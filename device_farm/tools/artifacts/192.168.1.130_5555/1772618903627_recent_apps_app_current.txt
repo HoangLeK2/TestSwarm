@@ -1,0 +1,1 @@
+{'package': 'com.sec.android.app.launcher', 'activity': 'com.android.quickstep.RecentsActivity', 'pid': 4391}

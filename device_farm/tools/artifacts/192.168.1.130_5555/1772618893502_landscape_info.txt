@@ -1,0 +1,1 @@
+{'currentPackageName': 'com.sec.android.app.launcher', 'displayHeight': 1080, 'displayRotation': 1, 'displaySizeDpX': 823, 'displaySizeDpY': 384, 'displayWidth': 2316, 'productName': 'dm3qxxx', 'screenOn': True, 'sdkInt': 36, 'naturalOrientation': False}

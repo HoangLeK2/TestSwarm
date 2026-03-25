@@ -1,0 +1,719 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Android Device Farm</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #22263a;
+      --border: #2e3350;
+      --accent: #6366f1;
+      --accent2: #818cf8;
+      --green: #22c55e;
+      --yellow: #f59e0b;
+      --red: #ef4444;
+      --gray: #64748b;
+      --text: #e2e8f0;
+      --text2: #94a3b8;
+    }
+
+    body {
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 16px 24px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+    header .logo { font-size: 20px; font-weight: 700; color: var(--accent2); letter-spacing: -0.5px; }
+    header .subtitle { font-size: 13px; color: var(--text2); }
+    header .ws-state { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text2); }
+    header .ws-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--gray); transition: background 0.3s; }
+    header .ws-dot.connected { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    header .ws-dot.error { background: var(--red); }
+
+    .main {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      height: calc(100vh - 57px);
+    }
+
+    /* ── Sidebar ── */
+    .sidebar {
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      overflow-y: auto;
+      padding: 12px;
+    }
+    .sidebar h2 { font-size: 11px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: 1px; padding: 8px 4px 6px; }
+
+    .device-card {
+      padding: 12px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      margin-bottom: 8px;
+      cursor: pointer;
+      transition: all 0.15s;
+      background: var(--surface2);
+    }
+    .device-card:hover { border-color: var(--accent); }
+    .device-card.active { border-color: var(--accent); background: #1e2040; }
+
+    .device-card .row { display: flex; align-items: center; gap: 8px; }
+    .device-card .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .device-card .dot.READY    { background: var(--green); box-shadow: 0 0 5px var(--green); }
+    .device-card .dot.CONNECTING { background: var(--yellow); }
+    .device-card .dot.DISCONNECTED, .dot.DEAD { background: var(--gray); }
+    .device-card .name { font-weight: 600; font-size: 14px; }
+    .device-card .serial { font-size: 11px; color: var(--text2); margin-top: 2px; font-family: monospace; }
+    .device-card .meta { font-size: 11px; color: var(--text2); margin-top: 6px; display: flex; gap: 12px; flex-wrap: wrap; }
+    .device-card .meta span { display: flex; align-items: center; gap: 4px; }
+    .battery-icon { font-size: 12px; }
+
+    .no-devices {
+      text-align: center;
+      padding: 40px 16px;
+      color: var(--text2);
+      font-size: 13px;
+    }
+    .no-devices .icon { font-size: 32px; margin-bottom: 8px; }
+
+    /* ── Content ── */
+    .content {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .empty-state {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: var(--text2);
+      gap: 12px;
+    }
+    .empty-state .icon { font-size: 48px; }
+    .empty-state h3 { font-size: 18px; color: var(--text); }
+    .empty-state p { font-size: 13px; max-width: 320px; text-align: center; line-height: 1.6; }
+
+    /* ── Device View ── */
+    .device-view {
+      display: none;
+      flex: 1;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .device-view.visible { display: flex; }
+
+    .device-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 20px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .device-toolbar .name { font-weight: 600; font-size: 14px; }
+    .device-toolbar .badge {
+      padding: 2px 8px;
+      border-radius: 99px;
+      font-size: 11px;
+      font-weight: 600;
+      background: var(--surface2);
+      color: var(--text2);
+    }
+    .device-toolbar .badge.READY { background: #14532d; color: var(--green); }
+    .device-toolbar .battery { margin-left: auto; font-size: 12px; color: var(--text2); }
+
+    .view-area {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      flex: 1;
+      overflow: hidden;
+      gap: 0;
+    }
+
+    /* ── Screen ── */
+    .screen-panel {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 16px;
+      background: var(--bg);
+      border-right: 1px solid var(--border);
+      gap: 12px;
+      overflow-y: auto;
+    }
+
+    .screen-wrap {
+      position: relative;
+      border-radius: 16px;
+      overflow: hidden;
+      border: 2px solid var(--border);
+      background: #000;
+      cursor: crosshair;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    }
+    .screen-wrap canvas {
+      display: block;
+      width: 300px;
+      height: auto;
+    }
+    .screen-placeholder {
+      width: 300px;
+      height: 534px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--gray);
+      font-size: 13px;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    /* ── Key Controls ── */
+    .key-controls {
+      display: flex;
+      gap: 8px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    .key-btn {
+      padding: 7px 14px;
+      border-radius: 8px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .key-btn:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .key-btn:active { transform: scale(0.95); }
+
+    /* ── Right Panel ── */
+    .right-panel {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .tabs {
+      display: flex;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      padding: 0 16px;
+    }
+    .tab {
+      padding: 10px 16px;
+      font-size: 13px;
+      color: var(--text2);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: all 0.15s;
+      user-select: none;
+    }
+    .tab.active { color: var(--accent2); border-bottom-color: var(--accent); }
+
+    .tab-content { display: none; flex: 1; overflow-y: auto; padding: 16px; }
+    .tab-content.active { display: block; }
+
+    /* Info */
+    .info-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .info-item {
+      background: var(--surface2);
+      padding: 12px 14px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+    }
+    .info-item label { font-size: 11px; color: var(--text2); display: block; margin-bottom: 4px; }
+    .info-item .val { font-size: 14px; font-weight: 600; font-family: monospace; }
+
+    /* Logs */
+    .log-box {
+      background: #0a0c14;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      font-family: 'Fira Code', 'Cascadia Code', monospace;
+      font-size: 12px;
+      line-height: 1.6;
+      min-height: 200px;
+      max-height: 100%;
+      overflow-y: auto;
+      color: #a0aec0;
+    }
+    .log-line.error { color: var(--red); }
+    .log-line.warn  { color: var(--yellow); }
+    .log-line.info  { color: #7dd3fc; }
+
+    /* Swipe UI */
+    .swipe-form { display: flex; flex-direction: column; gap: 10px; }
+    .swipe-form label { font-size: 12px; color: var(--text2); }
+    .swipe-form .row { display: flex; gap: 8px; }
+    .swipe-form input[type=number] {
+      flex: 1;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 10px;
+      color: var(--text);
+      font-size: 13px;
+    }
+    .btn-primary {
+      padding: 8px 18px;
+      border-radius: 8px;
+      background: var(--accent);
+      color: #fff;
+      font-size: 13px;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .btn-primary:hover { background: var(--accent2); }
+
+    @media (max-width: 900px) {
+      .main { grid-template-columns: 1fr; }
+      .view-area { grid-template-columns: 1fr; }
+    }
+  </style>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<header>
+  <div>
+    <div class="logo">📱 Device Farm</div>
+    <div class="subtitle">Android Remote Control Dashboard</div>
+  </div>
+  <div class="ws-state">
+    <div class="ws-dot" id="wsDot"></div>
+    <span id="wsLabel">Connecting…</span>
+  </div>
+</header>
+
+<div class="main">
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <h2>Devices</h2>
+    <div id="deviceList">
+      <div class="no-devices">
+        <div class="icon">📡</div>
+        Waiting for devices…
+      </div>
+    </div>
+  </aside>
+
+  <!-- Content -->
+  <section class="content" id="content">
+    <div class="empty-state" id="emptyState">
+      <div class="icon">📲</div>
+      <h3>Select a device</h3>
+      <p>Connect a device via ADB or scan the QR code in the STFService app to start streaming.</p>
+    </div>
+
+    <div class="device-view" id="deviceView">
+      <!-- Toolbar -->
+      <div class="device-toolbar">
+        <div class="name" id="dvName">—</div>
+        <div class="badge" id="dvBadge">—</div>
+        <div class="battery" id="dvBattery"></div>
+      </div>
+
+      <div class="view-area">
+        <!-- Screen Panel -->
+        <div class="screen-panel">
+          <div class="screen-wrap" id="screenWrap">
+            <div class="screen-placeholder" id="screenPlaceholder">
+              <span>📺</span>
+              <span>No frame yet</span>
+            </div>
+            <canvas id="screenCanvas" style="display:none;"></canvas>
+          </div>
+
+          <!-- Hardware keys -->
+          <div class="key-controls">
+            <button class="key-btn" onclick="sendKey('back')">◀ Back</button>
+            <button class="key-btn" onclick="sendKey('home')">⌂ Home</button>
+            <button class="key-btn" onclick="sendKey('recent')">⧉ Recents</button>
+            <button class="key-btn" onclick="sendKey('volumeup')">🔊+</button>
+            <button class="key-btn" onclick="sendKey('volumedown')">🔊−</button>
+            <button class="key-btn" onclick="sendKey('power')">⏻ Power</button>
+          </div>
+        </div>
+
+        <!-- Right panel -->
+        <div class="right-panel">
+          <div class="tabs">
+            <div class="tab active" onclick="switchTab('info')">Info</div>
+            <div class="tab" onclick="switchTab('logs')">Logs</div>
+            <div class="tab" onclick="switchTab('touch')">Touch</div>
+          </div>
+
+          <div class="tab-content active" id="tab-info">
+            <div class="info-grid">
+              <div class="info-item"><label>Serial</label><div class="val" id="iSerial">—</div></div>
+              <div class="info-item"><label>Model</label><div class="val" id="iModel">—</div></div>
+              <div class="info-item"><label>Android</label><div class="val" id="iAndroid">—</div></div>
+              <div class="info-item"><label>SDK</label><div class="val" id="iSdk">—</div></div>
+              <div class="info-item"><label>Resolution</label><div class="val" id="iRes">—</div></div>
+              <div class="info-item"><label>Battery</label><div class="val" id="iBattery">—</div></div>
+              <div class="info-item"><label>State</label><div class="val" id="iState">—</div></div>
+              <div class="info-item"><label>Brand</label><div class="val" id="iBrand">—</div></div>
+            </div>
+          </div>
+
+          <div class="tab-content" id="tab-logs">
+            <div class="log-box" id="logBox"></div>
+          </div>
+
+          <div class="tab-content" id="tab-touch">
+            <div class="swipe-form">
+              <label>Swipe (from → to)</label>
+              <div class="row">
+                <input type="number" id="sx1" placeholder="x1" value="200">
+                <input type="number" id="sy1" placeholder="y1" value="800">
+                <input type="number" id="sx2" placeholder="x2" value="200">
+                <input type="number" id="sy2" placeholder="y2" value="400">
+                <input type="number" id="sms" placeholder="ms" value="400">
+              </div>
+              <button class="btn-primary" onclick="doSwipe()">Swipe ↑</button>
+
+              <label style="margin-top:12px;">Tap (x, y)</label>
+              <div class="row">
+                <input type="number" id="tx" placeholder="x" value="540">
+                <input type="number" id="ty" placeholder="y" value="1158">
+              </div>
+              <button class="btn-primary" onclick="doTap()">Tap</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+  // ── State ──────────────────────────────────────────────────────────────────
+  let ws = null;
+  let activeSerial = null;
+  const devices = {};       // serial → status dict
+  const h264States = {};    // serial → { decoder, configured, codecString }
+
+  // ── WebSocket ──────────────────────────────────────────────────────────────
+  function connect() {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(`${proto}//${location.host}/ws`);
+
+    ws.onopen = () => {
+      document.getElementById('wsDot').className = 'ws-dot connected';
+      document.getElementById('wsLabel').textContent = 'Connected';
+    };
+
+    ws.onclose = () => {
+      document.getElementById('wsDot').className = 'ws-dot error';
+      document.getElementById('wsLabel').textContent = 'Reconnecting…';
+      setTimeout(connect, 2000);
+    };
+
+    ws.onerror = () => {
+      document.getElementById('wsDot').className = 'ws-dot error';
+    };
+
+    ws.onmessage = (ev) => {
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch { return; }
+
+      if (msg.type === 'frame') {
+        handleFrame(msg);
+      } else if (msg.type === 'status') {
+        handleStatus(msg);
+      } else if (msg.type === 'log') {
+        handleLog(msg);
+      }
+    };
+  }
+
+  // ── Handlers ──────────────────────────────────────────────────────────────
+  function handleStatus(msg) {
+    const serial = msg.serial;
+    if (!serial) return;
+    devices[serial] = msg;
+    renderSidebar();
+    // Auto-select first device that appears
+    if (!activeSerial) selectDevice(serial);
+    if (serial === activeSerial) updateDeviceView(msg);
+  }
+
+  // ── H.264 decoder helpers ─────────────────────────────────────────────────
+  function b64ToU8(b64) {
+    const bin = atob(b64), out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
+  function getH264State(serial) {
+    if (h264States[serial]) return h264States[serial];
+    const state = { decoder: null, configured: false, codecString: 'avc1.42E01E' };
+    h264States[serial] = state;
+    return state;
+  }
+
+  function resetH264Decoder(serial) {
+    const state = h264States[serial];
+    if (!state) return;
+    try { state.decoder && state.decoder.close(); } catch(e) {}
+    state.decoder    = null;
+    state.configured = false;
+  }
+
+  function ensureDecoder(state, codecString) {
+    const canvas = document.getElementById('screenCanvas');
+    const ctx    = canvas.getContext('2d');
+
+    if (state.decoder && state.configured && state.codecString === codecString) return true;
+
+    // Close old decoder if codec changed
+    if (state.decoder) {
+      try { state.decoder.close(); } catch(e) {}
+      state.decoder = null;
+      state.configured = false;
+    }
+
+    if (!window.VideoDecoder) return false; // browser doesn't support WebCodecs
+
+    state.codecString = codecString;
+    state.decoder = new VideoDecoder({
+      output(frame) {
+        canvas.width  = frame.displayWidth;
+        canvas.height = frame.displayHeight;
+        ctx.drawImage(frame, 0, 0);
+        frame.close();
+        canvas.style.display = 'block';
+        document.getElementById('screenPlaceholder').style.display = 'none';
+      },
+      error(e) {
+        console.warn('[H264] VideoDecoder error:', e.message);
+        state.configured = false; // will reconfigure on next keyframe
+      },
+    });
+
+    try {
+      state.decoder.configure({ codec: codecString, optimizeForLatency: true });
+      state.configured = true;
+      return true;
+    } catch(e) {
+      console.warn('[H264] configure failed:', e.message, 'codec:', codecString);
+      state.configured = false;
+      return false;
+    }
+  }
+
+  // ── Frame handler ─────────────────────────────────────────────────────────
+  function handleFrame(msg) {
+    if (msg.serial !== activeSerial) return;
+
+    // ── H.264 path ──────────────────────────────────────────────────────────
+    if (msg.codec === 'h264') {
+      const state       = getH264State(msg.serial);
+      const codecString = msg.codec_string || state.codecString;
+
+      if (!msg.key && !state.configured) return; // wait for keyframe to configure
+
+      if (!ensureDecoder(state, codecString)) return; // WebCodecs not supported
+
+      const data = b64ToU8(msg.data);
+      try {
+        state.decoder.decode(new EncodedVideoChunk({
+          type:      msg.key ? 'key' : 'delta',
+          timestamp: performance.now() * 1000, // microseconds
+          data,
+        }));
+      } catch(e) {
+        console.warn('[H264] decode error:', e.message);
+        state.configured = false; // force reconfigure on next keyframe
+      }
+      return;
+    }
+
+    // ── JPEG fallback ────────────────────────────────────────────────────────
+    const b64 = msg.jpeg_b64;
+    if (!b64) return;
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.getElementById('screenCanvas');
+      canvas.width  = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      canvas.getContext('2d').drawImage(img, 0, 0);
+      canvas.style.width = '300px';
+      canvas.style.display = 'block';
+      document.getElementById('screenPlaceholder').style.display = 'none';
+    };
+    img.src = 'data:image/jpeg;base64,' + b64;
+  }
+
+  function handleLog(msg) {
+    if (msg.serial !== activeSerial) return;
+    const box = document.getElementById('logBox');
+    const line = document.createElement('div');
+    line.className = 'log-line ' + (
+      msg.line.includes('ERROR') ? 'error' :
+      msg.line.includes('WARN')  ? 'warn'  : 'info'
+    );
+    line.textContent = msg.line;
+    box.appendChild(line);
+    // Keep last 200 lines
+    while (box.children.length > 200) box.removeChild(box.firstChild);
+    box.scrollTop = box.scrollHeight;
+  }
+
+  // ── Sidebar ────────────────────────────────────────────────────────────────
+  function renderSidebar() {
+    const list = document.getElementById('deviceList');
+    const serials = Object.keys(devices);
+    if (serials.length === 0) {
+      list.innerHTML = '<div class="no-devices"><div class="icon">📡</div>Waiting for devices…</div>';
+      return;
+    }
+    list.innerHTML = '';
+    serials.forEach(serial => {
+      const d = devices[serial];
+      const card = document.createElement('div');
+      card.className = 'device-card' + (serial === activeSerial ? ' active' : '');
+      const state = (d.state || 'DISCONNECTED').replace('DeviceState.', '');
+      const battery = d.battery != null && d.battery >= 0 ? `🔋 ${d.battery}%` : '';
+      card.innerHTML = `
+        <div class="row">
+          <div class="dot ${state}"></div>
+          <div class="name">${d.model || d.brand || serial}</div>
+        </div>
+        <div class="serial">${serial}</div>
+        <div class="meta">
+          <span>${d.android ? 'Android ' + d.android : ''}</span>
+          <span>${battery}</span>
+          <span style="color:${stateColor(state)}">${state}</span>
+        </div>`;
+      card.onclick = () => selectDevice(serial);
+      list.appendChild(card);
+    });
+  }
+
+  function stateColor(state) {
+    if (state === 'READY') return 'var(--green)';
+    if (state === 'CONNECTING') return 'var(--yellow)';
+    return 'var(--gray)';
+  }
+
+  // ── Device View ───────────────────────────────────────────────────────────
+  function selectDevice(serial) {
+    // Reset H.264 decoder for previous device
+    if (activeSerial && activeSerial !== serial) resetH264Decoder(activeSerial);
+    activeSerial = serial;
+    // Reset screen
+    document.getElementById('screenCanvas').style.display = 'none';
+    document.getElementById('screenPlaceholder').style.display = 'flex';
+    document.getElementById('logBox').innerHTML = '';
+
+    document.getElementById('emptyState').style.display = 'none';
+    document.getElementById('deviceView').classList.add('visible');
+
+    renderSidebar();
+    updateDeviceView(devices[serial]);
+  }
+
+  function updateDeviceView(d) {
+    const state = (d.state || 'DISCONNECTED').replace('DeviceState.', '');
+    document.getElementById('dvName').textContent = `${d.brand || ''} ${d.model || d.serial}`.trim();
+    const badge = document.getElementById('dvBadge');
+    badge.textContent = state;
+    badge.className = 'badge ' + state;
+    document.getElementById('dvBattery').textContent = d.battery >= 0 ? `🔋 ${d.battery}%` : '';
+
+    document.getElementById('iSerial').textContent  = d.serial || '—';
+    document.getElementById('iModel').textContent   = d.model  || '—';
+    document.getElementById('iBrand').textContent   = d.brand  || '—';
+    document.getElementById('iAndroid').textContent = d.android ? `Android ${d.android}` : '—';
+    document.getElementById('iSdk').textContent     = d.sdk    || '—';
+    document.getElementById('iRes').textContent     = d.screen_width ? `${d.screen_width}×${d.screen_height}` : '—';
+    document.getElementById('iBattery').textContent = d.battery >= 0 ? `${d.battery}%` : '—';
+    document.getElementById('iState').textContent   = state;
+  }
+
+  // ── Tabs ──────────────────────────────────────────────────────────────────
+  function switchTab(name) {
+    document.querySelectorAll('.tab').forEach((t, i) => {
+      const names = ['info', 'logs', 'touch'];
+      t.classList.toggle('active', names[i] === name);
+    });
+    document.querySelectorAll('.tab-content').forEach(c => {
+      c.classList.toggle('active', c.id === 'tab-' + name);
+    });
+  }
+
+  // ── Input ─────────────────────────────────────────────────────────────────
+  function sendKey(key) {
+    if (!ws || !activeSerial) return;
+    ws.send(JSON.stringify({ type: 'key', serial: activeSerial, key }));
+  }
+
+  function doSwipe() {
+    if (!ws || !activeSerial) return;
+    ws.send(JSON.stringify({
+      type: 'swipe', serial: activeSerial,
+      x1: +document.getElementById('sx1').value,
+      y1: +document.getElementById('sy1').value,
+      x2: +document.getElementById('sx2').value,
+      y2: +document.getElementById('sy2').value,
+      ms: +document.getElementById('sms').value,
+    }));
+  }
+
+  function doTap() {
+    if (!ws || !activeSerial) return;
+    ws.send(JSON.stringify({
+      type: 'tap', serial: activeSerial,
+      x: +document.getElementById('tx').value,
+      y: +document.getElementById('ty').value,
+    }));
+  }
+
+  // ── Canvas click → tap ────────────────────────────────────────────────────
+  document.getElementById('screenCanvas').addEventListener('click', (e) => {
+    if (!ws || !activeSerial) return;
+    const d = devices[activeSerial];
+    if (!d) return;
+    const canvas = e.currentTarget;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = d.screen_width  / rect.width;
+    const scaleY = d.screen_height / rect.height;
+    const x = Math.round((e.clientX - rect.left) * scaleX);
+    const y = Math.round((e.clientY - rect.top)  * scaleY);
+    ws.send(JSON.stringify({ type: 'tap', serial: activeSerial, x, y }));
+  });
+
+  // ── Boot ──────────────────────────────────────────────────────────────────
+  connect();
+</script>
+</body>
+</html>

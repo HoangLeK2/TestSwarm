@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "device-farm": {
+      "command": "sh",
+      "args": ["scripts/run_device_farm_mcp.sh"]
+    }
+  }
+}

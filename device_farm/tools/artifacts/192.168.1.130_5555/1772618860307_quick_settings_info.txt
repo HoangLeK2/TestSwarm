@@ -1,0 +1,1 @@
+{'currentPackageName': 'com.android.systemui', 'displayHeight': 2316, 'displayRotation': 0, 'displaySizeDpX': 384, 'displaySizeDpY': 823, 'displayWidth': 1080, 'productName': 'dm3qxxx', 'screenOn': True, 'sdkInt': 36, 'naturalOrientation': True}

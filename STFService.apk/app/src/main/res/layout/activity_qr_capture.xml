@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Custom ZXing capture layout.
+  MUST contain DecoratedBarcodeView with id "zxing_barcode_scanner".
+  The back/close button MUST have id "zxing_back_button" so CaptureActivity handles it.
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000">
+
+    <!-- ── Camera preview + ZXing viewfinder overlay ── -->
+    <com.journeyapps.barcodescanner.DecoratedBarcodeView
+        android:id="@+id/zxing_barcode_scanner"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"/>
+
+    <!-- ══════════════════ TOP OVERLAY ══════════════════ -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="120dp"
+        android:layout_gravity="top"
+        android:background="@drawable/gradient_scan_top"
+        android:orientation="vertical">
+
+        <!-- Toolbar row -->
+        <RelativeLayout
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:layout_marginTop="8dp">
+
+            <!-- Close button -->
+            <ImageButton
+                android:id="@+id/zxing_back_button"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:layout_alignParentLeft="true"
+                android:layout_centerVertical="true"
+                android:layout_marginLeft="8dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Close"
+                android:padding="12dp"
+                android:src="@drawable/ic_close"/>
+
+            <!-- Screen title -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_centerInParent="true"
+                android:text="Scan QR Code"
+                android:textColor="#FFFFFF"
+                android:textSize="18sp"
+                android:textStyle="bold"/>
+        </RelativeLayout>
+    </LinearLayout>
+
+    <!-- ══════════════════ BOTTOM OVERLAY ══════════════════ -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="200dp"
+        android:layout_gravity="bottom"
+        android:background="@drawable/gradient_scan_bottom"
+        android:orientation="vertical"
+        android:gravity="center|bottom"
+        android:paddingBottom="52dp"
+        android:paddingLeft="32dp"
+        android:paddingRight="32dp">
+
+        <!-- Primary instruction -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:text="Point camera at the QR code"
+            android:textColor="#FFFFFF"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp"/>
+
+        <!-- Secondary instruction -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:text="The QR code is shown on the Device Farm dashboard\nafter clicking \u201cPair device\u201d"
+            android:textColor="#94A3B8"
+            android:textSize="13sp"
+            android:lineSpacingMultiplier="1.4"/>
+    </LinearLayout>
+
+</FrameLayout>

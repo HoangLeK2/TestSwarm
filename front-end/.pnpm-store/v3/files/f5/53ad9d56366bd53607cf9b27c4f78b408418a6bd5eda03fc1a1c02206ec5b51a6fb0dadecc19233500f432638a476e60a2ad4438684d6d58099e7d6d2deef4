@@ -1,0 +1,9 @@
+/**
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ *
+ */
+
+"use strict";var e=require("lexical"),t="0.33.1";function o(e,o=Object.freeze({})){return{editorState:e.toJSON(),lastSaved:o.lastSaved||Date.now(),source:o.source||"Lexical",version:t}}function n(e,t){const o="string"==typeof t?JSON.parse(t):t;return e.parseEditorState(o.editorState)}exports.editorStateFromSerializedDocument=n,exports.exportFile=function(e,t=Object.freeze({})){const n=new Date;!function(e,t){const o=document.createElement("a"),n=document.body;if(null===n)return;n.appendChild(o),o.style.display="none";const r=JSON.stringify(e),i=new Blob([r],{type:"octet/stream"}),a=window.URL.createObjectURL(i);o.href=a,o.download=t,o.click(),window.URL.revokeObjectURL(a),o.remove()}(o(e.getEditorState(),{...t,lastSaved:n.getTime()}),`${t.fileName||n.toISOString()}.lexical`)},exports.importFile=function(t){!function(e){const t=document.createElement("input");t.type="file",t.accept=".lexical",t.addEventListener("change",(t=>{const o=t.target;if(o.files){const t=o.files[0],n=new FileReader;n.readAsText(t,"UTF-8"),n.onload=t=>{if(t.target){const o=t.target.result;e(o)}}}})),t.click()}((o=>{t.setEditorState(n(t,o)),t.dispatchCommand(e.CLEAR_HISTORY_COMMAND,void 0)}))},exports.serializedDocumentFromEditorState=o;

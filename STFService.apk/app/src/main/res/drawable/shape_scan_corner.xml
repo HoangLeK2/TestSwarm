@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Rounded square frame used as scan region indicator -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners android:radius="12dp"/>
+    <stroke android:width="2dp" android:color="#FF6366F1"/>
+    <solid android:color="#00000000"/>
+</shape>

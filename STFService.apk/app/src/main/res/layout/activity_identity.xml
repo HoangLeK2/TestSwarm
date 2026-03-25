@@ -1,0 +1,375 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0F172A"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingLeft="16dp"
+        android:paddingRight="16dp"
+        android:paddingTop="40dp"
+        android:paddingBottom="32dp">
+
+        <!-- ════════════════════════════════ HEADER ════════════════════════════════ -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:layout_marginBottom="28dp">
+
+            <FrameLayout
+                android:layout_width="88dp"
+                android:layout_height="88dp"
+                android:background="@drawable/shape_icon_bg"
+                android:layout_marginBottom="18dp">
+
+                <ImageView
+                    android:layout_width="44dp"
+                    android:layout_height="44dp"
+                    android:layout_gravity="center"
+                    app:srcCompat="@drawable/ic_smartphone"
+                    android:scaleType="fitCenter"/>
+            </FrameLayout>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Device Farm"
+                android:textColor="#F1F5F9"
+                android:textSize="28sp"
+                android:textStyle="bold"/>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Identity &amp; Pairing"
+                android:textColor="#64748B"
+                android:textSize="14sp"
+                android:layout_marginTop="6dp"/>
+        </LinearLayout>
+
+        <!-- ════════════════════════════════ DEVICE INFO CARD ════════════════════════════════ -->
+        <androidx.cardview.widget.CardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            app:cardBackgroundColor="#1E293B"
+            app:cardCornerRadius="16dp"
+            app:cardElevation="0dp"
+            android:layout_marginBottom="16dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <!-- Card header label -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="DEVICE INFORMATION"
+                    android:textColor="#475569"
+                    android:textSize="11sp"
+                    android:paddingLeft="20dp"
+                    android:paddingRight="20dp"
+                    android:paddingTop="18dp"
+                    android:paddingBottom="4dp"/>
+
+                <!-- ── Serial ── -->
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:background="#263348"
+                    android:layout_marginTop="10dp"/>
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:paddingLeft="20dp"
+                    android:paddingRight="20dp"
+                    android:paddingTop="14dp"
+                    android:paddingBottom="14dp"
+                    android:gravity="center_vertical">
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Serial"
+                        android:textColor="#94A3B8"
+                        android:textSize="14sp"/>
+                    <TextView
+                        android:id="@+id/tv_serial"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1.4"
+                        android:text="—"
+                        android:textColor="#F1F5F9"
+                        android:textSize="14sp"
+                        android:gravity="end"
+                        android:textStyle="bold"/>
+                </LinearLayout>
+
+                <!-- ── Model ── -->
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:background="#263348"
+                    android:layout_marginLeft="20dp"/>
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:paddingLeft="20dp"
+                    android:paddingRight="20dp"
+                    android:paddingTop="14dp"
+                    android:paddingBottom="14dp"
+                    android:gravity="center_vertical">
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Model"
+                        android:textColor="#94A3B8"
+                        android:textSize="14sp"/>
+                    <TextView
+                        android:id="@+id/tv_model"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1.4"
+                        android:text="—"
+                        android:textColor="#F1F5F9"
+                        android:textSize="14sp"
+                        android:gravity="end"
+                        android:textStyle="bold"/>
+                </LinearLayout>
+
+                <!-- ── Android Version ── -->
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:background="#263348"
+                    android:layout_marginLeft="20dp"/>
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:paddingLeft="20dp"
+                    android:paddingRight="20dp"
+                    android:paddingTop="14dp"
+                    android:paddingBottom="14dp"
+                    android:gravity="center_vertical">
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Android"
+                        android:textColor="#94A3B8"
+                        android:textSize="14sp"/>
+                    <TextView
+                        android:id="@+id/tv_version"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1.4"
+                        android:text="—"
+                        android:textColor="#F1F5F9"
+                        android:textSize="14sp"
+                        android:gravity="end"
+                        android:textStyle="bold"/>
+                </LinearLayout>
+
+                <!-- ── Operator ── -->
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:background="#263348"
+                    android:layout_marginLeft="20dp"/>
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:paddingLeft="20dp"
+                    android:paddingRight="20dp"
+                    android:paddingTop="14dp"
+                    android:paddingBottom="14dp"
+                    android:gravity="center_vertical">
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Operator"
+                        android:textColor="#94A3B8"
+                        android:textSize="14sp"/>
+                    <TextView
+                        android:id="@+id/tv_operator"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1.4"
+                        android:text="—"
+                        android:textColor="#F1F5F9"
+                        android:textSize="14sp"
+                        android:gravity="end"
+                        android:textStyle="bold"/>
+                </LinearLayout>
+
+                <!-- ── Phone Number ── -->
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:background="#263348"
+                    android:layout_marginLeft="20dp"/>
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:paddingLeft="20dp"
+                    android:paddingRight="20dp"
+                    android:paddingTop="14dp"
+                    android:paddingBottom="14dp"
+                    android:gravity="center_vertical">
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Phone"
+                        android:textColor="#94A3B8"
+                        android:textSize="14sp"/>
+                    <TextView
+                        android:id="@+id/tv_phone"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1.4"
+                        android:text="—"
+                        android:textColor="#F1F5F9"
+                        android:textSize="14sp"
+                        android:gravity="end"
+                        android:textStyle="bold"/>
+                </LinearLayout>
+
+                <!-- ── IMEI (shown only on API >= 26) ── -->
+                <View
+                    android:id="@+id/divider_imei"
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:background="#263348"
+                    android:layout_marginLeft="20dp"
+                    android:visibility="gone"/>
+                <LinearLayout
+                    android:id="@+id/row_imei"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:paddingLeft="20dp"
+                    android:paddingRight="20dp"
+                    android:paddingTop="14dp"
+                    android:paddingBottom="14dp"
+                    android:gravity="center_vertical"
+                    android:visibility="gone">
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="IMEI"
+                        android:textColor="#94A3B8"
+                        android:textSize="14sp"/>
+                    <TextView
+                        android:id="@+id/tv_imei"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1.4"
+                        android:text="—"
+                        android:textColor="#F1F5F9"
+                        android:textSize="14sp"
+                        android:gravity="end"
+                        android:textStyle="bold"/>
+                </LinearLayout>
+
+                <View android:layout_width="match_parent" android:layout_height="8dp"/>
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
+
+        <!-- ════════════════════════════════ CONNECT CARD ════════════════════════════════ -->
+        <androidx.cardview.widget.CardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            app:cardBackgroundColor="#1E293B"
+            app:cardCornerRadius="16dp"
+            app:cardElevation="0dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:paddingLeft="20dp"
+                android:paddingRight="20dp"
+                android:paddingTop="20dp"
+                android:paddingBottom="20dp">
+
+                <!-- Section title -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="CONNECT TO FARM"
+                    android:textColor="#475569"
+                    android:textSize="11sp"
+                    android:layout_marginBottom="12dp"/>
+
+                <!-- Instruction text -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Open the Device Farm dashboard on your desktop, click \u201cPair device\u201d to display a QR code, then tap the button below to scan it."
+                    android:textColor="#64748B"
+                    android:textSize="13sp"
+                    android:lineSpacingMultiplier="1.5"
+                    android:layout_marginBottom="20dp"/>
+
+                <!-- Scan / Disconnect Button -->
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btn_scan"
+                    android:layout_width="match_parent"
+                    android:layout_height="52dp"
+                    android:text="Scan QR Code"
+                    android:textColor="#FFFFFF"
+                    android:textSize="15sp"
+                    app:backgroundTint="#6366F1"
+                    app:cornerRadius="12dp"
+                    app:icon="@drawable/ic_qr_scan"
+                    app:iconGravity="textStart"
+                    app:iconPadding="10dp"
+                    app:iconSize="20dp"/>
+
+                <!-- Status row -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center"
+                    android:layout_marginTop="16dp">
+
+                    <View
+                        android:id="@+id/view_status_dot"
+                        android:layout_width="8dp"
+                        android:layout_height="8dp"
+                        android:background="@drawable/shape_status_dot"
+                        android:layout_marginRight="8dp"/>
+
+                    <TextView
+                        android:id="@+id/tv_status"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Not connected"
+                        android:textColor="#64748B"
+                        android:textSize="13sp"/>
+                </LinearLayout>
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
+
+        <!-- Bottom spacer -->
+        <View android:layout_width="match_parent" android:layout_height="16dp"/>
+    </LinearLayout>
+</ScrollView>

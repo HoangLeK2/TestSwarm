@@ -1,0 +1,228 @@
+package jp.co.cyberagent.stf.compat;
+
+
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
+
+import android.os.RemoteException;
+
+import jp.co.cyberagent.stf.util.InternalApi;
+
+public class WindowManagerWrapper {
+    private RotationInjector rotationInjector;
+    private Object windowManager;
+
+    private interface RotationInjector {
+        public void freezeRotation(int rotation);
+        public void thawRotation();
+    }
+
+    public static interface RotationWatcher {
+        public void onRotationChanged(int rotation);
+    }
+
+    public WindowManagerWrapper() {
+        windowManager = getWindowManager();
+
+        try {
+            rotationInjector = new FreezeThawRotationInjector();
+        }
+        catch (UnsupportedOperationException e) {
+            rotationInjector = new SetRotationRotationInjector();
+        }
+    }
+
+    public void freezeRotation(int rotation) {
+        rotationInjector.freezeRotation(rotation);
+    }
+
+    public void thawRotation() {
+        rotationInjector.thawRotation();
+    }
+
+    // It's not clear why we're relying on reflection instead of using
+    // Display.getRotation(). For now, reflection is used to ensure backwards
+    // compatibility just in case Display.getRotation() behaves differently
+    // in some cases. It's quite possible that IWindowManager.getRotation()
+    // was only used because it was convenient to access from where it was
+    // used, though.
+    public int getRotation() {
+        try {
+            Method getter = windowManager.getClass().getMethod("getDefaultDisplayRotation");
+            return (Integer) getter.invoke(windowManager);
+        }
+        catch (NoSuchMethodException e) {}
+        catch (IllegalAccessException e) {
+            e.printStackTrace();
+        }
+        catch (InvocationTargetException e) {
+            e.printStackTrace();
+        }
+
+        try {
+            Method getter = windowManager.getClass().getMethod("getRotation");
+            return (Integer) getter.invoke(windowManager);
+        }
+        catch (NoSuchMethodException e) {
+            e.printStackTrace();
+        }
+        catch (IllegalAccessException e) {
+            e.printStackTrace();
+        }
+        catch (InvocationTargetException e) {
+            e.printStackTrace();
+        }
+
+        return 0;
+    }
+
+    public Object watchRotation(final RotationWatcher watcher) {
+        // IRotationWatcher is a hidden framework interface; use reflection +
+        // dynamic proxy instead of a direct reference so this compiles on
+        // modern SDKs.
+        try {
+            Class<?> iRotationWatcherClass = Class.forName("android.view.IRotationWatcher");
+
+            Object realWatcher = Proxy.newProxyInstance(
+                    iRotationWatcherClass.getClassLoader(),
+                    new Class<?>[]{iRotationWatcherClass},
+                    new InvocationHandler() {
+                        @Override
+                        public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+                            if ("onRotationChanged".equals(method.getName()) && args != null && args.length > 0) {
+                                int rotation = (Integer) args[0];
+                                watcher.onRotationChanged(rotation);
+                            }
+                            return null;
+                        }
+                    }
+            );
+
+            try {
+                Method getter = windowManager.getClass().getMethod("watchRotation", iRotationWatcherClass, int.class);
+                getter.invoke(windowManager, realWatcher, 0);
+                return realWatcher;
+            } catch (NoSuchMethodException e) {
+                Method getter = windowManager.getClass().getMethod("watchRotation", iRotationWatcherClass);
+                getter.invoke(windowManager, realWatcher);
+                return realWatcher;
+            }
+        } catch (ClassNotFoundException e) {
+            throw new UnsupportedOperationException("IRotationWatcher not available: " + e.getMessage());
+        } catch (NoSuchMethodException e) {
+            throw new UnsupportedOperationException("watchRotation is not supported: " + e.getMessage());
+        } catch (IllegalAccessException e) {
+            throw new UnsupportedOperationException("watchRotation is not supported: " + e.getMessage());
+        } catch (InvocationTargetException e) {
+            throw new UnsupportedOperationException("watchRotation is not supported: " + e.getMessage());
+        }
+    }
+
+    public static Object getWindowManager() {
+        return InternalApi.getServiceAsInterface("window", "android.view.IWindowManager$Stub");
+    }
+
+    /**
+     * EventInjector for SDK >10
+     */
+    private class FreezeThawRotationInjector implements RotationInjector {
+        private Method freezeRotationInjector;
+        private Method thawRotationInjector;
+        //March 2024 security patch changes the arguments to these methods
+        boolean newMethods = false;
+
+        public FreezeThawRotationInjector() {
+            try {
+                freezeRotationInjector = windowManager.getClass()
+                        // public void freezeRotation(int rotation)
+                        .getMethod("freezeRotation", int.class);
+
+                thawRotationInjector = windowManager.getClass()
+                        // public void thawRotation()
+                        .getMethod("thawRotation");
+            }
+            catch (NoSuchMethodException e) {
+                try {
+                    freezeRotationInjector = windowManager.getClass()
+                            // public void freezeRotation(int rotation)
+                            .getMethod("freezeRotation", int.class, String.class);
+
+                    thawRotationInjector = windowManager.getClass()
+                            // public void thawRotation()
+                            .getMethod("thawRotation", String.class);
+
+                    newMethods = true;
+                } catch (NoSuchMethodException e2) {
+                    throw new UnsupportedOperationException("InputManagerEventInjector is not supported");
+                }
+            }
+        }
+
+        public void freezeRotation(int rotation) {
+            try {
+                if (newMethods) {
+                    freezeRotationInjector.invoke(windowManager, rotation, "jp.co.cyberagent.stf");
+                } else {
+                    freezeRotationInjector.invoke(windowManager, rotation);
+                }
+            }
+            catch (IllegalAccessException e) {
+                e.printStackTrace();
+            }
+            catch (InvocationTargetException e) {
+                e.printStackTrace();
+            }
+        }
+
+        public void thawRotation() {
+            try {
+                if (newMethods) {
+                    thawRotationInjector.invoke(windowManager, "jp.co.cyberagent.stf");
+                } else {
+                    thawRotationInjector.invoke(windowManager);
+                }
+            }
+            catch (IllegalAccessException e) {
+                e.printStackTrace();
+            }
+            catch (InvocationTargetException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    /**
+     * EventInjector for SDK <=10
+     */
+    private class SetRotationRotationInjector implements RotationInjector {
+        private Method setRotationInjector;
+
+        public SetRotationRotationInjector() {
+            try {
+                setRotationInjector = windowManager.getClass()
+                        // void setRotation(int rotation, boolean alwaysSendConfiguration, int animFlags)
+                        .getMethod("setRotation", int.class, boolean.class, int.class);
+            }
+            catch (NoSuchMethodException e) {
+                throw new UnsupportedOperationException("InputManagerEventInjector is not supported");
+            }
+        }
+
+        public void freezeRotation(int rotation) {
+            try {
+                setRotationInjector.invoke(windowManager, rotation, true, 0);
+            }
+            catch (IllegalAccessException e) {
+                e.printStackTrace();
+            }
+            catch (InvocationTargetException e) {
+                e.printStackTrace();
+            }
+        }
+
+        public void thawRotation() {
+        }
+    }
+}

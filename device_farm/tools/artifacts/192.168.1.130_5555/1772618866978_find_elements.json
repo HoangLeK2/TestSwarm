@@ -1,0 +1,14 @@
+{
+  "by_text(OK)_exists": false,
+  "by_textContains(Sett)": false,
+  "className=TextView_count": 35,
+  "resourceId_workspace": false,
+  "xpath_textview": true,
+  "child_textview": true,
+  "first_textview_attrs": {
+    "text": "Danh bạ",
+    "bounds": "{'bottom': 456, 'left': 41, 'right': 241, 'top': 182}",
+    "enabled": true,
+    "clickable": true
+  }
+}

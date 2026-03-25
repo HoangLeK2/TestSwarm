@@ -1,0 +1,132 @@
+body {
+  @apply bg-transparent;
+}
+
+:root {
+  --font-sans: var(--font-inter);
+  --header-height: calc(var(--spacing) * 12 + 1px);
+}
+
+.theme-scaled {
+  @media (min-width: 1024px) {
+    --radius: 0.6rem;
+    --text-lg: 1.05rem;
+    --text-base: 0.85rem;
+    --text-sm: 0.8rem;
+    --spacing: 0.222222rem;
+  }
+
+  [data-slot='card'] {
+    --spacing: 0.16rem;
+  }
+
+  [data-slot='select-trigger'],
+  [data-slot='toggle-group-item'] {
+    --spacing: 0.222222rem;
+  }
+}
+
+.theme-default,
+.theme-default-scaled {
+  --primary: 215 6% 40%;
+  --primary-foreground: 210 6% 95%;
+}
+
+.dark .theme-default,
+.dark .theme-default-scaled {
+  --primary: 210 6% 50%;
+  --primary-foreground: 210 6% 95%;
+}
+
+.theme-blue,
+.theme-blue-scaled {
+  --primary: 221 94% 50%;
+  --primary-foreground: 210 20% 98%;
+  --sidebar-active: 221 94% 44% / 0.05;
+  --sidebar-active-foreground: 221 94% 44%;
+}
+
+.dark .theme-blue,
+.dark .theme-blue-scaled {
+  --primary: 221 94% 60%;
+  --primary-foreground: 210 20% 100%;
+  --sidebar-active: 221 94% 60% / 0.05;
+  --sidebar-active-foreground: 221 94% 60%;
+}
+
+.theme-green,
+.theme-green-scaled {
+  --primary: 84 81% 44%;
+  --primary-foreground: 84 81% 95%;
+}
+
+.dark .theme-green,
+.dark .theme-green-scaled {
+  --primary: 84 81% 44%;
+  --primary-foreground: 84 81% 95%;
+}
+
+.theme-amber,
+.theme-amber-scaled {
+  --primary: 45 93% 47%;
+  --primary-foreground: 45 93% 95%;
+}
+
+.dark .theme-amber,
+.dark .theme-amber-scaled {
+  --primary: 45 93% 57%;
+  --primary-foreground: 45 93% 95%;
+}
+
+.theme-mono,
+.theme-mono-scaled {
+  --font-sans: var(--font-mono);
+  --primary: 215 6% 40%;
+  --primary-foreground: 210 6% 95%;
+}
+
+.dark .theme-mono,
+.dark .theme-mono-scaled {
+  --primary: 210 6% 50%;
+  --primary-foreground: 210 6% 95%;
+}
+
+.theme-mono .rounded-xs,
+.theme-mono .rounded-sm,
+.theme-mono .rounded-md,
+.theme-mono .rounded-lg,
+.theme-mono .rounded-xl,
+.theme-mono-scaled .rounded-xs,
+.theme-mono-scaled .rounded-sm,
+.theme-mono-scaled .rounded-md,
+.theme-mono-scaled .rounded-lg,
+.theme-mono-scaled .rounded-xl {
+  @apply !rounded-none;
+  border-radius: 0;
+}
+
+.theme-mono .shadow-xs,
+.theme-mono .shadow-sm,
+.theme-mono .shadow-md,
+.theme-mono .shadow-lg,
+.theme-mono .shadow-xl,
+.theme-mono-scaled .shadow-xs,
+.theme-mono-scaled .shadow-sm,
+.theme-mono-scaled .shadow-md,
+.theme-mono-scaled .shadow-lg,
+.theme-mono-scaled .shadow-xl {
+  @apply !shadow-none;
+}
+
+.theme-mono [data-slot='toggle-group'],
+.theme-mono [data-slot='toggle-group-item'],
+.theme-mono-scaled [data-slot='toggle-group'],
+.theme-mono-scaled [data-slot='toggle-group-item'] {
+  @apply !rounded-none !shadow-none;
+}
+
+/* Sidebar active state variables */
+:root {
+  --sidebar-active: var(--primary);
+  --sidebar-active-foreground: var(--primary);
+}

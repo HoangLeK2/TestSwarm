@@ -1,0 +1,1 @@
+{'serial': 'R5CW13CYASD', 'sdk': 36, 'brand': 'samsung', 'model': 'SM-S918B', 'arch': 'arm64-v8a', 'version': 16}

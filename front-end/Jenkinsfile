@@ -1,0 +1,168 @@
+pipeline {
+    agent any
+
+    environment {
+        // Common variables
+        DOCKER_REGISTRY = 'registry.fke.fptcloud.com/cf0e8e83-5ab2-4a89-afd8-703ba75cfeeb'
+        SERVICE_NAME = "ndatrace-portal-fe"
+        // Deploy info
+        SERVICE_DIR = 'ndatrace-portal'
+        SERVICE_DOCKER_NAME = 'portal-web'
+        // Get commit hash for tag
+        COMMIT_HASH = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+        // Get git repo URL
+        GIT_REPO = sh(script: 'git config --get remote.origin.url', returnStdout: true).trim()
+    }
+
+    stages {
+        stage('Set Environment') {
+            steps {
+                script {
+                    echo "=========== Build Info ==========="
+                    echo "Pipeline name: ${env.JOB_NAME}"
+                    echo "We are working on building ${env.SERVICE_NAME} for the branch ${env.JOB_BASE_NAME} and commit #${COMMIT_HASH}"
+                    echo "The git repo is: ${env.GIT_REPO}"
+                    echo "==================================="
+
+                    env.ENV = 'prod'
+                    env.ENV_FILE = "${SERVICE_NAME}-${env.ENV}.env"
+                    withCredentials([file(credentialsId: env.ENV_FILE, variable: 'ENV_FILE')]) {
+                        sh 'cp $ENV_FILE .env'
+                    }
+                    // Set full image name
+                    env.IMAGE_NAME = "${DOCKER_REGISTRY}/mainnet/${SERVICE_NAME}:${COMMIT_HASH}-${env.BUILD_NUMBER}"
+                }
+            }
+        }
+        
+        stage('Build') {
+            when {
+                expression { 
+                    return env.ENV != 'other' // skip build except env is prod / staging / dev
+                }
+            }
+            options {
+                timeout(time: 10, unit: 'MINUTES')
+            }
+            steps {
+                script {
+                    echo "Building & Push image ${env.IMAGE_NAME}"
+                    try {
+                        withCredentials([
+                            usernamePassword(
+                                credentialsId: 'fpt-registry',
+                                usernameVariable: 'REGISTRY_USERNAME',
+                                passwordVariable: 'REGISTRY_PASSWORD'
+                            )
+                        ]) {
+                            sh 'docker login -u $REGISTRY_USERNAME -p $REGISTRY_PASSWORD $DOCKER_REGISTRY'
+                            sh """
+                              docker build -t ${env.IMAGE_NAME} -f Dockerfile .
+                              docker push ${env.IMAGE_NAME}
+                            """
+                            
+                            echo "Successfully built and pushed image ${env.IMAGE_NAME}"
+                        }
+                    } catch (Exception e) {
+                        echo "Build failed: ${e.message}"
+                        // Only remove image if it exists
+                        sh """
+                            if docker images | grep -q "${env.IMAGE_NAME}"; then
+                                docker rmi ${env.IMAGE_NAME}
+                            fi
+                        """
+                        throw e
+                    }
+                }
+            }
+        }
+
+        stage('Scan') {
+            steps {
+                script {
+                    echo "Scanning image ${env.IMAGE_NAME}"
+                    //sh "snyk test --docker ${env.IMAGE_NAME} || true"
+                }
+            }
+        }
+
+        stage('Health Check') {
+            steps {
+                script {
+                    echo "Health checking image ${env.IMAGE_NAME}"
+
+                    // TODO: Implement health check for service     
+                    // Example: Run container and check health (replace with your actual health check)
+                    // sh "docker run -d --name temp_health_check --env-file .env ${env.IMAGE_NAME}"
+                    // Wait and check health (customize as needed)
+                    // sleep 10
+                    // Example: Check if service is running (replace with your actual check)
+                    // sh "docker ps | grep temp_health_check"
+                    // Clean up
+                    // sh "docker rm -f temp_health_check"
+                }
+            }
+        }
+
+        stage('Deploy') {
+            options{
+                timeout(time: 5, unit: 'MINUTES')
+            }
+            when {
+                expression {
+                    return env.ENV != 'other' // skip deploy except env is prod / staging / dev
+                }
+            }
+            steps {
+                script {
+                    echo "Deploying image ${env.IMAGE_NAME} to ${env.ENV} environment"
+
+                    def REMOTE_HOST = '10.0.3.23'
+                    def IMAGE = "${DOCKER_REGISTRY}/mainnet/${SERVICE_NAME}"
+                    def IMAGE_TAG = "${COMMIT_HASH}-${env.BUILD_NUMBER}"
+
+                    // Copy image or pull from registry, then deploy service
+
+                    withCredentials([
+                        sshUserPrivateKey(
+                            credentialsId: 'ssh-prod',
+                            keyFileVariable: 'SSH_KEY',
+                        ),
+                        usernamePassword(
+                            credentialsId: 'server-prod',
+                            usernameVariable: 'USERNAME',
+                            passwordVariable: 'PASSWORD'
+                        ),
+                        usernamePassword(
+                            credentialsId: 'fpt-registry',
+                            usernameVariable: 'REGISTRY_USERNAME',
+                            passwordVariable: 'REGISTRY_PASSWORD'
+                        )
+                    ]) {
+                        sh """
+                            ssh -i ${SSH_KEY} ${USERNAME}@${REMOTE_HOST} << 'EOF'                                
+                                docker pull ${env.IMAGE_NAME}
+                                cd "${SERVICE_DIR}"
+                                sed -i.bak -E 's|(image:\\s*${IMAGE}):[^\\s]+|\\1:${IMAGE_TAG}|' docker-compose.yml
+                                docker compose down "${SERVICE_DOCKER_NAME}"
+                                docker compose up -d "${SERVICE_DOCKER_NAME}"
+                        """
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Pipeline completed successfully for ${env.ENV} environment."
+            // TODO: Send notification to team
+        }
+        failure {
+            echo "Pipeline failed for ${env.ENV} environment."
+            // TODO: Implement rollback for service
+            // TODO: Send notification to team
+        }
+    }
+}
+

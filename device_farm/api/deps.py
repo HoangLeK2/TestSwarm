@@ -1,0 +1,69 @@
+from __future__ import annotations
+
+from typing import Annotated, AsyncGenerator
+
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jose import JWTError, jwt
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from core.security import jwt_algorithm, jwt_secret_key
+from db.database import AsyncSessionLocal
+from db.models import User
+from db import crud as repo
+
+_bearer = HTTPBearer(auto_error=False)
+
+
+async def _get_db() -> AsyncGenerator[AsyncSession, None]:
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+
+DB = Annotated[AsyncSession, Depends(_get_db)]
+
+
+def _decode_token(token: str) -> str:
+    try:
+        payload = jwt.decode(token, jwt_secret_key(), algorithms=[jwt_algorithm()])
+        user_id: str | None = payload.get("sub")
+        token_type: str | None = payload.get("type")
+        if not user_id:
+            raise ValueError("missing sub")
+        # Reject refresh tokens being used as access tokens
+        if token_type == "refresh":
+            raise ValueError("refresh token not allowed here")
+        return user_id
+    except (JWTError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+        )
+
+
+async def _get_current_user(
+    db: DB,
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+) -> User:
+    if not credentials:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    user_id = _decode_token(credentials.credentials)
+    user = await repo.get_user(db, user_id)
+    if not user or not user.is_active:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    return user
+
+
+async def _get_current_admin(user: User = Depends(_get_current_user)) -> User:
+    if user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin only")
+    return user
+
+
+CurrentUser = Annotated[User, Depends(_get_current_user)]
+AdminUser = Annotated[User, Depends(_get_current_admin)]

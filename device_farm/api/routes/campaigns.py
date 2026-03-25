@@ -1,0 +1,349 @@
+
+from __future__ import annotations
+
+import asyncio
+from fastapi import APIRouter, HTTPException, Request, status
+from pydantic import BaseModel
+
+from api.deps import CurrentUser, DB
+from api.schemas.campaign import (
+    CampaignCreate, CampaignDeviceOut, CampaignOut,
+    ScenarioCreate, ScenarioUpdate, ScenarioOut,
+)
+from db import crud as repo
+
+router = APIRouter(prefix="/campaigns", tags=["campaigns"])
+
+
+class StatusUpdate(BaseModel):
+    status: str  # draft | running | paused | completed
+
+
+class AddDeviceBody(BaseModel):
+    device_id: str
+
+
+class ScenarioUpdateBody(BaseModel):
+    scenario: dict
+
+
+class CompileScenarioBody(BaseModel):
+    instructions: str | None = None
+    ui_xml: str | None = None
+    device_serial: str | None = None
+    device_context: dict | None = None
+    scenario_id: str | None = None  # if provided, save to specific scenario
+
+
+# ── Helper ──────────────────────────────────────────────────────────────────
+
+def _scenario_to_out(s) -> ScenarioOut:
+    return ScenarioOut(
+        id=s.id,
+        campaign_id=s.campaign_id,
+        name=s.name,
+        instructions=s.instructions or "",
+        steps=s.steps or [],
+        order=s.order,
+        created_at=s.created_at,
+        updated_at=s.updated_at,
+    )
+
+
+def _to_out(c, scenarios=None) -> CampaignOut:
+    return CampaignOut(
+        id=c.id, name=c.name, description=c.description,
+        status=c.status, scenario=c.scenario,
+        scenarios=[_scenario_to_out(s) for s in (scenarios or [])],
+        user_id=c.user_id, created_at=c.created_at,
+    )
+
+
+async def _get_campaign_or_404(campaign_id: str, user_id: str, db):
+    campaign = await repo.get_campaign(db, campaign_id)
+    if not campaign or campaign.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return campaign
+
+
+# ── Campaign CRUD ────────────────────────────────────────────────────────────
+
+@router.get("", response_model=list[CampaignOut])
+async def list_campaigns(db: DB, user: CurrentUser):
+    campaigns = await repo.list_campaigns(db, user_id=user.id)
+    result = []
+    for c in campaigns:
+        scenarios = await repo.list_scenarios(db, c.id)
+        result.append(_to_out(c, scenarios))
+    return result
+
+
+@router.post("", response_model=CampaignOut, status_code=status.HTTP_201_CREATED)
+async def create_campaign(body: CampaignCreate, db: DB, user: CurrentUser):
+    campaign = await repo.create_campaign(
+        db, body.name, user.id, body.description, body.scenario
+    )
+    for device_id in body.device_ids:
+        device = await repo.get_device(db, device_id)
+        if device and device.user_id == user.id:
+            await repo.add_device_to_campaign(db, campaign.id, device_id)
+    await db.commit()
+    return _to_out(campaign)
+
+
+@router.get("/{campaign_id}", response_model=CampaignOut)
+async def get_campaign(campaign_id: str, db: DB, user: CurrentUser):
+    campaign = await _get_campaign_or_404(campaign_id, user.id, db)
+    scenarios = await repo.list_scenarios(db, campaign_id)
+    return _to_out(campaign, scenarios)
+
+
+@router.delete("/{campaign_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_campaign(campaign_id: str, db: DB, user: CurrentUser):
+    campaign = await _get_campaign_or_404(campaign_id, user.id, db)
+    from sqlalchemy import delete
+    from db.models import Campaign as CampaignModel
+    await db.execute(delete(CampaignModel).where(CampaignModel.id == campaign_id))
+    await db.commit()
+
+
+@router.patch("/{campaign_id}/status")
+async def update_status(campaign_id: str, body: StatusUpdate, db: DB, user: CurrentUser):
+    await _get_campaign_or_404(campaign_id, user.id, db)
+    valid = {"draft", "running", "paused", "completed"}
+    if body.status not in valid:
+        raise HTTPException(status_code=400, detail=f"status must be one of {valid}")
+    await repo.update_campaign_status(db, campaign_id, body.status)
+    await db.commit()
+    return {"id": campaign_id, "status": body.status}
+
+
+@router.get("/{campaign_id}/devices", response_model=list[CampaignDeviceOut])
+async def campaign_devices(campaign_id: str, db: DB, user: CurrentUser):
+    await _get_campaign_or_404(campaign_id, user.id, db)
+    devices = await repo.list_campaign_devices(db, campaign_id)
+    return [CampaignDeviceOut(id=d.id, serial=d.serial, name=d.name) for d in devices]
+
+
+@router.post("/{campaign_id}/devices", status_code=status.HTTP_201_CREATED)
+async def add_device(campaign_id: str, body: AddDeviceBody, db: DB, user: CurrentUser):
+    await _get_campaign_or_404(campaign_id, user.id, db)
+    device = await repo.get_device(db, body.device_id)
+    if not device or device.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Device not found")
+    await repo.add_device_to_campaign(db, campaign_id, body.device_id)
+    await db.commit()
+    return {"ok": True}
+
+
+@router.delete("/{campaign_id}/devices/{device_id}")
+async def remove_device(campaign_id: str, device_id: str, db: DB, user: CurrentUser):
+    await _get_campaign_or_404(campaign_id, user.id, db)
+    device = await repo.get_device(db, device_id)
+    if not device or device.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Device not found")
+    await repo.remove_device_from_campaign(db, campaign_id, device_id)
+    await db.commit()
+    return {"ok": True}
+
+
+# ── Legacy scenario field (kept for MCP backward-compat) ─────────────────────
+
+@router.patch("/{campaign_id}/scenario", response_model=CampaignOut)
+async def update_scenario(
+    campaign_id: str, body: ScenarioUpdateBody, db: DB, user: CurrentUser
+):
+    campaign = await _get_campaign_or_404(campaign_id, user.id, db)
+    campaign.scenario = body.scenario or {}
+    await db.flush()
+    await db.commit()
+    scenarios = await repo.list_scenarios(db, campaign_id)
+    return _to_out(campaign, scenarios)
+
+
+@router.post("/{campaign_id}/compile-scenario", response_model=CampaignOut)
+async def compile_scenario(
+    request: Request,
+    campaign_id: str,
+    body: CompileScenarioBody,
+    db: DB,
+    user: CurrentUser,
+):
+    from runtime.ai.ai_client import build_scenario_from_instructions
+
+    campaign = await _get_campaign_or_404(campaign_id, user.id, db)
+
+    # Resolve instructions
+    instructions = body.instructions
+    if not instructions and body.scenario_id:
+        s = await repo.get_scenario(db, body.scenario_id)
+        if s:
+            instructions = s.instructions or ""
+    if not instructions:
+        instructions = (campaign.scenario or {}).get("instructions") or ""
+    if not instructions:
+        raise HTTPException(
+            status_code=400,
+            detail="No instructions provided",
+        )
+
+    device_context = body.device_context or (campaign.scenario or {}).get("device_context")
+
+    ui_xml = (body.ui_xml or "").strip() or None
+    if not ui_xml and body.device_serial:
+        manager = getattr(request.app.state, "manager", None)
+        if manager:
+            device = manager.get_device(body.device_serial.strip())
+            if device:
+                loop = asyncio.get_running_loop()
+                ui_xml = await loop.run_in_executor(
+                    None, lambda: device.hierarchy_xml(force_refresh=True)
+                )
+                if not (ui_xml or "").strip():
+                    ui_xml = None
+
+    scenario = build_scenario_from_instructions(
+        instructions,
+        ui_xml=ui_xml,
+        device_context=device_context,
+    )
+    from common.scenario_schema import validate_scenario
+    validation_errors = validate_scenario(scenario)
+    if validation_errors:
+        raise HTTPException(
+            status_code=400,
+            detail={"message": "Scenario validation failed", "errors": validation_errors},
+        )
+
+    # Save to specific scenario row if scenario_id provided, else legacy field
+    if body.scenario_id:
+        s = await repo.get_scenario(db, body.scenario_id)
+        if s and s.campaign_id == campaign_id:
+            await repo.update_scenario(
+                db, body.scenario_id,
+                steps=scenario.get("steps", []),
+                instructions=instructions,
+            )
+    else:
+        campaign.scenario = scenario
+        await db.flush()
+
+    await db.commit()
+    scenarios = await repo.list_scenarios(db, campaign_id)
+    return _to_out(campaign, scenarios)
+
+
+# ── Scenario CRUD ─────────────────────────────────────────────────────────────
+
+@router.get("/{campaign_id}/scenarios", response_model=list[ScenarioOut])
+async def list_scenarios(campaign_id: str, db: DB, user: CurrentUser):
+    await _get_campaign_or_404(campaign_id, user.id, db)
+    scenarios = await repo.list_scenarios(db, campaign_id)
+    return [_scenario_to_out(s) for s in scenarios]
+
+
+@router.post("/{campaign_id}/scenarios", response_model=ScenarioOut, status_code=201)
+async def create_scenario(campaign_id: str, body: ScenarioCreate, db: DB, user: CurrentUser):
+    await _get_campaign_or_404(campaign_id, user.id, db)
+    # auto-order: append after last
+    existing = await repo.list_scenarios(db, campaign_id)
+    order = body.order if body.order else len(existing)
+    s = await repo.create_scenario(
+        db, campaign_id,
+        name=body.name,
+        instructions=body.instructions,
+        steps=body.steps,
+        order=order,
+    )
+    await db.commit()
+    return _scenario_to_out(s)
+
+
+@router.get("/{campaign_id}/scenarios/{scenario_id}", response_model=ScenarioOut)
+async def get_scenario(campaign_id: str, scenario_id: str, db: DB, user: CurrentUser):
+    await _get_campaign_or_404(campaign_id, user.id, db)
+    s = await repo.get_scenario(db, scenario_id)
+    if not s or s.campaign_id != campaign_id:
+        raise HTTPException(status_code=404, detail="Scenario not found")
+    return _scenario_to_out(s)
+
+
+@router.patch("/{campaign_id}/scenarios/{scenario_id}", response_model=ScenarioOut)
+async def update_scenario_route(
+    campaign_id: str, scenario_id: str, body: ScenarioUpdate, db: DB, user: CurrentUser
+):
+    await _get_campaign_or_404(campaign_id, user.id, db)
+    s = await repo.get_scenario(db, scenario_id)
+    if not s or s.campaign_id != campaign_id:
+        raise HTTPException(status_code=404, detail="Scenario not found")
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if updates:
+        await repo.update_scenario(db, scenario_id, **updates)
+    await db.commit()
+    s = await repo.get_scenario(db, scenario_id)
+    return _scenario_to_out(s)
+
+
+@router.delete("/{campaign_id}/scenarios/{scenario_id}", status_code=204)
+async def delete_scenario_route(
+    campaign_id: str, scenario_id: str, db: DB, user: CurrentUser
+):
+    await _get_campaign_or_404(campaign_id, user.id, db)
+    s = await repo.get_scenario(db, scenario_id)
+    if not s or s.campaign_id != campaign_id:
+        raise HTTPException(status_code=404, detail="Scenario not found")
+    await repo.delete_scenario(db, scenario_id)
+    await db.commit()
+
+
+# ── Compile scenario for a specific scenario row ──────────────────────────────
+
+@router.post("/{campaign_id}/scenarios/{scenario_id}/compile", response_model=ScenarioOut)
+async def compile_scenario_row(
+    request: Request,
+    campaign_id: str,
+    scenario_id: str,
+    body: CompileScenarioBody,
+    db: DB,
+    user: CurrentUser,
+):
+    from runtime.ai.ai_client import build_scenario_from_instructions
+
+    await _get_campaign_or_404(campaign_id, user.id, db)
+    s = await repo.get_scenario(db, scenario_id)
+    if not s or s.campaign_id != campaign_id:
+        raise HTTPException(status_code=404, detail="Scenario not found")
+
+    instructions = body.instructions or s.instructions or ""
+    if not instructions:
+        raise HTTPException(status_code=400, detail="No instructions provided")
+
+    ui_xml = (body.ui_xml or "").strip() or None
+    if not ui_xml and body.device_serial:
+        manager = getattr(request.app.state, "manager", None)
+        if manager:
+            device = manager.get_device(body.device_serial.strip())
+            if device:
+                loop = asyncio.get_running_loop()
+                ui_xml = await loop.run_in_executor(
+                    None, lambda: device.hierarchy_xml(force_refresh=True)
+                )
+                if not (ui_xml or "").strip():
+                    ui_xml = None
+
+    scenario = build_scenario_from_instructions(
+        instructions, ui_xml=ui_xml, device_context=body.device_context
+    )
+    from common.scenario_schema import validate_scenario
+    errs = validate_scenario(scenario)
+    if errs:
+        raise HTTPException(status_code=400, detail={"message": "Validation failed", "errors": errs})
+
+    await repo.update_scenario(
+        db, scenario_id,
+        steps=scenario.get("steps", []),
+        instructions=instructions,
+    )
+    await db.commit()
+    s = await repo.get_scenario(db, scenario_id)
+    return _scenario_to_out(s)

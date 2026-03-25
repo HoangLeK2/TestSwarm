@@ -1,0 +1,23 @@
+{
+  "ignorePatterns": ["src/features/device-farm/services/generated/**"],
+  "extends": ["next/core-web-vitals", "plugin:@typescript-eslint/recommended"],
+  "parser": "@typescript-eslint/parser",
+  "plugins": ["unused-imports"],
+  "rules": {
+    "@typescript-eslint/no-unused-vars": "off",
+    "@typescript-eslint/no-explicit-any": "off",
+    "@typescript-eslint/ban-ts-comment": [
+      "warn",
+      {
+        "ts-nocheck": true
+      }
+    ],
+    "no-console": "off",
+    "@typescript-eslint/no-non-null-asserted-optional-chain": "off",
+    "no-unused-vars": "off",
+    "react-hooks/exhaustive-deps": "warn",
+    "import/no-unresolved": "error",
+    "unused-imports/no-unused-imports": "error",
+    "react/no-unescaped-entities": "off"
+  }
+}

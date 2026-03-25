@@ -1,0 +1,107 @@
+name: CI NEW
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['dev', 'staging']
+    paths:
+      - 'src/**'
+      - 'generate/**'
+      - 'messages/**'
+
+env:
+  APP_NAME: ndatrace-portal-fe
+  APP_TAG: ${{ github.sha }}-${{ github.run_number }}
+  GITOPS_PRODUCT: layer-3/ndatrace
+  GITOPS_FILE: portal-web.yaml
+  APP_REGISTRY: registry.pila.vn
+
+jobs:
+  build-push-artifact:
+    runs-on: medium
+    steps:
+      - name: Checkout
+        uses: 'actions/checkout@v4'
+
+      - name: Set dynamic env for branch
+        run: |
+          if [[ "${GITHUB_REF##*/}" == "prod" ]]; then
+            echo "REGISTRY_PASS=${{ secrets.ORG_PILA_PROD_PASS }}" >> $GITHUB_ENV
+            echo 'GITOPS_NAMESPACE=prod' >> $GITHUB_ENV
+            echo "VAULT_ADDR=${{ secrets.VAULT_PROD_ADDR }}" >> $GITHUB_ENV
+            echo "VAULT_USERNAME=${{ secrets.VAULT_PROD_USERNAME }}" >> $GITHUB_ENV
+            echo "VAULT_PASSWORD=${{ secrets.VAULT_PROD_PASSWORD }}" >> $GITHUB_ENV
+
+          elif [[ "${GITHUB_REF##*/}" == "staging" ]]; then
+            echo "REGISTRY_PASS=${{ secrets.ORG_PILA_STAGING_PASS }}" >> $GITHUB_ENV
+            echo 'GITOPS_NAMESPACE=staging' >> $GITHUB_ENV
+            echo "VAULT_ADDR=${{ secrets.VAULT_STAGING_ADDR }}" >> $GITHUB_ENV
+            echo "VAULT_USERNAME=${{ secrets.VAULT_STAGING_USERNAME }}" >> $GITHUB_ENV
+            echo "VAULT_PASSWORD=${{ secrets.VAULT_STAGING_PASSWORD }}" >> $GITHUB_ENV
+
+          else
+            echo "REGISTRY_PASS=${{ secrets.ORG_PILA_DEV_PASS }}" >> $GITHUB_ENV
+            echo 'GITOPS_NAMESPACE=dev' >> $GITHUB_ENV
+            echo "VAULT_ADDR=${{ secrets.VAULT_DEV_ADDR }}" >> $GITHUB_ENV
+            echo "VAULT_USERNAME=${{ secrets.VAULT_DEV_USERNAME }}" >> $GITHUB_ENV
+            echo "VAULT_PASSWORD=${{ secrets.VAULT_DEV_PASSWORD }}" >> $GITHUB_ENV
+          fi
+
+      - name: Set APP IMAGE dynamic
+        run: |
+          echo "REGISTRY_SA=robot\$${{ env.GITOPS_NAMESPACE }}" >> $GITHUB_ENV
+          echo "APP_IMAGE=${{ env.APP_REGISTRY }}/${{ env.GITOPS_NAMESPACE }}/ndatrace-portal-fe" >> $GITHUB_ENV
+          echo "SECRET_PATH=secret/data/${{ env.GITOPS_NAMESPACE }}/products/${{ env.GITOPS_PRODUCT }}/${{ env.APP_NAME }}" >> $GITHUB_ENV
+
+      - name: Authenticate Registry
+        run: |-
+          docker login -u '${{ env.REGISTRY_SA }}' -p '${{ env.REGISTRY_PASS }}' ${{ env.APP_REGISTRY }}
+
+      - name: Import ENV
+        id: import-env
+        uses: hashicorp/vault-action@v2
+        with:
+          url: ${{ env.VAULT_ADDR }}
+          method: userpass
+          username: ${{ env.VAULT_USERNAME }}
+          password: ${{ env.VAULT_PASSWORD }}
+          tlsSkipVerify: true
+          secrets: |
+            ${{ env.SECRET_PATH }}/env *
+
+      - name: Create file .env
+        working-directory: .
+        run: |
+          rm -f .env
+          for key in $(jq -r 'keys[]' <<< '${{ toJson(steps.import-env.outputs) }}'); do
+            value=$(jq -r --arg k "$key" '.[$k]' <<< '${{ toJson(steps.import-env.outputs) }}')
+            echo "$key=$value" >> .env
+          done
+          cat .env
+
+      - name: Build and Push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ env.APP_IMAGE }}:${{ env.APP_TAG }}
+
+      - name: Check out gitops repo
+        uses: 'actions/checkout@v4'
+        with:
+          repository: pilacorp/pila-system
+          ref: ${{ env.GITOPS_NAMESPACE }}
+          token: ${{ secrets.ORG_GITOPS_PAT }}
+
+      - name: Update image tag
+        run: |
+          sed -i 's|\(image: ${{ env.APP_IMAGE }}:\).*|\1${{ env.APP_TAG }}|' ${{ env.GITOPS_FILE}}
+        working-directory: ${{ env.GITOPS_PRODUCT }}
+
+      - name: Commit update
+        run: |
+          git config --global user.name ${{ secrets.ORG_GITOPS_NAME }}
+          git config --global user.email ${{ secrets.ORG_GITOPS_EMAIL }}
+          git add .
+          git commit -m "deploy ${{ env.APP_NAME }} ver ${{ env.APP_TAG }}"
+          git push origin

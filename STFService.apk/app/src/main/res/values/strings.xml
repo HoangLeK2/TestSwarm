@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">STFService</string>
+    <string name="service_ticker">STFService running</string>
+    <string name="service_title">STFService</string>
+    <string name="service_text">STFService is running.</string>
+    <!-- Clear description for Play Protect / policy: remote control for device testing only -->
+    <string name="accessibility_description">Remote touch input for device testing and automation. Used only when you connect this device to a test server. No data is collected for advertising or tracking.</string>
+</resources>

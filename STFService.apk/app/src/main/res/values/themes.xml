@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.STFService.Identity" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#6366F1</item>
+        <item name="colorPrimaryVariant">#4F46E5</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorSecondary">#10B981</item>
+        <item name="colorOnSecondary">#FFFFFF</item>
+        <item name="android:windowBackground">#0F172A</item>
+        <item name="android:statusBarColor">#0F172A</item>
+        <item name="android:navigationBarColor">#0F172A</item>
+        <item name="materialButtonStyle">@style/Widget.STFService.Button</item>
+    </style>
+
+    <!-- Theme for the QR scan screen (plain AppCompat – CaptureActivity is not AppCompatActivity) -->
+    <style name="Theme.STFService.Scan" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowBackground">#000000</item>
+        <item name="android:statusBarColor">#000000</item>
+        <item name="android:navigationBarColor">#000000</item>
+        <item name="android:windowTranslucentStatus">false</item>
+    </style>
+
+    <style name="Widget.STFService.Button" parent="Widget.MaterialComponents.Button">
+        <item name="cornerRadius">12dp</item>
+        <item name="android:paddingTop">14dp</item>
+        <item name="android:paddingBottom">14dp</item>
+        <item name="android:textSize">15sp</item>
+        <item name="android:letterSpacing">0.01</item>
+    </style>
+</resources>

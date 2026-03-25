@@ -1,0 +1,59 @@
+[project]
+name = "device-farm"
+version = "1.0.0"
+description = "Android Device Farm — screen streaming, touch injection, task dispatch"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    # ── ADB transport (no adb binary) ──
+    # adb-shell: implements ADB protocol natively in Python
+    # Connects directly to device's adbd over TCP — no `adb` binary required
+    "adb-shell[usb]>=0.4.0",
+    "cryptography>=41.0.0",       # RSA key generation for ADB auth
+    "zeroconf>=0.132.0",          # mDNS discovery for Android 11+ Wireless Debugging
+    # ─────────────────────────────────
+    "uiautomator2>=3.2.0",
+    "adbutils>=2.11.0",
+    "pillow>=10.0.0",
+    "numpy>=1.24.0",
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.27.0",
+    "websockets>=12.0",
+    "aiohttp>=3.9.0",
+    "protobuf>=4.25.0",
+    "pyyaml>=6.0.1",
+    "jinja2>=3.1.3",
+    "python-multipart>=0.0.9",
+    "av>=12.0.0",
+    "python-jose[cryptography]>=3.3.0",
+    "bcrypt>=3.2.0,<4.0.0",
+    "passlib[bcrypt]>=1.7.4",
+    "sqlalchemy[asyncio]>=2.0.0",
+    "asyncpg>=0.29.0",
+    "openai>=2.26.0",
+    "google-generativeai>=0.8.6",
+    "python-dotenv>=1.2.2",
+    "pyngrok>=7.0.0",
+
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+
+[project.scripts]
+device-farm = "main:main"
+export-openapi = "export_openapi:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

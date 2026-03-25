@@ -1,0 +1,203 @@
+from __future__ import annotations
+
+import uuid
+from typing import Optional
+
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from sqlalchemy import delete
+
+from db.models import Device, CampaignDevice
+from db.models.utils import _now
+
+
+PENDING_SERIAL_PREFIX = "pending-"
+
+
+async def get_device_by_serial(db: AsyncSession, serial: str) -> Optional[Device]:
+    result = await db.execute(select(Device).where(Device.serial == serial))
+    return result.scalar_one_or_none()
+
+
+async def get_device_by_key(db: AsyncSession, device_key: str) -> Optional[Device]:
+    result = await db.execute(select(Device).where(Device.device_key == device_key))
+    return result.scalar_one_or_none()
+
+
+async def get_device(db: AsyncSession, device_id: str) -> Optional[Device]:
+    result = await db.execute(select(Device).where(Device.id == device_id))
+    return result.scalar_one_or_none()
+
+
+async def get_or_create_device(
+    db: AsyncSession, serial: str, user_id: Optional[str] = None
+) -> Device:
+    """Get existing device by serial, or create a new one (auto-register)."""
+    device = await get_device_by_serial(db, serial)
+    if device is None:
+        device = Device(serial=serial, user_id=user_id)
+        db.add(device)
+        await db.flush()
+    return device
+
+
+async def create_device(
+    db: AsyncSession,
+    serial: str,
+    name: str = "",
+    user_id: Optional[str] = None,
+) -> Device:
+    device = Device(serial=serial, name=name, user_id=user_id)
+    db.add(device)
+    await db.flush()
+    return device
+
+
+async def create_pending_device(
+    db: AsyncSession,
+    user_id: str,
+    name: str = "",
+) -> Device:
+    """Tạo bản ghi thiết bị chưa kết nối (đăng ký). Serial = pending-{uuid}."""
+    serial = f"{PENDING_SERIAL_PREFIX}{uuid.uuid4().hex}"
+    device = Device(serial=serial, name=name or "Thiết bị mới", user_id=user_id)
+    db.add(device)
+    await db.flush()
+    return device
+
+
+async def bind_pending_device(
+    db: AsyncSession,
+    device_key: str,
+    serial: str,
+    *,
+    brand: str = "",
+    model: str = "",
+    android_version: str = "",
+    sdk_version: int = 0,
+    screen_width: int = 0,
+    screen_height: int = 0,
+) -> Optional[Device]:
+    """
+    Gắn thiết bị pending (tìm theo device_key) với serial thật từ điện thoại.
+    """
+    device = await get_device_by_key(db, device_key)
+    if not device:
+        return None
+
+    # Case 1: pending device → bind lần đầu
+    if device.serial.startswith(PENDING_SERIAL_PREFIX):
+        existing = await get_device_by_serial(db, serial)
+        if existing and existing.id != device.id:
+            return None  # serial đã thuộc thiết bị khác
+        await db.execute(
+            update(Device)
+            .where(Device.id == device.id)
+            .values(
+                serial=serial,
+                brand=brand,
+                model=model,
+                android_version=android_version,
+                sdk_version=sdk_version,
+                screen_width=screen_width,
+                screen_height=screen_height,
+                last_seen=_now(),
+            )
+        )
+        await db.flush()
+        device.serial = serial
+    else:
+        # Case 2: device đã bind trước đó → cho phép re-connect với cùng serial
+        if device.serial != serial:
+            return None
+        await db.execute(
+            update(Device)
+            .where(Device.id == device.id)
+            .values(
+                brand=brand,
+                model=model,
+                android_version=android_version,
+                sdk_version=sdk_version,
+                screen_width=screen_width,
+                screen_height=screen_height,
+                last_seen=_now(),
+            )
+        )
+        await db.flush()
+
+    device.brand = brand
+    device.model = model
+    device.android_version = android_version
+    device.sdk_version = sdk_version
+    device.screen_width = screen_width
+    device.screen_height = screen_height
+    return device
+
+
+async def update_device_metadata(
+    db: AsyncSession,
+    serial: str,
+    *,
+    brand: str = "",
+    model: str = "",
+    android_version: str = "",
+    sdk_version: int = 0,
+    screen_width: int = 0,
+    screen_height: int = 0,
+) -> None:
+    await db.execute(
+        update(Device)
+        .where(Device.serial == serial)
+        .values(
+            brand=brand,
+            model=model,
+            android_version=android_version,
+            sdk_version=sdk_version,
+            screen_width=screen_width,
+            screen_height=screen_height,
+            last_seen=_now(),
+        )
+    )
+
+
+async def update_device_name(db: AsyncSession, device_id: str, name: str) -> None:
+    """Update display name for a device."""
+    await db.execute(
+        update(Device).where(Device.id == device_id).values(name=name)
+    )
+
+
+async def assign_device_to_user(db: AsyncSession, serial: str, user_id: str) -> None:
+    """Assign a device to a user if it has no owner yet."""
+    await db.execute(
+        update(Device)
+        .where(Device.serial == serial)
+        .where(Device.user_id.is_(None))
+        .values(user_id=user_id)
+    )
+
+
+async def touch_device_last_seen(db: AsyncSession, serial: str) -> None:
+    await db.execute(
+        update(Device).where(Device.serial == serial).values(last_seen=_now())
+    )
+
+
+async def list_devices(db: AsyncSession, user_id: Optional[str] = None) -> list[Device]:
+    q = select(Device).order_by(Device.created_at)
+    if user_id:
+        q = q.where(Device.user_id == user_id)
+    result = await db.execute(q)
+    return list(result.scalars().all())
+
+
+async def delete_device(db: AsyncSession, device_id: str) -> None:
+    """
+    Xoá device và mọi liên kết campaign-device của nó.
+    """
+    # Remove from campaigns first
+    await db.execute(delete(CampaignDevice).where(CampaignDevice.device_id == device_id))
+    # Then delete the device
+    await db.execute(delete(Device).where(Device.id == device_id))
+

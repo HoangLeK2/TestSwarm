@@ -1,0 +1,46 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Optional
+
+from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from db.database import Base
+from .utils import _now, _uuid
+
+
+class Organization(Base):
+    __tablename__ = "organizations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    business_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    business_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    business_logo: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    members: Mapped[list["OrganizationMember"]] = relationship(
+        "OrganizationMember", back_populates="organization", cascade="all, delete-orphan"
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - repr
+        return f"<Organization {self.business_name}>"
+
+
+class OrganizationMember(Base):
+    __tablename__ = "organization_members"
+    __table_args__ = (UniqueConstraint("organization_id", "user_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    organization_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    role: Mapped[str] = mapped_column(String(20), default="member")  # owner | member
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    organization: Mapped["Organization"] = relationship("Organization", back_populates="members")
+    user: Mapped["User"] = relationship("User", back_populates="memberships")
+

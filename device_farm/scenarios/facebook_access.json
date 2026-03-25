@@ -1,0 +1,7 @@
+{
+  "instructions": "Truy cập Facebook: mở link facebook.com (app hoặc trình duyệt), chờ 2s.",
+  "steps": [
+    { "type": "open_url", "url": "https://www.facebook.com" },
+    { "type": "wait", "seconds": 2 }
+  ]
+}

@@ -220,6 +220,9 @@ export function ControlRecordView({ initialSerial }: ControlRecordViewProps = {}
               >
                 <option value='text'>text</option>
                 <option value='resource-id'>resource-id</option>
+                <option value='description'>description (content-desc)</option>
+                <option value='descriptionContains'>descriptionContains</option>
+                <option value='descriptionStartsWith'>descriptionStartsWith</option>
                 <option value='xpath'>xpath</option>
                 <option value='class name'>class name</option>
               </select>

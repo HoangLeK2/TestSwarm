@@ -180,6 +180,7 @@ class U2JsonRpcClient:
                             timeout: Optional[float] = None) -> Optional[str]:
         """Resolve xpath by dumping hierarchy XML and searching with ElementTree."""
         import xml.etree.ElementTree as ET
+        xpath_query = self._normalize_et_xpath(xpath_expr)
         wait = timeout if timeout is not None else self._implicitly_wait
         # Single check when timeout=0
         single_shot = wait <= 0
@@ -189,7 +190,7 @@ class U2JsonRpcClient:
                 xml = self.page_source(timeout=self._timeout)
                 if xml:
                     root = ET.fromstring(xml)
-                    if root.findall(xpath_expr):
+                    if root.findall(xpath_query):
                         return f"xpath::{xpath_expr}"
             except Exception as exc:
                 logger.debug("xpath find failed for %r: %s", xpath_expr, exc)
@@ -256,12 +257,13 @@ class U2JsonRpcClient:
         """Resolve xpath via hierarchy XML, return eid + bounds."""
         import re as _re
         import xml.etree.ElementTree as ET
+        xpath_query = self._normalize_et_xpath(xpath_expr)
         try:
             xml = self.page_source(timeout=self._timeout)
             if not xml:
                 return None
             root = ET.fromstring(xml)
-            matches = root.findall(xpath_expr)
+            matches = root.findall(xpath_query)
             if not matches:
                 return None
             node = matches[0]
@@ -272,6 +274,21 @@ class U2JsonRpcClient:
         except Exception as exc:
             logger.debug("xpath_with_bounds failed for %r: %s", xpath_expr, exc)
             raise
+
+    @staticmethod
+    def _normalize_et_xpath(xpath_expr: str) -> str:
+        """
+        ElementTree's Element.findall() rejects absolute paths like '//*' with:
+        'cannot use absolute path on element'. Convert common absolute forms
+        to relative descendants rooted at current element.
+        """
+        q = (xpath_expr or "").strip()
+        if q.startswith("//"):
+            return f".{q}"  # //... -> .//...
+        if q.startswith("/"):
+            # /a/b -> ./a/b
+            return f".{q}"
+        return q
 
     def element_click(self, eid: str) -> None:
         """Click element by eid string (format: 'by::value').

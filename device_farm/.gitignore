@@ -1,0 +1,70 @@
+# -----------------------------
+# Python
+# -----------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+.python-version
+
+# -----------------------------
+# Virtual environments
+# -----------------------------
+.venv/
+venv/
+env/
+ENV/
+
+# -----------------------------
+# Build / packaging
+# -----------------------------
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# -----------------------------
+# Test / tooling cache
+# -----------------------------
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# -----------------------------
+# Runtime / logs
+# -----------------------------
+*.log
+logs/
+
+# -----------------------------
+# Local env / secrets
+# -----------------------------
+.env
+.env.*
+!.env.example
+*.pem
+
+# -----------------------------
+# IDE / OS
+# -----------------------------
+.idea/
+.vscode/
+.DS_Store
+
+# -----------------------------
+# Cursor / local AI metadata
+# -----------------------------
+.cursor/
+.cursorrules
+.serena
+memory-bank/
+
+# -----------------------------
+# Docs
+# -----------------------------
+*.md
+!README.md

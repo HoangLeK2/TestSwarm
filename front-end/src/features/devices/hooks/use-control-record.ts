@@ -47,7 +47,15 @@ export function useControlRecord(initialSerial?: string | null) {
   const pollingXmlRef = useRef(false);
   const [hierarchyOpen, setHierarchyOpen] = useState(false);
   const [hierarchyXml, setHierarchyXml] = useState<string>('');
-  const [selectorBy, setSelectorBy] = useState<'resource-id' | 'text' | 'xpath' | 'class name'>('text');
+  const [selectorBy, setSelectorBy] = useState<
+    | 'resource-id'
+    | 'text'
+    | 'xpath'
+    | 'class name'
+    | 'description'
+    | 'descriptionContains'
+    | 'descriptionStartsWith'
+  >('text');
   const [selectorValue, setSelectorValue] = useState('');
 
   const connectedDevices = useMemo(

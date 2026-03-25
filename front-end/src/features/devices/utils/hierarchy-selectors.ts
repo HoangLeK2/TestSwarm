@@ -1,7 +1,7 @@
 export type HierarchyParsedNode = {
   id: string;
   label: string;
-  by: 'resource-id' | 'text' | 'xpath';
+  by: 'resource-id' | 'text' | 'xpath' | 'description';
   value: string;
   package?: string;
   bounds?: string;
@@ -38,12 +38,11 @@ export function parseHierarchySelectorNodes(hierarchyXml: string): HierarchyPars
       }
       if (desc && !resId && !seen.has(`desc:${desc}`)) {
         seen.add(`desc:${desc}`);
-        const xval = `//*[@content-desc="${desc.replace(/"/g, '\\"')}"]`;
         items.push({
           id: `desc-${idx++}`,
           label: `content-desc: ${desc.slice(0, 50)}`,
-          by: 'xpath',
-          value: xval,
+          by: 'description',
+          value: desc,
           clickable: el.getAttribute('clickable') === 'true'
         });
       }

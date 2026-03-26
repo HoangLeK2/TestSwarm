@@ -52,6 +52,7 @@ const listeners = new Set<(msg: WsMessage) => void>();
 
 let sharedSocket: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+let idleCloseTimer: ReturnType<typeof setTimeout> | undefined;
 
 function broadcast(msg: WsMessage) {
   listeners.forEach((fn) => {
@@ -94,6 +95,11 @@ function connectShared() {
     return;
   }
 
+  if (idleCloseTimer !== undefined) {
+    clearTimeout(idleCloseTimer);
+    idleCloseTimer = undefined;
+  }
+
   const url = buildDeviceFarmWsUrl();
   const ws = new WebSocket(url);
   sharedSocket = ws;
@@ -129,12 +135,19 @@ function connectShared() {
 
 function disconnectSharedIfIdle() {
   if (listeners.size > 0) return;
-  if (reconnectTimer !== undefined) {
-    clearTimeout(reconnectTimer);
-    reconnectTimer = undefined;
-  }
-  sharedSocket?.close();
-  sharedSocket = null;
+  // Debounce close: in dev/HMR/route transitions listeners can briefly drop to 0,
+  // which would otherwise flap the WS connection and cause black-screen symptoms.
+  if (idleCloseTimer !== undefined) return;
+  idleCloseTimer = setTimeout(() => {
+    idleCloseTimer = undefined;
+    if (listeners.size > 0) return;
+    if (reconnectTimer !== undefined) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = undefined;
+    }
+    sharedSocket?.close();
+    sharedSocket = null;
+  }, 800);
 }
 
 /** One browser-wide socket; multiple React trees/components share it. */

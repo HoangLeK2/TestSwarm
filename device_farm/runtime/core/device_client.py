@@ -28,6 +28,7 @@ import asyncio
 import base64
 import logging
 import os
+import subprocess
 import struct
 import threading
 import time
@@ -664,9 +665,8 @@ class DeviceClient:
                 # In-app resource-id (stable within the same app version)
                 sel = {"by": "resource-id", "value": rid}
             elif desc and len(desc) < 80:
-                # Accessibility label — use xpath so u2 can find via content-desc attribute
-                escaped = desc.replace('"', '\\"')
-                sel = {"by": "xpath", "value": f'//*[@content-desc="{escaped}"]'}
+                # Accessibility label — map to native u2 "description" (content-desc)
+                sel = {"by": "description", "value": desc}
             elif rid:
                 # Launcher/system resource-id — least portable but better than nothing
                 sel = {"by": "resource-id", "value": rid}
@@ -831,6 +831,22 @@ class DeviceClient:
         Tap element by selector (uiautomator2 find + click).
         On connection/timeout error: null _u2, reconnect, retry once.
         """
+        by = (by or "").strip()
+        value = (value or "").strip()
+        # Normalize common names to our JSON-RPC selector surface.
+        if by in ("accessibility id", "accessibility_id", "content-desc", "content_desc"):
+            by = "description"
+        # Fuzzy description matching: translate to xpath (our JSON-RPC wrapper doesn't expose
+        # descriptionContains/StartsWith as native selector fields).
+        if by in ("descriptionContains", "content-desc-contains", "content_desc_contains"):
+            escaped = value.replace('"', '\\"')
+            by = "xpath"
+            value = f'//*[contains(@content-desc,"{escaped}")]'
+        elif by in ("descriptionStartsWith", "content-desc-starts-with", "content_desc_starts_with"):
+            escaped = value.replace('"', '\\"')
+            by = "xpath"
+            value = f'//*[starts-with(@content-desc,"{escaped}")]'
+
         if not self.ensure_u2_healthy() or self._u2 is None:
             self._log("tap_selector skipped (U2 not available)", level=logging.WARNING)
             return

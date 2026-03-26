@@ -1,6 +1,13 @@
 /** Scenario step types — match device_farm/tasks/scenario_task.py */
 
-export type SelectorBy = 'resource-id' | 'text' | 'xpath' | 'class name';
+export type SelectorBy =
+  | 'resource-id'
+  | 'text'
+  | 'xpath'
+  | 'class name'
+  | 'description'
+  | 'descriptionContains'
+  | 'descriptionStartsWith';
 
 /** Screen context captured at record time. Executor uses to verify correct screen. */
 export type ScreenContext = {

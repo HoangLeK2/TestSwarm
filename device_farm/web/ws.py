@@ -314,6 +314,10 @@ class DeviceAgentSession:
         self._ws_manager = ws_manager
         self._config = config
         self._sessions: Dict[str, WebSocket] = {}
+        # Deduplicate concurrent connections for the same ?key= (pending device key / QR).
+        # Without this, the agent (or OS/network) can open two sockets at once, and one
+        # times out on hello → tunnel churn + black screen symptoms.
+        self._active_keys: set[str] = set()
         self._lock = asyncio.Lock()
 
     async def handle(self, ws: WebSocket) -> None:
@@ -332,6 +336,15 @@ class DeviceAgentSession:
         pair_id = ws.query_params.get("pair")
         key = ws.query_params.get("key")
         log.info("Agent WS: waiting for hello…")
+        if key:
+            async with self._lock:
+                if key in self._active_keys:
+                    try:
+                        await ws.close(code=4003)
+                    except Exception:
+                        pass
+                    return
+                self._active_keys.add(key)
         try:
             # ── Handshake ────────────────────────────────────────────────────
             hello = await asyncio.wait_for(ws.receive_json(), timeout=15.0)
@@ -636,6 +649,12 @@ class DeviceAgentSession:
         except Exception as exc:
             log.warning("Agent %s WS error: %s", serial or "unknown", exc)
         finally:
+            if key:
+                try:
+                    async with self._lock:
+                        self._active_keys.discard(key)
+                except Exception:
+                    pass
             if serial:
                 device = self._manager.get_device(serial)
                 if device:

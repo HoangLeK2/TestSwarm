@@ -97,8 +97,15 @@ def _pick_serial() -> str:
             "    hoặc kết nối qua WiFi: adb connect <ip>:5555"
         )
     if len(devices) > 1:
+        # Prefer wireless debugging targets by default (matches farm workflow).
+        # Override by passing --serial explicitly.
+        preferred = sorted(
+            devices,
+            key=lambda s: (0 if ":5555" in s else 1, 0 if "." in s else 1, s),
+        )
+        devices = preferred
         print(f"[agent] Nhiều thiết bị: {devices}")
-        print(f"[agent] Dùng thiết bị đầu tiên: {devices[0]}")
+        print(f"[agent] Dùng thiết bị ưu tiên: {devices[0]}")
         print("[agent] (Dùng --serial để chọn thiết bị khác)")
     return devices[0]
 

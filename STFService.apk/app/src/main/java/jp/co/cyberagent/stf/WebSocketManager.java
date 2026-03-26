@@ -5,6 +5,7 @@ import okhttp3.Request;
 import okhttp3.Response;
 import okhttp3.WebSocket;
 import okhttp3.WebSocketListener;
+import okio.ByteString;
 
 import java.util.concurrent.TimeUnit;
 
@@ -98,6 +99,10 @@ public class WebSocketManager {
 
     public boolean send(String message) {
         return webSocket != null && webSocket.send(message);
+    }
+
+    public boolean sendBytes(byte[] bytes) {
+        return webSocket != null && bytes != null && webSocket.send(ByteString.of(bytes));
     }
 
     public void shutdown() {

@@ -143,17 +143,51 @@
     "activity_history": "Lịch sử hoạt động",
     "gln": "Quản lý GLN",
     "totp": "Xác thực hai yếu tố",
-    "dashboard_home": "Tổng quan",
     "devices": "Thiết bị",
     "device_farm": "Điều khiển thiết bị",
     "devices_manage": "Quản lý thiết bị",
     "device_control_record": "Điều khiển & ghi kịch bản",
-    "automation": "Tự động hoá",
-    "campaigns": "Campaigns"
+    "campaigns": "Campaigns",
+    "crawl_jobs": "FB Crawl Jobs"
   },
-  "campaignsPage": {
-    "title": "Campaigns",
-    "description": "Tạo và chạy kịch bản tự động trên nhiều thiết bị"
+  "crawlJobs": {
+    "title": "FB Crawl Jobs",
+    "description": "Theo dõi phiên crawl và dữ liệu bài viết đã lưu",
+    "jobsTitle": "Danh sách jobs",
+    "postsTitle": "Bài viết",
+    "createTitle": "Tạo crawl job",
+    "refresh": "Làm mới",
+    "runNow": "Chạy enqueue",
+    "creating": "Đang tạo...",
+    "loading": "Đang tải...",
+    "emptyJobs": "Chưa có crawl job nào.",
+    "emptyPosts": "Job chưa có bài viết.",
+    "selectJob": "Chọn 1 job để xem bài viết.",
+    "loadJobsFailed": "Không tải được crawl jobs",
+    "loadPostsFailed": "Không tải được bài viết",
+    "createFailed": "Không tạo được crawl job",
+    "serialRequired": "Chọn thiết bị trước",
+    "groupRequired": "Nhập group id",
+    "campaignOrScenarioRequired": "Chọn campaign hoặc scenario để chạy",
+    "selectDevice": "Chọn thiết bị",
+    "campaignOptional": "Không gắn campaign",
+    "scenarioOptional": "Scenario (tuỳ chọn)",
+    "allScenariosInCampaign": "Chạy toàn bộ scenarios của campaign",
+    "scenarioNoExtractWarning": "Scenario chưa có extract fb_posts, backend sẽ tự nối crawl block nếu bật auto-append.",
+    "autoAppendCrawl": "Tự nối crawl block nếu thiếu",
+    "autoAppendOn": "Bật",
+    "autoAppendOff": "Tắt",
+    "loopCount": "Số vòng lặp (max_scrolls)",
+    "maxPosts": "Giới hạn bài viết",
+    "scrollPause": "Delay sau mỗi scroll (giây)",
+    "waitLoad": "Delay tải trang ban đầu (giây)",
+    "device": "Thiết bị",
+    "campaign": "Campaign",
+    "posts": "Bài",
+    "reactions": "Reactions",
+    "comments": "Comments",
+    "shares": "Shares",
+    "unknownAuthor": "Không rõ tác giả"
   },
   "campaignsFeature": {
     "createDialog": {
@@ -299,26 +333,6 @@
       "saving": "Đang lưu…",
       "currentSteps": "{count} bước hiện tại"
     }
-  },
-  "devicesPage": {
-    "title": "Quản lý thiết bị",
-    "description": "Danh sách và quản lý các thiết bị đã đăng ký"
-  },
-  "controlRecordPage": {
-    "title": "Điều khiển & ghi kịch bản"
-  },
-  "dashboardPage": {
-    "title": "Tổng quan",
-    "description": "Tổng quan hệ thống Device Farm",
-    "devicesOnline": "Thiết bị online",
-    "devicesOffline": "Thiết bị offline",
-    "activeCampaigns": "Campaign đang chạy",
-    "totalCampaigns": "Tổng campaign",
-    "quickActions": "Thao tác nhanh",
-    "connectDevice": "Kết nối thiết bị",
-    "createCampaign": "Tạo campaign",
-    "openDeviceFarm": "Mở Device Farm",
-    "manageDevices": "Quản lý thiết bị"
   },
   "devicesList": {
     "loading": "Đang tải…",
@@ -535,13 +549,6 @@
     "signInPage": {
       "welcomeTitle": "Đăng nhập",
       "welcomeSubtitle": "Nhập thông tin đăng nhập để tiếp tục."
-    },
-    "signUpPage": {
-      "welcomeTitle": "Tạo tài khoản",
-      "welcomeSubtitle": "Đăng ký để bắt đầu sử dụng Device Farm.",
-      "name": "Tên",
-      "namePlaceholder": "Nguyen Van A",
-      "signingUp": "Đang đăng ký..."
     }
   },
   "settings": {

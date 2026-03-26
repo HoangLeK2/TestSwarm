@@ -143,17 +143,51 @@
     "activity_history": "Activity History",
     "gln": "GLN Management",
     "totp": "TOTP Management",
-    "dashboard_home": "Overview",
     "devices": "Devices",
     "device_farm": "Device Control",
     "devices_manage": "Manage Devices",
     "device_control_record": "Control & Record Scenario",
-    "automation": "Automation",
-    "campaigns": "Campaigns"
+    "campaigns": "Campaigns",
+    "crawl_jobs": "FB Crawl Jobs"
   },
-  "campaignsPage": {
-    "title": "Campaigns",
-    "description": "Create and run automated scenarios on multiple devices"
+  "crawlJobs": {
+    "title": "FB Crawl Jobs",
+    "description": "Track crawl sessions and persisted posts",
+    "jobsTitle": "Jobs",
+    "postsTitle": "Posts",
+    "createTitle": "Create crawl job",
+    "refresh": "Refresh",
+    "runNow": "Enqueue run",
+    "creating": "Creating...",
+    "loading": "Loading...",
+    "emptyJobs": "No crawl jobs yet.",
+    "emptyPosts": "No posts for this job yet.",
+    "selectJob": "Select a job to view posts.",
+    "loadJobsFailed": "Failed to load crawl jobs",
+    "loadPostsFailed": "Failed to load posts",
+    "createFailed": "Failed to create crawl job",
+    "serialRequired": "Select a device first",
+    "groupRequired": "Group ID is required",
+    "campaignOrScenarioRequired": "Select a campaign or scenario to run",
+    "selectDevice": "Select device",
+    "campaignOptional": "No campaign",
+    "scenarioOptional": "Scenario (optional)",
+    "allScenariosInCampaign": "Run all campaign scenarios",
+    "scenarioNoExtractWarning": "Selected scenario has no fb_posts extract; backend can auto-append crawl block.",
+    "autoAppendCrawl": "Auto-append crawl block when missing",
+    "autoAppendOn": "On",
+    "autoAppendOff": "Off",
+    "loopCount": "Loop count (max_scrolls)",
+    "maxPosts": "Max posts",
+    "scrollPause": "Pause after each scroll (seconds)",
+    "waitLoad": "Initial page wait (seconds)",
+    "device": "Device",
+    "campaign": "Campaign",
+    "posts": "Posts",
+    "reactions": "Reactions",
+    "comments": "Comments",
+    "shares": "Shares",
+    "unknownAuthor": "Unknown author"
   },
   "campaignsFeature": {
     "createDialog": {
@@ -299,26 +333,6 @@
       "saving": "Saving…",
       "currentSteps": "{count} current steps"
     }
-  },
-  "devicesPage": {
-    "title": "Device Management",
-    "description": "View and manage registered devices"
-  },
-  "controlRecordPage": {
-    "title": "Control & Record Scenario"
-  },
-  "dashboardPage": {
-    "title": "Overview",
-    "description": "Device Farm system overview",
-    "devicesOnline": "Devices Online",
-    "devicesOffline": "Devices Offline",
-    "activeCampaigns": "Active Campaigns",
-    "totalCampaigns": "Total Campaigns",
-    "quickActions": "Quick Actions",
-    "connectDevice": "Connect Device",
-    "createCampaign": "Create Campaign",
-    "openDeviceFarm": "Open Device Farm",
-    "manageDevices": "Manage Devices"
   },
   "devicesList": {
     "loading": "Loading…",
@@ -535,13 +549,6 @@
     "signInPage": {
       "welcomeTitle": "Sign in to Device Farm",
       "welcomeSubtitle": "Enter your credentials to continue."
-    },
-    "signUpPage": {
-      "welcomeTitle": "Create an account",
-      "welcomeSubtitle": "Sign up to get started with Device Farm.",
-      "name": "Name",
-      "namePlaceholder": "Nguyen Van A",
-      "signingUp": "Signing up..."
     }
   },
   "common": {

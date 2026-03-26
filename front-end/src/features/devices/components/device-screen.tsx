@@ -172,7 +172,9 @@ export function DeviceScreen({ device, wsSend, mode, onTap }: DeviceScreenProps)
         }
 
         const ctx = cv.getContext('2d');
-        if (ctx) ctx.drawImage(bmp, 0, 0);
+        // Always scale the JPEG to the current canvas size.
+        // (Agent may downscale JPEG for performance, while the canvas keeps the full device aspect.)
+        if (ctx) ctx.drawImage(bmp, 0, 0, cv.width, cv.height);
         bmp.close();
 
         if (!hasFrameRef.current) {
@@ -203,8 +205,9 @@ export function DeviceScreen({ device, wsSend, mode, onTap }: DeviceScreenProps)
         // the in-flight decode will call drainJpeg() on completion.
         pendingJpegRef.current = {
           data: evt.data,
-          w: evt.width  || dw,
-          h: evt.height || dh,
+          // Keep canvas sizing stable for correct touch mapping.
+          w: dw,
+          h: dh,
         };
         drainJpeg();
         return;

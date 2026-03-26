@@ -3131,6 +3131,108 @@
         }
       }
     },
+    "/api/devices/{serial}/fb_crawl": {
+      "post": {
+        "tags": [
+          "device-control"
+        ],
+        "summary": "Crawl Facebook group posts (blocking)",
+        "description": "Opens the Facebook group on the device and scrolls through the feed, collecting post data via UIAutomator2 hierarchy XML. Runs synchronously — the HTTP response is returned when crawling is complete. For long crawls (>50 posts) consider using the `/fb_crawl/enqueue` variant.",
+        "operationId": "api_fb_crawl_api_devices__serial__fb_crawl_post",
+        "parameters": [
+          {
+            "name": "serial",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Serial"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FbCrawlRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/devices/{serial}/fb_crawl/enqueue": {
+      "post": {
+        "tags": [
+          "device-control"
+        ],
+        "summary": "Crawl Facebook group posts (background task)",
+        "description": "Enqueues a Facebook group crawl as a background task. Returns immediately with a task_id. Poll GET /api/tasks/{task_id} to check status and retrieve result.",
+        "operationId": "api_fb_crawl_enqueue_api_devices__serial__fb_crawl_enqueue_post",
+        "parameters": [
+          {
+            "name": "serial",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Serial"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FbCrawlRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/stream/{serial}": {
       "get": {
         "summary": "Mjpeg Stream",
@@ -3599,6 +3701,78 @@
           "session_id"
         ],
         "title": "EndSessionRequest"
+      },
+      "FbCrawlRequest": {
+        "properties": {
+          "group_id": {
+            "type": "string",
+            "title": "Group Id",
+            "description": "Facebook group numeric ID or slug (e.g. '123456789' or 'mygroupslug')",
+            "examples": [
+              "123456789"
+            ]
+          },
+          "max_posts": {
+            "type": "integer",
+            "maximum": 500.0,
+            "minimum": 1.0,
+            "title": "Max Posts",
+            "description": "Stop when this many unique posts are collected",
+            "default": 50
+          },
+          "max_scrolls": {
+            "type": "integer",
+            "maximum": 200.0,
+            "minimum": 1.0,
+            "title": "Max Scrolls",
+            "description": "Hard scroll limit (safety cap to avoid infinite loop)",
+            "default": 30
+          },
+          "app": {
+            "type": "string",
+            "enum": [
+              "chrome",
+              "facebook",
+              "facebook_lite"
+            ],
+            "title": "App",
+            "description": "App to use: 'chrome' (m.facebook.com) | 'facebook' (com.facebook.katana) | 'facebook_lite' (com.facebook.lite)",
+            "default": "chrome"
+          },
+          "scroll_pause": {
+            "type": "number",
+            "maximum": 10.0,
+            "minimum": 0.5,
+            "title": "Scroll Pause",
+            "description": "Seconds to wait after each scroll (for feed to load)",
+            "default": 2.5
+          },
+          "wait_load": {
+            "type": "number",
+            "maximum": 30.0,
+            "minimum": 1.0,
+            "title": "Wait Load",
+            "description": "Seconds to wait after opening the group URL",
+            "default": 4.0
+          },
+          "expand_posts": {
+            "type": "boolean",
+            "title": "Expand Posts",
+            "description": "Tap 'See more' buttons to get full post text",
+            "default": true
+          },
+          "save_screenshots": {
+            "type": "boolean",
+            "title": "Save Screenshots",
+            "description": "Include base64-encoded JPEG screenshots at each scroll in the result",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "group_id"
+        ],
+        "title": "FbCrawlRequest"
       },
       "FleetRunRequest": {
         "properties": {

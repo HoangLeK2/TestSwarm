@@ -115,6 +115,54 @@ class U2JsonRpcClient:
     def long_click(self, x: int, y: int, duration: float = 0.8) -> None:
         self._rpc("longClick", int(x), int(y), _timeout=self._touch_timeout + duration)
 
+    # ── Key events ────────────────────────────────────────────────────────────
+
+    def press(self, key: str) -> None:
+        """
+        Press a device key via uiautomator2 instrumentation (e.g. "home", "back").
+
+        We try multiple JSON-RPC method names for compatibility across different
+        android-uiautomator-server builds.
+        """
+        k = (key or "").strip()
+        if not k:
+            return
+        k = k.lower()
+
+        # Common string-based APIs
+        last_exc: Exception | None = None
+        for method in ("pressKey", "press", "key", "keyevent"):
+            try:
+                self._rpc(method, k)
+                return
+            except Exception as exc:
+                last_exc = exc
+
+        # Numeric keycode APIs (best-effort)
+        keycode = {
+            "home": 3,
+            "back": 4,
+            "menu": 82,
+            "power": 26,
+            "enter": 66,
+            "del": 67,
+            "delete": 67,
+            "tab": 61,
+            "recent": 187,
+            "app_switch": 187,
+            "volumeup": 24,
+            "volumedown": 25,
+        }.get(k)
+        if keycode is not None:
+            for method in ("pressKeyCode", "pressKeycode", "keyCode", "keycode"):
+                try:
+                    self._rpc(method, int(keycode))
+                    return
+                except Exception as exc:
+                    last_exc = exc
+
+        raise RuntimeError(f"u2 press({k}) unsupported: {last_exc}")
+
     # ── Element API ───────────────────────────────────────────────────────────
 
     @staticmethod

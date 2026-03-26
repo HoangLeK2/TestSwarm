@@ -495,8 +495,81 @@ class DeviceClient:
         self.swipe(x1, y1, x2, y2, duration_ms=400)
 
     def key(self, key_name: str) -> None:
-        """Key press (home, back, power, enter). Via WS → agent."""
-        self._send_to_agent({"type": "key", "key": key_name})
+        """
+        Key press (home, back, power, enter).
+
+        Priority:
+        - If agent WS is connected: send to agent (supports non-ADB mode).
+        - Else if ADB transport is connected: inject via `adb shell input keyevent`.
+        """
+        k = (key_name or "").strip()
+        if not k:
+            return
+
+        key_l = k.lower()
+
+        # Best path: use uiautomator2 instrumentation (does NOT require INJECT_EVENTS).
+        with self._u2_lock:
+            u2 = self._u2
+        if u2 is not None:
+            try:
+                u2.press(key_l)  # type: ignore[attr-defined]
+                return
+            except Exception as exc:
+                self._log(f"key via U2 failed ({key_l}): {exc}", level=logging.WARNING)
+
+        # Prefer agent path when available.
+        #
+        # NOTE: Some agent builds don't implement {"type":"key"} reliably (observed: WS logs show
+        # INPUT KEY but device doesn't react). Shelling `input keyevent` is the most compatible
+        # path across Android versions/modes.
+        if self._agent_send is not None:
+            keycode = {
+                "home": "KEYCODE_HOME",
+                "back": "KEYCODE_BACK",
+                "menu": "KEYCODE_MENU",
+                "power": "KEYCODE_POWER",
+                "enter": "KEYCODE_ENTER",
+                "volumeup": "KEYCODE_VOLUME_UP",
+                "volumedown": "KEYCODE_VOLUME_DOWN",
+                "recent": "KEYCODE_APP_SWITCH",
+                "app_switch": "KEYCODE_APP_SWITCH",
+                "del": "KEYCODE_DEL",
+                "delete": "KEYCODE_DEL",
+                "tab": "KEYCODE_TAB",
+            }.get(key_l)
+            if not keycode:
+                keycode = k if k.upper().startswith("KEYCODE_") else f"KEYCODE_{k.upper()}"
+            # Agent executes on-device shell.
+            self._send_to_agent({"type": "shell", "cmd": f"input keyevent {keycode}"})
+            return
+
+        # Fallback for ADB mode (or anytime an adb transport is present).
+        adb = self._adb_transport
+        if adb is not None and adb.connected:
+            keycode = {
+                "home": "KEYCODE_HOME",
+                "back": "KEYCODE_BACK",
+                "menu": "KEYCODE_MENU",
+                "power": "KEYCODE_POWER",
+                "enter": "KEYCODE_ENTER",
+                "volumeup": "KEYCODE_VOLUME_UP",
+                "volumedown": "KEYCODE_VOLUME_DOWN",
+                "recent": "KEYCODE_APP_SWITCH",
+                "app_switch": "KEYCODE_APP_SWITCH",
+                "del": "KEYCODE_DEL",
+                "delete": "KEYCODE_DEL",
+                "tab": "KEYCODE_TAB",
+            }.get(key_l)
+            if not keycode:
+                keycode = k if k.upper().startswith("KEYCODE_") else f"KEYCODE_{k.upper()}"
+            try:
+                adb.shell(f"input keyevent {keycode}", timeout=5.0)
+                return
+            except Exception as exc:
+                self._log(f"key via ADB failed ({keycode}): {exc}", level=logging.WARNING)
+
+        self._log(f"key skipped ({k}): no agent and no adb", level=logging.WARNING)
 
     def pinch(self, cx: int, cy: int, scale: float) -> None:
         """Pinch gesture via WebSocket → agent."""

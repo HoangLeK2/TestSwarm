@@ -33,6 +33,11 @@ export function useNavItems(): {
           title: t('campaigns'),
           url: ROUTES.CAMPAIGNS.ROOT,
           icon: 'play'
+        },
+        {
+          title: t('crawl_jobs'),
+          url: ROUTES.CRAWL_JOBS.ROOT,
+          icon: 'post'
         }
       ]
     }

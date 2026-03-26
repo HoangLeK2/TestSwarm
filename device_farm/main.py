@@ -16,6 +16,7 @@ load_dotenv(dotenv_path=_root / ".env", override=False)
 
 import logging
 import signal
+import shlex
 import threading
 import time
 
@@ -34,12 +35,79 @@ from runtime.core import DeviceManager, TaskQueue, Dispatcher, WatchdogThread
 from web.server import create_app
 
 
+def _run_agent_boot(argv: list[str]) -> None:
+    """
+    Bridge to ../agent-boot/main.py (folder name contains '-', can't be imported normally).
+
+    Usage:
+      uv run main.py agent-boot --serial <device>
+      uv run main.py --agent-boot --serial <device>
+    """
+    import importlib.util
+
+    agent_boot_path = (_root.parent / "agent-boot" / "main.py").resolve()
+    if not agent_boot_path.is_file():
+        raise SystemExit(f"agent-boot not found: {agent_boot_path}")
+
+    spec = importlib.util.spec_from_file_location("device_farm_agent_boot", agent_boot_path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"Cannot load agent-boot module: {agent_boot_path}")
+
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)  # type: ignore[attr-defined]
+
+    if not hasattr(mod, "main") or not callable(mod.main):
+        raise SystemExit(f"agent-boot main() missing in: {agent_boot_path}")
+
+    old_argv = sys.argv[:]
+    try:
+        sys.argv = [str(agent_boot_path), *argv]
+        mod.main()
+    finally:
+        sys.argv = old_argv
+
+
 def main() -> None:
+    # Convenience: allow launching agent-boot from the same entrypoint.
+    # (Keeps server startup unchanged unless explicitly requested.)
+    if len(sys.argv) > 1 and sys.argv[1] in {"agent-boot", "agent_boot"}:
+        _run_agent_boot(sys.argv[2:])
+        return
+    if "--agent-boot" in sys.argv:
+        i = sys.argv.index("--agent-boot")
+        _run_agent_boot(sys.argv[i + 1 :])
+        return
 
     config_path = farm_config_path()
     config = load_config(config_path)
     setup_logging(config.logging)
     reload_enabled = farm_reload_enabled()
+
+    # Auto-run agent-boot when starting the server.
+    # Default: enabled (so `uv run main.py` "just works"), but never blocks startup if it fails.
+    auto = os.getenv("FARM_AGENT_BOOT", "1").strip().lower()
+    if auto not in {"0", "false", "no", "off"}:
+        log = logging.getLogger("main")
+        try:
+            # Default behavior: don't touch STF app; just make u2 available.
+            # Override with FARM_AGENT_BOOT_ARGS, e.g. "--serial 192.168.1.10:5555 --skip-stf --skip-tcpip"
+            args_raw = os.getenv("FARM_AGENT_BOOT_ARGS", "").strip()
+            if args_raw:
+                args = shlex.split(args_raw)
+            else:
+                args = ["--skip-stf", "--skip-tcpip"]
+                serial = os.getenv("FARM_AGENT_BOOT_SERIAL", "").strip()
+                if serial:
+                    args = ["--serial", serial, *args]
+
+            log.info("agent-boot: auto running (%s)", " ".join(args) if args else "(no args)")
+            _run_agent_boot(args)
+            log.info("agent-boot: done")
+        except SystemExit as e:
+            # agent-boot uses SystemExit for normal failures (no devices, missing apks, etc.)
+            log.warning("agent-boot: skipped/failed (%s) — continuing server startup", e)
+        except Exception as e:
+            log.warning("agent-boot: failed (%s) — continuing server startup", e)
 
     log = logging.getLogger("main")
     log.info("=" * 60)
@@ -53,9 +121,9 @@ def main() -> None:
     manager = DeviceManager(config)
 
     # Cloud-first architecture:
-    #   Local agent (agent/main.py) → ADB install/bootstrap device once
     #   App scans ws:// QR from dashboard → connects to /device-agent WebSocket
-    #   No ADB needed on cloud backend
+    #   Watchdog auto-starts u2-server via ADB wireless (phone_ip:5555) when needed
+    #   Requires phone: Developer Options → Wireless debugging enabled (once at setup)
     log.info("Devices: app scans ws:// QR → connects via /device-agent WebSocket")
 
     watchdog = WatchdogThread(manager, config)

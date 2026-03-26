@@ -143,11 +143,17 @@
     "activity_history": "Lịch sử hoạt động",
     "gln": "Quản lý GLN",
     "totp": "Xác thực hai yếu tố",
+    "dashboard_home": "Tổng quan",
     "devices": "Thiết bị",
     "device_farm": "Điều khiển thiết bị",
     "devices_manage": "Quản lý thiết bị",
     "device_control_record": "Điều khiển & ghi kịch bản",
+    "automation": "Tự động hoá",
     "campaigns": "Campaigns"
+  },
+  "campaignsPage": {
+    "title": "Campaigns",
+    "description": "Tạo và chạy kịch bản tự động trên nhiều thiết bị"
   },
   "campaignsFeature": {
     "createDialog": {
@@ -293,6 +299,26 @@
       "saving": "Đang lưu…",
       "currentSteps": "{count} bước hiện tại"
     }
+  },
+  "devicesPage": {
+    "title": "Quản lý thiết bị",
+    "description": "Danh sách và quản lý các thiết bị đã đăng ký"
+  },
+  "controlRecordPage": {
+    "title": "Điều khiển & ghi kịch bản"
+  },
+  "dashboardPage": {
+    "title": "Tổng quan",
+    "description": "Tổng quan hệ thống Device Farm",
+    "devicesOnline": "Thiết bị online",
+    "devicesOffline": "Thiết bị offline",
+    "activeCampaigns": "Campaign đang chạy",
+    "totalCampaigns": "Tổng campaign",
+    "quickActions": "Thao tác nhanh",
+    "connectDevice": "Kết nối thiết bị",
+    "createCampaign": "Tạo campaign",
+    "openDeviceFarm": "Mở Device Farm",
+    "manageDevices": "Quản lý thiết bị"
   },
   "devicesList": {
     "loading": "Đang tải…",
@@ -509,6 +535,13 @@
     "signInPage": {
       "welcomeTitle": "Đăng nhập",
       "welcomeSubtitle": "Nhập thông tin đăng nhập để tiếp tục."
+    },
+    "signUpPage": {
+      "welcomeTitle": "Tạo tài khoản",
+      "welcomeSubtitle": "Đăng ký để bắt đầu sử dụng Device Farm.",
+      "name": "Tên",
+      "namePlaceholder": "Nguyen Van A",
+      "signingUp": "Đang đăng ký..."
     }
   },
   "settings": {

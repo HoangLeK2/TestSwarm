@@ -143,11 +143,17 @@
     "activity_history": "Activity History",
     "gln": "GLN Management",
     "totp": "TOTP Management",
+    "dashboard_home": "Overview",
     "devices": "Devices",
     "device_farm": "Device Control",
     "devices_manage": "Manage Devices",
     "device_control_record": "Control & Record Scenario",
+    "automation": "Automation",
     "campaigns": "Campaigns"
+  },
+  "campaignsPage": {
+    "title": "Campaigns",
+    "description": "Create and run automated scenarios on multiple devices"
   },
   "campaignsFeature": {
     "createDialog": {
@@ -293,6 +299,26 @@
       "saving": "Saving…",
       "currentSteps": "{count} current steps"
     }
+  },
+  "devicesPage": {
+    "title": "Device Management",
+    "description": "View and manage registered devices"
+  },
+  "controlRecordPage": {
+    "title": "Control & Record Scenario"
+  },
+  "dashboardPage": {
+    "title": "Overview",
+    "description": "Device Farm system overview",
+    "devicesOnline": "Devices Online",
+    "devicesOffline": "Devices Offline",
+    "activeCampaigns": "Active Campaigns",
+    "totalCampaigns": "Total Campaigns",
+    "quickActions": "Quick Actions",
+    "connectDevice": "Connect Device",
+    "createCampaign": "Create Campaign",
+    "openDeviceFarm": "Open Device Farm",
+    "manageDevices": "Manage Devices"
   },
   "devicesList": {
     "loading": "Loading…",
@@ -509,6 +535,13 @@
     "signInPage": {
       "welcomeTitle": "Sign in to Device Farm",
       "welcomeSubtitle": "Enter your credentials to continue."
+    },
+    "signUpPage": {
+      "welcomeTitle": "Create an account",
+      "welcomeSubtitle": "Sign up to get started with Device Farm.",
+      "name": "Name",
+      "namePlaceholder": "Nguyen Van A",
+      "signingUp": "Signing up..."
     }
   },
   "common": {

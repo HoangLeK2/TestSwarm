@@ -22,6 +22,7 @@ function getBackendPort(): number {
 
 
 function getDeviceBackendBase(): string {
+  if (backendBase) return backendBase;
   if (typeof window !== 'undefined' && window.location?.hostname) {
     const protocol = window.location.protocol;
     const port = getBackendPort();

@@ -7,7 +7,6 @@ Usage in FastAPI:
 """
 from __future__ import annotations
 
-import os
 from collections.abc import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import (
@@ -15,26 +14,29 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy import text
 from sqlalchemy.orm import DeclarativeBase
+
+from core.config import load_config
+from core.env import farm_config_path
 
 
 def _build_url() -> str:
-    url = os.getenv("DATABASE_URL", "")
-    if url:
-        # Support both postgres:// and postgresql:// schemes
+    cfg = load_config(farm_config_path()).database
+    if cfg.url:
+        url = cfg.url
         if url.startswith("postgres://"):
             url = url.replace("postgres://", "postgresql+asyncpg://", 1)
         elif url.startswith("postgresql://") and "+asyncpg" not in url:
             url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
         return url
 
-    # Build from individual env vars (common in docker-compose setups)
-    host = os.getenv("DB_HOST", "localhost")
-    port = os.getenv("DB_PORT", "5432")
-    name = os.getenv("DB_NAME", "device_farm")
-    # Default user to current OS user (macOS/Homebrew often has no "postgres" role)
-    user = os.getenv("DB_USER") or os.getenv("USER", "hoanglcpila.vn")
-    password = os.getenv("DB_PASSWORD", "postgres")
+    # Build directly from YAML config.
+    host = cfg.host
+    port = str(cfg.port)
+    name = cfg.name
+    user = cfg.user
+    password = cfg.password
     return f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{name}"
 
 
@@ -75,3 +77,34 @@ async def init_db() -> None:
     from db import models  # noqa: F401 — ensure models are registered
     async with engine.begin() as conn:
         await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn))
+        # Lightweight compatibility migration for existing databases that
+        # already have crawl_jobs without the new campaign_id column.
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE crawl_jobs
+                ADD COLUMN IF NOT EXISTS campaign_id VARCHAR(36) NULL
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conname = 'fk_crawl_jobs_campaign_id'
+                    ) THEN
+                        ALTER TABLE crawl_jobs
+                        ADD CONSTRAINT fk_crawl_jobs_campaign_id
+                        FOREIGN KEY (campaign_id)
+                        REFERENCES campaigns(id)
+                        ON DELETE SET NULL;
+                    END IF;
+                END
+                $$;
+                """
+            )
+        )

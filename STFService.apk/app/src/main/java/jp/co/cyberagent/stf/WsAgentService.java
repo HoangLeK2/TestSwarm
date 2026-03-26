@@ -51,6 +51,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -96,7 +97,6 @@ public class WsAgentService extends android.app.Service {
     private static final int CAPTURE_WIDTH       = 1080; // max width; scales down if screen smaller
     private static final int TARGET_FPS          = 20;   // MJPEG target frame rate
     private static final int JPEG_QUALITY        = 75;   // JPEG compression (0-100)
-    private static final long MIN_FRAME_INTERVAL = 1000L / TARGET_FPS; // ms between frames
 
     /**
      * Shared MediaProjection token — static so it survives service restarts within the same
@@ -134,6 +134,21 @@ public class WsAgentService extends android.app.Service {
     private Handler          imageHandler;
     private volatile long    lastFrameTime   = 0;
     private volatile byte[]  latestJpeg      = null;          // latest JPEG frame (for screenshot API)
+
+    // Precomputed for binary JPEG frame protocol:
+    //   [0x01][serial_len:1B][serial:NB][w:2B BE][h:2B BE][jpeg_bytes]
+    private byte[] serialBytes;
+    private int    serialByteLen;
+    private int    headerWidth;
+    private int    headerHeight;
+
+    // Dynamic stream throttling (server sends set_stream_options).
+    private volatile int  targetFps = TARGET_FPS;
+    private volatile long minFrameIntervalMs = 1000L / TARGET_FPS;
+
+    // Optional output downscale width from server (0 = use CAPTURE_WIDTH / heuristic).
+    private volatile int streamMaxWidth = 0;
+
     private InputManagerWrapper inputManager;
     private ExecutorService  executor;
     private final AtomicBoolean capturing = new AtomicBoolean(false);
@@ -186,6 +201,15 @@ public class WsAgentService extends android.app.Service {
                 .getDefaultDisplay().getRealMetrics(dm);
         screenWidth = dm.widthPixels;
         screenHeight = dm.heightPixels;
+
+        headerWidth  = Math.max(0, Math.min(screenWidth,  0xFFFF));
+        headerHeight = Math.max(0, Math.min(screenHeight, 0xFFFF));
+
+        serialBytes = serial.getBytes(StandardCharsets.UTF_8);
+        serialByteLen = Math.min(255, serialBytes.length);
+        if (serialByteLen != serialBytes.length) {
+            serialBytes = Arrays.copyOf(serialBytes, serialByteLen);
+        }
 
         Log.i(TAG, "Device: " + brand + " " + model + " Android " + androidVersion
                 + " serial=" + serial + " screen=" + screenWidth + "x" + screenHeight);
@@ -479,11 +503,22 @@ public class WsAgentService extends android.app.Service {
             return;
         }
 
+        // Decide capture resolution (downscale) based on stream options.
+        // Server may send `set_stream_options.max_width` to reduce browser decode cost.
+        int maxW = streamMaxWidth > 0 ? streamMaxWidth : CAPTURE_WIDTH;
+        // Even dimensions required by ImageReader.
+        int capW = (Math.min(screenWidth, maxW)) & ~1;
+        int capH = ((int) (screenHeight * ((float) capW / screenWidth))) & ~1;
+        headerWidth  = Math.max(0, Math.min(capW, 0xFFFF));
+        headerHeight = Math.max(0, Math.min(capH, 0xFFFF));
+
         // Reuse VirtualDisplay from a previous service instance (static field).
         // createVirtualDisplay() is the ONLY call that triggers the "You're sharing
         // your screen" system overlay on Android 12+, so we keep the VD alive for
         // the lifetime of the process — across WS reconnects AND service restarts.
-        if (sSharedVirtualDisplay != null) {
+        if (sSharedVirtualDisplay != null && sSharedImageReader != null) {
+            // If resolution matches, reuse. Otherwise recreate once for the new width.
+            if (sSharedImageReader.getWidth() == capW && sSharedImageReader.getHeight() == capH) {
             virtualDisplay     = sSharedVirtualDisplay;
             imageReader        = sSharedImageReader;
             imageHandlerThread = sSharedImageHandlerThread;
@@ -491,11 +526,18 @@ public class WsAgentService extends android.app.Service {
             capturing.set(true);
             sendLog("MJPEG capture resumed (VirtualDisplay reused across restart)");
             return;
-        }
+            }
 
-        // Even dimensions required by ImageReader
-        int capW = (Math.min(screenWidth, CAPTURE_WIDTH)) & ~1;
-        int capH = ((int) (screenHeight * ((float) capW / screenWidth))) & ~1;
+            // Resolution changed: force-recreate ImageReader/VirtualDisplay with new size.
+            try { sSharedVirtualDisplay.release(); } catch (Exception ignored) {}
+            try { sSharedImageReader.close(); } catch (Exception ignored) {}
+            HandlerThread ht = sSharedImageHandlerThread;
+            if (ht != null) ht.quitSafely();
+            sSharedVirtualDisplay     = null;
+            sSharedImageReader        = null;
+            sSharedImageHandlerThread = null;
+            sSharedImageHandler       = null;
+        }
 
         DisplayMetrics dm = new DisplayMetrics();
         ((WindowManager) getSystemService(WINDOW_SERVICE))
@@ -519,7 +561,7 @@ public class WsAgentService extends android.app.Service {
 
                 // FPS throttle — drop frames exceeding TARGET_FPS
                 long now = SystemClock.uptimeMillis();
-                if (now - lastFrameTime < MIN_FRAME_INTERVAL) {
+                if (now - lastFrameTime < minFrameIntervalMs) {
                     return;
                 }
                 lastFrameTime = now;
@@ -529,11 +571,24 @@ public class WsAgentService extends android.app.Service {
 
                 latestJpeg = jpeg;
 
-                String b64 = Base64.encodeToString(jpeg, Base64.NO_WRAP);
-                JSONObject msg = new JSONObject();
-                msg.put("type",     "frame");
-                msg.put("jpeg_b64", b64);
-                wsManager.send(msg.toString());
+                // Send binary JPEG frame to server:
+                //   [0x01][serial_len:1B][serial:NB][w:2B BE][h:2B BE][jpeg_bytes]
+                int slen = serialByteLen;
+                int w = headerWidth;
+                int h = headerHeight;
+                int totalLen = 1 + 1 + slen + 2 + 2 + jpeg.length;
+                byte[] frame = new byte[totalLen];
+                int off = 0;
+                frame[off++] = 0x01;
+                frame[off++] = (byte) (slen & 0xFF);
+                System.arraycopy(serialBytes, 0, frame, off, slen);
+                off += slen;
+                frame[off++] = (byte) ((w >> 8) & 0xFF);
+                frame[off++] = (byte) (w & 0xFF);
+                frame[off++] = (byte) ((h >> 8) & 0xFF);
+                frame[off++] = (byte) (h & 0xFF);
+                System.arraycopy(jpeg, 0, frame, off, jpeg.length);
+                wsManager.sendBytes(frame);
             } catch (Exception e) {
                 Log.w(TAG, "frame send: " + e.getMessage());
             } finally {
@@ -556,7 +611,7 @@ public class WsAgentService extends android.app.Service {
 
         capturing.set(true);
         sendLog("MJPEG capture started: " + capW + "x" + capH
-                + " @" + TARGET_FPS + "fps quality=" + JPEG_QUALITY);
+                + " @" + targetFps + "fps quality=" + JPEG_QUALITY);
     }
 
     /**
@@ -822,10 +877,28 @@ public class WsAgentService extends android.app.Service {
                     });
                     break;
                 case "set_stream_options":
-                    // Hint for high FPS stream (MediaProjection / scrcpy); optional future use
-                    int maxFps = msg.optInt("max_fps", 60);
+                    // Server hint: reduce both FPS and capture resolution.
+                    int maxFps = msg.optInt("max_fps", -1);
                     if (maxFps >= 1 && maxFps <= 120) {
-                        sendLog("set_stream_options max_fps=" + maxFps);
+                        targetFps = maxFps;
+                        minFrameIntervalMs = 1000L / Math.max(1, targetFps);
+                        sendLog("set_stream_options max_fps=" + targetFps);
+                    }
+
+                    int maxWidth = msg.optInt("max_width", -1);
+                    boolean widthChanged = false;
+                    if (maxWidth >= 1 && maxWidth <= 4096) {
+                        widthChanged = (streamMaxWidth != maxWidth);
+                        streamMaxWidth = maxWidth;
+                    } else if (maxWidth == 0) {
+                        widthChanged = (streamMaxWidth != 0);
+                        streamMaxWidth = 0; // native / heuristic
+                    }
+
+                    if (widthChanged && wsManager != null && wsManager.isConnected()) {
+                        // Force recreate VirtualDisplay/ImageReader with the new size.
+                        capturing.set(false);
+                        executor.submit(this::startCapture);
                     }
                     break;
             }

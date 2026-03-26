@@ -95,6 +95,10 @@ class KeyStep(StepBase):
 class ScrollDownStep(StepBase):
     type: Literal["scroll_down"]
     repeats: int
+    start_y_ratio: float = 0.72
+    end_y_ratio: float = 0.38
+    duration_ms: int = 520
+    pause_seconds: float = 0.6
 
 
 class SwipeRatioStep(StepBase):
@@ -587,7 +591,59 @@ def _execute_tap(
     return False, f"selector {by}={value!r} not found, no fallback"
 
 
-def run_scenario_task(device: "DeviceClient", scenario: Dict[str, Any]) -> Dict[str, Any]:
+def _evaluate_condition(device: "DeviceClient", condition: Dict[str, Any], ctx: Dict[str, Any]) -> bool:
+    """Evaluate a condition dict for if/loop steps."""
+    ctype = str(condition.get("type", ""))
+
+    if ctype == "element_exists":
+        by = str(condition.get("by", "text"))
+        value = str(condition.get("value", ""))
+        if not value:
+            return False
+        xml = device.hierarchy_xml(force_refresh=False)
+        if not xml:
+            return False
+        import xml.etree.ElementTree as ET
+        try:
+            root = ET.fromstring(xml)
+            for node in root.iter():
+                t = (node.get("text") or node.get("content-desc") or "").strip()
+                rid = (node.get("resource-id") or "").strip()
+                if by in ("text",) and t == value:
+                    return True
+                if by in ("resource-id",) and rid == value:
+                    return True
+                if by == "xpath":
+                    # Simple xpath: check if any node matches text contains
+                    pass
+            return False
+        except Exception:
+            return False
+
+    elif ctype == "element_not_exists":
+        return not _evaluate_condition(device, {**condition, "type": "element_exists"}, ctx)
+
+    elif ctype == "posts_count_gte":
+        count = int(condition.get("count", 0))
+        return len(ctx.get("posts", [])) >= count
+
+    elif ctype == "posts_count_lt":
+        count = int(condition.get("count", 0))
+        return len(ctx.get("posts", [])) < count
+
+    elif ctype == "no_new_posts":
+        # True if no_new_streak >= threshold
+        threshold = int(condition.get("threshold", 3))
+        return ctx.get("_no_new_streak", 0) >= threshold
+
+    return False
+
+
+def run_scenario_task(
+    device: "DeviceClient",
+    scenario: Dict[str, Any],
+    context: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """
     Thực thi 1 scenario JSON trên 1 device.
 
@@ -597,6 +653,10 @@ def run_scenario_task(device: "DeviceClient", scenario: Dict[str, Any]) -> Dict[
     serial = device.serial
     steps: List[ScenarioStep] = scenario.get("steps", []) or []  # type: ignore[assignment]
     log.info(f"[{serial}] run_scenario_task: {len(steps)} steps")
+
+    ctx = context if context is not None else {}
+    ctx.setdefault("posts", [])
+    ctx.setdefault("vars", {})
 
     w = device.screen_width or 1080
     h = device.screen_height or 1920
@@ -1013,14 +1073,37 @@ def run_scenario_task(device: "DeviceClient", scenario: Dict[str, Any]) -> Dict[
                 repeats = int(step.get("repeats", 1) or 1)
             except Exception:
                 repeats = 1
+            try:
+                start_y_ratio = float(step.get("start_y_ratio", 0.72))
+            except Exception:
+                start_y_ratio = 0.72
+            try:
+                end_y_ratio = float(step.get("end_y_ratio", 0.38))
+            except Exception:
+                end_y_ratio = 0.38
+            try:
+                duration_ms = int(step.get("duration_ms", 520) or 520)
+            except Exception:
+                duration_ms = 520
+            try:
+                pause_seconds = float(step.get("pause_seconds", 0.6) or 0.6)
+            except Exception:
+                pause_seconds = 0.6
+
+            # Keep scroll gesture in safe viewport range and ensure downward move.
+            start_y_ratio = min(0.95, max(0.55, start_y_ratio))
+            end_y_ratio = min(0.75, max(0.1, end_y_ratio))
+            if end_y_ratio >= start_y_ratio:
+                end_y_ratio = max(0.1, start_y_ratio - 0.22)
+
             sx = w // 2
-            sy1 = int(h * 0.8)
-            sy2 = int(h * 0.2)
+            sy1 = int(h * start_y_ratio)
+            sy2 = int(h * end_y_ratio)
             failed = False
             for i in range(max(1, repeats)):
                 log.info(f"[{serial}] scroll swipe #{i + 1}: ({sx},{sy1})→({sx},{sy2})")
                 try:
-                    device.swipe(sx, sy1, sx, sy2, duration_ms=600)
+                    device.swipe(sx, sy1, sx, sy2, duration_ms=duration_ms)
                 except Exception as exc:
                     msg = f"swipe scroll #{i + 1} failed: {exc}"
                     log.warning(f"[{serial}] {msg}")
@@ -1028,7 +1111,7 @@ def run_scenario_task(device: "DeviceClient", scenario: Dict[str, Any]) -> Dict[
                     step_result["message"] = msg
                     failed = True
                     break
-                time.sleep(0.8)
+                time.sleep(max(0.1, pause_seconds))
             if not failed:
                 step_result["ok"] = True
 
@@ -1056,6 +1139,162 @@ def run_scenario_task(device: "DeviceClient", scenario: Dict[str, Any]) -> Dict[
             if dismissed_count > 0:
                 step_result["dismissed_count"] = dismissed_count
 
+        elif t == "extract":
+            """Extract UI data (posts, text nodes) from current screen into context."""
+            strategy = str(step.get("strategy", "fb_posts"))
+            stop_if_no_new = bool(step.get("stop_if_no_new", False))
+            no_new_threshold = int(step.get("no_new_threshold", 3))
+            expand_see_more = bool(step.get("expand_see_more", True))
+
+            if strategy == "fb_posts" and expand_see_more:
+                try:
+                    from tasks.fb_group_crawl import _expand_see_more
+                    expanded = _expand_see_more(device)
+                    if expanded:
+                        # Let UI settle after expanding truncated content.
+                        time.sleep(0.5)
+                except Exception:
+                    pass
+
+            xml = device.hierarchy_xml(force_refresh=True)
+            if not xml:
+                step_result["ok"] = False
+                step_result["message"] = "extract: hierarchy_xml returned None"
+            else:
+                if strategy == "fb_posts":
+                    from tasks.fb_group_crawl import parse_fb_posts_from_xml, _dedup
+                    scroll_idx = ctx.get("_loop_iter", 0)
+                    new_posts = parse_fb_posts_from_xml(xml, source_index=scroll_idx)
+                    prev_count = len(ctx["posts"])
+                    ctx["posts"] = _dedup(ctx["posts"] + new_posts)
+                    added = len(ctx["posts"]) - prev_count
+                    step_result["extracted"] = added
+                    step_result["total_posts"] = len(ctx["posts"])
+                    step_result["message"] = f"extract fb_posts: +{added} new (total {len(ctx['posts'])})"
+                    log.info(f"[{serial}] {step_result['message']}")
+                    # Track no-new streak for auto-break
+                    if stop_if_no_new:
+                        if added == 0:
+                            ctx["_no_new_streak"] = ctx.get("_no_new_streak", 0) + 1
+                            if ctx["_no_new_streak"] >= no_new_threshold:
+                                ctx["_break"] = True
+                                step_result["message"] += f" — breaking (no new for {ctx['_no_new_streak']} scrolls)"
+                        else:
+                            ctx["_no_new_streak"] = 0
+                elif strategy == "text_nodes":
+                    import xml.etree.ElementTree as ET
+                    try:
+                        root = ET.fromstring(xml)
+                        texts = []
+                        for node in root.iter():
+                            t2 = (node.get("text") or "").strip()
+                            if t2 and len(t2) > 2:
+                                texts.append(t2)
+                        ctx.setdefault("text_nodes", [])
+                        ctx["text_nodes"].extend(texts)
+                        step_result["extracted"] = len(texts)
+                        step_result["message"] = f"extract text_nodes: {len(texts)} texts"
+                    except Exception as exc:
+                        step_result["ok"] = False
+                        step_result["message"] = f"extract text_nodes failed: {exc}"
+                else:
+                    step_result["ok"] = False
+                    step_result["message"] = f"extract: unknown strategy {strategy!r}"
+
+        elif t == "loop":
+            """Repeat nested steps N times (count) or while condition is true."""
+            count = step.get("count")
+            while_cond = step.get("while")  # condition dict
+            max_iterations = int(step.get("max_iterations", 100))
+            nested_steps = step.get("steps") or []
+
+            if not nested_steps:
+                step_result["ok"] = False
+                step_result["message"] = "loop: no nested steps"
+            else:
+                # Determine iteration count
+                if count is not None:
+                    iterations = min(int(count), max_iterations)
+                    use_while = False
+                elif while_cond:
+                    iterations = max_iterations
+                    use_while = True
+                else:
+                    step_result["ok"] = False
+                    step_result["message"] = "loop: must specify either 'count' or 'while'"
+                    iterations = 0
+                    use_while = False
+
+                sub_results = []
+                actual_iters = 0
+                for i in range(iterations):
+                    # Evaluate while condition if present
+                    if use_while and not _evaluate_condition(device, while_cond, ctx):
+                        break
+
+                    ctx["_loop_iter"] = i
+                    # Run nested steps (reuse run_scenario_task recursively)
+                    nested_result = run_scenario_task(device, {"steps": nested_steps}, context=ctx)
+                    sub_results.append({"iteration": i, "result": nested_result})
+                    actual_iters += 1
+
+                    # Check break signal from extract step or break_if step
+                    if ctx.pop("_break", False):
+                        log.info(f"[{serial}] loop: break at iteration {i}")
+                        break
+
+                ctx.pop("_loop_iter", None)
+                step_result["iterations"] = actual_iters
+                step_result["sub_results"] = sub_results
+                step_result["message"] = f"loop: {actual_iters} iteration(s)"
+
+        elif t == "if":
+            """Conditional: run 'then' steps if condition is true, else 'else' steps."""
+            condition = step.get("condition") or {}
+            then_steps = step.get("then") or []
+            else_steps = step.get("else") or []
+
+            if not condition:
+                step_result["ok"] = False
+                step_result["message"] = "if: missing condition"
+            else:
+                cond_met = _evaluate_condition(device, condition, ctx)
+                branch_steps = then_steps if cond_met else else_steps
+                branch_name = "then" if cond_met else "else"
+
+                if branch_steps:
+                    branch_result = run_scenario_task(device, {"steps": branch_steps}, context=ctx)
+                    step_result["branch"] = branch_name
+                    step_result["condition_met"] = cond_met
+                    step_result["sub_result"] = branch_result
+                    step_result["message"] = f"if: took {branch_name} branch"
+                else:
+                    step_result["message"] = f"if: condition={cond_met}, no steps for {branch_name} branch"
+
+        elif t == "break_if":
+            """Break the current loop if condition is true."""
+            condition = step.get("condition") or {}
+            if not condition:
+                step_result["ok"] = False
+                step_result["message"] = "break_if: missing condition"
+            else:
+                if _evaluate_condition(device, condition, ctx):
+                    ctx["_break"] = True
+                    step_result["message"] = "break_if: condition met — breaking loop"
+                else:
+                    step_result["message"] = "break_if: condition not met — continuing"
+
+        elif t == "set_var":
+            """Set a variable in context.vars for use in conditions."""
+            key = str(step.get("key") or "")
+            value = step.get("value")
+            if not key:
+                step_result["ok"] = False
+                step_result["message"] = "set_var: missing key"
+            else:
+                ctx["vars"][key] = value
+                step_result["message"] = f"set_var: {key}={value!r}"
+
         else:
             msg = f"unknown step type: {t!r}"
             log.warning(f"[{serial}] {msg}")
@@ -1074,16 +1313,17 @@ def run_scenario_task(device: "DeviceClient", scenario: Dict[str, Any]) -> Dict[
         "steps_executed": len(steps),
         "step_results": step_results,
         "failed_message": first_fail_msg if not all_ok else None,
+        "context": ctx,
     }
 
 
-def make_scenario_task(scenario: Dict[str, Any]):
+def make_scenario_task(scenario: Dict[str, Any], context: Optional[Dict[str, Any]] = None):
     """
     Factory trả về hàm task(device) để dùng với TaskQueue.
     """
 
     def _task(device: "DeviceClient") -> Dict[str, Any]:
-        return run_scenario_task(device, scenario)
+        return run_scenario_task(device, scenario, context=context)
 
     _task.__name__ = "run_scenario"
     return _task

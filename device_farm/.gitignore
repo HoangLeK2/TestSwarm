@@ -68,3 +68,5 @@ memory-bank/
 # -----------------------------
 *.md
 !README.md
+
+.docs/

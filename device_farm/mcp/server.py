@@ -31,7 +31,6 @@ from urllib.error import HTTPError, URLError
 DEVICE_FARM_URL = os.environ.get("DEVICE_FARM_URL", "http://localhost:8081").rstrip("/")
 SERVER_VERSION = "2.1.0"
 
-# Tiered timeouts — match operation duration expectations
 _TIMEOUT_FAST     = 10    # list, status reads
 _TIMEOUT_CONTROL  = 30    # tap, swipe, key, open_url, shell
 _TIMEOUT_SCENARIO = 300   # scenario/run (up to 5 min)
@@ -372,6 +371,11 @@ def _df_fleet_run(args: Dict[str, Any]) -> Dict[str, Any]:
         body["timeout"] = float(args["timeout"])
     if args.get("max_retries") is not None:
         body["max_retries"] = int(args["max_retries"])
+    # DF-004: group and tags filters
+    if args.get("filter_group_id"):
+        body["filter_group_id"] = str(args["filter_group_id"])
+    if args.get("filter_tags"):
+        body["filter_tags"] = str(args["filter_tags"])
     return _http_post_json("/api/fleet/run", body, timeout=_TIMEOUT_CAMPAIGN)
 
 
@@ -571,6 +575,65 @@ def _df_run_campaign(args: Dict[str, Any]) -> Dict[str, Any]:
     """
     campaign_id = str(args["campaign_id"])
     return _http_post_json(f"/api/campaigns/{campaign_id}/run", {}, timeout=_TIMEOUT_CAMPAIGN)
+
+
+# ── Scenario Template tools (DF-003) ──────────────────────────────────────────
+
+def _df_list_scenario_templates(args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """List available scenario templates with optional category/tags filter."""
+    args = args or {}
+    params: List[str] = []
+    if args.get("category"):
+        params.append(f"category={args['category']}")
+    if args.get("tags"):
+        params.append(f"tags={args['tags']}")
+    qs = ("?" + "&".join(params)) if params else ""
+    raw = _http_get(f"/api/scenario-templates{qs}", timeout=_TIMEOUT_FAST)
+    return {"templates": json.loads(raw.decode("utf-8"))}
+
+
+def _df_get_scenario_template(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Get a scenario template by ID."""
+    tmpl_id = str(args["template_id"])
+    raw = _http_get(f"/api/scenario-templates/{tmpl_id}", timeout=_TIMEOUT_FAST)
+    return json.loads(raw.decode("utf-8"))
+
+
+def _df_create_scenario_template(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Create a new scenario template in the shared library."""
+    body: Dict[str, Any] = {"name": str(args["name"])}
+    if args.get("description") is not None:
+        body["description"] = str(args["description"])
+    if args.get("category") is not None:
+        body["category"] = str(args["category"])
+    if isinstance(args.get("steps"), list):
+        body["steps"] = args["steps"]
+    if isinstance(args.get("variables"), dict):
+        body["variables"] = args["variables"]
+    if args.get("tags") is not None:
+        body["tags"] = str(args["tags"])
+    return _http_post_json("/api/scenario-templates", body, timeout=_TIMEOUT_FAST)
+
+
+def _df_update_scenario_template(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Update a non-builtin scenario template."""
+    tmpl_id = str(args["template_id"])
+    body: Dict[str, Any] = {}
+    for field in ("name", "description", "category", "tags"):
+        if args.get(field) is not None:
+            body[field] = str(args[field])
+    if isinstance(args.get("steps"), list):
+        body["steps"] = args["steps"]
+    if isinstance(args.get("variables"), dict):
+        body["variables"] = args["variables"]
+    return _http_patch_json(f"/api/scenario-templates/{tmpl_id}", body, timeout=_TIMEOUT_FAST)
+
+
+def _df_delete_scenario_template(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Delete a non-builtin scenario template."""
+    tmpl_id = str(args["template_id"])
+    _http_delete(f"/api/scenario-templates/{tmpl_id}", timeout=_TIMEOUT_FAST)
+    return {"ok": True, "template_id": tmpl_id}
 
 
 # ── Tool schema helpers ───────────────────────────────────────────────────────
@@ -904,6 +967,14 @@ TOOL_DEFS: Dict[str, Dict[str, Any]] = {
                 "priority": {"type": "integer", "default": 5},
                 "timeout":  {"type": "number", "default": 300, "description": "Per-device task timeout (seconds)"},
                 "max_retries": {"type": "integer", "default": 1},
+                "filter_group_id": {
+                    "type": "string",
+                    "description": "DF-004: UUID of a DeviceGroup — only dispatch to devices in this group",
+                },
+                "filter_tags": {
+                    "type": "string",
+                    "description": "DF-004: Comma-separated tags (AND logic) — device must have ALL tags, e.g. 'fast,wifi'",
+                },
             },
             "required": ["steps"],
         },
@@ -1149,6 +1220,94 @@ TOOL_DEFS: Dict[str, Dict[str, Any]] = {
             "required": ["campaign_id"],
         },
         "fn": _df_run_campaign,
+    },
+    # ── Scenario Template management (DF-003) ─────────────────────────────────
+    "df_list_scenario_templates": {
+        "description": (
+            "List scenario templates in the shared library. "
+            "Templates can be referenced in scenario steps via "
+            "{\"type\": \"run_scenario\", \"scenario_name\": \"<name>\"}. "
+            "Optionally filter by category (general, utility, facebook, tiktok, ...) or "
+            "comma-separated tags."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "category": {"type": "string", "description": "Filter by category name (optional)"},
+                "tags":     {"type": "string", "description": "Comma-separated tags to filter (optional)"},
+            },
+            "required": [],
+        },
+        "fn": _df_list_scenario_templates,
+    },
+    "df_get_scenario_template": {
+        "description": "Get a scenario template by ID. Returns full template with steps and variables.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "template_id": {"type": "string", "description": "Template UUID"},
+            },
+            "required": ["template_id"],
+        },
+        "fn": _df_get_scenario_template,
+    },
+    "df_create_scenario_template": {
+        "description": (
+            "Create a new scenario template in the shared library. "
+            "The template can then be used across campaigns via "
+            "{\"type\": \"run_scenario\", \"scenario_name\": \"<name>\"}. "
+            "Requires auth token."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name":        {"type": "string", "description": "Unique template name"},
+                "description": {"type": "string", "default": ""},
+                "category":    {"type": "string", "default": "general",
+                                "description": "Category: general | utility | facebook | tiktok | ..."},
+                "steps":       {"type": "array", "description": "Scenario steps (same schema as campaign steps)"},
+                "variables":   {"type": "object", "description": "Default variable values for the template"},
+                "tags":        {"type": "string", "description": "Comma-separated tags", "default": ""},
+            },
+            "required": ["name"],
+        },
+        "fn": _df_create_scenario_template,
+    },
+    "df_update_scenario_template": {
+        "description": (
+            "Update a non-builtin scenario template. "
+            "Builtin templates (is_builtin=true) cannot be modified. "
+            "Requires auth token."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "template_id": {"type": "string"},
+                "name":        {"type": "string"},
+                "description": {"type": "string"},
+                "category":    {"type": "string"},
+                "steps":       {"type": "array"},
+                "variables":   {"type": "object"},
+                "tags":        {"type": "string"},
+            },
+            "required": ["template_id"],
+        },
+        "fn": _df_update_scenario_template,
+    },
+    "df_delete_scenario_template": {
+        "description": (
+            "Delete a non-builtin scenario template. "
+            "Returns 403 if the template is a builtin. "
+            "Requires auth token."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "template_id": {"type": "string"},
+            },
+            "required": ["template_id"],
+        },
+        "fn": _df_delete_scenario_template,
     },
 }
 

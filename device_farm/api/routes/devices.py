@@ -11,7 +11,9 @@ from fastapi.responses import FileResponse
 from api.deps import CurrentUser, DB
 from runtime.core import DeviceManager
 from api.schemas.device import DeviceCreate, DeviceOut, SessionOut
+from api.schemas.device_group import UpdateTagsBody
 from db import crud as repo
+from db.crud.device_group import update_device_tags
 from services import pairing as _pairing_mod
 
 router = APIRouter(prefix="/devices", tags=["devices"])
@@ -222,6 +224,19 @@ async def delete_device(device_id: str, db: DB, user: CurrentUser):
     return
 
 
+@router.patch("/{device_id}/tags", response_model=DeviceOut)
+async def update_tags(
+    device_id: str, body: UpdateTagsBody, db: DB, user: CurrentUser
+):
+    device = await repo.get_device(db, device_id)
+    if not device or device.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Device not found")
+    await update_device_tags(db, device_id, body.tags)
+    await db.commit()
+    device = await repo.get_device(db, device_id)
+    return _to_out(device)
+
+
 @router.get("/{device_id}/sessions", response_model=list[SessionOut])
 async def device_sessions(device_id: str, db: DB, user: CurrentUser):
     device = await repo.get_device(db, device_id)
@@ -249,4 +264,5 @@ def _to_out(d) -> DeviceOut:
         last_seen=d.last_seen, created_at=d.created_at,
         adb_ip=getattr(d, "adb_ip", None),
         adb_port=getattr(d, "adb_port", 5555),
+        tags=getattr(d, "tags", "") or "",
     )

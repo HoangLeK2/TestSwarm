@@ -457,6 +457,10 @@ def build_crawl_jobs_router(
                     "shares": p.shares,
                     "source_index": p.source_index,
                     "scraped_at": p.scraped_at.isoformat() if p.scraped_at else None,
+                    # DF-006 enrichment
+                    "post_type": getattr(p, "post_type", None),
+                    "image_desc": getattr(p, "image_desc", None),
+                    "comment_preview": getattr(p, "comment_preview", None),
                 }
                 for p in posts
             ]

@@ -35,6 +35,26 @@ def build_campaign_fleet_router(
 
     @router.post("/fleet/run")
     async def api_fleet_run(body: FleetRunRequest):
+        group_serials = None
+        serial_tags = None
+        filter_tags_list = None
+
+        needs_db = (body.filter_group_id or body.filter_tags) and config.database.enabled
+        if needs_db:
+            from db.database import AsyncSessionLocal
+            from db.crud.device_group import get_group_device_serials, get_all_device_serial_tags
+            async with AsyncSessionLocal() as db:
+                if body.filter_group_id:
+                    group_serials = await get_group_device_serials(db, body.filter_group_id)
+                if body.filter_tags:
+                    filter_tags_list = [
+                        t.strip().lower()
+                        for t in body.filter_tags.split(",")
+                        if t.strip()
+                    ]
+                    if filter_tags_list:
+                        serial_tags = await get_all_device_serial_tags(db)
+
         payload, status = enqueue_fleet_scenario(
             manager,
             queue,
@@ -45,6 +65,9 @@ def build_campaign_fleet_router(
             priority=body.priority,
             timeout=body.timeout,
             max_retries=body.max_retries,
+            group_serials=group_serials,
+            filter_tags=filter_tags_list,
+            serial_tags=serial_tags,
         )
         if status != 200:
             return JSONResponse(payload, status_code=status)

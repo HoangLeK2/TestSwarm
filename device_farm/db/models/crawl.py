@@ -60,6 +60,9 @@ class CrawlPost(Base):
     shares: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     source_index: Mapped[int] = mapped_column(Integer, default=0)
     scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    post_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    image_desc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    comment_preview: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     job: Mapped["CrawlJob"] = relationship("CrawlJob", back_populates="posts")
 

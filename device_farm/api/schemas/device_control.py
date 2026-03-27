@@ -83,6 +83,8 @@ class FleetRunRequest(BaseModel):
     priority: int = 5
     timeout: float = 300
     max_retries: int = 1
+    filter_group_id: Optional[str] = None
+    filter_tags: Optional[str] = None
 
 
 class ScrcpyAttachRequest(BaseModel):

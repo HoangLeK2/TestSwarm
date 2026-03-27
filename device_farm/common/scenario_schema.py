@@ -23,6 +23,18 @@ SCENARIO_STEP_TYPES = [
     "scroll_down",
     "wait_stable",
     "dismiss_popup",
+    "set_variable",
+    "repeat",
+    "repeat_until",
+    "if_element",
+    "if_variable",
+    "random_pick",
+    # DF-003: Flow composition
+    "run_scenario",
+    # Crawl / data extraction (used by crawl_jobs endpoint and crawl templates)
+    "extract",
+    "loop",
+    "break_if",
 ]
 
 STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
@@ -149,6 +161,121 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "🛡 Tự động đóng popup/dialog đang hiển thị (permission request, update prompt, quảng cáo). "
             "retries: thử tối đa N lần (mặc định 3). "
             "Dùng sau launch_app hoặc bất kỳ lúc nào có khả năng xuất hiện dialog bất ngờ."
+        ),
+    },
+    "set_variable": {
+        "required": ["name"],
+        "optional": ["value", "from_list", "increment"],
+        "description": (
+            "Đặt hoặc cập nhật một runtime variable để dùng trong các step sau với ${NAME}. "
+            "value: giá trị cụ thể (hỗ trợ ${VAR} interpolation). "
+            "from_list: chọn ngẫu nhiên 1 phần tử từ danh sách. "
+            "increment: tăng counter thêm N (bắt đầu từ 0 nếu chưa có). "
+            "Chỉ dùng 1 trong 3 tùy chọn trên; 'value' là mặc định."
+        ),
+    },
+    "repeat": {
+        "required": ["count", "steps"],
+        "optional": ["delay_between"],
+        "description": (
+            "Lặp lại danh sách steps con N lần. "
+            "count: số lần lặp (int). "
+            "delay_between: thời gian chờ giữa các lần lặp (seconds, mặc định 0). "
+            "${__LOOP_INDEX__} được set tự động (0-based) trong mỗi lần lặp."
+        ),
+    },
+    "repeat_until": {
+        "required": ["condition", "steps"],
+        "optional": ["max_iterations"],
+        "description": (
+            "Lặp lại steps cho đến khi điều kiện thỏa mãn (dừng). "
+            "max_iterations: giới hạn an toàn (mặc định 100). "
+            "condition keys: element_exists | element_not_exists | variable_equals. "
+            "Ví dụ: {\"element_exists\": {\"by\": \"text\", \"value\": \"End of feed\"}}."
+        ),
+    },
+    "if_element": {
+        "required": ["by", "value", "then"],
+        "optional": ["timeout", "else"],
+        "description": (
+            "Re nhánh theo sự tồn tại của element. "
+            "Nếu element tìm thấy trong timeout giây → chạy then. Nếu không → chạy else (nếu có). "
+            "timeout: thời gian tối đa chờ element (mặc định 3s). "
+            "by: text | resource-id | xpath."
+        ),
+    },
+    "if_variable": {
+        "required": ["name", "then"],
+        "optional": ["equals", "not_equals", "contains", "greater_than", "else"],
+        "description": (
+            "Re nhánh theo giá trị của variable. "
+            "name: tên variable (không cần ${...}). "
+            "Điều kiện: equals | not_equals | contains | greater_than. "
+            "Nếu không có điều kiện → branch theo truthy (var có giá trị). "
+            "then: steps chạy khi đúng. else: steps chạy khi sai (optional)."
+        ),
+    },
+    "random_pick": {
+        "required": ["branches"],
+        "optional": [],
+        "description": (
+            "Chọn ngẫu nhiên 1 nhánh để thực thi (weighted random). "
+            "branches: list các nhánh, mỗi nhánh có steps (required) và weight (optional, mặc định 1). "
+            "Weight cao hơn = xác suất được chọn cao hơn. "
+            "Ví dụ: [{\"weight\": 3, \"steps\": [...]}, {\"weight\": 1, \"steps\": [...]}]."
+        ),
+    },
+    # ── DF-003: Flow Composition ────────────────────────────────────────────────
+    "run_scenario": {
+        "required": [],
+        "optional": ["scenario_id", "scenario_name", "variables"],
+        "description": (
+            "Gọi một sub-scenario khác (flow composition). "
+            "scenario_id: UUID của scenario trong cùng campaign. "
+            "scenario_name: tên scenario (tìm trong campaign trước, rồi trong template library). "
+            "variables: dict override variables cho sub-scenario (optional). "
+            "Yêu cầu một trong hai: scenario_id hoặc scenario_name. "
+            "Circular reference và max depth (10) được tự động bảo vệ."
+        ),
+    },
+    # ── Crawl / data extraction ─────────────────────────────────────────────────
+    "extract": {
+        "required": ["strategy"],
+        "optional": ["stop_if_no_new", "no_new_threshold", "expand_see_more"],
+        "description": (
+            "Extract UI data từ màn hình hiện tại vào context['posts']. "
+            "strategy: 'fb_posts' — parse FB post cards (author/text/timestamp/reactions/"
+            "comments/shares/post_type/image_desc/comment_preview); "
+            "'text_nodes' — thu thập tất cả text node vào context['text_nodes']. "
+            "stop_if_no_new (bool, default False): set ctx['_break']=True khi không có bài mới "
+            "trong no_new_threshold (default 3) lần scroll liên tiếp — dùng bên trong step 'loop'. "
+            "expand_see_more (bool, default True): tự tap nút 'See more'/'Xem thêm' trước khi parse. "
+            "⚠ Dùng với step 'loop' (không phải 'repeat') để stop_if_no_new hoạt động."
+        ),
+    },
+    "loop": {
+        "required": ["steps"],
+        "optional": ["count", "while", "max_iterations"],
+        "description": (
+            "Lặp lại steps theo count hoặc while-condition. "
+            "count: số lần lặp cố định. "
+            "while: condition dict (element_exists | variable_equals) — lặp khi condition đúng. "
+            "max_iterations: giới hạn an toàn (default 100). "
+            "Khác 'repeat': 'loop' kiểm tra ctx['_break'] sau mỗi vòng — cho phép step 'extract' "
+            "với stop_if_no_new=True dừng sớm, hoặc step 'break_if' dừng khi đủ điều kiện. "
+            "${__LOOP_INDEX__} = chỉ số vòng lặp hiện tại (0-based)."
+        ),
+    },
+    "break_if": {
+        "required": ["condition"],
+        "optional": [],
+        "description": (
+            "Dừng vòng lặp 'loop' bao ngoài khi condition thỏa mãn. "
+            "condition keys: "
+            "{'type': 'posts_count_gte', 'count': N} — dừng khi ctx['posts'] đạt N bài. "
+            "{'element_exists': {'by': ..., 'value': ...}} — dừng khi element xuất hiện. "
+            "{'variable_equals': {'name': ..., 'value': ...}} — dừng khi variable đạt giá trị. "
+            "⚠ Chỉ hoạt động bên trong step 'loop' (không phải 'repeat' hay 'repeat_until')."
         ),
     },
 }

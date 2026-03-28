@@ -104,6 +104,13 @@ class WifiDenseposeConfig:
 
 
 @dataclass
+class StreamingConfig:
+    """Streaming mode: 'periodic' (screenshot polling) or 'continuous' (legacy 30FPS)."""
+    mode: str = "periodic"             # "periodic" or "continuous"
+    dashboard_interval: float = 3.0    # seconds between dashboard screenshots
+
+
+@dataclass
 class DatabaseConfig:
     """PostgreSQL connection config. Can also be set via DATABASE_URL env var."""
     url: str = ""           # Full DSN — overrides host/port/name/user/password
@@ -128,6 +135,7 @@ class Config:
     u2: U2Config = field(default_factory=U2Config)
     wifi_densepose: WifiDenseposeConfig = field(default_factory=WifiDenseposeConfig)
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
+    streaming: StreamingConfig = field(default_factory=StreamingConfig)
     target_app: str = ""
 
 
@@ -151,6 +159,7 @@ def load_config(path: str = "config.yaml") -> Config:
     logging_raw = raw.get("logging", {})
     u2_raw = raw.get("u2", {})
     wd_raw = raw.get("wifi_densepose", {})
+    streaming_raw = raw.get("streaming", {})
 
     op_delay = u2_raw.get("operation_delay", [0, 0.1])
     if isinstance(op_delay, list) and len(op_delay) == 2:
@@ -218,6 +227,10 @@ def load_config(path: str = "config.yaml") -> Config:
         database=DatabaseConfig(
             **{k: v for k, v in raw.get("database", {}).items()
                if k in DatabaseConfig.__dataclass_fields__}
+        ),
+        streaming=StreamingConfig(
+            mode=_get(streaming_raw, "mode", "periodic"),
+            dashboard_interval=float(_get(streaming_raw, "dashboard_interval", 3.0)),
         ),
         target_app=raw.get("target_app", ""),
     )

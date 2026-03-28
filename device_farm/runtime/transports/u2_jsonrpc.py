@@ -93,6 +93,40 @@ class U2JsonRpcClient:
         except Exception:
             return False
 
+    def screenshot(self, timeout: float = 10.0, max_width: int = 800, quality: int = 70) -> Optional[bytes]:
+        """
+        Capture screenshot via u2 HTTP API (GET /screenshot/0).
+        Returns JPEG bytes, resized to max_width if needed.
+        Returns None on failure.
+        """
+        try:
+            r = self._session.get(self._base + "/screenshot/0", timeout=timeout)
+            if r.status_code != 200:
+                logger.warning("U2 screenshot failed: HTTP %d", r.status_code)
+                return None
+            img_bytes = r.content
+            if not img_bytes:
+                return None
+            # Resize + re-encode to JPEG if needed
+            try:
+                from PIL import Image
+                import io
+                img = Image.open(io.BytesIO(img_bytes))
+                w, h = img.size
+                if max_width > 0 and w > max_width:
+                    ratio = max_width / w
+                    new_h = int(h * ratio)
+                    img = img.resize((max_width, new_h), Image.LANCZOS)
+                buf = io.BytesIO()
+                img.save(buf, format="JPEG", quality=quality)
+                return buf.getvalue()
+            except ImportError:
+                # PIL not available — return raw bytes as-is
+                return img_bytes
+        except Exception as exc:
+            logger.debug("U2 screenshot error: %s", exc)
+            return None
+
     @property
     def device_info(self) -> Dict[str, Any]:
         return self._rpc("deviceInfo")

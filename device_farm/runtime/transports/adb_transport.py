@@ -110,6 +110,36 @@ class AdbTransport:
             self._connected = False
         log.info(f"[{self._serial}] ADB handle closed")
 
+    def reconnect(self, retries: int = 3) -> bool:
+        """
+        Tear down and re-establish ADB connection with exponential backoff.
+        Returns True if reconnection succeeds.
+        """
+        log.info(f"[{self._serial}] Attempting ADB reconnect...")
+        self.close()
+        for attempt in range(1, retries + 1):
+            delay = min(2 ** attempt, 10)  # 2s, 4s, 8s (capped at 10s)
+            time.sleep(delay)
+            if self.connect(retries=1, retry_delay=0):
+                log.info(f"[{self._serial}] ADB reconnect OK (attempt {attempt})")
+                return True
+            log.warning(f"[{self._serial}] ADB reconnect failed (attempt {attempt}/{retries})")
+        log.error(f"[{self._serial}] ADB reconnect failed after {retries} attempts")
+        return False
+
+    def is_alive(self, timeout: float = 5.0) -> bool:
+        """
+        Quick health check: run 'echo ok' on device and verify output.
+        Returns False if transport is disconnected or command fails.
+        """
+        if not self._connected:
+            return False
+        try:
+            result = self.shell("echo ok", timeout=timeout)
+            return result.strip() == "ok"
+        except Exception:
+            return False
+
     @property
     def connected(self) -> bool:
         return self._connected

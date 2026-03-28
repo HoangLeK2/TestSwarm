@@ -1,6 +1,5 @@
 import type { WsMessage } from '../types';
 import { tokenStorage } from '@/lib/token-storage';
-import { FrameDispatcher, parseBinaryFrame } from './frame-dispatcher';
 
 function normalizeWsUrl(raw: string, fallbackScheme: 'ws' | 'wss') {
   const trimmed = raw.trim().replace(/^['"]|['"]$/g, '');
@@ -53,6 +52,22 @@ const listeners = new Set<(msg: WsMessage) => void>();
 let sharedSocket: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 let idleCloseTimer: ReturnType<typeof setTimeout> | undefined;
+let lastMessageTime = 0;
+
+// Reconnect stale WebSocket on page focus (NAT timeout, server restart, etc.)
+if (typeof window !== 'undefined') {
+  window.addEventListener('focus', () => {
+    if (listeners.size === 0) return;
+    if (!sharedSocket || sharedSocket.readyState !== WebSocket.OPEN) {
+      connectShared();
+      return;
+    }
+    // If no message received in 10s, connection is likely stale
+    if (Date.now() - lastMessageTime > 10_000) {
+      sharedSocket.close(); // onclose handler triggers reconnect
+    }
+  });
+}
 
 function broadcast(msg: WsMessage) {
   listeners.forEach((fn) => {
@@ -67,20 +82,6 @@ function broadcast(msg: WsMessage) {
 function handleTextMessage(raw: string) {
   try {
     const msg = JSON.parse(raw) as WsMessage;
-    if (msg.type === 'frame' && 'jpeg_b64' in msg && msg.jpeg_b64 && 'serial' in msg) {
-      const b64 = msg.jpeg_b64 as string;
-      const rawBuf = atob(b64);
-      const u8 = new Uint8Array(rawBuf.length);
-      for (let i = 0; i < rawBuf.length; i++) u8[i] = rawBuf.charCodeAt(i);
-      const legacy = msg as { device_width?: number; device_height?: number };
-      FrameDispatcher.dispatch(msg.serial as string, {
-        type: 'jpeg',
-        data: u8,
-        width: legacy.device_width ?? 1080,
-        height: legacy.device_height ?? 1920,
-      });
-      return;
-    }
     broadcast(msg);
   } catch {
     // ignore malformed messages
@@ -124,12 +125,11 @@ function connectShared() {
   ws.onerror = () => ws.close();
 
   ws.onmessage = (evt) => {
-    if (evt.data instanceof ArrayBuffer) {
-      const parsed = parseBinaryFrame(evt.data);
-      if (parsed) FrameDispatcher.dispatch(parsed.serial, parsed.evt);
-      return;
+    lastMessageTime = Date.now();
+    if (typeof evt.data === 'string') {
+      handleTextMessage(evt.data);
     }
-    handleTextMessage(evt.data as string);
+    // Binary frames ignored — video is served via MJPEG HTTP endpoint
   };
 }
 

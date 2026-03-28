@@ -4,7 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { ROUTES } from '@/config/routes';
 import { DeviceFarmHeader } from './header';
-import { DeviceTile } from './device-tile';
+import { DeviceTilePreview } from './device-tile-preview';
 import { ConnectDeviceDialog } from './connect-device-dialog';
 import { useDeviceFarm } from '../hooks/use-device-farm';
 import { Button } from '@/components/ui/button';
@@ -80,14 +80,9 @@ export function DeviceFarm() {
             </div>
             <section className='grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4'>
               {activeDevices.map((device) => (
-                <DeviceTile
+                <DeviceTilePreview
                   key={device.serial}
                   device={device}
-                  logLines={logs[device.serial] ?? []}
-                  mode={modes[device.serial] ?? 'tap'}
-                  wsSend={wsSend}
-                  onToggleMode={handleToggleMode}
-                  onRestart={handleRestart}
                 />
               ))}
             </section>

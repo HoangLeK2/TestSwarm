@@ -3,11 +3,14 @@ package jp.co.cyberagent.stf;
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.GestureDescription;
 import android.graphics.Path;
+import android.graphics.Rect;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityWindowInfo;
+import java.util.List;
 
 /**
  * TouchAccessibilityService — enables tap/swipe injection without INJECT_EVENTS permission.
@@ -110,5 +113,117 @@ public class TouchAccessibilityService extends AccessibilityService {
      */
     public boolean doGlobalAction(int action) {
         return performGlobalAction(action);
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // UI Hierarchy Dump via AccessibilityNodeInfo (~100-500ms, much faster
+    // than uiautomator2 dumpWindowHierarchy which takes 1-4s)
+    // ──────────────────────────────────────────────────────────────────────
+
+    /**
+     * Dump the full UI hierarchy as XML (same format as uiautomator2).
+     * Uses getWindows() to capture ALL visible windows: app, status bar,
+     * navigation bar, dialogs, keyboard, PiP, split-screen, overlays.
+     * Requires flagRetrieveInteractiveWindows in accessibility_service_config.xml.
+     * @return XML string, or null if no windows available.
+     */
+    public String dumpHierarchy() {
+        try {
+            StringBuilder sb = new StringBuilder(16384);
+            sb.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+            sb.append("<hierarchy rotation=\"0\">\n");
+
+            // getWindows() returns ALL visible windows (API 21+)
+            // flagRetrieveInteractiveWindows ensures we see non-interactive windows too
+            List<AccessibilityWindowInfo> windows = getWindows();
+            if (windows != null && !windows.isEmpty()) {
+                for (AccessibilityWindowInfo window : windows) {
+                    AccessibilityNodeInfo root = window.getRoot();
+                    if (root != null) {
+                        dumpNode(sb, root, 0);
+                        root.recycle();
+                    }
+                }
+            } else {
+                // Fallback: single active window (pre-API 21 or no windows returned)
+                AccessibilityNodeInfo root = getRootInActiveWindow();
+                if (root != null) {
+                    dumpNode(sb, root, 0);
+                    root.recycle();
+                } else {
+                    return null;
+                }
+            }
+
+            sb.append("</hierarchy>\n");
+            return sb.toString();
+        } catch (Exception e) {
+            Log.e(TAG, "dumpHierarchy error", e);
+            return null;
+        }
+    }
+
+    private void dumpNode(StringBuilder sb, AccessibilityNodeInfo node, int index) {
+        if (node == null) return;
+        Rect bounds = new Rect();
+        node.getBoundsInScreen(bounds);
+
+        String className = node.getClassName() != null ? node.getClassName().toString() : "";
+        String text = node.getText() != null ? node.getText().toString() : "";
+        String resourceId = node.getViewIdResourceName() != null ? node.getViewIdResourceName() : "";
+        String contentDesc = node.getContentDescription() != null ? node.getContentDescription().toString() : "";
+        String pkg = node.getPackageName() != null ? node.getPackageName().toString() : "";
+
+        sb.append("<node");
+        sb.append(" index=\"").append(index).append('"');
+        sb.append(" text=\"").append(escapeXml(text)).append('"');
+        sb.append(" resource-id=\"").append(escapeXml(resourceId)).append('"');
+        sb.append(" class=\"").append(escapeXml(className)).append('"');
+        sb.append(" package=\"").append(escapeXml(pkg)).append('"');
+        sb.append(" content-desc=\"").append(escapeXml(contentDesc)).append('"');
+        sb.append(" checkable=\"").append(node.isCheckable()).append('"');
+        sb.append(" checked=\"").append(node.isChecked()).append('"');
+        sb.append(" clickable=\"").append(node.isClickable()).append('"');
+        sb.append(" enabled=\"").append(node.isEnabled()).append('"');
+        sb.append(" focusable=\"").append(node.isFocusable()).append('"');
+        sb.append(" focused=\"").append(node.isFocused()).append('"');
+        sb.append(" scrollable=\"").append(node.isScrollable()).append('"');
+        sb.append(" long-clickable=\"").append(node.isLongClickable()).append('"');
+        sb.append(" password=\"").append(node.isPassword()).append('"');
+        sb.append(" selected=\"").append(node.isSelected()).append('"');
+        sb.append(" bounds=\"[").append(bounds.left).append(',').append(bounds.top)
+                .append("][").append(bounds.right).append(',').append(bounds.bottom).append("]\"");
+
+        int childCount = node.getChildCount();
+        if (childCount == 0) {
+            sb.append(" />\n");
+        } else {
+            sb.append(">\n");
+            for (int i = 0; i < childCount; i++) {
+                AccessibilityNodeInfo child = node.getChild(i);
+                if (child != null) {
+                    dumpNode(sb, child, i);
+                    child.recycle();
+                }
+            }
+            sb.append("</node>\n");
+        }
+    }
+
+    private static String escapeXml(String s) {
+        if (s == null || s.isEmpty()) return "";
+        return s.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;")
+                .replace("'", "&apos;");
+    }
+
+    /**
+     * Static convenience: dump hierarchy if service is available, null otherwise.
+     */
+    public static String dumpHierarchyIfAvailable() {
+        TouchAccessibilityService svc = instance;
+        return svc != null ? svc.dumpHierarchy() : null;
     }
 }

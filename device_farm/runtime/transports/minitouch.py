@@ -187,20 +187,35 @@ class MinitouchSender:
                 pass
             self._sock = None
 
+    _SEND_MAX_RETRIES = 3
+    _SEND_RETRY_DELAY = 0.5
+
     def _send(self, cmd: str, _retry: bool = True) -> None:
-        """Send raw command string. Reconnects once on failure."""
+        """Send raw command string. Retries up to _SEND_MAX_RETRIES on failure."""
         with self._lock:
             if not self._connected or self._sock is None:
-                self._logger.warning(f"[{self.serial}] minitouch not connected; skipping command")
+                self._logger.warning(f"[{self.serial}] minitouch not connected; dropping command")
                 return
             try:
                 self._sock.sendall(cmd.encode("utf-8"))
+                return  # success
             except OSError as exc:
                 self._logger.warning(f"[{self.serial}] minitouch send error: {exc}")
                 self._do_disconnect()
-                if _retry:
-                    try:
-                        self._do_connect()
-                        self._sock.sendall(cmd.encode("utf-8"))
-                    except Exception as e:
-                        self._logger.error(f"[{self.serial}] minitouch reconnect/send failed: {e}")
+
+            if not _retry:
+                return
+
+            # Retry loop with delay
+            for attempt in range(1, self._SEND_MAX_RETRIES + 1):
+                time.sleep(self._SEND_RETRY_DELAY)
+                try:
+                    self._do_connect()
+                    self._sock.sendall(cmd.encode("utf-8"))
+                    self._logger.info(f"[{self.serial}] minitouch reconnect OK (attempt {attempt})")
+                    return  # success
+                except Exception as e:
+                    self._logger.warning(
+                        f"[{self.serial}] minitouch retry {attempt}/{self._SEND_MAX_RETRIES} failed: {e}"
+                    )
+            self._logger.error(f"[{self.serial}] minitouch command dropped after {self._SEND_MAX_RETRIES} retries")

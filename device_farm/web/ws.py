@@ -146,7 +146,8 @@ class WebSocketManager:
             device.subscribe_frames(q)
             device.subscribe_status(q)
             # Push last frame immediately so browser shows something on open (binary format)
-            frame = device.take_screenshot()
+            # Skip for disconnected/dead devices — don't show stale preview
+            frame = device.take_screenshot() if device.state in (DeviceState.READY, DeviceState.BUSY) else None
             if frame:
                 serial_b = device.serial.encode()
                 slen = len(serial_b)
@@ -321,6 +322,9 @@ class DeviceAgentSession:
         self._lock = asyncio.Lock()
 
     async def handle(self, ws: WebSocket) -> None:
+        import time as _time
+        _connect_time = _time.monotonic()
+
         await ws.accept()
         client = getattr(ws, "client", None)
         if client and isinstance(client, (list, tuple)) and len(client) >= 2:
@@ -329,7 +333,7 @@ class DeviceAgentSession:
             client_addr = f"{client.host}:{client.port}"
         else:
             client_addr = str(client) if client else "unknown"
-        log.info("Device-agent WebSocket accepted from %s (path: /device-agent)", client_addr)
+        log.info("[DEVICE-WS] Connection accepted from %s", client_addr)
         serial: Optional[str] = None
         db_session_id: Optional[str] = None
 
@@ -339,11 +343,9 @@ class DeviceAgentSession:
         if key:
             async with self._lock:
                 if key in self._active_keys:
-                    try:
-                        await ws.close(code=4003)
-                    except Exception:
-                        pass
-                    return
+                    # Key already has an active connection — this is a reconnect.
+                    # Allow it (old connection will clean up in its own finally block).
+                    log.info("[DEVICE-WS] Key %s… reconnecting (replacing old connection)", key[:8])
                 self._active_keys.add(key)
         try:
             # ── Handshake ────────────────────────────────────────────────────
@@ -358,13 +360,15 @@ class DeviceAgentSession:
 
             serial = str(serial)
             log.info(
-                "Agent hello: serial=%s brand=%s android=%s sdk=%s screen=%sx%s",
+                "[DEVICE-WS] Device connected: serial=%s brand=%s model=%s android=%s sdk=%s screen=%sx%s ip=%s",
                 serial,
                 hello.get("brand"),
+                hello.get("model"),
                 hello.get("android"),
                 hello.get("sdk"),
                 hello.get("screen_width"),
                 hello.get("screen_height"),
+                client_addr,
             )
 
             # NOTE: We allow connections without key/pair_id even when DB is enabled.
@@ -422,8 +426,15 @@ class DeviceAgentSession:
             loop = asyncio.get_running_loop()
 
             def _send(msg: Dict[str, Any]) -> None:
-                if not loop.is_closed():
-                    asyncio.run_coroutine_threadsafe(ws.send_json(msg), loop)
+                if loop.is_closed():
+                    log.debug("[DEVICE-WS] _send: loop closed, dropping %s", msg.get("type"))
+                    return
+                async def _do_send():
+                    try:
+                        await ws.send_json(msg)
+                    except Exception as _exc:
+                        log.warning("[DEVICE-WS] _send failed for %s: %s", msg.get("type"), _exc)
+                asyncio.run_coroutine_threadsafe(_do_send(), loop)
 
             tunnels = device.attach_agent_sender(_send)
             device.state = DeviceState.CONNECTING
@@ -444,6 +455,13 @@ class DeviceAgentSession:
                 self._ws_manager.subscribe_device(device)
 
             async with self._lock:
+                old_ws = self._sessions.get(serial)
+                if old_ws and old_ws is not ws:
+                    log.info("[DEVICE-WS] Agent %s: closing stale previous WS session", serial)
+                    try:
+                        await old_ws.close(code=4001)
+                    except Exception:
+                        pass
                 self._sessions[serial] = ws
 
             # Acknowledge — send tunnel ports + stream options (FPS for scrcpy/MediaProjection)
@@ -457,13 +475,23 @@ class DeviceAgentSession:
                     "max_fps": self._config.device.scrcpy_max_fps,
                     "max_width": self._config.device.scrcpy_max_width or 0,
                 }
+                # Tell agent whether to stream continuously or stop
+                hello_ack_msg["stream_mode"] = self._config.streaming.mode
             else:
                 so = {}
             hello_ack_msg["stream_options"] = so
-            await ws.send_json(hello_ack_msg)
+            try:
+                await ws.send_json(hello_ack_msg)
+            except Exception as exc:
+                log.warning("[DEVICE-WS] Agent %s: failed to send hello_ack (broken pipe?): %s", serial, exc)
+                return
 
             # Request agent to auto-start minitouch, uiautomator2 (no-op if already running)
-            await ws.send_json({"type": "start_services", "services": ["minitouch", "u2"]})
+            try:
+                await ws.send_json({"type": "start_services", "services": ["minitouch", "u2"]})
+            except Exception as exc:
+                log.warning("[DEVICE-WS] Agent %s: failed to send start_services: %s", serial, exc)
+                return
 
             # Hint for high-FPS capture (scrcpy / MediaProjection)
             cfg = self._config
@@ -622,7 +650,7 @@ class DeviceAgentSession:
                         channels = {x.strip() for x in s.split() if x.strip()}
                     device.on_agent_ready(ready_channels=channels)
                     log.info(
-                        "Agent %s: tunnels ready %s → setting up tools",
+                        "[DEVICE-WS] Tunnels ready: serial=%s channels=%s",
                         serial,
                         channels,
                     )
@@ -639,15 +667,23 @@ class DeviceAgentSession:
                         msg.get("error", ""),
                     )
 
+                elif msg_type == "hierarchy":
+                    # Response from dump_hierarchy WS command (AccessibilityService)
+                    device.on_agent_hierarchy_response(
+                        xml=msg.get("xml"),
+                        error=msg.get("error"),
+                    )
+
                 else:
                     log.debug("Agent %s: unknown msg type: %r", serial, msg_type)
 
         except asyncio.TimeoutError:
-            log.warning("Agent WS: hello timeout")
-        except (WebSocketDisconnect, StarletteWSDisconnect):
-            pass
+            log.warning("[DEVICE-WS] Agent %s: hello timeout (15s)", serial or "unknown")
+        except (WebSocketDisconnect, StarletteWSDisconnect) as exc:
+            code = getattr(exc, "code", None)
+            log.info("[DEVICE-WS] Agent %s: WS closed (code=%s)", serial or "unknown", code)
         except Exception as exc:
-            log.warning("Agent %s WS error: %s", serial or "unknown", exc)
+            log.warning("[DEVICE-WS] Agent %s: unhandled error: %s", serial or "unknown", exc, exc_info=True)
         finally:
             if key:
                 try:
@@ -668,5 +704,15 @@ class DeviceAgentSession:
                         await db.commit()
                 except Exception:
                     pass
-            log.info("Agent %s: disconnected", serial or "unknown")
+            duration = _time.monotonic() - _connect_time
+            if duration >= 3600:
+                dur_str = f"{duration / 3600:.1f}h"
+            elif duration >= 60:
+                dur_str = f"{duration / 60:.1f}m"
+            else:
+                dur_str = f"{duration:.0f}s"
+            log.info(
+                "[DEVICE-WS] Device disconnected: serial=%s ip=%s duration=%s",
+                serial or "unknown", client_addr, dur_str,
+            )
 

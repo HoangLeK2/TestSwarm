@@ -30,6 +30,7 @@ public class WebSocketManager {
         client = new OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(0, TimeUnit.MILLISECONDS)
+                .pingInterval(20, TimeUnit.SECONDS)  // Keep WS alive through NAT/carrier timeouts
                 .build();
     }
 

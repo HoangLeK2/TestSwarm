@@ -15,6 +15,7 @@ interface DeviceTileProps {
   onToggleMode: (serial: string) => void;
   onRestart: (serial: string) => void;
   onTap?: (rx: number, ry: number) => void;
+  highlightBounds?: [number, number, number, number] | null;
 }
 
 export function DeviceTile({
@@ -25,6 +26,7 @@ export function DeviceTile({
   onToggleMode,
   onRestart,
   onTap,
+  highlightBounds,
 }: DeviceTileProps) {
   const t = useTranslations('devicesFarm');
   const id = serialToId(device.serial);
@@ -65,6 +67,7 @@ export function DeviceTile({
                     wsSend={wsSend}
                     mode={mode}
                     onTap={onTap}
+                    highlightBounds={highlightBounds}
                   />
                 ) : (
                   <div className='flex h-full w-full items-center justify-center bg-zinc-900 text-[11px] text-muted-foreground'>

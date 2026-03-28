@@ -95,7 +95,7 @@ public class WsAgentService extends android.app.Service {
     private static final String CHANNEL_ID = "ws_agent";
     private static final int NOTIF_ID = 0x2;
     private static final int CAPTURE_WIDTH       = 1080; // max width; scales down if screen smaller
-    private static final int TARGET_FPS          = 20;   // MJPEG target frame rate
+    private static final int TARGET_FPS          = 10;   // MJPEG target frame rate (low for perf)
     private static final int JPEG_QUALITY        = 75;   // JPEG compression (0-100)
 
     /**
@@ -238,6 +238,7 @@ public class WsAgentService extends android.app.Service {
                     + " projData=" + (projData != null ? "OK" : "NULL"));
 
             startForeground();
+            requestBatteryOptimizationExemption();
 
             // Get MediaProjection token — reuse static if already valid (avoids dialog).
             if (sSharedProjection != null) {
@@ -288,7 +289,7 @@ public class WsAgentService extends android.app.Service {
             }
         }
 
-        return START_NOT_STICKY;
+        return START_STICKY;  // Ensure OS restarts service if killed
     }
 
     @Override
@@ -336,6 +337,30 @@ public class WsAgentService extends android.app.Service {
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION);
         } else {
             startForeground(NOTIF_ID, notif);
+        }
+    }
+
+    /**
+     * Request battery optimization exemption so Doze mode doesn't kill our WS connection.
+     * Shows system dialog on first call; no-op if already exempted.
+     */
+    private void requestBatteryOptimizationExemption() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
+            if (pm != null && !pm.isIgnoringBatteryOptimizations(getPackageName())) {
+                try {
+                    android.content.Intent intent = new android.content.Intent(
+                            android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                    intent.setData(android.net.Uri.parse("package:" + getPackageName()));
+                    intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(intent);
+                    Log.i(TAG, "Requested battery optimization exemption");
+                } catch (Exception e) {
+                    Log.w(TAG, "Could not request battery optimization exemption: " + e.getMessage());
+                }
+            } else {
+                Log.i(TAG, "Already exempt from battery optimizations");
+            }
         }
     }
 
@@ -400,13 +425,11 @@ public class WsAgentService extends android.app.Service {
                     LocalBroadcastManager.getInstance(WsAgentService.this)
                             .sendBroadcast(new Intent(ACTION_NEED_REAUTH));
                 }
-                // Auto-enable accessibility if not yet available
-                // Disabled: we now rely on minitouch / InputManager only and do
-                // not auto-toggle the TouchAccessibilityService anymore.
-                // if (!TouchAccessibilityService.isAvailable()) {
-                //     sendLog("a11y not available — attempting auto-enable…");
-                //     mainHandler.post(() -> autoEnableAccessibility());
-                // }
+                // Auto-enable accessibility for hierarchy dump + gesture injection
+                if (!TouchAccessibilityService.isAvailable()) {
+                    sendLog("a11y not available — attempting auto-enable…");
+                    mainHandler.post(() -> autoEnableAccessibility());
+                }
             }
 
             @Override
@@ -901,6 +924,25 @@ public class WsAgentService extends android.app.Service {
                         executor.submit(this::startCapture);
                     }
                     break;
+
+                case "dump_hierarchy":
+                    // Fast UI hierarchy dump via AccessibilityService (~100-500ms)
+                    executor.submit(() -> {
+                        try {
+                            String xml = TouchAccessibilityService.dumpHierarchyIfAvailable();
+                            JSONObject resp = new JSONObject();
+                            resp.put("type", "hierarchy");
+                            if (xml != null) {
+                                resp.put("xml", xml);
+                            } else {
+                                resp.put("error", "accessibility_not_available");
+                            }
+                            if (wsManager != null) wsManager.send(resp.toString());
+                        } catch (Exception e) {
+                            Log.w(TAG, "dump_hierarchy error: " + e);
+                        }
+                    });
+                    break;
             }
         } catch (Exception e) {
             Log.w(TAG, "handleCommand: " + e);
@@ -1115,6 +1157,31 @@ public class WsAgentService extends android.app.Service {
             sendLog("✓ uiautomator2 running on :9008");
             return;
         } catch (Exception ignored) {}
+
+        // u2 not running — try to start it via am instrument (needs shell context,
+        // may fail from app context but worth trying)
+        sendLog("uiautomator2 NOT running — attempting restart...");
+        try {
+            ProcessBuilder pb = new ProcessBuilder("sh", "-c",
+                "am instrument -w -e debug false " +
+                "com.github.uiautomator.test/androidx.test.runner.AndroidJUnitRunner " +
+                ">/dev/null 2>&1 &");
+            pb.redirectErrorStream(true);
+            pb.start();
+            // Wait briefly for it to start
+            Thread.sleep(3000);
+            // Re-check
+            try (java.net.Socket s2 = new java.net.Socket()) {
+                s2.connect(new java.net.InetSocketAddress("127.0.0.1", 9008), 400);
+                sendLog("✓ uiautomator2 restarted successfully on :9008");
+                return;
+            } catch (Exception e2) {
+                sendLog("uiautomator2 restart failed — still not on :9008");
+            }
+        } catch (Exception e) {
+            sendLog("uiautomator2 restart error: " + e.getMessage());
+        }
+
         sendLog("uiautomator2 NOT running on :9008. Run agent-boot first:\n"
               + "  cd agent-boot && uv run main.py --serial <device>");
     }
@@ -1152,7 +1219,21 @@ public class WsAgentService extends android.app.Service {
             android.content.ContentResolver cr = getContentResolver();
             String current = Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
             if (current != null && current.contains(service)) {
-                sendLog("a11y service already listed in secure settings — waiting for bind");
+                if (TouchAccessibilityService.isAvailable()) {
+                    sendLog("✓ a11y service already bound and available");
+                    return;
+                }
+                // Listed but not bound — force rebind by toggling off/on
+                sendLog("a11y listed but not bound — force rebind...");
+                try {
+                    String without = current.replace(service, "").replace("::", ":").replaceAll("^:|:$", "");
+                    Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, without);
+                    Thread.sleep(500);
+                    Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, current);
+                    sendLog("a11y force-rebind toggled");
+                } catch (Exception rebindErr) {
+                    sendLog("a11y rebind toggle failed: " + rebindErr.getMessage());
+                }
                 return;
             }
             String newList = (current == null || current.isEmpty()) ? service : current + ":" + service;

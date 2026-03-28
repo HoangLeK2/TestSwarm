@@ -4,6 +4,22 @@ import Link from 'next/link';
 import { DeviceTile } from './device-tile';
 import { Button } from '@/components/ui/button';
 import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  verticalListSortingStrategy,
+  useSortable,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import { restrictToVerticalAxis } from '@dnd-kit/modifiers';
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -19,7 +35,8 @@ import {
   Plus,
   Save,
   ArrowLeft,
-  RefreshCw
+  RefreshCw,
+  Play
 } from 'lucide-react';
 import {
   Dialog,
@@ -29,8 +46,11 @@ import {
 } from '@/components/ui/dialog';
 import { ROUTES } from '@/config/routes';
 import { toast } from 'sonner';
-import { useControlRecord } from '../hooks/use-control-record';
+import { useState } from 'react';
+import { useControlRecord, type StepWithId } from '../hooks/use-control-record';
 import { ControlRecordStepLabel } from './control-record/step-label';
+import { XmlTreeViewer } from './control-record/xml-tree-viewer';
+import { ScenarioPlayer } from './control-record/scenario-player';
 import { useTranslations } from 'next-intl';
 
 type ControlRecordViewProps = {
@@ -58,6 +78,7 @@ export function ControlRecordView({ initialSerial }: ControlRecordViewProps = {}
     mode,
     addWaitStep,
     removeStep,
+    moveStep,
     copyJson,
     openSaveDialog,
     saveDialogOpen,
@@ -81,8 +102,30 @@ export function ControlRecordView({ initialSerial }: ControlRecordViewProps = {}
     selectorValue,
     setSelectorValue,
     handleTapSelector,
-    toggleRecording
+    toggleRecording,
+    autoRefreshHierarchy,
+    setAutoRefreshHierarchy,
+    hierarchyLoading,
+    hierarchyPaused,
+    setHierarchyPaused,
   } = useControlRecord(initialSerial);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor),
+  );
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (over && active.id !== over.id) {
+      const oldIndex = steps.findIndex((s) => s._id === active.id);
+      const newIndex = steps.findIndex((s) => s._id === over.id);
+      if (oldIndex !== -1 && newIndex !== -1) moveStep(oldIndex, newIndex);
+    }
+  };
+
+  const [highlightBounds, setHighlightBounds] = useState<[number, number, number, number] | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null);
+  const [playerMode, setPlayerMode] = useState(false);
 
   if (error) {
     return (
@@ -144,7 +187,8 @@ export function ControlRecordView({ initialSerial }: ControlRecordViewProps = {}
       </div>
 
       <div className='flex flex-col gap-4 lg:flex-row lg:items-start'>
-        <div className='w-full shrink-0 lg:w-auto' style={{ maxWidth: 360 }}>
+        {/* Column 1: Device Preview */}
+        <div className='w-full shrink-0 lg:w-auto' style={{ maxWidth: 320 }}>
           {selectedDevice && (
             <DeviceTile
               device={selectedDevice}
@@ -153,15 +197,48 @@ export function ControlRecordView({ initialSerial }: ControlRecordViewProps = {}
               wsSend={sendAndRecord}
               onToggleMode={handleToggleMode}
               onRestart={handleRestart}
+              highlightBounds={highlightBounds}
             />
           )}
         </div>
 
-        <Card className=''>
+        {/* Column 2: XML Tree Viewer */}
+        <div className='min-w-[300px] flex-1' style={{ minHeight: 400, maxHeight: 'calc(100vh - 200px)' }}>
+          <XmlTreeViewer
+            xml={hierarchyXml}
+            loading={hierarchyLoading ?? false}
+            onNodeSelect={({ bounds, by, value }) => {
+              setHighlightBounds(bounds);
+              setSelectedNodeId(null); // will be updated by tree interaction
+              setSelectorBy(by as typeof selectorBy);
+              setSelectorValue(value);
+            }}
+            selectedNodeId={selectedNodeId}
+            onRefresh={() => {
+              if (selectedDevice) refreshHierarchy();
+            }}
+            autoRefresh={autoRefreshHierarchy ?? true}
+            onAutoRefreshChange={setAutoRefreshHierarchy ?? (() => {})}
+          />
+        </div>
+
+        {/* Column 3: Scenario Card */}
+        <Card className='w-full lg:w-[380px] shrink-0'>
           <CardHeader className='flex flex-row items-center justify-between space-y-0 pb-2'>
-            <CardTitle className='text-sm'>{t('scenarioCardTitle')}</CardTitle>
+            <CardTitle className='text-sm'>{playerMode ? 'Scenario Player' : t('scenarioCardTitle')}</CardTitle>
             <div className='flex items-center gap-2'>
-              {recording && selectedDevice && (
+              {!playerMode && (
+                <Button
+                  size='sm'
+                  variant='outline'
+                  onClick={() => setPlayerMode(true)}
+                  disabled={!selectedDevice}
+                >
+                  <Play className='mr-1 size-3.5' />
+                  Play
+                </Button>
+              )}
+              {!playerMode && recording && selectedDevice && (
                 <>
                   {pollingXml ? (
                     <span className='flex items-center gap-1 text-[11px] text-muted-foreground animate-pulse'>
@@ -186,26 +263,36 @@ export function ControlRecordView({ initialSerial }: ControlRecordViewProps = {}
                   )}
                 </>
               )}
-              <Button
-                size='sm'
-                variant={recording ? 'destructive' : 'secondary'}
-                onClick={() => void toggleRecording()}
-              >
-                {recording ? (
-                  <>
-                    <Square className='mr-1 size-3.5' />
-                    {t('stopRecord')}
-                  </>
-                ) : (
-                  <>
-                    <Circle className='mr-1 size-3.5' />
-                    {t('record')}
-                  </>
-                )}
-              </Button>
+              {!playerMode && (
+                <Button
+                  size='sm'
+                  variant={recording ? 'destructive' : 'secondary'}
+                  onClick={() => void toggleRecording()}
+                >
+                  {recording ? (
+                    <>
+                      <Square className='mr-1 size-3.5' />
+                      {t('stopRecord')}
+                    </>
+                  ) : (
+                    <>
+                      <Circle className='mr-1 size-3.5' />
+                      {t('record')}
+                    </>
+                  )}
+                </Button>
+              )}
             </div>
           </CardHeader>
           <CardContent className='space-y-3'>
+            {playerMode && selectedDevice ? (
+              <ScenarioPlayer
+                serial={selectedDevice.serial}
+                onClose={() => setPlayerMode(false)}
+                onPlayingChange={setHierarchyPaused}
+              />
+            ) : (
+            <>
             <p className='text-xs text-muted-foreground'>
               {t.rich('recordingHint', { strong: (chunks) => <strong>{chunks}</strong> })}
             </p>
@@ -240,9 +327,6 @@ export function ControlRecordView({ initialSerial }: ControlRecordViewProps = {}
               >
                 {t('tapU2')}
               </Button>
-              <Button size='sm' variant='outline' onClick={loadHierarchy} disabled={!selectedDevice}>
-                {t('getHierarchy')}
-              </Button>
             </div>
             <div className='flex gap-1.5'>
               <Button size='sm' variant='outline' onClick={addWaitStep}>
@@ -258,123 +342,31 @@ export function ControlRecordView({ initialSerial }: ControlRecordViewProps = {}
                 {t('saveToCampaign')}
               </Button>
             </div>
-            <div className='max-h-[320px] space-y-1 overflow-y-auto rounded border border-border/60 bg-muted/30 p-2'>
-              {steps.length === 0 ? (
-                <p className='py-4 text-center text-xs text-muted-foreground'>
-                  {t('noSteps')}
-                </p>
-              ) : (
-                steps.map((step, i) => (
-                  <div
-                    key={i}
-                    className='flex items-center justify-between gap-2 rounded bg-background px-2 py-1.5 text-xs'
-                  >
-                    <ControlRecordStepLabel step={step} />
-                    <Button
-                      size='icon'
-                      variant='ghost'
-                      className='size-6 shrink-0'
-                      onClick={() => removeStep(i)}
-                    >
-                      <Trash2 className='size-3' />
-                    </Button>
-                  </div>
-                ))
-              )}
-            </div>
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              modifiers={[restrictToVerticalAxis]}
+              onDragEnd={handleDragEnd}
+            >
+              <SortableContext items={steps.map((s) => s._id)} strategy={verticalListSortingStrategy}>
+                <div className='max-h-[320px] space-y-1 overflow-y-auto rounded border border-border/60 bg-muted/30 p-2'>
+                  {steps.length === 0 ? (
+                    <p className='py-4 text-center text-xs text-muted-foreground'>
+                      {t('noSteps')}
+                    </p>
+                  ) : (
+                    steps.map((step, i) => (
+                      <SortableStepItem key={step._id} step={step} index={i} onRemove={removeStep} />
+                    ))
+                  )}
+                </div>
+              </SortableContext>
+            </DndContext>
+            </>
+            )}
           </CardContent>
         </Card>
       </div>
-
-      <Dialog open={hierarchyOpen} onOpenChange={setHierarchyOpen}>
-        <DialogContent className='max-w-5xl max-h-[90vh] flex flex-col gap-4'>
-          <DialogHeader className='gap-1'>
-            <div className='flex flex-wrap items-center justify-between gap-2'>
-              <DialogTitle className='text-base'>UI Hierarchy (uiautomator2)</DialogTitle>
-              <div className='flex items-center gap-2'>
-                <span className='text-xs text-muted-foreground'>{t('autoRefresh')}</span>
-                <Button size='sm' variant='outline' onClick={refreshHierarchy} disabled={!selectedDevice}>
-                  {t('refreshNow')}
-                </Button>
-              </div>
-            </div>
-            <p className='text-xs text-muted-foreground'>
-              {t('hierarchyHint')}
-            </p>
-          </DialogHeader>
-          <div className='grid grid-cols-1 lg:grid-cols-[1fr,320px] gap-4 flex-1 min-h-0'>
-            <div className='rounded-lg border bg-muted/30 overflow-hidden min-h-[240px]'>
-              <div className='bg-muted/60 px-3 py-1.5 text-xs font-medium text-muted-foreground border-b'>
-                {t('xmlDump')}
-              </div>
-              <pre className='p-3 text-[10px] font-mono whitespace-pre-wrap break-all overflow-auto max-h-[50vh]'>
-                {hierarchyXml === 'Đang tải…' || hierarchyXml === 'Loading…'
-                  ? t('loading')
-                  : hierarchyXml.startsWith('Lỗi:') || hierarchyXml.startsWith('Error:')
-                    ? hierarchyXml
-                    : !hierarchyXml || hierarchyXml.trim() === ''
-                      ? t('hierarchyUnavailable')
-                      : hierarchyXml}
-              </pre>
-            </div>
-            <div className='rounded-lg border bg-card overflow-hidden flex flex-col min-h-0'>
-              <div className='bg-muted/60 px-3 py-1.5 flex items-center justify-between border-b'>
-                <span className='text-xs font-medium'>{t('chooseSelector')}</span>
-                <span className='text-[10px] text-muted-foreground'>
-                  {parsedHierarchyNodes.length} mục
-                </span>
-              </div>
-              <div className='flex-1 overflow-auto p-2'>
-                {parsedHierarchyNodes.length === 0 ? (
-                  <div className='p-3 text-xs text-muted-foreground space-y-1'>
-                    <p>{t('selectorNotFound')}</p>
-                    <p>{t('selectorNeedAccessibility')}</p>
-                    <code className='block mt-2 p-2 rounded bg-muted text-[10px]'>
-                      Cài đặt → Trợ năng → STFService → Bật
-                    </code>
-                  </div>
-                ) : (
-                  <ul className='space-y-1'>
-                    {parsedHierarchyNodes.map((n) => (
-                      <li key={n.id}>
-                        <button
-                          type='button'
-                          className='w-full text-left rounded-md px-2 py-2 hover:bg-muted/80 focus:bg-muted/80 focus:outline-none border border-transparent hover:border-border transition-colors'
-                          onClick={() => {
-                            setSelectorBy(n.by);
-                            setSelectorValue(n.value);
-                            setHierarchyOpen(false);
-                          }}
-                        >
-                          <div className='flex items-center gap-1.5 flex-wrap'>
-                            <span className='inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium bg-primary/10 text-primary'>
-                              {n.by}
-                            </span>
-                            {n.clickable && (
-                              <span className='text-[9px] text-muted-foreground'>clickable</span>
-                            )}
-                          </div>
-                          <div className='mt-0.5 truncate text-xs font-medium' title={n.label}>
-                            {n.label}
-                          </div>
-                          {n.package && (
-                            <div className='mt-0.5 text-[10px] text-muted-foreground truncate' title={n.package}>
-                              {n.package}
-                            </div>
-                          )}
-                          <div className='mt-0.5 text-[9px] text-muted-foreground font-mono truncate' title={n.value}>
-                            {n.value.length > 56 ? `${n.value.slice(0, 56)}…` : n.value}
-                          </div>
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
 
       <Dialog
         open={saveDialogOpen}
@@ -453,6 +445,56 @@ export function ControlRecordView({ initialSerial }: ControlRecordViewProps = {}
           )}
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+// ── Sortable step item for drag-and-drop ─────────────────────────────────
+
+function SortableStepItem({
+  step,
+  index,
+  onRemove,
+}: {
+  step: StepWithId;
+  index: number;
+  onRemove: (i: number) => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: step._id,
+  });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className='flex items-center gap-1 rounded bg-background px-1 py-1.5 text-xs'
+    >
+      {/* Drag handle */}
+      <button
+        {...attributes}
+        {...listeners}
+        className='flex-shrink-0 cursor-grab px-1 text-muted-foreground hover:text-foreground active:cursor-grabbing'
+        title='Drag to reorder'
+      >
+        &#x2630;
+      </button>
+      <span className='flex-1 truncate'>
+        <ControlRecordStepLabel step={step} />
+      </span>
+      <Button
+        size='icon'
+        variant='ghost'
+        className='size-6 shrink-0'
+        onClick={() => onRemove(index)}
+      >
+        <Trash2 className='size-3' />
+      </Button>
     </div>
   );
 }

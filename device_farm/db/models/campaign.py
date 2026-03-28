@@ -18,7 +18,12 @@ class Campaign(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, default="")
     scenario: Mapped[dict] = mapped_column(JSON, default=dict)
-    status: Mapped[str] = mapped_column(String(20), default="draft")  
+    variables: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(20), default="draft")
+    # DF-004: optional device-group target (overrides per-device campaign_devices list)
+    target_group_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("device_groups.id", ondelete="SET NULL"), nullable=True
+    )  
     user_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
@@ -66,6 +71,7 @@ class Scenario(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False, default="Scenario")
     instructions: Mapped[str] = mapped_column(Text, default="")
     steps: Mapped[list] = mapped_column(JSON, default=list)
+    variables: Mapped[dict] = mapped_column(JSON, default=dict)
     order: Mapped[int] = mapped_column(default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(

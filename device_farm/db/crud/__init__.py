@@ -14,4 +14,6 @@ from .session import *  # noqa: F401,F403
 from .campaign import *  # noqa: F401,F403
 from .mcp_session import *  # noqa: F401,F403
 from .crawl import *  # noqa: F401,F403
+from .scenario_template import *  # noqa: F401,F403
+from .device_group import *  # noqa: F401,F403
 

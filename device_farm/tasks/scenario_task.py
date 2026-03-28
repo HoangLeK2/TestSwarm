@@ -25,6 +25,7 @@ import concurrent.futures
 import io
 import logging
 import os
+import random
 import re
 import time
 from datetime import datetime
@@ -49,6 +50,7 @@ _CONTAINER_CLASSES: frozenset[str] = frozenset({
 _HASH_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="hash_xml")
 
 from runtime.core import DeviceClient
+from common.variable_resolver import VariableContext
 
 
 log = logging.getLogger(__name__)
@@ -162,6 +164,66 @@ class ScrollToStep(StepBase):
     max_swipes: int  # default 5
 
 
+# ── DF-002 control flow step types ────────────────────────────────────────────
+
+class RepeatStep(StepBase):
+    """Loop sub-steps N times with optional delay between iterations."""
+    type: Literal["repeat"]
+    count: int
+    steps: List[Dict[str, Any]]
+    delay_between: float  # seconds between iterations (default 0)
+
+
+class RepeatUntilStep(StepBase):
+    """Loop sub-steps until condition is met (max_iterations safety cap)."""
+    type: Literal["repeat_until"]
+    condition: Dict[str, Any]
+    steps: List[Dict[str, Any]]
+    max_iterations: int  # default 100
+
+
+class IfElementStep(StepBase):
+    """Branch on element existence: run then-steps if found, else-steps if not."""
+    type: Literal["if_element"]
+    by: str
+    value: str
+    then: List[Dict[str, Any]]
+    timeout: float  # seconds to wait for element (default 3)
+
+
+class IfVariableStep(StepBase):
+    """Branch based on variable value comparison."""
+    type: Literal["if_variable"]
+    name: str
+    then: List[Dict[str, Any]]
+    # optional comparison ops: equals, not_equals, contains, greater_than
+    # optional else: list of steps when condition is False
+
+
+class RandomPickStep(StepBase):
+    """Randomly execute one branch from a weighted list."""
+    type: Literal["random_pick"]
+    branches: List[Dict[str, Any]]  # each: {weight?: int, steps: list}
+
+
+# ── DF-003 flow composition step type ─────────────────────────────────────────
+
+class RunScenarioStep(StepBase):
+    """
+    Execute a sub-scenario by ID or name.
+
+    Resolution order:
+      1. scenario_id  → direct lookup in _scenario_registry["by_id"]
+      2. scenario_name → lookup in _scenario_registry["by_campaign_name"]
+      3. scenario_name → lookup in _scenario_registry["by_template_name"]
+    """
+    type: Literal["run_scenario"]
+    # exactly one of the two lookup keys is required at runtime
+    scenario_id: Optional[str]
+    scenario_name: Optional[str]
+    variables: Dict[str, Any]   # override vars injected into child scope
+
+
 ScenarioStep = (
     LaunchAppStep
     | OpenUrlStep
@@ -178,6 +240,12 @@ ScenarioStep = (
     | InputTextStep
     | KeyStep
     | ScrollDownStep
+    | RepeatStep
+    | RepeatUntilStep
+    | IfElementStep
+    | IfVariableStep
+    | RandomPickStep
+    | RunScenarioStep
 )
 
 
@@ -698,6 +766,78 @@ def _capture_step_screenshot(
             log.debug(f"crop failed: {exc}")
 
     return result
+def _xml_has_element(xml: str, by: str, value: str) -> bool:
+    """
+    Check if the XML hierarchy contains an element matching (by, value).
+
+    Uses findall with attribute predicates for text/resource-id/content-desc —
+    faster than iterating every node. Falls back to iteration for other selectors.
+    Called in hot loops (repeat_until), so avoids re-parsing on every call.
+    """
+    if not xml or not value:
+        return False
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(xml)
+        if by == "text":
+            return bool(root.findall(f'.//*[@text="{value}"]'))
+        if by == "resource-id":
+            return bool(root.findall(f'.//*[@resource-id="{value}"]'))
+        if by in ("content-desc", "accessibility id"):
+            return bool(root.findall(f'.//*[@content-desc="{value}"]'))
+        if by == "class name":
+            return bool(root.findall(f'.//*[@class="{value}"]'))
+        for node in root.iter():
+            if node.get("text") == value or node.get("resource-id") == value:
+                return True
+        return False
+    except Exception:
+        return False
+
+
+def _eval_ru_condition(
+    device: "DeviceClient",
+    condition: Dict[str, Any],
+    var_ctx: VariableContext,
+) -> bool:
+    """
+    Evaluate a repeat_until stop condition (DF-002 format).
+
+    Returns True when the loop SHOULD STOP (condition satisfied).
+
+    Supported keys:
+      element_exists:     {"by": ..., "value": ...}  — stop when element appears
+      element_not_exists: {"by": ..., "value": ...}  — stop when element disappears
+      variable_equals:    {"name": ..., "value": ...} — stop when variable matches
+
+    Uses force_refresh=True so each iteration gets a fresh hierarchy dump, not
+    cached state from the previous step.
+    """
+    if "element_exists" in condition:
+        spec = condition["element_exists"]
+        by = str(spec.get("by", "text"))
+        value = str(var_ctx.resolve(spec.get("value", ""), step_index=0))
+        xml = device.hierarchy_xml(force_refresh=True) or ""
+        return _xml_has_element(xml, by, value)
+
+    if "element_not_exists" in condition:
+        spec = condition["element_not_exists"]
+        by = str(spec.get("by", "text"))
+        value = str(var_ctx.resolve(spec.get("value", ""), step_index=0))
+        xml = device.hierarchy_xml(force_refresh=True) or ""
+        return not _xml_has_element(xml, by, value)
+
+    if "variable_equals" in condition:
+        spec = condition["variable_equals"]
+        name = str(spec.get("name", ""))
+        expected = str(spec.get("value", ""))
+        if not name:
+            return False
+        actual = str(var_ctx.resolve(f"${{{name}}}", step_index=0))
+        return actual == expected
+
+    log.warning("repeat_until: unknown condition keys: %r", list(condition.keys()))
+    return False
 
 
 def run_scenario_task(
@@ -705,6 +845,9 @@ def run_scenario_task(
     scenario: Dict[str, Any],
     context: Optional[Dict[str, Any]] = None,
     on_step_done: Optional[Callable[[Dict[str, Any]], None]] = None,
+    _var_ctx: Optional[VariableContext] = None,
+    _depth: int = 0,
+    _call_stack: frozenset[str] = frozenset(),
 ) -> Dict[str, Any]:
     """
     Thực thi 1 scenario JSON trên 1 device.
@@ -719,6 +862,28 @@ def run_scenario_task(
     ctx = context if context is not None else {}
     ctx.setdefault("posts", [])
     ctx.setdefault("vars", {})
+
+    _MAX_NESTING_DEPTH = 10
+    if _depth > _MAX_NESTING_DEPTH:
+        log.warning(f"[{serial}] run_scenario_task: max nesting depth {_MAX_NESTING_DEPTH} exceeded")
+        return {
+            "serial": serial,
+            "success": False,
+            "steps_executed": 0,
+            "step_results": [{"type": "error", "ok": False, "message": f"Max nesting depth {_MAX_NESTING_DEPTH} exceeded"}],
+            "failed_message": f"Max nesting depth {_MAX_NESTING_DEPTH} exceeded",
+            "context": context or {},
+        }
+
+    # Khởi tạo VariableContext nếu chưa có (chỉ tạo 1 lần ở root call,
+    # các lệnh loop/if lồng nhau nhận _var_ctx từ caller để runtime vars persist).
+    if _var_ctx is None:
+        _var_ctx = VariableContext(
+            scenario_vars=scenario.get("variables", {}),
+            campaign_vars=scenario.get("_campaign_vars", {}),
+            device_serial=device.serial,
+            device_model=getattr(device, "model", ""),
+        )
 
     w = device.screen_width or 1080
     h = device.screen_height or 1920
@@ -743,7 +908,8 @@ def run_scenario_task(
     # Popups don't appear on every single tap, so checking every 5s is protective enough.
     _last_popup_t: float = 0.0
 
-    for idx, step in enumerate(steps):
+    for idx, raw_step in enumerate(steps):
+        step: Dict[str, Any] = _var_ctx.resolve(raw_step, step_index=idx)
         t = step.get("type")
         log.info(f"[{serial}] step#{idx + 1}: {t} {step}")
         step_result: Dict[str, Any] = {"index": idx, "type": t, "ok": True}
@@ -1319,7 +1485,7 @@ def run_scenario_task(
 
                     ctx["_loop_iter"] = i
                     # Run nested steps (reuse run_scenario_task recursively)
-                    nested_result = run_scenario_task(device, {"steps": nested_steps}, context=ctx)
+                    nested_result = run_scenario_task(device, {"steps": nested_steps}, context=ctx, _var_ctx=_var_ctx, _depth=_depth + 1)
                     sub_results.append({"iteration": i, "result": nested_result})
                     actual_iters += 1
 
@@ -1348,7 +1514,7 @@ def run_scenario_task(
                 branch_name = "then" if cond_met else "else"
 
                 if branch_steps:
-                    branch_result = run_scenario_task(device, {"steps": branch_steps}, context=ctx)
+                    branch_result = run_scenario_task(device, {"steps": branch_steps}, context=ctx, _var_ctx=_var_ctx, _depth=_depth + 1)
                     step_result["branch"] = branch_name
                     step_result["condition_met"] = cond_met
                     step_result["sub_result"] = branch_result
@@ -1369,6 +1535,246 @@ def run_scenario_task(
                 else:
                     step_result["message"] = "break_if: condition not met — continuing"
 
+        # ── DF-002: Control Flow ──────────────────────────────────────────────
+
+        elif t == "repeat":
+            count = step.get("count")
+            delay = float(step.get("delay_between", 0.0) or 0.0)
+            sub_steps = step.get("steps") or []
+
+            if count is None:
+                step_result["ok"] = False
+                step_result["message"] = "repeat: missing count"
+            elif not sub_steps:
+                step_result["ok"] = False
+                step_result["message"] = "repeat: no nested steps"
+            else:
+                try:
+                    n = int(count)
+                except (TypeError, ValueError):
+                    step_result["ok"] = False
+                    step_result["message"] = f"repeat: invalid count={count!r}"
+                    n = 0
+
+                sub_results: List[Dict[str, Any]] = []
+                for i in range(n):
+                    _var_ctx.set("__LOOP_INDEX__", i)
+                    iter_res = run_scenario_task(
+                        device,
+                        {"steps": sub_steps},
+                        context=ctx,
+                        _var_ctx=_var_ctx,
+                        _depth=_depth + 1,
+                    )
+                    sub_results.append({"iteration": i, "result": iter_res})
+                    if not iter_res.get("success"):
+                        step_result["ok"] = False
+                        step_result["message"] = f"repeat: iteration {i} failed — {iter_res.get('failed_message', '')}"
+                        break
+                    if delay > 0 and i < n - 1:
+                        time.sleep(delay)
+                else:
+                    step_result["message"] = f"repeat: {n} iteration(s) completed"
+                step_result["iterations"] = len(sub_results)
+                step_result["sub_results"] = sub_results
+
+        elif t == "repeat_until":
+            condition = step.get("condition") or {}
+            max_iter = max(1, int(step.get("max_iterations", 100) or 100))
+            sub_steps = step.get("steps") or []
+
+            if not condition:
+                step_result["ok"] = False
+                step_result["message"] = "repeat_until: missing condition"
+            elif not sub_steps:
+                step_result["ok"] = False
+                step_result["message"] = "repeat_until: no nested steps"
+            else:
+                actual_iters = 0
+                condition_met = False
+                for i in range(max_iter):
+                    _var_ctx.set("__LOOP_INDEX__", i)
+                    if _eval_ru_condition(device, condition, _var_ctx):
+                        condition_met = True
+                        break
+                    iter_res = run_scenario_task(
+                        device,
+                        {"steps": sub_steps},
+                        context=ctx,
+                        _var_ctx=_var_ctx,
+                        _depth=_depth + 1,
+                    )
+                    actual_iters += 1
+                    if not iter_res.get("success"):
+                        step_result["ok"] = False
+                        step_result["message"] = f"repeat_until: iteration {i} failed — {iter_res.get('failed_message', '')}"
+                        break
+                else:
+                    # Exhausted iterations without condition met
+                    if not condition_met:
+                        step_result["ok"] = False
+                        step_result["message"] = f"repeat_until: max_iterations ({max_iter}) reached without condition"
+
+                step_result["iterations"] = actual_iters
+                if condition_met:
+                    step_result["message"] = f"repeat_until: condition met after {actual_iters} iteration(s)"
+
+        elif t == "if_element":
+            by = str(step.get("by") or "")
+            value = str(step.get("value") or "").strip()
+            timeout = float(step.get("timeout", 3.0) or 3.0)
+            then_steps = step.get("then") or []
+            else_steps = step.get("else") or []
+
+            if not by or not value:
+                step_result["ok"] = False
+                step_result["message"] = "if_element: missing by/value"
+            else:
+                element_found = False
+                try:
+                    device.ensure_u2_healthy()
+                    u2 = device.u2
+                    if u2 is not None:
+                        eid = _wait_for_element(u2, by, value, timeout=timeout)
+                        element_found = eid is not None
+                except Exception as exc:
+                    log.debug(f"[{serial}] if_element u2 check error: {exc}")
+
+                branch_steps = then_steps if element_found else else_steps
+                branch_name = "then" if element_found else "else"
+                step_result["element_found"] = element_found
+                step_result["branch"] = branch_name
+
+                if branch_steps:
+                    sub = run_scenario_task(
+                        device,
+                        {"steps": branch_steps},
+                        context=ctx,
+                        _var_ctx=_var_ctx,
+                        _depth=_depth + 1,
+                    )
+                    step_result["sub_result"] = sub
+                    if not sub.get("success"):
+                        step_result["ok"] = False
+                        step_result["message"] = f"if_element: {branch_name} branch failed"
+                    else:
+                        step_result["message"] = f"if_element(element_found={element_found}): took {branch_name}"
+                else:
+                    step_result["message"] = f"if_element(element_found={element_found}): no steps for {branch_name}, skip"
+
+        elif t == "if_variable":
+            name = str(step.get("name") or "")
+            then_steps = step.get("then") or []
+            else_steps = step.get("else") or []
+
+            if not name:
+                step_result["ok"] = False
+                step_result["message"] = "if_variable: missing name"
+            elif not then_steps and not else_steps:
+                step_result["message"] = "if_variable: no then/else steps, skip"
+            else:
+                # Resolve variable — full-match preserves raw type for numeric comparisons
+                raw_val = _var_ctx.resolve(f"${{{name}}}", step_index=idx)
+                str_val = str(raw_val)
+
+                condition_met = False
+                if "equals" in step:
+                    condition_met = str_val == str(step["equals"])
+                elif "not_equals" in step:
+                    condition_met = str_val != str(step["not_equals"])
+                elif "contains" in step:
+                    condition_met = str(step["contains"]) in str_val
+                elif "greater_than" in step:
+                    try:
+                        condition_met = float(raw_val) > float(step["greater_than"])
+                    except (TypeError, ValueError):
+                        condition_met = False
+                else:
+                    # No comparison op — truthy: var is set and non-empty
+                    condition_met = bool(raw_val) and str_val not in ("None", "", "0")
+
+                branch_steps = then_steps if condition_met else else_steps
+                branch_name = "then" if condition_met else "else"
+                step_result["condition_met"] = condition_met
+                step_result["branch"] = branch_name
+
+                if branch_steps:
+                    sub = run_scenario_task(
+                        device,
+                        {"steps": branch_steps},
+                        context=ctx,
+                        _var_ctx=_var_ctx,
+                        _depth=_depth + 1,
+                    )
+                    step_result["sub_result"] = sub
+                    if not sub.get("success"):
+                        step_result["ok"] = False
+                        step_result["message"] = f"if_variable: {branch_name} branch failed"
+                    else:
+                        step_result["message"] = f"if_variable({name}={str_val!r}): took {branch_name}"
+                else:
+                    step_result["message"] = f"if_variable({name}={str_val!r}): no steps for {branch_name}, skip"
+
+        elif t == "random_pick":
+            branches = step.get("branches") or []
+            if not branches:
+                step_result["ok"] = False
+                step_result["message"] = "random_pick: no branches"
+            else:
+                weights = [max(1, int(b.get("weight", 1))) for b in branches]
+                # Use index-based selection to handle duplicate branch dicts correctly
+                chosen_idx = random.choices(range(len(branches)), weights=weights, k=1)[0]
+                chosen = branches[chosen_idx]
+                branch_steps = chosen.get("steps") or []
+
+                step_result["chosen_branch"] = chosen_idx
+                if not branch_steps:
+                    step_result["message"] = f"random_pick: branch {chosen_idx} has no steps, skip"
+                else:
+                    sub = run_scenario_task(
+                        device,
+                        {"steps": branch_steps},
+                        context=ctx,
+                        _var_ctx=_var_ctx,
+                        _depth=_depth + 1,
+                    )
+                    step_result["sub_result"] = sub
+                    if not sub.get("success"):
+                        step_result["ok"] = False
+                        step_result["message"] = f"random_pick: branch {chosen_idx} failed"
+                    else:
+                        step_result["message"] = f"random_pick: executed branch {chosen_idx}"
+
+        # ── DF-001: Variable Management ───────────────────────────────────────
+
+        elif t == "set_variable":
+            name = str(step.get("name") or "")
+            if not name:
+                step_result["ok"] = False
+                step_result["message"] = "set_variable: missing name"
+            elif "from_list" in raw_step:
+                # Dùng raw_step để lấy list gốc (trước khi resolve chọn random 1 phần tử)
+                vals = raw_step["from_list"]
+                if not isinstance(vals, list) or not vals:
+                    step_result["ok"] = False
+                    step_result["message"] = "set_variable: from_list phải là list không rỗng"
+                else:
+                    # Resolve từng phần tử trong list trước khi chọn
+                    resolved_vals = [_var_ctx.resolve(v, step_index=idx) for v in vals]
+                    chosen = _var_ctx.set_from_list(name, resolved_vals)
+                    step_result["message"] = f"set_variable: {name} = {chosen!r} (from_list)"
+            elif "increment" in step:
+                try:
+                    inc = int(step["increment"])
+                except (TypeError, ValueError):
+                    inc = 1
+                result = _var_ctx.increment(name, inc)
+                step_result["message"] = f"set_variable: {name} += {inc} → {result}"
+            else:
+                value = step.get("value")
+                _var_ctx.set(name, value)
+                step_result["message"] = f"set_variable: {name} = {value!r}"
+
         elif t == "set_var":
             """Set a variable in context.vars for use in conditions."""
             key = str(step.get("key") or "")
@@ -1379,6 +1785,70 @@ def run_scenario_task(
             else:
                 ctx["vars"][key] = value
                 step_result["message"] = f"set_var: {key}={value!r}"
+
+        # ── DF-003: Flow Composition ──────────────────────────────────────────
+
+        elif t == "run_scenario":
+            scenario_id = str(step.get("scenario_id") or "").strip()
+            scenario_name = str(step.get("scenario_name") or "").strip()
+            scenario_ref = scenario_id or scenario_name
+
+            if not scenario_ref:
+                step_result["ok"] = False
+                step_result["message"] = "run_scenario: missing scenario_id or scenario_name"
+            elif scenario_ref in _call_stack:
+                step_result["ok"] = False
+                step_result["message"] = f"run_scenario: circular reference detected: {scenario_ref!r}"
+            else:
+                registry = scenario.get("_scenario_registry") or {}
+                sub_def: Optional[Dict[str, Any]] = None
+
+                # Resolution order: by_id → by_campaign_name → by_template_name
+                if scenario_id:
+                    sub_def = (registry.get("by_id") or {}).get(scenario_id)
+                if sub_def is None and scenario_name:
+                    sub_def = (registry.get("by_campaign_name") or {}).get(scenario_name)
+                if sub_def is None and scenario_name:
+                    sub_def = (registry.get("by_template_name") or {}).get(scenario_name)
+
+                if sub_def is None:
+                    step_result["ok"] = False
+                    step_result["message"] = f"run_scenario: sub-scenario not found: {scenario_ref!r}"
+                    log.warning(f"[{serial}] run_scenario: sub-scenario not found: {scenario_ref!r}")
+                else:
+                    # Merge variables: sub-scenario defaults < step overrides
+                    override_vars: Dict[str, Any] = step.get("variables") or {}
+                    merged_vars = {**(sub_def.get("variables") or {}), **override_vars}
+                    child_ctx = _var_ctx.child_scope(merged_vars)
+
+                    # Pass registry down so nested run_scenario steps work
+                    sub_scenario: Dict[str, Any] = {
+                        "steps": sub_def.get("steps") or [],
+                        "variables": merged_vars,
+                        "_scenario_registry": registry,
+                    }
+                    new_call_stack = _call_stack | {scenario_ref}
+
+                    sub = run_scenario_task(
+                        device,
+                        sub_scenario,
+                        context=ctx,
+                        _var_ctx=child_ctx,
+                        _depth=_depth + 1,
+                        _call_stack=new_call_stack,
+                    )
+                    step_result["sub_result"] = sub
+                    if not sub.get("success"):
+                        step_result["ok"] = False
+                        step_result["message"] = (
+                            f"run_scenario: sub-scenario {scenario_ref!r} failed — "
+                            f"{sub.get('failed_message', '')}"
+                        )
+                    else:
+                        step_result["message"] = (
+                            f"run_scenario: {scenario_ref!r} completed "
+                            f"({sub.get('steps_executed', 0)} steps)"
+                        )
 
         else:
             msg = f"unknown step type: {t!r}"

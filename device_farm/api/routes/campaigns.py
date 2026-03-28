@@ -44,6 +44,7 @@ def _scenario_to_out(s) -> ScenarioOut:
         name=s.name,
         instructions=s.instructions or "",
         steps=s.steps or [],
+        variables=s.variables or {},
         order=s.order,
         created_at=s.created_at,
         updated_at=s.updated_at,
@@ -54,8 +55,10 @@ def _to_out(c, scenarios=None) -> CampaignOut:
     return CampaignOut(
         id=c.id, name=c.name, description=c.description,
         status=c.status, scenario=c.scenario,
+        variables=c.variables or {},
         scenarios=[_scenario_to_out(s) for s in (scenarios or [])],
         user_id=c.user_id, created_at=c.created_at,
+        target_group_id=getattr(c, "target_group_id", None),
     )
 
 
@@ -81,7 +84,8 @@ async def list_campaigns(db: DB, user: CurrentUser):
 @router.post("", response_model=CampaignOut, status_code=status.HTTP_201_CREATED)
 async def create_campaign(body: CampaignCreate, db: DB, user: CurrentUser):
     campaign = await repo.create_campaign(
-        db, body.name, user.id, body.description, body.scenario
+        db, body.name, user.id, body.description, body.scenario, body.variables,
+        target_group_id=body.target_group_id,
     )
     for device_id in body.device_ids:
         device = await repo.get_device(db, device_id)
@@ -253,6 +257,7 @@ async def create_scenario(campaign_id: str, body: ScenarioCreate, db: DB, user: 
         name=body.name,
         instructions=body.instructions,
         steps=body.steps,
+        variables=body.variables,
         order=order,
     )
     await db.commit()

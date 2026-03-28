@@ -25,6 +25,7 @@ class DeviceOut(BaseModel):
     created_at: datetime
     adb_ip: Optional[str] = None
     adb_port: int = 5555
+    tags: str = ""  # DF-004: comma-separated device tags
 
 
 class SessionOut(BaseModel):

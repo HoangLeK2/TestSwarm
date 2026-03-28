@@ -47,8 +47,9 @@ from __future__ import annotations
 import logging
 import re
 import time
-import xml.etree.ElementTree as ET
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from lxml import etree as _lxml
 
 log = logging.getLogger(__name__)
 
@@ -72,6 +73,23 @@ _RE_TS = re.compile(
     r"|(T\d,\s*\d{1,2}/\d{1,2}/\d{4})"  # Vietnamese date format
     r"|(\d{1,2}/\d{1,2}/\d{4})"
     r"|(\d{4}-\d{2}-\d{2})",
+    re.IGNORECASE,
+)
+
+# ── Post-type detection patterns ─────────────────────────────────────────────
+# Applied to ALL text/content-desc in a post cluster to classify the post.
+
+_RE_REEL_TYPE = re.compile(r"\breels?\b", re.IGNORECASE)
+_RE_VIDEO_TYPE = re.compile(
+    r"\b(video|clip|thước phim|watch video|xem video)\b", re.IGNORECASE
+)
+# Image: matches content-desc that FB puts on photo attachments
+# ("Ảnh của X", "Photo by Y", etc.)  Must start with these keywords.
+_RE_IMAGE_TYPE = re.compile(
+    r"^(ảnh|photo|hình|image|picture)\b", re.IGNORECASE
+)
+_RE_LINK_TYPE = re.compile(
+    r"(https?://\S{6,}|www\.[^\s]{4,}|\.\bcom\b|\.\bvn\b|\.\bnet\b|visit site|xem trang|đọc thêm)",
     re.IGNORECASE,
 )
 
@@ -134,10 +152,36 @@ def _is_noise_text(text: str) -> bool:
 
 
 # ── XML parsing helpers ───────────────────────────────────────────────────────
+# We use lxml for:
+#   • XPath queries to find RecyclerView / feed containers (not possible with stdlib ET)
+#   • recover=True — handles the occasional malformed UIAutomator2 XML gracefully
+#   • 5-20× faster parsing than stdlib xml.etree.ElementTree for large hierarchies
 
-def _parse_bounds(node: ET.Element) -> Optional[Tuple[int, int, int, int]]:
-    """Parse '[x1,y1][x2,y2]' → (x1, y1, x2, y2) or None."""
-    m = re.search(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", node.get("bounds", ""))
+
+_LXML_PARSER = _lxml.XMLParser(recover=True, remove_comments=True, encoding="utf-8")
+
+# XPath expressions for feed container detection.
+# UIAutomator2 XML uses <node class="..."> for every element.
+_XPATH_RECYCLER = (
+    '//node[contains(@class, "RecyclerView") and @scrollable="true"]'
+)
+_XPATH_LIST = (
+    '//node[contains(@class, "ListView") and @scrollable="true"]'
+)
+# WebView container (Chrome / m.facebook.com)
+_XPATH_WEBVIEW = '//node[contains(@class, "WebView")]'
+
+# Class names that are typically wrapper/container frames, not post cards themselves.
+_AD_RESOURCE_IDS = frozenset({
+    "com.facebook.katana:id/sponsored_label",
+    "com.facebook.katana:id/ad_unit_container",
+    "com.facebook.lite:id/sponsored_label",
+})
+
+
+def _parse_bounds(node) -> Optional[Tuple[int, int, int, int]]:
+    """Parse '[x1,y1][x2,y2]' attribute → (x1, y1, x2, y2) or None."""
+    m = re.search(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", node.get("bounds") or "")
     return (int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))) if m else None
 
 
@@ -145,50 +189,106 @@ def _cy(bounds: Tuple[int, int, int, int]) -> int:
     return (bounds[1] + bounds[3]) // 2
 
 
-def _collect_text_nodes(root: ET.Element, toolbar_cutoff_y: int = 200) -> List[Dict[str, Any]]:
+def _collect_text_nodes(
+    element,
+    toolbar_cutoff_y: int = 200,
+) -> List[Dict[str, Any]]:
     """
-    Walk hierarchy, collect all nodes that have visible text.
-    Returns list of dicts sorted top-to-bottom by vertical center.
+    Walk an element subtree (lxml), collect all nodes that carry visible text.
+    Returns a list of dicts sorted top-to-bottom by vertical centre.
+
+    Accepts any lxml element — either the full root or a single post container.
     """
-    nodes = []
-    for node in root.iter():
+    nodes: List[Dict[str, Any]] = []
+    for node in element.iter():
         text = (node.get("text") or "").strip()
         desc = (node.get("content-desc") or "").strip()
-        # Prefer explicit text. content-desc is often accessibility/action labels.
+        # Explicit text takes priority; content-desc is often accessibility/action labels.
         content = text if text else desc
         if not content:
             continue
         bounds = _parse_bounds(node)
         if not bounds:
             continue
-        # Skip system status bar / navigation bar
+        # Skip system status bar / navigation bar area
         if bounds[3] < toolbar_cutoff_y:
             continue
-        # Skip zero-size invisible nodes
+        # Skip zero-size / invisible nodes
         if bounds[0] == bounds[2] or bounds[1] == bounds[3]:
             continue
         nodes.append({
-            "text":   content,
-            "bounds": bounds,
-            "cy":     _cy(bounds),
+            "text":        content,
+            "bounds":      bounds,
+            "cy":          _cy(bounds),
+            "resource_id": node.get("resource-id") or "",
         })
     nodes.sort(key=lambda n: n["cy"])
     return nodes
 
 
+def _is_ad_container(element) -> bool:
+    """Return True if any child node has a known sponsored/ad resource-id."""
+    for node in element.iter():
+        if (node.get("resource-id") or "") in _AD_RESOURCE_IDS:
+            return True
+    return False
+
+
+# ── Strategy A: RecyclerView-based post boundary detection ────────────────────
+# Each direct <node> child of the RecyclerView is one post card (or story/ad).
+# This is the correct, tree-structure-aware approach for FB app native.
+
+def _extract_posts_from_recycler(
+    root,
+    source_index: int,
+) -> Optional[List[Dict[str, Any]]]:
+    """
+    Find the best RecyclerView or ListView feed container and treat each of its
+    direct <node> children as one post card.
+
+    Returns a list of post dicts, or None if no suitable container was found
+    (caller should fall back to gap-based clustering).
+    """
+    # Try RecyclerView first (FB app native), then ListView (older FB / Lite).
+    containers = root.xpath(_XPATH_RECYCLER) or root.xpath(_XPATH_LIST)
+    if not containers:
+        return None
+
+    # Pick the container with the most direct node children (most likely the feed).
+    feed = max(containers, key=lambda el: len(el.findall("node")))
+    candidates = feed.findall("node")
+    if len(candidates) < 2:
+        return None  # Too few children — probably not the feed, fall back.
+
+    posts: List[Dict[str, Any]] = []
+    for candidate in candidates:
+        # Skip known ad containers
+        if _is_ad_container(candidate):
+            continue
+        nodes = _collect_text_nodes(candidate, toolbar_cutoff_y=0)
+        post = _extract_post(nodes, source_index)
+        if post:
+            posts.append(post)
+    return posts
+
+
+# ── Strategy B: Gap-based clustering (fallback for WebView / Chrome) ──────────
+# Used when no RecyclerView is found (e.g. m.facebook.com in Chrome).
+
 def _cluster_into_posts(nodes: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
     """
-    Group nearby text nodes into post "blocks".
+    Fallback: group text nodes into post blocks by vertical gap and timestamp anchors.
 
     A new cluster starts when:
-      - Vertical gap from previous node > GAP_THRESHOLD (blank space between posts)
-      - OR a timestamp node is seen after the first one in the current cluster
-        (timestamp = reliable post-boundary marker)
+      • Vertical gap from previous node > GAP_THRESHOLD  (blank space between posts)
+      • OR a timestamp already exists in the current cluster and another timestamp
+        appears (reliable post-boundary signal).
     """
     if not nodes:
         return []
 
-    GAP_THRESHOLD = 100  # pixels — FB post cards have clear vertical separation
+    # 160 px covers FB image attachment nodes (typically 120-150 px below post text).
+    GAP_THRESHOLD = 160
 
     clusters: List[List[Dict]] = []
     current: List[Dict] = [nodes[0]]
@@ -199,9 +299,6 @@ def _cluster_into_posts(nodes: List[Dict[str, Any]]) -> List[List[Dict[str, Any]
         gap = node["cy"] - prev_cy
         is_ts = bool(_RE_TS.search(node["text"]))
 
-        # Start a new cluster if:
-        # 1. Large visual gap between nodes
-        # 2. We already have a timestamp and see another timestamp (next post)
         if gap > GAP_THRESHOLD or (current_has_ts and is_ts and gap > 15):
             clusters.append(current)
             current = [node]
@@ -225,10 +322,18 @@ def _extract_post(cluster: List[Dict[str, Any]], source_index: int) -> Optional[
 
     Layout heuristic (Facebook post card, top → bottom):
       [Author name]
-      [Timestamp]    ← anchor — required; no timestamp = not a post
-      [Post body...] (multiple TextViews)
-      [Reaction count] [Comment count] [Share count]
-      [Like | Comment | Share buttons] ← noise
+      [Timestamp]          ← anchor — required; no timestamp = not a post
+      [Post body...]       (multiple TextViews; may also appear before timestamp)
+      [Image/video desc]   content-desc of media attachment (optional)
+      [Reaction count]     e.g. "1.2K"
+      [Comment count]      e.g. "45 bình luận"
+      [Share count]        e.g. "12 lượt chia sẻ"
+      [Like|Comment|Share] ← noise buttons
+      [First comment]      ← comment_preview — first visible reply (optional)
+
+    Returns dict with keys:
+      author, text, timestamp, reactions, comments, shares, source_index,
+      post_type, image_desc, comment_preview  (DF-006 enrichment)
     """
     # Find timestamp index (required anchor)
     ts_idx = next((i for i, n in enumerate(cluster) if _RE_TS.search(n["text"])), None)
@@ -236,9 +341,26 @@ def _extract_post(cluster: List[Dict[str, Any]], source_index: int) -> Optional[
         return None  # Not a post block
 
     timestamp = cluster[ts_idx]["text"]
+
+    # ── Post type: scan all cluster texts for media signals ──────────────────
+    # NOTE: _RE_IMAGE_TYPE uses ^ anchor (for content-desc matching); use
+    # separate non-anchored search for cluster-wide scan.
+    all_lower = " ".join(n["text"].lower() for n in cluster)
+    if _RE_REEL_TYPE.search(all_lower):
+        post_type: str = "reel"
+    elif _RE_VIDEO_TYPE.search(all_lower):
+        post_type = "video"
+    elif _RE_LINK_TYPE.search(all_lower):
+        post_type = "link"
+    else:
+        post_type = "text"  # may be upgraded to "photo" below if image_desc found
+
     author: Optional[str] = None
     body_parts: List[str] = []
     reactions = comments = shares = None
+    image_desc: Optional[str] = None       # first image/video attachment description
+    comment_preview: Optional[str] = None  # first visible comment text after post
+    stats_seen: bool = False               # True once any engagement metric is found
 
     for i, node in enumerate(cluster):
         t = node["text"].strip()
@@ -250,38 +372,51 @@ def _extract_post(cluster: List[Dict[str, Any]], source_index: int) -> Optional[
         if _is_noise_text(t) or len(t) <= 1:
             continue
 
-        # Author: first meaningful short-ish text before timestamp.
+        # ── Author: first meaningful short text before timestamp ──────────────
         if (
             i < ts_idx
             and author is None
             and 2 <= len(t) <= 80
             and "•" not in t
             and "chia sẻ với" not in t_lower
-            and not _is_noise_text(t)
         ):
             author = t
             continue
 
-        # Nodes between author and timestamp → pre-timestamp body
-        # (Facebook sometimes puts post text BEFORE the timestamp)
-        if 0 < i < ts_idx and t != author and not _is_noise_text(t):
+        # ── Pre-timestamp body (FB sometimes puts post text BEFORE timestamp) ─
+        if 0 < i < ts_idx and t != author:
             body_parts.append(t)
             continue
 
-        # Nodes AFTER timestamp
+        # ── Nodes AFTER timestamp ─────────────────────────────────────────────
         if i > ts_idx:
+            # Image/video attachment: content-desc starts with image keyword.
+            # Only capture the first one; skip button-length texts.
+            if image_desc is None and _RE_IMAGE_TYPE.match(t_lower) and 8 < len(t) < 300:
+                image_desc = t
+                continue
+
             m_r = _RE_REACTIONS.match(t)
             m_c = _RE_COMMENTS.match(t)
             m_s = _RE_SHARES.match(t)
+
             if m_r and reactions is None:
                 reactions = m_r.group(1)
+                stats_seen = True
             elif m_c and comments is None:
                 comments = m_c.group(1)
+                stats_seen = True
             elif m_s and shares is None:
                 shares = m_s.group(1)
-            else:
-                # Post body text after timestamp (most common FB layout)
-                if not _is_noise_text(t):
+                stats_seen = True
+            elif not _is_noise_text(t):
+                if stats_seen:
+                    # Text appearing after engagement metrics = first visible comment.
+                    # Capture only the first qualifying text; ignore subsequent replies.
+                    if comment_preview is None and len(t) > 5:
+                        comment_preview = t
+                else:
+                    # Post body text (before engagement section)
                     body_parts.append(t)
 
     body = " ".join(body_parts).strip()
@@ -300,36 +435,69 @@ def _extract_post(cluster: List[Dict[str, Any]], source_index: int) -> Optional[
     if not author and not body:
         return None
 
+    # Upgrade post_type to "photo" when an image content-desc was found
+    # and no stronger media type (reel/video) was detected.
+    if image_desc and post_type == "text":
+        post_type = "photo"
+
     return {
-        "author":       author or "",
-        "text":         body,
-        "timestamp":    timestamp,
-        "reactions":    reactions,
-        "comments":     comments,
-        "shares":       shares,
-        "source_index": source_index,
+        "author":          author or "",
+        "text":            body,
+        "timestamp":       timestamp,
+        "reactions":       reactions,
+        "comments":        comments,
+        "shares":          shares,
+        "source_index":    source_index,
+        # DF-006 enrichment — saved to CrawlPost when using crawl_jobs endpoint
+        "post_type":       post_type,
+        "image_desc":      image_desc,
+        "comment_preview": comment_preview,
     }
+
+
+def _parse_xml(xml: str) -> Optional[Any]:
+    """Parse UIAutomator2 XML with lxml (recover=True handles malformed output)."""
+    try:
+        raw = xml.encode("utf-8") if isinstance(xml, str) else xml
+        return _lxml.fromstring(raw, parser=_LXML_PARSER)
+    except Exception as exc:
+        log.warning("fb_crawl: XML parse error: %s", exc)
+        return None
 
 
 def parse_fb_posts_from_xml(xml: str, source_index: int = 0) -> List[Dict[str, Any]]:
     """
-    Public helper: Parse UIAutomator2 hierarchy XML → list of post dicts.
+    Parse UIAutomator2 hierarchy XML → list of post dicts.
+
+    Strategy A (preferred): XPath to find the RecyclerView/ListView feed container;
+    each direct <node> child is treated as one post card. Gives precise boundaries.
+
+    Strategy B (fallback): when no scrollable feed container is found (e.g. Chrome
+    WebView where FB renders as m.facebook.com), fall back to vertical-gap clustering
+    over all visible text nodes.
+
     Can be used standalone for testing / offline replay.
     """
-    try:
-        root = ET.fromstring(xml)
-    except ET.ParseError as exc:
-        log.warning("fb_crawl: XML parse error: %s", exc)
+    root = _parse_xml(xml)
+    if root is None:
         return []
 
+    # Strategy A — RecyclerView tree-structure aware
+    posts = _extract_posts_from_recycler(root, source_index)
+    if posts is not None:
+        log.debug("fb_crawl: RecyclerView strategy → %d post candidates", len(posts))
+        return posts
+
+    # Strategy B — gap-based fallback (Chrome / WebView / older layouts)
+    log.debug("fb_crawl: no RecyclerView found, using gap-based clustering")
     nodes = _collect_text_nodes(root)
     clusters = _cluster_into_posts(nodes)
-    posts: List[Dict[str, Any]] = []
+    result: List[Dict[str, Any]] = []
     for cluster in clusters:
         post = _extract_post(cluster, source_index)
         if post:
-            posts.append(post)
-    return posts
+            result.append(post)
+    return result
 
 
 def _dedup(posts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -363,7 +531,9 @@ def _dismiss_login_wall(device, errors: List[str]) -> None:
     if not xml:
         return
     try:
-        root = ET.fromstring(xml)
+        root = _parse_xml(xml)
+        if root is None:
+            return
         for node in root.iter():
             text = (node.get("text") or node.get("content-desc") or "").strip()
             if text in _LOGIN_DISMISS:
@@ -391,15 +561,22 @@ def _expand_see_more(device) -> int:
         return 0
     expanded = 0
     try:
-        root = ET.fromstring(xml)
-        for node in root.iter():
-            text = (node.get("text") or node.get("content-desc") or "").strip().lower()
-            if text in ("see more", "xem thêm"):
-                b = _parse_bounds(node)
-                if b:
-                    device.tap((b[0] + b[2]) // 2, (b[1] + b[3]) // 2)
-                    expanded += 1
-                    time.sleep(0.4)
+        root = _parse_xml(xml)
+        if root is None:
+            return 0
+        # XPath: clickable nodes whose text is a "see more" label
+        candidates = root.xpath(
+            '//node[@clickable="true" and ('
+            '@text="See more" or @text="Xem thêm" or '
+            '@text="see more" or @text="xem thêm"'
+            ')]'
+        )
+        for node in candidates:
+            b = _parse_bounds(node)
+            if b:
+                device.tap((b[0] + b[2]) // 2, (b[1] + b[3]) // 2)
+                expanded += 1
+                time.sleep(0.4)
     except Exception:
         pass
     if expanded:

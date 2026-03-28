@@ -113,6 +113,10 @@ async def save_crawl_posts(
             comments=p.get("comments") or None,
             shares=p.get("shares") or None,
             source_index=int(p.get("source_index") or 0),
+            # DF-006 enrichment fields (None-safe — old posts without these fields are fine)
+            post_type=p.get("post_type") or None,
+            image_desc=p.get("image_desc") or None,
+            comment_preview=p.get("comment_preview") or None,
         )
         rows.append(row)
     db.add_all(rows)

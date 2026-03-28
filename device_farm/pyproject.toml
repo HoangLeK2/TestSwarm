@@ -32,6 +32,7 @@ dependencies = [
     "asyncpg>=0.29.0",
     "openai>=2.26.0",
     "google-generativeai>=0.8.6",
+    "lxml>=5.0.0",                # fast XML + XPath for UIAutomator2 hierarchy parsing
     "python-dotenv>=1.2.2",
     "pyngrok>=7.0.0",
 

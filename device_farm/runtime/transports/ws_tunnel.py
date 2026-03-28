@@ -58,6 +58,10 @@ class TcpWsTunnel:
         # Buffer data received from agent before a tool has connected
         self._pre_connect_buf: bytes = b""
         self._pre_connect_lock = threading.Lock()
+        # Generation counter for U2: prevents stale response from old TCP connection
+        # being written to a new TCP connection (NanoHTTPD closes after each response)
+        self._conn_gen: int = 0    # incremented when new tool TCP connection accepted
+        self._active_gen: int = 0  # set to _conn_gen when tool sends first data (request)
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
@@ -104,13 +108,18 @@ class TcpWsTunnel:
         """
         Called when a tunnel_data message arrives from the agent.
         Decode and write to the local TCP tool socket.
-        If no tool is connected yet, buffer the data so it's flushed on connect.
         """
         data = base64.b64decode(b64_data)
         with self._client_lock:
             conn = self._client_sock
+            # U2 generation gating: drop stale response from previous request cycle
+            if self.channel == "u2":
+                if conn is None:
+                    return  # no tool connected → stale data, drop silently
+                if self._active_gen != self._conn_gen:
+                    return  # tool connected but hasn't sent request → stale data
         if conn is None:
-            # No tool connected yet — buffer (e.g. minitouch banner arrives before MinitouchSender connects)
+            # Non-U2 channels: buffer for banner flush
             with self._pre_connect_lock:
                 self._pre_connect_buf += data
             return
@@ -145,24 +154,36 @@ class TcpWsTunnel:
                     if self.channel != "u2":
                         try: self._client_sock.close()
                         except Exception: pass
+            if self.channel == "u2":
+                # U2: clear stale buffer, increment generation, set client
+                with self._pre_connect_lock:
+                    stale = len(self._pre_connect_buf)
+                    self._pre_connect_buf = b""
+                if stale:
+                    self._logger.debug(f"Tunnel [u2] discarded {stale}b stale buffer on new connection")
+                with self._client_lock:
+                    self._client_sock = conn
+                    self._conn_gen += 1
+                # _active_gen stays at old value until _read_loop reads first data
+            elif self.channel == "minitouch":
                 # Flush buffer BEFORE setting _client_sock so banner is sent first
-            with self._pre_connect_lock:
-                buffered = self._pre_connect_buf
-                self._pre_connect_buf = b""
-            if buffered:
-                self._logger.info(f"Tunnel [{self.channel}] flushing {len(buffered)}b pre-connect buffer")
-                try:
-                    conn.sendall(buffered)
-                except OSError:
-                    pass
-            with self._pre_connect_lock:
-                more = self._pre_connect_buf
-                self._pre_connect_buf = b""
-            if more:
-                try:
-                    conn.sendall(more)
-                except OSError:
-                    pass
+                with self._pre_connect_lock:
+                    buffered = self._pre_connect_buf
+                    self._pre_connect_buf = b""
+                if buffered:
+                    self._logger.info(f"Tunnel [{self.channel}] flushing {len(buffered)}b pre-connect buffer")
+                    try:
+                        conn.sendall(buffered)
+                    except OSError:
+                        pass
+                with self._pre_connect_lock:
+                    more = self._pre_connect_buf
+                    self._pre_connect_buf = b""
+                if more:
+                    try:
+                        conn.sendall(more)
+                    except OSError:
+                        pass
 
             if self.channel == "minitouch" and not buffered and not more:
                 # Banner not arrived yet; wait 2.5s for tunnel_data then set client and flush
@@ -180,7 +201,17 @@ class TcpWsTunnel:
                         except OSError:
                             pass
                 threading.Thread(target=_delayed_flush, daemon=True, name=f"tunnel-delayed-{self._serial}-minitouch").start()
-            else:
+            elif self.channel not in ("u2", "minitouch"):
+                # stfservice and other channels: set client + flush
+                with self._pre_connect_lock:
+                    buffered = self._pre_connect_buf
+                    self._pre_connect_buf = b""
+                if buffered:
+                    self._logger.info(f"Tunnel [{self.channel}] flushing {len(buffered)}b pre-connect buffer")
+                    try:
+                        conn.sendall(buffered)
+                    except OSError:
+                        pass
                 with self._client_lock:
                     self._client_sock = conn
 
@@ -200,6 +231,10 @@ class TcpWsTunnel:
                 data = conn.recv(8192)
                 if not data:
                     break
+                # U2: mark this connection as having sent a request → response data now valid
+                if self.channel == "u2":
+                    with self._client_lock:
+                        self._active_gen = self._conn_gen
                 b64 = base64.b64encode(data).decode("ascii")
                 self._send_ws({
                     "type":    "tunnel_data",
@@ -212,6 +247,13 @@ class TcpWsTunnel:
             with self._client_lock:
                 if self._client_sock is conn:
                     self._client_sock = None
+            # Clear stale pre-connect buffer — data from old connection must not
+            # be flushed to the next connection (causes BadStatusLine / corruption)
+            with self._pre_connect_lock:
+                stale = len(self._pre_connect_buf)
+                self._pre_connect_buf = b""
+            if stale:
+                self._logger.debug(f"Tunnel [{self.channel}] cleared {stale}b stale buffer on disconnect")
             self._logger.info(f"Tunnel [{self.channel}] tool disconnected")
 
 

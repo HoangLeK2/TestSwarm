@@ -12,7 +12,7 @@ web:
   host: "0.0.0.0"
   port: 8081
   ws_ping_interval: 20   # seconds between server pings
-  ws_ping_timeout: 120   # seconds to wait for pong (increase if "keepalive ping timeout" in logs)
+  ws_ping_timeout: 30    # seconds to wait for pong — detect dead agents faster (was 120)
 
 
 ports:
@@ -51,7 +51,7 @@ device:
   # macOS: /opt/homebrew/share/scrcpy/scrcpy-server
   # Linux: /usr/share/scrcpy/scrcpy-server
   scrcpy_jar: "/opt/homebrew/share/scrcpy/scrcpy-server"
-  scrcpy_max_fps: 60       # max FPS (sent to agent via stream_options)
+  scrcpy_max_fps: 10       # max FPS sent to agent (10 = good balance for automation/monitoring)
   scrcpy_max_width: 800   # downscale width (0 = native resolution)
   scrcpy_bitrate: 8000000  # H.264 bitrate bps (8Mbps). Use 2–4M when behind ngrok to avoid "Network bandwidth exceeded"
 
@@ -92,8 +92,8 @@ database:
   host: "localhost"
   port: 5432
   name: "device_farm"
-  user: "hoanglcpila.vn"
-  password: "postgres"
+  user: "postgres"
+  password: "password"
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 logging:
@@ -101,7 +101,14 @@ logging:
   format: "%(asctime)s [%(levelname)s] [%(name)s] %(message)s"
 
 u2:
-  screenshot_interval: 0.25   
+  screenshot_interval: 0.25
   implicitly_wait: 10.0
   wait_timeout: 20.0
-  operation_delay: [0, 0.1]   
+  operation_delay: [0, 0.1]
+
+# ─── Streaming ──────────────────────────────────────────────────────────────
+# mode: "periodic" = server captures screenshots on interval (low CPU/bandwidth)
+#        "continuous" = legacy 30FPS streaming via agent/scrcpy
+streaming:
+  mode: "periodic"
+  dashboard_interval: 3.0    # seconds between dashboard screenshot refreshes

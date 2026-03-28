@@ -22,10 +22,13 @@ Executor này chỉ đọc từng step và gọi DeviceClient/u2 cho phù hợp.
 """
 
 import concurrent.futures
+import io
 import logging
+import os
 import re
 import time
-from typing import Any, Dict, List, Optional, Tuple, TypedDict, Literal, Sequence
+from datetime import datetime
+from typing import Any, Callable, Dict, List, Optional, Tuple, TypedDict, Literal, Sequence
 
 # Useless container classes that appear in STF flat XML — skip as selectors,
 # use ratio fallback instead (same logic as frontend CONTAINER_CLASSES).
@@ -484,16 +487,16 @@ def _execute_tap(
     value: Optional[str],
     fallback_rx: Optional[float],
     fallback_ry: Optional[float],
-    timeout: float = 8.0,
+    timeout: float = 4.0,
     retries: int = 2,
-) -> Tuple[bool, str]:
+) -> Tuple[bool, str, Optional[Dict[str, int]]]:
     """
     Full tap pipeline:
       1. wait_for_element (poll 300ms, up to `timeout`)
       2. tap at recorded position (fallback_rx/ry) if within bounds, else center of bounds
       3. on fail → retry up to `retries` times
       4. final fallback → ratio tap
-    Returns (ok, message).
+    Returns (ok, message, bounds_or_none).
     """
     serial = device.serial
     w = device.screen_width or 1080
@@ -508,87 +511,79 @@ def _execute_tap(
         by = None
         value = None
 
+    # ── Try selector path (wrapped in try/except → any failure falls through to position fallback)
+    selector_tried = False
     if u2 and by and value:
-        for attempt in range(retries):
-            # _wait_for_element: uses native waitForExists (non-xpath) or polling (xpath)
-            result = _wait_for_element(u2, by, value, timeout=timeout)
-            if result is not None:
-                try:
-                    # Extract bounds — either from find_element_with_bounds result dict
-                    # or by calling find_element_with_bounds directly as fallback
+        selector_tried = True
+        try:
+            for attempt in range(retries):
+                result = _wait_for_element(u2, by, value, timeout=timeout)
+                if result is not None:
                     bounds = None
                     if isinstance(result, dict):
                         bounds = result.get("bounds")
                         eid = result.get("eid", f"{by}::{value}")
                     else:
                         eid = result
-                        # Get bounds via find_element_with_bounds (parses both dict + string format)
                         try:
                             r2 = u2.find_element_with_bounds(by, value)
                             bounds = r2.get("bounds") if r2 else None
                         except Exception:
                             pass
 
-                    if bounds:
-                        # Sanity check: recorded position must be near element bounds.
-                        # If not → selector matched a WRONG element (different screen state).
-                        # Skip to ratio fallback.
-                        if fallback_rx is not None and fallback_ry is not None:
-                            hx = int(fallback_rx * w)
-                            hy = int(fallback_ry * h)
-                            TOLERANCE = 120  # px
-                            wrong_element = not (
-                                bounds.get("left", 0) - TOLERANCE <= hx <= bounds.get("right", w) + TOLERANCE
-                                and bounds.get("top", 0) - TOLERANCE <= hy <= bounds.get("bottom", h) + TOLERANCE
+                    if bounds and fallback_rx is not None and fallback_ry is not None:
+                        hx = int(fallback_rx * w)
+                        hy = int(fallback_ry * h)
+                        TOLERANCE = 120
+                        wrong_element = not (
+                            bounds.get("left", 0) - TOLERANCE <= hx <= bounds.get("right", w) + TOLERANCE
+                            and bounds.get("top", 0) - TOLERANCE <= hy <= bounds.get("bottom", h) + TOLERANCE
+                        )
+                        if wrong_element:
+                            log.warning(
+                                f"[{serial}] selector {by}={value!r} bounds {bounds} "
+                                f"don't match recorded position ({hx},{hy}) → fallback"
                             )
-                            if wrong_element:
-                                log.warning(
-                                    f"[{serial}] selector {by}={value!r} bounds {bounds} "
-                                    f"don't match recorded position ({hx},{hy}) → ratio fallback"
-                                )
-                                break  # → ratio fallback below
+                            break  # → position fallback below
 
-                            # Element confirmed in expected area → tap at RECORDED position (always).
-                            # Never use element center: the recording stores the exact tap point
-                            # the user intended; that is more accurate than the element's centroid.
-                            log.debug(f"[{serial}] {by}={value!r} OK → tap recorded ({hx},{hy})")
-                            device.tap(hx, hy)
-                        else:
-                            # No recorded position: tap element center as best effort
-                            cx = (bounds.get("left", 0) + bounds.get("right", w)) // 2
-                            cy = (bounds.get("top", 0) + bounds.get("bottom", h)) // 2
-                            device.tap(cx, cy)
+                        log.debug(f"[{serial}] {by}={value!r} OK → tap recorded ({hx},{hy})")
+                        device.tap(hx, hy)
+                        return True, f"selector {by}={value!r} tapped", bounds
+                    elif bounds:
+                        cx = (bounds.get("left", 0) + bounds.get("right", w)) // 2
+                        cy = (bounds.get("top", 0) + bounds.get("bottom", h)) // 2
+                        device.tap(cx, cy)
+                        return True, f"selector {by}={value!r} tapped (center)", bounds
+                    elif fallback_rx is not None and fallback_ry is not None:
+                        fx = max(0, min(w - 1, int(fallback_rx * w)))
+                        fy = max(0, min(h - 1, int(fallback_ry * h)))
+                        device.tap(fx, fy)
+                        return True, f"selector {by}={value!r} found, no bounds → tap position", None
                     else:
-                        # No bounds from u2 — tap at recorded ratio position.
-                        # Never fall through to element_click(): it would re-find the element
-                        # and tap its center, which for a large container equals mid-screen.
-                        if fallback_rx is not None and fallback_ry is not None:
-                            fx = max(0, min(w - 1, int(fallback_rx * w)))
-                            fy = max(0, min(h - 1, int(fallback_ry * h)))
-                            log.debug(f"[{serial}] no bounds for {by}={value!r} → ratio ({fx},{fy})")
-                            device.tap(fx, fy)
-                        else:
-                            u2.element_click(eid)
-                    return True, f"selector {by}={value!r} tapped (attempt {attempt + 1})"
-                except Exception as exc:
-                    log.warning(f"[{serial}] tap click err (attempt {attempt + 1}): {exc}")
-            else:
-                log.warning(f"[{serial}] selector {by}={value!r} not found (attempt {attempt + 1}/{retries})")
+                        u2.element_click(eid)
+                        return True, f"selector {by}={value!r} tapped (element_click)", None
+                else:
+                    log.warning(f"[{serial}] selector {by}={value!r} not found (attempt {attempt + 1}/{retries})")
+        except Exception as exc:
+            log.warning(f"[{serial}] selector path error: {exc} → falling back to position")
 
-    # Fallback: ratio tap
+    # ── Position fallback: ALWAYS runs if selector failed/skipped and position available
     if fallback_rx is not None and fallback_ry is not None:
         fx = max(0, min(w - 1, int(fallback_rx * w)))
         fy = max(0, min(h - 1, int(fallback_ry * h)))
-        if by and value:
-            log.warning(f"[{serial}] selector not found → fallback ratio ({fallback_rx:.3f},{fallback_ry:.3f})")
+        reason = "selector failed → " if selector_tried else ""
+        # Synthesize bounds around tap point for capture
+        PAD = 50
+        fb = {"left": max(0, fx - PAD), "top": max(0, fy - PAD),
+              "right": min(w, fx + PAD), "bottom": min(h, fy + PAD)}
         try:
             device.tap(fx, fy)
-            time.sleep(0.3)  # brief buffer for app to react before next step
-            return True, f"fallback ratio ({fallback_rx:.3f},{fallback_ry:.3f})"
+            time.sleep(0.3)
+            return True, f"{reason}fallback position ({fallback_rx:.3f},{fallback_ry:.3f})", fb
         except Exception as exc:
-            return False, f"fallback tap failed: {exc}"
+            return False, f"fallback tap failed: {exc}", None
 
-    return False, f"selector {by}={value!r} not found, no fallback"
+    return False, f"selector {by}={value!r} not found, no fallback position", None
 
 
 def _evaluate_condition(device: "DeviceClient", condition: Dict[str, Any], ctx: Dict[str, Any]) -> bool:
@@ -639,10 +634,77 @@ def _evaluate_condition(device: "DeviceClient", condition: Dict[str, Any], ctx: 
     return False
 
 
+def _capture_step_screenshot(
+    device: "DeviceClient",
+    capture_dir: str,
+    idx: int,
+    step_type: str,
+    bounds: Optional[Dict[str, int]],
+    screen_w: int,
+    screen_h: int,
+    selector: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
+    """Save full screenshot + cropped element + XML hierarchy + selector info."""
+    jpeg = device.take_screenshot()
+    if not jpeg:
+        return {}
+
+    prefix = f"step_{idx:03d}_{step_type}"
+
+    full_path = os.path.join(capture_dir, f"{prefix}_full.jpg")
+    with open(full_path, "wb") as f:
+        f.write(jpeg)
+    result: Dict[str, Any] = {"full": full_path}
+
+    # Save XML hierarchy (cached, near-instant)
+    try:
+        xml = device.hierarchy_xml(force_refresh=False)
+        if xml:
+            xml_path = os.path.join(capture_dir, f"{prefix}_hierarchy.xml")
+            with open(xml_path, "w", encoding="utf-8") as f:
+                f.write(xml)
+            result["hierarchy"] = xml_path
+    except Exception:
+        pass
+
+    # Save selector info
+    if selector:
+        sel_path = os.path.join(capture_dir, f"{prefix}_selector.json")
+        import json
+        with open(sel_path, "w", encoding="utf-8") as f:
+            json.dump(selector, f, ensure_ascii=False, indent=2)
+        result["selector"] = sel_path
+
+    # Crop element
+    if bounds:
+        try:
+            from PIL import Image
+            img = Image.open(io.BytesIO(jpeg))
+            iw, ih = img.size
+            sx, sy = iw / max(screen_w, 1), ih / max(screen_h, 1)
+            crop_box = (
+                max(0, int(bounds["left"] * sx)),
+                max(0, int(bounds["top"] * sy)),
+                min(iw, int(bounds["right"] * sx)),
+                min(ih, int(bounds["bottom"] * sy)),
+            )
+            if crop_box[2] > crop_box[0] and crop_box[3] > crop_box[1]:
+                cropped = img.crop(crop_box)
+                elem_path = os.path.join(capture_dir, f"{prefix}_element.jpg")
+                cropped.save(elem_path, quality=85)
+                result["element"] = elem_path
+                result["bounds"] = [bounds["left"], bounds["top"], bounds["right"], bounds["bottom"]]
+        except Exception as exc:
+            log.debug(f"crop failed: {exc}")
+
+    return result
+
+
 def run_scenario_task(
     device: "DeviceClient",
     scenario: Dict[str, Any],
     context: Optional[Dict[str, Any]] = None,
+    on_step_done: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
     """
     Thực thi 1 scenario JSON trên 1 device.
@@ -660,6 +722,20 @@ def run_scenario_task(
 
     w = device.screen_width or 1080
     h = device.screen_height or 1920
+
+    # Step screenshot capture (debug mode)
+    capture_enabled = (
+        scenario.get("capture_steps", False)
+        or os.environ.get("CAPTURE_STEPS", "").lower() in {"1", "true", "yes"}
+        or os.environ.get("DEBUG_AUTO", "").lower() in {"1", "true", "yes"}
+    )
+    capture_dir: Optional[str] = None
+    if capture_enabled:
+        ts = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        base = os.path.join(os.path.dirname(os.path.dirname(__file__)), "captures")
+        capture_dir = os.path.join(base, f"{serial}_{ts}")
+        os.makedirs(capture_dir, exist_ok=True)
+        log.info(f"[{serial}] Step capture enabled → {capture_dir}")
 
     step_results: List[Dict[str, Any]] = []
     # Rate-limit popup checks: at most once every 5 seconds.
@@ -731,7 +807,7 @@ def run_scenario_task(
             sel_value   = str(selector.get("value") or "").strip() or None
             fallback_rx = fallback.get("rx")
             fallback_ry = fallback.get("ry")
-            tap_timeout = float(step.get("timeout", 8.0) or 8.0)
+            tap_timeout = float(step.get("timeout", 4.0) or 4.0)
             wait_after  = bool(step.get("wait_after", True))
 
             # Skip container class selectors upfront — avoid useless pre_hash fetch
@@ -749,7 +825,7 @@ def run_scenario_task(
                 if dismissed:
                     step_result["popup_dismissed"] = True
 
-            ok, msg = _execute_tap(
+            ok, msg, tap_bounds = _execute_tap(
                 device,
                 by=sel_by,
                 value=sel_value,
@@ -761,8 +837,15 @@ def run_scenario_task(
             step_result["ok"] = ok
             if msg:
                 step_result["message"] = msg
+                # Tag method for frontend display
+                if "fallback position" in msg:
+                    step_result["method"] = "fallback_position"
+                elif "selector" in msg:
+                    step_result["method"] = "selector"
             if screen_ctx:
                 step_result["screen_context"] = screen_ctx
+            if tap_bounds:
+                step_result["_bounds"] = tap_bounds
 
             # Brief fixed wait after tap
             if ok:
@@ -848,7 +931,7 @@ def run_scenario_task(
                     if dismissed:
                         step_result["popup_dismissed"] = True
 
-                ok, msg = _execute_tap(
+                ok, msg, tap_bounds = _execute_tap(
                     device, by=by, value=value,
                     fallback_rx=fallback_rx, fallback_ry=fallback_ry,
                     timeout=sel_timeout, retries=1,
@@ -856,6 +939,8 @@ def run_scenario_task(
                 step_result["ok"] = ok
                 if msg:
                     step_result["message"] = msg
+                if tap_bounds:
+                    step_result["_bounds"] = tap_bounds
                 if ok:
                     time.sleep(0.3)
 
@@ -1301,13 +1386,42 @@ def run_scenario_task(
             step_result["ok"] = False
             step_result["message"] = msg
 
+        # Capture screenshot after step (debug mode)
+        if capture_dir:
+            try:
+                # Build selector dict from step for debug context
+                step_selector: Optional[Dict[str, str]] = None
+                if t in ("tap", "tap_selector", "wait_element", "assert_element",
+                         "input_selector", "long_tap_selector", "scroll_to"):
+                    sel = step.get("selector") or {}
+                    s_by = str(sel.get("by") or step.get("by") or "").strip()
+                    s_val = str(sel.get("value") or step.get("value") or "").strip()
+                    if s_by and s_val:
+                        step_selector = {"by": s_by, "value": s_val}
+
+                cap = _capture_step_screenshot(
+                    device, capture_dir, idx, t or "unknown",
+                    step_result.pop("_bounds", None), w, h,
+                    selector=step_selector,
+                )
+                if cap:
+                    step_result["screenshot"] = cap
+            except Exception as exc:
+                log.debug(f"[{serial}] step capture failed: {exc}")
+
         step_results.append(step_result)
+        # Notify caller of step completion (used for SSE streaming)
+        if on_step_done is not None:
+            try:
+                on_step_done(step_result)
+            except Exception:
+                pass
 
     all_ok = all(r.get("ok", True) for r in step_results)
     failed_steps = [r for r in step_results if not r.get("ok", True)]
     first_fail_msg = failed_steps[0].get("message", "step failed") if failed_steps else ""
 
-    return {
+    result = {
         "serial": serial,
         "success": all_ok,
         "steps_executed": len(steps),
@@ -1315,6 +1429,9 @@ def run_scenario_task(
         "failed_message": first_fail_msg if not all_ok else None,
         "context": ctx,
     }
+    if capture_dir:
+        result["capture_dir"] = capture_dir
+    return result
 
 
 def make_scenario_task(scenario: Dict[str, Any], context: Optional[Dict[str, Any]] = None):

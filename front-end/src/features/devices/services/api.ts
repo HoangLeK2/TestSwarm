@@ -151,3 +151,51 @@ export async function previewScenario(
   return data;
 }
 
+/**
+ * Stream scenario preview via SSE — emits step results in real-time as each step completes.
+ * Events: { event: 'start', total_steps }, { event: 'step_done', index, ok, ... }, { event: 'done', ... }
+ */
+export async function previewScenarioStream(
+  serial: string,
+  steps: Array<Record<string, any>>,
+  onEvent: (event: { event: string; [key: string]: any }) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  // Use farmApi's baseURL for the SSE endpoint
+  const baseUrl = farmApi.defaults.baseURL || '';
+  const url = `${baseUrl}/devices/${encodeURIComponent(serial)}/scenario/preview-stream`;
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ steps }),
+    signal,
+  });
+
+  if (!response.ok || !response.body) {
+    throw new Error(`SSE error: ${response.status}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    // Parse SSE lines
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        try {
+          const data = JSON.parse(line.slice(6));
+          onEvent(data);
+        } catch { /* skip malformed */ }
+      }
+    }
+  }
+}
+

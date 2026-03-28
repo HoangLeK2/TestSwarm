@@ -112,6 +112,7 @@ class DeviceClient:
         self._minitouch:   Optional[Union[MinitouchWsClient, MinitouchSender]] = None
         self._u2:          Optional[U2JsonRpcClient]  = None
         self._u2_lock      = threading.Lock()  # serializes reconnect + identity-safe nulling
+        self._u2_request_lock = threading.Lock()  # serializes ALL u2 HTTP requests (NanoHTTPD is single-threaded)
         self._hierarchy_lock = threading.Lock()  # only one dumpWindowHierarchy at a time
         self._stf_service: Optional[STFServiceClient] = None
 
@@ -140,6 +141,8 @@ class DeviceClient:
 
         # Reconnect tracking
         self.reconnect_attempts: int = 0
+        # Periodic screenshot timer state
+        self._periodic_ss_started: bool = False
         # Agent-reported capabilities (e.g. ["u2","stfservice","h264","minitouch"])
         self._agent_capabilities: List[str] = []
         # Touch mode parsed from agent log: "a11y" | "inputMgr" | "NONE" | ""
@@ -147,6 +150,11 @@ class DeviceClient:
         # open_url: wait for agent to send open_url_result before marking step done
         self._open_url_result_event = threading.Event()
         self._open_url_result: Optional[Tuple[bool, str]] = None  # (success, error_msg)
+        # WS hierarchy dump: synchronous wait for async WS response
+        self._ws_hierarchy_event = threading.Event()
+        self._ws_hierarchy_xml: Optional[str] = None
+        self._ws_hierarchy_error: Optional[str] = None
+        self._ws_hierarchy_a11y_available: bool = True  # optimistic, disabled on first "accessibility_not_available"
 
     def set_agent_capabilities(self, caps: List[str]) -> None:
         """Set capabilities from agent hello; server only tries minitouch when \"minitouch\" in caps."""
@@ -172,6 +180,11 @@ class DeviceClient:
         if old != new:
             self._log(f"State: {old.value} → {new.value}")
             self._publish_status()
+            # Auto-start periodic screenshot timer when device becomes READY
+            if new == DeviceState.READY and not self._periodic_ss_started:
+                if self.config.streaming.mode == "periodic":
+                    self._periodic_ss_started = True
+                    self.start_periodic_screenshot()
 
     # ── Agent Lifecycle ───────────────────────────────────────────────────────
 
@@ -181,6 +194,7 @@ class DeviceClient:
         Creates WS tunnels for minitouch, u2, stfservice.
         Returns TunnelSet so the session can route tunnel_data messages back.
         """
+        self._ws_hierarchy_a11y_available = True  # retry a11y on each new connection
         self._agent_send = send
         tunnels = TunnelSet(send, self.serial)
         ports   = tunnels.start_all()
@@ -240,6 +254,10 @@ class DeviceClient:
         if self._tunnels:
             self._tunnels.stop_all()
             self._tunnels = None
+        # Clear cached frame so frontend doesn't see stale preview
+        with self._latest_jpeg_lock:
+            self._latest_jpeg = None
+        self._last_key_frame = None
         if self.state != DeviceState.DEAD:
             self.state = DeviceState.DISCONNECTED
 
@@ -256,13 +274,19 @@ class DeviceClient:
         jpeg = base64.b64decode(jpeg_b64)
         with self._latest_jpeg_lock:
             self._latest_jpeg = jpeg
+        # In periodic mode, only update cache — periodic timer handles publishing
+        if self.config.streaming.mode == "periodic":
+            return
         self.publish_frame(jpeg)
 
     def on_agent_h264_frame(self, msg: Dict[str, Any]) -> None:
         """
         Receive H.264 NAL unit from agent — forward directly to browser subscribers.
         Browser decodes H.264 via WebCodecs VideoDecoder (no server-side decode needed).
+        Skipped in periodic mode (no continuous video streaming needed).
         """
+        if self.config.streaming.mode == "periodic":
+            return
         if not self._loop:
             return
         broadcast: Dict[str, Any] = {
@@ -290,12 +314,17 @@ class DeviceClient:
             return
         with self._latest_jpeg_lock:
             self._latest_jpeg = jpeg_bytes
+        # In periodic mode, only update cache
+        if self.config.streaming.mode == "periodic":
+            return
         self.publish_frame(jpeg_bytes)
 
     def on_agent_h264_config(self, avcc_record: bytes, w: int, h: int) -> None:
         """Relay H264 AVCDecoderConfigurationRecord to browser as binary 0x10 frame.
         Called when agent sends h264_config message (SPS+PPS codec config).
         """
+        if self.config.streaming.mode == "periodic":
+            return
         if not self._loop:
             return
         serial_b = self.serial.encode()
@@ -366,6 +395,30 @@ class DeviceClient:
         self.state = DeviceState.CONNECTING
         return True
 
+    def detach_all_transports(self) -> None:
+        """
+        Tear down all transport connections (scrcpy, minitouch, u2, tunnels, ADB bootstrap)
+        without changing device state. Used before re-bootstrap.
+        """
+        self._teardown_tools()
+        if self._tunnels:
+            try:
+                self._tunnels.stop_all()
+            except Exception:
+                pass
+            self._tunnels = None
+        if self._adb_bootstrap is not None:
+            try:
+                self._adb_bootstrap.stop()
+            except Exception:
+                pass
+            self._adb_bootstrap = None
+        # Clear stale frame cache
+        with self._latest_jpeg_lock:
+            self._latest_jpeg = None
+        self._last_key_frame = None
+        # Don't close ADB transport here — reconnect_adb_device handles that
+
     def teardown(self) -> None:
         # Agent (WS) teardown
         self._agent_send = None
@@ -398,12 +451,104 @@ class DeviceClient:
         with self._latest_jpeg_lock:
             return self._latest_jpeg
 
+    def capture_screenshot(self, quality: int = 70, max_width: int = 800) -> Optional[bytes]:
+        """
+        On-demand screenshot with fallback chain:
+          1. Cached _latest_jpeg from agent frame stream (WS agent mode — no tunnel needed)
+          2. U2 HTTP /screenshot/0 (ADB mode only — avoids tunnel contention in agent mode)
+          3. ADB shell screencap (ADB mode only)
+        Updates _latest_jpeg with the result.
+        """
+        jpeg = None
+
+        # For WS agent mode: prefer cached frame from agent (no tunnel contention)
+        # Agent sends JPEG frames which are cached in _latest_jpeg
+        if not self.is_adb_mode:
+            with self._latest_jpeg_lock:
+                jpeg = self._latest_jpeg
+            if jpeg is not None:
+                return jpeg
+
+        # ADB mode: try U2 screenshot (no tunnel contention issue in ADB mode)
+        if self.is_adb_mode:
+            with self._u2_lock:
+                u2 = self._u2
+            if u2 is not None:
+                try:
+                    jpeg = u2.screenshot(timeout=5.0, max_width=max_width, quality=quality)
+                except Exception as exc:
+                    self._log(f"capture_screenshot u2 error: {exc}", level=logging.DEBUG)
+
+        # Fallback: ADB shell screencap
+        if jpeg is None and self._adb_transport is not None and self._adb_transport.connected:
+            try:
+                png_data = self._adb_transport.shell("screencap -p", timeout=10.0)
+                if png_data:
+                    from PIL import Image
+                    import io
+                    img = Image.open(io.BytesIO(png_data.encode("latin-1") if isinstance(png_data, str) else png_data))
+                    w, h = img.size
+                    if max_width > 0 and w > max_width:
+                        ratio = max_width / w
+                        img = img.resize((max_width, int(h * ratio)), Image.LANCZOS)
+                    buf = io.BytesIO()
+                    img.save(buf, format="JPEG", quality=quality)
+                    jpeg = buf.getvalue()
+            except Exception as exc:
+                self._log(f"capture_screenshot adb error: {exc}", level=logging.DEBUG)
+
+        # Fallback: cached frame
+        if jpeg is None:
+            with self._latest_jpeg_lock:
+                jpeg = self._latest_jpeg
+
+        # Update cache
+        if jpeg is not None:
+            with self._latest_jpeg_lock:
+                self._latest_jpeg = jpeg
+
+        return jpeg
+
+    def start_periodic_screenshot(self) -> None:
+        """Start background thread that captures screenshots at dashboard_interval."""
+        interval = self.config.streaming.dashboard_interval
+        self._log(f"Periodic screenshot timer started (interval={interval}s)")
+
+        def _loop():
+            try:
+                while self.state not in (DeviceState.DEAD, DeviceState.DISCONNECTED):
+                    time.sleep(interval)
+                    if self.state not in (DeviceState.READY, DeviceState.BUSY):
+                        continue
+                    try:
+                        jpeg = self.capture_screenshot()
+                        if jpeg:
+                            self.publish_frame(jpeg)
+                    except Exception as exc:
+                        self._log(f"Periodic screenshot error: {exc}", level=logging.DEBUG)
+            finally:
+                self._periodic_ss_started = False
+
+        t = threading.Thread(target=_loop, daemon=True, name=f"periodic-ss-{self.serial}")
+        t.start()
+
     # ── Touch / Key API ───────────────────────────────────────────────────────
 
     def _try_u2_tap(self, action: "Callable[[], None]") -> bool:
         """Run touch action via u2. On failure: null _u2, reconnect once, retry."""
+        # If u2 not ready yet, wait briefly (tunnels may still be setting up)
+        if self._u2 is None and self.state in (DeviceState.READY, DeviceState.CONNECTING):
+            for _ in range(5):
+                time.sleep(0.5)
+                if self._u2 is not None:
+                    break
         if not self.ensure_u2_healthy() or self._u2 is None:
             return False
+        # Serialize with all u2 operations (NanoHTTPD is single-threaded)
+        with self._u2_request_lock:
+            return self._try_u2_tap_impl(action)
+
+    def _try_u2_tap_impl(self, action: "Callable[[], None]") -> bool:
         u2_snap = self._u2
         try:
             action()
@@ -620,13 +765,46 @@ class DeviceClient:
             raise RuntimeError(f"open_url failed: {err or 'agent reported failure'}")
 
 
+    def on_agent_hierarchy_response(self, xml: Optional[str], error: Optional[str] = None) -> None:
+        """Called when agent responds to dump_hierarchy WS command."""
+        self._ws_hierarchy_xml = xml
+        self._ws_hierarchy_error = error
+        if error == "accessibility_not_available":
+            if self._ws_hierarchy_a11y_available:
+                self._log("a11y not available on device — using u2 fallback for hierarchy", level=logging.WARNING)
+                self._ws_hierarchy_a11y_available = False
+        elif xml:
+            self._ws_hierarchy_a11y_available = True  # re-enable if it starts working
+        self._ws_hierarchy_event.set()
+
+    def _hierarchy_via_ws(self, timeout: float = 5.0) -> Optional[str]:
+        """Request hierarchy dump via WS direct (AccessibilityService, ~100-500ms)."""
+        if self._agent_send is None:
+            return None
+        self._ws_hierarchy_xml = None
+        self._ws_hierarchy_error = None
+        self._ws_hierarchy_event.clear()
+        self._log(f"hierarchy_via_ws: sending dump_hierarchy (agent_send={'SET' if self._agent_send else 'NULL'})")
+        self._send_to_agent({"type": "dump_hierarchy"})
+        if not self._ws_hierarchy_event.wait(timeout=timeout):
+            self._log("hierarchy_via_ws: timeout (5s)", level=logging.WARNING)
+            return None
+        if self._ws_hierarchy_error:
+            self._log(f"hierarchy_via_ws error: {self._ws_hierarchy_error}", level=logging.WARNING)
+            return None
+        xml = self._ws_hierarchy_xml
+        if xml:
+            self._log(f"hierarchy_via_ws: OK ({len(xml)} bytes)")
+        else:
+            self._log("hierarchy_via_ws: agent returned null xml", level=logging.WARNING)
+        return xml
+
     def hierarchy_xml(self, force_refresh: bool = False) -> Optional[str]:
         """
-        Dump UI hierarchy XML from u2 (am instrument :9008). Cached 2s for polling.
-        Pass force_refresh=True to skip cache. Retries once after u2 reconnect on failure.
+        Dump UI hierarchy XML. Cached 2s for polling.
 
-        Serialised by _hierarchy_lock so concurrent HTTP callers (multiple frontend tabs)
-        don't each open a new TCP connection to the tunnel simultaneously.
+        Primary: WS direct via AccessibilityService (100-500ms, no tunnel needed).
+        Fallback: u2 JSON-RPC via tunnel (1-4s, for ADB mode or when a11y unavailable).
         """
         now = time.time()
         if not force_refresh and self._hierarchy_cache is not None:
@@ -634,27 +812,44 @@ class DeviceClient:
             if now - ts < self._hierarchy_cache_ttl and xml:
                 return xml  # fast path: no lock needed for cache read
         with self._hierarchy_lock:
-            # Re-check cache after acquiring lock — another thread may have just fetched.
             now = time.time()
             if not force_refresh and self._hierarchy_cache is not None:
                 ts, xml = self._hierarchy_cache
                 if now - ts < self._hierarchy_cache_ttl and xml:
                     return xml
-            return self._hierarchy_xml_locked(now)
 
-    def _hierarchy_xml_locked(self, now: float) -> Optional[str]:
-        """Inner impl called while _hierarchy_lock is held (only one dump at a time)."""
+            # Primary: WS direct via AccessibilityService (fast, no tunnel)
+            # Only try if a11y was previously successful (avoid spamming agent)
+            if self._agent_send is not None and self._ws_hierarchy_a11y_available:
+                xml = self._hierarchy_via_ws(timeout=5.0)
+                if xml and not self._is_empty_hierarchy(xml):
+                    self._log(f"hierarchy: WS direct OK ({len(xml)} bytes)")
+                    self._hierarchy_cache = (now, xml)
+                    return xml
+                # a11y returned error/empty — stop trying until next reconnect
+
+            # Fallback: u2 tunnel (ADB mode or a11y not enabled)
+            return self._hierarchy_xml_via_u2(now)
+
+    @staticmethod
+    def _is_empty_hierarchy(s: str) -> bool:
+        if not s or not s.strip():
+            return True
+        t = s.strip()
+        return t in ("<hierarchy />", "<?xml version=\"1.0\" encoding=\"UTF-8\"?><hierarchy />") or t.endswith("<hierarchy />")
+
+    def _hierarchy_xml_via_u2(self, now: float) -> Optional[str]:
+        """Fallback: hierarchy via u2 tunnel."""
+        with self._u2_request_lock:
+            return self._hierarchy_xml_u2_impl(now)
+
+    def _hierarchy_xml_u2_impl(self, now: float) -> Optional[str]:
         if not self.ensure_u2_healthy() or self._u2 is None:
             return None
-        u2_snap = self._u2  # snapshot — stale timeouts can't kill a freshly reconnected client
-        def _is_empty_hierarchy(s: str) -> bool:
-            if not s or not s.strip():
-                return True
-            t = s.strip()
-            return t in ("<hierarchy />", "<?xml version=\"1.0\" encoding=\"UTF-8\"?><hierarchy />") or t.endswith("<hierarchy />")
+        u2_snap = self._u2
         try:
-            xml = u2_snap.page_source(timeout=4.0)
-            if _is_empty_hierarchy(xml or ""):
+            xml = u2_snap.page_source(timeout=10.0)
+            if self._is_empty_hierarchy(xml or ""):
                 return None  # Don't cache; UI can show "enable Accessibility" etc.
             self._hierarchy_cache = (now, xml)
             return xml
@@ -666,8 +861,8 @@ class DeviceClient:
         if not self._reconnect_u2() or self._u2 is None:
             return None
         try:
-            xml = self._u2.page_source(timeout=4.0)
-            if _is_empty_hierarchy(xml or ""):
+            xml = self._u2.page_source(timeout=10.0)
+            if self._is_empty_hierarchy(xml or ""):
                 return None
             self._hierarchy_cache = (now, xml)
             return xml
@@ -887,6 +1082,7 @@ class DeviceClient:
             self.state = DeviceState.READY
             self._publish_status()
 
+        skip_scrcpy = self.config.streaming.mode == "periodic"
         self._adb_bootstrap = AdbDeviceBootstrap(
             transport=self._adb_transport,
             on_frame=_on_frame,
@@ -895,9 +1091,11 @@ class DeviceClient:
             on_u2_ready=_on_u2_ready,
             on_metadata=_on_metadata,
             on_minitouch_ready=_on_minitouch_ready,
+            skip_scrcpy=skip_scrcpy,
         )
         self._adb_bootstrap.start()
-        self._log("ADB bootstrap started (scrcpy + u2 over TCP)")
+        mode_label = "periodic screenshots" if skip_scrcpy else "scrcpy + u2 over TCP"
+        self._log(f"ADB bootstrap started ({mode_label})")
 
     def tap_selector(self, by: str, value: str) -> None:
         """
@@ -923,7 +1121,14 @@ class DeviceClient:
         if not self.ensure_u2_healthy() or self._u2 is None:
             self._log("tap_selector skipped (U2 not available)", level=logging.WARNING)
             return
+        # Serialize with all u2 operations (NanoHTTPD is single-threaded)
+        with self._u2_request_lock:
+            self._tap_selector_impl(by, value)
+
+    def _tap_selector_impl(self, by: str, value: str) -> None:
         u2_snap = self._u2
+        if u2_snap is None:
+            return
         eid = None
         try:
             eid = u2_snap.find_element(by, value)
@@ -979,8 +1184,8 @@ class DeviceClient:
 
         return self._reconnect_u2()
 
-    _U2_RECONNECT_ATTEMPTS = 5
-    _U2_RECONNECT_DELAY = 0.3  # Android ServiceTunnel reconnects to :9008 in ~50ms; 0.3s is plenty
+    _U2_RECONNECT_ATTEMPTS = 10
+    _U2_RECONNECT_DELAY = 1.0  # Increased: u2 server restart can take 2-5s
 
     def _reconnect_u2(self) -> bool:
         """Connect (or reconnect) the u2 client. Tries JSON-RPC first, then WebDriver.
@@ -1199,10 +1404,13 @@ class DeviceClient:
         """
         _INTERVAL = max(3.0, float(os.environ.get("U2_KEEPALIVE_INTERVAL", "5.0")))
         _PING_TIMEOUT = 4.0
-        _MAX_MISSES = 2  # tolerate this many consecutive ping failures before marking dead
+        _MAX_MISSES = 4  # tolerate more misses (20s window at 5s interval)
         misses = 0
 
         def _is_alive() -> bool:
+            # For ADB mode, keep running while transport is connected
+            if self.is_adb_mode:
+                return self.state not in (DeviceState.DEAD, DeviceState.DISCONNECTED)
             return self._agent_send is not None
 
         while _is_alive():
@@ -1216,6 +1424,9 @@ class DeviceClient:
             with self._u2_lock:
                 u2 = self._u2
             if u2 is None:
+                # Proactively try to reconnect instead of waiting for next operation
+                if self.state == DeviceState.READY:
+                    self._reconnect_u2()
                 misses = 0
                 continue
 
@@ -1233,13 +1444,14 @@ class DeviceClient:
                     self._log(f"u2 keep-alive: ping miss {misses}/{_MAX_MISSES} (tunnel reconnecting?)",
                               level=logging.DEBUG)
                 else:
-                    self._log("u2 keep-alive: connection dead — marking for reconnect",
+                    self._log("u2 keep-alive: connection dead — attempting reconnect",
                               level=logging.WARNING)
                     with self._u2_lock:
                         if self._u2 is u2:
                             self._u2 = None
                     misses = 0
-                    # Reconnect happens on next touch/hierarchy call via _reconnect_u2().
+                    # Proactively reconnect instead of waiting for next operation
+                    self._reconnect_u2()
 
     def _teardown_tools(self) -> None:
         if self._stf_service:
@@ -1291,10 +1503,12 @@ async def _safe_put(queue: asyncio.Queue, item: Any) -> None:
         is_video = isinstance(item, (bytes, bytearray)) or (
             isinstance(item, dict) and item.get("type") == "frame"
         )
-        if is_video:
+        is_status = isinstance(item, dict) and item.get("type") == "status"
+        if is_video or is_status:
+            # Status messages must NOT be dropped — they carry state changes
+            # (DISCONNECTED, DEAD) that the frontend needs immediately.
             try:
                 queue.get_nowait()
                 queue.put_nowait(item)
             except (asyncio.QueueEmpty, asyncio.QueueFull):
                 pass
-        # JSON status/log messages: drop silently when queue is full (rare)

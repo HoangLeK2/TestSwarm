@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { arrayMove } from '@dnd-kit/sortable';
 import { toast } from 'sonner';
 import { campaignsApi, scenariosApi } from '@/features/campaigns/services/api';
 import type { ScenarioOut } from '@/features/campaigns/types';
@@ -16,6 +17,11 @@ import {
 } from '../utils/control-record-xml';
 import { parseHierarchySelectorNodes } from '../utils/hierarchy-selectors';
 import { useTranslations } from 'next-intl';
+
+let _stepIdCounter = 0;
+function nextStepId() { return `step-${++_stepIdCounter}`; }
+
+export type StepWithId = ScenarioStep & { _id: string };
 
 export function useControlRecord(initialSerial?: string | null) {
   const t = useTranslations('devicesControlRecord');
@@ -37,7 +43,7 @@ export function useControlRecord(initialSerial?: string | null) {
   const recordingRef = useRef(false);
   const recordXmlRef = useRef<string | null>(null);
   const [recordXml, setRecordXml] = useState<string | null>(null);
-  const [steps, setSteps] = useState<ScenarioStep[]>([]);
+  const [steps, setSteps] = useState<StepWithId[]>([]);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [campaigns, setCampaigns] = useState<{ id: string; name: string }[]>([]);
   const [savingCampaignId, setSavingCampaignId] = useState<string | null>(null);
@@ -47,6 +53,8 @@ export function useControlRecord(initialSerial?: string | null) {
   const pollingXmlRef = useRef(false);
   const [hierarchyOpen, setHierarchyOpen] = useState(false);
   const [hierarchyXml, setHierarchyXml] = useState<string>('');
+  const [autoRefreshHierarchy, setAutoRefreshHierarchy] = useState(true);
+  const [hierarchyLoading, setHierarchyLoading] = useState(false);
   const [selectorBy, setSelectorBy] = useState<
     | 'resource-id'
     | 'text'
@@ -99,7 +107,7 @@ export function useControlRecord(initialSerial?: string | null) {
   }, []);
 
   const recordStep = useCallback((step: ScenarioStep) => {
-    setSteps((s) => [...s, step]);
+    setSteps((s) => [...s, { ...step, _id: nextStepId() }]);
   }, []);
 
   const sendAndRecord = useCallback(
@@ -192,20 +200,30 @@ export function useControlRecord(initialSerial?: string | null) {
   const mode = selectedDevice ? (modes[selectedDevice.serial] ?? 'tap') : 'tap';
 
   const addWaitStep = useCallback(() => {
-    setSteps((s) => [...s, { type: 'wait', seconds: 2 }]);
+    setSteps((s) => [...s, { type: 'wait', seconds: 2, _id: nextStepId() }]);
   }, []);
 
   const removeStep = useCallback((index: number) => {
     setSteps((s) => s.filter((_, i) => i !== index));
   }, []);
 
+  const moveStep = useCallback((fromIndex: number, toIndex: number) => {
+    setSteps((s) => arrayMove(s, fromIndex, toIndex));
+  }, []);
+
+  // Strip _id before export/save
+  const cleanSteps = useCallback(
+    () => steps.map(({ _id, ...rest }) => rest),
+    [steps],
+  );
+
   const copyJson = useCallback(() => {
-    const json = scenarioToJson(steps);
+    const json = scenarioToJson(cleanSteps());
     navigator.clipboard.writeText(json).then(
       () => toast.success(t('toast.copyJsonSuccess')),
       () => toast.error(t('toast.copyJsonError'))
     );
-  }, [steps]);
+  }, [cleanSteps]);
 
   const openSaveDialog = useCallback(() => {
     setSaveDialogOpen(true);
@@ -261,35 +279,46 @@ export function useControlRecord(initialSerial?: string | null) {
   const loadHierarchy = useCallback(() => {
     if (!selectedDevice) return;
     setHierarchyOpen(true);
-    setHierarchyXml(loadingLabel);
+    setHierarchyLoading(true);
     fetchHierarchy(selectedDevice.serial, true)
       .then(setHierarchyXml)
       .catch((e) => {
         setHierarchyXml(`${errorPrefix} ${String(e)}`);
-      });
+      })
+      .finally(() => setHierarchyLoading(false));
   }, [selectedDevice]);
 
   const refreshHierarchy = useCallback(() => {
     if (!selectedDevice) return;
-    setHierarchyXml((prev) => (prev === loadingLabel ? prev : loadingLabel));
+    setHierarchyLoading(true);
     fetchHierarchy(selectedDevice.serial, true)
       .then(setHierarchyXml)
       .catch((e) => {
         setHierarchyXml(`${errorPrefix} ${String(e)}`);
-      });
+      })
+      .finally(() => setHierarchyLoading(false));
   }, [selectedDevice]);
 
+  // Auto-refresh hierarchy — pauses during recording/playing to avoid U2 tunnel contention.
+  // U2 server (NanoHTTPD) is single-threaded: concurrent hierarchy + tap → timeout.
+  // Flow: refresh XML → user sees tree → user taps → action executes → refresh again.
+  const [hierarchyPaused, setHierarchyPaused] = useState(false);
+
   useEffect(() => {
-    if (!hierarchyOpen || !selectedDevice) return;
+    if (!autoRefreshHierarchy || !selectedDevice || hierarchyPaused) return;
+    // Initial load
+    fetchHierarchy(selectedDevice.serial, true)
+      .then(setHierarchyXml)
+      .catch(() => {});
     const id = setInterval(() => {
       fetchHierarchy(selectedDevice.serial)
         .then(setHierarchyXml)
         .catch((e) =>
           setHierarchyXml((prev) => (prev.startsWith(errorPrefix) ? prev : `${errorPrefix} ${String(e)}`))
         );
-    }, 2000);
+    }, 3000);
     return () => clearInterval(id);
-  }, [hierarchyOpen, selectedDevice]);
+  }, [autoRefreshHierarchy, selectedDevice, hierarchyPaused]);
 
   const parsedHierarchyNodes = useMemo(
     () => parseHierarchySelectorNodes(hierarchyXml),
@@ -302,7 +331,9 @@ export function useControlRecord(initialSerial?: string | null) {
     const value = selectorValue.trim();
     wsSend({ type: 'tap_selector', serial: selectedDevice.serial, by, value });
     if (recording) {
-      recordStep({ type: 'tap_selector', by, value });
+      // Use unified 'tap' type with selector — always hybrid when possible
+      const step: ScenarioStep = { type: 'tap', selector: { by, value } } as ScenarioStep;
+      recordStep(step);
     }
     toast.success(t('toast.tapSelectorSuccess', { by, value: value.slice(0, 30) }));
   }, [selectedDevice, selectorBy, selectorValue, wsSend, recording, recordStep]);
@@ -340,6 +371,7 @@ export function useControlRecord(initialSerial?: string | null) {
     mode,
     addWaitStep,
     removeStep,
+    moveStep,
     copyJson,
     openSaveDialog,
     saveDialogOpen,
@@ -363,6 +395,11 @@ export function useControlRecord(initialSerial?: string | null) {
     selectorValue,
     setSelectorValue,
     handleTapSelector,
-    toggleRecording
+    toggleRecording,
+    autoRefreshHierarchy,
+    setAutoRefreshHierarchy,
+    hierarchyLoading,
+    hierarchyPaused,
+    setHierarchyPaused,
   };
 }

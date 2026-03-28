@@ -19,6 +19,8 @@ import android.util.Log;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
+import android.widget.Button;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -74,7 +76,15 @@ public class IdentityActivity extends AppCompatActivity {
 
     private MaterialButton btnScan;
     private TextView tvStatus;
+    private TextView tvWifiIp;
     private View viewStatusDot;
+
+    // Service status views
+    private View dotA11y, dotU2, dotMp, dotWs;
+    private TextView tvA11yStatus, tvU2Status, tvMpStatus, tvWsStatus;
+    private TextView tvA11yError, tvU2Error, tvMpError, tvWsError;
+    private final java.util.concurrent.ExecutorService statusExecutor =
+            java.util.concurrent.Executors.newSingleThreadExecutor();
 
     // WS URL waiting for projection permission
     private String pendingWsUrl;
@@ -136,6 +146,7 @@ public class IdentityActivity extends AppCompatActivity {
         TextView tvVersion = findViewById(R.id.tv_version);
         TextView tvOperator = findViewById(R.id.tv_operator);
         TextView tvPhone = findViewById(R.id.tv_phone);
+        tvWifiIp = findViewById(R.id.tv_wifi_ip);
         View rowImei = findViewById(R.id.row_imei);
         View divImei = findViewById(R.id.divider_imei);
         TextView tvImei = findViewById(R.id.tv_imei);
@@ -143,6 +154,21 @@ public class IdentityActivity extends AppCompatActivity {
         btnScan = findViewById(R.id.btn_scan);
         tvStatus = findViewById(R.id.tv_status);
         viewStatusDot = findViewById(R.id.view_status_dot);
+
+        // Service status card views
+        dotA11y = findViewById(R.id.dot_a11y);
+        dotU2 = findViewById(R.id.dot_u2);
+        dotMp = findViewById(R.id.dot_mp);
+        dotWs = findViewById(R.id.dot_ws);
+        tvA11yStatus = findViewById(R.id.tv_a11y_status);
+        tvU2Status = findViewById(R.id.tv_u2_status);
+        tvMpStatus = findViewById(R.id.tv_mp_status);
+        tvWsStatus = findViewById(R.id.tv_ws_status);
+        tvA11yError = findViewById(R.id.tv_a11y_error);
+        tvU2Error = findViewById(R.id.tv_u2_error);
+        tvMpError = findViewById(R.id.tv_mp_error);
+        tvWsError = findViewById(R.id.tv_ws_error);
+        findViewById(R.id.btn_refresh_status).setOnClickListener(v -> checkServiceStatus());
 
         // ── Device info ────────────────────────────────────────────────
         Intent intent = getIntent();
@@ -240,8 +266,8 @@ public class IdentityActivity extends AppCompatActivity {
         });
 
         ensureVisibility();
-        // Disabled: do not auto-enable accessibility; we rely on minitouch.
-        // autoEnableA11y();
+        refreshWifiIp();
+        checkServiceStatus();
 
         // Auto-reconnect with saved URL (works across different WiFi networks).
         // If the service already holds a valid MediaProjection token (same process lifetime),
@@ -284,13 +310,69 @@ public class IdentityActivity extends AppCompatActivity {
         }
     }
 
-    /**
-     * Programmatically enable TouchAccessibilityService via WRITE_SECURE_SETTINGS.
-     * This requires the permission to be granted once via ADB:
-     *   adb shell pm grant jp.co.cyberagent.stf android.permission.WRITE_SECURE_SETTINGS
-     */
-    private void autoEnableA11y() {
-        // Disabled in ADB-first builds; Accessibility-based touch is optional.
+    // ── Service Status Check ────────────────────────────────────────────────
+
+    @SuppressLint("SetTextI18n")
+    private void checkServiceStatus() {
+        // 1. Accessibility
+        boolean a11y = TouchAccessibilityService.isAvailable();
+        if (!a11y) tryAutoEnableAccessibility();
+        a11y = TouchAccessibilityService.isAvailable();
+        setServiceRow(dotA11y, tvA11yStatus, tvA11yError, a11y,
+                "Ready", "Not bound — Settings → Accessibility → STFService → Enable");
+
+        // 2. UIAutomator2 (TCP check on background thread)
+        setServiceRow(dotU2, tvU2Status, tvU2Error, false, "", "Checking...");
+        tvU2Error.setVisibility(View.GONE);
+        tvU2Status.setText("...");
+        tvU2Status.setTextColor(0xFF64748B);
+        statusExecutor.submit(() -> {
+            boolean u2ok = false;
+            try (java.net.Socket s = new java.net.Socket()) {
+                s.connect(new java.net.InetSocketAddress("127.0.0.1", 9008), 500);
+                u2ok = true;
+            } catch (Exception ignored) {}
+            final boolean u2 = u2ok;
+            runOnUiThread(() -> setServiceRow(dotU2, tvU2Status, tvU2Error, u2,
+                    "Running", "Not running on :9008 — run agent-boot on PC first"));
+        });
+
+        // 3. MediaProjection
+        boolean mp = WsAgentService.sSharedProjection != null;
+        setServiceRow(dotMp, tvMpStatus, tvMpError, mp,
+                "Token valid", "No permission yet — scan QR to grant screen capture");
+
+        // 4. WebSocket
+        setServiceRow(dotWs, tvWsStatus, tvWsError, serviceRunning,
+                "Connected", "Not connected — scan QR code to connect");
+    }
+
+    private void setServiceRow(View dot, TextView tvStatus, TextView tvError,
+                               boolean ok, String okText, String errorText) {
+        if (dot == null || tvStatus == null || tvError == null) return;
+        GradientDrawable shape = (GradientDrawable) dot.getBackground().mutate();
+        shape.setColor(ok ? 0xFF22C55E : 0xFFEF4444);
+        dot.setBackground(shape);
+        tvStatus.setText(ok ? okText : "Error");
+        tvStatus.setTextColor(ok ? 0xFF22C55E : 0xFFEF4444);
+        tvError.setVisibility(ok ? View.GONE : View.VISIBLE);
+        tvError.setText(errorText);
+    }
+
+    private void tryAutoEnableAccessibility() {
+        String service = getPackageName() + "/" + TouchAccessibilityService.class.getName();
+        try {
+            String current = Settings.Secure.getString(getContentResolver(),
+                    Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+            if (current != null && current.contains(service)) return;
+            String newList = (current == null || current.isEmpty()) ? service : current + ":" + service;
+            Settings.Secure.putString(getContentResolver(),
+                    Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, newList);
+            Settings.Secure.putInt(getContentResolver(), Settings.Secure.ACCESSIBILITY_ENABLED, 1);
+            Log.i(TAG, "Auto-enabled accessibility via WRITE_SECURE_SETTINGS");
+        } catch (Exception e) {
+            Log.d(TAG, "Auto-enable a11y failed: " + e.getMessage());
+        }
     }
 
     @Override
@@ -302,6 +384,9 @@ public class IdentityActivity extends AppCompatActivity {
         filter.addAction(WsAgentService.ACTION_CONNECTION_FAILED);
         filter.addAction(WsAgentService.ACTION_CONNECTED);
         LocalBroadcastManager.getInstance(this).registerReceiver(reAuthReceiver, filter);
+        // Re-check all services when returning from Settings
+        refreshWifiIp();
+        checkServiceStatus();
     }
 
     @Override
@@ -441,6 +526,14 @@ public class IdentityActivity extends AppCompatActivity {
                 });
             }
         }).start();
+    }
+
+    private void refreshWifiIp() {
+        String ip = getWifiIpAddress();
+        if (tvWifiIp != null) {
+            tvWifiIp.setText(ip != null ? ip + ":5555" : "No WiFi");
+            tvWifiIp.setTextColor(ip != null ? 0xFFF1F5F9 : 0xFFEF4444);
+        }
     }
 
     /** Returns this device's WiFi IPv4 address, or null if not available. */

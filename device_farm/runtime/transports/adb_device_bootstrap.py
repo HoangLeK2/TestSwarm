@@ -63,8 +63,10 @@ class AdbDeviceBootstrap:
         on_minitouch_ready: Optional[Callable[[MinitouchSender], None]] = None,
         u2_wait_timeout: float = 20.0,
         u2_implicitly_wait: float = 10.0,
+        skip_scrcpy: bool = False,
     ) -> None:
         self._transport = transport
+        self._skip_scrcpy = skip_scrcpy
         self._on_frame = on_frame
         self._on_battery = on_battery
         self._on_rotation = on_rotation
@@ -161,9 +163,11 @@ class AdbDeviceBootstrap:
             meta = self._collect_metadata()
             self._on_metadata(meta)
 
-            # 2. Start screen stream (scrcpy only)
-            if self._running:
+            # 2. Start screen stream (scrcpy only) — skipped in periodic screenshot mode
+            if self._running and not self._skip_scrcpy:
                 self._start_stream()
+            elif self._skip_scrcpy:
+                log.info(f"[{serial}] Skipping scrcpy (periodic screenshot mode)")
 
             # 3. Start minitouch (push binary, start process, forward, connect)
             # NOTE: On modern Android (SDK>=34), raw minitouch binary often can't access /dev/input/*

@@ -144,6 +144,50 @@ class DeviceManager:
         client.attach_adb_transport(transport)
         return client
 
+    def reconnect_adb_device(self, serial: str) -> Optional[DeviceClient]:
+        """
+        Tear down and re-bootstrap an ADB device.
+        Called by watchdog when ADB health check fails.
+        Only reconnects READY devices (not BUSY — avoid interrupting tasks).
+        """
+        device = self.get_device(serial)
+        if device is None:
+            log.warning(f"reconnect_adb_device: {serial} not found in registry")
+            return None
+        if not device.is_adb_mode or device._adb_transport is None:
+            log.warning(f"reconnect_adb_device: {serial} is not in ADB mode")
+            return None
+
+        host = device._adb_transport.host
+        port = device._adb_transport.port
+
+        log.info(f"[{serial}] Re-bootstrapping ADB device ({host}:{port})...")
+
+        # 1. Tear down existing transports (scrcpy, minitouch, u2)
+        device.state = DeviceState.CONNECTING
+        device.detach_all_transports()
+
+        # 2. Reconnect ADB transport
+        transport = device._adb_transport
+        if not transport.reconnect(retries=3):
+            log.error(f"[{serial}] ADB reconnect failed — creating new transport")
+            try:
+                transport.close()
+            except Exception:
+                pass
+            # Create fresh transport
+            from runtime.transports.adb_transport import AdbTransport
+            transport = AdbTransport(host, port)
+            if not transport.connect():
+                log.error(f"[{serial}] New ADB transport also failed")
+                device.state = DeviceState.DEAD
+                return None
+
+        # 3. Re-attach and bootstrap
+        device.attach_adb_transport(transport)
+        log.info(f"[{serial}] ADB re-bootstrap initiated")
+        return device
+
     def start_mdns_discovery(self) -> bool:
         """
         Start mDNS listener for Android 11+ Wireless Debugging.

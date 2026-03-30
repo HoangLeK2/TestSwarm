@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
+import { useTranslations } from 'next-intl';
 import { useCreateSchedule, useUpdateSchedule } from '../hooks/use-schedules';
 import { useCampaigns } from '@/features/campaigns/hooks/use-campaigns';
 import { useScenarioTemplates } from '@/features/scenario-templates/hooks/use-scenario-templates';
@@ -76,7 +77,10 @@ export function ScheduleFormDialog({
   const createMutation = useCreateSchedule();
   const updateMutation = useUpdateSchedule();
 
-  const title = mode === 'create' ? 'Create schedule' : `Edit schedule: ${schedule?.name ?? ''}`;
+  const t = useTranslations('schedulesFeature.form');
+
+  const title =
+    mode === 'create' ? t('titleCreate') : t('titleEdit', { name: schedule?.name ?? '' });
 
   useEffect(() => {
     if (!open) return;
@@ -124,22 +128,22 @@ export function ScheduleFormDialog({
 
   const onSubmit = async () => {
     if (!name.trim()) {
-      toast.error('Schedule name is required');
+      toast.error(t('errorNameRequired'));
       return;
     }
     const cron = cronExpression.trim();
     const tz = timezone.trim();
     if (!cron) {
-      toast.error('cron_expression is required');
+      toast.error(t('errorCronRequired'));
       return;
     }
     if ((targetType === 'campaign' || targetType === 'template') && !targetId) {
-      toast.error(`target_id is required when target_type="${targetType}"`);
+      toast.error(t('errorTargetIdRequired', { targetType }));
       return;
     }
     if (targetType === 'fleet') {
       if (!inlineSteps.length) {
-        toast.error('inline_steps is required when target_type="fleet"');
+        toast.error(t('errorInlineStepsRequired'));
         return;
       }
       const check = validateScenarioStepsForApi(inlineSteps);
@@ -150,7 +154,7 @@ export function ScheduleFormDialog({
     }
 
     if (randomDelayMax > 0 && randomDelayMax < randomDelayMin) {
-      toast.error('random_delay_max must be >= random_delay_min');
+      toast.error(t('errorRandomDelay'));
       return;
     }
 
@@ -180,10 +184,10 @@ export function ScheduleFormDialog({
 
       createMutation.mutate(data, {
         onSuccess: () => {
-          toast.success('Schedule created');
+            toast.success(t('createSuccess'));
           onOpenChange(false);
         },
-        onError: (err: unknown) => toast.error(formatFarmApiError(err, 'Create schedule failed'))
+          onError: (err: unknown) => toast.error(formatFarmApiError(err, t('createFailed')))
       });
       return;
     }
@@ -221,10 +225,10 @@ export function ScheduleFormDialog({
       { scheduleId: s.id, data: patch },
       {
         onSuccess: () => {
-          toast.success('Schedule updated');
+          toast.success(t('updateSuccess'));
           onOpenChange(false);
         },
-        onError: (err: unknown) => toast.error(formatFarmApiError(err, 'Update schedule failed'))
+        onError: (err: unknown) => toast.error(formatFarmApiError(err, t('updateFailed')))
       }
     );
   };
@@ -241,32 +245,32 @@ export function ScheduleFormDialog({
         <div className='space-y-5 pt-2'>
           <div className='grid grid-cols-2 gap-4'>
             <div className='space-y-1'>
-              <Label>name</Label>
-              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder='Schedule name' />
+              <Label>{t('nameLabel')}</Label>
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t('namePlaceholder')} />
             </div>
             <div className='space-y-1'>
-              <Label>Enabled</Label>
+              <Label>{t('enabledLabel')}</Label>
               <div className='flex items-center gap-3 pt-2'>
                 <Switch checked={isEnabled} onCheckedChange={setIsEnabled} />
-                <span className='text-sm text-muted-foreground'>{isEnabled ? 'ON' : 'OFF'}</span>
+                <span className='text-sm text-muted-foreground'>{isEnabled ? t('enabledOn') : t('enabledOff')}</span>
               </div>
             </div>
           </div>
 
           <div className='space-y-1'>
-            <Label>description</Label>
+            <Label>{t('descriptionLabel')}</Label>
             <Textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               rows={2}
-              placeholder='Optional'
+              placeholder={t('optional')}
             />
           </div>
 
           <div className='space-y-3 rounded border p-3'>
             <div className='grid grid-cols-2 gap-3'>
               <div className='space-y-1'>
-                <Label>Target type</Label>
+                <Label>{t('targetTypeLabel')}</Label>
                 <Select
                   value={targetType}
                   onValueChange={(v) => {
@@ -278,24 +282,24 @@ export function ScheduleFormDialog({
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value='campaign'>Campaign</SelectItem>
-                    <SelectItem value='template'>Template</SelectItem>
-                    <SelectItem value='fleet'>Fleet (inline)</SelectItem>
+                  <SelectContent className='z-[10001]'>
+                    <SelectItem value='campaign'>{t('targetCampaign')}</SelectItem>
+                    <SelectItem value='template'>{t('targetTemplate')}</SelectItem>
+                    <SelectItem value='fleet'>{t('targetFleet')}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
 
               {(targetType === 'campaign' || targetType === 'template') && (
                 <div className='space-y-1'>
-                  <Label>Target</Label>
+                  <Label>{t('targetLabel')}</Label>
                   {targetType === 'campaign' ? (
                     <Select value={targetId ?? '_none'} onValueChange={(v) => setTargetId(v === '_none' ? null : v)}>
                       <SelectTrigger>
-                        <SelectValue placeholder='Pick a campaign' />
+                        <SelectValue placeholder={t('pickCampaign')} />
                       </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value='_none'>Select campaign</SelectItem>
+                      <SelectContent className='z-[10001]'>
+                        <SelectItem value='_none'>{t('selectCampaign')}</SelectItem>
                         {(campaigns ?? []).map((c) => (
                           <SelectItem key={c.id} value={c.id}>
                             {c.name}
@@ -306,10 +310,10 @@ export function ScheduleFormDialog({
                   ) : (
                     <Select value={targetId ?? '_none'} onValueChange={(v) => setTargetId(v === '_none' ? null : v)}>
                       <SelectTrigger>
-                        <SelectValue placeholder='Pick a template' />
+                        <SelectValue placeholder={t('pickTemplate')} />
                       </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value='_none'>Select template</SelectItem>
+                      <SelectContent className='z-[10001]'>
+                        <SelectItem value='_none'>{t('selectTemplate')}</SelectItem>
                         {(templates ?? []).map((tpl) => (
                           <SelectItem key={tpl.id} value={tpl.id}>
                             {tpl.name}
@@ -324,7 +328,9 @@ export function ScheduleFormDialog({
 
             {targetType === 'fleet' && (
               <div className='space-y-2 pt-2'>
-                <Label>inline_steps ({inlineSteps.length})</Label>
+                <Label>
+                  {t('inlineStepsLabel', { count: inlineSteps.length })}
+                </Label>
                 <FlowEditor steps={inlineSteps} onChange={setInlineSteps} compact maxHeight='min(420px,48vh)' />
               </div>
             )}
@@ -336,18 +342,18 @@ export function ScheduleFormDialog({
 
           <div className='grid grid-cols-2 gap-4'>
             <div className='space-y-1'>
-              <Label>Timezone</Label>
-              <Input value={timezone} onChange={(e) => setTimezone(e.target.value)} placeholder='Asia/Ho_Chi_Minh' />
+              <Label>{t('timezoneLabel')}</Label>
+              <Input value={timezone} onChange={(e) => setTimezone(e.target.value)} placeholder={t('timezonePlaceholder')} />
             </div>
 
             <div className='space-y-1'>
-              <Label>Device group (optional)</Label>
+              <Label>{t('deviceGroupLabel')}</Label>
               <Select value={deviceGroupId ?? '_none'} onValueChange={(v) => setDeviceGroupId(v === '_none' ? null : v)}>
                 <SelectTrigger>
-                  <SelectValue placeholder='All READY devices' />
+                  <SelectValue placeholder={t('allReadyDevices')} />
                 </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value='_none'>All READY devices</SelectItem>
+                <SelectContent className='z-[10001]'>
+                  <SelectItem value='_none'>{t('allReadyDevices')}</SelectItem>
                   {(groups ?? []).map((g) => (
                     <SelectItem key={g.id} value={g.id}>
                       {g.name} ({g.device_count})
@@ -360,15 +366,15 @@ export function ScheduleFormDialog({
 
           <div className='grid grid-cols-3 gap-4'>
             <div className='space-y-1'>
-              <Label>filter_state</Label>
-              <Input value={filterState} onChange={(e) => setFilterState(e.target.value)} placeholder='READY' />
+              <Label>{t('filterStateLabel')}</Label>
+              <Input value={filterState} onChange={(e) => setFilterState(e.target.value)} placeholder={t('filterStatePlaceholder')} />
             </div>
             <div className='space-y-1'>
-              <Label>filter_model</Label>
-              <Input value={filterModel} onChange={(e) => setFilterModel(e.target.value)} placeholder='optional model' />
+              <Label>{t('filterModelLabel')}</Label>
+              <Input value={filterModel} onChange={(e) => setFilterModel(e.target.value)} placeholder={t('filterModelPlaceholder')} />
             </div>
             <div className='space-y-1'>
-              <Label>max_devices</Label>
+              <Label>{t('maxDevicesLabel')}</Label>
               <Input
                 type='number'
                 value={maxDevices ?? ''}
@@ -376,7 +382,7 @@ export function ScheduleFormDialog({
                   const v = e.target.value;
                   setMaxDevices(v === '' ? null : Math.max(1, Number(v)));
                 }}
-                placeholder='optional'
+                placeholder={t('optional')}
               />
             </div>
           </div>
@@ -384,19 +390,19 @@ export function ScheduleFormDialog({
           <div className='rounded border p-3 space-y-3'>
             <div className='grid grid-cols-2 gap-4'>
               <div className='space-y-1'>
-                <Label>random_delay_min (seconds)</Label>
+                <Label>{t('randomDelayMinLabel')}</Label>
                 <Input type='number' min={0} value={randomDelayMin} onChange={(e) => setRandomDelayMin(Math.max(0, Number(e.target.value) || 0))} />
               </div>
               <div className='space-y-1'>
-                <Label>random_delay_max (seconds)</Label>
+                <Label>{t('randomDelayMaxLabel')}</Label>
                 <Input type='number' min={0} value={randomDelayMax} onChange={(e) => setRandomDelayMax(Math.max(0, Number(e.target.value) || 0))} />
               </div>
             </div>
 
             <div className='flex items-center justify-between gap-3'>
               <div className='space-y-1'>
-                <Label>stagger_devices</Label>
-                <p className='text-[11px] text-muted-foreground'>Offset dispatch per device by stagger_interval_seconds.</p>
+                <Label>{t('staggerDevicesLabel')}</Label>
+                <p className='text-[11px] text-muted-foreground'>{t('staggerHint')}</p>
               </div>
               <div className='flex items-center gap-3'>
                 <Switch checked={staggerDevices} onCheckedChange={setStaggerDevices} />
@@ -405,7 +411,7 @@ export function ScheduleFormDialog({
 
             {staggerDevices && (
               <div className='space-y-1'>
-                <Label>stagger_interval_seconds</Label>
+                <Label>{t('staggerIntervalSecondsLabel')}</Label>
                 <Input
                   type='number'
                   min={1}
@@ -420,7 +426,7 @@ export function ScheduleFormDialog({
           {targetType === 'fleet' && (
             <details className='group'>
               <summary className='cursor-pointer text-sm font-medium flex items-center gap-2'>
-                inline_variables (optional)
+                {t('inlineVariablesSummary')}
                 {Object.keys(inlineVariables ?? {}).length > 0 && (
                   <span className='text-xs text-muted-foreground'>({Object.keys(inlineVariables).length})</span>
                 )}
@@ -428,8 +434,9 @@ export function ScheduleFormDialog({
               <div className='pt-2'>
                 <VariableEditor variables={inlineVariables} onChange={setInlineVariables} />
                 <p className='mt-1 text-[10px] text-muted-foreground'>
-                  JSON values are parsed automatically. You can use{' '}
-                  <code className='rounded bg-muted px-1 py-0.5'>{'${__DEVICE_SERIAL__}'}</code>, etc.
+                  {t('inlineVariablesHintPrefix')}{' '}
+                  <code className='rounded bg-muted px-1 py-0.5'>{'${__DEVICE_SERIAL__}'}</code>
+                  {t('inlineVariablesHintSuffix')}
                 </p>
               </div>
             </details>
@@ -439,17 +446,17 @@ export function ScheduleFormDialog({
             <p className='text-xs text-destructive'>
               {formatFarmApiError(
                 mode === 'create' ? createMutation.error : updateMutation.error,
-                mode === 'create' ? 'Create schedule failed' : 'Update schedule failed'
+                mode === 'create' ? t('createFailed') : t('updateFailed')
               )}
             </p>
           )}
 
           <div className='flex items-center justify-end gap-2 pt-2'>
             <Button size='sm' variant='outline' onClick={() => onOpenChange(false)} disabled={isPending}>
-              Cancel
+              {t('cancel')}
             </Button>
             <Button size='sm' onClick={() => void onSubmit()} disabled={isPending}>
-              {isPending ? 'Saving…' : mode === 'create' ? 'Create schedule' : 'Save changes'}
+              {isPending ? t('saving') : mode === 'create' ? t('createCta') : t('saveCta')}
             </Button>
           </div>
         </div>

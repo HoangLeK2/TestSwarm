@@ -8,12 +8,12 @@ import { ScheduleRowActions } from './schedule-row-actions';
 
 type TFn = (key: string, values?: Record<string, any>) => string;
 
-export function getScheduleColumns(t: TFn): ColumnDef<ScheduleOut>[] {
+export function getScheduleColumns(tList: TFn, tCron: TFn): ColumnDef<ScheduleOut>[] {
   return [
     {
       id: 'name',
       accessorKey: 'name',
-      header: t('colName'),
+      header: tList('colName'),
       cell: ({ row }) => (
         <span className='truncate text-sm font-semibold'>{row.original.name}</span>
       )
@@ -21,13 +21,21 @@ export function getScheduleColumns(t: TFn): ColumnDef<ScheduleOut>[] {
     {
       id: 'target',
       accessorKey: 'target_type',
-      header: t('colTarget'),
+      header: tList('colTarget'),
       cell: ({ row }) => {
         const s = row.original;
+        const targetLabel =
+          s.target_type === 'campaign'
+            ? tList('targetCampaign')
+            : s.target_type === 'template'
+              ? tList('targetTemplate')
+              : s.target_type === 'fleet'
+                ? tList('targetFleet')
+                : s.target_type;
         return (
           <div className='space-y-0.5'>
             <div className='truncate text-sm'>
-              <span className='font-medium'>{s.target_type}</span>
+              <span className='font-medium'>{targetLabel}</span>
             </div>
             <div className='truncate text-[11px] text-muted-foreground'>{s.target_id ?? '-'}</div>
           </div>
@@ -37,12 +45,14 @@ export function getScheduleColumns(t: TFn): ColumnDef<ScheduleOut>[] {
     {
       id: 'cron',
       accessorKey: 'cron_expression',
-      header: t('colCron'),
+      header: tList('colCron'),
       cell: ({ row }) => {
         const s = row.original;
         return (
           <div className='space-y-0.5'>
-            <div className='truncate text-sm'>{cronExpressionToHumanReadable(s.cron_expression)}</div>
+            <div className='truncate text-sm'>
+              {cronExpressionToHumanReadable(s.cron_expression, tCron)}
+            </div>
             <div className='truncate text-[11px] text-muted-foreground font-mono'>{s.cron_expression}</div>
           </div>
         );
@@ -51,12 +61,12 @@ export function getScheduleColumns(t: TFn): ColumnDef<ScheduleOut>[] {
     {
       id: 'enabled',
       accessorKey: 'is_enabled',
-      header: t('colEnabled'),
+      header: tList('colEnabled'),
       cell: ({ row }) => {
         const isEnabled = row.original.is_enabled;
         return (
           <Badge variant={isEnabled ? 'default' : 'secondary'} className='text-[11px]'>
-            {isEnabled ? 'ON' : 'OFF'}
+            {isEnabled ? tList('enabledOn') : tList('enabledOff')}
           </Badge>
         );
       }
@@ -64,7 +74,7 @@ export function getScheduleColumns(t: TFn): ColumnDef<ScheduleOut>[] {
     {
       id: 'nextRun',
       accessorKey: 'next_run_at',
-      header: t('colNextRun'),
+      header: tList('colNextRun'),
       cell: ({ row }) => {
         const v = row.original.next_run_at;
         if (!v) return <span className='text-[11px] text-muted-foreground'>-</span>;
@@ -78,7 +88,7 @@ export function getScheduleColumns(t: TFn): ColumnDef<ScheduleOut>[] {
     {
       id: 'runs',
       accessorKey: 'run_count',
-      header: t('colRuns'),
+      header: tList('colRuns'),
       cell: ({ row }) => (
         <Badge variant='secondary' className='text-[11px]'>
           {row.original.run_count}

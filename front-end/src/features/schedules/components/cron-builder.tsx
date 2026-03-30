@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslations } from 'next-intl';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
@@ -11,6 +12,8 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select';
+
+type TFn = (key: string, values?: Record<string, any>) => string;
 
 type SimpleCronKind =
   | 'everyMinutes'
@@ -30,31 +33,44 @@ function pad2(n: number) {
   return String(n).padStart(2, '0');
 }
 
-export function cronExpressionToHumanReadable(cronExpression: string): string {
+export function cronExpressionToHumanReadable(
+  cronExpression: string,
+  t?: TFn
+): string {
   const parts = cronExpression.trim().split(/\s+/);
   if (parts.length !== 5) return cronExpression;
 
   const [minField, hourField, domField, monField, dowField] = parts;
 
+  const tr = (key: string, fallback: string, values?: Record<string, any>) =>
+    t ? t(key, values) : fallback;
+
   // Every N minutes: */N * * * *
   const everyMin = minField.match(/^\*\/(\d+)$/);
   if (everyMin && hourField === '*' && domField === '*' && monField === '*' && dowField === '*') {
-    return `Every ${Number(everyMin[1])} minutes`;
+    return tr('everyMinutes', `Every ${Number(everyMin[1])} minutes`, {
+      interval: Number(everyMin[1])
+    });
   }
 
   // Every N hours at minute: M */N * * *
   const everyHour = hourField.match(/^\*\/(\d+)$/);
   if (everyHour && domField === '*' && monField === '*' && dowField === '*') {
     const minute = Number(minField);
-    return `Every ${Number(everyHour[1])} hours at ${pad2(minute)}:00`;
+    return tr('everyHoursAtMinute', `Every ${Number(everyHour[1])} hours at ${pad2(minute)}:00`, {
+      interval: Number(everyHour[1]),
+      minute: pad2(minute)
+    });
   }
 
-  // Daily at HH:MM: M H * * *
   if (!minField.includes('/') && !hourField.includes('/') && domField === '*' && monField === '*' && dowField === '*') {
     const minute = Number(minField);
     const hour = Number(hourField);
     if (Number.isFinite(minute) && Number.isFinite(hour)) {
-      return `Every day at ${pad2(hour)}:${pad2(minute)}`;
+      return tr('dailyAt', `Every day at ${pad2(hour)}:${pad2(minute)}`, {
+        hour: pad2(hour),
+        minute: pad2(minute)
+      });
     }
   }
 
@@ -65,7 +81,15 @@ export function cronExpressionToHumanReadable(cronExpression: string): string {
     const intervalMinutes = Number(winMin[1]);
     const startHour = Number(winHourRange[1]);
     const endHour = Number(winHourRange[2]);
-    return `Every ${intervalMinutes} minutes between ${pad2(startHour)}:00 and ${pad2(endHour)}:00`;
+    return tr(
+      'windowMinutes',
+      `Every ${intervalMinutes} minutes between ${pad2(startHour)}:00 and ${pad2(endHour)}:00`,
+      {
+        interval: intervalMinutes,
+        start: pad2(startHour),
+        end: pad2(endHour)
+      }
+    );
   }
 
   // Window hours with step: M start-end/step * * *
@@ -75,7 +99,16 @@ export function cronExpressionToHumanReadable(cronExpression: string): string {
     const startHour = Number(winHourStep[1]);
     const endHour = Number(winHourStep[2]);
     const stepHours = Number(winHourStep[3]);
-    return `Every ${stepHours} hours between ${pad2(startHour)}:00 and ${pad2(endHour)}:00 at ${pad2(minute)}:00`;
+    return tr(
+      'windowHoursStep',
+      `Every ${stepHours} hours between ${pad2(startHour)}:00 and ${pad2(endHour)}:00 at ${pad2(minute)}:00`,
+      {
+        step: stepHours,
+        start: pad2(startHour),
+        end: pad2(endHour),
+        minute: pad2(minute)
+      }
+    );
   }
 
   // Window hours range without step: M start-end * * *
@@ -84,7 +117,15 @@ export function cronExpressionToHumanReadable(cronExpression: string): string {
     const minute = Number(minField);
     const startHour = Number(winHourRangeOnly[1]);
     const endHour = Number(winHourRangeOnly[2]);
-    return `Every hour between ${pad2(startHour)}:00 and ${pad2(endHour)}:00 at ${pad2(minute)}:00`;
+    return tr(
+      'windowHoursRangeOnly',
+      `Every hour between ${pad2(startHour)}:00 and ${pad2(endHour)}:00 at ${pad2(minute)}:00`,
+      {
+        start: pad2(startHour),
+        end: pad2(endHour),
+        minute: pad2(minute)
+      }
+    );
   }
 
   return cronExpression;
@@ -203,6 +244,7 @@ export function CronBuilder({
   value: string;
   onChange: (cronExpression: string) => void;
 }) {
+  const t = useTranslations('schedulesFeature.cronBuilder');
   const parsed = useMemo(() => parseCronExpression(value), [value]);
   const [tab, setTab] = useState<'simple' | 'advanced'>(parsed ? 'simple' : 'advanced');
 
@@ -261,34 +303,34 @@ export function CronBuilder({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [simpleCron, tab]);
 
-  const preview = useMemo(() => cronExpressionToHumanReadable(value), [value]);
+  const preview = useMemo(() => cronExpressionToHumanReadable(value, t), [value, t]);
 
   return (
     <div className='space-y-2'>
       <div className='flex items-center justify-between gap-2'>
-        <Label>Cron schedule</Label>
+        <Label>{t('cronScheduleLabel')}</Label>
         <span className='text-[11px] text-muted-foreground'>{preview}</span>
       </div>
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as 'simple' | 'advanced')}>
         <TabsList>
-          <TabsTrigger value='simple'>Simple</TabsTrigger>
-          <TabsTrigger value='advanced'>Advanced</TabsTrigger>
+          <TabsTrigger value='simple'>{t('simple')}</TabsTrigger>
+          <TabsTrigger value='advanced'>{t('advanced')}</TabsTrigger>
         </TabsList>
 
         <TabsContent value='simple' className='pt-4 space-y-3'>
           <div className='space-y-1'>
-            <Label>Preset</Label>
+            <Label>{t('preset')}</Label>
             <Select value={kind} onValueChange={(v) => setKind(v as SimpleCronKind)}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent>
-                <SelectItem value='everyMinutes'>Every N minutes</SelectItem>
-                <SelectItem value='everyHours'>Every N hours</SelectItem>
-                <SelectItem value='dailyAt'>Daily at time</SelectItem>
-                <SelectItem value='windowMinutes'>Every N minutes between hours</SelectItem>
-                <SelectItem value='windowHours'>Every N hours between hours</SelectItem>
+              <SelectContent className='z-[10001]'>
+                <SelectItem value='everyMinutes'>{t('presetEveryMinutes')}</SelectItem>
+                <SelectItem value='everyHours'>{t('presetEveryHours')}</SelectItem>
+                <SelectItem value='dailyAt'>{t('presetDailyAt')}</SelectItem>
+                <SelectItem value='windowMinutes'>{t('presetWindowMinutes')}</SelectItem>
+                <SelectItem value='windowHours'>{t('presetWindowHours')}</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -296,7 +338,7 @@ export function CronBuilder({
           {kind === 'everyMinutes' && (
             <div className='grid grid-cols-2 gap-3'>
               <div className='space-y-1'>
-                <Label>Interval (minutes)</Label>
+                <Label>{t('intervalMinutes')}</Label>
                 <Input
                   type='number'
                   min={1}
@@ -305,7 +347,7 @@ export function CronBuilder({
                 />
               </div>
               <div className='space-y-1'>
-                <Label>Preview cron</Label>
+                <Label>{t('previewCron')}</Label>
                 <Input value={simpleCron} readOnly />
               </div>
             </div>
@@ -314,7 +356,7 @@ export function CronBuilder({
           {kind === 'everyHours' && (
             <div className='grid grid-cols-3 gap-3'>
               <div className='space-y-1'>
-                <Label>Every (hours)</Label>
+                <Label>{t('intervalHours')}</Label>
                 <Input
                   type='number'
                   min={1}
@@ -323,7 +365,7 @@ export function CronBuilder({
                 />
               </div>
               <div className='space-y-1'>
-                <Label>Minute (0-59)</Label>
+                <Label>{t('minute0to59')}</Label>
                 <Input
                   type='number'
                   min={0}
@@ -333,7 +375,7 @@ export function CronBuilder({
                 />
               </div>
               <div className='space-y-1'>
-                <Label>Preview cron</Label>
+                <Label>{t('previewCron')}</Label>
                 <Input value={simpleCron} readOnly />
               </div>
             </div>
@@ -342,7 +384,7 @@ export function CronBuilder({
           {kind === 'dailyAt' && (
             <div className='grid grid-cols-3 gap-3'>
               <div className='space-y-1'>
-                <Label>Hour (0-23)</Label>
+                <Label>{t('hour0to23')}</Label>
                 <Input
                   type='number'
                   min={0}
@@ -352,7 +394,7 @@ export function CronBuilder({
                 />
               </div>
               <div className='space-y-1'>
-                <Label>Minute (0-59)</Label>
+                <Label>{t('minute0to59')}</Label>
                 <Input
                   type='number'
                   min={0}
@@ -362,7 +404,7 @@ export function CronBuilder({
                 />
               </div>
               <div className='space-y-1'>
-                <Label>Preview cron</Label>
+                <Label>{t('previewCron')}</Label>
                 <Input value={simpleCron} readOnly />
               </div>
             </div>
@@ -371,7 +413,7 @@ export function CronBuilder({
           {kind === 'windowMinutes' && (
             <div className='grid grid-cols-4 gap-3'>
               <div className='space-y-1'>
-                <Label>Interval (minutes)</Label>
+                <Label>{t('intervalMinutes')}</Label>
                 <Input
                   type='number'
                   min={1}
@@ -380,7 +422,7 @@ export function CronBuilder({
                 />
               </div>
               <div className='space-y-1'>
-                <Label>Start hour</Label>
+                <Label>{t('startHour')}</Label>
                 <Input
                   type='number'
                   min={0}
@@ -390,7 +432,7 @@ export function CronBuilder({
                 />
               </div>
               <div className='space-y-1'>
-                <Label>End hour</Label>
+                <Label>{t('endHour')}</Label>
                 <Input
                   type='number'
                   min={0}
@@ -400,7 +442,7 @@ export function CronBuilder({
                 />
               </div>
               <div className='space-y-1'>
-                <Label>Preview cron</Label>
+                <Label>{t('previewCron')}</Label>
                 <Input value={simpleCron} readOnly />
               </div>
             </div>
@@ -409,7 +451,7 @@ export function CronBuilder({
           {kind === 'windowHours' && (
             <div className='grid grid-cols-5 gap-3'>
               <div className='space-y-1'>
-                <Label>Step hours</Label>
+                <Label>{t('stepHours')}</Label>
                 <Input
                   type='number'
                   min={1}
@@ -418,7 +460,7 @@ export function CronBuilder({
                 />
               </div>
               <div className='space-y-1'>
-                <Label>Start hour</Label>
+                <Label>{t('startHour')}</Label>
                 <Input
                   type='number'
                   min={0}
@@ -428,7 +470,7 @@ export function CronBuilder({
                 />
               </div>
               <div className='space-y-1'>
-                <Label>End hour</Label>
+                <Label>{t('endHour')}</Label>
                 <Input
                   type='number'
                   min={0}
@@ -438,7 +480,7 @@ export function CronBuilder({
                 />
               </div>
               <div className='space-y-1'>
-                <Label>Minute</Label>
+                <Label>{t('minute')}</Label>
                 <Input
                   type='number'
                   min={0}
@@ -448,7 +490,7 @@ export function CronBuilder({
                 />
               </div>
               <div className='space-y-1'>
-                <Label>Preview cron</Label>
+                <Label>{t('previewCron')}</Label>
                 <Input value={simpleCron} readOnly />
               </div>
             </div>
@@ -457,14 +499,14 @@ export function CronBuilder({
 
         <TabsContent value='advanced' className='pt-4 space-y-2'>
           <div className='space-y-1'>
-            <Label>Raw cron expression</Label>
+            <Label>{t('rawCronExpression')}</Label>
             <Input
               value={value}
               onChange={(e) => onChange(e.target.value)}
-              placeholder='*/30 * * * *'
+              placeholder={t('rawCronPlaceholder')}
             />
             <p className='text-[11px] text-muted-foreground'>
-              5 fields (minute hour day month day-of-week), Croniter-compatible.
+              {t('rawCronHelp')}
             </p>
           </div>
           <div className='rounded border bg-muted/10 p-2 text-[11px] text-muted-foreground'>

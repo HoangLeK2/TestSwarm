@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { Play, Pencil, Power, Trash2 } from 'lucide-react';
+import { useTranslations } from 'next-intl';
 import { toast } from 'sonner';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import { Button } from '@/components/ui/button';
@@ -11,6 +12,7 @@ import { ScheduleFormDialog } from './schedule-form-dialog';
 import { ScheduleRunHistoryDialog } from './schedule-run-history-dialog';
 
 export function ScheduleRowActions({ schedule }: { schedule: ScheduleOut }) {
+  const t = useTranslations('schedulesFeature.actions');
   const toggleMutation = useToggleSchedule();
   const runNowMutation = useRunNowSchedule();
   const deleteMutation = useDeleteSchedule();
@@ -23,23 +25,23 @@ export function ScheduleRowActions({ schedule }: { schedule: ScheduleOut }) {
     toggleMutation.mutate(
       { scheduleId: schedule.id, enabled: !schedule.is_enabled },
       {
-        onError: (err: unknown) => toast.error(formatFarmApiError(err, 'Toggle schedule failed'))
+        onError: (err: unknown) => toast.error(formatFarmApiError(err, t('toggleFailed')))
       }
     );
   };
 
   const handleRunNow = () => {
     runNowMutation.mutate(schedule.id, {
-      onError: (err: unknown) => toast.error(formatFarmApiError(err, 'Run now failed'))
+      onError: (err: unknown) => toast.error(formatFarmApiError(err, t('runNowFailed')))
     });
   };
 
   const handleDelete = () => {
-    const ok = window.confirm(`Delete schedule "${schedule.name}"?`);
+    const ok = window.confirm(t('deleteConfirm', { name: schedule.name }));
     if (!ok) return;
     deleteMutation.mutate(schedule.id, {
-      onSuccess: () => toast.success('Schedule deleted'),
-      onError: (err: unknown) => toast.error(formatFarmApiError(err, 'Delete schedule failed'))
+      onSuccess: () => toast.success(t('deleteSuccess')),
+      onError: (err: unknown) => toast.error(formatFarmApiError(err, t('deleteFailed')))
     });
   };
 
@@ -53,7 +55,7 @@ export function ScheduleRowActions({ schedule }: { schedule: ScheduleOut }) {
         className='size-7 text-amber-600 hover:text-amber-600'
         disabled={runNowMutation.isPending}
         onClick={handleRunNow}
-        title='Run now'
+        title={t('runNow')}
       >
         <Play size={14} />
       </Button>
@@ -64,7 +66,7 @@ export function ScheduleRowActions({ schedule }: { schedule: ScheduleOut }) {
         className={`size-7 ${schedule.is_enabled ? 'text-green-600 hover:text-green-600' : 'text-muted-foreground hover:text-muted-foreground'}`}
         disabled={toggleMutation.isPending}
         onClick={handleToggle}
-        title={schedule.is_enabled ? 'Disable schedule' : 'Enable schedule'}
+        title={schedule.is_enabled ? t('disable') : t('enable')}
       >
         <Power size={14} />
       </Button>
@@ -75,7 +77,7 @@ export function ScheduleRowActions({ schedule }: { schedule: ScheduleOut }) {
         className='size-7'
         disabled={isPending}
         onClick={() => setEditOpen(true)}
-        title='Edit'
+        title={t('edit')}
       >
         <Pencil size={14} />
       </Button>
@@ -86,7 +88,7 @@ export function ScheduleRowActions({ schedule }: { schedule: ScheduleOut }) {
         className='size-7 text-destructive hover:text-destructive'
         disabled={deleteMutation.isPending}
         onClick={handleDelete}
-        title='Delete'
+        title={t('delete')}
       >
         <Trash2 size={14} />
       </Button>

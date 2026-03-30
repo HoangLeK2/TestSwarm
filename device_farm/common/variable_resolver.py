@@ -20,13 +20,9 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-# Match entire string as one var: "${VAR}" — used to keep original type (int/float/list/dict)
 _EXACT_VAR_RE = re.compile(r"^\$\{(\w+)\}$")
-
-# Match all ${VAR} in string — used to resolve multiple vars in one string
 _VAR_PATTERN = re.compile(r"\$\{(\w+)\}")
 
-# Set of built-in var names to avoid lookup os.environ with them
 _BUILTIN_NAMES: frozenset[str] = frozenset({
     "__NOW__", "__DATE__", "__TIME__",
     "__DEVICE_SERIAL__", "__DEVICE_MODEL__",
@@ -69,7 +65,6 @@ class VariableContext:
         self._device_serial = device_serial
         self._device_model = device_model
 
-    # ── Setters ──────────────────────────────────────────────────────────────
 
     def child_scope(self, extra_vars: dict[str, Any]) -> "VariableContext":
         """
@@ -98,6 +93,10 @@ class VariableContext:
     def set(self, name: str, value: Any) -> None:
         """Set a runtime variable."""
         self._runtime_vars[name] = value
+        if isinstance(value, int) and not isinstance(value, bool):
+            self._counters[name] = value
+        else:
+            self._counters.pop(name, None)
 
     def set_from_list(self, name: str, values: list[Any]) -> Any:
         """Choose random value from list and set it into runtime vars. Return the chosen value."""
@@ -111,8 +110,6 @@ class VariableContext:
         self._counters[name] = current
         self._runtime_vars[name] = current
         return current
-
-    # ── Resolution ───────────────────────────────────────────────────────────
 
     def resolve(self, value: Any, step_index: int = 0) -> Any:
         """
@@ -155,16 +152,12 @@ class VariableContext:
         return _VAR_PATTERN.sub(_replacer, text)
 
     def _lookup(self, name: str, step_index: int) -> Any:
-        """Lookup in order of priority. Return None if not found."""
-        # Built-ins are prioritized highest after runtime to avoid accidental override
-        # Order: runtime > scenario > campaign > env > built-in
         if name in self._runtime_vars:
             return self._runtime_vars[name]
         if name in self._scenario_vars:
             return self._scenario_vars[name]
         if name in self._campaign_vars:
             return self._campaign_vars[name]
-        # Không tra env cho built-in names (tránh collision với OS vars)
         if name in _BUILTIN_NAMES:
             return self._resolve_builtin(name, step_index)
         env_val = os.environ.get(name)

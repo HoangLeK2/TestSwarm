@@ -102,11 +102,7 @@ class DeviceManager:
           - POST /api/devices/adb-register (manual registration)
           - AdbMdnsDiscovery callback (automatic via Android 11+ Wireless Debugging)
         """
-        try:
-            from runtime.transports.adb_transport import AdbTransport
-        except ImportError:
-            log.error("adb-shell not installed. Run: pip install adb-shell[usb]")
-            return None
+        from runtime.transports.adb_transport import AdbTransport
 
         tmp_serial = serial_hint or f"{host}:{port}"
         log.info(f"Connecting ADB transport to {host}:{port}")

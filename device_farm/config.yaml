@@ -1,66 +1,36 @@
-# Android Device Farm — Configuration
-# All timeouts are in seconds unless noted
-#
-# DEPLOY LÊN SERVER (không dùng ADB):
-#   Server chạy trên cloud, thiết bị chỉ cần cài STFService.apk và kết nối WebSocket.
-#   Minitouch / UiAutomator: do STFService.apk cung cấp (U2CompatServer + touch a11y),
-#   không cần ADB, không cần agent.py (PC). Xem device_farm/DEPLOY-NO-ADB.md.
 
-# ─── Network ───────────────────────────────────────────────────────────────
-# ws_ping_*: WebSocket keepalive for /ws (frontend) and /device-agent; higher timeout helps high-latency/mobile clients
 web:
   host: "0.0.0.0"
   port: 8081
-  ws_ping_interval: 20   # seconds between server pings
-  ws_ping_timeout: 30    # seconds to wait for pong — detect dead agents faster (was 120)
+  ws_ping_interval: 20  
+  ws_ping_timeout: 30   
 
 
 ports:
   base_port: 20000
   stride: 10
 
-# ─── ADB (chỉ dùng cho agent.py khi dev local) ───────────────────────────────
-# Server KHÔNG dùng ADB binary. Khi deploy lên cloud chỉ dùng STFService.apk trên thiết bị.
 adb:
-  path: "adb"            # Chỉ dùng bởi agent.py (PC), không dùng bởi server
+  path: "adb"            
   ping_timeout: 5
   connect_timeout: 10
 
-# ─── Wireless ADB / adb-shell transport (Mode B — no adb binary) ─────────────
-# Farm server kết nối thẳng đến device adbd qua TCP dùng thư viện adb-shell.
-# Không cần cài adb binary trên server. Không cần USB.
-#
-# Yêu cầu trên device:
-#   Android 11+: Settings → Developer Options → Wireless Debugging → Enable
-#                Lần đầu: pair RSA key (device show "Allow ADB?" dialog)
-#   Android ≤10: Chạy `adb tcpip 5555` một lần qua USB, sau đó rút USB
-#
-# ─── Device Setup ────────────────────────────────────────────────────────────
 device:
-  # File that maps device serial → slot index (for port persistence)
   index_file: "device_index.json"
 
   minitouch_bin: "/data/local/tmp/minitouch"
 
-  # STFService APK package name
   stf_package: "jp.co.cyberagent.stf"
-  stf_apk_path: ""       # Leave empty; installer will detect from 'pm path'
+  stf_apk_path: ""       
 
-  # scrcpy-server JAR path on HOST machine (from brew install scrcpy)
-  # Used by agent.py (PC/ADB) for high-FPS stream. STFService/agent_local use MediaProjection.
-  # macOS: /opt/homebrew/share/scrcpy/scrcpy-server
-  # Linux: /usr/share/scrcpy/scrcpy-server
   scrcpy_jar: "/opt/homebrew/share/scrcpy/scrcpy-server"
-  scrcpy_max_fps: 10       # max FPS sent to agent (10 = good balance for automation/monitoring)
-  scrcpy_max_width: 800   # downscale width (0 = native resolution)
+  scrcpy_max_fps: 20      
+  scrcpy_max_width: 800   # downscale max dimension
   scrcpy_bitrate: 8000000  # H.264 bitrate bps (8Mbps). Use 2–4M when behind ngrok to avoid "Network bandwidth exceeded"
+  scrcpy_control: true     # Enable scrcpy control channel for touch/key/text (smoothest input method)
 
-# ─── Device Mode Override ────────────────────────────────────────────────────
-# force_u2_mode: true  → skip minitouch/STF; tap qua u2 only.
-# force_u2_mode: false → dùng minitouch + u2 (mặc định)
-force_u2_mode: false
+force_u2_mode: true
 
-# ─── Target Application ──────────────────────────────────────────────────────
 # Leave empty to skip app monitoring in watchdog
 target_app: ""           # e.g., "com.example.mygame"
 
@@ -92,7 +62,7 @@ database:
   host: "localhost"
   port: 5432
   name: "device_farm"
-  user: "postgres"
+  user: "hoanglcpila.vn"
   password: "password"
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
@@ -111,4 +81,22 @@ u2:
 #        "continuous" = legacy 30FPS streaming via agent/scrcpy
 streaming:
   mode: "periodic"
-  dashboard_interval: 3.0    # seconds between dashboard screenshot refreshes
+  dashboard_interval: 3.0    # seconds between dashboard screenshot refreshes (scrcpy pushes frames directly)
+
+# Temporal workflow engine (optional).
+# Set enabled: true only when Temporal server is running.
+# When disabled, campaigns fall back to the in-process TaskQueue automatically.
+# Start server: docker run -p 7233:7233 temporalio/auto-setup:latest
+temporal:
+  enabled: true                        # Set true to use Temporal
+  server_url: "localhost:7233"          # Temporal gRPC endpoint
+  namespace: "default"
+  task_queue: "device-scenario"
+  worker_max_concurrent_activities: 10  # Max parallel device actions per worker
+  worker_max_concurrent_workflows: 50   # Max parallel workflow tasks per worker
+  workflow_execution_timeout: 3600      # Max seconds for one campaign workflow
+  activity_start_to_close_timeout: 60   # Max seconds per device action
+  activity_retry_max_attempts: 3        # Retry failed device actions
+  activity_retry_initial_interval: 1.0  # First retry delay (seconds)
+  activity_retry_max_interval: 30.0     # Max retry delay (seconds)
+  activity_retry_backoff: 2.0           # Exponential backoff multiplier

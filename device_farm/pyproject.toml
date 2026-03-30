@@ -5,15 +5,11 @@ description = "Android Device Farm — screen streaming, touch injection, task d
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    # ── ADB transport (no adb binary) ──
-    # adb-shell: implements ADB protocol natively in Python
-    # Connects directly to device's adbd over TCP — no `adb` binary required
-    "adb-shell[usb]>=0.4.0",
-    "cryptography>=41.0.0",       # RSA key generation for ADB auth
+    # ── ADB transport (requires system `adb` binary) ──
+    "cryptography>=41.0.0",       # Fernet encryption (common/crypto.py)
     "zeroconf>=0.132.0",          # mDNS discovery for Android 11+ Wireless Debugging
     # ─────────────────────────────────
-    "uiautomator2>=3.2.0",
-    "adbutils>=2.11.0",
+
     "pillow>=10.0.0",
     "numpy>=1.24.0",
     "fastapi>=0.110.0",
@@ -35,7 +31,13 @@ dependencies = [
     "lxml>=5.0.0",                # fast XML + XPath for UIAutomator2 hierarchy parsing
     "python-dotenv>=1.2.2",
     "pyngrok>=7.0.0",
-
+    "tenacity>=8.2.0",            # retry-until-visible for scenario steps
+    "airtest>=1.3.0",                 # Airtest aircv: SSIM + template matching for visual anchoring
+    # ── Temporal workflow orchestration (DF-002) ──
+    "temporalio>=1.7.1",
+    # ── Scheduler & Cron (DF-008) ──
+    "croniter>=2.0.0",             # cron expression parsing + next_run_at computation
+    "pytz>=2024.1",                # timezone-aware datetime for cron schedules
 ]
 
 [project.optional-dependencies]
@@ -55,6 +57,26 @@ packages = ["."]
 device-farm = "main:main"
 export-openapi = "export_openapi:main"
 
+[tool.uv]
+environments = ["sys_platform == 'darwin'", "sys_platform == 'linux'", "sys_platform == 'win32'"]
+override-dependencies = [
+    # Airtest pins old opencv/numpy — override for Python 3.14 compat
+    "opencv-contrib-python>=4.10.0",
+    "numpy>=1.24.0",
+    "pywin32>=300; sys_platform == 'win32'",
+    "pywinauto>=0.6.3; sys_platform == 'win32'",
+    "mss>=9.0.0",
+    "six>=1.16.0",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+asyncio_mode = "auto"
+
+[dependency-groups]
+dev = [
+    "croniter>=6.2.2",
+    "pytest-asyncio>=1.3.0",
+    "pytz>=2026.1.post1",
+]

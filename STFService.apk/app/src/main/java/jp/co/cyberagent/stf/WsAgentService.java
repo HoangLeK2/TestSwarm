@@ -62,19 +62,16 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import jp.co.cyberagent.stf.compat.InputManagerWrapper;
 
 /**
- * WsAgentService — Foreground service (foregroundServiceType=mediaProjection).
+ * WsAgentService — Foreground service.
  *
- * Android 14+ (SDK 34) bắt buộc MediaProjection phải chạy trong foreground
- * service có đúng type. Activity không thể gọi createVirtualDisplay() trực
- * tiếp.
- *
- * Flow:
- * 1. IdentityActivity xin quyền screen capture → nhận MediaProjection token
- * 2. Start WsAgentService với token + ws url
- * 3. Service kết nối WebSocket, bắt đầu capture, gửi frames
- * 4. Server gửi tap/swipe/key → Service inject qua InputManagerWrapper
+ * Set {@link #USE_MEDIA_PROJECTION} = false để tắt MJPEG trong app và dùng stream
+ * ngoài (vd. scrcpy qua ADB). Khi bật lại: manifest FGS type + permission
+ * FOREGROUND_SERVICE_MEDIA_PROJECTION và flow IdentityActivity như cũ.
  */
 public class WsAgentService extends android.app.Service {
+
+    /** false = không xin MediaProjection, không gửi MJPEG qua WS (dùng scrcpy / nguồn khác). */
+    public static final boolean USE_MEDIA_PROJECTION = false;
 
     public static final String ACTION_START = "jp.co.cyberagent.stf.ws.START";
     public static final String ACTION_STOP = "jp.co.cyberagent.stf.ws.STOP";
@@ -240,47 +237,48 @@ public class WsAgentService extends android.app.Service {
             startForeground();
             requestBatteryOptimizationExemption();
 
-            // Get MediaProjection token — reuse static if already valid (avoids dialog).
-            if (sSharedProjection != null) {
-                mediaProjection = sSharedProjection;
-                diagProjection = "reused-sSharedProjection";
-                Log.i(TAG, diagProjection);
-            } else {
-                MediaProjectionManager mpm = (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
-                // NOTE: Activity.RESULT_OK == -1 on Android, so the old check
-                // `projCode <= 0` was ALWAYS true and always skipped MediaProjection!
-                // Correct check: projCode != Activity.RESULT_OK
-                if (projData == null || projCode != Activity.RESULT_OK) {
-                    diagProjection = "SKIP: projData=" + (projData != null ? "OK" : "NULL")
-                            + " projCode=" + projCode + " (RESULT_OK=" + Activity.RESULT_OK + ")";
-                    Log.w(TAG, diagProjection);
-                } else if (mpm == null) {
-                    diagProjection = "SKIP: MediaProjectionManager is null";
-                    Log.w(TAG, diagProjection);
+            if (USE_MEDIA_PROJECTION) {
+                // Get MediaProjection token — reuse static if already valid (avoids dialog).
+                if (sSharedProjection != null) {
+                    mediaProjection = sSharedProjection;
+                    diagProjection = "reused-sSharedProjection";
+                    Log.i(TAG, diagProjection);
                 } else {
-                    try {
-                        mediaProjection = mpm.getMediaProjection(projCode, projData);
-                        if (mediaProjection != null) {
-                            sSharedProjection = mediaProjection;
-                            // Register callback so we know when the OS revokes the token.
-                            mediaProjection.registerCallback(new MediaProjection.Callback() {
-                                @Override
-                                public void onStop() {
-                                    Log.w(TAG, "MediaProjection.onStop() — token revoked by OS");
-                                    sSharedProjection = null;
-                                    mediaProjection   = null;
-                                    LocalBroadcastManager.getInstance(WsAgentService.this)
-                                            .sendBroadcast(new Intent(ACTION_NEED_REAUTH));
-                                }
-                            }, mainHandler);
+                    MediaProjectionManager mpm = (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
+                    if (projData == null || projCode != Activity.RESULT_OK) {
+                        diagProjection = "SKIP: projData=" + (projData != null ? "OK" : "NULL")
+                                + " projCode=" + projCode + " (RESULT_OK=" + Activity.RESULT_OK + ")";
+                        Log.w(TAG, diagProjection);
+                    } else if (mpm == null) {
+                        diagProjection = "SKIP: MediaProjectionManager is null";
+                        Log.w(TAG, diagProjection);
+                    } else {
+                        try {
+                            mediaProjection = mpm.getMediaProjection(projCode, projData);
+                            if (mediaProjection != null) {
+                                sSharedProjection = mediaProjection;
+                                mediaProjection.registerCallback(new MediaProjection.Callback() {
+                                    @Override
+                                    public void onStop() {
+                                        Log.w(TAG, "MediaProjection.onStop() — token revoked by OS");
+                                        sSharedProjection = null;
+                                        mediaProjection   = null;
+                                        LocalBroadcastManager.getInstance(WsAgentService.this)
+                                                .sendBroadcast(new Intent(ACTION_NEED_REAUTH));
+                                    }
+                                }, mainHandler);
+                            }
+                            diagProjection = "getMediaProjection=" + (mediaProjection != null ? "OK" : "returned-null");
+                            Log.i(TAG, diagProjection);
+                        } catch (Exception e) {
+                            diagProjection = "getMediaProjection EXCEPTION: " + e.getMessage();
+                            Log.e(TAG, diagProjection, e);
                         }
-                        diagProjection = "getMediaProjection=" + (mediaProjection != null ? "OK" : "returned-null");
-                        Log.i(TAG, diagProjection);
-                    } catch (Exception e) {
-                        diagProjection = "getMediaProjection EXCEPTION: " + e.getMessage();
-                        Log.e(TAG, diagProjection, e);
                     }
                 }
+            } else {
+                diagProjection = "OFF: USE_MEDIA_PROJECTION=false (external video e.g. scrcpy)";
+                Log.i(TAG, diagProjection);
             }
 
             if (wsUrl != null && !wsUrl.isEmpty()) {
@@ -329,12 +327,16 @@ public class WsAgentService extends android.app.Service {
         Notification notif = new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.ic_menu_share)
                 .setContentTitle("Device Farm Agent")
-                .setContentText("Streaming screen to server…")
+                .setContentText(USE_MEDIA_PROJECTION
+                        ? "Streaming screen to server…"
+                        : "Connected to server (screen: external / scrcpy)…")
                 .setOngoing(true)
                 .build();
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) { // API 29+
-            startForeground(NOTIF_ID, notif,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            int fgsType = USE_MEDIA_PROJECTION
+                    ? ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                    : ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
+            startForeground(NOTIF_ID, notif, fgsType);
         } else {
             startForeground(NOTIF_ID, notif);
         }
@@ -411,19 +413,23 @@ public class WsAgentService extends android.app.Service {
                 sendHello();
                 sendStatus();
                 sendLog("SDK=" + Build.VERSION.SDK_INT
-                        + " mediaProjection=" + (mediaProjection != null ? "OK" : "NULL")
+                        + " mediaProjection=" + (USE_MEDIA_PROJECTION
+                                ? (mediaProjection != null ? "OK" : "NULL") : "disabled")
                         + " diag=" + diagProjection
                         + " capturing=" + capturing.get()
                         + " touch=" + (TouchAccessibilityService.isAvailable() ? "a11y"
                                 : inputManager != null ? "inputMgr" : "NONE"));
-                if (mediaProjection != null && !capturing.get()) {
-                    sendLog("startCapture() called");
-                    startCapture();
-                } else if (mediaProjection == null) {
-                    sendLog("ERROR: mediaProjection is null — requesting re-auth from IdentityActivity");
-                    // Ask IdentityActivity to re-request the MediaProjection permission
-                    LocalBroadcastManager.getInstance(WsAgentService.this)
-                            .sendBroadcast(new Intent(ACTION_NEED_REAUTH));
+                if (USE_MEDIA_PROJECTION) {
+                    if (mediaProjection != null && !capturing.get()) {
+                        sendLog("startCapture() called");
+                        startCapture();
+                    } else if (mediaProjection == null) {
+                        sendLog("ERROR: mediaProjection is null — requesting re-auth from IdentityActivity");
+                        LocalBroadcastManager.getInstance(WsAgentService.this)
+                                .sendBroadcast(new Intent(ACTION_NEED_REAUTH));
+                    }
+                } else {
+                    sendLog("MJPEG capture skipped — use scrcpy (or similar) for display");
                 }
                 // Auto-enable accessibility for hierarchy dump + gesture injection
                 if (!TouchAccessibilityService.isAvailable()) {
@@ -474,11 +480,13 @@ public class WsAgentService extends android.app.Service {
             JSONObject m = new JSONObject();
             m.put("type", "hello");
             m.put("serial", serial);
-            // STFService: u2, stfservice, mjpeg, minitouch (in-app MinitouchAgent = no ADB)
+            // STFService: u2, stfservice, optional mjpeg, minitouch
             JSONArray caps = new JSONArray();
             caps.put("u2");
             caps.put("stfservice");
-            caps.put("mjpeg");
+            if (USE_MEDIA_PROJECTION) {
+                caps.put("mjpeg");
+            }
             caps.put("minitouch");
             m.put("capabilities", caps);
             // Server needs touch_mode in hello so it can create MinitouchWsClient before tunnels_ready
@@ -521,6 +529,10 @@ public class WsAgentService extends android.app.Service {
     // ──────────────────────────────────────────────────────────────────────
 
     private void startCapture() {
+        if (!USE_MEDIA_PROJECTION) {
+            Log.d(TAG, "startCapture: skipped (USE_MEDIA_PROJECTION=false)");
+            return;
+        }
         if (mediaProjection == null) {
             Log.w(TAG, "startCapture: no MediaProjection token");
             return;
@@ -703,12 +715,13 @@ public class WsAgentService extends android.app.Service {
         sSharedImageHandler = null;
         imageHandlerThread = null;
         imageHandler = null;
-        // Stop MediaProjection
-        if (mediaProjection != null) {
-            mediaProjection.stop();
-            mediaProjection = null;
+        if (USE_MEDIA_PROJECTION) {
+            if (mediaProjection != null) {
+                mediaProjection.stop();
+                mediaProjection = null;
+            }
+            sSharedProjection = null;
         }
-        sSharedProjection = null;  // force re-request on next service start
     }
 
     // ──────────────────────────────────────────────────────────────────────

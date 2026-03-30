@@ -22,6 +22,7 @@ SCENARIO_STEP_TYPES = [
     "key",
     "scroll_down",
     "wait_stable",
+    "verify_screen",
     "dismiss_popup",
     "set_variable",
     "repeat",
@@ -29,12 +30,15 @@ SCENARIO_STEP_TYPES = [
     "if_element",
     "if_variable",
     "random_pick",
-    # DF-003: Flow composition
     "run_scenario",
-    # Crawl / data extraction (used by crawl_jobs endpoint and crawl templates)
     "extract",
     "loop",
     "break_if",
+    "extract_text_hierarchy",
+    "extract_text_ocr",
+    "extract_text_ai",
+    "extract_screen_data",
+    "save_extraction",
 ]
 
 STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
@@ -60,13 +64,18 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
     },
     "tap": {
         "required": [],
-        "optional": ["selector", "fallback", "screen", "timeout"],
+        "optional": ["selector", "fallback", "screen", "timeout", "implicit_wait"],
         "description": (
             "⚡ Unified tap step (recorded by control-record-view). "
             "selector: {by, value} — uiautomator2 element find. "
             "fallback: {rx, ry} — ratio tap if selector fails. "
-            "screen: {package, hash, texts} — context captured at record time. "
-            "Executor: try selector → fallback ratio → ok."
+            "screen: {package, hash, texts, screenshot, element_image, screenshot_anchor} — "
+            "context captured at record time. "
+            "screen.screenshot_anchor: {image: base64, region: {rx, ry, rw, rh}} — "
+            "ROI crop around tap point for faster image matching (optional). "
+            "implicit_wait: number (timeout secs) or {timeout, poll} — "
+            "Tenacity retry-until-visible before tapping (default 10s/0.5s poll). "
+            "Executor: retry-find-element → image match (ROI→full) → fallback ratio → ok."
         ),
     },
     "tap_ratio": {
@@ -81,16 +90,17 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
     },
     "tap_selector": {
         "required": ["by", "value"],
-        "optional": ["fallback_rx", "fallback_ry", "timeout"],
+        "optional": ["fallback_rx", "fallback_ry", "timeout", "implicit_wait"],
         "description": (
             "Tap theo uiautomator2 selector. by: resource-id | text | xpath | class name. "
             "timeout (float, mặc định 5s): đợi element tối đa N giây trước khi fail. "
+            "implicit_wait: Tenacity retry-until-visible (default 10s/0.5s poll). "
             "fallback_rx/ry: tọa độ ratio fallback nếu không tìm thấy element."
         ),
     },
     "wait_element": {
         "required": ["by", "value"],
-        "optional": ["timeout"],
+        "optional": ["timeout", "poll"],
         "description": (
             "⚡ PREFERRED thay cho 'wait N giây'. "
             "Poll liên tục cho đến khi element xuất hiện (mặc định timeout=10s). "
@@ -109,17 +119,20 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
     },
     "input_selector": {
         "required": ["by", "value", "text"],
-        "optional": ["clear_first"],
+        "optional": ["clear_first", "implicit_wait"],
         "description": (
             "Tìm input field theo selector, xóa nội dung cũ (clear_first=true mặc định), "
-            "rồi gõ text. Đáng tin cậy hơn tap_ratio + input_text. "
+            "rồi gõ text. implicit_wait: Tenacity retry-until-visible (default 10s/0.5s poll). "
             "by: resource-id (ưu tiên) | text | xpath."
         ),
     },
     "long_tap_selector": {
         "required": ["by", "value"],
-        "optional": ["duration_ms"],
-        "description": "Long press element tìm theo selector. duration_ms mặc định 800ms.",
+        "optional": ["duration_ms", "implicit_wait"],
+        "description": (
+            "Long press element tìm theo selector. duration_ms mặc định 800ms. "
+            "implicit_wait: Tenacity retry-until-visible (default 10s/0.5s poll)."
+        ),
     },
     "scroll_to": {
         "required": ["by", "value"],
@@ -148,17 +161,27 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
         "required": [],
         "optional": ["timeout", "stable_duration"],
         "description": (
-            "⚡ Chờ UI ngừng thay đổi (animation/transition xong). "
+            "Chờ UI ngừng thay đổi (animation/transition xong). "
             "timeout: tối đa N giây chờ (mặc định 5.0). "
             "stable_duration: UI phải đứng yên bao lâu (mặc định 0.4s). "
             "Dùng sau swipe, mở tab mới, hay bất kỳ animation nào trước khi tap."
+        ),
+    },
+    "verify_screen": {
+        "required": ["screenshot"],
+        "optional": ["ssim_threshold", "timeout", "poll"],
+        "description": (
+            "Visual Anchoring: so sánh SSIM giữa ảnh chụp lúc record và màn hình hiện tại. "
+            "screenshot: base64 JPEG từ lúc record. ssim_threshold (0-1, default 0.75). "
+            "timeout: chờ tối đa N giây cho màn hình khớp (default 8s). "
+            "poll: tần suất kiểm tra (default 0.5s). Fail nếu SSIM dưới threshold."
         ),
     },
     "dismiss_popup": {
         "required": [],
         "optional": ["retries"],
         "description": (
-            "🛡 Tự động đóng popup/dialog đang hiển thị (permission request, update prompt, quảng cáo). "
+            "Tự động đóng popup/dialog đang hiển thị (permission request, update prompt, quảng cáo). "
             "retries: thử tối đa N lần (mặc định 3). "
             "Dùng sau launch_app hoặc bất kỳ lúc nào có khả năng xuất hiện dialog bất ngờ."
         ),
@@ -225,7 +248,6 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "Ví dụ: [{\"weight\": 3, \"steps\": [...]}, {\"weight\": 1, \"steps\": [...]}]."
         ),
     },
-    # ── DF-003: Flow Composition ────────────────────────────────────────────────
     "run_scenario": {
         "required": [],
         "optional": ["scenario_id", "scenario_name", "variables"],
@@ -238,7 +260,6 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "Circular reference và max depth (10) được tự động bảo vệ."
         ),
     },
-    # ── Crawl / data extraction ─────────────────────────────────────────────────
     "extract": {
         "required": ["strategy"],
         "optional": ["stop_if_no_new", "no_new_threshold", "expand_see_more"],
@@ -276,6 +297,61 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "{'element_exists': {'by': ..., 'value': ...}} — dừng khi element xuất hiện. "
             "{'variable_equals': {'name': ..., 'value': ...}} — dừng khi variable đạt giá trị. "
             "⚠ Chỉ hoạt động bên trong step 'loop' (không phải 'repeat' hay 'repeat_until')."
+        ),
+    },
+    "extract_text_hierarchy": {
+        "required": ["save_as"],
+        "optional": ["filter_class", "exclude_empty", "format"],
+        "description": (
+            "Extract text from UI Hierarchy XML (free, fastest, native views only). "
+            "save_as: variable name to store result. "
+            "format: 'text' (plain) or 'json' (structured with bounds/class/resource_id). "
+            "filter_class: list of Android widget classes to include (null = all)."
+        ),
+    },
+    "extract_text_ocr": {
+        "required": ["save_as"],
+        "optional": ["region", "language", "psm", "preprocess", "scale_factor"],
+        "description": (
+            "Extract text from screenshot using Tesseract OCR. "
+            "Works on WebView, Canvas, images — anything visible on screen. "
+            "save_as: variable name. "
+            "region: {x1, y1, x2, y2} as ratios 0-1 to crop before OCR. "
+            "language: Tesseract lang code (e.g. 'eng', 'vie+eng'). "
+            "psm: Page Segmentation Mode (3=auto, 6=block, 7=line, 11=sparse)."
+        ),
+    },
+    "extract_text_ai": {
+        "required": ["save_as", "prompt"],
+        "optional": ["provider", "format", "model", "region"],
+        "description": (
+            "Extract structured data from screenshot using AI Vision (OpenAI/Gemini). "
+            "save_as: variable name. "
+            "prompt: extraction instruction for the AI. "
+            "provider: 'openai' or 'gemini'. "
+            "format: 'json' (parsed dict) or 'text' (raw string). "
+            "Requires OPENAI_API_KEY or GEMINI_API_KEY env var."
+        ),
+    },
+    "extract_screen_data": {
+        "required": ["save_as"],
+        "optional": ["schema", "strategy", "language"],
+        "description": (
+            "Smart extraction: tries hierarchy → OCR → AI Vision (auto fallback). "
+            "save_as: variable name. "
+            "strategy: 'auto' (fallback chain), 'hierarchy', 'ocr', 'ai'. "
+            "schema: expected output fields (used to validate extraction completeness)."
+        ),
+    },
+    "save_extraction": {
+        "required": ["data_var"],
+        "optional": ["collection", "platform", "content_type", "dedupe_field", "tags"],
+        "description": (
+            "Save extracted data to content database with deduplication (DF-010). "
+            "data_var: name of runtime variable containing the data (from extract_text_* or set_variable). "
+            "collection: name of content collection (default: 'default'). "
+            "dedupe_field: field in data to use for dedup hash (e.g. 'content'). "
+            "Data is saved to content_items table with SHA256 hash-based dedup."
         ),
     },
 }
@@ -349,6 +425,20 @@ def validate_step(step: Dict[str, Any], index: int) -> List[str]:
 
 
 def validate_scenario(scenario: Dict[str, Any]) -> List[str]:
+    """
+    Validate a scenario dict.
+
+    Uses Pydantic models (api.schemas.scenario.ScenarioModel) for deep
+    type checking of steps, variables, and nested structures.
+    Falls back to the lightweight dict-based check if Pydantic import fails.
+    """
+    try:
+        from api.schemas.scenario import ScenarioModel
+        return ScenarioModel.validate_dict(scenario)
+    except ImportError:
+        pass
+
+    # Fallback: lightweight validation (no Pydantic)
     errors: List[str] = []
     steps = scenario.get("steps")
     if not isinstance(steps, list):

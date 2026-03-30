@@ -56,7 +56,92 @@ def create_app(
                 log.info("PostgreSQL connected and tables ready")
             except Exception as exc:  # noqa: BLE001
                 log.warning("PostgreSQL init failed (running without DB): %s", exc)
+
+        # ── Start lifecycle components attached by main.py ──
+        watchdog = getattr(_app.state, "watchdog", None)
+        dispatcher = getattr(_app.state, "dispatcher", None)
+
+        if watchdog is not None:
+            watchdog.start_watchdog()
+            log.info("Watchdog started")
+        if dispatcher is not None:
+            dispatcher.start_dispatcher()
+            log.info("Dispatcher started")
+
+        # ── Scheduler setup (DF-008) ──────────────────────────────────────
+        temporal_client = None
+        temporal_thread = None
+        if config.temporal.enabled:
+            try:
+                from temporal.worker import start_temporal_worker, get_temporal_client
+                temporal_client = await get_temporal_client(config.temporal)
+                temporal_thread = start_temporal_worker(manager, config.temporal, queue=queue)
+                log.info(
+                    "Temporal worker started: server=%s queue=%s",
+                    config.temporal.server_url, config.temporal.task_queue,
+                )
+            except Exception as exc:
+                log.warning("Temporal worker failed to start: %s — campaigns will use TaskQueue", exc)
+        else:
+            log.info("Temporal disabled — campaigns run via in-process TaskQueue")
+
+        from services.scheduler import SchedulerService, SchedulerEngine
+        scheduler = SchedulerService(
+            temporal_client=temporal_client,
+            manager=manager,
+            queue=queue,
+            temporal_config=config.temporal if config.temporal.enabled else None,
+        )
+        _app.state.scheduler = scheduler
+
+        scheduler_engine = None
+        if not config.temporal.enabled and config.database.enabled:
+            scheduler_engine = SchedulerEngine(queue=queue, manager=manager)
+            scheduler_engine.start()
+            log.info("SchedulerEngine (fallback) started")
+
+        ngrok_tunnel = None
+        from core.env import ngrok_enabled, ngrok_authtoken
+        if ngrok_enabled():
+            try:
+                import pyngrok
+                auth = ngrok_authtoken()
+                if auth:
+                    pyngrok.set_auth_token(auth)
+                ngrok_tunnel = pyngrok.ngrok.connect(addr=str(config.web.port), bind_tls=True)
+                log.info("ngrok tunnel: %s", ngrok_tunnel.public_url)
+            except Exception as e:
+                err = str(e).lower()
+                log.warning("ngrok failed: %s", e)
+                if "bandwidth" in err:
+                    log.warning(
+                        "ngrok free tier bandwidth limit. Options: 1) Lower scrcpy_bitrate. "
+                        "2) Upgrade at dashboard.ngrok.com. "
+                        "3) cloudflared tunnel --url http://localhost:%s",
+                        config.web.port,
+                    )
+
+        log.info("Dashboard: http://%s:%s", config.web.host, config.web.port)
+
         yield
+
+        # ── Shutdown ──
+        log.info("Shutting down…")
+        if scheduler_engine is not None:
+            await scheduler_engine.stop()
+        if ngrok_tunnel is not None:
+            try:
+                import pyngrok
+                pyngrok.ngrok.disconnect(ngrok_tunnel.public_url)
+                pyngrok.ngrok.kill()
+            except Exception:
+                pass
+        if watchdog is not None:
+            watchdog.stop_watchdog()
+        if dispatcher is not None:
+            dispatcher.stop_dispatcher()
+        manager.teardown_all()
+        log.info("Shutdown complete.")
 
     app = FastAPI(
         title="Android Device Farm",
@@ -64,6 +149,7 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.manager = manager
+    app.state.queue = queue
     app.state.session_store = SessionLockStore()
 
     db_enabled = bool(
@@ -81,8 +167,22 @@ def create_app(
     )
     app.add_middleware(RequestLogMiddleware)
 
+    @app.get("/api/health")
+    async def health():
+        return {
+            "status": "ok",
+            "devices": len(manager.devices),
+            "db": db_enabled,
+        }
+
     templates = Jinja2Templates(directory=templates_dir)
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+    from services.image_store import init as _init_image_store
+    _captures_dir = Path("captures")
+    _captures_dir.mkdir(exist_ok=True)
+    _init_image_store(_captures_dir)
+    app.mount("/captures", StaticFiles(directory=str(_captures_dir)), name="captures")
 
     assets_dir = Path(front_end_dist) / "assets" if front_end_dist else None
     if assets_dir and assets_dir.exists():

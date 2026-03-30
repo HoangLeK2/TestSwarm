@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from runtime.transports.adb_transport import AdbTransport
-from runtime.transports.minitouch import MinitouchSender
 from runtime.transports.scrcpy_receiver import ScrcpyReceiver
+from runtime.transports.stf_client import STFServiceClient
 from runtime.transports.u2_jsonrpc import U2JsonRpcClient
 
 log = logging.getLogger(__name__)
@@ -60,7 +60,7 @@ class AdbDeviceBootstrap:
         on_rotation: Callable[[int], None],
         on_u2_ready: Callable[[U2JsonRpcClient], None],
         on_metadata: Callable[[dict], None],
-        on_minitouch_ready: Optional[Callable[[MinitouchSender], None]] = None,
+        on_stf_ready: Optional[Callable[[STFServiceClient], None]] = None,
         u2_wait_timeout: float = 20.0,
         u2_implicitly_wait: float = 10.0,
         skip_scrcpy: bool = False,
@@ -72,7 +72,7 @@ class AdbDeviceBootstrap:
         self._on_rotation = on_rotation
         self._on_u2_ready = on_u2_ready
         self._on_metadata = on_metadata
-        self._on_minitouch_ready = on_minitouch_ready
+        self._on_stf_ready = on_stf_ready
         self._u2_wait_timeout = u2_wait_timeout
         self._u2_implicitly_wait = u2_implicitly_wait
 
@@ -82,8 +82,14 @@ class AdbDeviceBootstrap:
         # Components started by bootstrap
         self._scrcpy_receiver: Optional[ScrcpyReceiver] = None
         self._u2_client: Optional[U2JsonRpcClient] = None
-        self._minitouch_sender: Optional[MinitouchSender] = None
+        self._stf_service: Optional[STFServiceClient] = None
         self._poll_thread: Optional[threading.Thread] = None
+
+        # Self-healing watchdog
+        self._u2_restart_lock = threading.Lock()
+        self._u2_last_restart: float = 0.0
+        self._u2_watchdog_interval: float = 30.0   # ping every N seconds
+        self._u2_watchdog_max_fails: int = 2        # restart after N consecutive failures
 
         # Collected device metadata
         self._screen_width: int = 0
@@ -119,28 +125,25 @@ class AdbDeviceBootstrap:
                 pass
             self._scrcpy_receiver = None
 
-        # Disconnect minitouch and remove forward
-        if self._minitouch_sender:
-            try:
-                self._minitouch_sender.disconnect()
-            except Exception:
-                pass
-            self._minitouch_sender = None
-        try:
-            subprocess.run(
-                ["adb", "-s", self._transport.serial, "forward", "--remove", f"tcp:{MINITOUCH_HOST_PORT}"],
-                capture_output=True,
-                timeout=5,
-            )
-        except Exception:
-            pass
-        try:
-            self._transport.kill_process("minitouch")
-        except Exception:
-            pass
+        # Touch via minitouch is disabled; no minitouch disconnect/forward cleanup.
         try:
             self._transport.shell_safe(
                 f"am force-stop {U2_SERVER_PKG}"
+            )
+        except Exception:
+            pass
+
+        # Stop STFService client and remove forward
+        if self._stf_service:
+            try:
+                self._stf_service.stop_client()
+            except Exception:
+                pass
+            self._stf_service = None
+        try:
+            subprocess.run(
+                ["adb", "-s", self._transport.serial, "forward", "--remove", f"tcp:{self._STF_FORWARD_PORT}"],
+                capture_output=True, timeout=5,
             )
         except Exception:
             pass
@@ -170,31 +173,23 @@ class AdbDeviceBootstrap:
                 log.info(f"[{serial}] Skipping scrcpy (periodic screenshot mode)")
 
             # 3. Start minitouch (push binary, start process, forward, connect)
-            # NOTE: On modern Android (SDK>=34), raw minitouch binary often can't access /dev/input/*
-            # without additional privileges/relay. Default to U2 for touch on these devices.
-            sdk = 0
-            try:
-                sdk = int(meta.get("sdk", 0) or 0)
-            except Exception:
-                sdk = 0
-            force_minitouch = os.environ.get("FORCE_MINITOUCH", "").strip().lower() in {"1", "true", "yes"}
-            if (
-                self._running
-                and self._on_minitouch_ready is not None
-                and (force_minitouch or sdk < 34)
-            ):
-                if self._ensure_minitouch():
-                    self._start_minitouch()
-            elif self._running and self._on_minitouch_ready is not None and sdk >= 34 and not force_minitouch:
-                log.info(f"[{serial}] SDK={sdk} → skip minitouch (set FORCE_MINITOUCH=1 to try anyway)")
+            # Touch via minitouch disabled; always rely on U2 (and optionally agent shell/scrcpy).
 
             # 4. Start uiautomator2-server
             if self._running:
                 self._start_u2_server()
 
-            # 5. Start battery/rotation polling
+            # 4b. Start u2 watchdog (monitors u2 health, auto-restarts if dead)
+            if self._running and self._u2_client is not None:
+                self._start_u2_watchdog()
+
+            # 5. Try STFService for push-based events; fall back to shell polling
             if self._running:
-                self._start_polling()
+                if self._try_stf_service():
+                    log.info(f"[{serial}] Using STFService for events (push-based, no polling)")
+                else:
+                    log.info(f"[{serial}] STFService unavailable, falling back to shell polling")
+                    self._start_polling()
 
             log.info(f"[{serial}] ADB bootstrap complete")
 
@@ -263,13 +258,27 @@ class AdbDeviceBootstrap:
         if from_env and Path(from_env).is_file():
             return from_env
 
-        # 2-5. Search well-known relative paths (relative to this file's parent)
+        # 2. config.yaml device.scrcpy_jar
+        try:
+            from core.config import load_config
+            cfg_jar = load_config().device.scrcpy_jar
+            if cfg_jar and Path(cfg_jar).is_file():
+                return cfg_jar
+        except Exception:
+            pass
+
+        # 3-7. Search well-known paths (relative to this file + system)
         _base = Path(__file__).parent.parent
         candidates = [
             _base / "runtime" / "scrcpy-server",
             _base / "bundle" / "scrcpy-server",
             _base / "assets" / "scrcpy-server",
             Path.cwd() / "scrcpy-server",
+            # Homebrew (macOS)
+            Path("/opt/homebrew/share/scrcpy/scrcpy-server"),
+            Path("/usr/local/share/scrcpy/scrcpy-server"),
+            # Linux
+            Path("/usr/share/scrcpy/scrcpy-server"),
         ]
         for candidate in candidates:
             if candidate.is_file():
@@ -360,88 +369,12 @@ class AdbDeviceBootstrap:
         log.info(f"[{serial}] ScrcpyReceiver → 127.0.0.1:{port}")
 
     def _ensure_minitouch(self) -> bool:
-        """Push minitouch binary to device if not present. Returns True if ready to start."""
-        t = self._transport
-        serial = t.serial
-        if t.is_file_present(_MINITOUCH_REMOTE):
-            log.info(f"[{serial}] minitouch already on device")
-            return True
-        abi = self._abi or "arm64-v8a"
-        for try_abi in (abi, "arm64-v8a", "armeabi-v7a"):
-            for base in (_ASSETS_DIR, _BUNDLE_DIR):
-                bin_asset = base / "minitouch" / try_abi / "minitouch"
-                if not bin_asset.exists() or bin_asset.stat().st_size == 0:
-                    continue
-                log.info(f"[{serial}] Pushing minitouch ({try_abi}) from {base.name}/...")
-                if t.push_file(str(bin_asset), _MINITOUCH_REMOTE, mode=0o755):
-                    t.chmod(_MINITOUCH_REMOTE, "755")
-                    log.info(f"[{serial}] minitouch pushed successfully")
-                    return True
-                # push failed for this binary — try next base dir, then next ABI
-                log.warning(f"[{serial}] push failed for {bin_asset}, trying next...")
-        log.warning(
-            f"[{serial}] minitouch binary not found in assets/minitouch/<abi>/ or bundle/minitouch/<abi>/. "
-            "Place prebuilt minitouch in e.g. assets/minitouch/arm64-v8a/minitouch"
-        )
+        # Touch via minitouch is disabled.
         return False
 
     def _start_minitouch(self) -> None:
-        """Start minitouch on device (abstract socket), adb forward, connect MinitouchSender."""
-        t = self._transport
-        serial = t.serial
-        w = self._screen_width or 1080
-        h = self._screen_height or 1920
-        t.kill_process("minitouch")
-        time.sleep(0.5)
-        # Capture logs so we can debug permission/device selection issues
-        log_path = f"{_REMOTE_TMP}/minitouch.log"
-        t.shell_safe(f"rm -f {log_path}")
-        # Force socket name to "minitouch" explicitly
-        t.shell_safe(f"nohup {_MINITOUCH_REMOTE} -n minitouch > {log_path} 2>&1 &")
-        time.sleep(1.0)
-        # Verify process is running; if not, print the log and a foreground run output for debugging
-        ps = t.shell_safe("pgrep -f minitouch || true").strip()
-        if not ps:
-            mt_log = t.shell_safe(
-                f"ls -l {log_path} || true; "
-                f"(toybox tail -n 80 {log_path} 2>/dev/null || tail -n 80 {log_path} 2>/dev/null || cat {log_path} 2>/dev/null || true)",
-                timeout=5.0,
-            ).strip()
-            # Try a short foreground run to capture immediate errors (permission/device missing)
-            fg = t.shell_safe(
-                f"toybox timeout 2 {_MINITOUCH_REMOTE} -n minitouch 2>&1 || true",
-                timeout=5.0,
-            ).strip()
-            log.warning(
-                f"[{serial}] minitouch failed to start.\n"
-                f"--- /data/local/tmp/minitouch.log ---\n{mt_log}\n"
-                f"--- foreground (2s) ---\n{fg}".rstrip()
-            )
-        try:
-            subprocess.run(
-                ["adb", "-s", serial, "forward", f"tcp:{MINITOUCH_HOST_PORT}", "localabstract:minitouch"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-        except Exception as exc:
-            log.warning(f"[{serial}] adb forward minitouch failed: {exc}")
-            return
-        for attempt in range(3):
-            if not self._running:
-                return
-            try:
-                sender = MinitouchSender(serial, "127.0.0.1", MINITOUCH_HOST_PORT, w, h)
-                sender.connect()
-                self._minitouch_sender = sender
-                if self._on_minitouch_ready:
-                    self._on_minitouch_ready(sender)
-                log.info(f"[{serial}] minitouch ready (ADB)")
-                return
-            except Exception as exc:
-                log.debug(f"[{serial}] minitouch connect attempt {attempt + 1}/3: {exc}")
-                time.sleep(0.8)
-        log.warning(f"[{serial}] minitouch connect failed after retries")
+        # Touch via minitouch is disabled.
+        raise RuntimeError("minitouch disabled (use U2/scrcpy/agent shell instead)")
 
     def _start_u2_server(self) -> None:
         """
@@ -514,7 +447,8 @@ class AdbDeviceBootstrap:
         )
 
         # Wait for u2 HTTP server to become available
-        client = U2JsonRpcClient(host, U2_TCP_PORT, timeout=self._u2_wait_timeout)
+        client = U2JsonRpcClient(host, U2_TCP_PORT, timeout=self._u2_wait_timeout,
+                                 adb_shell=self._transport.shell_safe)
         client.implicitly_wait(self._u2_implicitly_wait)
         client.settings["wait_timeout"] = self._u2_wait_timeout
 
@@ -537,19 +471,209 @@ class AdbDeviceBootstrap:
         log.error(f"[{serial}] uiautomator2-server failed to start after retries")
 
     def _on_u2_exit(self, u2_transport: AdbTransport) -> None:
-        """Called when u2-server instrument exits."""
+        """Called when u2-server instrument exits (streaming shell closed)."""
+        u2_transport.close()
         if not self._running:
-            u2_transport.close()
             return
         serial = self._transport.serial
-        log.warning(f"[{serial}] u2-server exited — restarting after 5s")
+        log.warning(f"[{serial}] u2-server exited — restarting in 5s")
         self._u2_client = None
         time.sleep(5.0)
-        u2_transport.close()
         if self._running:
+            # Reuse restart machinery so debounce + lock are respected
+            self.restart_u2_server(debounce=0.0)
+
+    def restart_u2_server(self, debounce: float = 30.0) -> bool:
+        """
+        Self-healing: kill the existing u2-server and start a fresh one.
+
+        Called by DeviceClient.ensure_u2_healthy() when a ping to the HTTP
+        server fails — covers both the "process exited" and the "process
+        frozen / NanoHTTPD hung" cases.
+
+        Debounce: if a restart happened less than `debounce` seconds ago,
+        this call is a no-op (returns False) so callers can immediately fall
+        back to ratio/image instead of blocking on another restart attempt.
+
+        Returns True once the new u2 HTTP server is verified ready.
+        Thread-safe: only one restart proceeds at a time; others return False.
+        """
+        if not self._running:
+            return False
+
+        # Fast debounce check (no lock needed for monotonic read)
+        now = time.monotonic()
+        if now - self._u2_last_restart < debounce:
+            serial = self._transport.serial
+            log.debug(
+                "[%s] u2 restart skipped (debounce %.0fs remaining)",
+                serial, debounce - (now - self._u2_last_restart),
+            )
+            return False
+
+        # Only one restart at a time
+        acquired = self._u2_restart_lock.acquire(blocking=False)
+        if not acquired:
+            return False
+
+        serial = self._transport.serial
+        try:
+            self._u2_last_restart = time.monotonic()
+            log.warning("[%s] u2 self-healing: killing and restarting atx-agent", serial)
+
+            # 1. Kill existing u2-server (force-stop is idempotent)
+            self._u2_client = None
+            try:
+                self._transport.shell_safe(f"am force-stop {U2_SERVER_PKG}", timeout=5.0)
+            except Exception as exc:
+                log.debug("[%s] force-stop u2 error (ignored): %s", serial, exc)
+            time.sleep(1.0)
+
+            # 2. Re-run am instrument (reuses _start_u2_server fast path)
+            #    _start_u2_server() also calls _on_u2_ready which wires _u2 back
+            #    into DeviceClient via the callback.
             self._start_u2_server()
 
-    # ── Battery / Rotation Polling (replaces STFService) ─────────────────────
+            ok = self._u2_client is not None
+            if ok:
+                log.info("[%s] u2 self-healing: atx-agent restarted successfully", serial)
+            else:
+                log.error("[%s] u2 self-healing: atx-agent restart failed", serial)
+            return ok
+        finally:
+            self._u2_restart_lock.release()
+
+
+    # ── U2 Watchdog (tương tự d.healthcheck() của uiautomator2 gốc) ──────────
+
+    def _start_u2_watchdog(self) -> None:
+        """
+        Start a daemon thread that periodically pings u2 and restarts
+        atx-agent if it becomes unresponsive.
+
+        Mirrors the behaviour of ``d.healthcheck()`` / ``d.watchers.watched``
+        in the official uiautomator2 Python library, but works with our
+        custom U2JsonRpcClient (no dependency on the upstream library).
+        """
+        t = threading.Thread(
+            target=self._u2_watchdog_loop,
+            daemon=True,
+            name=f"u2-watchdog-{self._transport.serial}",
+        )
+        t.start()
+        log.info(
+            "[%s] u2 watchdog started (interval=%.0fs, max_fails=%d)",
+            self._transport.serial,
+            self._u2_watchdog_interval,
+            self._u2_watchdog_max_fails,
+        )
+
+    def _u2_watchdog_loop(self) -> None:
+        """
+        Watchdog loop: runs every _u2_watchdog_interval seconds.
+
+        Algorithm (same as upstream uiautomator2 healthcheck):
+          - GET /ping with short timeout
+          - Success  → reset consecutive-fail counter
+          - Failure  → increment counter
+          - Counter >= max_fails → restart atx-agent via restart_u2_server()
+        """
+        serial = self._transport.serial
+        fail_count = 0
+
+        while self._running:
+            # Sleep in 1-second ticks so stop() wakes quickly
+            for _ in range(int(self._u2_watchdog_interval)):
+                if not self._running:
+                    return
+                time.sleep(1.0)
+
+            client = self._u2_client
+            if client is None:
+                # u2 not ready yet (still starting or mid-restart) — skip this tick
+                fail_count = 0
+                continue
+
+            alive = client.ping(timeout=5.0)
+
+            if alive:
+                if fail_count > 0:
+                    log.debug("[%s] u2 watchdog: ping OK (was failing %d times)", serial, fail_count)
+                fail_count = 0
+                continue
+
+            fail_count += 1
+            log.warning(
+                "[%s] u2 watchdog: ping failed (%d/%d)",
+                serial, fail_count, self._u2_watchdog_max_fails,
+            )
+
+            if fail_count >= self._u2_watchdog_max_fails:
+                fail_count = 0
+                log.warning("[%s] u2 watchdog: threshold reached — restarting atx-agent", serial)
+                # bypass debounce: watchdog already controls its own timing
+                self.restart_u2_server(debounce=0.0)
+
+    _STF_PKG = "jp.co.cyberagent.stf"
+    _STF_SERVICE_CLS = "jp.co.cyberagent.stf/.Service"
+    _STF_FORWARD_PORT = 1100  # local port for adb forward → stfservice socket
+
+    def _try_stf_service(self) -> bool:
+        """
+        If STFService APK is installed, start it and connect via adb forward.
+        Returns True if successfully connected (replaces polling).
+        """
+        t = self._transport
+        serial = t.serial
+
+        # Check if STFService APK is installed
+        installed = t.shell_safe(f"pm path {self._STF_PKG}").strip()
+        if not installed:
+            return False
+
+        # Start the service
+        t.shell_safe(
+            f"am startservice -n {self._STF_SERVICE_CLS}",
+            timeout=5.0,
+        )
+        time.sleep(1.0)  # Give service time to open socket
+
+        # Forward local port to the STFService abstract socket
+        try:
+            subprocess.run(
+                ["adb", "-s", serial, "forward",
+                 f"tcp:{self._STF_FORWARD_PORT}", "localabstract:stfservice"],
+                capture_output=True, text=True, timeout=10,
+            )
+        except Exception as exc:
+            log.warning(f"[{serial}] adb forward stfservice failed: {exc}")
+            return False
+
+        # Connect STFServiceClient
+        try:
+            svc = STFServiceClient(
+                serial=serial,
+                host="127.0.0.1",
+                port=self._STF_FORWARD_PORT,
+                on_battery=self._on_battery,
+                on_rotation=self._on_rotation,
+            )
+            svc.start_client()
+            # Wait briefly for initial peek events
+            time.sleep(0.5)
+            if not svc.connected:
+                svc.stop_client()
+                return False
+            self._stf_service = svc
+            if self._on_stf_ready:
+                self._on_stf_ready(svc)
+            log.info(f"[{serial}] STFService connected via adb forward :{self._STF_FORWARD_PORT}")
+            return True
+        except Exception as exc:
+            log.warning(f"[{serial}] STFService connect failed: {exc}")
+            return False
+
+    # ── Battery / Rotation Polling (fallback when STFService unavailable) ───
 
     def _start_polling(self) -> None:
         """Start background thread that polls battery and rotation via shell."""

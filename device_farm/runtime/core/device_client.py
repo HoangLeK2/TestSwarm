@@ -40,10 +40,12 @@ import xml.etree.ElementTree as ET
 from core.config import Config
 from runtime.transports.adb_device_bootstrap import AdbDeviceBootstrap
 from runtime.transports.adb_transport import AdbTransport
-from runtime.transports.minitouch import MinitouchSender
-from runtime.transports.minitouch_ws import MinitouchWsClient
+from runtime.transports.scrcpy_control import ScrcpyControl
 from runtime.transports.scrcpy_receiver import ScrcpyReceiver
-from runtime.transports.stf_client import STFServiceClient
+from runtime.transports.stf_client import (
+    STFServiceClient, ConnectivityInfo, PhoneStateInfo, BatteryInfo,
+)
+
 from runtime.transports.u2_jsonrpc import U2JsonRpcClient
 from runtime.transports.ws_tunnel import TunnelSet
 
@@ -87,11 +89,19 @@ class DeviceClient:
         self.screen_width:    int = 0
         self.screen_height:   int = 0
         self.battery_level:   int = -1
+        self.battery_status:  str = ""        # charging, discharging, full
+        self.battery_source:  str = ""        # ac, usb, wireless
+        self.battery_temp:    float = 0.0     # Celsius
+        self.wifi_connected:  bool = False
+        self.network_type:    str = ""        # wifi, mobile, etc.
+        self.network_subtype: str = ""        # LTE, HSPA, etc.
+        self.airplane_mode:   bool = False
         self.current_app:     str = ""
 
         # Latest JPEG frame (from agent MediaProjection or scrcpy)
         self._latest_jpeg:      Optional[bytes] = None
         self._latest_jpeg_lock  = threading.Lock()
+        self._last_frame_time:  float = 0.0  # monotonic timestamp of last received frame
 
         # Scrcpy receiver for Mode A+scrcpy hybrid (agent touch + scrcpy screen)
         self._scrcpy_receiver:  Optional[ScrcpyReceiver] = None
@@ -108,8 +118,8 @@ class DeviceClient:
         self._tunnel_ports: Dict[str, int] = {}
         self._tunnels_ready_channels: set = set()  # channels device actually set up (from tunnels_ready)
 
-        # Tools connected via tunnels (WS agent) or ADB (MinitouchSender)
-        self._minitouch:   Optional[Union[MinitouchWsClient, MinitouchSender]] = None
+        # Minitouch support disabled.
+        self._minitouch = None
         self._u2:          Optional[U2JsonRpcClient]  = None
         self._u2_lock      = threading.Lock()  # serializes reconnect + identity-safe nulling
         self._u2_request_lock = threading.Lock()  # serializes ALL u2 HTTP requests (NanoHTTPD is single-threaded)
@@ -274,6 +284,7 @@ class DeviceClient:
         jpeg = base64.b64decode(jpeg_b64)
         with self._latest_jpeg_lock:
             self._latest_jpeg = jpeg
+            self._last_frame_time = time.monotonic()
         # In periodic mode, only update cache — periodic timer handles publishing
         if self.config.streaming.mode == "periodic":
             return
@@ -451,26 +462,37 @@ class DeviceClient:
         with self._latest_jpeg_lock:
             return self._latest_jpeg
 
-    def capture_screenshot(self, quality: int = 70, max_width: int = 800) -> Optional[bytes]:
+    def capture_screenshot(
+        self,
+        quality: int = 70,
+        max_width: int = 800,
+        allow_ws_u2_fallback: bool = False,
+    ) -> Optional[bytes]:
         """
         On-demand screenshot with fallback chain:
-          1. Cached _latest_jpeg from agent frame stream (WS agent mode — no tunnel needed)
+          1. Cached _latest_jpeg (from scrcpy or agent frame stream) — always preferred
           2. U2 HTTP /screenshot/0 (ADB mode only — avoids tunnel contention in agent mode)
           3. ADB shell screencap (ADB mode only)
         Updates _latest_jpeg with the result.
+
+        IMPORTANT: When scrcpy is active, ONLY return cached frame. U2 screenshot
+        requests hammer the WS tunnel and starve scrcpy bandwidth.
         """
         jpeg = None
 
-        # For WS agent mode: prefer cached frame from agent (no tunnel contention)
-        # Agent sends JPEG frames which are cached in _latest_jpeg
-        if not self.is_adb_mode:
+        # When scrcpy is active OR WS agent mode: always use cached frame.
+        # U2 screenshot through WS tunnel causes massive tunnel thrashing that
+        # kills scrcpy FPS (drops from 30fps to 1fps).
+        if self._scrcpy_active or not self.is_adb_mode:
             with self._latest_jpeg_lock:
                 jpeg = self._latest_jpeg
             if jpeg is not None:
                 return jpeg
 
-        # ADB mode: try U2 screenshot (no tunnel contention issue in ADB mode)
-        if self.is_adb_mode:
+        # ADB mode: always try U2 screenshot.
+        # WS mode: only try when explicitly allowed (for infrequent snapshot APIs).
+        use_u2 = self.is_adb_mode or allow_ws_u2_fallback
+        if use_u2:
             with self._u2_lock:
                 u2 = self._u2
             if u2 is not None:
@@ -558,8 +580,14 @@ class DeviceClient:
             with self._u2_lock:
                 if self._u2 is u2_snap:
                     self._u2 = None
-        # Reconnect u2 and retry once (same pattern as tap_selector)
-        if not self._reconnect_u2() or self._u2 is None:
+        # Reconnect u2 and retry once — mirrors uiautomator2 jsonrpc_call pattern:
+        # stop_uiautomator() + start_uiautomator() + retry in the same call.
+        reconnected = (
+            self._wait_for_u2_restart(timeout=25.0)
+            if self.is_adb_mode
+            else self._reconnect_u2()
+        )
+        if not reconnected or self._u2 is None:
             return False
         try:
             action()
@@ -569,49 +597,65 @@ class DeviceClient:
             self._u2 = None
             return False
 
+    def _get_scrcpy_control(self) -> Optional[ScrcpyControl]:
+        """Return active ScrcpyControl instance if available (thread-safe)."""
+        receiver = self._scrcpy_receiver
+        if receiver is not None:
+            with receiver._ctrl_lock:
+                ctrl = receiver.control
+            # ctrl is now a local ref — safe to use even if receiver.control is set to None
+            if ctrl is not None and ctrl.is_connected:
+                return ctrl
+        return None
+
     def tap(self, x: int, y: int) -> None:
-        # Minitouch first: faster and doesn't depend on u2 tunnel stability.
-        # u2 click is only tried when minitouch is unavailable (e.g. ADB mode).
-        if self._minitouch is not None and self._minitouch.is_connected:
-            try:
-                self._minitouch.tap(x, y)
-                return
-            except Exception as exc:
-                self._log(f"minitouch tap failed: {exc}", level=logging.WARNING)
+        """
+        Touch priority: U2 → Agent shell (a11y fallback)
+        When U2 is down, agent `input tap` provides immediate fallback.
+        U2 keepalive loop will reconnect U2 in background.
+        """
         if self._try_u2_tap(lambda: self._u2.click(x, y) if self._u2 else None):
             return
-        self._log(
-            f"tap skipped (no touch method) minitouch={self._minitouch is not None} "
-            f"u2={self._u2 is not None} adb={self.is_adb_mode}",
-            level=logging.WARNING,
-        )
+        # Fallback: agent shell `input tap` (works without U2, uses a11y/InputManager)
+        if self._agent_send is not None:
+            self._send_to_agent({"type": "shell", "cmd": f"input tap {int(x)} {int(y)}"})
+            return
+        self._log(f"tap skipped (no touch method)", level=logging.WARNING)
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300) -> None:
-        # Minitouch first (same reason as tap).
-        if self._minitouch is not None and self._minitouch.is_connected:
-            try:
-                self._minitouch.swipe(x1, y1, x2, y2, duration_ms=duration_ms)
-                return
-            except Exception as exc:
-                self._log(f"minitouch swipe failed: {exc}", level=logging.WARNING)
+        """Touch priority: U2 → Agent shell"""
         if self._try_u2_tap(lambda: self._u2.swipe(x1, y1, x2, y2, duration=duration_ms / 1000.0) if self._u2 else None):
+            return
+        if self._agent_send is not None:
+            self._send_to_agent({
+                "type": "shell",
+                "cmd": f"input swipe {int(x1)} {int(y1)} {int(x2)} {int(y2)} {int(duration_ms)}",
+            })
             return
         self._log("swipe skipped (no touch method available)", level=logging.WARNING)
 
     def long_tap(self, x: int, y: int, duration_ms: int = 800) -> None:
-        # Minitouch first (same reason as tap).
-        if self._minitouch is not None and self._minitouch.is_connected:
-            try:
-                self._minitouch.long_tap(x, y, duration_ms=duration_ms)
-                return
-            except Exception as exc:
-                self._log(f"minitouch long_tap failed: {exc}", level=logging.WARNING)
+        """Touch priority: U2 → Agent shell (swipe with 0 distance = long press)"""
         if self._try_u2_tap(lambda: self._u2.long_click(x, y, duration=duration_ms / 1000.0) if self._u2 else None):
+            return
+        if self._agent_send is not None:
+            self._send_to_agent({
+                "type": "shell",
+                "cmd": f"input swipe {int(x)} {int(y)} {int(x)} {int(y)} {int(duration_ms)}",
+            })
             return
         self._log("long_tap skipped (no touch method available)", level=logging.WARNING)
 
     def input_text(self, text: str) -> None:
-        """Type text into currently focused element via u2.send_keys()."""
+        """Type text into currently focused element."""
+        # scrcpy control first: injects text at system level.
+        ctrl = self._get_scrcpy_control()
+        if ctrl is not None:
+            try:
+                ctrl.input_text(text)
+                return
+            except Exception as exc:
+                self._log(f"input_text via scrcpy control failed: {exc}", level=logging.WARNING)
         with self._u2_lock:
             u2 = self._u2
         if u2 is not None:
@@ -639,13 +683,101 @@ class DeviceClient:
             x1, y1, x2, y2 = int(w * (0.5 - d / 2)), cy, int(w * (0.5 + d / 2)), cy
         self.swipe(x1, y1, x2, y2, duration_ms=400)
 
+    # ── STFService Device Control ──────────────────────────────────────────────
+
+    def stf_get_clipboard(self) -> Optional[str]:
+        """Get clipboard text via STFService."""
+        svc = self._stf_service
+        if svc and svc.connected:
+            return svc.get_clipboard()
+        return None
+
+    def stf_set_clipboard(self, text: str) -> bool:
+        """Set clipboard text via STFService."""
+        svc = self._stf_service
+        if svc and svc.connected:
+            return svc.set_clipboard(text)
+        return False
+
+    def stf_set_wifi(self, enabled: bool) -> bool:
+        """Enable/disable WiFi via STFService."""
+        svc = self._stf_service
+        if svc and svc.connected:
+            return svc.set_wifi_enabled(enabled)
+        return False
+
+    def stf_set_bluetooth(self, enabled: bool) -> bool:
+        """Enable/disable Bluetooth via STFService."""
+        svc = self._stf_service
+        if svc and svc.connected:
+            return svc.set_bluetooth_enabled(enabled)
+        return False
+
+    def stf_set_keyguard(self, enabled: bool) -> bool:
+        """Enable/disable keyguard (lock screen) via STFService."""
+        svc = self._stf_service
+        if svc and svc.connected:
+            return svc.set_keyguard(enabled)
+        return False
+
+    def stf_set_wake_lock(self, enabled: bool) -> bool:
+        """Acquire/release wake lock via STFService."""
+        svc = self._stf_service
+        if svc and svc.connected:
+            return svc.set_wake_lock(enabled)
+        return False
+
+    def stf_set_ringer_mode(self, mode: str) -> bool:
+        """Set ringer mode: 'silent', 'vibrate', 'normal'."""
+        svc = self._stf_service
+        if svc and svc.connected:
+            return svc.set_ringer_mode(mode)
+        return False
+
+    def stf_set_master_mute(self, enabled: bool) -> bool:
+        """Mute/unmute all audio via STFService."""
+        svc = self._stf_service
+        if svc and svc.connected:
+            return svc.set_master_mute(enabled)
+        return False
+
+    def stf_identify(self) -> bool:
+        """Show identification UI on device."""
+        svc = self._stf_service
+        if svc and svc.connected:
+            return svc.identify(self.serial)
+        return False
+
+    def stf_get_display(self) -> Optional[dict]:
+        """Get display info via STFService."""
+        svc = self._stf_service
+        if svc and svc.connected:
+            info = svc.get_display()
+            if info:
+                return {
+                    "width": info.width, "height": info.height,
+                    "xdpi": info.xdpi, "ydpi": info.ydpi,
+                    "fps": info.fps, "density": info.density,
+                    "rotation": info.rotation, "secure": info.secure,
+                }
+        return None
+
+    def stf_get_properties(self) -> Optional[dict]:
+        """Get device properties (IMEI, IMSI, etc.) via STFService."""
+        svc = self._stf_service
+        if svc and svc.connected:
+            return svc.get_properties()
+        return None
+
     def key(self, key_name: str) -> None:
         """
         Key press (home, back, power, enter).
 
         Priority:
-        - If agent WS is connected: send to agent (supports non-ADB mode).
-        - Else if ADB transport is connected: inject via `adb shell input keyevent`.
+        1. scrcpy control (system-level, smoothest)
+        2. uiautomator2 (no INJECT_EVENTS needed)
+        3. Agent WS shell
+        4. ADB shell
         """
         k = (key_name or "").strip()
         if not k:
@@ -653,7 +785,16 @@ class DeviceClient:
 
         key_l = k.lower()
 
-        # Best path: use uiautomator2 instrumentation (does NOT require INJECT_EVENTS).
+        # Best path: scrcpy control (system-level injection).
+        ctrl = self._get_scrcpy_control()
+        if ctrl is not None:
+            try:
+                ctrl.key(key_l)
+                return
+            except Exception as exc:
+                self._log(f"key via scrcpy control failed ({key_l}): {exc}", level=logging.WARNING)
+
+        # Second: uiautomator2 instrumentation (does NOT require INJECT_EVENTS).
         with self._u2_lock:
             u2 = self._u2
         if u2 is not None:
@@ -733,6 +874,15 @@ class DeviceClient:
     def launch_app(self, package: str) -> None:
         """Ask agent to start an app by package name via Intent."""
         if not package:
+            return
+        # ADB mode: use monkey or am start to launch by package
+        if self.is_adb_mode and self._adb_transport is not None and self._adb_transport.connected:
+            try:
+                # monkey -p <pkg> -c android.intent.category.LAUNCHER 1 is reliable
+                cmd = f"monkey -p {package} -c android.intent.category.LAUNCHER 1"
+                self._adb_transport.shell(cmd, timeout=10.0)
+            except Exception as exc:
+                self._log(f"launch_app via ADB failed: {exc}", level=logging.WARNING)
             return
         self._send_to_agent({"type": "launch_app", "package": package})
 
@@ -945,48 +1095,72 @@ class DeviceClient:
 
         return best
 
-    # ── Scrcpy Hybrid (Mode A + scrcpy screen) ────────────────────────────────
 
-    def attach_scrcpy_stream(self, device_ip: str, adb_port: int = 5555) -> None:
+    def attach_scrcpy_stream(
+        self,
+        device_ip: str,
+        adb_port: int = 5555,
+        enable_control: bool = True,
+    ) -> None:
         """
-        Attach scrcpy screen streaming to a WS-Agent device (Mode A hybrid).
+        Attach scrcpy screen streaming + control to a WS-Agent device (Mode A hybrid).
 
-        The WS Agent continues to handle touch/control. scrcpy replaces
-        MediaProjection as the screen source. Requires ADB access to device.
+        When enable_control=True (default), scrcpy also provides touch/key input
+        via its control channel — smoother than minitouch/u2.
 
         Args:
-            device_ip:  Device IP address (e.g. "192.168.1.100")
-            adb_port:   ADB TCP port on device (default 5555)
+            device_ip:       Device IP address (e.g. "192.168.1.100")
+            adb_port:        ADB TCP port on device (default 5555)
+            enable_control:  Also enable scrcpy control channel for touch/key input
         """
-        import os as _os
-        from runtime.transports.adb_device_bootstrap import AdbDeviceBootstrap
-
         # Stop any existing scrcpy receiver
         self.detach_scrcpy_stream()
 
         serial = f"{device_ip}:{adb_port}"
-        adb_bin = _os.environ.get("SCRCPY_ADB_BIN", "adb").strip() or "adb"
-        scrcpy_port = 27183
+        adb_bin = os.environ.get("SCRCPY_ADB_BIN", "adb").strip() or "adb"
+        # Unique port per device slot to avoid collision when multiple devices are attached
+        scrcpy_port = 27183 + self.index
 
         try:
-            # adb connect
+            # adb connect (ensure device is reachable)
             subprocess.run([adb_bin, "connect", serial], capture_output=True, timeout=10)
-            # adb forward tcp:27183 → localabstract:scrcpy
-            result = subprocess.run(
-                [adb_bin, "-s", serial, "forward", f"tcp:{scrcpy_port}", "localabstract:scrcpy"],
-                capture_output=True, text=True, timeout=10,
-            )
-            if result.returncode != 0:
-                raise RuntimeError(f"adb forward failed: {result.stderr.strip()}")
-
-            scrcpy_jar = AdbDeviceBootstrap._resolve_scrcpy_jar(None)  # type: ignore[arg-type]
+            # NOTE: adb forward is handled internally by ScrcpyReceiver._connect_and_stream()
+            scrcpy_jar = AdbDeviceBootstrap._resolve_scrcpy_jar()
+            # Get real screen resolution via adb (scrcpy downscales, we need real for touch coords)
+            if not self.screen_width or not self.screen_height:
+                try:
+                    wm = subprocess.run(
+                        [adb_bin, "-s", serial, "shell", "wm", "size"],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    # Parse "Physical size: 1080x2316"
+                    for line in wm.stdout.strip().splitlines():
+                        if line.strip().startswith("Physical size") and "x" in line:
+                            parts = line.split(":")[-1].strip().split("x")
+                            self.screen_width = int(parts[0])
+                            self.screen_height = int(parts[1])
+                            self._log(f"Real screen resolution from adb: {self.screen_width}x{self.screen_height}")
+                            break
+                except Exception as exc2:
+                    self._log(f"Failed to get screen size via adb: {exc2}", level=logging.WARNING)
         except Exception as exc:
             self._log(f"attach_scrcpy_stream setup failed: {exc}", level=logging.ERROR)
             return
 
         def _on_scrcpy_frame(jpeg: bytes) -> None:
+            # Ensure ScrcpyControl uses REAL device resolution for coordinate mapping.
+            # scrcpy downscales video (e.g. 376x800) but touch coords from frontend
+            # are in real resolution (e.g. 1080x2316). scrcpy maps:
+            #   actual_x = x * realDeviceWidth / position.screenWidth
+            # So we must set position.screenWidth = real device width.
+            ctrl = receiver.control
+            if ctrl is not None and self.screen_width and ctrl.screen_width != self.screen_width:
+                ctrl.screen_width = self.screen_width
+                ctrl.screen_height = self.screen_height
+                self._log(f"ScrcpyControl coords updated to real resolution: {self.screen_width}x{self.screen_height}")
             with self._latest_jpeg_lock:
                 self._latest_jpeg = jpeg
+                self._last_frame_time = time.monotonic()
             self.publish_frame(jpeg)
 
         receiver = ScrcpyReceiver(
@@ -994,19 +1168,22 @@ class DeviceClient:
             adb_path=adb_bin,
             port=scrcpy_port,
             server_jar=scrcpy_jar,
-            max_fps=30,
-            max_width=800,
+            max_fps=self.config.device.scrcpy_max_fps,
+            max_width=self.config.device.scrcpy_max_width,
             reconnect_delay=2.0,
+            enable_control=enable_control,
+            on_frame=_on_scrcpy_frame,
         )
-        receiver._on_frame = _on_scrcpy_frame  # type: ignore[attr-defined]
         receiver.start_receiver()
 
         self._scrcpy_receiver = receiver
         self._scrcpy_active = True
-        self._log(f"scrcpy stream attached ({serial}) — MediaProjection suppressed")
+        ctrl_status = "control=ON" if enable_control else "video-only"
+        self._log(f"scrcpy stream attached ({serial}) — {ctrl_status}, MediaProjection suppressed")
 
     def detach_scrcpy_stream(self) -> None:
-        """Stop scrcpy receiver and resume MediaProjection frames."""
+        """Stop scrcpy receiver (+ control) and resume MediaProjection frames.
+        adb forward cleanup is handled internally by ScrcpyReceiver."""
         if self._scrcpy_receiver is not None:
             try:
                 self._scrcpy_receiver.stop_receiver()
@@ -1053,10 +1230,16 @@ class DeviceClient:
                 self.battery_level = int(level)
             except Exception:
                 self.battery_level = -1
+            # If STFService is connected, get rich battery info
+            svc = self._stf_service
+            if svc and svc.connected:
+                info = svc.get_battery_info()
+                self.battery_status = info.status
+                self.battery_source = info.source
+                self.battery_temp = info.temp
             self._publish_status()
 
         def _on_rotation(degrees: int) -> None:
-            # Frontend currently only cares about frame aspect; rotation is logged.
             self._log(f"Rotation (ADB): {degrees}°")
 
         def _on_u2_ready(client: U2JsonRpcClient) -> None:
@@ -1066,10 +1249,10 @@ class DeviceClient:
             self._publish_status()
             self._log(f"uiautomator2 ready on {client._base}")
 
-        def _on_minitouch_ready(sender: MinitouchSender) -> None:
-            self._minitouch = sender
+        def _on_stf_ready(svc: STFServiceClient) -> None:
+            self._stf_service = svc
             self._publish_status()
-            self._log("minitouch ready (ADB)")
+            self._log("STFService connected (ADB mode — push events)")
 
         def _on_metadata(meta: Dict[str, Any]) -> None:
             # Update basic device metadata from AdbDeviceBootstrap; mark READY so frontend shows frame
@@ -1090,7 +1273,7 @@ class DeviceClient:
             on_rotation=_on_rotation,
             on_u2_ready=_on_u2_ready,
             on_metadata=_on_metadata,
-            on_minitouch_ready=_on_minitouch_ready,
+            on_stf_ready=_on_stf_ready,
             skip_scrcpy=skip_scrcpy,
         )
         self._adb_bootstrap.start()
@@ -1171,9 +1354,8 @@ class DeviceClient:
 
     # Quick health‑check + lazy reconnect for U2 tunnel
     def ensure_u2_healthy(self, ping_timeout: float = 3.0) -> bool:
-       
         if self.is_adb_mode:
-            return self._u2 is not None
+            return self._ensure_u2_healthy_adb(ping_timeout)
 
         ports = self._tunnel_ports or {}
         if "u2" not in ports or "u2" not in self._tunnels_ready_channels:
@@ -1183,6 +1365,65 @@ class DeviceClient:
             return True  # Trust existing connection; reconnect on failure below
 
         return self._reconnect_u2()
+
+    def _ensure_u2_healthy_adb(self, ping_timeout: float = 3.0) -> bool:
+        """
+        Health check for ADB mode.
+
+        Pings the u2 HTTP server. If dead, nulls _u2 so subsequent calls
+        return False immediately while the watchdog thread (started by
+        AdbDeviceBootstrap._start_u2_watchdog) detects the failure and
+        restarts atx-agent automatically in the background.
+
+        Returns True only when /ping responds HTTP 200.
+        """
+        u2_snap = self._u2
+        if u2_snap is None:
+            return False
+
+        if u2_snap.ping(timeout=ping_timeout):
+            return True
+
+        # Ping failed — null out stale client so callers fall back gracefully.
+        # The watchdog thread will detect the failure on its next tick and
+        # call restart_u2_server() without us needing to spawn anything here.
+        self._log("u2 ping failed — waiting for watchdog to restart atx-agent", level=logging.WARNING)
+        with self._u2_lock:
+            if self._u2 is u2_snap:
+                self._u2 = None
+        return False
+
+    def _wait_for_u2_restart(self, timeout: float = 25.0) -> bool:
+        """
+        ADB mode: wait for the watchdog to bring u2 back up.
+
+        Mirrors the uiautomator2 library pattern: after a failed RPC call,
+        block briefly so the inline retry can succeed (watchdog is already
+        restarting in the background).
+
+        Polls _u2 every 1s until it becomes non-None and passes /ping.
+        """
+        deadline = time.monotonic() + timeout
+        serial = self.serial
+        # Trigger an eager restart if watchdog hasn't noticed yet
+        bootstrap = self._adb_bootstrap
+        if bootstrap is not None:
+            t = threading.Thread(
+                target=bootstrap.restart_u2_server,
+                kwargs={"debounce": 0.0},
+                daemon=True,
+                name=f"u2-inline-restart-{serial}",
+            )
+            t.start()
+
+        while time.monotonic() < deadline:
+            time.sleep(1.0)
+            u2 = self._u2
+            if u2 is not None and u2.ping(timeout=2.0):
+                self._log("u2 back online after inline restart")
+                return True
+        self._log(f"u2 did not recover within {timeout:.0f}s", level=logging.ERROR)
+        return False
 
     _U2_RECONNECT_ATTEMPTS = 10
     _U2_RECONNECT_DELAY = 1.0  # Increased: u2 server restart can take 2-5s
@@ -1292,14 +1533,11 @@ class DeviceClient:
             asyncio.run_coroutine_threadsafe(_safe_put(q, msg), self._loop)
 
     def status_dict(self) -> Dict[str, Any]:
-        minitouch_ok = self._minitouch is not None and (self._minitouch.is_connected if self._minitouch else False)
         u2_ok = self._u2 is not None
-        if minitouch_ok:
-            touch_method = "minitouch"
-        elif u2_ok:
+        if u2_ok:
             touch_method = "u2"
         else:
-            touch_method = "none"
+            touch_method = "agent_shell" if self._agent_send is not None else "none"
         return {
             "type":             "status",
             "serial":           self.serial,
@@ -1309,13 +1547,21 @@ class DeviceClient:
             "sdk":              self.sdk_version,
             "state":            self.state.value,
             "battery":          self.battery_level,
+            "battery_status":   self.battery_status,
+            "battery_source":   self.battery_source,
+            "battery_temp":     self.battery_temp,
+            "wifi_connected":   self.wifi_connected,
+            "network_type":     self.network_type,
+            "network_subtype":  self.network_subtype,
+            "airplane_mode":    self.airplane_mode,
             "current_app":      self.current_app,
             "screen_width":     self.screen_width,
             "screen_height":    self.screen_height,
             "agent_connected":  self._agent_send is not None,
-            "minitouch_ready":  minitouch_ok,
+            "minitouch_ready":  False,
             "u2_ready":         u2_ok,
             "touch_method":     touch_method,
+            "stf_connected":    self._stf_service is not None and self._stf_service.connected,
         }
 
     def get_log_lines(self) -> List[str]:
@@ -1338,37 +1584,45 @@ class DeviceClient:
         # On Android 14+ (SDK≥34) this requires INJECT_EVENTS (system-only permission)
         # and silently fails on regular APKs — use U2 (accessibility-based) instead.
         input_mgr_mode = self._agent_touch_mode in ("inputMgr",)
-        use_minitouch = (
-            not input_mgr_mode
-            and ((not self._agent_capabilities) or ("minitouch" in self._agent_capabilities))
-        )
-        if use_minitouch and self._agent_send is not None:
-            self._minitouch = MinitouchWsClient(
-                serial=self.serial,
-                send_fn=self._agent_send,
-                screen_width=w,
-                screen_height=h,
-            )
+        force_u2 = bool(getattr(self.config, "force_u2_mode", False))
+        if force_u2:
+            self._log("force_u2_mode: touch via U2 (minitouch disabled)", level=logging.INFO)
         elif input_mgr_mode:
-            self._log(
-                "touch=inputMgr — skipping MinitouchWsClient, will use U2 (uiautomator2) for touch",
-                level=logging.INFO,
-            )
-            # Connect U2 eagerly so first tap has no latency
-            threading.Thread(
-                target=self._reconnect_u2,
-                daemon=True,
-                name=f"u2-eager-{self.serial}",
-            ).start()
+            self._log("touch=inputMgr: using U2 (minitouch disabled)", level=logging.INFO)
+
+        # Connect U2 eagerly so first tap has no latency.
+        threading.Thread(
+            target=self._reconnect_u2,
+            daemon=True,
+            name=f"u2-eager-{self.serial}",
+        ).start()
 
         # ── STFService ────────────────────────────────────────────────────────
         try:
             def _on_battery(level: int) -> None:
-                self.battery_level = level
+                svc = self._stf_service
+                if svc:
+                    info = svc.get_battery_info()
+                    self.battery_level = info.level
+                    self.battery_status = info.status
+                    self.battery_source = info.source
+                    self.battery_temp = info.temp
+                else:
+                    self.battery_level = level
                 self._publish_status()
 
             def _on_rotation(degrees: int) -> None:
                 self._log(f"Rotation: {degrees}°")
+                self._publish_status()
+
+            def _on_connectivity(info: ConnectivityInfo) -> None:
+                self.wifi_connected = info.connected and info.type == "wifi"
+                self.network_type = info.type
+                self.network_subtype = info.subtype
+                self._publish_status()
+
+            def _on_airplane(enabled: bool) -> None:
+                self.airplane_mode = enabled
                 self._publish_status()
 
             svc = STFServiceClient(
@@ -1377,16 +1631,24 @@ class DeviceClient:
                 port=ports["stfservice"],
                 on_battery=_on_battery,
                 on_rotation=_on_rotation,
+                on_connectivity=_on_connectivity,
+                on_airplane=_on_airplane,
             )
             svc.start_client()
             self._stf_service = svc
-            self._log("STFService connected via WS tunnel")
+            self._log("STFService connected via WS tunnel (full events)")
         except Exception as exc:
             self._log(f"STFService tunnel unavailable: {exc}",
                       level=logging.WARNING)
 
         self.state = DeviceState.READY
-        touch_status = "minitouch(ws)" if self._minitouch else "u2"
+        ctrl = self._get_scrcpy_control()
+        if ctrl is not None:
+            touch_status = "scrcpy_control"
+        elif self._u2 is not None:
+            touch_status = "u2"
+        else:
+            touch_status = "agent_shell"
         self._log("Device READY (touch=%s u2=%s stfservice=%s)" % (
             touch_status,
             "yes" if self._u2 else "no",
@@ -1458,10 +1720,6 @@ class DeviceClient:
             try: self._stf_service.stop_client()
             except Exception: pass
             self._stf_service = None
-        if self._minitouch:
-            try: self._minitouch.disconnect()
-            except Exception: pass
-            self._minitouch = None
         self._u2 = None
         self.detach_scrcpy_stream()
 

@@ -1,0 +1,460 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import { toast } from 'sonner';
+import { useCreateSchedule, useUpdateSchedule } from '../hooks/use-schedules';
+import { useCampaigns } from '@/features/campaigns/hooks/use-campaigns';
+import { useScenarioTemplates } from '@/features/scenario-templates/hooks/use-scenario-templates';
+import { useDeviceGroups } from '@/features/device-groups/hooks/use-device-groups';
+import type { ScheduleOut, SchedulePatch, ScheduleCreate } from '../services/api';
+import { formatFarmApiError } from '@/lib/format-farm-api-error';
+import { CronBuilder } from './cron-builder';
+import { VariableEditor } from '@/components/variable-editor';
+import { FlowEditor } from '@/features/campaigns/components/flow-editor';
+import type { FlowStep } from '@/features/campaigns/components/scenario-steps/types';
+import { validateScenarioStepsForApi } from '@/features/campaigns/utils/validate-scenario-steps-for-api';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import { Switch } from '@/components/ui/switch';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select';
+
+type Mode = 'create' | 'edit';
+
+export function ScheduleFormDialog({
+  open,
+  onOpenChange,
+  mode,
+  schedule
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  mode: Mode;
+  schedule?: ScheduleOut | null;
+}) {
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [targetType, setTargetType] = useState<ScheduleCreate['target_type']>('campaign');
+  const [targetId, setTargetId] = useState<string | null>(null);
+
+  const [cronExpression, setCronExpression] = useState('*/30 * * * *');
+  const [timezone, setTimezone] = useState('Asia/Ho_Chi_Minh');
+
+  const [deviceGroupId, setDeviceGroupId] = useState<string | null>(null);
+
+  const [filterState, setFilterState] = useState('READY');
+  const [filterModel, setFilterModel] = useState<string>('');
+  const [maxDevices, setMaxDevices] = useState<number | null>(null);
+
+  const [randomDelayMin, setRandomDelayMin] = useState(0);
+  const [randomDelayMax, setRandomDelayMax] = useState(0);
+  const [staggerDevices, setStaggerDevices] = useState(false);
+  const [staggerIntervalSeconds, setStaggerIntervalSeconds] = useState(60);
+
+  const [isEnabled, setIsEnabled] = useState(true);
+
+  const [inlineSteps, setInlineSteps] = useState<FlowStep[]>([]);
+  const [inlineVariables, setInlineVariables] = useState<Record<string, any>>({});
+
+  const { data: campaigns } = useCampaigns();
+  const { data: templates } = useScenarioTemplates();
+  const { data: groups } = useDeviceGroups();
+
+  const createMutation = useCreateSchedule();
+  const updateMutation = useUpdateSchedule();
+
+  const title = mode === 'create' ? 'Create schedule' : `Edit schedule: ${schedule?.name ?? ''}`;
+
+  useEffect(() => {
+    if (!open) return;
+    if (mode === 'create') {
+      setName('');
+      setDescription('');
+      setTargetType('campaign');
+      setTargetId(null);
+      setCronExpression('*/30 * * * *');
+      setTimezone('Asia/Ho_Chi_Minh');
+      setDeviceGroupId(null);
+      setFilterState('READY');
+      setFilterModel('');
+      setMaxDevices(null);
+      setRandomDelayMin(0);
+      setRandomDelayMax(0);
+      setStaggerDevices(false);
+      setStaggerIntervalSeconds(60);
+      setIsEnabled(true);
+      setInlineSteps([]);
+      setInlineVariables({});
+      return;
+    }
+
+    const s = schedule;
+    if (!s) return;
+    setName(s.name ?? '');
+    setDescription(s.description ?? '');
+    setTargetType(s.target_type as any);
+    setTargetId(s.target_id ?? null);
+    setCronExpression(s.cron_expression ?? '*/30 * * * *');
+    setTimezone(s.timezone ?? 'Asia/Ho_Chi_Minh');
+    setDeviceGroupId(s.device_group_id ?? null);
+    setFilterState(s.filter_state ?? 'READY');
+    setFilterModel(s.filter_model ?? '');
+    setMaxDevices(s.max_devices ?? null);
+    setRandomDelayMin((s as any).random_delay_min ?? 0);
+    setRandomDelayMax((s as any).random_delay_max ?? 0);
+    setStaggerDevices(Boolean((s as any).stagger_devices));
+    setStaggerIntervalSeconds((s as any).stagger_interval_seconds ?? 60);
+    setIsEnabled(Boolean((s as any).is_enabled));
+    setInlineSteps(Array.isArray(s.inline_steps) ? (s.inline_steps as any as FlowStep[]) : []);
+    setInlineVariables(s.inline_variables ?? {});
+  }, [open, mode, schedule]);
+
+  const onSubmit = async () => {
+    if (!name.trim()) {
+      toast.error('Schedule name is required');
+      return;
+    }
+    const cron = cronExpression.trim();
+    const tz = timezone.trim();
+    if (!cron) {
+      toast.error('cron_expression is required');
+      return;
+    }
+    if ((targetType === 'campaign' || targetType === 'template') && !targetId) {
+      toast.error(`target_id is required when target_type="${targetType}"`);
+      return;
+    }
+    if (targetType === 'fleet') {
+      if (!inlineSteps.length) {
+        toast.error('inline_steps is required when target_type="fleet"');
+        return;
+      }
+      const check = validateScenarioStepsForApi(inlineSteps);
+      if (!check.ok) {
+        toast.error(check.message);
+        return;
+      }
+    }
+
+    if (randomDelayMax > 0 && randomDelayMax < randomDelayMin) {
+      toast.error('random_delay_max must be >= random_delay_min');
+      return;
+    }
+
+    if (mode === 'create') {
+      const data: ScheduleCreate = {
+        name: name.trim(),
+        description: description ?? '',
+        target_type: targetType,
+        target_id: targetType === 'fleet' ? null : targetId,
+        cron_expression: cron,
+        timezone: tz ? tz : undefined,
+        device_group_id: deviceGroupId ?? undefined,
+        filter_state: filterState || 'READY',
+        filter_model: filterModel?.trim() ? filterModel.trim() : undefined,
+        max_devices: maxDevices ?? undefined,
+        random_delay_min: randomDelayMin ?? 0,
+        random_delay_max: randomDelayMax ?? 0,
+        stagger_devices: staggerDevices,
+        stagger_interval_seconds: staggerIntervalSeconds,
+        is_enabled: isEnabled
+      };
+
+      if (targetType === 'fleet') {
+        data.inline_steps = inlineSteps as any;
+        data.inline_variables = inlineVariables ?? {};
+      }
+
+      createMutation.mutate(data, {
+        onSuccess: () => {
+          toast.success('Schedule created');
+          onOpenChange(false);
+        },
+        onError: (err: unknown) => toast.error(formatFarmApiError(err, 'Create schedule failed'))
+      });
+      return;
+    }
+
+    const s = schedule;
+    if (!s?.id) return;
+
+    const patch: SchedulePatch = {
+      name: name.trim(),
+      description: description ?? '',
+      target_type: targetType,
+      target_id: targetType === 'fleet' ? null : targetId,
+      cron_expression: cron,
+      timezone: tz ? tz : undefined,
+      device_group_id: deviceGroupId ?? undefined,
+      filter_state: filterState || 'READY',
+      filter_model: filterModel?.trim() ? filterModel.trim() : undefined,
+      max_devices: maxDevices ?? undefined,
+      random_delay_min: randomDelayMin ?? 0,
+      random_delay_max: randomDelayMax ?? 0,
+      stagger_devices: staggerDevices,
+      stagger_interval_seconds: staggerIntervalSeconds,
+      is_enabled: isEnabled
+    };
+
+    if (targetType === 'fleet') {
+      patch.inline_steps = inlineSteps as any;
+      patch.inline_variables = inlineVariables ?? {};
+    } else {
+      patch.inline_steps = undefined;
+      patch.inline_variables = undefined;
+    }
+
+    updateMutation.mutate(
+      { scheduleId: s.id, data: patch },
+      {
+        onSuccess: () => {
+          toast.success('Schedule updated');
+          onOpenChange(false);
+        },
+        onError: (err: unknown) => toast.error(formatFarmApiError(err, 'Update schedule failed'))
+      }
+    );
+  };
+
+  const isPending = mode === 'create' ? createMutation.isPending : updateMutation.isPending;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className='z-[1000] max-w-6xl max-h-[90vh] overflow-y-auto'>
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+        </DialogHeader>
+
+        <div className='space-y-5 pt-2'>
+          <div className='grid grid-cols-2 gap-4'>
+            <div className='space-y-1'>
+              <Label>name</Label>
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder='Schedule name' />
+            </div>
+            <div className='space-y-1'>
+              <Label>Enabled</Label>
+              <div className='flex items-center gap-3 pt-2'>
+                <Switch checked={isEnabled} onCheckedChange={setIsEnabled} />
+                <span className='text-sm text-muted-foreground'>{isEnabled ? 'ON' : 'OFF'}</span>
+              </div>
+            </div>
+          </div>
+
+          <div className='space-y-1'>
+            <Label>description</Label>
+            <Textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={2}
+              placeholder='Optional'
+            />
+          </div>
+
+          <div className='space-y-3 rounded border p-3'>
+            <div className='grid grid-cols-2 gap-3'>
+              <div className='space-y-1'>
+                <Label>Target type</Label>
+                <Select
+                  value={targetType}
+                  onValueChange={(v) => {
+                    const next = v as ScheduleCreate['target_type'];
+                    setTargetType(next);
+                    if (next === 'fleet') setTargetId(null);
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value='campaign'>Campaign</SelectItem>
+                    <SelectItem value='template'>Template</SelectItem>
+                    <SelectItem value='fleet'>Fleet (inline)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {(targetType === 'campaign' || targetType === 'template') && (
+                <div className='space-y-1'>
+                  <Label>Target</Label>
+                  {targetType === 'campaign' ? (
+                    <Select value={targetId ?? '_none'} onValueChange={(v) => setTargetId(v === '_none' ? null : v)}>
+                      <SelectTrigger>
+                        <SelectValue placeholder='Pick a campaign' />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value='_none'>Select campaign</SelectItem>
+                        {(campaigns ?? []).map((c) => (
+                          <SelectItem key={c.id} value={c.id}>
+                            {c.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <Select value={targetId ?? '_none'} onValueChange={(v) => setTargetId(v === '_none' ? null : v)}>
+                      <SelectTrigger>
+                        <SelectValue placeholder='Pick a template' />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value='_none'>Select template</SelectItem>
+                        {(templates ?? []).map((tpl) => (
+                          <SelectItem key={tpl.id} value={tpl.id}>
+                            {tpl.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {targetType === 'fleet' && (
+              <div className='space-y-2 pt-2'>
+                <Label>inline_steps ({inlineSteps.length})</Label>
+                <FlowEditor steps={inlineSteps} onChange={setInlineSteps} compact maxHeight='min(420px,48vh)' />
+              </div>
+            )}
+          </div>
+
+          <div className='space-y-2'>
+            <CronBuilder value={cronExpression} onChange={(next) => setCronExpression(next)} />
+          </div>
+
+          <div className='grid grid-cols-2 gap-4'>
+            <div className='space-y-1'>
+              <Label>Timezone</Label>
+              <Input value={timezone} onChange={(e) => setTimezone(e.target.value)} placeholder='Asia/Ho_Chi_Minh' />
+            </div>
+
+            <div className='space-y-1'>
+              <Label>Device group (optional)</Label>
+              <Select value={deviceGroupId ?? '_none'} onValueChange={(v) => setDeviceGroupId(v === '_none' ? null : v)}>
+                <SelectTrigger>
+                  <SelectValue placeholder='All READY devices' />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value='_none'>All READY devices</SelectItem>
+                  {(groups ?? []).map((g) => (
+                    <SelectItem key={g.id} value={g.id}>
+                      {g.name} ({g.device_count})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className='grid grid-cols-3 gap-4'>
+            <div className='space-y-1'>
+              <Label>filter_state</Label>
+              <Input value={filterState} onChange={(e) => setFilterState(e.target.value)} placeholder='READY' />
+            </div>
+            <div className='space-y-1'>
+              <Label>filter_model</Label>
+              <Input value={filterModel} onChange={(e) => setFilterModel(e.target.value)} placeholder='optional model' />
+            </div>
+            <div className='space-y-1'>
+              <Label>max_devices</Label>
+              <Input
+                type='number'
+                value={maxDevices ?? ''}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setMaxDevices(v === '' ? null : Math.max(1, Number(v)));
+                }}
+                placeholder='optional'
+              />
+            </div>
+          </div>
+
+          <div className='rounded border p-3 space-y-3'>
+            <div className='grid grid-cols-2 gap-4'>
+              <div className='space-y-1'>
+                <Label>random_delay_min (seconds)</Label>
+                <Input type='number' min={0} value={randomDelayMin} onChange={(e) => setRandomDelayMin(Math.max(0, Number(e.target.value) || 0))} />
+              </div>
+              <div className='space-y-1'>
+                <Label>random_delay_max (seconds)</Label>
+                <Input type='number' min={0} value={randomDelayMax} onChange={(e) => setRandomDelayMax(Math.max(0, Number(e.target.value) || 0))} />
+              </div>
+            </div>
+
+            <div className='flex items-center justify-between gap-3'>
+              <div className='space-y-1'>
+                <Label>stagger_devices</Label>
+                <p className='text-[11px] text-muted-foreground'>Offset dispatch per device by stagger_interval_seconds.</p>
+              </div>
+              <div className='flex items-center gap-3'>
+                <Switch checked={staggerDevices} onCheckedChange={setStaggerDevices} />
+              </div>
+            </div>
+
+            {staggerDevices && (
+              <div className='space-y-1'>
+                <Label>stagger_interval_seconds</Label>
+                <Input
+                  type='number'
+                  min={1}
+                  max={3600}
+                  value={staggerIntervalSeconds}
+                  onChange={(e) => setStaggerIntervalSeconds(Math.max(1, Math.min(3600, Number(e.target.value) || 60)))}
+                />
+              </div>
+            )}
+          </div>
+
+          {targetType === 'fleet' && (
+            <details className='group'>
+              <summary className='cursor-pointer text-sm font-medium flex items-center gap-2'>
+                inline_variables (optional)
+                {Object.keys(inlineVariables ?? {}).length > 0 && (
+                  <span className='text-xs text-muted-foreground'>({Object.keys(inlineVariables).length})</span>
+                )}
+              </summary>
+              <div className='pt-2'>
+                <VariableEditor variables={inlineVariables} onChange={setInlineVariables} />
+                <p className='mt-1 text-[10px] text-muted-foreground'>
+                  JSON values are parsed automatically. You can use{' '}
+                  <code className='rounded bg-muted px-1 py-0.5'>{'${__DEVICE_SERIAL__}'}</code>, etc.
+                </p>
+              </div>
+            </details>
+          )}
+
+          {(createMutation.error || updateMutation.error) && (
+            <p className='text-xs text-destructive'>
+              {formatFarmApiError(
+                mode === 'create' ? createMutation.error : updateMutation.error,
+                mode === 'create' ? 'Create schedule failed' : 'Update schedule failed'
+              )}
+            </p>
+          )}
+
+          <div className='flex items-center justify-end gap-2 pt-2'>
+            <Button size='sm' variant='outline' onClick={() => onOpenChange(false)} disabled={isPending}>
+              Cancel
+            </Button>
+            <Button size='sm' onClick={() => void onSubmit()} disabled={isPending}>
+              {isPending ? 'Saving…' : mode === 'create' ? 'Create schedule' : 'Save changes'}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+

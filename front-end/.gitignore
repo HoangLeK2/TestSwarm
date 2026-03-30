@@ -43,6 +43,7 @@ next-env.d.ts
 # cursor 
 .cursorrules
 .serena
+.docs
 /memory-bank
 
 # Sentry Config File

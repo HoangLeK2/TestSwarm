@@ -23,13 +23,17 @@ Executor này chỉ đọc từng step và gọi DeviceClient/u2 cho phù hợp.
 
 import concurrent.futures
 import io
+import json
 import logging
 import os
 import random
 import re
+import threading
 import time
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypedDict, Literal, Sequence
+
+from tenacity import retry, stop_after_delay, wait_fixed, retry_if_result, before_sleep_log
 
 # Useless container classes that appear in STF flat XML — skip as selectors,
 # use ratio fallback instead (same logic as frontend CONTAINER_CLASSES).
@@ -343,8 +347,8 @@ def _wait_for_element(
                     result = u2.find_element_with_bounds(by, value)
                     if result:
                         return result
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.debug("find_element_with_bounds failed (%s=%r): %s", by, value, exc)
             return eid
         except Exception as exc:
             log.debug("_wait_for_element %s=%r error: %s", by, value, exc)
@@ -369,6 +373,108 @@ def _wait_for_element(
                 return None
         time.sleep(poll)
     return None
+
+
+# ---------------------------------------------------------------------------
+# Tenacity-based retry-until-visible
+# ---------------------------------------------------------------------------
+# Wraps element lookup with automatic retries.  Used by _execute_tap,
+# input_selector, long_tap_selector, etc. so that the script tolerates
+# dynamic loading / slow app transitions without manual wait_element steps.
+#
+# Default: poll every 500 ms, give up after 10 s (configurable per step
+# via ``implicit_wait`` or at scenario level via ``implicit_wait``).
+# ---------------------------------------------------------------------------
+
+def _retry_find_element(
+    u2,
+    by: str,
+    value: str,
+    timeout: float = 10.0,
+    poll: float = 0.5,
+) -> Optional[Any]:
+    """
+    Find element with Tenacity retry.  Returns element id/dict or None.
+
+    Unlike _wait_for_element (which uses server-side waitForExists for
+    non-xpath), this function retries the *entire* find_element call,
+    handling transient u2 errors (connection hiccups, hierarchy not ready).
+    """
+    if u2 is None:
+        return None
+
+    @retry(
+        stop=stop_after_delay(timeout),
+        wait=wait_fixed(poll),
+        retry=retry_if_result(lambda r: r is None),
+        before_sleep=before_sleep_log(log, logging.DEBUG),
+        reraise=False,
+    )
+    def _find():
+        try:
+            # Quick server-side check (timeout=0.5s per attempt)
+            eid = u2.find_element(by, value, timeout=min(0.5, poll))
+            if eid is None:
+                return None   # triggers retry
+            # Try to get bounds for accurate tap targeting
+            if hasattr(u2, "find_element_with_bounds"):
+                try:
+                    result = u2.find_element_with_bounds(by, value)
+                    if result:
+                        return result
+                except Exception:
+                    pass
+            return eid
+        except Exception as exc:
+            log.debug("_retry_find_element %s=%r attempt error: %s", by, value, exc)
+            return None  # triggers retry
+
+    try:
+        return _find()
+    except Exception:
+        # Tenacity exhausted all retries — element not found
+        return None
+
+
+_IW_DEFAULT_TIMEOUT = 10.0
+_IW_DEFAULT_POLL = 0.5
+_IW_MAX_TIMEOUT = 60.0
+
+
+def _get_implicit_wait_config(
+    step: Dict[str, Any],
+    scenario_config: Dict[str, Any],
+) -> Tuple[float, float]:
+    """
+    Resolve implicit_wait timeout and poll interval.
+
+    Priority: step.implicit_wait > scenario.implicit_wait > defaults (10s / 0.5s).
+    Accepts either a number (timeout only) or a dict {timeout, poll}.
+    Clamps timeout to [0.1, 60] to prevent runaway waits.
+    """
+    for source in (step, scenario_config):
+        iw = source.get("implicit_wait")
+        if iw is not None:
+            if isinstance(iw, (int, float)):
+                t = min(max(0.1, float(iw)), _IW_MAX_TIMEOUT)
+                return t, _IW_DEFAULT_POLL
+            if isinstance(iw, dict):
+                t = min(max(0.1, float(iw.get("timeout", _IW_DEFAULT_TIMEOUT))), _IW_MAX_TIMEOUT)
+                p = max(0.1, float(iw.get("poll", _IW_DEFAULT_POLL)))
+                return t, p
+    return _IW_DEFAULT_TIMEOUT, _IW_DEFAULT_POLL
+
+
+def _decode_element_image(b64_or_none: Optional[str]) -> Optional[bytes]:
+    """Decode base64 element image for visual anchoring. Returns None on failure."""
+    if not b64_or_none:
+        return None
+    try:
+        from runtime.visual_anchor import _b64_to_bytes
+        return _b64_to_bytes(b64_or_none)
+    except Exception as exc:
+        log.warning("Failed to decode element_image: %s", exc)
+        return None
 
 
 def _wait_element_gone(
@@ -549,6 +655,14 @@ def _tap_best_in_bounds(
     device.tap(cx, cy)
 
 
+def _make_bounds(cx: int, cy: int, pad: int, w: int, h: int) -> Dict[str, int]:
+    """Create a bounds dict centered on (cx, cy) with padding."""
+    return {
+        "left": max(0, cx - pad), "top": max(0, cy - pad),
+        "right": min(w, cx + pad), "bottom": min(h, cy + pad),
+    }
+
+
 def _execute_tap(
     device: "DeviceClient",
     by: Optional[str],
@@ -557,101 +671,102 @@ def _execute_tap(
     fallback_ry: Optional[float],
     timeout: float = 4.0,
     retries: int = 2,
+    implicit_wait_timeout: float = 10.0,
+    implicit_wait_poll: float = 0.5,
+    element_image: Optional[bytes] = None,
+    image_threshold: float = 0.7,
+    screenshot_anchor: Optional[Dict[str, Any]] = None,
 ) -> Tuple[bool, str, Optional[Dict[str, int]]]:
     """
-    Full tap pipeline:
-      1. wait_for_element (poll 300ms, up to `timeout`)
-      2. tap at recorded position (fallback_rx/ry) if within bounds, else center of bounds
-      3. on fail → retry up to `retries` times
-      4. final fallback → ratio tap
+    Full tap pipeline: selector → image match (ROI→full) → position fallback.
+
+    Uses ElementResolver for phased resolution. Each phase is a pure "find"
+    returning coordinates; the actual device.tap() happens here after resolution.
+
     Returns (ok, message, bounds_or_none).
     """
+    from runtime.element_resolver import (
+        ElementResolver, phase_selector, phase_image, phase_ratio, phase_healing,
+    )
+
     serial = device.serial
     w = device.screen_width or 1080
     h = device.screen_height or 1920
     u2 = device.u2
 
-    # Skip useless container class selectors (same list as frontend CONTAINER_CLASSES).
-    # STF flat XML returns only window-container nodes, so these selectors always
-    # match the wrong element (whole-screen FrameLayout). Treat as no selector.
+    # Skip useless container class selectors
+    effective_by = by
+    effective_value = value
     if by == "class name" and value in _CONTAINER_CLASSES:
-        log.debug(f"[{serial}] selector class={value!r} is a container — skipping to ratio fallback")
-        by = None
-        value = None
+        log.debug(f"[{serial}] selector class={value!r} is container — skip to fallback")
+        effective_by = None
+        effective_value = None
 
-    # ── Try selector path (wrapped in try/except → any failure falls through to position fallback)
-    selector_tried = False
-    if u2 and by and value:
-        selector_tried = True
-        try:
-            for attempt in range(retries):
-                result = _wait_for_element(u2, by, value, timeout=timeout)
-                if result is not None:
-                    bounds = None
-                    if isinstance(result, dict):
-                        bounds = result.get("bounds")
-                        eid = result.get("eid", f"{by}::{value}")
-                    else:
-                        eid = result
-                        try:
-                            r2 = u2.find_element_with_bounds(by, value)
-                            bounds = r2.get("bounds") if r2 else None
-                        except Exception:
-                            pass
+    # Build ordered resolution phases
+    phases = []
 
-                    if bounds and fallback_rx is not None and fallback_ry is not None:
-                        hx = int(fallback_rx * w)
-                        hy = int(fallback_ry * h)
-                        TOLERANCE = 120
-                        wrong_element = not (
-                            bounds.get("left", 0) - TOLERANCE <= hx <= bounds.get("right", w) + TOLERANCE
-                            and bounds.get("top", 0) - TOLERANCE <= hy <= bounds.get("bottom", h) + TOLERANCE
-                        )
-                        if wrong_element:
-                            log.warning(
-                                f"[{serial}] selector {by}={value!r} bounds {bounds} "
-                                f"don't match recorded position ({hx},{hy}) → fallback"
-                            )
-                            break  # → position fallback below
+    # Phase 1: Selector
+    has_selector = bool(u2 and effective_by and effective_value)
+    if has_selector:
+        phases.append(lambda: phase_selector(
+            u2, effective_by, effective_value,
+            fallback_rx, fallback_ry,
+            implicit_wait_timeout, implicit_wait_poll,
+            w, h,
+            find_fn=_retry_find_element,
+        ))
 
-                        log.debug(f"[{serial}] {by}={value!r} OK → tap recorded ({hx},{hy})")
-                        device.tap(hx, hy)
-                        return True, f"selector {by}={value!r} tapped", bounds
-                    elif bounds:
-                        cx = (bounds.get("left", 0) + bounds.get("right", w)) // 2
-                        cy = (bounds.get("top", 0) + bounds.get("bottom", h)) // 2
-                        device.tap(cx, cy)
-                        return True, f"selector {by}={value!r} tapped (center)", bounds
-                    elif fallback_rx is not None and fallback_ry is not None:
-                        fx = max(0, min(w - 1, int(fallback_rx * w)))
-                        fy = max(0, min(h - 1, int(fallback_ry * h)))
-                        device.tap(fx, fy)
-                        return True, f"selector {by}={value!r} found, no bounds → tap position", None
-                    else:
-                        u2.element_click(eid)
-                        return True, f"selector {by}={value!r} tapped (element_click)", None
-                else:
-                    log.warning(f"[{serial}] selector {by}={value!r} not found (attempt {attempt + 1}/{retries})")
-        except Exception as exc:
-            log.warning(f"[{serial}] selector path error: {exc} → falling back to position")
+    # Phase 1.5: Self-healing (alternative selector when primary fails)
+    if has_selector and fallback_rx is not None and fallback_ry is not None:
+        phases.append(lambda: phase_healing(
+            u2, device, effective_by, effective_value,
+            fallback_rx, fallback_ry, w, h,
+            implicit_wait_timeout=3.0,
+        ))
 
-    # ── Position fallback: ALWAYS runs if selector failed/skipped and position available
+    # Phase 2: Image match (ROI-optimized if screenshot_anchor available)
+    if element_image is not None:
+        phases.append(lambda: phase_image(
+            device, element_image, image_threshold, w, h,
+            screenshot_anchor=screenshot_anchor,
+        ))
+
+    # Phase 3: Ratio fallback
     if fallback_rx is not None and fallback_ry is not None:
-        fx = max(0, min(w - 1, int(fallback_rx * w)))
-        fy = max(0, min(h - 1, int(fallback_ry * h)))
-        reason = "selector failed → " if selector_tried else ""
-        # Synthesize bounds around tap point for capture
-        PAD = 50
-        fb = {"left": max(0, fx - PAD), "top": max(0, fy - PAD),
-              "right": min(w, fx + PAD), "bottom": min(h, fy + PAD)}
-        try:
-            device.tap(fx, fy)
-            time.sleep(0.3)
-            return True, f"{reason}fallback position ({fallback_rx:.3f},{fallback_ry:.3f})", fb
-        except Exception as exc:
-            return False, f"fallback tap failed: {exc}", None
+        phases.append(lambda: phase_ratio(
+            device, fallback_rx, fallback_ry, w, h,
+            selector_tried=has_selector,
+        ))
 
-    return False, f"selector {by}={value!r} not found, no fallback position", None
+    resolver = ElementResolver(phases=phases)
+    result = resolver.resolve()
+
+    if not result.hit:
+        return False, f"selector {by}={value!r} not found, no fallback position", None
+
+    # Execute the tap
+    if result.x == -1 and result.y == -1:
+        # Special case: element_click (no bounds available from selector)
+        try:
+            eid_result = _retry_find_element(u2, effective_by, effective_value, timeout=1.0, poll=0.3)
+            if eid_result is not None:
+                eid = eid_result.get("eid", f"{effective_by}::{effective_value}") if isinstance(eid_result, dict) else eid_result
+                u2.element_click(eid)
+            else:
+                return False, f"selector {by}={value!r} lost before click", None
+        except Exception as exc:
+            return False, f"element_click failed: {exc}", None
+    else:
+        try:
+            device.tap(result.x, result.y)
+        except Exception as exc:
+            return False, f"tap ({result.x},{result.y}) failed: {exc}", None
+
+    # For ratio fallback, add the brief wait that was in the original
+    if result.method == "fallback_position":
+        time.sleep(0.3)
+
+    return True, result.message, result.bounds
 
 
 def _evaluate_condition(device: "DeviceClient", condition: Dict[str, Any], ctx: Dict[str, Any]) -> bool:
@@ -830,14 +945,20 @@ def _eval_ru_condition(
     if "variable_equals" in condition:
         spec = condition["variable_equals"]
         name = str(spec.get("name", ""))
-        expected = str(spec.get("value", ""))
         if not name:
             return False
+        # Resolve templated expected value, e.g. "${MAX_POSTS}".
+        expected = str(var_ctx.resolve(spec.get("value", ""), step_index=0))
         actual = str(var_ctx.resolve(f"${{{name}}}", step_index=0))
         return actual == expected
 
     log.warning("repeat_until: unknown condition keys: %r", list(condition.keys()))
     return False
+
+
+class ScenarioCancelled(Exception):
+    """Raised when scenario is cancelled via cancel_event."""
+    pass
 
 
 def run_scenario_task(
@@ -848,12 +969,15 @@ def run_scenario_task(
     _var_ctx: Optional[VariableContext] = None,
     _depth: int = 0,
     _call_stack: frozenset[str] = frozenset(),
+    cancel_event: Optional["threading.Event"] = None,
 ) -> Dict[str, Any]:
     """
     Thực thi 1 scenario JSON trên 1 device.
 
     Đây là lớp "thực thi" thuần deterministic. AI/MCP chỉ cần sinh ra `scenario`
     đúng schema; mọi thao tác cụ thể đều do code này handle.
+
+    cancel_event: threading.Event — nếu set(), scenario dừng graceful ở step tiếp theo.
     """
     serial = device.serial
     steps: List[ScenarioStep] = scenario.get("steps", []) or []  # type: ignore[assignment]
@@ -888,6 +1012,42 @@ def run_scenario_task(
     w = device.screen_width or 1080
     h = device.screen_height or 1920
 
+    # ── Implicit wait config (Tenacity retry-until-visible) ──────────
+    # Scenario-level default: { "implicit_wait": 10 } or { "implicit_wait": { "timeout": 10, "poll": 0.5 } }
+    # Step-level override: each step can set its own "implicit_wait".
+    _scenario_iw_config: Dict[str, Any] = {}
+    _raw_iw = scenario.get("implicit_wait")
+    if _raw_iw is not None:
+        if isinstance(_raw_iw, (int, float)):
+            _scenario_iw_config["implicit_wait"] = _raw_iw
+        elif isinstance(_raw_iw, dict):
+            _scenario_iw_config["implicit_wait"] = _raw_iw
+
+    # ── Visual Anchoring config ─────────────────────────────────────
+    _va_raw = scenario.get("visual_anchor")
+    _va_ssim_threshold = 0.65  # lenient: status bar (time/battery) changes ~5-10% of pixels
+    _va_image_threshold = 0.7
+    _va_screen_timeout = 3.0   # only used when no selector — short timeout avoids blocking
+    _va_screen_poll = 0.5
+
+    if isinstance(_va_raw, bool):
+        _visual_anchor_enabled = _va_raw
+    elif isinstance(_va_raw, dict):
+        _visual_anchor_enabled = bool(_va_raw.get("enabled", True))
+        _va_ssim_threshold = max(0.0, min(1.0, float(_va_raw.get("ssim_threshold", 0.75))))
+        _va_image_threshold = max(0.0, min(1.0, float(_va_raw.get("image_threshold", 0.7))))
+        _va_screen_timeout = min(float(_va_raw.get("screen_timeout", 8.0)), _IW_MAX_TIMEOUT)
+        _va_screen_poll = max(0.1, float(_va_raw.get("screen_poll", 0.5)))
+    else:
+        # Auto-enable if any step has visual anchor data
+        _visual_anchor_enabled = any(
+            (s.get("screen") or {}).get("screenshot") or (s.get("screen") or {}).get("element_image")
+            for s in steps if isinstance(s, dict)
+        )
+
+    if _visual_anchor_enabled:
+        log.info(f"[{serial}] Visual Anchoring ON (SSIM≥{_va_ssim_threshold}, image≥{_va_image_threshold})")
+
     # Step screenshot capture (debug mode)
     capture_enabled = (
         scenario.get("capture_steps", False)
@@ -909,6 +1069,19 @@ def run_scenario_task(
     _last_popup_t: float = 0.0
 
     for idx, raw_step in enumerate(steps):
+        # ── Cancellation checkpoint ──────────────────────────────────────
+        if cancel_event is not None and cancel_event.is_set():
+            log.info(f"[{serial}] scenario CANCELLED at step#{idx + 1}")
+            step_results.append({"index": idx, "type": "cancelled", "ok": False, "message": "Cancelled by user"})
+            return {
+                "serial": serial,
+                "success": False,
+                "steps_executed": idx,
+                "step_results": step_results,
+                "failed_message": f"Cancelled at step {idx + 1}",
+                "context": ctx,
+            }
+
         step: Dict[str, Any] = _var_ctx.resolve(raw_step, step_index=idx)
         t = step.get("type")
         log.info(f"[{serial}] step#{idx + 1}: {t} {step}")
@@ -961,11 +1134,17 @@ def run_scenario_task(
                 step_result["ok"] = True
                 step_result["message"] = "wait 0s (skipped sleep)"
             else:
-                time.sleep(secs)
+                # Interruptible sleep: check cancel_event every 200ms
+                deadline = time.monotonic() + secs
+                _CHUNK = 0.2
+                while time.monotonic() < deadline:
+                    if cancel_event is not None and cancel_event.is_set():
+                        break
+                    time.sleep(min(_CHUNK, max(0.0, deadline - time.monotonic())))
 
         elif t == "tap":
             # Full pipeline:
-            # dismiss_popup? → wait_stable → wait_for_selector → tap_random_in_bounds → wait_ui_change
+            # dismiss_popup? → wait_for_selector → image_match → fallback_position
             selector    = step.get("selector") or {}
             fallback    = step.get("fallback") or {}
             screen_ctx  = step.get("screen") or {}
@@ -982,15 +1161,35 @@ def run_scenario_task(
                 and not (sel_by == "class name" and sel_value in _CONTAINER_CLASSES)
             )
 
-            # Layer 1: auto-dismiss popup — rate-limited to once every 5s.
-            # Dumping XML hierarchy is expensive (0.5-1.5s); popups don't appear on every tap.
-            now_t = time.monotonic()
-            if now_t - _last_popup_t >= 5.0:
-                dismissed = _auto_dismiss_popup(device)
-                _last_popup_t = time.monotonic()
-                if dismissed:
-                    step_result["popup_dismissed"] = True
+            # ── Visual Anchoring: verify screen state before tapping ──
+            # Skip when a reliable selector exists — finding the element already
+            # proves we're on the correct screen. SSIM is only useful when we
+            # have to rely on recorded coordinates (no selector / fallback-only).
+            screen_screenshot_b64 = screen_ctx.get("screenshot")
+            if _visual_anchor_enabled and screen_screenshot_b64 and not has_real_selector:
+                try:
+                    from runtime.visual_anchor import wait_for_screen_match, _b64_to_bytes
+                    recorded_jpeg = _b64_to_bytes(screen_screenshot_b64)
+                    matched, ssim = wait_for_screen_match(
+                        device.take_screenshot, recorded_jpeg,
+                        timeout=_va_screen_timeout, poll=_va_screen_poll,
+                        ssim_threshold=_va_ssim_threshold,
+                    )
+                    step_result["screen_ssim"] = round(ssim, 3)
+                    if not matched:
+                        # Info-level only — SSIM mismatch is non-blocking (execution continues).
+                        # Use verify_screen step for intentional hard checks.
+                        log.info(f"[{serial}] step#{idx+1} screen SSIM={ssim:.3f} < {_va_ssim_threshold} (proceeding)")
+                        step_result["screen_mismatch"] = True
+                except ImportError:
+                    pass
+                except Exception as exc:
+                    log.debug(f"[{serial}] screen verify error: {exc}")
 
+            elem_img_bytes = _decode_element_image(screen_ctx.get("element_image"))
+            ss_anchor = screen_ctx.get("screenshot_anchor")
+
+            iw_timeout, iw_poll = _get_implicit_wait_config(step, _scenario_iw_config)
             ok, msg, tap_bounds = _execute_tap(
                 device,
                 by=sel_by,
@@ -999,19 +1198,76 @@ def run_scenario_task(
                 fallback_ry=fallback_ry,
                 timeout=tap_timeout,
                 retries=1,
+                implicit_wait_timeout=iw_timeout,
+                implicit_wait_poll=iw_poll,
+                element_image=elem_img_bytes,
+                image_threshold=_va_image_threshold,
+                screenshot_anchor=ss_anchor,
             )
+
+            # Auto-dismiss popup only when tap failed — avoids dismissing the
+            # intended target element whose text happens to match a popup pattern.
+            if not ok:
+                now_t = time.monotonic()
+                if now_t - _last_popup_t >= 5.0:
+                    dismissed = _auto_dismiss_popup(device)
+                    _last_popup_t = time.monotonic()
+                    if dismissed:
+                        step_result["popup_dismissed"] = True
+                        # Retry tap once after popup cleared
+                        ok, msg, tap_bounds = _execute_tap(
+                            device,
+                            by=sel_by,
+                            value=sel_value,
+                            fallback_rx=fallback_rx,
+                            fallback_ry=fallback_ry,
+                            timeout=tap_timeout,
+                            retries=1,
+                            implicit_wait_timeout=iw_timeout,
+                            implicit_wait_poll=iw_poll,
+                            element_image=elem_img_bytes,
+                            image_threshold=_va_image_threshold,
+                            screenshot_anchor=ss_anchor,
+                        )
             step_result["ok"] = ok
             if msg:
                 step_result["message"] = msg
                 # Tag method for frontend display
-                if "fallback position" in msg:
+                if "image match" in msg:
+                    step_result["method"] = "image_match"
+                elif "fallback position" in msg:
                     step_result["method"] = "fallback_position"
+                elif msg.startswith("healed "):
+                    step_result["method"] = "healed_selector"
                 elif "selector" in msg:
                     step_result["method"] = "selector"
             if screen_ctx:
                 step_result["screen_context"] = screen_ctx
             if tap_bounds:
                 step_result["_bounds"] = tap_bounds
+
+            # Self-healing hook:
+            # (A) Proactive: healed_selector was found in Phase 1.5 — extract from message.
+            # (B) Reactive: image_match succeeded (selector stale) — scan XML post-tap.
+            if ok:
+                try:
+                    from runtime.selector_healer import try_heal_selector, HEALING_ENABLED
+                    if HEALING_ENABLED:
+                        method = step_result.get("method", "")
+                        if method == "healed_selector":
+                            # Phase 1.5 already found the healed selector — parse from message
+                            # e.g. "healed text='Đăng nhập' (was resource-id='com.app:id/btn')"
+                            msg_val = step_result.get("message", "")
+                            import re as _re
+                            m = _re.match(r"healed (\S+)=(.+?) \(was", msg_val)
+                            if m:
+                                step_result["healed_selector"] = {"by": m.group(1), "value": m.group(2).strip("'")}
+                        elif method == "image_match" and tap_bounds:
+                            healed = try_heal_selector(device, step, tap_bounds)
+                            if healed:
+                                step_result["healed_selector"] = healed
+                except Exception as exc:
+                    log.debug("[%s] selector healing failed: %s", serial, exc)
 
             # Brief fixed wait after tap
             if ok:
@@ -1025,11 +1281,6 @@ def run_scenario_task(
                 rx, ry = 0.5, 0.5
             x = max(0, min(w - 1, int(rx * w)))
             y = max(0, min(h - 1, int(ry * h)))
-            # Rate-limited popup check
-            now_t = time.monotonic()
-            if now_t - _last_popup_t >= 5.0:
-                _auto_dismiss_popup(device)
-                _last_popup_t = time.monotonic()
             try:
                 device.tap(x, y)
                 time.sleep(0.3)  # fixed brief wait — ratio taps don't need XML change detection
@@ -1089,22 +1340,41 @@ def run_scenario_task(
                 step_result["ok"] = False
                 step_result["message"] = "tap_selector: empty value"
             else:
-                # Rate-limited popup check (max once per 5s)
-                now_t = time.monotonic()
-                if now_t - _last_popup_t >= 5.0:
-                    dismissed = _auto_dismiss_popup(device)
-                    _last_popup_t = time.monotonic()
-                    if dismissed:
-                        step_result["popup_dismissed"] = True
+                elem_img_bytes = _decode_element_image(step.get("element_image"))
 
+                iw_timeout, iw_poll = _get_implicit_wait_config(step, _scenario_iw_config)
                 ok, msg, tap_bounds = _execute_tap(
                     device, by=by, value=value,
                     fallback_rx=fallback_rx, fallback_ry=fallback_ry,
                     timeout=sel_timeout, retries=1,
+                    implicit_wait_timeout=iw_timeout,
+                    implicit_wait_poll=iw_poll,
+                    element_image=elem_img_bytes,
+                    image_threshold=_va_image_threshold,
                 )
+
+                # Auto-dismiss popup only on failure — never before the tap.
+                if not ok:
+                    now_t = time.monotonic()
+                    if now_t - _last_popup_t >= 5.0:
+                        dismissed = _auto_dismiss_popup(device)
+                        _last_popup_t = time.monotonic()
+                        if dismissed:
+                            step_result["popup_dismissed"] = True
+                            ok, msg, tap_bounds = _execute_tap(
+                                device, by=by, value=value,
+                                fallback_rx=fallback_rx, fallback_ry=fallback_ry,
+                                timeout=sel_timeout, retries=1,
+                                implicit_wait_timeout=iw_timeout,
+                                implicit_wait_poll=iw_poll,
+                                element_image=elem_img_bytes,
+                                image_threshold=_va_image_threshold,
+                            )
                 step_result["ok"] = ok
                 if msg:
                     step_result["message"] = msg
+                    if "image match" in msg:
+                        step_result["method"] = "image_match"
                 if tap_bounds:
                     step_result["_bounds"] = tap_bounds
                 if ok:
@@ -1119,7 +1389,9 @@ def run_scenario_task(
                 step_result["ok"] = False; step_result["message"] = "wait_element: empty value"
             else:
                 u2 = device.u2
-                eid = _wait_for_element(u2, by, value, timeout=timeout) if u2 else None
+                # Use Tenacity retry for robust element waiting
+                iw_poll = float(step.get("poll", 0.5) or 0.5)
+                eid = _retry_find_element(u2, by, value, timeout=timeout, poll=iw_poll) if u2 else None
                 if eid is None:
                     msg = f"wait_element {by}={value!r} not found after {timeout:.0f}s"
                     log.warning(f"[{serial}] {msg}")
@@ -1136,7 +1408,8 @@ def run_scenario_task(
                 step_result["ok"] = False; step_result["message"] = "assert_element: empty value"
             else:
                 u2 = device.u2
-                eid = _wait_for_element(u2, by, value, timeout=timeout) if u2 else None
+                iw_poll = float(step.get("poll", 0.5) or 0.5)
+                eid = _retry_find_element(u2, by, value, timeout=timeout, poll=iw_poll) if u2 else None
                 if eid is None:
                     msg = f"assert_element FAILED: {by}={value!r} not visible after {timeout:.0f}s"
                     log.warning(f"[{serial}] {msg}")
@@ -1159,9 +1432,14 @@ def run_scenario_task(
                         device.ensure_u2_healthy(); u2 = device.u2
                     if u2 is None:
                         raise RuntimeError("u2 not available")
-                    eid = u2.find_element(by, value)
+                    # Retry-until-visible: wait for the input field to appear
+                    iw_timeout, iw_poll = _get_implicit_wait_config(step, _scenario_iw_config)
+                    eid = _retry_find_element(u2, by, value, timeout=iw_timeout, poll=iw_poll)
                     if eid is None:
-                        raise RuntimeError(f"element not found {by}={value!r}")
+                        raise RuntimeError(f"element not visible after {iw_timeout:.0f}s: {by}={value!r}")
+                    # Extract element id from dict result
+                    if isinstance(eid, dict):
+                        eid = eid.get("eid", f"{by}::{value}")
                     # Click the field to focus it
                     u2.element_click(eid)
                     time.sleep(0.3)
@@ -1189,12 +1467,21 @@ def run_scenario_task(
                         device.ensure_u2_healthy(); u2 = device.u2
                     if u2 is None:
                         raise RuntimeError("u2 not available")
-                    # Get element bounds, then long-tap at center
-                    selector = u2._build_selector(by, value)
-                    info = u2._rpc("objInfo", selector)
-                    if not info:
-                        raise RuntimeError(f"element not found {by}={value!r}")
-                    bounds = info.get("bounds") or {}
+                    # Retry-until-visible: wait for element before long-tapping
+                    iw_timeout, iw_poll = _get_implicit_wait_config(step, _scenario_iw_config)
+                    result = _retry_find_element(u2, by, value, timeout=iw_timeout, poll=iw_poll)
+                    if result is None:
+                        raise RuntimeError(f"element not visible after {iw_timeout:.0f}s: {by}={value!r}")
+                    # Extract bounds from retry result or fetch via objInfo
+                    bounds = None
+                    if isinstance(result, dict):
+                        bounds = result.get("bounds")
+                    if not bounds:
+                        selector = u2._build_selector(by, value)
+                        info = u2._rpc("objInfo", selector)
+                        if not info:
+                            raise RuntimeError(f"element bounds not found {by}={value!r}")
+                        bounds = info.get("bounds") or {}
                     cx = (bounds.get("left", 0) + bounds.get("right", 0)) // 2
                     cy = (bounds.get("top", 0) + bounds.get("bottom", 0)) // 2
                     u2.long_click(cx, cy, duration_ms / 1000.0)
@@ -1374,6 +1661,40 @@ def run_scenario_task(
             step_result["ok"] = True
             step_result["message"] = f"wait_stable: {'stable' if stable else 'timed_out'}"
 
+        elif t == "verify_screen":
+            # Visual Anchoring: compare current screen with recorded screenshot.
+            # Fails if SSIM is below threshold. Use after navigation to ensure
+            # the playback is on the correct screen before proceeding.
+            screenshot_b64 = str(step.get("screenshot") or "").strip()
+            vs_threshold = float(step.get("ssim_threshold", 0.75) or 0.75)
+            vs_timeout = float(step.get("timeout", 8.0) or 8.0)
+            vs_poll = float(step.get("poll", 0.5) or 0.5)
+            if not screenshot_b64:
+                step_result["ok"] = False
+                step_result["message"] = "verify_screen: no screenshot provided"
+            else:
+                try:
+                    from runtime.visual_anchor import wait_for_screen_match, _b64_to_bytes
+                    recorded_jpeg = _b64_to_bytes(screenshot_b64)
+                    matched, ssim = wait_for_screen_match(
+                        device.take_screenshot, recorded_jpeg,
+                        timeout=vs_timeout, poll=vs_poll,
+                        ssim_threshold=vs_threshold,
+                    )
+                    step_result["ssim"] = round(ssim, 3)
+                    if matched:
+                        step_result["message"] = f"verify_screen: SSIM={ssim:.3f} ≥ {vs_threshold}"
+                    else:
+                        step_result["ok"] = False
+                        step_result["message"] = f"verify_screen FAILED: SSIM={ssim:.3f} < {vs_threshold}"
+                        log.warning(f"[{serial}] {step_result['message']}")
+                except ImportError:
+                    step_result["ok"] = False
+                    step_result["message"] = "verify_screen: opencv-python-headless not installed"
+                except Exception as exc:
+                    step_result["ok"] = False
+                    step_result["message"] = f"verify_screen error: {exc}"
+
         elif t == "dismiss_popup":
             # Explicitly try to dismiss any visible popup/dialog.
             # retries: how many times to attempt (default 3, 0.5s apart)
@@ -1399,7 +1720,7 @@ def run_scenario_task(
 
             if strategy == "fb_posts" and expand_see_more:
                 try:
-                    from tasks.fb_group_crawl import _expand_see_more
+                    from tasks.fb_extract import _expand_see_more
                     expanded = _expand_see_more(device)
                     if expanded:
                         # Let UI settle after expanding truncated content.
@@ -1413,7 +1734,7 @@ def run_scenario_task(
                 step_result["message"] = "extract: hierarchy_xml returned None"
             else:
                 if strategy == "fb_posts":
-                    from tasks.fb_group_crawl import parse_fb_posts_from_xml, _dedup
+                    from tasks.fb_extract import parse_fb_posts_from_xml, _dedup
                     scroll_idx = ctx.get("_loop_iter", 0)
                     new_posts = parse_fb_posts_from_xml(xml, source_index=scroll_idx)
                     prev_count = len(ctx["posts"])
@@ -1451,6 +1772,291 @@ def run_scenario_task(
                 else:
                     step_result["ok"] = False
                     step_result["message"] = f"extract: unknown strategy {strategy!r}"
+
+        # ── DF-009: OCR & Screen Text Extraction ──────────────────────────
+        elif t == "extract_text_hierarchy":
+            save_as = step.get("save_as", "")
+            if not save_as:
+                step_result["ok"] = False
+                step_result["message"] = "extract_text_hierarchy: missing save_as"
+            else:
+                try:
+                    from runtime.extraction.hierarchy_extractor import HierarchyExtractor
+                    xml = device.hierarchy_xml(force_refresh=True)
+                    if not xml:
+                        step_result["ok"] = False
+                        step_result["message"] = "No hierarchy XML available"
+                    else:
+                        fmt = step.get("format", "text")
+                        items = HierarchyExtractor.extract_texts(
+                            xml,
+                            filter_class=step.get("filter_class"),
+                            exclude_empty=step.get("exclude_empty", True),
+                        )
+                        if fmt == "json":
+                            _var_ctx.set(save_as, items)
+                        else:
+                            _var_ctx.set(save_as, "\n".join(i["text"] for i in items if i.get("text")))
+                        step_result["message"] = f"Extracted {len(items)} text elements"
+                except Exception as exc:
+                    step_result["ok"] = False
+                    step_result["message"] = f"extract_text_hierarchy failed: {exc}"
+
+        elif t == "extract_text_ocr":
+            save_as = step.get("save_as", "")
+            if not save_as:
+                step_result["ok"] = False
+                step_result["message"] = "extract_text_ocr: missing save_as"
+            else:
+                try:
+                    from runtime.extraction.ocr_engine import OCREngine
+                    frame = device.take_screenshot()
+                    if not frame:
+                        step_result["ok"] = False
+                        step_result["message"] = "No screenshot available for OCR"
+                    else:
+                        ocr = OCREngine()
+                        text = ocr.extract_text(
+                            frame,
+                            language=step.get("language", "eng"),
+                            region=step.get("region"),
+                            psm=int(step.get("psm", 11)),
+                            preprocess=step.get("preprocess", True),
+                            scale_factor=float(step.get("scale_factor", 2.0)),
+                        )
+                        _var_ctx.set(save_as, text)
+                        step_result["message"] = f"OCR extracted {len(text)} chars"
+                except Exception as exc:
+                    step_result["ok"] = False
+                    step_result["message"] = f"extract_text_ocr failed: {exc}"
+
+        elif t == "extract_text_ai":
+            save_as = step.get("save_as", "")
+            prompt = step.get("prompt", "")
+            if not save_as or not prompt:
+                step_result["ok"] = False
+                step_result["message"] = "extract_text_ai: missing save_as or prompt"
+            else:
+                try:
+                    from runtime.extraction.ai_vision import AIVisionExtractor
+                    frame = device.take_screenshot()
+                    if not frame:
+                        step_result["ok"] = False
+                        step_result["message"] = "No screenshot available for AI extraction"
+                    else:
+                        ai = AIVisionExtractor()
+                        result = ai.extract(
+                            frame,
+                            prompt=prompt,
+                            provider=step.get("provider", "openai"),
+                            output_format=step.get("format", "json"),
+                            model=step.get("model"),
+                            region=step.get("region"),
+                        )
+                        _var_ctx.set(save_as, result)
+                        step_result["message"] = f"AI extracted {type(result).__name__}"
+                except Exception as exc:
+                    step_result["ok"] = False
+                    step_result["message"] = f"extract_text_ai failed: {exc}"
+
+        elif t == "extract_screen_data":
+            save_as = step.get("save_as", "")
+            if not save_as:
+                step_result["ok"] = False
+                step_result["message"] = "extract_screen_data: missing save_as"
+            else:
+                strategy = step.get("strategy", "auto")
+                extracted = None
+                source = ""
+                try:
+                    # Strategy 1: Hierarchy (free, fastest)
+                    if strategy in ("auto", "hierarchy"):
+                        from runtime.extraction.hierarchy_extractor import HierarchyExtractor
+                        xml = device.hierarchy_xml(force_refresh=True)
+                        if xml:
+                            items = HierarchyExtractor.extract_texts(xml, exclude_empty=True)
+                            if items:
+                                extracted = "\n".join(i["text"] for i in items if i.get("text"))
+                                source = "hierarchy"
+
+                    # Strategy 2: OCR (free, handles WebView/Canvas)
+                    if extracted is None and strategy in ("auto", "ocr"):
+                        from runtime.extraction.ocr_engine import OCREngine
+                        frame = device.take_screenshot()
+                        if frame:
+                            ocr = OCREngine()
+                            if ocr.available:
+                                text = ocr.extract_text(
+                                    frame,
+                                    language=step.get("language", "eng"),
+                                    psm=11,
+                                )
+                                if text and len(text) > 3:
+                                    extracted = text
+                                    source = "ocr"
+
+                    # Strategy 3: AI Vision (paid, best for structured data)
+                    if extracted is None and strategy in ("auto", "ai"):
+                        from runtime.extraction.ai_vision import AIVisionExtractor
+                        frame = device.take_screenshot()
+                        if frame:
+                            schema = step.get("schema")
+                            prompt = "Extract all visible text from this mobile screenshot."
+                            if schema:
+                                prompt = (
+                                    f"Extract the following fields from this screenshot: "
+                                    f"{json.dumps(schema)}. Return as JSON."
+                                )
+                            ai = AIVisionExtractor()
+                            extracted = ai.extract(
+                                frame, prompt=prompt,
+                                output_format="json" if schema else "text",
+                            )
+                            source = "ai"
+
+                    if extracted is not None:
+                        _var_ctx.set(save_as, extracted)
+                        step_result["message"] = f"Extracted via {source}"
+                        step_result["source"] = source
+                    else:
+                        step_result["ok"] = False
+                        step_result["message"] = "extract_screen_data: no data extracted"
+                except Exception as exc:
+                    step_result["ok"] = False
+                    step_result["message"] = f"extract_screen_data failed: {exc}"
+
+        elif t == "save_extraction":
+            data_var = step.get("data_var", "")
+            if not data_var:
+                step_result["ok"] = False
+                step_result["message"] = "save_extraction: missing data_var"
+            else:
+                try:
+                    import asyncio
+                    from services.content_store import save_content_item
+                    data = _var_ctx._runtime_vars.get(data_var)
+                    # Fallback to scenario context for extract strategies that store in ctx.
+                    if data is None:
+                        data = ctx.get(data_var)
+                    if data is None:
+                        step_result["ok"] = False
+                        step_result["message"] = f"save_extraction: variable '{data_var}' not found"
+                    else:
+                        items: list[dict[str, Any]] = []
+                        if isinstance(data, str):
+                            items = [{"text": data}]
+                        elif isinstance(data, dict):
+                            items = [data]
+                        elif isinstance(data, list):
+                            if not data:
+                                # Empty list — no posts yet, not an error.
+                                items = []
+                            else:
+                                items = [item for item in data if isinstance(item, dict)]
+                                if not items:
+                                    step_result["ok"] = False
+                                    step_result["message"] = (
+                                        f"save_extraction: variable '{data_var}' is a list but has no object items"
+                                    )
+                        else:
+                            step_result["ok"] = False
+                            step_result["message"] = (
+                                f"save_extraction: unsupported type for '{data_var}': {type(data).__name__}"
+                            )
+                            items = []
+
+                        if not items:
+                            # Nothing to save (empty list or error already set above).
+                            step_result["saved_count"] = 0
+                            step_result["duplicate_count"] = 0
+                            step_result["error_count"] = 0
+                            if step_result.get("ok", True):
+                                step_result["message"] = "save_extraction: no items to save"
+                            # else: preserve the error message set above
+                            continue
+
+                        start_idx = 0
+                        if isinstance(data, list):
+                            offsets = ctx.setdefault("__save_extraction_offsets__", {})
+                            start_idx = int(offsets.get(data_var, 0) or 0)
+                            if start_idx > 0:
+                                items = items[start_idx:]
+
+                        if not items:
+                            # All items already saved in a previous iteration — no-op.
+                            step_result["saved_count"] = 0
+                            step_result["duplicate_count"] = 0
+                            step_result["error_count"] = 0
+                            step_result["message"] = "save_extraction: no new items to save"
+                            continue
+
+                        import concurrent.futures as _cf
+
+                        _coll = step.get("collection", "default")
+                        _plat = step.get("platform")
+                        _ctype = step.get("content_type", "post")
+                        _dedup_f = step.get("dedupe_field")
+                        _tags = step.get("tags", "")
+                        _dserial = device.serial
+                        _items_snap = list(items)
+
+                        async def _save_all_items() -> tuple[int, int, int, int, dict[str, Any]]:
+                            _sv = _dp = _er = _pc = 0
+                            _last: dict[str, Any] = {}
+                            for _it in _items_snap:
+                                try:
+                                    _r = await save_content_item(
+                                        data=_it,
+                                        collection=_coll,
+                                        platform=_plat,
+                                        content_type=_ctype,
+                                        dedupe_field=_dedup_f,
+                                        tags=_tags,
+                                        device_serial=_dserial,
+                                    )
+                                    _last = _r
+                                    if _r.get("saved"):
+                                        _sv += 1
+                                    else:
+                                        _dp += 1
+                                    _pc += 1
+                                except Exception as _exc:
+                                    _er += 1
+                                    log.warning(
+                                        "[%s] save_extraction item failed (%s): %s",
+                                        _dserial,
+                                        data_var,
+                                        _exc,
+                                    )
+                                    break
+                            return _sv, _dp, _er, _pc, _last
+
+                        # Run in a dedicated thread with its own event loop to avoid
+                        # asyncpg pool cross-loop issues when called from async context.
+                        with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
+                            _fut = _pool.submit(asyncio.run, _save_all_items())
+                            saved_count, duplicate_count, error_count, processed_count, last_result = (
+                                _fut.result(timeout=120)
+                            )
+                        if isinstance(data, list):
+                            offsets = ctx.setdefault("__save_extraction_offsets__", {})
+                            offsets[data_var] = start_idx + processed_count
+
+                        step_result["saved"] = saved_count > 0
+                        step_result["saved_count"] = saved_count
+                        step_result["duplicate_count"] = duplicate_count
+                        step_result["error_count"] = error_count
+                        step_result["last_result"] = last_result
+                        if error_count > 0 and saved_count == 0 and duplicate_count == 0:
+                            step_result["ok"] = False
+                            step_result["message"] = "save_extraction: all items failed"
+                        else:
+                            step_result["message"] = (
+                                f"save_extraction: saved={saved_count}, duplicate={duplicate_count}, errors={error_count}"
+                            )
+                except Exception as exc:
+                    step_result["ok"] = False
+                    step_result["message"] = f"save_extraction failed: {exc}"
 
         elif t == "loop":
             """Repeat nested steps N times (count) or while condition is true."""
@@ -1745,21 +2351,20 @@ def run_scenario_task(
                     else:
                         step_result["message"] = f"random_pick: executed branch {chosen_idx}"
 
-        # ── DF-001: Variable Management ───────────────────────────────────────
-
         elif t == "set_variable":
             name = str(step.get("name") or "")
             if not name:
                 step_result["ok"] = False
                 step_result["message"] = "set_variable: missing name"
             elif "from_list" in raw_step:
-                # Dùng raw_step để lấy list gốc (trước khi resolve chọn random 1 phần tử)
-                vals = raw_step["from_list"]
+                vals = raw_step.get("from_list")
+                if isinstance(vals, str):
+                    resolved_list = _var_ctx.resolve(vals, step_index=idx)
+                    vals = resolved_list if isinstance(resolved_list, list) else []
                 if not isinstance(vals, list) or not vals:
                     step_result["ok"] = False
                     step_result["message"] = "set_variable: from_list phải là list không rỗng"
                 else:
-                    # Resolve từng phần tử trong list trước khi chọn
                     resolved_vals = [_var_ctx.resolve(v, step_index=idx) for v in vals]
                     chosen = _var_ctx.set_from_list(name, resolved_vals)
                     step_result["message"] = f"set_variable: {name} = {chosen!r} (from_list)"
@@ -1904,13 +2509,14 @@ def run_scenario_task(
     return result
 
 
-def make_scenario_task(scenario: Dict[str, Any], context: Optional[Dict[str, Any]] = None):
-    """
-    Factory trả về hàm task(device) để dùng với TaskQueue.
-    """
-
+def make_scenario_task(
+    scenario: Dict[str, Any],
+    context: Optional[Dict[str, Any]] = None,
+    cancel_event: Optional["threading.Event"] = None,
+):
+ 
     def _task(device: "DeviceClient") -> Dict[str, Any]:
-        return run_scenario_task(device, scenario, context=context)
+        return run_scenario_task(device, scenario, context=context, cancel_event=cancel_event)
 
     _task.__name__ = "run_scenario"
     return _task

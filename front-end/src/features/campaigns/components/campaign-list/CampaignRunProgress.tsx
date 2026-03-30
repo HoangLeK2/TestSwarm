@@ -1,23 +1,147 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Progress } from '@/components/ui/progress';
-import { useCampaignProgress } from '../../hooks/use-campaigns';
+import {
+  useCampaignProgress,
+  useCampaignWorkflows,
+} from '../../hooks/use-campaigns';
+import type { CampaignExecutionEngine, WorkflowInfo } from '../../types';
 
-export function CampaignRunProgress({ campaignId, isRunning }: { campaignId: string; isRunning: boolean }) {
-  const t = useTranslations('campaignsFeature.list');
-  const { data: progress } = useCampaignProgress(campaignId, isRunning);
-  if (!isRunning || !progress || progress.total === 0) return null;
+const _dfEngineKey = (campaignId: string) => `df_campaign_engine:${campaignId}`;
+
+function WorkflowRow({ wf }: { wf: WorkflowInfo }) {
+  // Extract device serial from workflow_id: "campaign:...:device:SERIAL:scenario:..."
+  const parts = wf.workflow_id.split(':');
+  const deviceIdx = parts.indexOf('device');
+  const serial = deviceIdx >= 0 ? parts[deviceIdx + 1] : wf.workflow_id;
+
+  const statusColor: Record<string, string> = {
+    RUNNING: 'text-blue-500',
+    COMPLETED: 'text-green-500',
+    FAILED: 'text-destructive',
+    CANCELLED: 'text-muted-foreground',
+    PAUSED: 'text-amber-500',
+    TERMINATED: 'text-destructive',
+  };
 
   return (
-    <div className='flex flex-col gap-1 pt-0.5'>
-      <div className='flex items-center justify-between text-[10px] text-muted-foreground'>
-        <span>{t('progressDone', { done: progress.done, total: progress.total })}</span>
-        {progress.failed > 0 && <span className='text-destructive'>{t('progressFailed', { count: progress.failed })}</span>}
-        <span>{progress.pct}%</span>
-      </div>
-      <Progress value={progress.pct} className='h-1' />
+    <div className='flex items-center gap-2 text-[10px]'>
+      <span className='font-mono truncate max-w-[140px]' title={serial}>
+        {serial}
+      </span>
+      <span className={statusColor[wf.status] ?? 'text-muted-foreground'}>
+        {wf.status}
+      </span>
     </div>
   );
 }
 
+export function CampaignRunProgress({
+  campaignId,
+  isRunning,
+  executionEngineHint,
+}: {
+  campaignId: string;
+  isRunning: boolean;
+  executionEngineHint?: CampaignExecutionEngine | null;
+}) {
+  const t = useTranslations('campaignsFeature.list');
+  const [storedEngine, setStoredEngine] = useState<CampaignExecutionEngine | null>(null);
+
+  useEffect(() => {
+    if (!isRunning) {
+      setStoredEngine(null);
+      return;
+    }
+    try {
+      const v = sessionStorage.getItem(_dfEngineKey(campaignId));
+      setStoredEngine(v === 'temporal' || v === 'task_queue' ? v : null);
+    } catch {
+      setStoredEngine(null);
+    }
+  }, [campaignId, isRunning]);
+
+  // Temporal workflows
+  const { data: wfData } = useCampaignWorkflows(campaignId, isRunning);
+  const workflows = wfData?.workflows ?? [];
+
+  // Legacy task progress (fallback)
+  const { data: legacyProgress } = useCampaignProgress(campaignId, isRunning && workflows.length === 0);
+
+  if (!isRunning) return null;
+
+  const engineLabel: CampaignExecutionEngine | null =
+    executionEngineHint ??
+    storedEngine ??
+    (workflows.length > 0 ? 'temporal' : legacyProgress && legacyProgress.total > 0 ? 'task_queue' : null);
+
+  // Temporal mode
+  if (workflows.length > 0) {
+    const total = workflows.length;
+    const completed = workflows.filter((w) => w.status === 'COMPLETED').length;
+    const failed = workflows.filter((w) => w.status === 'FAILED' || w.status === 'CANCELLED' || w.status === 'TERMINATED').length;
+    const running = workflows.filter((w) => w.status === 'RUNNING').length;
+    const paused = workflows.filter((w) => w.status === 'PAUSED').length;
+    const terminal = completed + failed;
+    const pct = total ? Math.round((terminal / total) * 100) : 0;
+
+    return (
+      <div className='flex flex-col gap-1 pt-0.5'>
+        {engineLabel && (
+          <div className='text-[9px] font-medium uppercase tracking-wide text-muted-foreground'>
+            {engineLabel === 'temporal' ? t('engineTemporal') : t('engineTaskQueue')}
+          </div>
+        )}
+        <div className='flex items-center justify-between text-[10px] text-muted-foreground'>
+          <span>
+            {completed}/{total} done
+            {running > 0 && <span className='text-blue-500 ml-1'>{running} running</span>}
+            {paused > 0 && <span className='text-amber-500 ml-1'>{paused} paused</span>}
+          </span>
+          {failed > 0 && (
+            <span className='text-destructive'>{failed} failed</span>
+          )}
+          <span>{pct}%</span>
+        </div>
+        <Progress value={pct} className='h-1' />
+        {workflows.length <= 6 && (
+          <div className='space-y-0.5 pt-0.5'>
+            {workflows.map((wf) => (
+              <WorkflowRow key={wf.workflow_id} wf={wf} />
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Legacy fallback
+  if (!legacyProgress || legacyProgress.total === 0) return null;
+
+  return (
+    <div className='flex flex-col gap-1 pt-0.5'>
+      {engineLabel && (
+        <div className='text-[9px] font-medium uppercase tracking-wide text-muted-foreground'>
+          {engineLabel === 'temporal' ? t('engineTemporal') : t('engineTaskQueue')}
+        </div>
+      )}
+      <div className='flex items-center justify-between text-[10px] text-muted-foreground'>
+        <span>
+          {t('progressDone', {
+            done: legacyProgress.done,
+            total: legacyProgress.total,
+          })}
+        </span>
+        {legacyProgress.failed > 0 && (
+          <span className='text-destructive'>
+            {t('progressFailed', { count: legacyProgress.failed })}
+          </span>
+        )}
+        <span>{legacyProgress.pct}%</span>
+      </div>
+      <Progress value={legacyProgress.pct} className='h-1' />
+    </div>
+  );
+}

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 
 class ScenarioTemplateCreate(BaseModel):
@@ -14,6 +14,17 @@ class ScenarioTemplateCreate(BaseModel):
     variables: dict = {}
     tags: str = ""
 
+    @field_validator("steps")
+    @classmethod
+    def validate_steps(cls, v: list) -> list:
+        if not v:
+            return v
+        from common.scenario_schema import validate_scenario
+        errors = validate_scenario({"steps": v})
+        if errors:
+            raise ValueError(f"Step validation failed: {'; '.join(errors[:5])}")
+        return v
+
 
 class ScenarioTemplateUpdate(BaseModel):
     name: str | None = None
@@ -22,6 +33,17 @@ class ScenarioTemplateUpdate(BaseModel):
     steps: list | None = None
     variables: dict | None = None
     tags: str | None = None
+
+    @field_validator("steps")
+    @classmethod
+    def validate_steps(cls, v: list | None) -> list | None:
+        if not v:
+            return v
+        from common.scenario_schema import validate_scenario
+        errors = validate_scenario({"steps": v})
+        if errors:
+            raise ValueError(f"Step validation failed: {'; '.join(errors[:5])}")
+        return v
 
 
 class ScenarioTemplateOut(BaseModel):

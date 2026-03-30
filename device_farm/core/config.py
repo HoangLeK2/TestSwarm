@@ -59,6 +59,7 @@ class DeviceConfig:
     scrcpy_max_fps: int = 30
     scrcpy_max_width: int = 800
     scrcpy_bitrate: int = 8_000_000  # H.264 bitrate bps (8 Mbps)
+    scrcpy_control: bool = True      # Enable scrcpy control channel for touch/key/text
 
 
 @dataclass
@@ -123,6 +124,28 @@ class DatabaseConfig:
 
 
 @dataclass
+class TemporalConfig:
+    """Temporal workflow engine config (DF-002).
+
+    Set enabled: true to use Temporal for durable campaign workflows.
+    When disabled (default), campaigns fall back to the in-process TaskQueue.
+    Requires Temporal Server: docker run -p 7233:7233 temporalio/auto-setup:latest
+    """
+    enabled: bool = False                    # Set true only when Temporal server is running
+    server_url: str = "localhost:7233"       # Temporal gRPC endpoint
+    namespace: str = "default"
+    task_queue: str = "device-scenario"
+    worker_max_concurrent_activities: int = 10
+    worker_max_concurrent_workflows: int = 50
+    workflow_execution_timeout: int = 3600   # seconds
+    activity_start_to_close_timeout: int = 60  # seconds
+    activity_retry_max_attempts: int = 3
+    activity_retry_initial_interval: float = 1.0
+    activity_retry_max_interval: float = 30.0
+    activity_retry_backoff: float = 2.0
+
+
+@dataclass
 class Config:
     web: WebConfig = field(default_factory=WebConfig)
     ports: PortsConfig = field(default_factory=PortsConfig)
@@ -136,7 +159,27 @@ class Config:
     wifi_densepose: WifiDenseposeConfig = field(default_factory=WifiDenseposeConfig)
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     streaming: StreamingConfig = field(default_factory=StreamingConfig)
+    temporal: TemporalConfig = field(default_factory=TemporalConfig)
     target_app: str = ""
+    force_u2_mode: bool = False
+
+
+def _build_temporal_config(raw: dict) -> TemporalConfig:
+    """Build TemporalConfig from YAML, with env var overrides for Docker."""
+    cfg = TemporalConfig(
+        **{k: v for k, v in raw.items() if k in TemporalConfig.__dataclass_fields__}
+    )
+    # Allow env override for Docker: TEMPORAL_SERVER_URL=temporal:7233
+    env_url = os.environ.get("TEMPORAL_SERVER_URL")
+    if env_url:
+        cfg.server_url = env_url
+    env_ns = os.environ.get("TEMPORAL_NAMESPACE")
+    if env_ns:
+        cfg.namespace = env_ns
+    env_queue = os.environ.get("TEMPORAL_TASK_QUEUE")
+    if env_queue:
+        cfg.task_queue = env_queue
+    return cfg
 
 
 def load_config(path: str = "config.yaml") -> Config:
@@ -193,6 +236,7 @@ def load_config(path: str = "config.yaml") -> Config:
             scrcpy_max_fps=_get(device_raw, "scrcpy_max_fps", 30),
             scrcpy_max_width=_get(device_raw, "scrcpy_max_width", 800),
             scrcpy_bitrate=_get(device_raw, "scrcpy_bitrate", 8_000_000),
+            scrcpy_control=bool(_get(device_raw, "scrcpy_control", True)),
         ),
         watchdog=WatchdogConfig(
             interval=_get(watchdog_raw, "interval", 10),
@@ -232,7 +276,9 @@ def load_config(path: str = "config.yaml") -> Config:
             mode=_get(streaming_raw, "mode", "periodic"),
             dashboard_interval=float(_get(streaming_raw, "dashboard_interval", 3.0)),
         ),
+        temporal=_build_temporal_config(raw.get("temporal", {})),
         target_app=raw.get("target_app", ""),
+        force_u2_mode=bool(raw.get("force_u2_mode", False)),
     )
 
 

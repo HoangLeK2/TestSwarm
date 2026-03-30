@@ -100,7 +100,7 @@ public class IdentityActivity extends AppCompatActivity {
         @Override
         public void onReceive(android.content.Context context, Intent intent) {
             if (WsAgentService.ACTION_NEED_REAUTH.equals(intent.getAction())) {
-                // Guard: if another thread already refreshed the token, skip.
+                if (!WsAgentService.USE_MEDIA_PROJECTION) return;
                 if (WsAgentService.sSharedProjection != null) return;
                 Log.i(TAG, "Received NEED_REAUTH — re-requesting MediaProjection permission");
                 if (pendingWsUrl != null) {
@@ -194,14 +194,14 @@ public class IdentityActivity extends AppCompatActivity {
             tvPhone.setText("—");
         }
 
-        // ── MediaProjection launcher ───────────────────────────────────
+        // ── MediaProjection launcher (chỉ dùng khi WsAgentService.USE_MEDIA_PROJECTION) ──
         projectionLauncher = registerForActivityResult(
                 new ActivityResultContracts.StartActivityForResult(),
                 result -> {
+                    if (!WsAgentService.USE_MEDIA_PROJECTION) return;
                     if (result.getResultCode() == Activity.RESULT_OK
                             && result.getData() != null
                             && pendingWsUrl != null) {
-                        // Save URL for auto-reconnect across WiFi networks
                         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
                                 .putString(PREF_WS_URL, pendingWsUrl).apply();
                         WsAgentService.start(this,
@@ -231,14 +231,23 @@ public class IdentityActivity extends AppCompatActivity {
             Log.d(TAG, "QR result received, connecting: " + content.substring(0, Math.min(content.length(), 60)) + "...");
             if (content.startsWith("ws://") || content.startsWith("wss://")) {
                 pendingWsUrl = content;
-                applyState(STATE_CONNECTING, "Requesting screen permission…");
-                MediaProjectionManager mpm = (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
-                if (mpm != null) {
-                    projectionLauncher.launch(mpm.createScreenCaptureIntent());
+                if (WsAgentService.USE_MEDIA_PROJECTION) {
+                    applyState(STATE_CONNECTING, "Requesting screen permission…");
+                    MediaProjectionManager mpm = (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
+                    if (mpm != null) {
+                        projectionLauncher.launch(mpm.createScreenCaptureIntent());
+                    } else {
+                        pendingWsUrl = null;
+                        applyState(STATE_ERROR, "Screen capture not available");
+                        Toast.makeText(this, "Screen capture not available on this device", Toast.LENGTH_LONG).show();
+                    }
                 } else {
-                    pendingWsUrl = null;
-                    applyState(STATE_ERROR, "Screen capture not available");
-                    Toast.makeText(this, "Screen capture not available on this device", Toast.LENGTH_LONG).show();
+                    getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                            .putString(PREF_WS_URL, pendingWsUrl).apply();
+                    WsAgentService.start(this, pendingWsUrl, 0, null);
+                    serviceRunning = true;
+                    String hostPort = formatHostPort(pendingWsUrl);
+                    applyState(STATE_CONNECTING, hostPort != null ? "Đang kết nối " + hostPort + "…" : "Đang kết nối…");
                 }
             } else if (content.trim().startsWith("{")) {
                 // ADB connect-by-QR: payload { "registerUrl": "http://..." } → POST device IP to backend
@@ -276,8 +285,11 @@ public class IdentityActivity extends AppCompatActivity {
                 .getString(PREF_WS_URL, null);
         if (savedUrl != null && !savedUrl.isEmpty()) {
             pendingWsUrl = savedUrl;
-            if (WsAgentService.sSharedProjection != null) {
-                // Token is still valid — no dialog needed.
+            if (!WsAgentService.USE_MEDIA_PROJECTION) {
+                WsAgentService.start(this, savedUrl, 0, null);
+                serviceRunning = true;
+                applyState(STATE_CONNECTED, "Reconnecting to " + savedUrl + "…");
+            } else if (WsAgentService.sSharedProjection != null) {
                 WsAgentService.start(this, savedUrl, 0, null);
                 serviceRunning = true;
                 applyState(STATE_CONNECTED, "Reconnecting to " + savedUrl + "…");
@@ -337,10 +349,15 @@ public class IdentityActivity extends AppCompatActivity {
                     "Running", "Not running on :9008 — run agent-boot on PC first"));
         });
 
-        // 3. MediaProjection
-        boolean mp = WsAgentService.sSharedProjection != null;
+        // 3. MediaProjection / external video
+        boolean mp = WsAgentService.USE_MEDIA_PROJECTION
+                ? WsAgentService.sSharedProjection != null
+                : true;
         setServiceRow(dotMp, tvMpStatus, tvMpError, mp,
-                "Token valid", "No permission yet — scan QR to grant screen capture");
+                WsAgentService.USE_MEDIA_PROJECTION ? "Token valid" : "Off (scrcpy / external)",
+                WsAgentService.USE_MEDIA_PROJECTION
+                        ? "No permission yet — scan QR to grant screen capture"
+                        : "MJPEG disabled in app");
 
         // 4. WebSocket
         setServiceRow(dotWs, tvWsStatus, tvWsError, serviceRunning,

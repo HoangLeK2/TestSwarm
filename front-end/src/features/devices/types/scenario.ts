@@ -14,6 +14,8 @@ export type ScreenContext = {
   package?: string;
   hash?: string;          // FNV-1a of normalized XML
   texts?: string[];       // top visible texts (signature for fuzzy match)
+  screenshot?: string;    // base64 JPEG — full screen at record time (visual anchoring)
+  element_image?: string; // base64 JPEG — cropped element (template matching fallback)
 };
 
 /**
@@ -45,7 +47,8 @@ export type ScenarioStep =
   | { type: 'scroll_to'; by: SelectorBy; value: string; direction?: 'down' | 'up'; max_swipes?: number }
   | { type: 'input_text'; text: string; via: 'u2' | 'a11y_key' }
   | { type: 'key'; key: string }
-  | { type: 'scroll_down'; repeats: number };
+  | { type: 'scroll_down'; repeats: number }
+  | { type: 'verify_screen'; screenshot: string; ssim_threshold?: number; timeout?: number; poll?: number };
 
 export function scenarioToJson(steps: ScenarioStep[]): string {
   return JSON.stringify({ steps }, null, 2);

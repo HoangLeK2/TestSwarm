@@ -22,63 +22,96 @@ import { Textarea } from '@/components/ui/textarea';
 import { FileText, Trash2, Play, Circle, Square, RefreshCw, Sparkles } from 'lucide-react';
 import { fetchHierarchy, previewScenario } from '@/features/devices/services/api';
 import { DeviceControlEmbed } from '@/features/devices/components/device-control-embed';
+import { VariableEditor } from '@/components/variable-editor';
+import { FlowEditor } from './flow-editor';
+import { validateScenarioStepsForApi } from '../utils/validate-scenario-steps-for-api';
+import { formatFarmApiError } from '@/lib/format-farm-api-error';
+import { findSelectorInXml } from '@/features/devices/utils/control-record-xml';
 
-/** Parse Android uiautomator2 XML in the browser, find best selector at (rx,ry) ratios. */
-function findSelectorInXml(
-  xmlStr: string,
-  rx: number,
-  ry: number
-): { by: 'resource-id' | 'text' | 'xpath' | 'class name'; value: string } | null {
-  let doc: Document;
-  try {
-    doc = new DOMParser().parseFromString(xmlStr, 'text/xml');
-  } catch {
-    return null;
+type SelectorBy =
+  | 'resource-id'
+  | 'text'
+  | 'xpath'
+  | 'class name'
+  | 'description'
+  | 'descriptionContains'
+  | 'descriptionStartsWith';
+
+const ALLOWED_SELECTOR_BY: readonly SelectorBy[] = [
+  'resource-id',
+  'text',
+  'xpath',
+  'class name',
+  'description',
+  'descriptionContains',
+  'descriptionStartsWith',
+];
+
+function normalizeSelectorBy(by: unknown, fallback: SelectorBy = 'text'): SelectorBy {
+  const raw = String(by ?? '').trim();
+  if (!raw) return fallback;
+  if (ALLOWED_SELECTOR_BY.includes(raw as SelectorBy)) return raw as SelectorBy;
+
+  const lower = raw.toLowerCase().replace(/\s+/g, '');
+  if (lower === 'content-desc' || lower === 'contentdesc' || lower === 'description' || lower === 'accessibilityid') {
+    return 'description';
   }
-
-  // Infer screen dimensions from root node bounds [0,0][dw][dh]
-  const rootNode = doc.querySelector('node');
-  const rootBounds = rootNode?.getAttribute('bounds') ?? '';
-  const rootM = /\[0,0\]\[(\d+),(\d+)\]/.exec(rootBounds);
-  const dw = rootM ? parseInt(rootM[1]) : 1080;
-  const dh = rootM ? parseInt(rootM[2]) : 1920;
-
-  const px = rx * dw;
-  const py = ry * dh;
-
-  const BOUNDS = /\[(\d+),(\d+)\]\[(\d+),(\d+)\]/;
-  let best: { by: 'resource-id' | 'text' | 'xpath' | 'class name'; value: string } | null = null;
-  let bestArea = Infinity;
-
-  for (const node of Array.from(doc.getElementsByTagName('node'))) {
-    const m = BOUNDS.exec(node.getAttribute('bounds') ?? '');
-    if (!m) continue;
-    const [x1, y1, x2, y2] = [+m[1], +m[2], +m[3], +m[4]];
-    if (!(x1 <= px && px <= x2 && y1 <= py && py <= y2)) continue;
-    const area = (x2 - x1) * (y2 - y1);
-    if (area >= bestArea) continue;
-
-    const text = (node.getAttribute('text') ?? '').trim();
-    const rid = (node.getAttribute('resource-id') ?? '').trim();
-    const desc = (node.getAttribute('content-desc') ?? '').trim();
-
-    let sel: { by: 'resource-id' | 'text' | 'xpath' | 'class name'; value: string } | null = null;
-    if (text && text.length < 80) {
-      sel = { by: 'text' as const, value: text };
-    } else if (rid && rid.includes('/')) {
-      sel = { by: 'resource-id' as const, value: rid };
-    } else if (desc && desc.length < 80) {
-      sel = { by: 'xpath' as const, value: `//*[@content-desc="${desc.replace(/"/g, '\\"')}"]` };
-    } else if (rid) {
-      sel = { by: 'resource-id' as const, value: rid };
-    }
-
-    if (sel) { best = sel; bestArea = area; }
+  if (lower === 'content-desccontains' || lower === 'descriptioncontains') {
+    return 'descriptionContains';
   }
-  return best;
+  if (lower === 'content-descstartswith' || lower === 'descriptionstartswith') {
+    return 'descriptionStartsWith';
+  }
+  if (lower === 'classname' || lower === 'class-name') {
+    return 'class name';
+  }
+  return fallback;
 }
 
-type SelectorBy = 'resource-id' | 'text' | 'xpath' | 'class name';
+function sanitizeScenarioStep(step: any): any {
+  if (!step || typeof step !== 'object') return step;
+  const next: any = { ...step };
+
+  if (next.by != null) {
+    next.by = normalizeSelectorBy(next.by);
+  }
+  if (next.selector && typeof next.selector === 'object') {
+    next.selector = {
+      ...next.selector,
+      ...(next.selector.by != null ? { by: normalizeSelectorBy(next.selector.by) } : {}),
+    };
+  }
+  if (next.condition && typeof next.condition === 'object') {
+    const cond = { ...(next.condition as Record<string, any>) };
+    if (cond.element_exists && typeof cond.element_exists === 'object' && cond.element_exists.by != null) {
+      cond.element_exists = { ...cond.element_exists, by: normalizeSelectorBy(cond.element_exists.by) };
+    }
+    if (cond.element_not_exists && typeof cond.element_not_exists === 'object' && cond.element_not_exists.by != null) {
+      cond.element_not_exists = { ...cond.element_not_exists, by: normalizeSelectorBy(cond.element_not_exists.by) };
+    }
+    next.condition = cond;
+  }
+
+  if (Array.isArray(next.then)) next.then = next.then.map(sanitizeScenarioStep);
+  if (Array.isArray(next.else)) next.else = next.else.map(sanitizeScenarioStep);
+  if (Array.isArray(next.steps)) next.steps = next.steps.map(sanitizeScenarioStep);
+  if (Array.isArray(next.branches)) {
+    next.branches = next.branches.map((br: any) => {
+      if (!br || typeof br !== 'object') return br;
+      return {
+        ...br,
+        ...(Array.isArray(br.steps) ? { steps: br.steps.map(sanitizeScenarioStep) } : {}),
+      };
+    });
+  }
+
+  return next;
+}
+
+function sanitizeScenarioStepsForApi(input: unknown): any[] {
+  if (!Array.isArray(input)) return [];
+  return input.map(sanitizeScenarioStep);
+}
 
 type StepType =
   | 'launch_app'
@@ -98,7 +131,9 @@ type StepType =
   | 'dismiss_popup'
   | 'input_text'
   | 'key'
-  | 'scroll_down';
+  | 'scroll_down'
+  | 'set_variable'
+  | 'run_scenario';
 
 type Step =
   | { type: 'launch_app'; package: string }
@@ -118,7 +153,9 @@ type Step =
   | { type: 'dismiss_popup'; retries?: number }
   | { type: 'input_text'; via: 'u2' | 'a11y_key'; text: string }
   | { type: 'key'; key: string }
-  | { type: 'scroll_down'; repeats: number };
+  | { type: 'scroll_down'; repeats: number }
+  | { type: 'set_variable'; name: string; value?: string; from_list?: string[]; increment?: number }
+  | { type: 'run_scenario'; scenario_id?: string; scenario_name?: string; variables?: Record<string, any> };
 
 type Props = {
   campaign: CampaignOut;
@@ -251,6 +288,14 @@ function coerceSteps(raw: any[]): Step[] {
         return { type: 'key', key: String(s.key || '') };
       case 'scroll_down':
         return { type: 'scroll_down', repeats: Number(s.repeats || 1) };
+      case 'set_variable':
+        return {
+          type: 'set_variable',
+          name: String(s.name || ''),
+          ...(s.value != null ? { value: String(s.value) } : {}),
+          ...(Array.isArray(s.from_list) ? { from_list: s.from_list.map(String) } : {}),
+          ...(s.increment != null ? { increment: Number(s.increment) } : {})
+        };
       default:
         // Keep unknown step types visible instead of silently converting to wait(0).
         // This preserves DB data and avoids misleading UI.
@@ -263,6 +308,7 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
   const [open, setOpen] = useState(false);
   const [instructions, setInstructions] = useState('');
   const [steps, setSteps] = useState<Step[]>([]);
+  const [variables, setVariables] = useState<Record<string, any>>({});
   const [rawJson, setRawJson] = useState('');
   const [deviceModel, setDeviceModel] = useState('');
   const [androidVersion, setAndroidVersion] = useState('');
@@ -387,15 +433,19 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
     let currentBrowserApp = '';
     let currentDeviceNotes = '';
 
+    let currentVariables: Record<string, any> = {};
+
     if (scenarioProp) {
       // New 3-level: load from scenario row
       currentInstructions = scenarioProp.instructions ?? '';
       currentSteps = Array.isArray(scenarioProp.steps) ? coerceSteps(scenarioProp.steps) : [];
+      currentVariables = (scenarioProp as any).variables ?? {};
     } else {
       // Legacy: load from campaign.scenario field
       const sc: any = campaign.scenario ?? {};
       currentInstructions = sc.instructions ?? '';
       currentSteps = Array.isArray(sc.steps) ? coerceSteps(sc.steps) : [];
+      currentVariables = sc.variables ?? campaign.variables ?? {};
       const ctx: any = sc.device_context ?? {};
       currentDeviceModel = ctx.device_model ?? '';
       currentAndroidVersion = ctx.android_version ?? '';
@@ -405,6 +455,7 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
 
     setInstructions(currentInstructions);
     setSteps(currentSteps);
+    setVariables(currentVariables);
     setDeviceModel(currentDeviceModel);
     setAndroidVersion(currentAndroidVersion);
     setBrowserApp(currentBrowserApp);
@@ -433,25 +484,31 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
   }, [xmlSerial]);
 
   const handleSave = () => {
+    const sanitizedSteps = sanitizeScenarioStepsForApi(steps);
+    const check = validateScenarioStepsForApi(sanitizedSteps);
+    if (!check.ok) {
+      toast.error(check.message);
+      return;
+    }
     if (scenarioProp) {
       // New 3-level: save to scenario row
       saveScenarioRow(
-        { campaignId: campaign.id, scenarioId: scenarioProp.id, data: { instructions, steps } },
+        { campaignId: campaign.id, scenarioId: scenarioProp.id, data: { instructions, steps: sanitizedSteps, variables } },
         {
           onSuccess: () => { toast.success('Lưu kịch bản thành công'); setOpen(false); },
-          onError: () => { toast.error('Lưu kịch bản thất bại'); },
+          onError: (err) => { toast.error(formatFarmApiError(err, 'Lưu kịch bản thất bại')); },
         }
       );
     } else {
       // Legacy: save to campaign.scenario field
       const existing = (campaign.scenario as any) ?? {};
       const deviceContext = { device_model: deviceModel, android_version: androidVersion, browser_app: browserApp, notes: deviceNotes };
-      const next: Record<string, any> = { ...existing, instructions, steps, device_context: deviceContext };
+      const next: Record<string, any> = { ...existing, instructions, steps: sanitizedSteps, variables, device_context: deviceContext };
       saveScenario(
         { id: campaign.id, scenario: next },
         {
           onSuccess: () => { toast.success('Lưu kịch bản thành công'); setOpen(false); },
-          onError: () => { toast.error('Lưu kịch bản thất bại'); },
+          onError: (err) => { toast.error(formatFarmApiError(err, 'Lưu kịch bản thất bại')); },
         }
       );
     }
@@ -462,13 +519,14 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
       toast.error('Chọn thiết bị để test kịch bản');
       return;
     }
-    if (!steps.length) {
+    const sanitizedSteps = sanitizeScenarioStepsForApi(steps);
+    if (!sanitizedSteps.length) {
       toast.error('Chưa có bước nào để test');
       return;
     }
     setPreviewingAll(true);
     try {
-      const res = await previewScenario(previewSerial, steps as any[]);
+      const res = await previewScenario(previewSerial, sanitizedSteps);
       const failed =
         res.step_results?.filter((r) => r && typeof r.ok === 'boolean' && !r.ok) ?? [];
       if (failed.length > 0) {
@@ -489,8 +547,9 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
       toast.error('Chọn thiết bị để test');
       return;
     }
-    if (!steps.length) return;
-    const subset = steps.slice(0, index + 1);
+    const sanitizedSteps = sanitizeScenarioStepsForApi(steps);
+    if (!sanitizedSteps.length) return;
+    const subset = sanitizedSteps.slice(0, index + 1);
     setPreviewingIndex(index);
     try {
       const res = await previewScenario(previewSerial, subset as any[]);
@@ -652,6 +711,8 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
             return { type: 'key', key: 'enter' };
           case 'scroll_down':
             return { type: 'scroll_down', repeats: 1 };
+          case 'set_variable':
+            return { type: 'set_variable', name: '', value: '' };
           default:
             return s;
         }
@@ -665,20 +726,23 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
     );
   };
 
+  /** Luôn có thiết bị xem trước khi campaign có device — tránh cột phải trống khi chọn "Không gửi XML". */
+  const embedSerial = xmlSerial || devices[0]?.serial || '';
+
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         {children ?? (
           <Button size="sm" variant="outline" className="gap-1 text-[10px]">
-            <FileText size={10} />
+            <FileText size={12} strokeWidth={2} className="opacity-80" />
             Kịch bản
           </Button>
         )}
       </DialogTrigger>
       <DialogContent
-        className="z-[1000] max-w-5xl lg:max-w-6xl max-h-[90vh] overflow-hidden flex flex-col rounded-lg p-4"
+        className="z-[1000] max-w-5xl lg:max-w-6xl max-h-[92vh] min-h-0 md:min-h-[48vh] overflow-hidden flex flex-col rounded-lg p-3 sm:p-4 gap-0 sm:max-w-[min(100%-2rem,72rem)] [&>button.absolute]:right-3 [&>button.absolute]:top-3 [&>button.absolute]:h-7 [&>button.absolute]:w-7 [&>button.absolute_svg]:!size-3.5"
       >
-        <DialogHeader>
+        <DialogHeader className="shrink-0">
           <DialogTitle>
             {scenarioProp ? `Kịch bản: ${scenarioProp.name}` : 'Kịch bản campaign'}
           </DialogTitle>
@@ -687,7 +751,7 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
           className="flex flex-col lg:flex-row gap-4 pt-2 min-h-0 flex-1 overflow-hidden"
         >
           <div
-            className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden space-y-4 order-1"
+            className="min-w-0 flex-1 min-h-[12rem] overflow-y-auto overflow-x-hidden space-y-4 order-1"
           >
           <div className="space-y-1">
             <p className="text-xs font-medium">Mô tả (ngôn ngữ tự nhiên)</p>
@@ -777,7 +841,7 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
                 disabled={compiling}
                 title="Gửi mô tả + XML lên OpenAI (ChatGPT) để sinh kịch bản"
               >
-                <Sparkles size={13} />
+                <Sparkles size={12} strokeWidth={2} className="shrink-0 opacity-90" />
                 {compiling ? 'ChatGPT đang sinh…' : 'Sinh bằng ChatGPT'}
               </Button>
             </div>
@@ -847,6 +911,27 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
             </div>
           </div>
 
+          {/* DF-001: Variables */}
+          <div className="space-y-2">
+            <details className="group">
+              <summary className="cursor-pointer text-xs font-medium flex items-center gap-1">
+                <span>Biến (Variables)</span>
+                <span className="text-muted-foreground font-normal">
+                  — {'${VAR}'} trong steps sẽ được thay thế khi chạy
+                </span>
+              </summary>
+              <div className="pt-2 space-y-2">
+                <VariableEditor
+                  variables={variables}
+                  onChange={setVariables}
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  Built-in: {'${__NOW__}'} {'${__DATE__}'} {'${__TIME__}'} {'${__DEVICE_SERIAL__}'} {'${__DEVICE_MODEL__}'} {'${__RANDOM_INT_1_100__}'} {'${__RANDOM_UUID__}'} {'${__STEP_INDEX__}'} {'${__ACCOUNT_USERNAME__}'} {'${__ACCOUNT_PASSWORD__}'}
+                </p>
+              </div>
+            </details>
+          </div>
+
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
               <p className="text-xs font-medium">Các bước thực thi</p>
@@ -886,8 +971,21 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
                 Chưa có bước nào. Bạn có thể dùng AI để sinh hoặc tự thêm step thủ công.
               </p>
             ) : (
+              <div>
+                <FlowEditor
+                  steps={steps as any[]}
+                  onChange={(newSteps) => setSteps(newSteps as Step[])}
+                  maxHeight="min(380px, 42vh)"
+                  compact
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Legacy step list — kept for reference, replaced by NestedStepList above */}
+          {false && steps.length > 0 && (
               <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
-                {steps.map((step, index) => (
+                {steps.map((step: any, index: number) => (
                   <div
                     key={index}
                     className="rounded border p-2 space-y-1 bg-muted/40"
@@ -935,6 +1033,7 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
                           <option value="input_text">input_text</option>
                           <option value="key">key</option>
                           <option value="scroll_down">scroll_down</option>
+                          <option value="set_variable">set_variable</option>
                         </select>
                         <button
                           type="button"
@@ -1436,11 +1535,67 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
                         />
                       </div>
                     )}
+
+                    {step.type === 'set_variable' && (
+                      <div className="space-y-1.5 text-[11px]">
+                        <div className="flex items-center gap-2">
+                          <span className="shrink-0 w-14">name:</span>
+                          <input
+                            className="flex-1 border rounded px-1 py-0.5 bg-background font-mono"
+                            placeholder="MY_VAR"
+                            value={step.name}
+                            onChange={(e) =>
+                              updateStepField(index, { name: e.target.value } as any)
+                            }
+                          />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="shrink-0 w-14">value:</span>
+                          <input
+                            className="flex-1 border rounded px-1 py-0.5 bg-background"
+                            placeholder="static value or ${__BUILTIN__}"
+                            value={step.value ?? ''}
+                            onChange={(e) =>
+                              updateStepField(index, { value: e.target.value } as any)
+                            }
+                          />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="shrink-0 w-14">from_list:</span>
+                          <input
+                            className="flex-1 border rounded px-1 py-0.5 bg-background"
+                            placeholder="item1, item2, item3 (random pick)"
+                            value={(step.from_list ?? []).join(', ')}
+                            onChange={(e) =>
+                              updateStepField(index, {
+                                from_list: e.target.value.split(',').map((s: string) => s.trim()).filter(Boolean)
+                              } as any)
+                            }
+                          />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="shrink-0 w-14">increment:</span>
+                          <input
+                            type="number"
+                            className="w-20 border rounded px-1 py-0.5 bg-background"
+                            placeholder="0"
+                            value={step.increment ?? ''}
+                            onChange={(e) =>
+                              updateStepField(index, {
+                                increment: e.target.value ? Number(e.target.value) : undefined
+                              } as any)
+                            }
+                          />
+                        </div>
+                        <p className="text-muted-foreground text-[10px]">
+                          Built-in: {'${__NOW__}'} {'${__DATE__}'} {'${__DEVICE_SERIAL__}'} {'${__RANDOM_INT_1_100__}'} {'${__RANDOM_UUID__}'} {'${__STEP_INDEX__}'}
+                        </p>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
-            )}
-          </div>
+          )}
 
           <div className="flex justify-end gap-2 pt-2">
             <Button
@@ -1460,21 +1615,27 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
             </Button>
           </div>
           </div>
-          {xmlSerial && (
-            <div className="flex shrink-0 w-[360px] min-w-[360px] flex-col border-l border-border pl-4 overflow-y-auto order-2 self-start">
-              <div className="flex items-center justify-between mb-2 shrink-0">
-                <p className="text-xs font-medium text-muted-foreground">Điều khiển thiết bị</p>
+          {devices.length > 0 && embedSerial && (
+            <div className="flex min-h-0 w-full shrink-0 flex-col self-stretch border-t border-border pt-3 order-2 lg:w-[320px] lg:min-w-[320px] lg:border-l lg:border-t-0 lg:pt-0 lg:pl-3 overflow-y-auto lg:max-h-full max-h-[min(52vh,520px)]">
+              {!xmlSerial && (
+                <p className="mb-2 rounded-md bg-muted/50 px-2 py-1 text-[10px] text-muted-foreground">
+                  Đang xem <span className="font-mono text-foreground">{embedSerial.slice(0, 12)}…</span>
+                  . Chọn thiết bị ở &quot;Thiết bị để lấy UI XML&quot; nếu cần XML khác cho AI.
+                </p>
+              )}
+              <div className="flex items-center justify-between mb-2 shrink-0 gap-2">
+                <p className="text-[11px] font-medium text-muted-foreground">Điều khiển</p>
                 <Button
                   size="sm"
                   variant={recording ? 'destructive' : 'outline'}
-                  className="h-6 gap-1 text-[11px] px-2"
+                  className="h-7 gap-1 text-[10px] px-2"
                   onClick={async () => {
                     const next = !recording;
-                    if (next && xmlSerial) {
-                      // Fetch XML immediately when starting recording
+                    const serialForRec = xmlSerial || devices[0]?.serial;
+                    if (next && serialForRec) {
                       toast.info('Đang lấy XML màn hình hiện tại…');
-                      const xml = await refreshRecordXml(xmlSerial);
-                      if (!xml) return; // Don't start recording if no XML
+                      const xml = await refreshRecordXml(serialForRec);
+                      if (!xml) return;
                       toast.success('XML sẵn sàng — bắt đầu ghi kịch bản');
                     } else {
                       setRecordXml(null);
@@ -1483,35 +1644,46 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
                   }}
                   title={recording ? 'Dừng ghi kịch bản' : 'Bật ghi: lấy XML → mỗi tap tự thêm tap_selector'}
                 >
-                  {recording
-                    ? <><Square size={10} className="fill-current" /> Dừng ghi</>
-                    : <><Circle size={10} className="text-red-500 fill-red-500" /> Ghi kịch bản</>
-                  }
+                  {recording ? (
+                    <>
+                      <Square size={9} className="fill-current" /> Dừng ghi
+                    </>
+                  ) : (
+                    <>
+                      <Circle size={9} className="text-red-500 fill-red-500" /> Ghi
+                    </>
+                  )}
                 </Button>
               </div>
               {recording && (
-                <div className="flex items-center justify-between mb-1.5 rounded bg-amber-50 dark:bg-amber-950/30 px-2 py-1">
-                  <p className="text-[10px] text-amber-700 dark:text-amber-400">
-                    {recordXml
-                      ? <>Đang ghi — tap để thêm <code>tap_selector</code>. Sau khi chuyển màn hình bấm làm mới.</>
-                      : <span className="text-destructive">Chưa có XML — tap sẽ ra tap_ratio</span>
-                    }
+                <div className="mb-1.5 flex items-center justify-between gap-1 rounded bg-amber-50 px-2 py-1 dark:bg-amber-950/30">
+                  <p className="text-[10px] text-amber-800 dark:text-amber-400">
+                    {recordXml ? (
+                      <>
+                        Đang ghi — tap → <code className="text-[9px]">tap_selector</code>. Đổi màn → làm mới XML.
+                      </>
+                    ) : (
+                      <span className="text-destructive">Chưa có XML — tap → tap_ratio</span>
+                    )}
                   </p>
                   <Button
                     size="sm"
                     variant="ghost"
-                    className="h-5 gap-1 text-[10px] px-1.5 shrink-0"
+                    className="h-6 shrink-0 gap-0.5 px-1.5 text-[10px]"
                     disabled={refreshingXml}
-                    onClick={() => xmlSerial && refreshRecordXml(xmlSerial)}
-                    title="Làm mới XML sau khi chuyển sang màn hình mới"
+                    onClick={() => {
+                      const s = xmlSerial || devices[0]?.serial;
+                      if (s) void refreshRecordXml(s);
+                    }}
+                    title="Làm mới XML sau khi đổi màn hình"
                   >
-                    <RefreshCw size={9} className={refreshingXml ? 'animate-spin' : ''} />
-                    {refreshingXml ? 'Đang lấy…' : 'Làm mới XML'}
+                    <RefreshCw size={10} className={refreshingXml ? 'animate-spin' : ''} />
+                    {refreshingXml ? '…' : 'Làm mới'}
                   </Button>
                 </div>
               )}
               <DeviceControlEmbed
-                initialSerial={xmlSerial}
+                initialSerial={embedSerial}
                 compact
                 onTap={recording ? (serial, rx, ry) => handleRecordTap(serial, rx, ry) : undefined}
               />

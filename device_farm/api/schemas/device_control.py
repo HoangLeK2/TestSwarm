@@ -88,8 +88,9 @@ class FleetRunRequest(BaseModel):
 
 
 class ScrcpyAttachRequest(BaseModel):
-    device_ip: str
+    device_ip: str | None = None  # Auto-detected from DB if omitted
     adb_port: int = 5555
+    enable_control: bool = True  # Enable scrcpy control channel for touch/key input
 
 
 class StartSessionRequest(BaseModel):

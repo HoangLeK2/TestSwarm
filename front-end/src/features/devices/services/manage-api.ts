@@ -16,6 +16,7 @@ export type DeviceOut = {
   created_at: string;
   adb_ip: string | null;
   adb_port: number;
+  tags?: string;
 };
 
 export type DeviceCreate = { serial: string; name?: string };

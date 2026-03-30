@@ -56,18 +56,37 @@ function elementToNode(el: Element, depth: number): HierarchyTreeNode {
 
 /**
  * Parse XML hierarchy string into a tree. Returns root node or null.
+ * Android may emit several top-level &lt;node&gt; siblings (e.g. SystemUI + app window).
+ * Using only querySelector('node') hid app content — we merge all direct children of &lt;hierarchy&gt;.
  */
 export function parseHierarchyTree(xml: string): HierarchyTreeNode | null {
   if (!xml || !xml.trim()) return null;
   try {
     _nextId = 0;
     const doc = new DOMParser().parseFromString(xml, 'text/xml');
-    const root = doc.querySelector('hierarchy');
-    if (!root) return null;
-    // hierarchy element may have direct <node> children
-    const firstNode = root.querySelector('node');
-    if (!firstNode) return null;
-    return elementToNode(firstNode, 0);
+    const hierarchyEl = doc.querySelector('hierarchy');
+    if (!hierarchyEl) return null;
+    const topNodes = Array.from(hierarchyEl.children).filter(
+      (c) => c.tagName === 'node'
+    ) as Element[];
+    if (topNodes.length === 0) return null;
+    if (topNodes.length === 1) {
+      return elementToNode(topNodes[0], 0);
+    }
+    const synthetic: HierarchyTreeNode = {
+      id: _nextId++,
+      tag: 'hierarchy',
+      className: `${topNodes.length} roots`,
+      resourceId: '',
+      text: '',
+      contentDesc: '',
+      pkg: '',
+      bounds: null,
+      clickable: false,
+      children: topNodes.map((el) => elementToNode(el, 1)),
+      depth: 0,
+    };
+    return synthetic;
   } catch {
     return null;
   }
@@ -109,17 +128,82 @@ export function searchTree(
 }
 
 /**
+ * Find the smallest node whose bounds contain the given relative position (rx, ry ∈ [0,1]).
+ * Screen dimensions are inferred from the root node's bounds.
+ * Returns the node ID, or null if nothing found.
+ */
+export function findNodeIdAtRatio(root: HierarchyTreeNode, rx: number, ry: number): number | null {
+  const screenBounds = root.bounds;
+  if (!screenBounds) return null;
+  const dw = screenBounds[2];
+  const dh = screenBounds[3];
+  if (dw <= 0 || dh <= 0) return null;
+  const px = rx * dw;
+  const py = ry * dh;
+
+  let bestId: number | null = null;
+  let bestArea = Infinity;
+
+  function walk(node: HierarchyTreeNode) {
+    if (!node.bounds) { node.children.forEach(walk); return; }
+    const [x1, y1, x2, y2] = node.bounds;
+    if (x1 <= px && px <= x2 && y1 <= py && py <= y2) {
+      const area = (x2 - x1) * (y2 - y1);
+      if (area < bestArea) { bestArea = area; bestId = node.id; }
+      node.children.forEach(walk);
+    }
+  }
+  walk(root);
+  return bestId;
+}
+
+/**
+ * Home/launcher grids reuse one resource-id for every cell (e.g. Samsung
+ * `com.sec.android.app.launcher:id/icon`). Using resource-id taps the *first*
+ * match in the XML, not the icon you picked — prefer text / content-desc.
+ */
+export function isAmbiguousLauncherResourceId(resourceId: string, pkg: string): boolean {
+  if (!resourceId || !resourceId.includes('/')) return false;
+  if (!/:id\/(icon|label|title|icon_text|text|name|bubble_text)$/i.test(resourceId)) {
+    return false;
+  }
+  const prefixes = [
+    'com.sec.android.app.launcher',
+    'com.android.launcher',
+    'com.google.android.apps.nexuslauncher',
+    'com.miui.home',
+    'com.huawei.android.launcher',
+    'com.oppo.launcher',
+    'com.vivo.launcher',
+  ];
+  return prefixes.some((p) => pkg.startsWith(p) || resourceId.startsWith(`${p}:`));
+}
+
+/**
  * Pick the best selector for a node (same priority as hierarchy-selectors.ts).
  */
 export function bestSelector(node: HierarchyTreeNode): { by: string; value: string } {
-  if (node.resourceId && node.resourceId.includes('/')) {
-    return { by: 'resource-id', value: node.resourceId };
+  const rid = node.resourceId?.trim() ?? '';
+  const ambiguous =
+    rid && isAmbiguousLauncherResourceId(rid, node.pkg?.trim() ?? '');
+
+  const text = node.text?.trim() ?? '';
+  if (ambiguous && text && text.length < 120) {
+    return { by: 'text', value: node.text! };
+  }
+  const desc = node.contentDesc?.trim() ?? '';
+  if (ambiguous && desc && desc.length < 120) {
+    return { by: 'description', value: node.contentDesc! };
+  }
+
+  if (rid && rid.includes('/')) {
+    return { by: 'resource-id', value: rid };
   }
   if (node.text && node.text.length < 80) {
     return { by: 'text', value: node.text };
   }
   if (node.contentDesc) {
-    return { by: 'content-desc', value: node.contentDesc };
+    return { by: 'description', value: node.contentDesc };
   }
-  return { by: 'class-name', value: node.className };
+  return { by: 'class name', value: node.className };
 }

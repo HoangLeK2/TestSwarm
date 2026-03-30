@@ -112,6 +112,50 @@ export async function fetchHierarchy(serial: string, refresh = false): Promise<s
   }
 }
 
+/** Fetch full screenshot as base64 for visual anchoring. */
+export async function fetchScreenshotB64(
+  serial: string,
+): Promise<{ screenshot: string; width: number; height: number }> {
+  const { data } = await farmApi.get(`/screenshot-b64/${encodeURIComponent(serial)}`);
+  return data as { screenshot: string; width: number; height: number };
+}
+
+/**
+ * Crop a base64 JPEG image client-side using Canvas API.
+ * ratioCrop values are in 0–1 relative to image dimensions.
+ * Returns base64 JPEG of the cropped region, or undefined if crop is invalid.
+ */
+export async function cropBase64(
+  b64: string,
+  ratioCrop: { rx1: number; ry1: number; rx2: number; ry2: number }
+): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const iw = img.naturalWidth;
+      const ih = img.naturalHeight;
+      const x1 = Math.round(ratioCrop.rx1 * iw);
+      const y1 = Math.round(ratioCrop.ry1 * ih);
+      const x2 = Math.round(ratioCrop.rx2 * iw);
+      const y2 = Math.round(ratioCrop.ry2 * ih);
+      const cw = x2 - x1;
+      const ch = y2 - y1;
+      if (cw <= 0 || ch <= 0) { resolve(undefined); return; }
+      const canvas = document.createElement('canvas');
+      canvas.width = cw;
+      canvas.height = ch;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) { resolve(undefined); return; }
+      ctx.drawImage(img, x1, y1, cw, ch, 0, 0, cw, ch);
+      // Strip "data:image/jpeg;base64," prefix
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      resolve(dataUrl.split(',')[1]);
+    };
+    img.onerror = () => resolve(undefined);
+    img.src = `data:image/jpeg;base64,${b64}`;
+  });
+}
+
 /** Tap by selector (resource-id, text, xpath). Uses uiautomator2. */
 export async function tapSelector(
   serial: string,

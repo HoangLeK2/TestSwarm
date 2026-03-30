@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 
 class ScenarioCreate(BaseModel):
@@ -10,6 +10,17 @@ class ScenarioCreate(BaseModel):
     variables: dict = {}
     order: int = 0
 
+    @field_validator("steps")
+    @classmethod
+    def validate_steps(cls, v: list) -> list:
+        if not v:
+            return v  # empty is allowed at create time
+        from common.scenario_schema import validate_scenario
+        errors = validate_scenario({"steps": v})
+        if errors:
+            raise ValueError(f"Step validation failed: {'; '.join(errors[:5])}")
+        return v
+
 
 class ScenarioUpdate(BaseModel):
     name: str | None = None
@@ -17,6 +28,17 @@ class ScenarioUpdate(BaseModel):
     steps: list | None = None
     variables: dict | None = None
     order: int | None = None
+
+    @field_validator("steps")
+    @classmethod
+    def validate_steps(cls, v: list | None) -> list | None:
+        if not v:
+            return v
+        from common.scenario_schema import validate_scenario
+        errors = validate_scenario({"steps": v})
+        if errors:
+            raise ValueError(f"Step validation failed: {'; '.join(errors[:5])}")
+        return v
 
 
 class ScenarioOut(BaseModel):

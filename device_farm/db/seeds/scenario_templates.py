@@ -27,10 +27,6 @@ Design rules:
 
 from typing import Any, Dict, List
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Existing generic / utility templates (unchanged from DF-003 seed)
-# ─────────────────────────────────────────────────────────────────────────────
-
 _GENERIC_TEMPLATES: List[Dict[str, Any]] = [
     {
         "name": "scroll_feed_generic",
@@ -426,8 +422,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "post_type, image_desc, comment_preview). "
             "Dữ liệu tích lũy trong context['posts'], tự động dừng khi 3 lần scroll "
             "không có bài mới (stop_if_no_new). "
-            "Dùng qua endpoint POST /api/devices/{serial}/crawl/jobs — "
-            "endpoint này sẽ tự động lưu posts vào DB (bảng crawl_posts). "
+            "Dùng bước save_extraction để lưu posts vào content DB. "
             "APP_PACKAGE: com.facebook.katana hoặc com.facebook.lite. "
             "MAX_SCROLLS: giới hạn tổng số scroll (default 30). "
             "SCROLL_PAUSE: giây chờ sau mỗi scroll để feed tải xong."
@@ -533,7 +528,520 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             },
         ],
     },
+
+    # ── fb_crawl_group_native ─────────────────────────────────────────────
+    # Built from capture eae85582931e8222_2026-03-29_211008 (OpenClaw VN group).
+    # Uses native FB app selectors observed in hierarchy XML.
+    {
+        "name": "fb_crawl_group_native",
+        "category": "facebook",
+        "description": (
+            "Crawl bài viết từ một Facebook Group bằng app native (com.facebook.katana). "
+            "Mở FB → Search → gõ tên group → tap group → cuộn và extract bài viết. "
+            "Thu thập: tên tác giả, nội dung, thời gian, lượt like, comment, share, "
+            "mô tả ảnh/video, preview comment. "
+            "Tự động expand 'xem thêm' để lấy nội dung đầy đủ. "
+            "Tự động dừng khi 3 lần scroll không có bài mới. "
+            "Dữ liệu lưu vào content DB qua bước save_extraction. "
+            "\n"
+            "GROUP_NAME: tên group hiển thị trên FB (ví dụ: 'OpenClaw VN'). "
+            "MAX_SCROLLS: giới hạn tổng số scroll (default 50). "
+            "SCROLL_PAUSE: giây chờ giữa mỗi scroll để feed tải (default 2.5). "
+            "LIKE_WHILE_CRAWL: xác suất like ngẫu nhiên khi crawl (0-100, default 0 = tắt). "
+            "SAVE_COLLECTION: tên collection để lưu vào content DB."
+        ),
+        "tags": "facebook,crawl,extract,group,data,scrape,posts,native,like,comment,share",
+        "variables": {
+            "GROUP_NAME": "OpenClaw VN",
+            "APP_PACKAGE": "com.facebook.katana",
+            "MAX_SCROLLS": 50,
+            "SCROLL_PAUSE": 2.5,
+            "LIKE_WHILE_CRAWL": 0,
+            "SAVE_COLLECTION": "fb_group_posts",
+        },
+        "steps": [
+            # ── Phase 1: Launch & Navigate to Group ──────────────────────
+            {"type": "launch_app", "package": "${APP_PACKAGE}", "wait_after": 5},
+            {"type": "dismiss_popup", "retries": 3},
+            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
+
+            # Tap Search icon (top bar)
+            {
+                "type": "if_element",
+                "by": "content-desc",
+                "value": "Search Facebook",
+                "timeout": 5,
+                "then": [
+                    {"type": "tap_selector", "by": "content-desc", "value": "Search Facebook", "timeout": 4},
+                ],
+                "else": [
+                    # Fallback: tap search icon by resource-id (varies by version)
+                    {
+                        "type": "if_element",
+                        "by": "content-desc",
+                        "value": "Tìm kiếm",
+                        "timeout": 3,
+                        "then": [
+                            {"type": "tap_selector", "by": "content-desc", "value": "Tìm kiếm", "timeout": 3},
+                        ],
+                        "else": [
+                            # Last resort: tap the search position from recording
+                            {"type": "tap_ratio", "x": 0.62, "y": 0.045},
+                        ],
+                    },
+                ],
+            },
+            {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
+
+            # Type group name in search box
+            {"type": "input_text", "text": "${GROUP_NAME}", "via": "u2"},
+            {"type": "wait", "seconds": 2},
+
+            # Tap the group from search results (match by content-desc or text)
+            {
+                "type": "if_element",
+                "by": "content-desc",
+                "value": "${GROUP_NAME}",
+                "timeout": 5,
+                "then": [
+                    {"type": "tap_selector", "by": "content-desc", "value": "${GROUP_NAME}", "timeout": 4},
+                ],
+                "else": [
+                    {
+                        "type": "if_element",
+                        "by": "text",
+                        "value": "${GROUP_NAME}",
+                        "timeout": 3,
+                        "then": [
+                            {"type": "tap_selector", "by": "text", "value": "${GROUP_NAME}", "timeout": 3},
+                        ],
+                    },
+                ],
+            },
+            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
+
+            # ── Phase 2: Scroll past group header to posts ──────────────
+            # Group page has cover photo + info — scroll 2-3 times to reach posts
+            {"type": "scroll_down", "repeats": 2},
+            {"type": "wait_stable", "timeout": 3, "stable_duration": 0.4},
+
+            # ── Phase 3: Crawl Loop ─────────────────────────────────────
+            {
+                "type": "loop",
+                "count": "${MAX_SCROLLS}",
+                "steps": [
+                    # Extract posts from current screen
+                    # strategy=fb_posts parses: author, text, timestamp, reactions,
+                    # comments, shares, post_type, image_desc, comment_preview
+                    {
+                        "type": "extract",
+                        "strategy": "fb_posts",
+                        "stop_if_no_new": True,
+                        "no_new_threshold": 3,
+                        "expand_see_more": True,
+                    },
+
+                    # Optional: like while crawling (natural behavior)
+                    {
+                        "type": "random_pick",
+                        "branches": [
+                            {
+                                "weight": "${LIKE_WHILE_CRAWL}",
+                                "steps": [
+                                    {
+                                        "type": "if_element",
+                                        "by": "text",
+                                        "value": "Thích",
+                                        "timeout": 1,
+                                        "then": [
+                                            {"type": "tap_selector", "by": "text", "value": "Thích", "timeout": 2},
+                                            {"type": "wait", "seconds": 1},
+                                        ],
+                                    },
+                                ],
+                            },
+                            {"weight": 100, "steps": []},
+                        ],
+                    },
+
+                    # Scroll down to load more posts
+                    {
+                        "type": "set_variable",
+                        "name": "_SCROLL_N",
+                        "from_list": [1, 1, 2],
+                    },
+                    {"type": "scroll_down", "repeats": "${_SCROLL_N}"},
+                    {"type": "wait", "seconds": "${SCROLL_PAUSE}"},
+                    {"type": "dismiss_popup", "retries": 1},
+                ],
+            },
+
+            # ── Phase 4: Save extracted data ────────────────────────────
+            {
+                "type": "save_extraction",
+                "data_var": "posts",
+                "collection": "${SAVE_COLLECTION}",
+                "platform": "facebook",
+                "content_type": "group_post",
+                "dedupe_field": "content",
+                "tags": "group,${GROUP_NAME}",
+            },
+        ],
+    },
+
+    # ── fb_crawl_group_deep ────────────────────────────────────────────────
+    {
+        "name": "fb_crawl_group_deep",
+        "category": "facebook",
+        "description": (
+            "Crawl sâu bài viết Facebook Group: ngoài extract cơ bản (tác giả, nội dung, "
+            "like/comment/share), template này còn TAP vào từng bài để lấy full nội dung + "
+            "comment, rồi quay lại feed tiếp tục. "
+            "Chậm hơn fb_crawl_group_native nhưng thu thập đầy đủ hơn. "
+            "\n"
+            "GROUP_NAME: tên group. "
+            "MAX_POSTS: số bài muốn crawl sâu (default 20). "
+            "SAVE_COLLECTION: collection name."
+        ),
+        "tags": "facebook,crawl,extract,group,deep,comments,full,scrape",
+        "variables": {
+            "GROUP_NAME": "OpenClaw VN",
+            "APP_PACKAGE": "com.facebook.katana",
+            "MAX_POSTS": 20,
+            "SAVE_COLLECTION": "fb_group_deep",
+        },
+        "steps": [
+            # ── Navigate to group (reuse same pattern) ──────────────────
+            {"type": "launch_app", "package": "${APP_PACKAGE}", "wait_after": 5},
+            {"type": "dismiss_popup", "retries": 3},
+            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
+            {
+                "type": "if_element",
+                "by": "content-desc",
+                "value": "Search Facebook",
+                "timeout": 5,
+                "then": [
+                    {"type": "tap_selector", "by": "content-desc", "value": "Search Facebook", "timeout": 4},
+                ],
+                "else": [
+                    {
+                        "type": "if_element",
+                        "by": "content-desc",
+                        "value": "Tìm kiếm",
+                        "timeout": 3,
+                        "then": [
+                            {"type": "tap_selector", "by": "content-desc", "value": "Tìm kiếm", "timeout": 3},
+                        ],
+                        "else": [
+                            {"type": "tap_ratio", "x": 0.62, "y": 0.045},
+                        ],
+                    },
+                ],
+            },
+            {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
+            {"type": "input_text", "text": "${GROUP_NAME}", "via": "u2"},
+            {"type": "wait", "seconds": 2},
+            {
+                "type": "if_element",
+                "by": "content-desc",
+                "value": "${GROUP_NAME}",
+                "timeout": 5,
+                "then": [
+                    {"type": "tap_selector", "by": "content-desc", "value": "${GROUP_NAME}", "timeout": 4},
+                ],
+                "else": [
+                    {
+                        "type": "if_element",
+                        "by": "text",
+                        "value": "${GROUP_NAME}",
+                        "timeout": 3,
+                        "then": [
+                            {"type": "tap_selector", "by": "text", "value": "${GROUP_NAME}", "timeout": 3},
+                        ],
+                    },
+                ],
+            },
+            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
+            {"type": "scroll_down", "repeats": 2},
+            {"type": "wait_stable", "timeout": 3, "stable_duration": 0.4},
+
+            # ── Deep crawl loop ─────────────────────────────────────────
+            {"type": "set_variable", "name": "CRAWLED", "value": 0},
+            {
+                "type": "repeat_until",
+                "condition": {"variable_equals": {"name": "CRAWLED", "value": "${MAX_POSTS}"}},
+                "max_iterations": 200,
+                "steps": [
+                    # Quick extract from feed view first
+                    {
+                        "type": "extract",
+                        "strategy": "fb_posts",
+                        "expand_see_more": True,
+                    },
+
+                    # Tap into post detail — FB posts have content-desc
+                    # "Lựa chọn khác cho bài viết của <Author>"
+                    # The post body itself is clickable
+                    {
+                        "type": "if_element",
+                        "by": "text",
+                        "value": "Bình luận",
+                        "timeout": 2,
+                        "then": [
+                            # Tap "Bình luận" to open post detail with comments
+                            {"type": "tap_selector", "by": "text", "value": "Bình luận", "timeout": 3},
+                            {"type": "wait_stable", "timeout": 5, "stable_duration": 0.5},
+
+                            # Extract full post + comments in detail view
+                            {
+                                "type": "extract",
+                                "strategy": "fb_posts",
+                                "expand_see_more": True,
+                            },
+
+                            # Scroll to load more comments
+                            {"type": "scroll_down", "repeats": 2},
+                            {"type": "wait", "seconds": 1.5},
+                            {
+                                "type": "extract",
+                                "strategy": "fb_posts",
+                                "expand_see_more": False,
+                            },
+
+                            # Go back to feed
+                            {"type": "key", "key": "back"},
+                            {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
+
+                            {"type": "set_variable", "name": "CRAWLED", "increment": 1},
+                        ],
+                        "else": [
+                            # No "Bình luận" visible — scroll to find next post
+                            {"type": "scroll_down", "repeats": 1},
+                            {"type": "wait", "seconds": 2},
+                        ],
+                    },
+
+                    # Scroll to next post in feed
+                    {"type": "scroll_down", "repeats": 1},
+                    {
+                        "type": "set_variable",
+                        "name": "_PAUSE",
+                        "from_list": [1.5, 2, 2.5, 3],
+                    },
+                    {"type": "wait", "seconds": "${_PAUSE}"},
+                    {"type": "dismiss_popup", "retries": 1},
+                    # Persist incrementally so data is not lost when device/u2 is unstable
+                    # and the campaign task times out before exiting repeat_until.
+                    {
+                        "type": "save_extraction",
+                        "data_var": "posts",
+                        "collection": "${SAVE_COLLECTION}",
+                        "platform": "facebook",
+                        "content_type": "group_post_deep",
+                        "dedupe_field": "content",
+                        "tags": "group,deep,${GROUP_NAME}",
+                    },
+                ],
+            },
+
+            {
+                "type": "save_extraction",
+                "data_var": "posts",
+                "collection": "${SAVE_COLLECTION}",
+                "platform": "facebook",
+                "content_type": "group_post_deep",
+                "dedupe_field": "content",
+                "tags": "group,deep,${GROUP_NAME}",
+            },
+        ],
+    },
+
+    # ── fb_group_engagement ────────────────────────────────────────────────
+    {
+        "name": "fb_group_engagement",
+        "category": "facebook",
+        "description": (
+            "Tương tác tự nhiên trong Facebook Group: cuộn feed, "
+            "like bài (LIKE_WEIGHT%), bình luận (COMMENT_WEIGHT%), "
+            "xem ảnh/video. Dùng để warm-up account hoặc tăng organic engagement "
+            "trong group. "
+            "\n"
+            "GROUP_NAME: tên group. "
+            "ROUNDS: số vòng cuộn + tương tác. "
+            "LIKE_WEIGHT: xác suất like (0-100). "
+            "COMMENT_WEIGHT: xác suất bình luận (0-100). "
+            "COMMENTS: danh sách comment ngẫu nhiên."
+        ),
+        "tags": "facebook,group,engagement,like,comment,interact,behavior,natural",
+        "variables": {
+            "GROUP_NAME": "OpenClaw VN",
+            "APP_PACKAGE": "com.facebook.katana",
+            "ROUNDS": 15,
+            "LIKE_WEIGHT": 30,
+            "COMMENT_WEIGHT": 10,
+            "COMMENTS": [
+                "Hay quá!", "Cảm ơn bạn!", "Thông tin hữu ích 👍",
+                "Mình cũng quan tâm topic này", "Bookmark lại đã",
+                "Thank you!", "Chia sẻ rất hay", "Noted 📝",
+            ],
+        },
+        "steps": [
+            # Navigate to group
+            {"type": "launch_app", "package": "${APP_PACKAGE}", "wait_after": 5},
+            {"type": "dismiss_popup", "retries": 3},
+            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
+            {
+                "type": "if_element",
+                "by": "content-desc",
+                "value": "Search Facebook",
+                "timeout": 5,
+                "then": [
+                    {"type": "tap_selector", "by": "content-desc", "value": "Search Facebook", "timeout": 4},
+                ],
+                "else": [
+                    {
+                        "type": "if_element",
+                        "by": "content-desc",
+                        "value": "Tìm kiếm",
+                        "timeout": 3,
+                        "then": [
+                            {"type": "tap_selector", "by": "content-desc", "value": "Tìm kiếm", "timeout": 3},
+                        ],
+                        "else": [
+                            {"type": "tap_ratio", "x": 0.62, "y": 0.045},
+                        ],
+                    },
+                ],
+            },
+            {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
+            {"type": "input_text", "text": "${GROUP_NAME}", "via": "u2"},
+            {"type": "wait", "seconds": 2},
+            {
+                "type": "if_element",
+                "by": "content-desc",
+                "value": "${GROUP_NAME}",
+                "timeout": 5,
+                "then": [
+                    {"type": "tap_selector", "by": "content-desc", "value": "${GROUP_NAME}", "timeout": 4},
+                ],
+                "else": [
+                    {"type": "tap_selector", "by": "text", "value": "${GROUP_NAME}", "timeout": 3},
+                ],
+            },
+            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
+            {"type": "scroll_down", "repeats": 2},
+            {"type": "wait_stable", "timeout": 3, "stable_duration": 0.4},
+
+            # Engagement loop
+            {
+                "type": "repeat",
+                "count": "${ROUNDS}",
+                "steps": [
+                    # Scroll 1-3 times
+                    {"type": "set_variable", "name": "_S", "from_list": [1, 1, 2, 2, 3]},
+                    {"type": "scroll_down", "repeats": "${_S}"},
+
+                    # Read time
+                    {"type": "set_variable", "name": "_READ", "from_list": [3, 4, 5, 6, 8, 10]},
+                    {"type": "wait", "seconds": "${_READ}"},
+
+                    # Like with probability
+                    {
+                        "type": "random_pick",
+                        "branches": [
+                            {
+                                "weight": "${LIKE_WEIGHT}",
+                                "steps": [
+                                    {
+                                        "type": "if_element",
+                                        "by": "text",
+                                        "value": "Thích",
+                                        "timeout": 1,
+                                        "then": [
+                                            {"type": "tap_selector", "by": "text", "value": "Thích", "timeout": 2},
+                                            {"type": "wait", "seconds": 1},
+                                        ],
+                                    },
+                                ],
+                            },
+                            {"weight": 70, "steps": []},
+                        ],
+                    },
+
+                    # Comment with probability
+                    {
+                        "type": "random_pick",
+                        "branches": [
+                            {
+                                "weight": "${COMMENT_WEIGHT}",
+                                "steps": [
+                                    {
+                                        "type": "if_element",
+                                        "by": "text",
+                                        "value": "Bình luận",
+                                        "timeout": 1,
+                                        "then": [
+                                            {"type": "tap_selector", "by": "text", "value": "Bình luận", "timeout": 2},
+                                            {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
+                                            # Type random comment
+                                            {
+                                                "type": "set_variable",
+                                                "name": "_CMT",
+                                                "from_list": "${COMMENTS}",
+                                            },
+                                            {"type": "input_text", "text": "${_CMT}", "via": "u2"},
+                                            {"type": "wait", "seconds": 1},
+                                            # Submit comment (Enter key or tap Send)
+                                            {
+                                                "type": "if_element",
+                                                "by": "content-desc",
+                                                "value": "Send",
+                                                "timeout": 2,
+                                                "then": [
+                                                    {"type": "tap_selector", "by": "content-desc", "value": "Send", "timeout": 2},
+                                                ],
+                                                "else": [
+                                                    {
+                                                        "type": "if_element",
+                                                        "by": "content-desc",
+                                                        "value": "Gửi",
+                                                        "timeout": 2,
+                                                        "then": [
+                                                            {"type": "tap_selector", "by": "content-desc", "value": "Gửi", "timeout": 2},
+                                                        ],
+                                                        "else": [
+                                                            {"type": "key", "key": "enter"},
+                                                        ],
+                                                    },
+                                                ],
+                                            },
+                                            {"type": "wait", "seconds": 2},
+                                            {"type": "key", "key": "back"},
+                                            {"type": "wait_stable", "timeout": 3, "stable_duration": 0.4},
+                                            # Anti-spam delay after comment
+                                            {
+                                                "type": "set_variable",
+                                                "name": "_CDEL",
+                                                "from_list": [30, 45, 60, 90],
+                                            },
+                                            {"type": "wait", "seconds": "${_CDEL}"},
+                                        ],
+                                    },
+                                ],
+                            },
+                            {"weight": 90, "steps": []},
+                        ],
+                    },
+
+                    {"type": "dismiss_popup", "retries": 1},
+                    {"type": "set_variable", "name": "_P", "from_list": [1, 1.5, 2]},
+                    {"type": "wait", "seconds": "${_P}"},
+                ],
+            },
+        ],
+    },
 ]
+
 
 _TIKTOK_TEMPLATES: List[Dict[str, Any]] = [
     # ── tt_scroll_fyp ───────────────────────────────────────────────────────

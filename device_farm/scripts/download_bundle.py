@@ -74,8 +74,6 @@ SCRCPY_SERVER_URL = (
 )
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
 def _download(url: str, dest: Path, label: str = "") -> bool:
     dest.parent.mkdir(parents=True, exist_ok=True)
     label = label or dest.name

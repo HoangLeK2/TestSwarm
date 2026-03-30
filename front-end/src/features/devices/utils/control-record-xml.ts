@@ -1,4 +1,5 @@
 import { fetchHierarchy } from '../services/api';
+import { isAmbiguousLauncherResourceId } from './hierarchy-tree';
 
 /**
  * Normalize Android hierarchy XML before hashing.
@@ -30,12 +31,23 @@ export function hashXml(xml: string): number {
 /**
  * Parse XML, find element at (rx,ry).
  * Priority: resource-id > content-desc > text > class
+ *
+ * bounds.rx1/ry1/rx2/ry2 are normalized to XML root dims (0–1) so the caller
+ * can pass them directly to the screenshot-b64 API without knowing device resolution.
  */
 export function findSelectorInXml(
   xmlStr: string,
   rx: number,
   ry: number
-): { by: 'resource-id' | 'text' | 'xpath' | 'class name'; value: string } | null {
+): {
+  by: 'resource-id' | 'text' | 'xpath' | 'class name';
+  value: string;
+  bounds?: {
+    left: number; top: number; right: number; bottom: number;
+    // Ratio equivalents normalized to XML root viewport dimensions
+    rx1: number; ry1: number; rx2: number; ry2: number;
+  };
+} | null {
   let doc: Document;
   try {
     doc = new DOMParser().parseFromString(xmlStr, 'text/xml');
@@ -51,7 +63,11 @@ export function findSelectorInXml(
   const py = ry * dh;
 
   const BOUNDS = /\[(\d+),(\d+)\]\[(\d+),(\d+)\]/;
-  let best: { by: 'resource-id' | 'text' | 'xpath' | 'class name'; value: string } | null = null;
+  let best: {
+    by: 'resource-id' | 'text' | 'xpath' | 'class name';
+    value: string;
+    bounds?: { left: number; top: number; right: number; bottom: number };
+  } | null = null;
   let bestArea = Infinity;
 
   for (const node of Array.from(doc.getElementsByTagName('node'))) {
@@ -65,7 +81,10 @@ export function findSelectorInXml(
     const rid = (node.getAttribute('resource-id') ?? '').trim();
     const desc = (node.getAttribute('content-desc') ?? '').trim();
     const text = (node.getAttribute('text') ?? '').trim();
+    const pkg = (node.getAttribute('package') ?? '').trim();
     const cls = (node.getAttribute('class') ?? '').trim();
+
+    const ambiguousLauncher = rid && isAmbiguousLauncherResourceId(rid, pkg);
 
     const CONTAINER_CLASSES = new Set([
       'android.widget.FrameLayout',
@@ -78,12 +97,22 @@ export function findSelectorInXml(
       'androidx.recyclerview.widget.RecyclerView'
     ]);
 
-    type Sel = { by: 'resource-id' | 'text' | 'xpath' | 'class name'; value: string };
+    type Sel = {
+      by: 'resource-id' | 'text' | 'xpath' | 'class name';
+      value: string;
+      bounds?: { left: number; top: number; right: number; bottom: number; rx1: number; ry1: number; rx2: number; ry2: number };
+    };
     let sel: Sel | null = null;
-    if (rid && rid.includes('/')) {
+    if (ambiguousLauncher && text && text.length < 120) {
+      sel = { by: 'text', value: text };
+    } else if (ambiguousLauncher && desc && desc.length < 80) {
+      const safeDesc = desc.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      sel = { by: 'xpath', value: `//*[@content-desc="${safeDesc}"]` };
+    } else if (rid && rid.includes('/')) {
       sel = { by: 'resource-id', value: rid };
     } else if (desc && desc.length < 80) {
-      sel = { by: 'xpath', value: `//*[@content-desc="${desc.replace(/"/g, '\\"')}"]` };
+      const safeDesc = desc.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      sel = { by: 'xpath', value: `//*[@content-desc="${safeDesc}"]` };
     } else if (text && text.length < 80) {
       sel = { by: 'text', value: text };
     } else if (rid) {
@@ -93,6 +122,10 @@ export function findSelectorInXml(
     }
 
     if (sel) {
+      sel.bounds = {
+        left: x1, top: y1, right: x2, bottom: y2,
+        rx1: x1 / dw, ry1: y1 / dh, rx2: x2 / dw, ry2: y2 / dh,
+      };
       best = sel;
       bestArea = area;
     }
@@ -103,7 +136,23 @@ export function findSelectorInXml(
 export function getScreenSignature(xml: string): { package: string; texts: string[] } {
   try {
     const doc = new DOMParser().parseFromString(xml, 'text/xml');
-    const pkg = doc.querySelector('node')?.getAttribute('package') ?? '';
+    const BOUNDS = /\[(\d+),(\d+)\]\[(\d+),(\d+)\]/;
+    let pkg = '';
+    let bestArea = 0;
+    for (const node of Array.from(doc.getElementsByTagName('node'))) {
+      const p = (node.getAttribute('package') ?? '').trim();
+      if (!p || p === 'android' || p.startsWith('com.android.systemui')) continue;
+      const m = BOUNDS.exec(node.getAttribute('bounds') ?? '');
+      if (!m) continue;
+      const area = (+m[3] - +m[1]) * (+m[4] - +m[2]);
+      if (area > bestArea) {
+        bestArea = area;
+        pkg = p;
+      }
+    }
+    if (!pkg) {
+      pkg = doc.querySelector('node')?.getAttribute('package') ?? '';
+    }
     const texts: string[] = [];
     for (const node of Array.from(doc.getElementsByTagName('node'))) {
       const t = (node.getAttribute('text') ?? '').trim();

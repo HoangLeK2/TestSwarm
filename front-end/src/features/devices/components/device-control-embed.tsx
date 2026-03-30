@@ -60,7 +60,7 @@ export function DeviceControlEmbed({ initialSerial, compact = true, onTap }: Pro
   }
 
   return (
-    <div className={compact ? 'min-w-[320px] w-full' : ''}>
+    <div className={compact ? 'w-full min-w-0 max-w-full' : ''}>
       {selectedDevice.serial !== initialSerial && (
         <p className="mb-1 text-[10px] text-muted-foreground">
           Thiết bị {initialSerial} chưa online — đang hiển thị: {selectedDevice.serial}
@@ -74,6 +74,7 @@ export function DeviceControlEmbed({ initialSerial, compact = true, onTap }: Pro
         onToggleMode={handleToggleMode}
         onRestart={handleRestart}
         onTap={onTap ? (rx, ry) => onTap(selectedDevice.serial, rx, ry) : undefined}
+        compact={compact}
       />
     </div>
   );

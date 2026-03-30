@@ -1,0 +1,122 @@
+# Device Farm — Full Stack
+# Usage:
+#   docker compose up -d          # start all services
+#   docker compose logs -f farm   # follow backend logs
+#   docker compose down            # stop all
+#
+# Services:
+#   farm       — Backend API + Temporal worker (port 8081)
+#   frontend   — Next.js dashboard (port 3000)
+#   postgres   — PostgreSQL (host port 5433 → container 5432; avoid clash with local PG)
+#   temporal   — Temporal Server (port 7233, UI: 8233)
+
+services:
+
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: device_farm
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+
+  temporal:
+    image: temporalio/auto-setup:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=postgres
+      - POSTGRES_PWD=${DB_PASSWORD:-postgres}
+      - POSTGRES_SEEDS=postgres
+    ports:
+      - "7233:7233"   # gRPC (worker + client)
+    healthcheck:
+      test: ["CMD", "tctl", "--address", "temporal:7233", "cluster", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+
+  temporal-ui:
+    image: temporalio/ui:latest
+    restart: unless-stopped
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_CORS_ORIGINS=http://localhost:3000
+    ports:
+      - "8233:8080"   # Temporal UI at http://localhost:8233
+
+  # farm:
+  #   build:
+  #     context: ./device_farm
+  #     dockerfile: Dockerfile
+  #   restart: unless-stopped
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     temporal:
+  #       condition: service_healthy
+  #   ports:
+  #     - "8081:8081"
+  #   environment:
+  #     # Database
+  #     DATABASE_URL: postgresql://postgres:${DB_PASSWORD:-postgres}@postgres:5432/device_farm
+  #     # Temporal — point to temporal service, not localhost
+  #     TEMPORAL_SERVER_URL: temporal:7233
+  #     # Auth
+  #     SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+  #     ACCESS_EXPIRE_HOURS: ${ACCESS_EXPIRE_HOURS:-1}
+  #     # AI (optional)
+  #     OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  #     GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  #     # Agent boot — skip in container (no USB/ADB)
+  #     FARM_AGENT_BOOT: "0"
+  #   volumes:
+  #     # Config override (optional — mount custom config.yaml)
+  #     - ./device_farm/config.yaml:/app/config.yaml:ro
+  #     # Persist captures/screenshots
+  #     - farm_captures:/app/captures
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:8081/api/health"]
+  #     interval: 15s
+  #     timeout: 5s
+  #     retries: 3
+  #     start_period: 10s
+
+
+  # frontend:
+  #   build:
+  #     context: ./front-end
+  #     dockerfile: Dockerfile
+  #   restart: unless-stopped
+  #   depends_on:
+  #     farm:
+  #       condition: service_healthy
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     NEXT_PUBLIC_API_URL: http://farm:8081
+  #     NEXT_PUBLIC_WS_URL: ws://farm:8081
+
+volumes:
+  pgdata:
+  farm_captures:

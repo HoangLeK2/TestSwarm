@@ -1,22 +1,19 @@
 """
-adb_transport.py — ADB transport using pure Python (no `adb` binary required).
+adb_transport.py — ADB transport via system `adb` binary (subprocess).
 
-Connects directly to device's built-in ADB daemon (adbd) over TCP/WiFi.
+Connects to device via `adb connect host:port` and shells out all commands
+through `adb -s host:port shell ...`. Requires `adb` on PATH.
 
 Compatible devices:
   - Android 11+ : Settings → Developer Options → Wireless Debugging → Enable
-  - Android ≤10 : Requires `adb tcpip 5555` once via USB (then USB can be removed)
-
-No ADB binary, no ADB server process needed on the farm server.
-Uses `adb-shell` library that implements ADB protocol natively in Python.
+  - Android ≤10 : `adb tcpip 5555` once via USB, then disconnect USB
 
 Usage:
     transport = AdbTransport('192.168.1.100', 5555)
     ok = transport.connect()
     output = transport.shell('whoami')
-    transport.push_file('/local/minicap', '/data/local/tmp/minicap', mode=0o755)
-    transport.start_streaming_shell('LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/minicap ...',
-                                    on_exit=lambda: print('minicap died'))
+    transport.push_file('/local/file', '/data/local/tmp/file', mode=0o755)
+    transport.start_streaming_shell('am instrument -w ...', on_exit=lambda: ...)
     transport.close()
 """
 from __future__ import annotations

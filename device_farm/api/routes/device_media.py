@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import logging
 import os
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from runtime.core import DeviceManager
+
+log = logging.getLogger(__name__)
 
 
 def build_device_media_router(manager: DeviceManager) -> APIRouter:
@@ -45,7 +49,6 @@ def build_device_media_router(manager: DeviceManager) -> APIRouter:
         if not device:
             return JSONResponse({"error": "Not found"}, status_code=404)
         if fresh:
-            # Trigger on-demand capture (u2 → adb screencap → cache fallback)
             frame = device.capture_screenshot()
         else:
             frame = device.take_screenshot()
@@ -56,5 +59,24 @@ def build_device_media_router(manager: DeviceManager) -> APIRouter:
             media_type="image/jpeg",
             headers={"Cache-Control": "no-store"},
         )
+
+    @router.get("/screenshot-b64/{serial}")
+    async def screenshot_b64(serial: str):
+        """Screenshot as base64 JPEG. Cropping is done client-side."""
+        device = manager.get_device(serial)
+        if not device:
+            return JSONResponse({"error": "Not found"}, status_code=404)
+
+        frame = device.take_screenshot()
+        if not frame:
+            frame = device.capture_screenshot(allow_ws_u2_fallback=True)
+        if not frame:
+            return JSONResponse({"error": "No frame available"}, status_code=503)
+
+        return JSONResponse({
+            "screenshot": base64.b64encode(frame).decode("ascii"),
+            "width": device.screen_width or 0,
+            "height": device.screen_height or 0,
+        })
 
     return router

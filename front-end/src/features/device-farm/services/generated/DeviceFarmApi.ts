@@ -10,6 +10,172 @@
  * ---------------------------------------------------------------
  */
 
+/** AIExtractBody */
+export interface AIExtractBody {
+  /** Prompt */
+  prompt: string;
+  /**
+   * Provider
+   * @default "openai"
+   */
+  provider?: string;
+  /**
+   * Format
+   * @default "json"
+   */
+  format?: string;
+  /** Model */
+  model?: string | null;
+  /** Region */
+  region?: Record<string, number> | null;
+}
+
+/** AccountCreate */
+export interface AccountCreate {
+  /** Platform */
+  platform: string;
+  /** Username */
+  username: string;
+  /** Password */
+  password?: string | null;
+  /**
+   * Display Name
+   * @default ""
+   */
+  display_name?: string;
+  /**
+   * Notes
+   * @default ""
+   */
+  notes?: string;
+  /**
+   * Tags
+   * @default ""
+   */
+  tags?: string;
+  /** Proxy Id */
+  proxy_id?: string | null;
+  /**
+   * Account Metadata
+   * @default {}
+   */
+  account_metadata?: Record<string, any>;
+}
+
+/** AccountOut */
+export interface AccountOut {
+  /** Id */
+  id: string;
+  /** Platform */
+  platform: string;
+  /** Username */
+  username: string;
+  /** Display Name */
+  display_name: string;
+  /** Status */
+  status: string;
+  /** Cooldown Until */
+  cooldown_until: string | null;
+  /** Proxy Id */
+  proxy_id: string | null;
+  /** Notes */
+  notes: string;
+  /** Tags */
+  tags: string;
+  /** User Id */
+  user_id: string | null;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /**
+   * Updated At
+   * @format date-time
+   */
+  updated_at: string;
+  /** Last Used At */
+  last_used_at: string | null;
+  /** Total Usage Minutes */
+  total_usage_minutes: number;
+  /** Usage Today Minutes */
+  usage_today_minutes: number;
+  /** Usage Reset Date */
+  usage_reset_date: string | null;
+}
+
+/** AccountStatusUpdate */
+export interface AccountStatusUpdate {
+  /** Status */
+  status: string;
+}
+
+/** AccountUpdate */
+export interface AccountUpdate {
+  /** Password */
+  password?: string | null;
+  /** Display Name */
+  display_name?: string | null;
+  /** Notes */
+  notes?: string | null;
+  /** Tags */
+  tags?: string | null;
+  /** Proxy Id */
+  proxy_id?: string | null;
+  /** Account Metadata */
+  account_metadata?: Record<string, any> | null;
+}
+
+/**
+ * AccountWithLinksOut
+ * Detailed account response that includes the list of device links.
+ */
+export interface AccountWithLinksOut {
+  /** Id */
+  id: string;
+  /** Platform */
+  platform: string;
+  /** Username */
+  username: string;
+  /** Display Name */
+  display_name: string;
+  /** Status */
+  status: string;
+  /** Cooldown Until */
+  cooldown_until: string | null;
+  /** Proxy Id */
+  proxy_id: string | null;
+  /** Notes */
+  notes: string;
+  /** Tags */
+  tags: string;
+  /** User Id */
+  user_id: string | null;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /**
+   * Updated At
+   * @format date-time
+   */
+  updated_at: string;
+  /** Last Used At */
+  last_used_at: string | null;
+  /** Total Usage Minutes */
+  total_usage_minutes: number;
+  /** Usage Today Minutes */
+  usage_today_minutes: number;
+  /** Usage Reset Date */
+  usage_reset_date: string | null;
+  /**
+   * Device Links
+   * @default []
+   */
+  device_links?: DeviceAccountOut[];
+}
+
 /**
  * AdbRegisterRequest
  * Body for app-after-scan: phone sends its IP so backend can connect via ADB.
@@ -32,6 +198,93 @@ export interface AddDeviceBody {
   device_id: string;
 }
 
+/** AddDevicesToGroupBody */
+export interface AddDevicesToGroupBody {
+  /** Device Ids */
+  device_ids: string[];
+}
+
+/**
+ * AssignAccountBody
+ * Used by POST /devices/{device_id}/accounts — assigns an account to a device.
+ */
+export interface AssignAccountBody {
+  /** Account Id */
+  account_id: string;
+  /**
+   * Is Primary
+   * @default false
+   */
+  is_primary?: boolean;
+}
+
+/**
+ * AssignDeviceBody
+ * Used by POST /accounts/{account_id}/devices — assigns a device to an account.
+ */
+export interface AssignDeviceBody {
+  /** Device Id */
+  device_id: string;
+  /**
+   * Is Primary
+   * @default false
+   */
+  is_primary?: boolean;
+}
+
+/** Body_bulk_import_csv_api_accounts_import_csv_post */
+export interface BodyBulkImportCsvApiAccountsImportCsvPost {
+  /**
+   * File
+   * CSV file with columns: platform, username, password, display_name, tags, notes
+   */
+  file: string;
+}
+
+/**
+ * BulkImportBody
+ * JSON bulk import body.
+ */
+export interface BulkImportBody {
+  /** Accounts */
+  accounts: BulkImportRow[];
+}
+
+/** BulkImportResult */
+export interface BulkImportResult {
+  /** Created */
+  created: number;
+  /** Skipped */
+  skipped: number;
+  /** Total */
+  total: number;
+}
+
+/** BulkImportRow */
+export interface BulkImportRow {
+  /** Platform */
+  platform: string;
+  /** Username */
+  username: string;
+  /** Password */
+  password?: string | null;
+  /**
+   * Display Name
+   * @default ""
+   */
+  display_name?: string;
+  /**
+   * Tags
+   * @default ""
+   */
+  tags?: string;
+  /**
+   * Notes
+   * @default ""
+   */
+  notes?: string;
+}
+
 /** CampaignCreate */
 export interface CampaignCreate {
   /** Name */
@@ -47,10 +300,17 @@ export interface CampaignCreate {
    */
   scenario?: Record<string, any>;
   /**
+   * Variables
+   * @default {}
+   */
+  variables?: Record<string, any>;
+  /**
    * Device Ids
    * @default []
    */
   device_ids?: string[];
+  /** Target Group Id */
+  target_group_id?: string | null;
 }
 
 /** CampaignDeviceOut */
@@ -76,12 +336,51 @@ export interface CampaignOut {
   /** Scenario */
   scenario?: Record<string, any> | null;
   /**
+   * Variables
+   * @default {}
+   */
+  variables?: Record<string, any>;
+  /**
    * Scenarios
    * @default []
    */
   scenarios?: ScenarioOut[];
   /** User Id */
   user_id: string | null;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /** Target Group Id */
+  target_group_id?: string | null;
+}
+
+/** CollectionCreate */
+export interface CollectionCreate {
+  /** Name */
+  name: string;
+  /**
+   * Description
+   * @default ""
+   */
+  description?: string;
+  /** Platform */
+  platform?: string | null;
+}
+
+/** CollectionOut */
+export interface CollectionOut {
+  /** Id */
+  id: string;
+  /** Name */
+  name: string;
+  /** Description */
+  description: string;
+  /** Platform */
+  platform?: string | null;
+  /** Item Count */
+  item_count: number;
   /**
    * Created At
    * @format date-time
@@ -117,6 +416,35 @@ export interface ConnectByIpBody {
   port?: number;
 }
 
+/** ContentStatsOut */
+export interface ContentStatsOut {
+  /** Total Items */
+  total_items: number;
+  /** By Platform */
+  by_platform: Record<string, number>;
+  /** By Collection */
+  by_collection: Record<string, number>;
+  /** Latest Extraction */
+  latest_extraction?: string | null;
+}
+
+/** DeviceAccountOut */
+export interface DeviceAccountOut {
+  /** Id */
+  id: string;
+  /** Device Id */
+  device_id: string;
+  /** Account Id */
+  account_id: string;
+  /** Is Primary */
+  is_primary: boolean;
+  /**
+   * Assigned At
+   * @format date-time
+   */
+  assigned_at: string;
+}
+
 /** DeviceCreate */
 export interface DeviceCreate {
   /** Serial */
@@ -128,6 +456,92 @@ export interface DeviceCreate {
   name?: string;
   /** User Id */
   user_id?: string | null;
+}
+
+/** DeviceGroupCreate */
+export interface DeviceGroupCreate {
+  /** Name */
+  name: string;
+  /**
+   * Description
+   * @default ""
+   */
+  description?: string;
+  /**
+   * Color
+   * @default "#6366f1"
+   */
+  color?: string;
+}
+
+/**
+ * DeviceGroupDetailOut
+ * Extended response that includes the full device list (for GET /device-groups/{id}).
+ */
+export interface DeviceGroupDetailOut {
+  /** Id */
+  id: string;
+  /** Name */
+  name: string;
+  /** Description */
+  description: string;
+  /** Color */
+  color: string;
+  /** User Id */
+  user_id: string | null;
+  /** Device Count */
+  device_count: number;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /**
+   * Updated At
+   * @format date-time
+   */
+  updated_at: string;
+  /**
+   * Devices
+   * @default []
+   */
+  devices?: DeviceOut[];
+}
+
+/** DeviceGroupOut */
+export interface DeviceGroupOut {
+  /** Id */
+  id: string;
+  /** Name */
+  name: string;
+  /** Description */
+  description: string;
+  /** Color */
+  color: string;
+  /** User Id */
+  user_id: string | null;
+  /** Device Count */
+  device_count: number;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /**
+   * Updated At
+   * @format date-time
+   */
+  updated_at: string;
+}
+
+/** DeviceGroupUpdate */
+export interface DeviceGroupUpdate {
+  /** Name */
+  name?: string | null;
+  /** Description */
+  description?: string | null;
+  /** Color */
+  color?: string | null;
 }
 
 /** DeviceOut */
@@ -168,12 +582,56 @@ export interface DeviceOut {
    * @default 5555
    */
   adb_port?: number;
+  /**
+   * Tags
+   * @default ""
+   */
+  tags?: string;
 }
 
 /** EndSessionRequest */
 export interface EndSessionRequest {
   /** Session Id */
   session_id: string;
+}
+
+/** ExportOut */
+export interface ExportOut {
+  /** Id */
+  id: string;
+  /** Collection */
+  collection?: string | null;
+  /** Format */
+  format: string;
+  /** Status */
+  status: string;
+  /** Item Count */
+  item_count: number;
+  /** File Size Bytes */
+  file_size_bytes?: number | null;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /** Completed At */
+  completed_at?: string | null;
+}
+
+/** ExportRequest */
+export interface ExportRequest {
+  /** Collection */
+  collection?: string | null;
+  /**
+   * Format
+   * @default "csv"
+   */
+  format?: string;
+  /**
+   * Filters
+   * @default {}
+   */
+  filters?: Record<string, any>;
 }
 
 /** FleetRunRequest */
@@ -204,12 +662,32 @@ export interface FleetRunRequest {
    * @default 1
    */
   max_retries?: number;
+  /** Filter Group Id */
+  filter_group_id?: string | null;
+  /** Filter Tags */
+  filter_tags?: string | null;
 }
 
 /** HTTPValidationError */
 export interface HTTPValidationError {
   /** Detail */
   detail?: ValidationError[];
+}
+
+/** HierarchyExtractBody */
+export interface HierarchyExtractBody {
+  /** Filter Class */
+  filter_class?: string[] | null;
+  /**
+   * Exclude Empty
+   * @default true
+   */
+  exclude_empty?: boolean;
+  /**
+   * Format
+   * @default "text"
+   */
+  format?: string;
 }
 
 /** HitTestRequest */
@@ -267,6 +745,27 @@ export interface LongTapRequest {
    * @default 800
    */
   duration_ms?: number;
+}
+
+/** OCRExtractBody */
+export interface OCRExtractBody {
+  /**
+   * Language
+   * @default "eng"
+   */
+  language?: string;
+  /** Region */
+  region?: Record<string, number> | null;
+  /**
+   * Psm
+   * @default 11
+   */
+  psm?: number;
+  /**
+   * Scale Factor
+   * @default 2
+   */
+  scale_factor?: number;
 }
 
 /** OpenUrlRequest */
@@ -348,6 +847,43 @@ export interface RegisterRequest {
   role?: string;
 }
 
+/** RoundRobinBody */
+export interface RoundRobinBody {
+  /** Account Ids */
+  account_ids: string[];
+  /** Device Ids */
+  device_ids: string[];
+}
+
+/** SaveContentBody */
+export interface SaveContentBody {
+  /** Data */
+  data: Record<string, any>;
+  /**
+   * Collection
+   * @default "default"
+   */
+  collection?: string;
+  /** Platform */
+  platform?: string | null;
+  /**
+   * Content Type
+   * @default "post"
+   */
+  content_type?: string;
+  /** Dedupe Field */
+  dedupe_field?: string | null;
+  /**
+   * Tags
+   * @default ""
+   */
+  tags?: string;
+  /** Device Serial */
+  device_serial?: string | null;
+  /** Campaign Id */
+  campaign_id?: string | null;
+}
+
 /** ScenarioCreate */
 export interface ScenarioCreate {
   /**
@@ -365,6 +901,11 @@ export interface ScenarioCreate {
    * @default []
    */
   steps?: any[];
+  /**
+   * Variables
+   * @default {}
+   */
+  variables?: Record<string, any>;
   /**
    * Order
    * @default 0
@@ -384,6 +925,8 @@ export interface ScenarioOut {
   instructions: string;
   /** Steps */
   steps: any[];
+  /** Variables */
+  variables: Record<string, any>;
   /** Order */
   order: number;
   /**
@@ -404,6 +947,85 @@ export interface ScenarioPreviewRequest {
   steps: Record<string, any>[];
 }
 
+/** ScenarioTemplateCreate */
+export interface ScenarioTemplateCreate {
+  /** Name */
+  name: string;
+  /**
+   * Description
+   * @default ""
+   */
+  description?: string;
+  /**
+   * Category
+   * @default "general"
+   */
+  category?: string;
+  /**
+   * Steps
+   * @default []
+   */
+  steps?: any[];
+  /**
+   * Variables
+   * @default {}
+   */
+  variables?: Record<string, any>;
+  /**
+   * Tags
+   * @default ""
+   */
+  tags?: string;
+}
+
+/** ScenarioTemplateOut */
+export interface ScenarioTemplateOut {
+  /** Id */
+  id: string;
+  /** Name */
+  name: string;
+  /** Description */
+  description: string;
+  /** Category */
+  category: string;
+  /** Steps */
+  steps: any[];
+  /** Variables */
+  variables: Record<string, any>;
+  /** Tags */
+  tags: string;
+  /** Is Builtin */
+  is_builtin: boolean;
+  /** User Id */
+  user_id: string | null;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /**
+   * Updated At
+   * @format date-time
+   */
+  updated_at: string;
+}
+
+/** ScenarioTemplateUpdate */
+export interface ScenarioTemplateUpdate {
+  /** Name */
+  name?: string | null;
+  /** Description */
+  description?: string | null;
+  /** Category */
+  category?: string | null;
+  /** Steps */
+  steps?: any[] | null;
+  /** Variables */
+  variables?: Record<string, any> | null;
+  /** Tags */
+  tags?: string | null;
+}
+
 /** ScenarioUpdate */
 export interface ScenarioUpdate {
   /** Name */
@@ -412,6 +1034,8 @@ export interface ScenarioUpdate {
   instructions?: string | null;
   /** Steps */
   steps?: any[] | null;
+  /** Variables */
+  variables?: Record<string, any> | null;
   /** Order */
   order?: number | null;
 }
@@ -422,15 +1046,225 @@ export interface ScenarioUpdateBody {
   scenario: Record<string, any>;
 }
 
+/** ScheduleCreate */
+export interface ScheduleCreate {
+  /**
+   * Name
+   * @minLength 1
+   * @maxLength 255
+   */
+  name: string;
+  /**
+   * Description
+   * @default ""
+   */
+  description?: string;
+  /**
+   * Target Type
+   * @pattern ^(campaign|template|fleet)$
+   */
+  target_type: string;
+  /** Target Id */
+  target_id?: string | null;
+  /** Inline Steps */
+  inline_steps?: Record<string, any>[] | null;
+  /** Inline Variables */
+  inline_variables?: Record<string, any>;
+  /** Device Group Id */
+  device_group_id?: string | null;
+  /**
+   * Filter State
+   * @default "READY"
+   */
+  filter_state?: string;
+  /** Filter Model */
+  filter_model?: string | null;
+  /** Max Devices */
+  max_devices?: number | null;
+  /**
+   * Cron Expression
+   * @minLength 1
+   * @maxLength 100
+   */
+  cron_expression: string;
+  /**
+   * Timezone
+   * @default "Asia/Ho_Chi_Minh"
+   */
+  timezone?: string;
+  /**
+   * Random Delay Min
+   * @min 0
+   * @default 0
+   */
+  random_delay_min?: number;
+  /**
+   * Random Delay Max
+   * @min 0
+   * @default 0
+   */
+  random_delay_max?: number;
+  /**
+   * Stagger Devices
+   * @default false
+   */
+  stagger_devices?: boolean;
+  /**
+   * Stagger Interval Seconds
+   * @min 1
+   * @max 3600
+   * @default 60
+   */
+  stagger_interval_seconds?: number;
+  /**
+   * Is Enabled
+   * @default true
+   */
+  is_enabled?: boolean;
+}
+
+/** ScheduleOut */
+export interface ScheduleOut {
+  /** Id */
+  id: string;
+  /** Name */
+  name: string;
+  /** Description */
+  description: string;
+  /** Target Type */
+  target_type: string;
+  /** Target Id */
+  target_id: string | null;
+  /** Inline Steps */
+  inline_steps: Record<string, any>[] | null;
+  /** Inline Variables */
+  inline_variables: Record<string, any>;
+  /** Device Group Id */
+  device_group_id: string | null;
+  /** Filter State */
+  filter_state: string;
+  /** Filter Model */
+  filter_model: string | null;
+  /** Max Devices */
+  max_devices: number | null;
+  /** Cron Expression */
+  cron_expression: string;
+  /** Timezone */
+  timezone: string;
+  /** Random Delay Min */
+  random_delay_min: number;
+  /** Random Delay Max */
+  random_delay_max: number;
+  /** Stagger Devices */
+  stagger_devices: boolean;
+  /** Stagger Interval Seconds */
+  stagger_interval_seconds: number;
+  /** Is Enabled */
+  is_enabled: boolean;
+  /** Last Run At */
+  last_run_at: string | null;
+  /** Next Run At */
+  next_run_at: string | null;
+  /** Run Count */
+  run_count: number;
+  /** User Id */
+  user_id: string | null;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /**
+   * Updated At
+   * @format date-time
+   */
+  updated_at: string;
+}
+
+/** SchedulePatch */
+export interface SchedulePatch {
+  /** Name */
+  name?: string | null;
+  /** Description */
+  description?: string | null;
+  /** Target Type */
+  target_type?: string | null;
+  /** Target Id */
+  target_id?: string | null;
+  /** Inline Steps */
+  inline_steps?: Record<string, any>[] | null;
+  /** Inline Variables */
+  inline_variables?: Record<string, any> | null;
+  /** Device Group Id */
+  device_group_id?: string | null;
+  /** Filter State */
+  filter_state?: string | null;
+  /** Filter Model */
+  filter_model?: string | null;
+  /** Max Devices */
+  max_devices?: number | null;
+  /** Cron Expression */
+  cron_expression?: string | null;
+  /** Timezone */
+  timezone?: string | null;
+  /** Random Delay Min */
+  random_delay_min?: number | null;
+  /** Random Delay Max */
+  random_delay_max?: number | null;
+  /** Stagger Devices */
+  stagger_devices?: boolean | null;
+  /** Stagger Interval Seconds */
+  stagger_interval_seconds?: number | null;
+  /** Is Enabled */
+  is_enabled?: boolean | null;
+}
+
+/** ScheduleRunOut */
+export interface ScheduleRunOut {
+  /** Id */
+  id: string;
+  /** Schedule Id */
+  schedule_id: string;
+  /** Status */
+  status: string;
+  /**
+   * Started At
+   * @format date-time
+   */
+  started_at: string;
+  /** Finished At */
+  finished_at: string | null;
+  /** Devices Dispatched */
+  devices_dispatched: number;
+  /** Devices Succeeded */
+  devices_succeeded: number;
+  /** Devices Failed */
+  devices_failed: number;
+  /** Task Ids */
+  task_ids: string[];
+  /** Error Message */
+  error_message: string | null;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+}
+
 /** ScrcpyAttachRequest */
 export interface ScrcpyAttachRequest {
   /** Device Ip */
-  device_ip: string;
+  device_ip?: string | null;
   /**
    * Adb Port
    * @default 5555
    */
   adb_port?: number;
+  /**
+   * Enable Control
+   * @default true
+   */
+  enable_control?: boolean;
 }
 
 /** ScrollRequest */
@@ -460,6 +1294,30 @@ export interface SessionOut {
   connected_at: string;
   /** Disconnected At */
   disconnected_at: string | null;
+}
+
+/** SetClipboardRequest */
+export interface SetClipboardRequest {
+  /** Text */
+  text: string;
+}
+
+/** SetEnabledRequest */
+export interface SetEnabledRequest {
+  /** Enabled */
+  enabled: boolean;
+}
+
+/** SetPrimaryBody */
+export interface SetPrimaryBody {
+  /** Account Id */
+  account_id: string;
+}
+
+/** SetRingerModeRequest */
+export interface SetRingerModeRequest {
+  /** Mode */
+  mode: string;
 }
 
 /** StartSessionRequest */
@@ -546,6 +1404,23 @@ export interface TokenResponse {
    * @default "bearer"
    */
   token_type?: string;
+}
+
+/** TriggerResponse */
+export interface TriggerResponse {
+  /** Run Id */
+  run_id: string;
+  /**
+   * Message
+   * @default "Schedule triggered"
+   */
+  message?: string;
+}
+
+/** UpdateTagsBody */
+export interface UpdateTagsBody {
+  /** Tags */
+  tags: string;
 }
 
 /** UserCreate */
@@ -808,23 +1683,22 @@ export class DeviceFarmHttpClient<
       ...params,
     });
 
-  ping = {
+  api = {
     /**
      * No description
      *
-     * @name PingPingGet
-     * @summary Ping
-     * @request GET:/ping
+     * @name HealthApiHealthGet
+     * @summary Health
+     * @request GET:/api/health
      */
-    pingPingGet: (params: RequestParams = {}) =>
+    healthApiHealthGet: (params: RequestParams = {}) =>
       this.request<any, any>({
-        path: `/ping`,
+        path: `/api/health`,
         method: "GET",
         format: "json",
         ...params,
       }),
-  };
-  api = {
+
     /**
      * No description
      *
@@ -1176,6 +2050,30 @@ export class DeviceFarmHttpClient<
         path: `/api/devices/${deviceId}`,
         method: "DELETE",
         secure: true,
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags devices
+     * @name UpdateTagsApiDevicesDeviceIdTagsPatch
+     * @summary Update Tags
+     * @request PATCH:/api/devices/{device_id}/tags
+     * @secure
+     */
+    updateTagsApiDevicesDeviceIdTagsPatch: (
+      deviceId: string,
+      data: UpdateTagsBody,
+      params: RequestParams = {},
+    ) =>
+      this.request<DeviceOut, HTTPValidationError>({
+        path: `/api/devices/${deviceId}/tags`,
+        method: "PATCH",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
         ...params,
       }),
 
@@ -1652,6 +2550,1124 @@ export class DeviceFarmHttpClient<
         body: data,
         secure: true,
         type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags scenario-templates
+     * @name ListScenarioTemplatesApiScenarioTemplatesGet
+     * @summary List Scenario Templates
+     * @request GET:/api/scenario-templates
+     * @secure
+     */
+    listScenarioTemplatesApiScenarioTemplatesGet: (
+      query?: {
+        /** Category */
+        category?: string | null;
+        /** Tags */
+        tags?: string | null;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<ScenarioTemplateOut[], HTTPValidationError>({
+        path: `/api/scenario-templates`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags scenario-templates
+     * @name CreateScenarioTemplateApiScenarioTemplatesPost
+     * @summary Create Scenario Template
+     * @request POST:/api/scenario-templates
+     * @secure
+     */
+    createScenarioTemplateApiScenarioTemplatesPost: (
+      data: ScenarioTemplateCreate,
+      params: RequestParams = {},
+    ) =>
+      this.request<ScenarioTemplateOut, HTTPValidationError>({
+        path: `/api/scenario-templates`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags scenario-templates
+     * @name GetScenarioTemplateApiScenarioTemplatesTemplateIdGet
+     * @summary Get Scenario Template
+     * @request GET:/api/scenario-templates/{template_id}
+     * @secure
+     */
+    getScenarioTemplateApiScenarioTemplatesTemplateIdGet: (
+      templateId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<ScenarioTemplateOut, HTTPValidationError>({
+        path: `/api/scenario-templates/${templateId}`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags scenario-templates
+     * @name UpdateScenarioTemplateApiScenarioTemplatesTemplateIdPatch
+     * @summary Update Scenario Template
+     * @request PATCH:/api/scenario-templates/{template_id}
+     * @secure
+     */
+    updateScenarioTemplateApiScenarioTemplatesTemplateIdPatch: (
+      templateId: string,
+      data: ScenarioTemplateUpdate,
+      params: RequestParams = {},
+    ) =>
+      this.request<ScenarioTemplateOut, HTTPValidationError>({
+        path: `/api/scenario-templates/${templateId}`,
+        method: "PATCH",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags scenario-templates
+     * @name DeleteScenarioTemplateApiScenarioTemplatesTemplateIdDelete
+     * @summary Delete Scenario Template
+     * @request DELETE:/api/scenario-templates/{template_id}
+     * @secure
+     */
+    deleteScenarioTemplateApiScenarioTemplatesTemplateIdDelete: (
+      templateId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<void, HTTPValidationError>({
+        path: `/api/scenario-templates/${templateId}`,
+        method: "DELETE",
+        secure: true,
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags scenario-templates
+     * @name DuplicateScenarioTemplateApiScenarioTemplatesTemplateIdDuplicatePost
+     * @summary Duplicate Scenario Template
+     * @request POST:/api/scenario-templates/{template_id}/duplicate
+     * @secure
+     */
+    duplicateScenarioTemplateApiScenarioTemplatesTemplateIdDuplicatePost: (
+      templateId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<ScenarioTemplateOut, HTTPValidationError>({
+        path: `/api/scenario-templates/${templateId}/duplicate`,
+        method: "POST",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description List all device groups for the authenticated user (includes device count).
+     *
+     * @tags device-groups
+     * @name ListDeviceGroupsApiDeviceGroupsGet
+     * @summary List Device Groups
+     * @request GET:/api/device-groups
+     * @secure
+     */
+    listDeviceGroupsApiDeviceGroupsGet: (params: RequestParams = {}) =>
+      this.request<DeviceGroupOut[], any>({
+        path: `/api/device-groups`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags device-groups
+     * @name CreateDeviceGroupApiDeviceGroupsPost
+     * @summary Create Device Group
+     * @request POST:/api/device-groups
+     * @secure
+     */
+    createDeviceGroupApiDeviceGroupsPost: (
+      data: DeviceGroupCreate,
+      params: RequestParams = {},
+    ) =>
+      this.request<DeviceGroupOut, HTTPValidationError>({
+        path: `/api/device-groups`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Get group with full device list.
+     *
+     * @tags device-groups
+     * @name GetDeviceGroupApiDeviceGroupsGroupIdGet
+     * @summary Get Device Group
+     * @request GET:/api/device-groups/{group_id}
+     * @secure
+     */
+    getDeviceGroupApiDeviceGroupsGroupIdGet: (
+      groupId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<DeviceGroupDetailOut, HTTPValidationError>({
+        path: `/api/device-groups/${groupId}`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags device-groups
+     * @name UpdateDeviceGroupApiDeviceGroupsGroupIdPatch
+     * @summary Update Device Group
+     * @request PATCH:/api/device-groups/{group_id}
+     * @secure
+     */
+    updateDeviceGroupApiDeviceGroupsGroupIdPatch: (
+      groupId: string,
+      data: DeviceGroupUpdate,
+      params: RequestParams = {},
+    ) =>
+      this.request<DeviceGroupOut, HTTPValidationError>({
+        path: `/api/device-groups/${groupId}`,
+        method: "PATCH",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Delete group and all its memberships. Devices themselves are NOT deleted.
+     *
+     * @tags device-groups
+     * @name DeleteDeviceGroupApiDeviceGroupsGroupIdDelete
+     * @summary Delete Device Group
+     * @request DELETE:/api/device-groups/{group_id}
+     * @secure
+     */
+    deleteDeviceGroupApiDeviceGroupsGroupIdDelete: (
+      groupId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<void, HTTPValidationError>({
+        path: `/api/device-groups/${groupId}`,
+        method: "DELETE",
+        secure: true,
+        ...params,
+      }),
+
+    /**
+     * @description Add one or more devices to the group. Already-present devices are ignored.
+     *
+     * @tags device-groups
+     * @name AddDevicesApiDeviceGroupsGroupIdDevicesPost
+     * @summary Add Devices
+     * @request POST:/api/device-groups/{group_id}/devices
+     * @secure
+     */
+    addDevicesApiDeviceGroupsGroupIdDevicesPost: (
+      groupId: string,
+      data: AddDevicesToGroupBody,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/device-groups/${groupId}/devices`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Remove a device from the group. The device itself is NOT deleted.
+     *
+     * @tags device-groups
+     * @name RemoveDeviceApiDeviceGroupsGroupIdDevicesDeviceIdDelete
+     * @summary Remove Device
+     * @request DELETE:/api/device-groups/{group_id}/devices/{device_id}
+     * @secure
+     */
+    removeDeviceApiDeviceGroupsGroupIdDevicesDeviceIdDelete: (
+      groupId: string,
+      deviceId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/device-groups/${groupId}/devices/${deviceId}`,
+        method: "DELETE",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description List accounts owned by the current user with optional filters.
+     *
+     * @tags accounts
+     * @name ListAccountsEndpointApiAccountsGet
+     * @summary List Accounts Endpoint
+     * @request GET:/api/accounts
+     * @secure
+     */
+    listAccountsEndpointApiAccountsGet: (
+      query?: {
+        /** Platform */
+        platform?: string | null;
+        /** Status */
+        status?: string | null;
+        /** Tags */
+        tags?: string | null;
+        /**
+         * Limit
+         * @min 1
+         * @max 200
+         * @default 50
+         */
+        limit?: number;
+        /**
+         * Offset
+         * @min 0
+         * @default 0
+         */
+        offset?: number;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<AccountOut[], HTTPValidationError>({
+        path: `/api/accounts`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Create a new account. Password is encrypted before storage.
+     *
+     * @tags accounts
+     * @name CreateAccountEndpointApiAccountsPost
+     * @summary Create Account Endpoint
+     * @request POST:/api/accounts
+     * @secure
+     */
+    createAccountEndpointApiAccountsPost: (
+      data: AccountCreate,
+      params: RequestParams = {},
+    ) =>
+      this.request<AccountOut, HTTPValidationError>({
+        path: `/api/accounts`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Bulk import accounts from a JSON array. Duplicate (platform, username) pairs are skipped.
+     *
+     * @tags accounts
+     * @name BulkImportJsonApiAccountsImportPost
+     * @summary Bulk Import Json
+     * @request POST:/api/accounts/import
+     * @secure
+     */
+    bulkImportJsonApiAccountsImportPost: (
+      data: BulkImportBody,
+      params: RequestParams = {},
+    ) =>
+      this.request<BulkImportResult, HTTPValidationError>({
+        path: `/api/accounts/import`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Stream-import accounts from a CSV file upload. Reads the upload in 64 KB chunks, parses CSV incrementally, and flushes batches of up to 500 rows to the DB via INSERT ON CONFLICT DO NOTHING — so memory usage stays flat regardless of file size. Expected CSV columns: platform, username, password, display_name, tags, notes
+     *
+     * @tags accounts
+     * @name BulkImportCsvApiAccountsImportCsvPost
+     * @summary Bulk Import Csv
+     * @request POST:/api/accounts/import-csv
+     * @secure
+     */
+    bulkImportCsvApiAccountsImportCsvPost: (
+      data: BodyBulkImportCsvApiAccountsImportCsvPost,
+      params: RequestParams = {},
+    ) =>
+      this.request<BulkImportResult, HTTPValidationError>({
+        path: `/api/accounts/import-csv`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.FormData,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Auto-assign accounts to devices in round-robin order.
+     *
+     * @tags accounts
+     * @name RoundRobinAssignEndpointApiAccountsRoundRobinPost
+     * @summary Round Robin Assign Endpoint
+     * @request POST:/api/accounts/round-robin
+     * @secure
+     */
+    roundRobinAssignEndpointApiAccountsRoundRobinPost: (
+      data: RoundRobinBody,
+      params: RequestParams = {},
+    ) =>
+      this.request<Record<string, any>, HTTPValidationError>({
+        path: `/api/accounts/round-robin`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Get account details including device links.
+     *
+     * @tags accounts
+     * @name GetAccountEndpointApiAccountsAccountIdGet
+     * @summary Get Account Endpoint
+     * @request GET:/api/accounts/{account_id}
+     * @secure
+     */
+    getAccountEndpointApiAccountsAccountIdGet: (
+      accountId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<AccountWithLinksOut, HTTPValidationError>({
+        path: `/api/accounts/${accountId}`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Update account fields. Password (if provided) is re-encrypted before storage.
+     *
+     * @tags accounts
+     * @name UpdateAccountEndpointApiAccountsAccountIdPatch
+     * @summary Update Account Endpoint
+     * @request PATCH:/api/accounts/{account_id}
+     * @secure
+     */
+    updateAccountEndpointApiAccountsAccountIdPatch: (
+      accountId: string,
+      data: AccountUpdate,
+      params: RequestParams = {},
+    ) =>
+      this.request<AccountOut, HTTPValidationError>({
+        path: `/api/accounts/${accountId}`,
+        method: "PATCH",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Delete account and all its device links (cascade).
+     *
+     * @tags accounts
+     * @name DeleteAccountEndpointApiAccountsAccountIdDelete
+     * @summary Delete Account Endpoint
+     * @request DELETE:/api/accounts/{account_id}
+     * @secure
+     */
+    deleteAccountEndpointApiAccountsAccountIdDelete: (
+      accountId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<void, HTTPValidationError>({
+        path: `/api/accounts/${accountId}`,
+        method: "DELETE",
+        secure: true,
+        ...params,
+      }),
+
+    /**
+     * @description Manually set account status (active / banned / cooldown / disabled).
+     *
+     * @tags accounts
+     * @name UpdateAccountStatusApiAccountsAccountIdStatusPatch
+     * @summary Update Account Status
+     * @request PATCH:/api/accounts/{account_id}/status
+     * @secure
+     */
+    updateAccountStatusApiAccountsAccountIdStatusPatch: (
+      accountId: string,
+      data: AccountStatusUpdate,
+      params: RequestParams = {},
+    ) =>
+      this.request<AccountOut, HTTPValidationError>({
+        path: `/api/accounts/${accountId}/status`,
+        method: "PATCH",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description List all device-account links for an account.
+     *
+     * @tags accounts
+     * @name ListAccountDevicesEndpointApiAccountsAccountIdDevicesGet
+     * @summary List Account Devices Endpoint
+     * @request GET:/api/accounts/{account_id}/devices
+     * @secure
+     */
+    listAccountDevicesEndpointApiAccountsAccountIdDevicesGet: (
+      accountId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<DeviceAccountOut[], HTTPValidationError>({
+        path: `/api/accounts/${accountId}/devices`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Assign a device to an account.
+     *
+     * @tags accounts
+     * @name AssignDeviceToAccountApiAccountsAccountIdDevicesPost
+     * @summary Assign Device To Account
+     * @request POST:/api/accounts/{account_id}/devices
+     * @secure
+     */
+    assignDeviceToAccountApiAccountsAccountIdDevicesPost: (
+      accountId: string,
+      data: AssignDeviceBody,
+      params: RequestParams = {},
+    ) =>
+      this.request<DeviceAccountOut, HTTPValidationError>({
+        path: `/api/accounts/${accountId}/devices`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Remove a device-account link.
+     *
+     * @tags accounts
+     * @name UnassignDeviceFromAccountApiAccountsAccountIdDevicesDeviceIdDelete
+     * @summary Unassign Device From Account
+     * @request DELETE:/api/accounts/{account_id}/devices/{device_id}
+     * @secure
+     */
+    unassignDeviceFromAccountApiAccountsAccountIdDevicesDeviceIdDelete: (
+      accountId: string,
+      deviceId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/accounts/${accountId}/devices/${deviceId}`,
+        method: "DELETE",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description List all accounts assigned to a device.
+     *
+     * @tags accounts
+     * @name ListDeviceAccountsEndpointApiDevicesDeviceIdAccountsGet
+     * @summary List Device Accounts Endpoint
+     * @request GET:/api/devices/{device_id}/accounts
+     * @secure
+     */
+    listDeviceAccountsEndpointApiDevicesDeviceIdAccountsGet: (
+      deviceId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<DeviceAccountOut[], HTTPValidationError>({
+        path: `/api/devices/${deviceId}/accounts`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Assign an account to a device.
+     *
+     * @tags accounts
+     * @name AssignAccountToDeviceEndpointApiDevicesDeviceIdAccountsPost
+     * @summary Assign Account To Device Endpoint
+     * @request POST:/api/devices/{device_id}/accounts
+     * @secure
+     */
+    assignAccountToDeviceEndpointApiDevicesDeviceIdAccountsPost: (
+      deviceId: string,
+      data: AssignAccountBody,
+      params: RequestParams = {},
+    ) =>
+      this.request<DeviceAccountOut, HTTPValidationError>({
+        path: `/api/devices/${deviceId}/accounts`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Set the primary account for a device (demotes existing primary).
+     *
+     * @tags accounts
+     * @name SetPrimaryAccountEndpointApiDevicesDeviceIdAccountsPrimaryPost
+     * @summary Set Primary Account Endpoint
+     * @request POST:/api/devices/{device_id}/accounts/primary
+     * @secure
+     */
+    setPrimaryAccountEndpointApiDevicesDeviceIdAccountsPrimaryPost: (
+      deviceId: string,
+      data: SetPrimaryBody,
+      params: RequestParams = {},
+    ) =>
+      this.request<DeviceAccountOut, HTTPValidationError>({
+        path: `/api/devices/${deviceId}/accounts/primary`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags content
+     * @name ListContentApiContentGet
+     * @summary List Content
+     * @request GET:/api/content
+     */
+    listContentApiContentGet: (
+      query?: {
+        /** Collection */
+        collection?: string | null;
+        /** Platform */
+        platform?: string | null;
+        /** Content Type */
+        content_type?: string | null;
+        /** Search */
+        search?: string | null;
+        /** Device Serial */
+        device_serial?: string | null;
+        /** Campaign Id */
+        campaign_id?: string | null;
+        /**
+         * Limit
+         * @min 1
+         * @max 500
+         * @default 50
+         */
+        limit?: number;
+        /**
+         * Offset
+         * @min 0
+         * @default 0
+         */
+        offset?: number;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/content`,
+        method: "GET",
+        query: query,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags content
+     * @name GetStatsApiContentStatsGet
+     * @summary Get Stats
+     * @request GET:/api/content/stats
+     */
+    getStatsApiContentStatsGet: (params: RequestParams = {}) =>
+      this.request<ContentStatsOut, any>({
+        path: `/api/content/stats`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Save extracted content with deduplication (used by scenarios and MCP).
+     *
+     * @tags content
+     * @name SaveContentApiContentSavePost
+     * @summary Save Content
+     * @request POST:/api/content/save
+     */
+    saveContentApiContentSavePost: (
+      data: SaveContentBody,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/content/save`,
+        method: "POST",
+        body: data,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags content
+     * @name GetContentItemApiContentItemIdGet
+     * @summary Get Content Item
+     * @request GET:/api/content/{item_id}
+     */
+    getContentItemApiContentItemIdGet: (
+      itemId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/content/${itemId}`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags content
+     * @name DeleteContentItemApiContentItemIdDelete
+     * @summary Delete Content Item
+     * @request DELETE:/api/content/{item_id}
+     */
+    deleteContentItemApiContentItemIdDelete: (
+      itemId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/content/${itemId}`,
+        method: "DELETE",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags content
+     * @name ListCollectionsApiContentCollectionsListGet
+     * @summary List Collections
+     * @request GET:/api/content/collections/list
+     */
+    listCollectionsApiContentCollectionsListGet: (params: RequestParams = {}) =>
+      this.request<CollectionOut[], any>({
+        path: `/api/content/collections/list`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags content
+     * @name CreateCollectionApiContentCollectionsPost
+     * @summary Create Collection
+     * @request POST:/api/content/collections
+     */
+    createCollectionApiContentCollectionsPost: (
+      data: CollectionCreate,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/content/collections`,
+        method: "POST",
+        body: data,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags content
+     * @name DeleteCollectionApiContentCollectionsNameDelete
+     * @summary Delete Collection
+     * @request DELETE:/api/content/collections/{name}
+     */
+    deleteCollectionApiContentCollectionsNameDelete: (
+      name: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/content/collections/${name}`,
+        method: "DELETE",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags content
+     * @name CreateExportApiContentExportPost
+     * @summary Create Export
+     * @request POST:/api/content/export
+     */
+    createExportApiContentExportPost: (
+      data: ExportRequest,
+      params: RequestParams = {},
+    ) =>
+      this.request<ExportOut, HTTPValidationError>({
+        path: `/api/content/export`,
+        method: "POST",
+        body: data,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags content
+     * @name ListExportsApiContentExportsListGet
+     * @summary List Exports
+     * @request GET:/api/content/exports/list
+     */
+    listExportsApiContentExportsListGet: (params: RequestParams = {}) =>
+      this.request<ExportOut[], any>({
+        path: `/api/content/exports/list`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags content
+     * @name GetExportApiContentExportsExportIdGet
+     * @summary Get Export
+     * @request GET:/api/content/exports/{export_id}
+     */
+    getExportApiContentExportsExportIdGet: (
+      exportId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/content/exports/${exportId}`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags content
+     * @name DownloadExportApiContentExportsExportIdDownloadGet
+     * @summary Download Export
+     * @request GET:/api/content/exports/{export_id}/download
+     */
+    downloadExportApiContentExportsExportIdDownloadGet: (
+      exportId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/content/exports/${exportId}/download`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags schedules
+     * @name ListSchedulesEndpointApiSchedulesGet
+     * @summary List Schedules Endpoint
+     * @request GET:/api/schedules
+     * @secure
+     */
+    listSchedulesEndpointApiSchedulesGet: (
+      query?: {
+        /**
+         * Offset
+         * @default 0
+         */
+        offset?: number;
+        /**
+         * Limit
+         * @default 50
+         */
+        limit?: number;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<ScheduleOut[], HTTPValidationError>({
+        path: `/api/schedules`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags schedules
+     * @name CreateScheduleEndpointApiSchedulesPost
+     * @summary Create Schedule Endpoint
+     * @request POST:/api/schedules
+     * @secure
+     */
+    createScheduleEndpointApiSchedulesPost: (
+      data: ScheduleCreate,
+      params: RequestParams = {},
+    ) =>
+      this.request<ScheduleOut, HTTPValidationError>({
+        path: `/api/schedules`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags schedules
+     * @name GetScheduleEndpointApiSchedulesScheduleIdGet
+     * @summary Get Schedule Endpoint
+     * @request GET:/api/schedules/{schedule_id}
+     * @secure
+     */
+    getScheduleEndpointApiSchedulesScheduleIdGet: (
+      scheduleId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<ScheduleOut, HTTPValidationError>({
+        path: `/api/schedules/${scheduleId}`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags schedules
+     * @name UpdateScheduleEndpointApiSchedulesScheduleIdPatch
+     * @summary Update Schedule Endpoint
+     * @request PATCH:/api/schedules/{schedule_id}
+     * @secure
+     */
+    updateScheduleEndpointApiSchedulesScheduleIdPatch: (
+      scheduleId: string,
+      data: SchedulePatch,
+      params: RequestParams = {},
+    ) =>
+      this.request<ScheduleOut, HTTPValidationError>({
+        path: `/api/schedules/${scheduleId}`,
+        method: "PATCH",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags schedules
+     * @name DeleteScheduleEndpointApiSchedulesScheduleIdDelete
+     * @summary Delete Schedule Endpoint
+     * @request DELETE:/api/schedules/{schedule_id}
+     * @secure
+     */
+    deleteScheduleEndpointApiSchedulesScheduleIdDelete: (
+      scheduleId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<void, HTTPValidationError>({
+        path: `/api/schedules/${scheduleId}`,
+        method: "DELETE",
+        secure: true,
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags schedules
+     * @name ToggleScheduleEndpointApiSchedulesScheduleIdTogglePost
+     * @summary Toggle Schedule Endpoint
+     * @request POST:/api/schedules/{schedule_id}/toggle
+     * @secure
+     */
+    toggleScheduleEndpointApiSchedulesScheduleIdTogglePost: (
+      scheduleId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<ScheduleOut, HTTPValidationError>({
+        path: `/api/schedules/${scheduleId}/toggle`,
+        method: "POST",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags schedules
+     * @name RunNowEndpointApiSchedulesScheduleIdRunNowPost
+     * @summary Run Now Endpoint
+     * @request POST:/api/schedules/{schedule_id}/run-now
+     * @secure
+     */
+    runNowEndpointApiSchedulesScheduleIdRunNowPost: (
+      scheduleId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<TriggerResponse, HTTPValidationError>({
+        path: `/api/schedules/${scheduleId}/run-now`,
+        method: "POST",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags schedules
+     * @name ListRunsEndpointApiSchedulesScheduleIdRunsGet
+     * @summary List Runs Endpoint
+     * @request GET:/api/schedules/{schedule_id}/runs
+     * @secure
+     */
+    listRunsEndpointApiSchedulesScheduleIdRunsGet: (
+      scheduleId: string,
+      query?: {
+        /**
+         * Offset
+         * @default 0
+         */
+        offset?: number;
+        /**
+         * Limit
+         * @default 50
+         */
+        limit?: number;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<ScheduleRunOut[], HTTPValidationError>({
+        path: `/api/schedules/${scheduleId}/runs`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags schedules
+     * @name GetRunEndpointApiSchedulesScheduleIdRunsRunIdGet
+     * @summary Get Run Endpoint
+     * @request GET:/api/schedules/{schedule_id}/runs/{run_id}
+     * @secure
+     */
+    getRunEndpointApiSchedulesScheduleIdRunsRunIdGet: (
+      scheduleId: string,
+      runId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<ScheduleRunOut, HTTPValidationError>({
+        path: `/api/schedules/${scheduleId}/runs/${runId}`,
+        method: "GET",
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -2183,6 +4199,28 @@ export class DeviceFarmHttpClient<
       }),
 
     /**
+     * @description SSE endpoint: streams step results as they complete. Each event is a JSON object with the step result. Final event has type "done" with full summary.
+     *
+     * @tags device-control
+     * @name ApiScenarioPreviewStreamApiDevicesSerialScenarioPreviewStreamPost
+     * @summary Api Scenario Preview Stream
+     * @request POST:/api/devices/{serial}/scenario/preview-stream
+     */
+    apiScenarioPreviewStreamApiDevicesSerialScenarioPreviewStreamPost: (
+      serial: string,
+      data: ScenarioPreviewRequest,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/devices/${serial}/scenario/preview-stream`,
+        method: "POST",
+        body: data,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
      * No description
      *
      * @tags device-control
@@ -2246,6 +4284,117 @@ export class DeviceFarmHttpClient<
       }),
 
     /**
+     * @description How campaign runs are executed — for UI/docs (Temporal vs in-process TaskQueue).
+     *
+     * @tags device-control
+     * @name ApiExecutionRuntimeApiExecutionRuntimeGet
+     * @summary Api Execution Runtime
+     * @request GET:/api/execution/runtime
+     */
+    apiExecutionRuntimeApiExecutionRuntimeGet: (params: RequestParams = {}) =>
+      this.request<any, any>({
+        path: `/api/execution/runtime`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description List top-level Temporal workflow runs for a campaign. Only returns ScenarioWorkflow entries (one per device×scenario). Child workflows (ScenarioStepsWorkflow) are excluded — they are an implementation detail and would flood the list.
+     *
+     * @tags device-control
+     * @name ApiListCampaignWorkflowsApiCampaignsCampaignIdWorkflowsGet
+     * @summary Api List Campaign Workflows
+     * @request GET:/api/campaigns/{campaign_id}/workflows
+     */
+    apiListCampaignWorkflowsApiCampaignsCampaignIdWorkflowsGet: (
+      campaignId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/campaigns/${campaignId}/workflows`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Query real-time progress of a Temporal scenario workflow.
+     *
+     * @tags device-control
+     * @name ApiWorkflowProgressApiWorkflowsWorkflowIdProgressGet
+     * @summary Api Workflow Progress
+     * @request GET:/api/workflows/{workflow_id}/progress
+     */
+    apiWorkflowProgressApiWorkflowsWorkflowIdProgressGet: (
+      workflowId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/workflows/${workflowId}/progress`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Pause a running scenario workflow at the next step boundary.
+     *
+     * @tags device-control
+     * @name ApiWorkflowPauseApiWorkflowsWorkflowIdPausePost
+     * @summary Api Workflow Pause
+     * @request POST:/api/workflows/{workflow_id}/pause
+     */
+    apiWorkflowPauseApiWorkflowsWorkflowIdPausePost: (
+      workflowId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/workflows/${workflowId}/pause`,
+        method: "POST",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Resume a paused scenario workflow.
+     *
+     * @tags device-control
+     * @name ApiWorkflowResumeApiWorkflowsWorkflowIdResumePost
+     * @summary Api Workflow Resume
+     * @request POST:/api/workflows/{workflow_id}/resume
+     */
+    apiWorkflowResumeApiWorkflowsWorkflowIdResumePost: (
+      workflowId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/workflows/${workflowId}/resume`,
+        method: "POST",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Cancel a scenario workflow gracefully.
+     *
+     * @tags device-control
+     * @name ApiWorkflowCancelApiWorkflowsWorkflowIdCancelPost
+     * @summary Api Workflow Cancel
+     * @request POST:/api/workflows/{workflow_id}/cancel
+     */
+    apiWorkflowCancelApiWorkflowsWorkflowIdCancelPost: (
+      workflowId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/workflows/${workflowId}/cancel`,
+        method: "POST",
+        format: "json",
+        ...params,
+      }),
+
+    /**
      * No description
      *
      * @tags device-control
@@ -2288,6 +4437,271 @@ export class DeviceFarmHttpClient<
         format: "json",
         ...params,
       }),
+
+    /**
+     * @description Get STFService connection status and all event state.
+     *
+     * @tags device-control, stf-control
+     * @name StfStatusApiStfStatusSerialGet
+     * @summary Stf Status
+     * @request GET:/api/stf/status/{serial}
+     */
+    stfStatusApiStfStatusSerialGet: (
+      serial: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/stf/status/${serial}`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags device-control, stf-control
+     * @name StfGetClipboardApiStfClipboardSerialGet
+     * @summary Stf Get Clipboard
+     * @request GET:/api/stf/clipboard/{serial}
+     */
+    stfGetClipboardApiStfClipboardSerialGet: (
+      serial: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/stf/clipboard/${serial}`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags device-control, stf-control
+     * @name StfSetClipboardApiStfClipboardSerialPost
+     * @summary Stf Set Clipboard
+     * @request POST:/api/stf/clipboard/{serial}
+     */
+    stfSetClipboardApiStfClipboardSerialPost: (
+      serial: string,
+      data: SetClipboardRequest,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/stf/clipboard/${serial}`,
+        method: "POST",
+        body: data,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags device-control, stf-control
+     * @name StfSetWifiApiStfWifiSerialPost
+     * @summary Stf Set Wifi
+     * @request POST:/api/stf/wifi/{serial}
+     */
+    stfSetWifiApiStfWifiSerialPost: (
+      serial: string,
+      data: SetEnabledRequest,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/stf/wifi/${serial}`,
+        method: "POST",
+        body: data,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags device-control, stf-control
+     * @name StfSetBluetoothApiStfBluetoothSerialPost
+     * @summary Stf Set Bluetooth
+     * @request POST:/api/stf/bluetooth/{serial}
+     */
+    stfSetBluetoothApiStfBluetoothSerialPost: (
+      serial: string,
+      data: SetEnabledRequest,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/stf/bluetooth/${serial}`,
+        method: "POST",
+        body: data,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags device-control, stf-control
+     * @name StfSetKeyguardApiStfKeyguardSerialPost
+     * @summary Stf Set Keyguard
+     * @request POST:/api/stf/keyguard/{serial}
+     */
+    stfSetKeyguardApiStfKeyguardSerialPost: (
+      serial: string,
+      data: SetEnabledRequest,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/stf/keyguard/${serial}`,
+        method: "POST",
+        body: data,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags device-control, stf-control
+     * @name StfSetWakeLockApiStfWakelockSerialPost
+     * @summary Stf Set Wake Lock
+     * @request POST:/api/stf/wakelock/{serial}
+     */
+    stfSetWakeLockApiStfWakelockSerialPost: (
+      serial: string,
+      data: SetEnabledRequest,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/stf/wakelock/${serial}`,
+        method: "POST",
+        body: data,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags device-control, stf-control
+     * @name StfSetRingerApiStfRingerSerialPost
+     * @summary Stf Set Ringer
+     * @request POST:/api/stf/ringer/{serial}
+     */
+    stfSetRingerApiStfRingerSerialPost: (
+      serial: string,
+      data: SetRingerModeRequest,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/stf/ringer/${serial}`,
+        method: "POST",
+        body: data,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags device-control, stf-control
+     * @name StfSetMuteApiStfMuteSerialPost
+     * @summary Stf Set Mute
+     * @request POST:/api/stf/mute/{serial}
+     */
+    stfSetMuteApiStfMuteSerialPost: (
+      serial: string,
+      data: SetEnabledRequest,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/stf/mute/${serial}`,
+        method: "POST",
+        body: data,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags device-control, stf-control
+     * @name StfIdentifyApiStfIdentifySerialPost
+     * @summary Stf Identify
+     * @request POST:/api/stf/identify/{serial}
+     */
+    stfIdentifyApiStfIdentifySerialPost: (
+      serial: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/stf/identify/${serial}`,
+        method: "POST",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags device-control, stf-control
+     * @name StfGetDisplayApiStfDisplaySerialGet
+     * @summary Stf Get Display
+     * @request GET:/api/stf/display/{serial}
+     */
+    stfGetDisplayApiStfDisplaySerialGet: (
+      serial: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/stf/display/${serial}`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags device-control, stf-control
+     * @name StfGetPropertiesApiStfPropertiesSerialGet
+     * @summary Stf Get Properties
+     * @request GET:/api/stf/properties/{serial}
+     */
+    stfGetPropertiesApiStfPropertiesSerialGet: (
+      serial: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/stf/properties/${serial}`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+  };
+  ping = {
+    /**
+     * No description
+     *
+     * @name PingPingGet
+     * @summary Ping
+     * @request GET:/ping
+     */
+    pingPingGet: (params: RequestParams = {}) =>
+      this.request<any, any>({
+        path: `/ping`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
   };
   stream = {
     /**
@@ -2297,10 +4711,21 @@ export class DeviceFarmHttpClient<
      * @summary Mjpeg Stream
      * @request GET:/stream/{serial}
      */
-    mjpegStreamStreamSerialGet: (serial: string, params: RequestParams = {}) =>
+    mjpegStreamStreamSerialGet: (
+      serial: string,
+      query?: {
+        /**
+         * Fps
+         * @default 0
+         */
+        fps?: number;
+      },
+      params: RequestParams = {},
+    ) =>
       this.request<any, HTTPValidationError>({
         path: `/stream/${serial}`,
         method: "GET",
+        query: query,
         format: "json",
         ...params,
       }),
@@ -2315,11 +4740,105 @@ export class DeviceFarmHttpClient<
      */
     screenshotScreenshotSerialGet: (
       serial: string,
+      query?: {
+        /**
+         * Fresh
+         * @default false
+         */
+        fresh?: boolean;
+      },
       params: RequestParams = {},
     ) =>
       this.request<any, HTTPValidationError>({
         path: `/screenshot/${serial}`,
         method: "GET",
+        query: query,
+        format: "json",
+        ...params,
+      }),
+  };
+  screenshotB64 = {
+    /**
+     * @description Screenshot as base64 JPEG. Cropping is done client-side.
+     *
+     * @name ScreenshotB64ScreenshotB64SerialGet
+     * @summary Screenshot B64
+     * @request GET:/screenshot-b64/{serial}
+     */
+    screenshotB64ScreenshotB64SerialGet: (
+      serial: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/screenshot-b64/${serial}`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+  };
+  devices = {
+    /**
+     * No description
+     *
+     * @tags extraction
+     * @name ApiExtractHierarchyDevicesSerialExtractHierarchyPost
+     * @summary Api Extract Hierarchy
+     * @request POST:/devices/{serial}/extract/hierarchy
+     */
+    apiExtractHierarchyDevicesSerialExtractHierarchyPost: (
+      serial: string,
+      data: HierarchyExtractBody,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/devices/${serial}/extract/hierarchy`,
+        method: "POST",
+        body: data,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags extraction
+     * @name ApiExtractOcrDevicesSerialExtractOcrPost
+     * @summary Api Extract Ocr
+     * @request POST:/devices/{serial}/extract/ocr
+     */
+    apiExtractOcrDevicesSerialExtractOcrPost: (
+      serial: string,
+      data: OCRExtractBody,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/devices/${serial}/extract/ocr`,
+        method: "POST",
+        body: data,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags extraction
+     * @name ApiExtractAiDevicesSerialExtractAiPost
+     * @summary Api Extract Ai
+     * @request POST:/devices/{serial}/extract/ai
+     */
+    apiExtractAiDevicesSerialExtractAiPost: (
+      serial: string,
+      data: AIExtractBody,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/devices/${serial}/extract/ai`,
+        method: "POST",
+        body: data,
+        type: ContentType.Json,
         format: "json",
         ...params,
       }),

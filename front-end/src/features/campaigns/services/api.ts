@@ -3,22 +3,28 @@ import type {
   CampaignCreate,
   CampaignDeviceOut,
   CampaignOut,
+  CampaignRunResponse,
   CampaignStatus,
+  CampaignWorkflowsResponse,
   ScenarioCreate,
   ScenarioOut,
   ScenarioUpdate,
-  TaskOut
+  TaskOut,
+  WorkflowProgress
 } from '../types';
 
 export type {
   CampaignCreate,
   CampaignDeviceOut,
   CampaignOut,
+  CampaignRunResponse,
   CampaignStatus,
+  CampaignWorkflowsResponse,
   ScenarioCreate,
   ScenarioOut,
   ScenarioUpdate,
-  TaskOut
+  TaskOut,
+  WorkflowProgress
 } from '../types';
 
 export const campaignsApi = {
@@ -32,10 +38,7 @@ export const campaignsApi = {
     farmApi.patch<CampaignOut>(`/campaigns/${id}/status`, { status }).then((r) => r.data),
   run: (id: string) =>
     farmApi
-      .post<{ id: string; status: string; device_serials: string[]; task_ids: string[] }>(
-        `/campaigns/${id}/run`,
-        {}
-      )
+      .post<CampaignRunResponse>(`/campaigns/${id}/run`, {})
       .then((r) => r.data),
   compileScenario: (
     id: string,
@@ -117,6 +120,23 @@ export const scenariosApi = {
         ...(options?.deviceContext ? { device_context: options.deviceContext } : {})
       })
       .then((r) => r.data)
+};
+
+export const workflowsApi = {
+  listForCampaign: (campaignId: string) =>
+    farmApi
+      .get<CampaignWorkflowsResponse>(`/campaigns/${campaignId}/workflows`)
+      .then((r) => r.data),
+  progress: (workflowId: string) =>
+    farmApi
+      .get<WorkflowProgress>(`/workflows/${workflowId}/progress`)
+      .then((r) => r.data),
+  pause: (workflowId: string) =>
+    farmApi.post(`/workflows/${workflowId}/pause`).then((r) => r.data),
+  resume: (workflowId: string) =>
+    farmApi.post(`/workflows/${workflowId}/resume`).then((r) => r.data),
+  cancel: (workflowId: string) =>
+    farmApi.post(`/workflows/${workflowId}/cancel`).then((r) => r.data)
 };
 
 export const tasksApi = {

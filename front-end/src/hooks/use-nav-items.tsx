@@ -35,9 +35,24 @@ export function useNavItems(): {
           icon: 'play'
         },
         {
-          title: t('crawl_jobs'),
-          url: ROUTES.CRAWL_JOBS.ROOT,
-          icon: 'post'
+          title: t('schedules'),
+          url: ROUTES.SCHEDULES.ROOT,
+          icon: 'bell'
+        },
+        {
+          title: t('device_groups'),
+          url: ROUTES.DEVICE_GROUPS.ROOT,
+          icon: 'folder'
+        },
+        {
+          title: t('accounts'),
+          url: ROUTES.ACCOUNTS.ROOT,
+          icon: 'user'
+        },
+        {
+          title: t('scenario_templates'),
+          url: ROUTES.SCENARIO_TEMPLATES.ROOT,
+          icon: 'template'
         }
       ]
     }

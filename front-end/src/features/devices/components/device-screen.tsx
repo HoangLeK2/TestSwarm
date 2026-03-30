@@ -29,7 +29,7 @@ export function DeviceScreen({ device, wsSend, mode, onTap, highlightBounds }: D
     device.state && !['DISCONNECTED', 'DEAD'].includes(device.state.toUpperCase());
 
   const mjpegUrl = isActive
-    ? `${deviceFarmBackendBase}/stream/${encodeURIComponent(device.serial)}?fps=5`
+    ? `${deviceFarmBackendBase}/stream/${encodeURIComponent(device.serial)}?fps=30`
     : null;
 
   console.log({isActive, mjpegUrl})

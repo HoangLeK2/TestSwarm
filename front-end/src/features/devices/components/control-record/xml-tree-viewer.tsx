@@ -1,12 +1,19 @@
 'use client';
 
 import React, { useCallback, useMemo, useState } from 'react';
+import { HelpCircle } from 'lucide-react';
 import {
   parseHierarchyTree,
   searchTree,
   bestSelector,
   type HierarchyTreeNode,
 } from '../../utils/hierarchy-tree';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
+import { useTranslations } from 'next-intl';
 
 interface XmlTreeViewerProps {
   xml: string;
@@ -15,6 +22,7 @@ interface XmlTreeViewerProps {
     bounds: [number, number, number, number] | null;
     by: string;
     value: string;
+    nodeId: number;
   }) => void;
   selectedNodeId: number | null;
   onRefresh: () => void;
@@ -31,6 +39,7 @@ export function XmlTreeViewer({
   autoRefresh,
   onAutoRefreshChange,
 }: XmlTreeViewerProps) {
+  const t = useTranslations('devicesControlRecord.view');
   const [search, setSearch] = useState('');
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
 
@@ -65,7 +74,7 @@ export function XmlTreeViewer({
   const handleClick = useCallback(
     (node: HierarchyTreeNode) => {
       const sel = bestSelector(node);
-      onNodeSelect({ bounds: node.bounds, ...sel });
+      onNodeSelect({ bounds: node.bounds, ...sel, nodeId: node.id });
     },
     [onNodeSelect],
   );
@@ -74,7 +83,23 @@ export function XmlTreeViewer({
     <div className='flex h-full flex-col rounded-lg border border-border bg-card'>
       {/* Header */}
       <div className='flex items-center gap-2 border-b border-border px-3 py-2'>
-        <span className='text-xs font-semibold text-foreground'>UI Hierarchy</span>
+        <div className='flex items-center gap-1'>
+          <span className='text-xs font-semibold text-foreground'>{t('hierarchyTitle')}</span>
+          <Tooltip delayDuration={400}>
+            <TooltipTrigger asChild>
+              <button
+                type='button'
+                className='rounded-full p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground'
+                aria-label={t('tooltipHierarchyPanel')}
+              >
+                <HelpCircle className='size-3.5' />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side='bottom' className='max-w-[min(100vw-2rem,22rem)] text-xs leading-relaxed'>
+              {t('tooltipHierarchyPanel')}
+            </TooltipContent>
+          </Tooltip>
+        </div>
         <div className='flex-1' />
         <label className='flex items-center gap-1 text-[10px] text-muted-foreground'>
           <input
@@ -189,6 +214,12 @@ function TreeNode({ node, expanded, matchingIds, selectedNodeId, onToggle, onCli
         {textPreview && (
           <span className='truncate text-[10px] text-orange-600 dark:text-orange-400'>
             &quot;{textPreview}&quot;
+          </span>
+        )}
+
+        {node.pkg && (
+          <span className='truncate text-[9px] text-violet-600/90 dark:text-violet-400/90' title={node.pkg}>
+            {node.pkg}
           </span>
         )}
       </div>

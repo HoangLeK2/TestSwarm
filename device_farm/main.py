@@ -15,10 +15,7 @@ os.chdir(_root)
 load_dotenv(dotenv_path=_root / ".env", override=False)
 
 import logging
-import signal
 import shlex
-import threading
-import time
 
 import uvicorn
 
@@ -27,8 +24,6 @@ from core.env import (
     farm_config_path,
     farm_frontend_dist_override,
     farm_reload_enabled,
-    ngrok_authtoken,
-    ngrok_enabled,
     resolve_farm_frontend_dist,
 )
 from runtime.core import DeviceManager, TaskQueue, Dispatcher, WatchdogThread
@@ -120,29 +115,7 @@ def main() -> None:
     task_queue = TaskQueue()
     manager = DeviceManager(config)
 
-    # Cloud-first architecture:
-    #   App scans ws:// QR from dashboard → connects to /device-agent WebSocket
-    #   Watchdog auto-starts u2-server via ADB wireless (phone_ip:5555) when needed
-    #   Requires phone: Developer Options → Wireless debugging enabled (once at setup)
     log.info("Devices: app scans ws:// QR → connects via /device-agent WebSocket")
-
-    watchdog = WatchdogThread(manager, config)
-    watchdog.start_watchdog()
-    log.info("Watchdog started")
-
-    dispatcher = Dispatcher(manager, task_queue, config)
-    dispatcher.start_dispatcher()
-    log.info("Dispatcher started")
-
-
-    shutdown_event = threading.Event()
-
-    def _shutdown(signum, frame):
-        log.info("Shutdown signal received")
-        shutdown_event.set()
-
-    signal.signal(signal.SIGINT, _shutdown)
-    signal.signal(signal.SIGTERM, _shutdown)
 
     root_dir = Path(__file__).resolve().parent
     templates_dir = str(root_dir / "web" / "templates")
@@ -156,73 +129,22 @@ def main() -> None:
 
     app = create_app(manager, task_queue, config, templates_dir, static_dir, front_end_dist)
 
-    def _run_server():
-        uvicorn.run(
-            app,
-            host=config.web.host,
-            port=config.web.port,
-            log_level=config.logging.level.lower(),
-            access_log=False,
-            ws_ping_interval=config.web.ws_ping_interval,
-            ws_ping_timeout=config.web.ws_ping_timeout,
-            reload=reload_enabled,
-            reload_dirs=[str(root_dir)],
-        )
+    # Attach lifecycle components — started/stopped by FastAPI lifespan
+    app.state.watchdog = WatchdogThread(manager, config)
+    app.state.dispatcher = Dispatcher(manager, task_queue, config)
 
-    server_thread = threading.Thread(target=_run_server, daemon=True, name="uvicorn")
-    server_thread.start()
-    # Let server run startup so event loop is set before ADB bootstrap sends frames
-    time.sleep(1.5)
-
-    # ADB devices are registered only after "Connect by QR" flow (app scan → POST /api/connect/register).
-    # No auto-register from FARM_ADB_HOST at startup.
-
-    ngrok_tunnel = None
-    if ngrok_enabled():
-        try:
-            import pyngrok
-            auth = ngrok_authtoken()
-            if auth:
-                pyngrok.set_auth_token(auth)
-            ngrok_tunnel = pyngrok.ngrok.connect(addr=str(config.web.port), bind_tls=True)
-            log.info("=" * 60)
-            log.info("ngrok tunnel: %s", ngrok_tunnel.public_url)
-            log.info("=" * 60)
-        except Exception as e:
-            err = str(e).lower()
-            log.warning("ngrok failed: %s", e)
-            if "bandwidth" in err:
-                log.warning(
-                    "ngrok free tier bandwidth limit. Options: 1) Lower config: scrcpy_bitrate. "
-                    "2) Upgrade at dashboard.ngrok.com. 3) Use Cloudflare Tunnel: cloudflared tunnel --url http://localhost:%s",
-                    config.web.port,
-                )
-
-    log.info(f"Dashboard: http://localhost:{config.web.port}")
-    log.info("Press Ctrl+C to stop")
-
-    # Block until shutdown signal
-    try:
-        while not shutdown_event.is_set():
-            shutdown_event.wait(timeout=1.0)
-    except KeyboardInterrupt:
-        pass
-
-    log.info("Shutting down…")
-
-    if ngrok_tunnel is not None:
-        try:
-            import pyngrok
-            pyngrok.ngrok.disconnect(ngrok_tunnel.public_url)
-            pyngrok.ngrok.kill()
-        except Exception:
-            pass
-
-    watchdog.stop_watchdog()
-    dispatcher.stop_dispatcher()
-    manager.teardown_all()
-
-    log.info("Shutdown complete. Goodbye.")
+    # ── 3. Run uvicorn in main thread (owns the event loop) ──────────────
+    uvicorn.run(
+        app,
+        host=config.web.host,
+        port=config.web.port,
+        log_level=config.logging.level.lower(),
+        access_log=False,
+        ws_ping_interval=config.web.ws_ping_interval,
+        ws_ping_timeout=config.web.ws_ping_timeout,
+        reload=reload_enabled,
+        reload_dirs=[str(root_dir)],
+    )
 
 
 if __name__ == "__main__":

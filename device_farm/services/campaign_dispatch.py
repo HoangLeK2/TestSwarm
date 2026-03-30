@@ -1,11 +1,14 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Tuple
 
 from db.database import AsyncSessionLocal
 from db import crud as repo
 from runtime.core import Task, TaskQueue
+
+log = logging.getLogger(__name__)
 
 
 async def _get_device_account_vars(
@@ -94,8 +97,6 @@ async def enqueue_campaign_run(
         if not campaign:
             return {"error": "Campaign not found"}, 404
 
-        # DF-004: If campaign targets a device group, use group members instead of
-        # the per-campaign device list.
         target_group_id = getattr(campaign, "target_group_id", None)
         if target_group_id:
             devices = await list_group_devices(db, target_group_id)
@@ -143,13 +144,14 @@ async def enqueue_campaign_run(
                     "_scenario_registry": registry,
                 }
                 task = Task(
-                    fn=make_scenario_task(payload),
+                    fn=lambda dev: None,  # placeholder, replaced below
                     priority=5,
                     target=d.serial,
                     timeout=300,
                     max_retries=1,
                     name=f"campaign:{campaign_id}:scenario:{scen.id}",
                 )
+                task.fn = make_scenario_task(payload, cancel_event=task.cancel_event)
                 queue.put(task)
                 task_ids.append(task.id)
     elif isinstance(legacy_scenario, dict) and legacy_scenario.get("steps"):
@@ -165,13 +167,14 @@ async def enqueue_campaign_run(
                 "_scenario_registry": registry,
             }
             task = Task(
-                fn=make_scenario_task(legacy_payload),
+                fn=lambda dev: None,
                 priority=5,
                 target=d.serial,
                 timeout=300,
                 max_retries=1,
                 name=f"campaign:{campaign_id}:scenario",
             )
+            task.fn = make_scenario_task(legacy_payload, cancel_event=task.cancel_event)
             queue.put(task)
             task_ids.append(task.id)
     else:
@@ -193,4 +196,114 @@ async def enqueue_campaign_run(
         "device_serials": [d.serial for d in devices],
         "task_ids": task_ids,
         "scenarios_count": len(scenarios),
+        "execution_engine": "task_queue",
+        "engine": "task_queue",
+    }, 200
+
+
+async def enqueue_campaign_run_temporal(
+    campaign_id: str,
+    temporal_client,
+    temporal_config=None,
+) -> Tuple[Dict[str, Any], int]:
+   
+    from temporal.shared import ScenarioInput, TASK_QUEUE_NAME
+    from temporal.workflows import ScenarioWorkflow
+    from db.crud.scenario_template import list_templates
+    from db.crud.device_group import list_group_devices
+
+    async with AsyncSessionLocal() as db:
+        campaign = await repo.get_campaign(db, campaign_id)
+        if not campaign:
+            return {"error": "Campaign not found"}, 404
+
+        target_group_id = getattr(campaign, "target_group_id", None)
+        if target_group_id:
+            devices = await list_group_devices(db, target_group_id)
+        else:
+            devices = await repo.list_campaign_devices(db, campaign_id)
+
+        if not devices:
+            return {"error": "Campaign has no devices"}, 400
+
+        scenarios = await repo.list_scenarios(db, campaign_id)
+        templates = await list_templates(db)
+        legacy_scenario: dict = campaign.scenario or {}
+
+        registry = _build_scenario_registry(scenarios, templates)
+        await repo.update_campaign_status(db, campaign_id, "running")
+        await db.commit()
+
+    # Resolve per-device account vars
+    campaign_platform: str = (campaign.variables or {}).get("__PLATFORM__", "facebook")
+    async with AsyncSessionLocal() as account_db:
+        device_account_vars: Dict[str, Dict[str, Any]] = {}
+        for d in devices:
+            device_account_vars[d.id] = await _get_device_account_vars(
+                d.id, campaign_platform, account_db
+            )
+
+    task_queue = TASK_QUEUE_NAME
+    if temporal_config:
+        task_queue = temporal_config.task_queue or task_queue
+
+    workflow_ids: list[str] = []
+
+    if scenarios:
+        for d in devices:
+            acct_vars = device_account_vars.get(d.id, {})
+            for scen in scenarios:
+                if not scen.steps:
+                    continue
+                wf_id = f"campaign:{campaign_id}:device:{d.serial}:scenario:{scen.id}"
+                try:
+                    await temporal_client.start_workflow(
+                        ScenarioWorkflow.run,
+                        ScenarioInput(
+                            campaign_id=campaign_id,
+                            device_serial=d.serial,
+                            steps=scen.steps,
+                            variables={**(scen.variables or {}), **acct_vars},
+                            campaign_vars=campaign.variables or {},
+                            scenario_registry=registry,
+                        ),
+                        id=wf_id,
+                        task_queue=task_queue,
+                    )
+                    workflow_ids.append(wf_id)
+                except Exception as exc:
+                    log.error("Failed to start workflow %s: %s", wf_id, exc)
+    elif isinstance(legacy_scenario, dict) and legacy_scenario.get("steps"):
+        for d in devices:
+            acct_vars = device_account_vars.get(d.id, {})
+            wf_id = f"campaign:{campaign_id}:device:{d.serial}:scenario:legacy"
+            try:
+                await temporal_client.start_workflow(
+                    ScenarioWorkflow.run,
+                    ScenarioInput(
+                        campaign_id=campaign_id,
+                        device_serial=d.serial,
+                        steps=legacy_scenario.get("steps", []),
+                        variables={
+                            **(legacy_scenario.get("variables") or {}),
+                            **acct_vars,
+                        },
+                        campaign_vars=campaign.variables or {},
+                        scenario_registry=registry,
+                    ),
+                    id=wf_id,
+                    task_queue=task_queue,
+                )
+                workflow_ids.append(wf_id)
+            except Exception as exc:
+                log.error("Failed to start workflow %s: %s", wf_id, exc)
+
+    return {
+        "id": campaign_id,
+        "status": "running",
+        "device_serials": [d.serial for d in devices],
+        "workflow_ids": workflow_ids,
+        "scenarios_count": len(scenarios),
+        "execution_engine": "temporal",
+        "engine": "temporal",
     }, 200

@@ -26,8 +26,17 @@ export const ROUTES = {
     ROOT: '/dashboard/campaigns',
     DETAIL: (id: string) => `/dashboard/campaigns/${id}`
   },
-  CRAWL_JOBS: {
-    ROOT: '/dashboard/crawl-jobs'
+  DEVICE_GROUPS: {
+    ROOT: '/dashboard/device-groups'
+  },
+  ACCOUNTS: {
+    ROOT: '/dashboard/accounts'
+  },
+  SCENARIO_TEMPLATES: {
+    ROOT: '/dashboard/scenario-templates'
+  },
+  SCHEDULES: {
+    ROOT: '/dashboard/schedules'
   },
   DASHBOARD: {
     ROOT: '/dashboard',

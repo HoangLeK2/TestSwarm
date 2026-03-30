@@ -376,6 +376,9 @@ class DeviceAgentSession:
             # as new devices. Only reject when key= is explicitly provided but invalid.
 
             # ── Nếu có ?key= thì bắt buộc key phải khớp pending device; sai key → từ chối ──
+            # Extract device IP from WebSocket connection for ADB/scrcpy
+            client_ip = ws.client.host if ws.client else ""
+
             if key:
                 meta = {
                     "brand": hello.get("brand", ""),
@@ -384,6 +387,8 @@ class DeviceAgentSession:
                     "sdk_version": int(hello.get("sdk", 0) or 0),
                     "screen_width": int(hello.get("screen_width", 0) or 0),
                     "screen_height": int(hello.get("screen_height", 0) or 0),
+                    "adb_ip": client_ip,
+                    "adb_port": 5555,
                 }
                 try:
                     async with AsyncSessionLocal() as db:
@@ -504,7 +509,6 @@ class DeviceAgentSession:
             await ws.send_json(opts)
 
             if not key:
-                client_ip = ws.client.host if ws.client else ""
                 try:
                     async with AsyncSessionLocal() as db:
                         meta = {
@@ -514,6 +518,8 @@ class DeviceAgentSession:
                             "sdk_version": int(hello.get("sdk", 0) or 0),
                             "screen_width": int(hello.get("screen_width", 0) or 0),
                             "screen_height": int(hello.get("screen_height", 0) or 0),
+                            "adb_ip": client_ip,
+                            "adb_port": 5555,
                         }
                         db_dev = await repo.get_or_create_device(db, serial)
                         await repo.update_device_metadata(db, serial, **meta)
@@ -556,6 +562,20 @@ class DeviceAgentSession:
                     serial,
                     stored_user_id,
                 )
+
+            # ── Auto-attach scrcpy for screen streaming (if device IP available) ──
+            if client_ip and self._config and self._config.device.scrcpy_control:
+                try:
+                    loop.run_in_executor(
+                        None,
+                        device.attach_scrcpy_stream,
+                        client_ip,
+                        5555,
+                        True,  # enable_control (keys only, touch via U2)
+                    )
+                    log.info("Auto-attaching scrcpy stream for %s (ip=%s)", serial, client_ip)
+                except Exception as exc:
+                    log.warning("Auto-attach scrcpy failed for %s: %s", serial, exc)
 
             # ── Message loop ─────────────────────────────────────────────────
             log.info("Agent %s: ready, streaming…", serial)

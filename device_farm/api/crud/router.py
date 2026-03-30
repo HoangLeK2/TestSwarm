@@ -6,6 +6,8 @@ from api.routes import auth, campaigns, devices, organizations, users
 from api.routes.scenario_templates import router as scenario_templates_router
 from api.routes.device_groups import router as device_groups_router
 from api.routes.accounts import router as accounts_router
+from api.routes.content import router as content_router
+from api.routes.schedules import router as schedules_router
 
 api_router = APIRouter()
 
@@ -17,3 +19,5 @@ api_router.include_router(organizations.router)
 api_router.include_router(scenario_templates_router)
 api_router.include_router(device_groups_router)
 api_router.include_router(accounts_router)
+api_router.include_router(content_router)
+api_router.include_router(schedules_router)

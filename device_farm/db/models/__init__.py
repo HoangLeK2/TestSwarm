@@ -8,8 +8,8 @@ split into smaller modules for easier maintenance:
 - organization.py  — Organization, OrganizationMember
 - device.py        — Device, DeviceSession
 - campaign.py      — Campaign, CampaignDevice
-- crawl.py         — CrawlJob, CrawlPost
 - account.py       — Account, DeviceAccount  (DF-007)
+- content.py       — ContentItem, ContentCollection, ContentExport
 """
 
 from .user import User
@@ -18,9 +18,10 @@ from .device import Device, DeviceSession
 from .device_group import DeviceGroup, DeviceGroupMember
 from .campaign import Campaign, CampaignDevice, Scenario
 from .mcp_session import McpSession
-from .crawl import CrawlJob, CrawlPost
 from .scenario_template import ScenarioTemplate
 from .account import Account, DeviceAccount
+from .content import ContentItem, ContentCollection, ContentExport
+from .schedule import Schedule, ScheduleRun
 
 __all__ = [
     "User",
@@ -34,10 +35,13 @@ __all__ = [
     "CampaignDevice",
     "Scenario",
     "McpSession",
-    "CrawlJob",
-    "CrawlPost",
     "ScenarioTemplate",
     "Account",
     "DeviceAccount",
+    "ContentItem",
+    "ContentCollection",
+    "ContentExport",
+    "Schedule",
+    "ScheduleRun",
 ]
 

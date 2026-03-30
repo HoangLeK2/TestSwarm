@@ -11,6 +11,7 @@ from api.schemas.campaign import (
     ScenarioCreate, ScenarioUpdate, ScenarioOut,
 )
 from db import crud as repo
+from services.image_store import save_step_images, delete_scenario_images
 
 router = APIRouter(prefix="/campaigns", tags=["campaigns"])
 
@@ -91,8 +92,25 @@ async def create_campaign(body: CampaignCreate, db: DB, user: CurrentUser):
         device = await repo.get_device(db, device_id)
         if device and device.user_id == user.id:
             await repo.add_device_to_campaign(db, campaign.id, device_id)
+    # Mirror legacy `campaign.scenario` into a Scenario row so list/edit UIs see it.
+    sc = body.scenario or {}
+    steps = sc.get("steps") if isinstance(sc, dict) else None
+    if isinstance(steps, list) and len(steps) > 0:
+        scenario_row = await repo.create_scenario(
+            db,
+            campaign.id,
+            name=body.name,
+            instructions=(sc.get("instructions") or "") if isinstance(sc, dict) else "",
+            steps=[],
+            variables=body.variables or {},
+            order=0,
+        )
+        await db.flush()
+        saved_steps = save_step_images(steps, scenario_row.id)
+        await repo.update_scenario(db, scenario_row.id, steps=saved_steps)
     await db.commit()
-    return _to_out(campaign)
+    scenarios = await repo.list_scenarios(db, campaign.id)
+    return _to_out(campaign, scenarios)
 
 
 @router.get("/{campaign_id}", response_model=CampaignOut)
@@ -112,14 +130,51 @@ async def delete_campaign(campaign_id: str, db: DB, user: CurrentUser):
 
 
 @router.patch("/{campaign_id}/status")
-async def update_status(campaign_id: str, body: StatusUpdate, db: DB, user: CurrentUser):
+async def update_status(campaign_id: str, body: StatusUpdate, db: DB, user: CurrentUser, request: Request):
     await _get_campaign_or_404(campaign_id, user.id, db)
-    valid = {"draft", "running", "paused", "completed"}
+    valid = {"draft", "running", "paused", "completed", "stopped"}
     if body.status not in valid:
         raise HTTPException(status_code=400, detail=f"status must be one of {valid}")
-    await repo.update_campaign_status(db, campaign_id, body.status)
+
+    cancelled_count = 0
+    # When stopping/pausing/completing a campaign, cancel all its running/pending tasks
+    if body.status in ("stopped", "paused", "completed"):
+        # 1. Cancel local TaskQueue tasks
+        queue = getattr(request.app.state, "queue", None)
+        if queue is not None:
+            prefix = f"campaign:{campaign_id}:"
+            cancelled_count = queue.cancel_by_name_prefix(prefix)
+
+        # 2. Cancel / pause Temporal workflows if Temporal is enabled
+        config = getattr(request.app.state, "config", None)
+        if config is not None and getattr(config, "temporal", None) and config.temporal.enabled:
+            try:
+                from temporal.worker import get_temporal_client
+                from temporal.workflows import ScenarioWorkflow
+
+                t_client = await get_temporal_client(config.temporal)
+                wf_query = f'WorkflowId STARTS_WITH "campaign:{campaign_id}:" AND ExecutionStatus="Running"'
+                async for wf in t_client.list_workflows(wf_query):
+                    try:
+                        handle = t_client.get_workflow_handle(wf.id)
+                        if body.status == "paused":
+                            await handle.signal(ScenarioWorkflow.pause)
+                        else:
+                            # stopped / completed → hard cancel (propagates to all child workflows)
+                            await handle.cancel()
+                    except Exception as exc:
+                        import logging
+                        logging.getLogger(__name__).warning(
+                            "Failed to %s workflow %s: %s", body.status, wf.id, exc
+                        )
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).warning("Temporal cancel/pause failed: %s", exc)
+
+    db_status = "completed" if body.status == "stopped" else body.status
+    await repo.update_campaign_status(db, campaign_id, db_status)
     await db.commit()
-    return {"id": campaign_id, "status": body.status}
+    return {"id": campaign_id, "status": db_status, "tasks_cancelled": cancelled_count}
 
 
 @router.get("/{campaign_id}/devices", response_model=list[CampaignDeviceOut])
@@ -256,11 +311,15 @@ async def create_scenario(campaign_id: str, body: ScenarioCreate, db: DB, user: 
         db, campaign_id,
         name=body.name,
         instructions=body.instructions,
-        steps=body.steps,
+        steps=[],
         variables=body.variables,
         order=order,
     )
+    await db.flush()
+    saved_steps = save_step_images(body.steps or [], s.id)
+    await repo.update_scenario(db, s.id, steps=saved_steps)
     await db.commit()
+    s = await repo.get_scenario(db, s.id)
     return _scenario_to_out(s)
 
 
@@ -282,6 +341,8 @@ async def update_scenario_route(
     if not s or s.campaign_id != campaign_id:
         raise HTTPException(status_code=404, detail="Scenario not found")
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if "steps" in updates:
+        updates["steps"] = save_step_images(updates["steps"], scenario_id)
     if updates:
         await repo.update_scenario(db, scenario_id, **updates)
     await db.commit()
@@ -299,6 +360,7 @@ async def delete_scenario_route(
         raise HTTPException(status_code=404, detail="Scenario not found")
     await repo.delete_scenario(db, scenario_id)
     await db.commit()
+    delete_scenario_images(scenario_id)
 
 
 # ── Compile scenario for a specific scenario row ──────────────────────────────

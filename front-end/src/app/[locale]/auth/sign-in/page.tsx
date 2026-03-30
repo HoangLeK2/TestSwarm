@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Link } from '@/i18n/navigation';
 import { ROUTES } from '@/config/routes';
+import { formatFarmApiError } from '@/lib/format-farm-api-error';
 
 type FormData = {
   email: string;
@@ -95,8 +96,7 @@ export default function SignInPage() {
 
           {error && (
             <p className='text-xs text-destructive'>
-              {(error as any)?.response?.data?.detail ??
-                tAuth('errors.signInFailed')}
+              {formatFarmApiError(error, tAuth('errors.signInFailed'))}
             </p>
           )}
 

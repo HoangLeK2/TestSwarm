@@ -5,6 +5,22 @@
     "version": "2.0.0"
   },
   "paths": {
+    "/api/health": {
+      "get": {
+        "summary": "Health",
+        "operationId": "health_api_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/ping": {
       "get": {
         "summary": "Ping",
@@ -3313,6 +3329,1012 @@
         }
       }
     },
+    "/api/content": {
+      "get": {
+        "tags": [
+          "content"
+        ],
+        "summary": "List Content",
+        "operationId": "list_content_api_content_get",
+        "parameters": [
+          {
+            "name": "collection",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Collection"
+            }
+          },
+          {
+            "name": "platform",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Platform"
+            }
+          },
+          {
+            "name": "content_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Content Type"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search"
+            }
+          },
+          {
+            "name": "device_serial",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Device Serial"
+            }
+          },
+          {
+            "name": "campaign_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Campaign Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/content/stats": {
+      "get": {
+        "tags": [
+          "content"
+        ],
+        "summary": "Get Stats",
+        "operationId": "get_stats_api_content_stats_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContentStatsOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/content/save": {
+      "post": {
+        "tags": [
+          "content"
+        ],
+        "summary": "Save Content",
+        "description": "Save extracted content with deduplication (used by scenarios and MCP).",
+        "operationId": "save_content_api_content_save_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveContentBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/content/{item_id}": {
+      "get": {
+        "tags": [
+          "content"
+        ],
+        "summary": "Get Content Item",
+        "operationId": "get_content_item_api_content__item_id__get",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Item Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "content"
+        ],
+        "summary": "Delete Content Item",
+        "operationId": "delete_content_item_api_content__item_id__delete",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Item Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/content/collections/list": {
+      "get": {
+        "tags": [
+          "content"
+        ],
+        "summary": "List Collections",
+        "operationId": "list_collections_api_content_collections_list_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CollectionOut"
+                  },
+                  "type": "array",
+                  "title": "Response List Collections Api Content Collections List Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/content/collections": {
+      "post": {
+        "tags": [
+          "content"
+        ],
+        "summary": "Create Collection",
+        "operationId": "create_collection_api_content_collections_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollectionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/content/collections/{name}": {
+      "delete": {
+        "tags": [
+          "content"
+        ],
+        "summary": "Delete Collection",
+        "operationId": "delete_collection_api_content_collections__name__delete",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/content/export": {
+      "post": {
+        "tags": [
+          "content"
+        ],
+        "summary": "Create Export",
+        "operationId": "create_export_api_content_export_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/content/exports/list": {
+      "get": {
+        "tags": [
+          "content"
+        ],
+        "summary": "List Exports",
+        "operationId": "list_exports_api_content_exports_list_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ExportOut"
+                  },
+                  "type": "array",
+                  "title": "Response List Exports Api Content Exports List Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/content/exports/{export_id}": {
+      "get": {
+        "tags": [
+          "content"
+        ],
+        "summary": "Get Export",
+        "operationId": "get_export_api_content_exports__export_id__get",
+        "parameters": [
+          {
+            "name": "export_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Export Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/content/exports/{export_id}/download": {
+      "get": {
+        "tags": [
+          "content"
+        ],
+        "summary": "Download Export",
+        "operationId": "download_export_api_content_exports__export_id__download_get",
+        "parameters": [
+          {
+            "name": "export_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Export Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/schedules": {
+      "get": {
+        "tags": [
+          "schedules"
+        ],
+        "summary": "List Schedules Endpoint",
+        "operationId": "list_schedules_endpoint_api_schedules_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ScheduleOut"
+                  },
+                  "title": "Response List Schedules Endpoint Api Schedules Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "schedules"
+        ],
+        "summary": "Create Schedule Endpoint",
+        "operationId": "create_schedule_endpoint_api_schedules_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/schedules/{schedule_id}": {
+      "get": {
+        "tags": [
+          "schedules"
+        ],
+        "summary": "Get Schedule Endpoint",
+        "operationId": "get_schedule_endpoint_api_schedules__schedule_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "schedule_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Schedule Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "schedules"
+        ],
+        "summary": "Update Schedule Endpoint",
+        "operationId": "update_schedule_endpoint_api_schedules__schedule_id__patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "schedule_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Schedule Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SchedulePatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "schedules"
+        ],
+        "summary": "Delete Schedule Endpoint",
+        "operationId": "delete_schedule_endpoint_api_schedules__schedule_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "schedule_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Schedule Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/schedules/{schedule_id}/toggle": {
+      "post": {
+        "tags": [
+          "schedules"
+        ],
+        "summary": "Toggle Schedule Endpoint",
+        "operationId": "toggle_schedule_endpoint_api_schedules__schedule_id__toggle_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "schedule_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Schedule Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/schedules/{schedule_id}/run-now": {
+      "post": {
+        "tags": [
+          "schedules"
+        ],
+        "summary": "Run Now Endpoint",
+        "operationId": "run_now_endpoint_api_schedules__schedule_id__run_now_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "schedule_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Schedule Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriggerResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/schedules/{schedule_id}/runs": {
+      "get": {
+        "tags": [
+          "schedules"
+        ],
+        "summary": "List Runs Endpoint",
+        "operationId": "list_runs_endpoint_api_schedules__schedule_id__runs_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "schedule_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Schedule Id"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ScheduleRunOut"
+                  },
+                  "title": "Response List Runs Endpoint Api Schedules  Schedule Id  Runs Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/schedules/{schedule_id}/runs/{run_id}": {
+      "get": {
+        "tags": [
+          "schedules"
+        ],
+        "summary": "Get Run Endpoint",
+        "operationId": "get_run_endpoint_api_schedules__schedule_id__runs__run_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "schedule_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Schedule Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleRunOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/": {
       "get": {
         "summary": "Dashboard",
@@ -4427,6 +5449,57 @@
         }
       }
     },
+    "/api/devices/{serial}/scenario/preview-stream": {
+      "post": {
+        "tags": [
+          "device-control"
+        ],
+        "summary": "Api Scenario Preview Stream",
+        "description": "SSE endpoint: streams step results as they complete.\nEach event is a JSON object with the step result.\nFinal event has type \"done\" with full summary.",
+        "operationId": "api_scenario_preview_stream_api_devices__serial__scenario_preview_stream_post",
+        "parameters": [
+          {
+            "name": "serial",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Serial"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScenarioPreviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/devices/{serial}/scenario/run": {
       "post": {
         "tags": [
@@ -4567,6 +5640,231 @@
         }
       }
     },
+    "/api/execution/runtime": {
+      "get": {
+        "tags": [
+          "device-control"
+        ],
+        "summary": "Api Execution Runtime",
+        "description": "How campaign runs are executed — for UI/docs (Temporal vs in-process TaskQueue).",
+        "operationId": "api_execution_runtime_api_execution_runtime_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/campaigns/{campaign_id}/workflows": {
+      "get": {
+        "tags": [
+          "device-control"
+        ],
+        "summary": "Api List Campaign Workflows",
+        "description": "List top-level Temporal workflow runs for a campaign.\n\nOnly returns ScenarioWorkflow entries (one per device×scenario).\nChild workflows (ScenarioStepsWorkflow) are excluded — they are an\nimplementation detail and would flood the list.",
+        "operationId": "api_list_campaign_workflows_api_campaigns__campaign_id__workflows_get",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Campaign Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workflows/{workflow_id}/progress": {
+      "get": {
+        "tags": [
+          "device-control"
+        ],
+        "summary": "Api Workflow Progress",
+        "description": "Query real-time progress of a Temporal scenario workflow.",
+        "operationId": "api_workflow_progress_api_workflows__workflow_id__progress_get",
+        "parameters": [
+          {
+            "name": "workflow_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Workflow Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workflows/{workflow_id}/pause": {
+      "post": {
+        "tags": [
+          "device-control"
+        ],
+        "summary": "Api Workflow Pause",
+        "description": "Pause a running scenario workflow at the next step boundary.",
+        "operationId": "api_workflow_pause_api_workflows__workflow_id__pause_post",
+        "parameters": [
+          {
+            "name": "workflow_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Workflow Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workflows/{workflow_id}/resume": {
+      "post": {
+        "tags": [
+          "device-control"
+        ],
+        "summary": "Api Workflow Resume",
+        "description": "Resume a paused scenario workflow.",
+        "operationId": "api_workflow_resume_api_workflows__workflow_id__resume_post",
+        "parameters": [
+          {
+            "name": "workflow_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Workflow Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workflows/{workflow_id}/cancel": {
+      "post": {
+        "tags": [
+          "device-control"
+        ],
+        "summary": "Api Workflow Cancel",
+        "description": "Cancel a scenario workflow gracefully.",
+        "operationId": "api_workflow_cancel_api_workflows__workflow_id__cancel_post",
+        "parameters": [
+          {
+            "name": "workflow_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Workflow Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/fleet/run": {
       "post": {
         "tags": [
@@ -4653,305 +5951,23 @@
         }
       }
     },
-    "/api/devices/{serial}/fb_crawl": {
-      "post": {
-        "tags": [
-          "device-control"
-        ],
-        "summary": "Crawl Facebook group posts (blocking)",
-        "description": "Opens the Facebook group on the device and scrolls through the feed, collecting post data via UIAutomator2 hierarchy XML. Runs synchronously — the HTTP response is returned when crawling is complete. For long crawls (>50 posts) consider using the `/fb_crawl/enqueue` variant.",
-        "operationId": "api_fb_crawl_api_devices__serial__fb_crawl_post",
-        "parameters": [
-          {
-            "name": "serial",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Serial"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/FbCrawlRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/devices/{serial}/fb_crawl/enqueue": {
-      "post": {
-        "tags": [
-          "device-control"
-        ],
-        "summary": "Crawl Facebook group posts (background task)",
-        "description": "Enqueues a Facebook group crawl as a background task. Returns immediately with a task_id. Poll GET /api/tasks/{task_id} to check status and retrieve result.",
-        "operationId": "api_fb_crawl_enqueue_api_devices__serial__fb_crawl_enqueue_post",
-        "parameters": [
-          {
-            "name": "serial",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Serial"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/FbCrawlRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/fb_crawl/fleet": {
-      "post": {
-        "tags": [
-          "device-control"
-        ],
-        "summary": "Crawl Facebook group posts across all READY devices",
-        "description": "Enqueues a crawl task on every READY device simultaneously. Each device crawls independently (parallel). Returns a list of task_ids to poll individually. Useful for faster crawling by distributing load across multiple phones.",
-        "operationId": "api_fb_crawl_fleet_api_fb_crawl_fleet_post",
-        "parameters": [
-          {
-            "name": "max_devices",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "default": 0,
-              "title": "Max Devices"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/FbCrawlRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/devices/{serial}/crawl/jobs": {
-      "post": {
-        "tags": [
-          "device-control"
-        ],
-        "summary": "Api Crawl Job Run",
-        "operationId": "api_crawl_job_run_api_devices__serial__crawl_jobs_post",
-        "parameters": [
-          {
-            "name": "serial",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Serial"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CrawlJobRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/devices/{serial}/crawl/jobs/enqueue": {
-      "post": {
-        "tags": [
-          "device-control"
-        ],
-        "summary": "Api Crawl Job Enqueue",
-        "operationId": "api_crawl_job_enqueue_api_devices__serial__crawl_jobs_enqueue_post",
-        "parameters": [
-          {
-            "name": "serial",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Serial"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CrawlJobRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/crawl/jobs": {
+    "/api/stf/status/{serial}": {
       "get": {
         "tags": [
-          "device-control"
+          "device-control",
+          "stf-control"
         ],
-        "summary": "Api List Crawl Jobs",
-        "operationId": "api_list_crawl_jobs_api_crawl_jobs_get",
+        "summary": "Stf Status",
+        "description": "Get STFService connection status and all event state.",
+        "operationId": "stf_status_api_stf_status__serial__get",
         "parameters": [
           {
-            "name": "campaign_id",
-            "in": "query",
-            "required": false,
+            "name": "serial",
+            "in": "path",
+            "required": true,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Campaign Id"
-            }
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 200,
-              "minimum": 1,
-              "default": 50,
-              "title": "Limit"
-            }
-          },
-          {
-            "name": "offset",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0,
-              "title": "Offset"
+              "type": "string",
+              "title": "Serial"
             }
           }
         ],
@@ -4977,21 +5993,22 @@
         }
       }
     },
-    "/api/crawl/jobs/{job_id}": {
+    "/api/stf/clipboard/{serial}": {
       "get": {
         "tags": [
-          "device-control"
+          "device-control",
+          "stf-control"
         ],
-        "summary": "Api Get Crawl Job",
-        "operationId": "api_get_crawl_job_api_crawl_jobs__job_id__get",
+        "summary": "Stf Get Clipboard",
+        "operationId": "stf_get_clipboard_api_stf_clipboard__serial__get",
         "parameters": [
           {
-            "name": "job_id",
+            "name": "serial",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "Job Id"
+              "title": "Serial"
             }
           }
         ],
@@ -5016,20 +6033,378 @@
           }
         }
       },
-      "delete": {
+      "post": {
         "tags": [
-          "device-control"
+          "device-control",
+          "stf-control"
         ],
-        "summary": "Api Delete Crawl Job",
-        "operationId": "api_delete_crawl_job_api_crawl_jobs__job_id__delete",
+        "summary": "Stf Set Clipboard",
+        "operationId": "stf_set_clipboard_api_stf_clipboard__serial__post",
         "parameters": [
           {
-            "name": "job_id",
+            "name": "serial",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "Job Id"
+              "title": "Serial"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetClipboardRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/stf/wifi/{serial}": {
+      "post": {
+        "tags": [
+          "device-control",
+          "stf-control"
+        ],
+        "summary": "Stf Set Wifi",
+        "operationId": "stf_set_wifi_api_stf_wifi__serial__post",
+        "parameters": [
+          {
+            "name": "serial",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Serial"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetEnabledRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/stf/bluetooth/{serial}": {
+      "post": {
+        "tags": [
+          "device-control",
+          "stf-control"
+        ],
+        "summary": "Stf Set Bluetooth",
+        "operationId": "stf_set_bluetooth_api_stf_bluetooth__serial__post",
+        "parameters": [
+          {
+            "name": "serial",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Serial"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetEnabledRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/stf/keyguard/{serial}": {
+      "post": {
+        "tags": [
+          "device-control",
+          "stf-control"
+        ],
+        "summary": "Stf Set Keyguard",
+        "operationId": "stf_set_keyguard_api_stf_keyguard__serial__post",
+        "parameters": [
+          {
+            "name": "serial",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Serial"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetEnabledRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/stf/wakelock/{serial}": {
+      "post": {
+        "tags": [
+          "device-control",
+          "stf-control"
+        ],
+        "summary": "Stf Set Wake Lock",
+        "operationId": "stf_set_wake_lock_api_stf_wakelock__serial__post",
+        "parameters": [
+          {
+            "name": "serial",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Serial"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetEnabledRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/stf/ringer/{serial}": {
+      "post": {
+        "tags": [
+          "device-control",
+          "stf-control"
+        ],
+        "summary": "Stf Set Ringer",
+        "operationId": "stf_set_ringer_api_stf_ringer__serial__post",
+        "parameters": [
+          {
+            "name": "serial",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Serial"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetRingerModeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/stf/mute/{serial}": {
+      "post": {
+        "tags": [
+          "device-control",
+          "stf-control"
+        ],
+        "summary": "Stf Set Mute",
+        "operationId": "stf_set_mute_api_stf_mute__serial__post",
+        "parameters": [
+          {
+            "name": "serial",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Serial"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetEnabledRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/stf/identify/{serial}": {
+      "post": {
+        "tags": [
+          "device-control",
+          "stf-control"
+        ],
+        "summary": "Stf Identify",
+        "operationId": "stf_identify_api_stf_identify__serial__post",
+        "parameters": [
+          {
+            "name": "serial",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Serial"
             }
           }
         ],
@@ -5055,44 +6430,63 @@
         }
       }
     },
-    "/api/crawl/jobs/{job_id}/posts": {
+    "/api/stf/display/{serial}": {
       "get": {
         "tags": [
-          "device-control"
+          "device-control",
+          "stf-control"
         ],
-        "summary": "Api Get Crawl Posts",
-        "operationId": "api_get_crawl_posts_api_crawl_jobs__job_id__posts_get",
+        "summary": "Stf Get Display",
+        "operationId": "stf_get_display_api_stf_display__serial__get",
         "parameters": [
           {
-            "name": "job_id",
+            "name": "serial",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "Job Id"
+              "title": "Serial"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
             }
           },
-          {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 1000,
-              "minimum": 1,
-              "default": 200,
-              "title": "Limit"
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
             }
-          },
+          }
+        }
+      }
+    },
+    "/api/stf/properties/{serial}": {
+      "get": {
+        "tags": [
+          "device-control",
+          "stf-control"
+        ],
+        "summary": "Stf Get Properties",
+        "operationId": "stf_get_properties_api_stf_properties__serial__get",
+        "parameters": [
           {
-            "name": "offset",
-            "in": "query",
-            "required": false,
+            "name": "serial",
+            "in": "path",
+            "required": true,
             "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0,
-              "title": "Offset"
+              "type": "string",
+              "title": "Serial"
             }
           }
         ],
@@ -5131,6 +6525,16 @@
               "type": "string",
               "title": "Serial"
             }
+          },
+          {
+            "name": "fps",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "default": 0,
+              "title": "Fps"
+            }
           }
         ],
         "responses": {
@@ -5168,8 +6572,206 @@
               "type": "string",
               "title": "Serial"
             }
+          },
+          {
+            "name": "fresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Fresh"
+            }
           }
         ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/screenshot-b64/{serial}": {
+      "get": {
+        "summary": "Screenshot B64",
+        "description": "Screenshot as base64 JPEG. Cropping is done client-side.",
+        "operationId": "screenshot_b64_screenshot_b64__serial__get",
+        "parameters": [
+          {
+            "name": "serial",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Serial"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/devices/{serial}/extract/hierarchy": {
+      "post": {
+        "tags": [
+          "extraction"
+        ],
+        "summary": "Api Extract Hierarchy",
+        "operationId": "api_extract_hierarchy_devices__serial__extract_hierarchy_post",
+        "parameters": [
+          {
+            "name": "serial",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Serial"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HierarchyExtractBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/devices/{serial}/extract/ocr": {
+      "post": {
+        "tags": [
+          "extraction"
+        ],
+        "summary": "Api Extract Ocr",
+        "operationId": "api_extract_ocr_devices__serial__extract_ocr_post",
+        "parameters": [
+          {
+            "name": "serial",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Serial"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OCRExtractBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/devices/{serial}/extract/ai": {
+      "post": {
+        "tags": [
+          "extraction"
+        ],
+        "summary": "Api Extract Ai",
+        "operationId": "api_extract_ai_devices__serial__extract_ai_post",
+        "parameters": [
+          {
+            "name": "serial",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Serial"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AIExtractBody"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -5195,6 +6797,54 @@
   },
   "components": {
     "schemas": {
+      "AIExtractBody": {
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "title": "Prompt"
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider",
+            "default": "openai"
+          },
+          "format": {
+            "type": "string",
+            "title": "Format",
+            "default": "json"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region"
+          }
+        },
+        "type": "object",
+        "required": [
+          "prompt"
+        ],
+        "title": "AIExtractBody"
+      },
       "AccountCreate": {
         "properties": {
           "platform": {
@@ -5958,6 +7608,80 @@
         ],
         "title": "CampaignOut"
       },
+      "CollectionCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "default": ""
+          },
+          "platform": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "CollectionCreate"
+      },
+      "CollectionOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "platform": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform"
+          },
+          "item_count": {
+            "type": "integer",
+            "title": "Item Count"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "item_count",
+          "created_at"
+        ],
+        "title": "CollectionOut"
+      },
       "CompileScenarioBody": {
         "properties": {
           "instructions": {
@@ -6039,18 +7763,27 @@
         "title": "ConnectByIpBody",
         "description": "Kết nối thiết bị qua ADB TCP: backend chủ động connect tới IP, không cần QR."
       },
-      "CrawlJobRequest": {
+      "ContentStatsOut": {
         "properties": {
-          "group_id": {
-            "type": "string",
-            "title": "Group Id",
-            "description": "Optional group id label for the job (for quick filtering)",
-            "default": "",
-            "examples": [
-              "123456789"
-            ]
+          "total_items": {
+            "type": "integer",
+            "title": "Total Items"
           },
-          "campaign_id": {
+          "by_platform": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "By Platform"
+          },
+          "by_collection": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "By Collection"
+          },
+          "latest_extraction": {
             "anyOf": [
               {
                 "type": "string"
@@ -6059,79 +7792,16 @@
                 "type": "null"
               }
             ],
-            "title": "Campaign Id",
-            "description": "Optional campaign ID this crawl job belongs to"
-          },
-          "scenario_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Scenario Id",
-            "description": "Optional scenario ID; has higher priority than campaign_id"
-          },
-          "max_posts": {
-            "type": "integer",
-            "maximum": 5000.0,
-            "minimum": 0.0,
-            "title": "Max Posts",
-            "description": "0 means no post-count cap; crawl until no-new/scroll cap",
-            "default": 0
-          },
-          "max_scrolls": {
-            "type": "integer",
-            "maximum": 2000.0,
-            "minimum": 1.0,
-            "title": "Max Scrolls",
-            "default": 200
-          },
-          "auto_append_crawl": {
-            "type": "boolean",
-            "title": "Auto Append Crawl",
-            "description": "Auto append default fb_posts crawl loop when scenario has no extract/fb_posts step",
-            "default": true
-          },
-          "app": {
-            "type": "string",
-            "enum": [
-              "chrome",
-              "facebook",
-              "facebook_lite"
-            ],
-            "title": "App",
-            "default": "chrome"
-          },
-          "scroll_pause": {
-            "type": "number",
-            "maximum": 10.0,
-            "minimum": 0.5,
-            "title": "Scroll Pause",
-            "default": 2.5
-          },
-          "wait_load": {
-            "type": "number",
-            "maximum": 30.0,
-            "minimum": 1.0,
-            "title": "Wait Load",
-            "default": 4.0
-          },
-          "expand_posts": {
-            "type": "boolean",
-            "title": "Expand Posts",
-            "default": true
-          },
-          "name": {
-            "type": "string",
-            "title": "Name",
-            "default": ""
+            "title": "Latest Extraction"
           }
         },
         "type": "object",
-        "title": "CrawlJobRequest"
+        "required": [
+          "total_items",
+          "by_platform",
+          "by_collection"
+        ],
+        "title": "ContentStatsOut"
       },
       "DeviceAccountOut": {
         "properties": {
@@ -6504,77 +8174,101 @@
         ],
         "title": "EndSessionRequest"
       },
-      "FbCrawlRequest": {
+      "ExportOut": {
         "properties": {
-          "group_id": {
+          "id": {
             "type": "string",
-            "title": "Group Id",
-            "description": "Facebook group numeric ID or slug (e.g. '123456789' or 'mygroupslug')",
-            "examples": [
-              "123456789"
-            ]
+            "title": "Id"
           },
-          "max_posts": {
-            "type": "integer",
-            "maximum": 500.0,
-            "minimum": 1.0,
-            "title": "Max Posts",
-            "description": "Stop when this many unique posts are collected",
-            "default": 50
-          },
-          "max_scrolls": {
-            "type": "integer",
-            "maximum": 200.0,
-            "minimum": 1.0,
-            "title": "Max Scrolls",
-            "description": "Hard scroll limit (safety cap to avoid infinite loop)",
-            "default": 30
-          },
-          "app": {
-            "type": "string",
-            "enum": [
-              "chrome",
-              "facebook",
-              "facebook_lite"
+          "collection": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ],
-            "title": "App",
-            "description": "App to use: 'chrome' (m.facebook.com) | 'facebook' (com.facebook.katana) | 'facebook_lite' (com.facebook.lite)",
-            "default": "chrome"
+            "title": "Collection"
           },
-          "scroll_pause": {
-            "type": "number",
-            "maximum": 10.0,
-            "minimum": 0.5,
-            "title": "Scroll Pause",
-            "description": "Seconds to wait after each scroll (for feed to load)",
-            "default": 2.5
+          "format": {
+            "type": "string",
+            "title": "Format"
           },
-          "wait_load": {
-            "type": "number",
-            "maximum": 30.0,
-            "minimum": 1.0,
-            "title": "Wait Load",
-            "description": "Seconds to wait after opening the group URL",
-            "default": 4.0
+          "status": {
+            "type": "string",
+            "title": "Status"
           },
-          "expand_posts": {
-            "type": "boolean",
-            "title": "Expand Posts",
-            "description": "Tap 'See more' buttons to get full post text",
-            "default": true
+          "item_count": {
+            "type": "integer",
+            "title": "Item Count"
           },
-          "save_screenshots": {
-            "type": "boolean",
-            "title": "Save Screenshots",
-            "description": "Include base64-encoded JPEG screenshots at each scroll in the result",
-            "default": false
+          "file_size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Size Bytes"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
           }
         },
         "type": "object",
         "required": [
-          "group_id"
+          "id",
+          "format",
+          "status",
+          "item_count",
+          "created_at"
         ],
-        "title": "FbCrawlRequest"
+        "title": "ExportOut"
+      },
+      "ExportRequest": {
+        "properties": {
+          "collection": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collection"
+          },
+          "format": {
+            "type": "string",
+            "title": "Format",
+            "default": "csv"
+          },
+          "filters": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Filters",
+            "default": {}
+          }
+        },
+        "type": "object",
+        "title": "ExportRequest"
       },
       "FleetRunRequest": {
         "properties": {
@@ -6670,6 +8364,36 @@
         "type": "object",
         "title": "HTTPValidationError"
       },
+      "HierarchyExtractBody": {
+        "properties": {
+          "filter_class": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filter Class"
+          },
+          "exclude_empty": {
+            "type": "boolean",
+            "title": "Exclude Empty",
+            "default": true
+          },
+          "format": {
+            "type": "string",
+            "title": "Format",
+            "default": "text"
+          }
+        },
+        "type": "object",
+        "title": "HierarchyExtractBody"
+      },
       "HitTestRequest": {
         "properties": {
           "x": {
@@ -6762,6 +8486,41 @@
           "y"
         ],
         "title": "LongTapRequest"
+      },
+      "OCRExtractBody": {
+        "properties": {
+          "language": {
+            "type": "string",
+            "title": "Language",
+            "default": "eng"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region"
+          },
+          "psm": {
+            "type": "integer",
+            "title": "Psm",
+            "default": 11
+          },
+          "scale_factor": {
+            "type": "number",
+            "title": "Scale Factor",
+            "default": 2.0
+          }
+        },
+        "type": "object",
+        "title": "OCRExtractBody"
       },
       "OpenUrlRequest": {
         "properties": {
@@ -6961,6 +8720,79 @@
           "device_ids"
         ],
         "title": "RoundRobinBody"
+      },
+      "SaveContentBody": {
+        "properties": {
+          "data": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Data"
+          },
+          "collection": {
+            "type": "string",
+            "title": "Collection",
+            "default": "default"
+          },
+          "platform": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform"
+          },
+          "content_type": {
+            "type": "string",
+            "title": "Content Type",
+            "default": "post"
+          },
+          "dedupe_field": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dedupe Field"
+          },
+          "tags": {
+            "type": "string",
+            "title": "Tags",
+            "default": ""
+          },
+          "device_serial": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Serial"
+          },
+          "campaign_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "SaveContentBody"
       },
       "ScenarioCreate": {
         "properties": {
@@ -7334,22 +9166,652 @@
         ],
         "title": "ScenarioUpdateBody"
       },
+      "ScheduleCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "default": ""
+          },
+          "target_type": {
+            "type": "string",
+            "pattern": "^(campaign|template|fleet)$",
+            "title": "Target Type"
+          },
+          "target_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Id"
+          },
+          "inline_steps": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inline Steps"
+          },
+          "inline_variables": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Inline Variables"
+          },
+          "device_group_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Group Id"
+          },
+          "filter_state": {
+            "type": "string",
+            "title": "Filter State",
+            "default": "READY"
+          },
+          "filter_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filter Model"
+          },
+          "max_devices": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Devices"
+          },
+          "cron_expression": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Cron Expression"
+          },
+          "timezone": {
+            "type": "string",
+            "title": "Timezone",
+            "default": "Asia/Ho_Chi_Minh"
+          },
+          "random_delay_min": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Random Delay Min",
+            "default": 0
+          },
+          "random_delay_max": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Random Delay Max",
+            "default": 0
+          },
+          "stagger_devices": {
+            "type": "boolean",
+            "title": "Stagger Devices",
+            "default": false
+          },
+          "stagger_interval_seconds": {
+            "type": "integer",
+            "maximum": 3600.0,
+            "minimum": 1.0,
+            "title": "Stagger Interval Seconds",
+            "default": 60
+          },
+          "is_enabled": {
+            "type": "boolean",
+            "title": "Is Enabled",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "target_type",
+          "cron_expression"
+        ],
+        "title": "ScheduleCreate"
+      },
+      "ScheduleOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "target_type": {
+            "type": "string",
+            "title": "Target Type"
+          },
+          "target_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Id"
+          },
+          "inline_steps": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inline Steps"
+          },
+          "inline_variables": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Inline Variables"
+          },
+          "device_group_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Group Id"
+          },
+          "filter_state": {
+            "type": "string",
+            "title": "Filter State"
+          },
+          "filter_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filter Model"
+          },
+          "max_devices": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Devices"
+          },
+          "cron_expression": {
+            "type": "string",
+            "title": "Cron Expression"
+          },
+          "timezone": {
+            "type": "string",
+            "title": "Timezone"
+          },
+          "random_delay_min": {
+            "type": "integer",
+            "title": "Random Delay Min"
+          },
+          "random_delay_max": {
+            "type": "integer",
+            "title": "Random Delay Max"
+          },
+          "stagger_devices": {
+            "type": "boolean",
+            "title": "Stagger Devices"
+          },
+          "stagger_interval_seconds": {
+            "type": "integer",
+            "title": "Stagger Interval Seconds"
+          },
+          "is_enabled": {
+            "type": "boolean",
+            "title": "Is Enabled"
+          },
+          "last_run_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Run At"
+          },
+          "next_run_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Run At"
+          },
+          "run_count": {
+            "type": "integer",
+            "title": "Run Count"
+          },
+          "user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "target_type",
+          "target_id",
+          "inline_steps",
+          "inline_variables",
+          "device_group_id",
+          "filter_state",
+          "filter_model",
+          "max_devices",
+          "cron_expression",
+          "timezone",
+          "random_delay_min",
+          "random_delay_max",
+          "stagger_devices",
+          "stagger_interval_seconds",
+          "is_enabled",
+          "last_run_at",
+          "next_run_at",
+          "run_count",
+          "user_id",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ScheduleOut"
+      },
+      "SchedulePatch": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "target_type": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(campaign|template|fleet)$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Type"
+          },
+          "target_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Id"
+          },
+          "inline_steps": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inline Steps"
+          },
+          "inline_variables": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inline Variables"
+          },
+          "device_group_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Group Id"
+          },
+          "filter_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filter State"
+          },
+          "filter_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filter Model"
+          },
+          "max_devices": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Devices"
+          },
+          "cron_expression": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cron Expression"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
+          },
+          "random_delay_min": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Random Delay Min"
+          },
+          "random_delay_max": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Random Delay Max"
+          },
+          "stagger_devices": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stagger Devices"
+          },
+          "stagger_interval_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 3600.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stagger Interval Seconds"
+          },
+          "is_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Enabled"
+          }
+        },
+        "type": "object",
+        "title": "SchedulePatch"
+      },
+      "ScheduleRunOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "schedule_id": {
+            "type": "string",
+            "title": "Schedule Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "devices_dispatched": {
+            "type": "integer",
+            "title": "Devices Dispatched"
+          },
+          "devices_succeeded": {
+            "type": "integer",
+            "title": "Devices Succeeded"
+          },
+          "devices_failed": {
+            "type": "integer",
+            "title": "Devices Failed"
+          },
+          "task_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Task Ids"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "schedule_id",
+          "status",
+          "started_at",
+          "finished_at",
+          "devices_dispatched",
+          "devices_succeeded",
+          "devices_failed",
+          "task_ids",
+          "error_message",
+          "created_at"
+        ],
+        "title": "ScheduleRunOut"
+      },
       "ScrcpyAttachRequest": {
         "properties": {
           "device_ip": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Device Ip"
           },
           "adb_port": {
             "type": "integer",
             "title": "Adb Port",
             "default": 5555
+          },
+          "enable_control": {
+            "type": "boolean",
+            "title": "Enable Control",
+            "default": true
           }
         },
         "type": "object",
-        "required": [
-          "device_ip"
-        ],
         "title": "ScrcpyAttachRequest"
       },
       "ScrollRequest": {
@@ -7405,6 +9867,32 @@
         ],
         "title": "SessionOut"
       },
+      "SetClipboardRequest": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "SetClipboardRequest"
+      },
+      "SetEnabledRequest": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "title": "SetEnabledRequest"
+      },
       "SetPrimaryBody": {
         "properties": {
           "account_id": {
@@ -7417,6 +9905,19 @@
           "account_id"
         ],
         "title": "SetPrimaryBody"
+      },
+      "SetRingerModeRequest": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "title": "Mode"
+          }
+        },
+        "type": "object",
+        "required": [
+          "mode"
+        ],
+        "title": "SetRingerModeRequest"
       },
       "StartSessionRequest": {
         "properties": {
@@ -7583,6 +10084,24 @@
           "refresh_token"
         ],
         "title": "TokenResponse"
+      },
+      "TriggerResponse": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "default": "Schedule triggered"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id"
+        ],
+        "title": "TriggerResponse"
       },
       "UpdateTagsBody": {
         "properties": {

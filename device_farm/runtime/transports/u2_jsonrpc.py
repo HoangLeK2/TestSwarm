@@ -407,7 +407,7 @@ class U2JsonRpcClient:
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int,
               duration: float = 0.5) -> None:
-        steps = max(1, int(duration * 20))  # ~20 steps/sec
+        steps = max(1, int(duration * 40))  # ~40 steps/sec — higher step rate = lower velocity at lift = no fling
         # Add duration to timeout so long swipes don't time out prematurely.
         t = self._touch_timeout + duration
         self._rpc("swipe", int(x1), int(y1), int(x2), int(y2), steps, _timeout=t)

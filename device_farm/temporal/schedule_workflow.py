@@ -55,6 +55,19 @@ _MEDIUM = timedelta(seconds=120)
 _LONG = timedelta(minutes=30)
 
 
+def _normalize_dispatch_result(raw: ScheduleDispatchResult | dict) -> ScheduleDispatchResult:
+    if isinstance(raw, ScheduleDispatchResult):
+        return raw
+    if isinstance(raw, dict):
+        return ScheduleDispatchResult(
+            run_id=str(raw.get("run_id", "")),
+            devices_dispatched=int(raw.get("devices_dispatched", 0) or 0),
+            task_ids=list(raw.get("task_ids", []) or []),
+            workflow_ids=list(raw.get("workflow_ids", []) or []),
+            error=raw.get("error"),
+        )
+    return ScheduleDispatchResult(run_id="", error=f"Invalid dispatch result type: {type(raw)!r}")
+
 
 @workflow.defn
 class ScheduleRunWorkflow:
@@ -98,13 +111,14 @@ class ScheduleRunWorkflow:
             if delay_seconds > 0:
                 await workflow.sleep(timedelta(seconds=delay_seconds))
 
-        dispatch_result: ScheduleDispatchResult = await workflow.execute_activity(
+        raw_dispatch_result: ScheduleDispatchResult | dict = await workflow.execute_activity(
             "dispatch_schedule",
             args=[schedule_config, run_id],
             start_to_close_timeout=_LONG,
             retry_policy=_DISPATCH_RETRY,
             heartbeat_timeout=timedelta(seconds=30),
         )
+        dispatch_result = _normalize_dispatch_result(raw_dispatch_result)
 
         await workflow.execute_activity(
             "finalize_schedule_run",

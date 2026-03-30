@@ -119,6 +119,9 @@ class ScrcpyControl:
             if not self._connected:
                 return
             self._inject_touch(ACTION_MOVE, cx, cy, PRESSURE_MAX)
+        # Hold still at end position before lifting — prevents Android from
+        # detecting residual velocity and triggering fling/inertia.
+        time.sleep(0.1)
         self._inject_touch(ACTION_UP, x2, y2, PRESSURE_NONE)
 
     def long_tap(self, x: int, y: int, duration_ms: int = 800) -> None:

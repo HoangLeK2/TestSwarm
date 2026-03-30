@@ -270,7 +270,7 @@ class ScheduleActivities:
         self,
         run_id: str,
         schedule_id: str,
-        dispatch_result: ScheduleDispatchResult,
+        dispatch_result: ScheduleDispatchResult | dict[str, Any],
         cron_expression: str,
         timezone_name: str,
     ) -> None:
@@ -285,7 +285,17 @@ class ScheduleActivities:
 
         activity.heartbeat("finalize_run")
         now = datetime.now(timezone.utc)
-        status = "failed" if dispatch_result.error else "completed"
+        if isinstance(dispatch_result, dict):
+            normalized = ScheduleDispatchResult(
+                run_id=str(dispatch_result.get("run_id", run_id)),
+                devices_dispatched=int(dispatch_result.get("devices_dispatched", 0) or 0),
+                task_ids=list(dispatch_result.get("task_ids", []) or []),
+                workflow_ids=list(dispatch_result.get("workflow_ids", []) or []),
+                error=dispatch_result.get("error"),
+            )
+        else:
+            normalized = dispatch_result
+        status = "failed" if normalized.error else "completed"
 
         async with AsyncSessionLocal() as db:
             await update_schedule_run(
@@ -293,9 +303,9 @@ class ScheduleActivities:
                 run_id,
                 status=status,
                 finished_at=now,
-                devices_dispatched=dispatch_result.devices_dispatched,
-                task_ids=dispatch_result.task_ids,
-                error_message=dispatch_result.error,
+                devices_dispatched=normalized.devices_dispatched,
+                task_ids=normalized.task_ids,
+                error_message=normalized.error,
             )
             next_run = _compute_next_run(cron_expression, timezone_name, now)
             await update_schedule_after_run(

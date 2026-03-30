@@ -90,6 +90,9 @@ class AdbDeviceBootstrap:
         self._u2_last_restart: float = 0.0
         self._u2_watchdog_interval: float = 30.0   # ping every N seconds
         self._u2_watchdog_max_fails: int = 2        # restart after N consecutive failures
+        # Exit backoff: exponential delay for rapid consecutive exits
+        self._u2_exit_count: int = 0               # consecutive exit count
+        self._u2_exit_last: float = 0.0            # monotonic time of last exit
 
         # Collected device metadata
         self._screen_width: int = 0
@@ -428,9 +431,16 @@ class AdbDeviceBootstrap:
         t.shell_safe(f"am force-stop {U2_SERVER_PKG}")
         time.sleep(0.5)
 
-        # Start u2 instrumentation in background
+        # Exclude u2 APKs from battery optimization so Android won't kill am instrument.
+        # Works on Doze-capable devices (Android 6+). Requires ADB shell privilege (shell user).
+        for pkg in (U2_SERVER_PKG, U2_SERVER_TEST_PKG):
+            t.shell_safe(f"dumpsys deviceidle whitelist +{pkg}", timeout=5.0)
+
+        # Start u2 instrumentation in background.
+        # -e timeout 0 disables the default 10-minute instrumentation time-out that
+        # causes am instrument to self-terminate and forces a restart loop.
         u2_cmd = (
-            f"am instrument -w "
+            f"am instrument -w -e timeout 0 "
             f"{U2_SERVER_TEST_PKG}/{U2_RUNNER}"
         )
         log.info(f"[{serial}] Starting uiautomator2-server: {u2_cmd}")
@@ -471,14 +481,33 @@ class AdbDeviceBootstrap:
         log.error(f"[{serial}] uiautomator2-server failed to start after retries")
 
     def _on_u2_exit(self, u2_transport: AdbTransport) -> None:
-        """Called when u2-server instrument exits (streaming shell closed)."""
+        """Called when u2-server instrument exits (streaming shell closed).
+
+        Uses exponential backoff to avoid rapid restart loops when am-instrument
+        exits immediately (e.g. due to memory pressure or a device-side crash):
+          exit 1 → wait 5s
+          exit 2 → wait 10s
+          exit 3 → wait 20s
+          exit 4+ → wait 40s (capped)
+        The counter resets if the process ran for ≥ 60s (healthy run).
+        """
         u2_transport.close()
         if not self._running:
             return
         serial = self._transport.serial
-        log.warning(f"[{serial}] u2-server exited — restarting in 5s")
+
+        now = time.monotonic()
+        # Reset counter if last exit was long ago (process was running healthily)
+        if now - self._u2_exit_last >= 60.0:
+            self._u2_exit_count = 0
+        self._u2_exit_count += 1
+        self._u2_exit_last = now
+
+        delay = min(5.0 * (2 ** (self._u2_exit_count - 1)), 40.0)  # 5, 10, 20, 40, 40, ...
+        log.warning(f"[{serial}] u2-server exited (#{self._u2_exit_count}) — restarting in {delay:.0f}s")
+
         self._u2_client = None
-        time.sleep(5.0)
+        time.sleep(delay)
         if self._running:
             # Reuse restart machinery so debounce + lock are respected
             self.restart_u2_server(debounce=0.0)

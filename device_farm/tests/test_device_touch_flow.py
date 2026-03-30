@@ -46,15 +46,12 @@ class TestTapFallbackFlow:
         assert msg["type"] == "shell"
         assert "input tap 100 200" in msg["cmd"]
 
-    def test_tap_falls_back_to_minitouch_when_no_agent(self):
+    def test_tap_logs_warning_when_no_u2_no_scrcpy_no_agent(self):
+        """Minitouch is disabled; tap logs a warning and returns without crash."""
         d = _make_device()
         d._u2 = None
         d._agent_send = None
-        mock_mt = MagicMock()
-        mock_mt.is_connected = True
-        d._minitouch = mock_mt
-        d.tap(100, 200)
-        mock_mt.tap.assert_called_once_with(100, 200)
+        d.tap(100, 200)  # must not raise
 
     def test_tap_logs_warning_when_no_method(self):
         d = _make_device()
@@ -81,15 +78,12 @@ class TestSwipeFallbackFlow:
         assert msg["type"] == "shell"
         assert "input swipe 10 20 30 40 500" in msg["cmd"]
 
-    def test_swipe_falls_back_to_minitouch(self):
+    def test_swipe_logs_warning_when_no_u2_no_scrcpy_no_agent(self):
+        """Minitouch is disabled; swipe logs a warning and returns without crash."""
         d = _make_device()
         d._u2 = None
         d._agent_send = None
-        mock_mt = MagicMock()
-        mock_mt.is_connected = True
-        d._minitouch = mock_mt
-        d.swipe(0, 0, 100, 200, duration_ms=300)
-        mock_mt.swipe.assert_called_once()
+        d.swipe(0, 0, 100, 200, duration_ms=300)  # must not raise
 
 
 class TestLongTapFallbackFlow:

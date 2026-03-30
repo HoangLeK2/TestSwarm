@@ -10,8 +10,14 @@ import json
 import threading
 import time
 import unittest
-import xml.etree.ElementTree as ET
 from unittest.mock import MagicMock, Mock, call, patch
+
+from runtime.xml_utils import XML_PARSE_ERRORS, parse_xml
+
+try:
+    from lxml import etree as _ET
+except ImportError:
+    import xml.etree.ElementTree as _ET
 
 from runtime.transports.u2_jsonrpc import (
     U2JsonRpcClient,
@@ -141,7 +147,7 @@ class TestWatcherBuilder(unittest.TestCase):
 class TestWatcherNodeMatches(unittest.TestCase):
 
     def _node(self, **attrs):
-        el = ET.Element("node")
+        el = _ET.Element("node")
         for k, v in attrs.items():
             el.set(k, v)
         return el
@@ -186,7 +192,7 @@ class TestWatcherNodeMatches(unittest.TestCase):
         self.assertFalse(_WatcherContext._node_matches(node, "unknown_by", "something"))
 
     def test_missing_attribute_returns_false(self):
-        node = ET.Element("node")  # no attributes
+        node = _ET.Element("node")  # no attributes
         self.assertFalse(_WatcherContext._node_matches(node, "text", "anything"))
 
 
@@ -197,22 +203,22 @@ class TestWatcherNodeMatches(unittest.TestCase):
 class TestWatcherBoundsFromNode(unittest.TestCase):
 
     def test_valid_bounds(self):
-        node = ET.Element("node")
+        node = _ET.Element("node")
         node.set("bounds", "[10,20][110,70]")
         b = _WatcherContext._bounds_from_node(node)
         self.assertEqual(b, {"left": 10, "top": 20, "right": 110, "bottom": 70})
 
     def test_missing_bounds_returns_none(self):
-        node = ET.Element("node")
+        node = _ET.Element("node")
         self.assertIsNone(_WatcherContext._bounds_from_node(node))
 
     def test_malformed_bounds_returns_none(self):
-        node = ET.Element("node")
+        node = _ET.Element("node")
         node.set("bounds", "invalid")
         self.assertIsNone(_WatcherContext._bounds_from_node(node))
 
     def test_negative_bounds(self):
-        node = ET.Element("node")
+        node = _ET.Element("node")
         node.set("bounds", "[-10,-20][100,50]")
         b = _WatcherContext._bounds_from_node(node)
         self.assertEqual(b["left"], -10)
@@ -231,7 +237,7 @@ class TestWatcherFire(unittest.TestCase):
 
     def test_check_and_fire_click(self):
         """Watcher fires click at center of matched node bounds."""
-        root = ET.fromstring(SIMPLE_XML)
+        root = parse_xml(SIMPLE_XML)
         entry = _WatcherEntry("w", "text", "Home")
         entry.click()
         self.client.click = Mock()
@@ -239,7 +245,7 @@ class TestWatcherFire(unittest.TestCase):
         self.client.click.assert_called_once_with(50, 25)  # center of [0,0][100,50]
 
     def test_check_and_fire_press(self):
-        root = ET.fromstring(SIMPLE_XML)
+        root = parse_xml(SIMPLE_XML)
         entry = _WatcherEntry("w", "text", "Home")
         entry.press("back")
         self.client.press = Mock()
@@ -248,7 +254,7 @@ class TestWatcherFire(unittest.TestCase):
 
     def test_check_and_fire_no_match(self):
         """No match → neither click nor press called."""
-        root = ET.fromstring(SIMPLE_XML)
+        root = parse_xml(SIMPLE_XML)
         entry = _WatcherEntry("w", "text", "NonExistent")
         entry.click()
         self.client.click = Mock()
@@ -283,14 +289,14 @@ class TestWatcherFire(unittest.TestCase):
         self.ctx._run_once()
 
     def test_find_node_xpath(self):
-        root = ET.fromstring(SIMPLE_XML)
+        root = parse_xml(SIMPLE_XML)
         entry = _WatcherEntry("w", "xpath", '//*[@text="Home"]')
         node = self.ctx._find_node(root, entry)
         self.assertIsNotNone(node)
         self.assertEqual(node.get("text"), "Home")
 
     def test_find_node_xpath_no_match(self):
-        root = ET.fromstring(SIMPLE_XML)
+        root = parse_xml(SIMPLE_XML)
         entry = _WatcherEntry("w", "xpath", '//*[@text="Missing"]')
         self.assertIsNone(self.ctx._find_node(root, entry))
 

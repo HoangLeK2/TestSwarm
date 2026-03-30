@@ -6,8 +6,9 @@ import logging
 import re
 import threading
 import time
-import xml.etree.ElementTree as ET
 from typing import Any, Callable, Dict, Iterator, Optional
+
+from runtime.xml_utils import XML_PARSE_ERRORS, parse_xml
 
 import requests
 
@@ -166,7 +167,7 @@ class _WatcherContext:
         if not xml_str:
             return
         try:
-            root = ET.fromstring(xml_str)
+            root = parse_xml(xml_str)
         except Exception:
             return
         for entry in list(self._entries.values()):
@@ -177,7 +178,7 @@ class _WatcherContext:
             except Exception as exc:
                 logger.debug("watcher %r fire error: %s", entry.name, exc)
 
-    def _check_and_fire(self, root: ET.Element, entry: _WatcherEntry) -> None:
+    def _check_and_fire(self, root: Any, entry: _WatcherEntry) -> None:
         node = self._find_node(root, entry)
         if node is None:
             return
@@ -192,7 +193,7 @@ class _WatcherContext:
         elif action[0] == "press":
             self._client.press(action[1])
 
-    def _find_node(self, root: ET.Element, entry: _WatcherEntry) -> Optional[ET.Element]:
+    def _find_node(self, root: Any, entry: _WatcherEntry) -> Optional[Any]:
         """Find the first XML node matching entry's condition."""
         if entry.by == "xpath":
             query = U2JsonRpcClient._normalize_et_xpath(entry.value)
@@ -207,7 +208,7 @@ class _WatcherContext:
         return None
 
     @staticmethod
-    def _node_matches(node: ET.Element, by: str, value: str) -> bool:
+    def _node_matches(node: Any, by: str, value: str) -> bool:
         """Match an XML node against a by/value condition.
 
         Uses XML attribute names (resource-id, content-desc, class),
@@ -230,7 +231,7 @@ class _WatcherContext:
         return False
 
     @staticmethod
-    def _bounds_from_node(node: ET.Element) -> Optional[Dict[str, int]]:
+    def _bounds_from_node(node: Any) -> Optional[Dict[str, int]]:
         bounds_str = node.get("bounds", "")
         nums = [int(n) for n in re.findall(r"-?\d+", bounds_str)]
         if len(nums) == 4:
@@ -339,11 +340,17 @@ class U2JsonRpcClient:
 
     # ── Connection ────────────────────────────────────────────────────────────
 
-    def verify(self) -> Dict[str, Any]:
+    def verify(self, timeout: Optional[float] = None) -> Dict[str, Any]:
         """Check connectivity via a single JSON-RPC deviceInfo call (one TCP connection).
         Avoids the GET /ping + separate deviceInfo two-request pattern which causes
-        two TCP reconnects on the device side (NanoHTTPD closes after each response)."""
-        info = self._rpc("deviceInfo")  # single request — /ping would need a second RPC
+        two TCP reconnects on the device side (NanoHTTPD closes after each response).
+
+        timeout: override the HTTP read timeout for this call only.  Pass a short
+        value (e.g. 8.0) when probing during reconnect so a dead server fails fast
+        instead of blocking for the full wait_timeout (default 20 s).
+        """
+        kw: Dict[str, Any] = {"_timeout": timeout} if timeout is not None else {}
+        info = self._rpc("deviceInfo", **kw)
         if not isinstance(info, dict) or "currentPackageName" not in info:
             raise RuntimeError(f"deviceInfo unexpected: {info!r}")
         logger.debug("U2JsonRpcClient connected: %s", info)
@@ -556,7 +563,7 @@ class U2JsonRpcClient:
             try:
                 xml = self.page_source(timeout=self._timeout)
                 if xml:
-                    root = ET.fromstring(xml)
+                    root = parse_xml(xml)
                     if root.findall(xpath_query):
                         return f"xpath::{xpath_expr}"
             except Exception as exc:
@@ -627,7 +634,7 @@ class U2JsonRpcClient:
             xml = self.page_source(timeout=self._timeout)
             if not xml:
                 return None
-            root = ET.fromstring(xml)
+            root = parse_xml(xml)
             matches = root.findall(xpath_query)
             if not matches:
                 return None
@@ -680,22 +687,29 @@ class U2JsonRpcClient:
         except Exception:
             return ""
 
-    def page_source(self, timeout: Optional[float] = None) -> str:
+    def page_source(self, timeout: Optional[float] = None,
+                    compressed: bool = False) -> str:
         """
-        Dump UI hierarchy XML via JSON-RPC dumpWindowHierarchy(False, 50).
+        Dump UI hierarchy XML via JSON-RPC dumpWindowHierarchy(compressed, 50).
 
-        Retries up to 3 times with 300ms delay when hierarchy is empty or contains
-        only '<hierarchy rotation="0" />' (accessibility service not ready yet).
+        compressed=True  → server skips redundant layout nodes (faster, smaller XML).
+        compressed=False → full hierarchy (default, compatible with all devices).
+
+        Retries up to 3 times with 300ms delay when hierarchy is empty or the
+        root has no children (accessibility service not ready yet).
         This mirrors the real uiautomator2 library behaviour.
         """
         t = timeout if timeout is not None else 60.0
-        _empty_patterns = ('<hierarchy rotation="0" />', "<hierarchy />", "")
         for attempt in range(3):
             try:
-                xml = str(self._rpc("dumpWindowHierarchy", False, 50, _timeout=t) or "")
-                # Non-empty hierarchy that isn't a stub rotation placeholder
-                if xml and not any(xml.strip() == p for p in _empty_patterns):
-                    return xml
+                xml = str(self._rpc("dumpWindowHierarchy", compressed, 50, _timeout=t) or "")
+                if xml:
+                    try:
+                        root = parse_xml(xml)
+                        if list(root):  # has at least one child node
+                            return xml
+                    except Exception:
+                        pass  # invalid XML — treat as empty, retry
                 logger.debug(
                     "dumpWindowHierarchy empty/stub (attempt %d/3): %r",
                     attempt + 1, xml[:80] if xml else ""

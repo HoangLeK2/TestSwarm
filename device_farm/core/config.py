@@ -14,8 +14,11 @@ import yaml
 class WebConfig:
     host: str = "0.0.0.0"
     port: int = 8080
-    ws_ping_interval: float = 30.0   # seconds between server pings
-    ws_ping_timeout: float = 60.0   # seconds to wait for pong before closing
+    # Disable uvicorn WS ping: concurrent ping + frame drains cause
+    # "assert waiter is None or waiter.cancelled()" in websockets legacy.
+    # App-level heartbeat (ws.py:heartbeat every 5s) keeps connections alive.
+    ws_ping_interval: Optional[float] = None
+    ws_ping_timeout: Optional[float] = None
 
 
 @dataclass
@@ -214,8 +217,8 @@ def load_config(path: str = "config.yaml") -> Config:
         web=WebConfig(
             host=_get(web_raw, "host", "0.0.0.0"),
             port=_get(web_raw, "port", 8080),
-            ws_ping_interval=float(_get(web_raw, "ws_ping_interval", 30.0)),
-            ws_ping_timeout=float(_get(web_raw, "ws_ping_timeout", 60.0)),
+            ws_ping_interval=None,  # disabled: concurrent drain assertion in websockets legacy
+            ws_ping_timeout=None,
         ),
         ports=PortsConfig(
             base_port=_get(ports_raw, "base_port", 20000),

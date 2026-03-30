@@ -36,6 +36,7 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import re
 import xml.etree.ElementTree as ET
+from runtime.xml_utils import parse_xml, XML_PARSE_ERRORS
 
 from core.config import Config
 from runtime.transports.adb_device_bootstrap import AdbDeviceBootstrap
@@ -151,6 +152,8 @@ class DeviceClient:
 
         # Reconnect tracking
         self.reconnect_attempts: int = 0
+        self._u2_reconnect_failed_at: float = 0.0  # monotonic time of last full-cycle failure
+        self._u2_last_ok_at: float = 0.0           # monotonic time of last confirmed-live ping
         # Periodic screenshot timer state
         self._periodic_ss_started: bool = False
         # Agent-reported capabilities (e.g. ["u2","stfservice","h264","minitouch"])
@@ -206,6 +209,13 @@ class DeviceClient:
         """
         self._ws_hierarchy_a11y_available = True  # retry a11y on each new connection
         self._agent_send = send
+        # Reset so on_agent_ready() treats the incoming tunnels_ready as is_initial=True.
+        # Required for the reconnect-race case: when on_agent_disconnected() is a no-op
+        # (stale-sender guard), _tunnels_ready_channels stays populated from the old session.
+        self._tunnels_ready_channels = set()
+        # Discard stale u2 client — its tunnel port is dead after agent reconnect.
+        with self._u2_lock:
+            self._u2 = None
         tunnels = TunnelSet(send, self.serial)
         ports   = tunnels.start_all()
         self._tunnels      = tunnels
@@ -257,7 +267,17 @@ class DeviceClient:
                 name=f"u2-retry-{self.serial}",
             ).start()
 
-    def on_agent_disconnected(self) -> None:
+    def on_agent_disconnected(self, sender: Optional[Callable] = None) -> None:
+        """Called when the agent WebSocket disconnects.
+
+        sender: the _send callable that was active for this session.  When a
+        reconnect races ahead of the old session's finally-block, _agent_send
+        will already point to the NEW session's sender.  In that case we must
+        NOT tear down the new session — just return silently.
+        """
+        if sender is not None and self._agent_send is not sender:
+            # New session has already replaced this one — stale disconnect, skip teardown.
+            return
         self._agent_send = None
         self._tunnels_ready_channels = set()
         self._teardown_tools()
@@ -566,9 +586,17 @@ class DeviceClient:
                     break
         if not self.ensure_u2_healthy() or self._u2 is None:
             return False
-        # Serialize with all u2 operations (NanoHTTPD is single-threaded)
-        with self._u2_request_lock:
+        # Serialize with all u2 operations (NanoHTTPD is single-threaded).
+        # 5 s timeout: if a prior request is frozen, fall back to agent_shell immediately
+        # rather than letting touch events queue up behind a stuck HTTP call.
+        acquired = self._u2_request_lock.acquire(timeout=5.0)
+        if not acquired:
+            self._log("u2_request_lock timeout — falling back to agent_shell", level=logging.DEBUG)
+            return False
+        try:
             return self._try_u2_tap_impl(action)
+        finally:
+            self._u2_request_lock.release()
 
     def _try_u2_tap_impl(self, action: "Callable[[], None]") -> bool:
         u2_snap = self._u2
@@ -608,25 +636,53 @@ class DeviceClient:
                 return ctrl
         return None
 
+    # Android 14 (SDK 34) tightened INJECT_EVENTS: `input tap/swipe` via shell now requires
+    # the system-only INJECT_EVENTS permission.  Using shell input on SDK ≥ 34 produces a
+    # SecurityException that corrupts the task log.  Skip it entirely; U2 and scrcpy both
+    # work without this permission.
+    _SHELL_INPUT_MAX_SDK = 33
+
+    def _shell_input_ok(self) -> bool:
+        """Return True when `input tap/swipe` via adb shell is safe to use."""
+        return (
+            self._agent_send is not None
+            and (self.sdk_version == 0 or self.sdk_version <= self._SHELL_INPUT_MAX_SDK)
+        )
+
     def tap(self, x: int, y: int) -> None:
         """
-        Touch priority: U2 → Agent shell (a11y fallback)
-        When U2 is down, agent `input tap` provides immediate fallback.
-        U2 keepalive loop will reconnect U2 in background.
+        Touch priority: U2 → scrcpy control → agent shell (SDK ≤ 33 only)
+
+        Android 14+ (SDK 34+) blocks `input tap` with a SecurityException
+        (INJECT_EVENTS required).  scrcpy uses kernel-level injection and works
+        on all SDK versions regardless.
         """
         if self._try_u2_tap(lambda: self._u2.click(x, y) if self._u2 else None):
             return
-        # Fallback: agent shell `input tap` (works without U2, uses a11y/InputManager)
-        if self._agent_send is not None:
+        ctrl = self._get_scrcpy_control()
+        if ctrl is not None:
+            try:
+                ctrl.tap(x, y)
+                return
+            except Exception as exc:
+                self._log(f"tap via scrcpy failed: {exc}", level=logging.WARNING)
+        if self._shell_input_ok():
             self._send_to_agent({"type": "shell", "cmd": f"input tap {int(x)} {int(y)}"})
             return
-        self._log(f"tap skipped (no touch method)", level=logging.WARNING)
+        self._log("tap skipped (no touch method)", level=logging.WARNING)
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300) -> None:
-        """Touch priority: U2 → Agent shell"""
+        """Touch priority: U2 → scrcpy control → agent shell (SDK ≤ 33 only)"""
         if self._try_u2_tap(lambda: self._u2.swipe(x1, y1, x2, y2, duration=duration_ms / 1000.0) if self._u2 else None):
             return
-        if self._agent_send is not None:
+        ctrl = self._get_scrcpy_control()
+        if ctrl is not None:
+            try:
+                ctrl.swipe(x1, y1, x2, y2, duration_ms=duration_ms)
+                return
+            except Exception as exc:
+                self._log(f"swipe via scrcpy failed: {exc}", level=logging.WARNING)
+        if self._shell_input_ok():
             self._send_to_agent({
                 "type": "shell",
                 "cmd": f"input swipe {int(x1)} {int(y1)} {int(x2)} {int(y2)} {int(duration_ms)}",
@@ -635,10 +691,17 @@ class DeviceClient:
         self._log("swipe skipped (no touch method available)", level=logging.WARNING)
 
     def long_tap(self, x: int, y: int, duration_ms: int = 800) -> None:
-        """Touch priority: U2 → Agent shell (swipe with 0 distance = long press)"""
+        """Touch priority: U2 → scrcpy control → agent shell (SDK ≤ 33 only)"""
         if self._try_u2_tap(lambda: self._u2.long_click(x, y, duration=duration_ms / 1000.0) if self._u2 else None):
             return
-        if self._agent_send is not None:
+        ctrl = self._get_scrcpy_control()
+        if ctrl is not None:
+            try:
+                ctrl.long_tap(x, y, duration_ms=duration_ms)
+                return
+            except Exception as exc:
+                self._log(f"long_tap via scrcpy failed: {exc}", level=logging.WARNING)
+        if self._shell_input_ok():
             self._send_to_agent({
                 "type": "shell",
                 "cmd": f"input swipe {int(x)} {int(y)} {int(x)} {int(y)} {int(duration_ms)}",
@@ -934,7 +997,7 @@ class DeviceClient:
         self._ws_hierarchy_xml = None
         self._ws_hierarchy_error = None
         self._ws_hierarchy_event.clear()
-        self._log(f"hierarchy_via_ws: sending dump_hierarchy (agent_send={'SET' if self._agent_send else 'NULL'})")
+        self._log(f"hierarchy_via_ws: sending dump_hierarchy (agent_send={'SET' if self._agent_send else 'NULL'})", level=logging.DEBUG)
         self._send_to_agent({"type": "dump_hierarchy"})
         if not self._ws_hierarchy_event.wait(timeout=timeout):
             self._log("hierarchy_via_ws: timeout (5s)", level=logging.WARNING)
@@ -944,7 +1007,7 @@ class DeviceClient:
             return None
         xml = self._ws_hierarchy_xml
         if xml:
-            self._log(f"hierarchy_via_ws: OK ({len(xml)} bytes)")
+            self._log(f"hierarchy_via_ws: OK ({len(xml)} bytes)", level=logging.DEBUG)
         else:
             self._log("hierarchy_via_ws: agent returned null xml", level=logging.WARNING)
         return xml
@@ -973,7 +1036,7 @@ class DeviceClient:
             if self._agent_send is not None and self._ws_hierarchy_a11y_available:
                 xml = self._hierarchy_via_ws(timeout=5.0)
                 if xml and not self._is_empty_hierarchy(xml):
-                    self._log(f"hierarchy: WS direct OK ({len(xml)} bytes)")
+                    self._log(f"hierarchy: WS direct OK ({len(xml)} bytes)", level=logging.DEBUG)
                     self._hierarchy_cache = (now, xml)
                     return xml
                 # a11y returned error/empty — stop trying until next reconnect
@@ -989,16 +1052,36 @@ class DeviceClient:
         return t in ("<hierarchy />", "<?xml version=\"1.0\" encoding=\"UTF-8\"?><hierarchy />") or t.endswith("<hierarchy />")
 
     def _hierarchy_xml_via_u2(self, now: float) -> Optional[str]:
-        """Fallback: hierarchy via u2 tunnel."""
-        with self._u2_request_lock:
+        """Fallback: hierarchy via u2 tunnel.
+
+        Uses a 2 s acquire timeout so that an in-flight touch operation is never
+        blocked by a slower hierarchy dump, and vice-versa (NanoHTTPD is single-threaded).
+        Returns None immediately when the lock cannot be acquired; the caller falls
+        back to the a11y path or the cached hierarchy.
+        """
+        acquired = self._u2_request_lock.acquire(timeout=2.0)
+        if not acquired:
+            return None
+        try:
             return self._hierarchy_xml_u2_impl(now)
+        finally:
+            self._u2_request_lock.release()
+
+    # Hierarchy dump via u2: use compressed layout (skip invisible nodes).
+    # compressed=True cuts dump time from 3-10 s to 1-3 s on complex Samsung screens
+    # because dumpWindowHierarchy skips off-screen/invisible view sub-trees.
+    _U2_HIERARCHY_COMPRESSED = True
+    _U2_HIERARCHY_TIMEOUT    = 6.0   # seconds; fail fast rather than blocking 10 s
 
     def _hierarchy_xml_u2_impl(self, now: float) -> Optional[str]:
         if not self.ensure_u2_healthy() or self._u2 is None:
             return None
         u2_snap = self._u2
         try:
-            xml = u2_snap.page_source(timeout=10.0)
+            xml = u2_snap.page_source(
+                timeout=self._U2_HIERARCHY_TIMEOUT,
+                compressed=self._U2_HIERARCHY_COMPRESSED,
+            )
             if self._is_empty_hierarchy(xml or ""):
                 return None  # Don't cache; UI can show "enable Accessibility" etc.
             self._hierarchy_cache = (now, xml)
@@ -1008,17 +1091,10 @@ class DeviceClient:
         with self._u2_lock:
             if self._u2 is u2_snap:
                 self._u2 = None
-        if not self._reconnect_u2() or self._u2 is None:
-            return None
-        try:
-            xml = self._u2.page_source(timeout=10.0)
-            if self._is_empty_hierarchy(xml or ""):
-                return None
-            self._hierarchy_cache = (now, xml)
-            return xml
-        except Exception as exc:
-            self._log(f"hierarchy_xml retry failed: {exc}", level=logging.WARNING)
-            self._u2 = None
+        # On timeout/error: do NOT reconnect here.  A slow dumpWindowHierarchy does
+        # not mean the server is dead (it might just be a complex screen).  Reconnecting
+        # would restart am-instrument unnecessarily and cause a ~5 s outage for touches.
+        # The keepalive loop will detect a truly dead server within _MAX_MISSES ticks.
         return None
 
     def hierarchy_invalidate_cache(self) -> None:
@@ -1054,8 +1130,8 @@ class DeviceClient:
         BOUNDS_RE = _re.compile(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]")
 
         try:
-            root = ET.fromstring(xml)
-        except ET.ParseError:
+            root = parse_xml(xml)
+        except XML_PARSE_ERRORS:
             return None
 
         for node in root.iter():
@@ -1304,9 +1380,16 @@ class DeviceClient:
         if not self.ensure_u2_healthy() or self._u2 is None:
             self._log("tap_selector skipped (U2 not available)", level=logging.WARNING)
             return
-        # Serialize with all u2 operations (NanoHTTPD is single-threaded)
-        with self._u2_request_lock:
+        # Serialize with all u2 operations (NanoHTTPD is single-threaded).
+        # 5 s timeout prevents blocking indefinitely when u2 is frozen.
+        acquired = self._u2_request_lock.acquire(timeout=5.0)
+        if not acquired:
+            self._log("tap_selector: lock timeout — u2 busy", level=logging.WARNING)
+            return
+        try:
             self._tap_selector_impl(by, value)
+        finally:
+            self._u2_request_lock.release()
 
     def _tap_selector_impl(self, by: str, value: str) -> None:
         u2_snap = self._u2
@@ -1353,18 +1436,36 @@ class DeviceClient:
         return self._u2
 
     # Quick health‑check + lazy reconnect for U2 tunnel
+    _U2_STALE_CHECK_INTERVAL = 10.0  # seconds between lazy pings in WS mode
+
     def ensure_u2_healthy(self, ping_timeout: float = 3.0) -> bool:
         if self.is_adb_mode:
             return self._ensure_u2_healthy_adb(ping_timeout)
 
-        ports = self._tunnel_ports or {}
-        if "u2" not in ports or "u2" not in self._tunnels_ready_channels:
-            return False
+        u2 = self._u2
+        if u2 is None:
+            ports = self._tunnel_ports or {}
+            if "u2" not in ports or "u2" not in self._tunnels_ready_channels:
+                return False
+            return self._reconnect_u2()
 
-        if self._u2 is not None:
-            return True  # Trust existing connection; reconnect on failure below
+        # Lazy ping: every _U2_STALE_CHECK_INTERVAL seconds, verify the u2 server is
+        # still alive.  Without this, a crashed am-instrument process stays undetected
+        # until the next HTTP request times out (up to 15 s), stalling touch events.
+        now = time.monotonic()
+        if now - self._u2_last_ok_at > self._U2_STALE_CHECK_INTERVAL:
+            if not u2.ping(timeout=min(ping_timeout, 1.5)):
+                self._log("u2 stale-ping failed — server likely crashed", level=logging.WARNING)
+                with self._u2_lock:
+                    if self._u2 is u2:
+                        self._u2 = None
+                if self._agent_send is not None:
+                    self._send_to_agent({"type": "start_services", "services": ["u2"]})
+                    time.sleep(0.5)
+                return self._reconnect_u2()
+            self._u2_last_ok_at = now
 
-        return self._reconnect_u2()
+        return True
 
     def _ensure_u2_healthy_adb(self, ping_timeout: float = 3.0) -> bool:
         """
@@ -1426,7 +1527,9 @@ class DeviceClient:
         return False
 
     _U2_RECONNECT_ATTEMPTS = 10
-    _U2_RECONNECT_DELAY = 1.0  # Increased: u2 server restart can take 2-5s
+    _U2_RECONNECT_DELAY = 1.5   # u2 server restart typically takes 2-5 s
+    _U2_RECONNECT_PROBE_TIMEOUT = 6.0   # short verify() timeout per attempt (not full wait_timeout)
+    _U2_RECONNECT_BACKOFF = 30.0  # seconds before re-attempting after a full failed cycle
 
     def _reconnect_u2(self) -> bool:
         """Connect (or reconnect) the u2 client. Tries JSON-RPC first, then WebDriver.
@@ -1457,7 +1560,9 @@ class DeviceClient:
             d_rpc.implicitly_wait(cfg.implicitly_wait)
             d_rpc.settings["wait_timeout"] = cfg.wait_timeout
             try:
-                d_rpc.verify()
+                # Use a short probe timeout so a dead/restarting server fails fast
+                # instead of blocking for the full wait_timeout (20 s) × 10 attempts.
+                d_rpc.verify(timeout=self._U2_RECONNECT_PROBE_TIMEOUT)
                 with self._u2_lock:
                     self._u2 = d_rpc
                 self._log(f"uiautomator2 JSON-RPC connected on port {port}")
@@ -1470,6 +1575,7 @@ class DeviceClient:
                 )
 
         self._u2 = None
+        self._u2_reconnect_failed_at = time.monotonic()
         return False
 
     # ── Frame / Status Broadcasting ───────────────────────────────────────────
@@ -1661,12 +1767,16 @@ class DeviceClient:
         The uiautomator2 server (port 9008) closes the TCP connection after each
         HTTP response. The Android ServiceTunnel auto-reconnects within ~50ms.
         During that reconnect window, a ping here would fail. We tolerate up to
-        2 consecutive misses before declaring u2 dead, so transient reconnects
+        4 consecutive misses before declaring u2 dead, so transient reconnects
         don't cascade into a full u2 teardown.
+
+        When u2 is None:
+          - Respects a 30s backoff after a full failed reconnect cycle.
+          - In WS mode: sends start_services to ask agent to (re)start u2 on device.
         """
         _INTERVAL = max(3.0, float(os.environ.get("U2_KEEPALIVE_INTERVAL", "5.0")))
         _PING_TIMEOUT = 4.0
-        _MAX_MISSES = 4  # tolerate more misses (20s window at 5s interval)
+        _MAX_MISSES = 2  # detect crash within ~10 s (at 5 s keepalive interval)
         misses = 0
 
         def _is_alive() -> bool:
@@ -1686,9 +1796,29 @@ class DeviceClient:
             with self._u2_lock:
                 u2 = self._u2
             if u2 is None:
-                # Proactively try to reconnect instead of waiting for next operation
                 if self.state == DeviceState.READY:
-                    self._reconnect_u2()
+                    now = time.monotonic()
+                    since_fail = now - self._u2_reconnect_failed_at
+                    if since_fail < self._U2_RECONNECT_BACKOFF:
+                        # Back off: avoid hammering u2 reconnect every 5s after a
+                        # full failed cycle.  The agent may need time to restart
+                        # the am-instrument process on device.
+                        self._log(
+                            f"u2 keepalive: backoff {self._U2_RECONNECT_BACKOFF - since_fail:.0f}s remaining",
+                            level=logging.DEBUG,
+                        )
+                    else:
+                        # In WS mode: ask agent to (re)start u2 on device before
+                        # trying to reconnect the tunnel.  This covers the case
+                        # where the am-instrument process has died and the agent
+                        # needs to relaunch it.
+                        if not self.is_adb_mode and self._agent_send is not None:
+                            self._send_to_agent({"type": "start_services", "services": ["u2"]})
+                            self._log("u2 keepalive: sent start_services(u2) to agent", level=logging.DEBUG)
+                        # Use ensure_u2_healthy so the channel-readiness check is
+                        # respected; also avoids a direct call that bypasses the
+                        # _tunnels_ready_channels guard.
+                        self.ensure_u2_healthy()
                 misses = 0
                 continue
 
@@ -1700,6 +1830,7 @@ class DeviceClient:
 
             if ok:
                 misses = 0
+                self._u2_last_ok_at = time.monotonic()
             else:
                 misses += 1
                 if misses < _MAX_MISSES:
@@ -1712,8 +1843,13 @@ class DeviceClient:
                         if self._u2 is u2:
                             self._u2 = None
                     misses = 0
-                    # Proactively reconnect instead of waiting for next operation
-                    self._reconnect_u2()
+                    # In WS mode: tell agent to restart u2 on device before reconnecting
+                    if not self.is_adb_mode and self._agent_send is not None:
+                        self._send_to_agent({"type": "start_services", "services": ["u2"]})
+                        self._log("u2 keepalive: sent start_services(u2) after dead ping", level=logging.DEBUG)
+                        # Give agent a moment to restart u2 before we try to reconnect
+                        time.sleep(3.0)
+                    self.ensure_u2_healthy()
 
     def _teardown_tools(self) -> None:
         if self._stf_service:

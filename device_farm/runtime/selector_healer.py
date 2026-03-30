@@ -32,6 +32,8 @@ import re
 import xml.etree.ElementTree as ET
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
+from runtime.xml_utils import parse_xml, XML_PARSE_ERRORS
+
 if TYPE_CHECKING:
     from runtime.core.device_client import DeviceClient
 
@@ -140,8 +142,8 @@ def try_heal_selector(
         return None
 
     try:
-        root = ET.fromstring(xml)
-    except ET.ParseError:
+        root = parse_xml(xml)
+    except XML_PARSE_ERRORS:
         return None
 
     best_selector: Optional[Dict[str, str]] = None
@@ -271,8 +273,8 @@ def try_heal_proactive(
         return None
 
     try:
-        root = ET.fromstring(xml)
-    except ET.ParseError:
+        root = parse_xml(xml)
+    except XML_PARSE_ERRORS:
         return None
 
     px = int(fallback_rx * screen_w)

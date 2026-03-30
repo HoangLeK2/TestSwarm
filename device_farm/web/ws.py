@@ -336,6 +336,7 @@ class DeviceAgentSession:
         log.info("[DEVICE-WS] Connection accepted from %s", client_addr)
         serial: Optional[str] = None
         db_session_id: Optional[str] = None
+        _send = None  # set once the _send closure is created; used in finally for stale-reconnect guard
 
         pair_id = ws.query_params.get("pair")
         key = ws.query_params.get("key")
@@ -714,7 +715,9 @@ class DeviceAgentSession:
             if serial:
                 device = self._manager.get_device(serial)
                 if device:
-                    device.on_agent_disconnected()
+                    # Pass our _send so on_agent_disconnected() can detect when a
+                    # faster reconnect has already replaced this session and skip teardown.
+                    device.on_agent_disconnected(sender=_send)
                 async with self._lock:
                     self._sessions.pop(serial, None)
             if db_session_id:

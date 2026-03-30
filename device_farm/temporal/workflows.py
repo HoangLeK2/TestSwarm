@@ -18,6 +18,7 @@ Security:
 
 from __future__ import annotations
 
+import asyncio
 import re as _re
 from datetime import timedelta
 from typing import Any
@@ -108,7 +109,6 @@ class ScenarioWorkflow:
                 success=False, steps_executed=0,
                 failed_message="Cancelled before start",
             )
-
         try:
             result = await workflow.execute_child_workflow(
                 ScenarioStepsWorkflow.run,
@@ -140,7 +140,7 @@ class ScenarioWorkflow:
             )
             return result
 
-        except workflow.CancelledException:
+        except asyncio.CancelledError:
             # Native Temporal cancel (handle.cancel()) — propagated from API
             self._progress.status = WorkflowStatus.CANCELLED.value
             return StepsResult(
@@ -184,9 +184,6 @@ class ScenarioWorkflow:
         )
 
 
-# ── ScenarioStepsWorkflow ────────────────────────────────────────────────────
-
-
 @workflow.defn
 class ScenarioStepsWorkflow:
     """
@@ -212,9 +209,6 @@ class ScenarioStepsWorkflow:
             # Resolve variables in step
             step = _resolve_step(raw_step, runtime_vars, inp.variables, inp.campaign_vars, idx)
             step_type = step.get("type", "")
-
-            # ── Control flow steps (handled in workflow, not activity) ────
-
             if step_type == "set_variable":
                 result_dict = _handle_set_variable(
                     step, raw_step, runtime_vars, inp.variables, inp.campaign_vars, idx,
@@ -309,8 +303,6 @@ class ScenarioStepsWorkflow:
                     )
                 continue
 
-            # ── Regular device action steps (executed via activity) ───────
-
             step_result: StepResult = await workflow.execute_activity(
                 "execute_device_action",
                 DeviceActionInput(
@@ -349,8 +341,6 @@ class ScenarioStepsWorkflow:
             step_results=step_results,
             runtime_vars=runtime_vars,
         )
-
-    # ── Control flow handlers ────────────────────────────────────────────
 
     async def _handle_repeat(
         self, inp: StepsInput, step: dict, runtime_vars: dict, idx: int,

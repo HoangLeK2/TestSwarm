@@ -339,7 +339,7 @@ class SchedulerService:
                     ),
                     spec=ScheduleSpec(
                         cron_expressions=[cron_expression],
-                        timezone_name=timezone_name,
+                        time_zone_name=timezone_name,
                     ),
                 ),
             )
@@ -366,7 +366,7 @@ class SchedulerService:
                 schedule = input.description.schedule
                 schedule.spec = ScheduleSpec(
                     cron_expressions=[cron_expression],
-                    timezone_name=timezone_name,
+                    time_zone_name=timezone_name,
                 )
                 return ScheduleUpdate(schedule=schedule)
 

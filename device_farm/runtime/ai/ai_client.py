@@ -2,13 +2,30 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import requests
 
 log = logging.getLogger(__name__)
 
-AI_MCP_URL = os.getenv("AI_MCP_URL", "http://localhost:4000")
+_DOTENV_LOADED = False
+
+
+def _ensure_dotenv_loaded() -> None:
+    global _DOTENV_LOADED
+    if _DOTENV_LOADED:
+        return
+    try:
+        from dotenv import load_dotenv
+
+        # runtime/ai/ai_client.py → ../../../.env (device_farm/.env)
+        env_path = Path(__file__).resolve().parents[2] / ".env"
+        load_dotenv(dotenv_path=env_path, override=False)
+    except Exception:  # noqa: BLE001
+        # Never hard-fail if dotenv isn't available or .env isn't present.
+        pass
+    _DOTENV_LOADED = True
 
 
 def _is_trivial_wait_scenario(scenario: Dict[str, Any]) -> bool:
@@ -39,12 +56,13 @@ def build_scenario_from_instructions(
     if device_context:
         payload["device_context"] = device_context
     # Để AI MCP (Node) generate đúng format, gửi kèm URL schema (GET trả về step types + fields).
+    _ensure_dotenv_loaded()
     base = os.getenv("DEVICE_FARM_URL", "http://localhost:8081").rstrip("/")
     payload["schema_url"] = f"{base}/api/scenario/schema"
 
     try:
         resp = requests.post(
-            f"{AI_MCP_URL}/scenario",
+            f"{os.getenv('AI_MCP_URL', 'http://localhost:4000')}/scenario",
             json=payload,
             timeout=30,
         )

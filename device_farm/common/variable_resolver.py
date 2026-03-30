@@ -7,8 +7,8 @@ Support ${VAR} syntax in any string field of step.
 Resolution order (priority decreasing):
   1. Runtime vars  (set_variable step, extraction results)
   2. Scenario-level vars  (scenario.variables)
-  3. Campaign-level vars  (campaign.variables)  
-  4. OS environment  (os.environ)
+  3. Campaign-level vars  (campaign.variables)
+  4. Env vars  (only names listed in VariableContext.env_whitelist — opt-in, default empty)
   5. Built-in vars  (__NOW__, __DEVICE_SERIAL__, ...)
   6. Keep ${VAR} if not resolved
 """
@@ -49,6 +49,7 @@ class VariableContext:
         "_counters",
         "_device_serial",
         "_device_model",
+        "_env_whitelist",
     )
 
     def __init__(
@@ -57,6 +58,7 @@ class VariableContext:
         campaign_vars: dict[str, Any] | None = None,
         device_serial: str = "",
         device_model: str = "",
+        env_whitelist: frozenset[str] | None = None,
     ) -> None:
         self._runtime_vars: dict[str, Any] = {}
         self._scenario_vars: dict[str, Any] = dict(scenario_vars or {})
@@ -64,6 +66,9 @@ class VariableContext:
         self._counters: dict[str, int] = {}
         self._device_serial = device_serial
         self._device_model = device_model
+        # Only env var names explicitly listed here are exposed to scenarios.
+        # Default is empty — no env access — to prevent secret leakage.
+        self._env_whitelist: frozenset[str] = env_whitelist or frozenset()
 
 
     def child_scope(self, extra_vars: dict[str, Any]) -> "VariableContext":
@@ -84,6 +89,7 @@ class VariableContext:
             campaign_vars=self._campaign_vars,
             device_serial=self._device_serial,
             device_model=self._device_model,
+            env_whitelist=self._env_whitelist,
         )
         # Copy current runtime state so sub-scenario sees vars set by parent steps,
         # but mutations inside sub-scenario don't affect parent scope.
@@ -160,9 +166,10 @@ class VariableContext:
             return self._campaign_vars[name]
         if name in _BUILTIN_NAMES:
             return self._resolve_builtin(name, step_index)
-        env_val = os.environ.get(name)
-        if env_val is not None:
-            return env_val
+        if name in self._env_whitelist:
+            env_val = os.environ.get(name)
+            if env_val is not None:
+                return env_val
         return None
 
     def _resolve_builtin(self, name: str, step_index: int) -> Any:

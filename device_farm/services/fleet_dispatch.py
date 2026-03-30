@@ -50,10 +50,11 @@ def enqueue_fleet_scenario(
 
     all_devices = manager.all_devices()
 
-    # 1. state filter
+    # 1. state filter — exact enum name match; empty string defaults to "READY"
+    _state = filter_state.strip().upper() or "READY"
     target_devices = [
         d for d in all_devices
-        if filter_state.upper() in d.state.name.upper()
+        if d.state.name.upper() == _state
     ]
     # 2. model substring filter
     if filter_model:

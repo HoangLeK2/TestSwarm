@@ -189,9 +189,46 @@ class _WatcherContext:
             if bounds:
                 cx = (bounds["left"] + bounds["right"]) // 2
                 cy = (bounds["top"] + bounds["bottom"]) // 2
-                self._client.click(cx, cy)
+                # Use dedicated session to avoid racing with the main client session.
+                self._rpc_dedicated("click", cx, cy)
         elif action[0] == "press":
-            self._client.press(action[1])
+            # press() probes multiple RPC method names; replicate the same strategy
+            # through the dedicated session without touching main client state.
+            k = (action[1] or "").strip().lower()
+            for method in ("pressKey", "press", "key", "keyevent"):
+                try:
+                    self._rpc_dedicated(method, k)
+                    return
+                except Exception:
+                    pass
+            keycode = U2JsonRpcClient._KEYCODES.get(k)
+            if keycode is not None:
+                for method in ("pressKeyCode", "pressKeycode", "keyCode", "keycode"):
+                    try:
+                        self._rpc_dedicated(method, keycode)
+                        return
+                    except Exception:
+                        pass
+            logger.debug("watcher press(%r) unsupported via dedicated session", k)
+
+    def _rpc_dedicated(self, method: str, *args: Any) -> Any:
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 0,
+            "method": method,
+            "params": list(args),
+        }
+        r = self._session.post(
+            self._client._base + _RPC_PATH,
+            json=payload,
+            timeout=self._client._touch_timeout,
+        )
+        if not r.ok:
+            raise RuntimeError(f"watcher RPC HTTP {r.status_code}")
+        data = json.loads(r.text or "{}")
+        if "error" in data:
+            raise RuntimeError(f"watcher RPC error: {data['error']}")
+        return data.get("result")
 
     def _find_node(self, root: Any, entry: _WatcherEntry) -> Optional[Any]:
         """Find the first XML node matching entry's condition."""
@@ -284,13 +321,28 @@ class _U2JsonRpcElement:
 
     def drag_to(self, x: int, y: int, duration: float = 0.5) -> None:
         """Drag this element to absolute screen coordinates (x, y)."""
-        selector = self._client._build_selector(self._by, self._value)
         steps = max(1, int(duration * 20))
         t = self._client._touch_timeout + duration
-        self._client._rpc("objDrag", selector, int(x), int(y), steps, _timeout=t)
+        if self._by == "xpath":
+            # objDrag takes a native selector; xpath must be resolved to bounds first.
+            result = self._client._find_element_xpath_with_bounds(self._value)
+            if result is None or not result.get("bounds"):
+                raise RuntimeError(f"drag_to: xpath element not found: {self._value!r}")
+            b = result["bounds"]
+            cx = (b["left"] + b["right"]) // 2
+            cy = (b["top"] + b["bottom"]) // 2
+            self._client._rpc("drag", cx, cy, int(x), int(y), steps, _timeout=t)
+        else:
+            selector = self._client._build_selector(self._by, self._value)
+            self._client._rpc("objDrag", selector, int(x), int(y), steps, _timeout=t)
 
     def pinch_in(self, percent: int = 50, steps: int = 10) -> None:
         """Pinch in on this element (zoom out). percent: how far to pinch (0-100)."""
+        if self._by == "xpath":
+            raise NotImplementedError(
+                "pinch_in() is not supported for xpath elements — "
+                "use a native selector (text, resource-id, description) instead."
+            )
         selector = self._client._build_selector(self._by, self._value)
         self._client._rpc(
             "pinchIn", selector, percent, steps,
@@ -299,6 +351,11 @@ class _U2JsonRpcElement:
 
     def pinch_out(self, percent: int = 50, steps: int = 10) -> None:
         """Pinch out on this element (zoom in). percent: how far to stretch (0-100)."""
+        if self._by == "xpath":
+            raise NotImplementedError(
+                "pinch_out() is not supported for xpath elements — "
+                "use a native selector (text, resource-id, description) instead."
+            )
         selector = self._client._build_selector(self._by, self._value)
         self._client._rpc(
             "pinchOut", selector, percent, steps,
@@ -561,7 +618,9 @@ class U2JsonRpcClient:
         deadline = time.monotonic() + max(wait, 0)
         while True:
             try:
-                xml = self.page_source(timeout=self._timeout)
+                remaining = deadline - time.monotonic()
+                ps_timeout = min(self._timeout, max(0.5, remaining + 1.0))
+                xml = self.page_source(timeout=ps_timeout)
                 if xml:
                     root = parse_xml(xml)
                     if root.findall(xpath_query):

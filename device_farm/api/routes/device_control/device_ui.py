@@ -5,13 +5,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-import xml.etree.ElementTree as ET
-
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from api.schemas.device_control import HitTestRequest, TapSelectorRequest
 from runtime.core import DeviceManager
+from runtime.xml_utils import XML_PARSE_ERRORS, parse_xml
 
 _LOG = logging.getLogger(__name__)
 _BOUNDS_RE = re.compile(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]")
@@ -23,7 +22,7 @@ def _best_selector(text: str, rid: str, desc: str):
     if rid and "/" in rid:
         return "resource-id", rid
     if desc and len(desc) < 80:
-        return "xpath", f'//*[@content-desc="{desc.replace(chr(34), chr(92)+chr(34))}"]'
+        return "description", desc
     if rid:
         return "resource-id", rid
     return None, None
@@ -65,8 +64,8 @@ def build_device_ui_router(manager: DeviceManager) -> APIRouter:
 
         elements: list[dict] = []
         try:
-            root = ET.fromstring(xml_str)
-        except ET.ParseError as e:
+            root = parse_xml(xml_str)
+        except XML_PARSE_ERRORS as e:
             return JSONResponse({"error": f"XML parse error: {e}"}, status_code=500)
 
         for node in root.iter():

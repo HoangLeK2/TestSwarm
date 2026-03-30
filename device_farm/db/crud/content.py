@@ -66,7 +66,9 @@ async def query_content(
     if date_to:
         stmt = stmt.where(ContentItem.extracted_at <= date_to)
     if search:
-        stmt = stmt.where(ContentItem.body.ilike(f"%{search}%"))
+        # Escape LIKE special characters so user input is treated as a literal substring.
+        escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        stmt = stmt.where(ContentItem.body.ilike(f"%{escaped}%", escape="\\"))
 
     # Count
     count_stmt = select(func.count()).select_from(stmt.subquery())

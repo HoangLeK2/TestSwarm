@@ -5,6 +5,7 @@ import { useGesture } from '@use-gesture/react';
 import type { Device } from '../types';
 import { serialToId } from '../helpers';
 import { deviceFarmBackendBase } from '@/lib/farm-api';
+import { tokenStorage } from '@/lib/token-storage';
 
 interface DeviceScreenProps {
   device: Device;
@@ -28,11 +29,12 @@ export function DeviceScreen({ device, wsSend, mode, onTap, highlightBounds }: D
   const isActive =
     device.state && !['DISCONNECTED', 'DEAD'].includes(device.state.toUpperCase());
 
-  const mjpegUrl = isActive
-    ? `${deviceFarmBackendBase}/stream/${encodeURIComponent(device.serial)}?fps=30`
-    : null;
-
-  console.log({isActive, mjpegUrl})
+  const mjpegUrl = React.useMemo(() => {
+    if (!isActive) return null;
+    const base = `${deviceFarmBackendBase}/stream/${encodeURIComponent(device.serial)}?fps=30`;
+    const token = tokenStorage.getAuthToken();
+    return token ? `${base}&token=${encodeURIComponent(token)}` : base;
+  }, [isActive, device.serial]);
 
   // ── Touch / gesture ──────────────────────────────────────────────────────
   const clientToDevice = useCallback(

@@ -236,21 +236,27 @@ class TestWatcherFire(unittest.TestCase):
         self.ctx = self.client.watchers
 
     def test_check_and_fire_click(self):
-        """Watcher fires click at center of matched node bounds."""
+        """Watcher fires click via dedicated session at center of matched node bounds."""
         root = parse_xml(SIMPLE_XML)
         entry = _WatcherEntry("w", "text", "Home")
         entry.click()
-        self.client.click = Mock()
+        # Since fix #3, _check_and_fire uses _rpc_dedicated, not client.click
+        self.ctx._rpc_dedicated = Mock(return_value=None)
+        self.client.click = Mock()  # must NOT be called
         self.ctx._check_and_fire(root, entry)
-        self.client.click.assert_called_once_with(50, 25)  # center of [0,0][100,50]
+        self.client.click.assert_not_called()
+        self.ctx._rpc_dedicated.assert_called_once_with("click", 50, 25)  # center of [0,0][100,50]
 
     def test_check_and_fire_press(self):
         root = parse_xml(SIMPLE_XML)
         entry = _WatcherEntry("w", "text", "Home")
         entry.press("back")
-        self.client.press = Mock()
+        # Since fix #3, _check_and_fire uses _rpc_dedicated, not client.press
+        self.ctx._rpc_dedicated = Mock(return_value=None)
+        self.client.press = Mock()  # must NOT be called
         self.ctx._check_and_fire(root, entry)
-        self.client.press.assert_called_once_with("back")
+        self.client.press.assert_not_called()
+        self.ctx._rpc_dedicated.assert_called()
 
     def test_check_and_fire_no_match(self):
         """No match → neither click nor press called."""

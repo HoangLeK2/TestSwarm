@@ -1,4 +1,5 @@
 import { farmApi } from '@/lib/farm-api';
+import { tokenStorage } from '@/lib/token-storage';
 import type { Device, Task } from '../types';
 
 export type PreviewStepResult = {
@@ -184,6 +185,144 @@ export async function fetchConfig(): Promise<AppConfig> {
   return data;
 }
 
+export interface StfBattery {
+  level: number;
+  status: number;
+  health: number;
+  source: number;
+  temp: number;
+  voltage: number;
+}
+
+export interface StfConnectivity {
+  connected: boolean;
+  type: number;
+  subtype: number;
+  roaming: boolean;
+}
+
+export interface StfPhoneState {
+  state: number;
+  operator: string;
+}
+
+export interface StfStatus {
+  connected: boolean;
+  battery: StfBattery;
+  rotation: number;
+  connectivity: StfConnectivity;
+  airplane_mode: boolean;
+  phone_state: StfPhoneState;
+}
+
+export async function stfStatus(serial: string): Promise<StfStatus | null> {
+  try {
+    const { data } = await farmApi.get<StfStatus>(`/stf/status/${encodeURIComponent(serial)}`);
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+export async function stfGetClipboard(serial: string): Promise<string | null> {
+  try {
+    const { data } = await farmApi.get<{ text: string }>(`/stf/clipboard/${encodeURIComponent(serial)}`);
+    return data.text;
+  } catch {
+    return null;
+  }
+}
+
+export async function stfSetClipboard(serial: string, text: string): Promise<boolean> {
+  try {
+    const { data } = await farmApi.post<{ ok: boolean }>(`/stf/clipboard/${encodeURIComponent(serial)}`, { text });
+    return data.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function stfSetWifi(serial: string, enabled: boolean): Promise<boolean> {
+  try {
+    const { data } = await farmApi.post<{ ok: boolean }>(`/stf/wifi/${encodeURIComponent(serial)}`, { enabled });
+    return data.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function stfSetBluetooth(serial: string, enabled: boolean): Promise<boolean> {
+  try {
+    const { data } = await farmApi.post<{ ok: boolean }>(`/stf/bluetooth/${encodeURIComponent(serial)}`, { enabled });
+    return data.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function stfSetKeyguard(serial: string, enabled: boolean): Promise<boolean> {
+  try {
+    const { data } = await farmApi.post<{ ok: boolean }>(`/stf/keyguard/${encodeURIComponent(serial)}`, { enabled });
+    return data.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function stfSetWakeLock(serial: string, enabled: boolean): Promise<boolean> {
+  try {
+    const { data } = await farmApi.post<{ ok: boolean }>(`/stf/wakelock/${encodeURIComponent(serial)}`, { enabled });
+    return data.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function stfSetRinger(serial: string, mode: 'silent' | 'vibrate' | 'normal'): Promise<boolean> {
+  try {
+    const { data } = await farmApi.post<{ ok: boolean }>(`/stf/ringer/${encodeURIComponent(serial)}`, { mode });
+    return data.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function stfSetMute(serial: string, enabled: boolean): Promise<boolean> {
+  try {
+    const { data } = await farmApi.post<{ ok: boolean }>(`/stf/mute/${encodeURIComponent(serial)}`, { enabled });
+    return data.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function stfIdentify(serial: string): Promise<boolean> {
+  try {
+    const { data } = await farmApi.post<{ ok: boolean }>(`/stf/identify/${encodeURIComponent(serial)}`);
+    return data.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function stfGetDisplay(serial: string): Promise<Record<string, unknown> | null> {
+  try {
+    const { data } = await farmApi.get(`/stf/display/${encodeURIComponent(serial)}`);
+    return data as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+export async function stfGetProperties(serial: string): Promise<Record<string, unknown> | null> {
+  try {
+    const { data } = await farmApi.get(`/stf/properties/${encodeURIComponent(serial)}`);
+    return data as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
 export async function previewScenario(
   serial: string,
   steps: Array<Record<string, any>>
@@ -209,9 +348,13 @@ export async function previewScenarioStream(
   const baseUrl = farmApi.defaults.baseURL || '';
   const url = `${baseUrl}/devices/${encodeURIComponent(serial)}/scenario/preview-stream`;
 
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const rawToken = tokenStorage.getAuthToken();
+  if (rawToken) headers['Authorization'] = `Bearer ${rawToken}`;
+
   const response = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify({ steps }),
     signal,
   });

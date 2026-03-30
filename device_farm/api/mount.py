@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.templating import Jinja2Templates
 
 from api.crud import api_router
+from api.deps import make_device_auth_dependency
 from api.routes.dashboard_page import build_dashboard_router
 from api.routes.device_control import build_device_control_router
 from api.routes.device_media import build_device_media_router
@@ -32,8 +33,17 @@ def mount_http_routers(
         app.include_router(api_router, prefix="/api")
 
     app.include_router(build_dashboard_router(manager, config, templates, front_end_dist))
+
+    device_auth = make_device_auth_dependency(db_enabled)
     app.include_router(
-        build_device_control_router(manager, queue, config, session_store)
+        build_device_control_router(manager, queue, config, session_store),
+        dependencies=[Depends(device_auth)],
     )
-    app.include_router(build_device_media_router(manager))
-    app.include_router(build_extraction_router(manager))
+    app.include_router(
+        build_device_media_router(manager),
+        dependencies=[Depends(device_auth)],
+    )
+    app.include_router(
+        build_extraction_router(manager),
+        dependencies=[Depends(device_auth)],
+    )

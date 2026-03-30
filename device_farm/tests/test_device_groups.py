@@ -301,6 +301,101 @@ def test_fleet_state_filter_applied_before_group():
     assert payload["device_serials"] == ["ready_in_group"]
 
 
+# ── fleet state filter: exact match semantics ─────────────────────────────────
+
+
+class TestFleetStateFilterExactMatch:
+    """filter_state uses exact enum-name match, not substring."""
+
+    def _dispatch(self, devices, filter_state):
+        manager = _MockManager(devices)
+        queue = _MockQueue()
+        payload, status = enqueue_fleet_scenario(
+            manager, queue,
+            steps=_make_step(),
+            filter_state=filter_state,
+            filter_model=None, max_devices=None,
+            priority=5, timeout=30, max_retries=1,
+        )
+        return payload, status, queue
+
+    def test_ready_matches_only_ready(self):
+        devices = [
+            _MockDevice("d1", state="READY"),
+            _MockDevice("d2", state="BUSY"),
+            _MockDevice("d3", state="OFFLINE"),
+        ]
+        payload, status, queue = self._dispatch(devices, "READY")
+        assert status == 200
+        assert payload["dispatched"] == 1
+        assert payload["device_serials"] == ["d1"]
+
+    def test_substring_read_does_not_match_ready(self):
+        """'READ' must NOT match a device whose state is 'READY'."""
+        devices = [_MockDevice("d1", state="READY")]
+        payload, status, _ = self._dispatch(devices, "READ")
+        assert status == 400, (
+            "filter_state='READ' is not a valid state name — should return 400, not match READY"
+        )
+
+    def test_empty_filter_state_defaults_to_ready(self):
+        """Empty string defaults to READY — does not match all devices."""
+        devices = [
+            _MockDevice("d_ready", state="READY"),
+            _MockDevice("d_busy", state="BUSY"),
+        ]
+        payload, status, queue = self._dispatch(devices, "")
+        assert status == 200
+        assert payload["dispatched"] == 1
+        assert payload["device_serials"] == ["d_ready"]
+
+    def test_whitespace_filter_state_defaults_to_ready(self):
+        """Whitespace-only filter_state is treated as empty → default READY."""
+        devices = [
+            _MockDevice("d_ready", state="READY"),
+            _MockDevice("d_busy", state="BUSY"),
+        ]
+        payload, status, _ = self._dispatch(devices, "   ")
+        assert status == 200
+        assert payload["dispatched"] == 1
+
+    def test_empty_filter_state_does_not_match_busy(self):
+        """Empty filter_state must NOT match BUSY devices (old substring bug would)."""
+        devices = [_MockDevice("d1", state="BUSY")]
+        payload, status, _ = self._dispatch(devices, "")
+        assert status == 400
+
+    def test_case_insensitive_match(self):
+        """'ready' (lowercase) matches state READY."""
+        devices = [_MockDevice("d1", state="READY")]
+        payload, status, _ = self._dispatch(devices, "ready")
+        assert status == 200
+        assert payload["dispatched"] == 1
+
+    def test_busy_filter_matches_only_busy(self):
+        devices = [
+            _MockDevice("d1", state="READY"),
+            _MockDevice("d2", state="BUSY"),
+        ]
+        payload, status, _ = self._dispatch(devices, "BUSY")
+        assert status == 200
+        assert payload["dispatched"] == 1
+        assert payload["device_serials"] == ["d2"]
+
+    def test_no_match_returns_400(self):
+        devices = [_MockDevice("d1", state="READY")]
+        payload, status, _ = self._dispatch(devices, "OFFLINE")
+        assert status == 400
+        assert "error" in payload
+
+    def test_all_ready_all_dispatched(self):
+        devices = [_MockDevice(f"d{i}", state="READY") for i in range(5)]
+        payload, status, queue = self._dispatch(devices, "READY")
+        assert status == 200
+        assert payload["dispatched"] == 5
+        assert len(queue.tasks) == 5
+
+
 # ── Tag normalisation via CRUD helper ─────────────────────────────────────────
 
 

@@ -4,6 +4,7 @@ import type { Device } from '../types';
 import { serialToId } from '../helpers';
 import { DeviceScreen } from './device-screen';
 import { DeviceControls } from './device-controls';
+import { DeviceSTFPanel } from './device-stf-panel';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useTranslations } from 'next-intl';
 
@@ -89,6 +90,7 @@ export function DeviceTile({
           onRestart={() => onRestart(device.serial)}
           compact={compact}
         />
+        {isActive && <DeviceSTFPanel serial={device.serial} />}
       </CardContent>
     </Card>
   );

@@ -4,6 +4,7 @@ import { useMemo } from 'react';
 import type { Device } from '../types';
 import { serialToId } from '../helpers';
 import { deviceFarmBackendBase } from '@/lib/farm-api';
+import { tokenStorage } from '@/lib/token-storage';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useTranslations } from 'next-intl';
 
@@ -17,13 +18,12 @@ export function DeviceTilePreview({ device }: DeviceTilePreviewProps) {
   const isActive =
     device.state && !['DISCONNECTED', 'DEAD'].includes(device.state.toUpperCase());
 
-  const mjpegUrl = useMemo(
-    () =>
-      isActive
-        ? `${deviceFarmBackendBase}/stream/${encodeURIComponent(device.serial)}?fps=1`
-        : null,
-    [device.serial, isActive],
-  );
+  const mjpegUrl = useMemo(() => {
+    if (!isActive) return null;
+    const base = `${deviceFarmBackendBase}/stream/${encodeURIComponent(device.serial)}?fps=1`;
+    const token = tokenStorage.getAuthToken();
+    return token ? `${base}&token=${encodeURIComponent(token)}` : base;
+  }, [device.serial, isActive]);
 
   return (
     <Card

@@ -421,6 +421,9 @@
   const devices = {};       // serial → status dict
   const h264States = {};    // serial → { decoder, configured, codecString }
 
+  // Reused TextDecoder — avoid allocating a new one on every binary frame (~60/s)
+  const _textDecoder = new TextDecoder();
+
   // ── WebSocket ──────────────────────────────────────────────────────────────
   function connect() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -441,7 +444,13 @@
       document.getElementById('wsDot').className = 'ws-dot error';
     };
 
+    ws.binaryType = 'arraybuffer';
     ws.onmessage = (ev) => {
+      // Binary frames: 0x01=JPEG, 0x10=H264 config, 0x11=H264 video
+      if (ev.data instanceof ArrayBuffer) {
+        handleBinaryFrame(ev.data);
+        return;
+      }
       let msg;
       try { msg = JSON.parse(ev.data); } catch { return; }
 
@@ -475,7 +484,12 @@
 
   function getH264State(serial) {
     if (h264States[serial]) return h264States[serial];
-    const state = { decoder: null, configured: false, codecString: 'avc1.42E01E' };
+    const state = {
+      decoder:       null,
+      configured:    false,
+      codecString:   'avc1.42E01E',
+      waitingForIdr: false,   // true after SPS/PPS change — drop frames until IDR
+    };
     h264States[serial] = state;
     return state;
   }
@@ -484,14 +498,12 @@
     const state = h264States[serial];
     if (!state) return;
     try { state.decoder && state.decoder.close(); } catch(e) {}
-    state.decoder    = null;
-    state.configured = false;
+    state.decoder       = null;
+    state.configured    = false;
+    state.waitingForIdr = false;
   }
 
   function ensureDecoder(state, codecString) {
-    const canvas = document.getElementById('screenCanvas');
-    const ctx    = canvas.getContext('2d');
-
     if (state.decoder && state.configured && state.codecString === codecString) return true;
 
     // Close old decoder if codec changed
@@ -503,11 +515,19 @@
 
     if (!window.VideoDecoder) return false; // browser doesn't support WebCodecs
 
+    const canvas = document.getElementById('screenCanvas');
+    // drawImage(VideoFrame) directly on 2D context — synchronous, no async
+    // microtask overhead. Faster than createImageBitmap().then(...) in practice.
+    const ctx = canvas.getContext('2d');
+
     state.codecString = codecString;
     state.decoder = new VideoDecoder({
       output(frame) {
-        canvas.width  = frame.displayWidth;
-        canvas.height = frame.displayHeight;
+        // Only resize when dimensions change — avoids clearing canvas every frame.
+        if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
+          canvas.width  = frame.displayWidth;
+          canvas.height = frame.displayHeight;
+        }
         ctx.drawImage(frame, 0, 0);
         frame.close();
         canvas.style.display = 'block';
@@ -520,7 +540,11 @@
     });
 
     try {
-      state.decoder.configure({ codec: codecString, optimizeForLatency: true });
+      state.decoder.configure({
+        codec:                 codecString,
+        optimizeForLatency:    true,
+        hardwareAcceleration:  'prefer-hardware',  // GPU decode → lower CPU + latency
+      });
       state.configured = true;
       return true;
     } catch(e) {
@@ -530,34 +554,150 @@
     }
   }
 
-  // ── Frame handler ─────────────────────────────────────────────────────────
+  // ── Binary frame parser (0x01 JPEG / 0x10 H264 config / 0x11 H264 video) ──
+  function handleBinaryFrame(buf) {
+    const u8  = new Uint8Array(buf);
+    if (u8.length < 6) return;
+
+    const frameType = u8[0];
+    const slen      = u8[1];
+    if (u8.length < 2 + slen + 4) return;
+
+    const serial = _textDecoder.decode(u8.subarray(2, 2 + slen));
+    if (serial !== activeSerial) return;
+
+    const base = 2 + slen;
+    // w/h present in all frame types (not used for H264 — decoder reports actual size)
+    let doff = base + 4;
+
+    // ── 0x10 H264 config (AVCDecoderConfigurationRecord) ──────────────────
+    if (frameType === 0x10) {
+      if (u8.length < doff + 1) return;
+      const flags         = u8[doff];
+      const configChanged = (flags & 0x01) !== 0;
+      const avccRecord    = u8.subarray(doff + 1);
+
+      const state = getH264State(serial);
+
+      if (configChanged) {
+        // SPS/PPS changed (rotation / resolution / reconnect).
+        // Close current decoder — it was configured with old SPS/PPS.
+        // Do NOT create a new decoder yet; wait for IDR before decoding.
+        console.log('[H264] SPS/PPS changed — resetting decoder, waiting for IDR');
+        try { state.decoder && state.decoder.close(); } catch(e) {}
+        state.decoder       = null;
+        state.configured    = false;
+        state.waitingForIdr = true;
+      }
+
+      // Derive codec string from SPS bytes inside AVCC record.
+      // AVCDecoderConfigurationRecord layout:
+      //   [0x01][profile][compat][level][0xFF][0xE1][sps_len:2B][sps...]
+      // codec string = "avc1.PPCCLL" where PP=profile, CC=compat, LL=level (hex)
+      let codecString = state.codecString;
+      if (avccRecord.length >= 4 && avccRecord[0] === 0x01) {
+        const p = avccRecord[1].toString(16).padStart(2, '0');
+        const c = avccRecord[2].toString(16).padStart(2, '0');
+        const l = avccRecord[3].toString(16).padStart(2, '0');
+        codecString = `avc1.${p}${c}${l}`;
+      }
+      state.codecString = codecString;
+
+      // Always (re)configure decoder when we receive a config packet, UNLESS we
+      // just reset due to a change — in that case defer until the IDR arrives.
+      if (!configChanged) {
+        ensureDecoder(state, codecString);
+      }
+      return;
+    }
+
+    // ── 0x11 H264 video frame (AVCC) ──────────────────────────────────────
+    if (frameType === 0x11) {
+      if (u8.length < doff + 9) return;
+      const isKey  = u8[doff] !== 0;
+      const avccData = u8.subarray(doff + 9);
+
+      const state = getH264State(serial);
+
+      // IDR gate: after SPS/PPS change, drop frames until first IDR.
+      if (state.waitingForIdr) {
+        if (!isKey) return;   // drop P-frame
+        // IDR arrived — configure decoder with stored codec string, then decode
+        state.waitingForIdr = false;
+        if (!ensureDecoder(state, state.codecString)) return;
+      }
+
+      if (!isKey && !state.configured) return;  // startup: wait for first IDR
+      if (!ensureDecoder(state, state.codecString)) return;
+
+      try {
+        state.decoder.decode(new EncodedVideoChunk({
+          type:      isKey ? 'key' : 'delta',
+          timestamp: performance.now() * 1000,
+          data:      avccData,
+        }));
+      } catch(e) {
+        console.warn('[H264] decode error:', e.message);
+        state.configured    = false;
+        state.waitingForIdr = true;   // wait for IDR before retrying
+      }
+      return;
+    }
+
+    // ── 0x01 JPEG fallback ────────────────────────────────────────────────
+    if (frameType === 0x01) {
+      const jpegBytes = u8.subarray(doff);
+      const blob = new Blob([jpegBytes], { type: 'image/jpeg' });
+      const url  = URL.createObjectURL(blob);
+      const img  = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        const canvas = document.getElementById('screenCanvas');
+        canvas.width  = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        canvas.getContext('2d').drawImage(img, 0, 0);
+        canvas.style.display = 'block';
+        document.getElementById('screenPlaceholder').style.display = 'none';
+      };
+      img.onerror = () => URL.revokeObjectURL(url);
+      img.src = url;
+    }
+  }
+
+  // ── Frame handler (JSON path — agent APK h264 / MJPEG) ───────────────────
   function handleFrame(msg) {
     if (msg.serial !== activeSerial) return;
 
-    // ── H.264 path ──────────────────────────────────────────────────────────
+    // ── H.264 path (agent APK sends JSON frames) ─────────────────────────
     if (msg.codec === 'h264') {
       const state       = getH264State(msg.serial);
       const codecString = msg.codec_string || state.codecString;
 
-      if (!msg.key && !state.configured) return; // wait for keyframe to configure
+      // IDR gate applies to JSON path too
+      if (state.waitingForIdr) {
+        if (!msg.key) return;
+        state.waitingForIdr = false;
+      }
 
-      if (!ensureDecoder(state, codecString)) return; // WebCodecs not supported
+      if (!msg.key && !state.configured) return;
+      if (!ensureDecoder(state, codecString)) return;
 
       const data = b64ToU8(msg.data);
       try {
         state.decoder.decode(new EncodedVideoChunk({
           type:      msg.key ? 'key' : 'delta',
-          timestamp: performance.now() * 1000, // microseconds
+          timestamp: performance.now() * 1000,
           data,
         }));
       } catch(e) {
         console.warn('[H264] decode error:', e.message);
-        state.configured = false; // force reconfigure on next keyframe
+        state.configured    = false;
+        state.waitingForIdr = true;
       }
       return;
     }
 
-    // ── JPEG fallback ────────────────────────────────────────────────────────
+    // ── JPEG fallback (JSON) ──────────────────────────────────────────────
     const b64 = msg.jpeg_b64;
     if (!b64) return;
     const img = new Image();

@@ -70,6 +70,12 @@ def device_farm_cv_concurrency() -> int:
         return 4
 
 
+def capture_pre_step_enabled() -> bool:
+    """Enable pre-step screenshot capture in scenario runner.
+    Env: CAPTURE_PRE_STEP=1 (default off)."""
+    return _truthy("CAPTURE_PRE_STEP")
+
+
 # ── JWT / auth (core/security, api/routes/auth) ──────────────────────────────
 
 

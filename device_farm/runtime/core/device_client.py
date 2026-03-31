@@ -350,9 +350,18 @@ class DeviceClient:
             return
         self.publish_frame(jpeg_bytes)
 
-    def on_agent_h264_config(self, avcc_record: bytes, w: int, h: int) -> None:
+    def on_agent_h264_config(
+        self, avcc_record: bytes, w: int, h: int, changed: bool = False
+    ) -> None:
         """Relay H264 AVCDecoderConfigurationRecord to browser as binary 0x10 frame.
-        Called when agent sends h264_config message (SPS+PPS codec config).
+
+        Binary layout:
+            [0x10][slen:1B][serial][width:2B BE][height:2B BE][flags:1B][avcc_record]
+            flags bit 0: config_changed — browser must close+reopen VideoDecoder before
+                         reconfiguring (rotation, resolution change, scrcpy reconnect).
+
+        Called when agent sends h264_config message (SPS+PPS codec config) or when
+        scrcpy relay detects a SPS/PPS change.
         """
         if self.config.streaming.mode == "periodic":
             return
@@ -362,7 +371,13 @@ class DeviceClient:
         slen = len(serial_b)
         width = max(0, min(w or self.screen_width, 0xFFFF))
         height = max(0, min(h or self.screen_height, 0xFFFF))
-        msg: bytes = bytes([0x10, slen]) + serial_b + struct.pack(">HH", width, height) + avcc_record
+        flags = 0x01 if changed else 0x00
+        msg: bytes = (
+            bytes([0x10, slen]) + serial_b
+            + struct.pack(">HH", width, height)
+            + bytes([flags])
+            + avcc_record
+        )
         with self._frame_lock:
             queues = list(self._frame_queues)
         for q in queues:
@@ -1224,11 +1239,10 @@ class DeviceClient:
             return
 
         def _on_scrcpy_frame(jpeg: bytes) -> None:
-            # Ensure ScrcpyControl uses REAL device resolution for coordinate mapping.
-            # scrcpy downscales video (e.g. 376x800) but touch coords from frontend
-            # are in real resolution (e.g. 1080x2316). scrcpy maps:
-            #   actual_x = x * realDeviceWidth / position.screenWidth
-            # So we must set position.screenWidth = real device width.
+            # Called for keyframes (relay mode) or every frame (JPEG-only mode).
+            # Ensures take_screenshot() always has a recent JPEG available.
+            # ScrcpyControl coordinate fix: scrcpy may downscale video (e.g. 376x800)
+            # but touch coords use real resolution (e.g. 1080x2316).
             ctrl = receiver.control
             if ctrl is not None and self.screen_width and ctrl.screen_width != self.screen_width:
                 ctrl.screen_width = self.screen_width
@@ -1237,7 +1251,27 @@ class DeviceClient:
             with self._latest_jpeg_lock:
                 self._latest_jpeg = jpeg
                 self._last_frame_time = time.monotonic()
-            self.publish_frame(jpeg)
+            # In relay mode: subscribers receive H264 directly — skip JPEG publish.
+            # In periodic mode: MJPEG frontend polls /stream/{serial} over HTTP —
+            # no need to also push JPEG over WS (wastes 20fps × N devices of CPU).
+            if _relay_mode:
+                pass  # H264 path handles delivery
+            # periodic mode: cache-only, MJPEG endpoint serves it
+
+        def _on_scrcpy_h264_config(avcc_record: bytes, w: int, h: int, changed: bool = False) -> None:
+            """Relay SPS/PPS AVCDecoderConfigurationRecord to browser subscribers.
+            changed=True triggers browser VideoDecoder reset (rotation/resolution/reconnect).
+            """
+            self.on_agent_h264_config(
+                avcc_record, w or self.screen_width, h or self.screen_height, changed
+            )
+
+        def _on_scrcpy_h264_packet(avcc_data: bytes, is_key: bool, pts_us: int) -> None:
+            """Relay raw AVCC video frame to browser (WebCodecs path, no server decode)."""
+            self.on_agent_h264_video(avcc_data, is_key, pts_us)
+
+        # Use WebCodecs relay when streaming mode allows continuous video.
+        _relay_mode = self.config.streaming.mode != "periodic"
 
         receiver = ScrcpyReceiver(
             serial=serial,
@@ -1249,6 +1283,8 @@ class DeviceClient:
             reconnect_delay=2.0,
             enable_control=enable_control,
             on_frame=_on_scrcpy_frame,
+            on_h264_config=_on_scrcpy_h264_config if _relay_mode else None,
+            on_h264_packet=_on_scrcpy_h264_packet if _relay_mode else None,
         )
         receiver.start_receiver()
 
@@ -1454,7 +1490,7 @@ class DeviceClient:
         # until the next HTTP request times out (up to 15 s), stalling touch events.
         now = time.monotonic()
         if now - self._u2_last_ok_at > self._U2_STALE_CHECK_INTERVAL:
-            if not u2.ping(timeout=min(ping_timeout, 1.5)):
+            if not u2.ping(timeout=min(ping_timeout, 4.0)):  # NanoHTTPD can be slow; 1.5s was too tight
                 self._log("u2 stale-ping failed — server likely crashed", level=logging.WARNING)
                 with self._u2_lock:
                     if self._u2 is u2:
@@ -1775,8 +1811,8 @@ class DeviceClient:
           - In WS mode: sends start_services to ask agent to (re)start u2 on device.
         """
         _INTERVAL = max(3.0, float(os.environ.get("U2_KEEPALIVE_INTERVAL", "5.0")))
-        _PING_TIMEOUT = 4.0
-        _MAX_MISSES = 2  # detect crash within ~10 s (at 5 s keepalive interval)
+        _PING_TIMEOUT = 6.0   # NanoHTTPD is single-threaded; give it extra time under load
+        _MAX_MISSES = 4  # ~20 s of misses before declaring dead (was 2/~10 s)
         misses = 0
 
         def _is_alive() -> bool:

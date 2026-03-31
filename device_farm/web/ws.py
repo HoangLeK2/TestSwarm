@@ -33,7 +33,11 @@ def _parse_agent_binary_frame(buf: bytes) -> Dict[str, Any] | None:
         buf[2+slen+2]   h : 2B BE
         buf[2+slen+4:]  payload (varies by type)
 
-    For 0x11 video frames, payload starts with:
+    For 0x10 config frames, payload:
+        [flags : 1B] [avcc_record ...]
+        flags bit 0: config_changed (1 = SPS/PPS changed, browser must reset decoder)
+
+    For 0x11 video frames, payload:
         [is_key : 1B] [pts_hi : 4B BE] [pts_lo : 4B BE] [avcc_data ...]
     """
     if len(buf) < 6:
@@ -49,7 +53,17 @@ def _parse_agent_binary_frame(buf: bytes) -> Dict[str, Any] | None:
     if frame_type == 0x01:
         return {"type": "jpeg", "w": w, "h": h, "data": buf[doff:]}
     if frame_type == 0x10:
-        return {"type": "h264_config", "w": w, "h": h, "data": buf[doff:]}
+        # flags byte added in v2 of protocol
+        if len(buf) < doff + 1:
+            return None
+        flags = buf[doff]
+        config_changed = bool(flags & 0x01)
+        return {
+            "type": "h264_config",
+            "w": w, "h": h,
+            "config_changed": config_changed,
+            "data": buf[doff + 1:],
+        }
     if frame_type == 0x11:
         if len(buf) < doff + 9:
             return None
@@ -127,7 +141,10 @@ class WebSocketManager:
     async def connect(self, ws: WebSocket, user_id: Optional[str] = None) -> None:
         await ws.accept()
         conn_id = str(uuid.uuid4())
-        q: asyncio.Queue = asyncio.Queue(maxsize=6)
+        # maxsize=2: hold at most 2 frames in queue.
+        # _safe_put drops the oldest when full → browser always gets latest frame.
+        # Larger values add buffering latency (N × frame_interval ms).
+        q: asyncio.Queue = asyncio.Queue(maxsize=2)
         allowed_serials = await self._load_allowed_serials(user_id)
 
         async with self._lock:

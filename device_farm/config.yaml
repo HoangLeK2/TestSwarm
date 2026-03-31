@@ -81,7 +81,7 @@ u2:
 #        "continuous" = legacy 30FPS streaming via agent/scrcpy
 streaming:
   mode: "periodic"
-  dashboard_interval: 3.0    # seconds between dashboard screenshot refreshes (scrcpy pushes frames directly)
+  dashboard_interval: 0.1    # 10fps — scrcpy decode → JPEG cache → MJPEG endpoint
 
 # Temporal workflow engine (optional).
 # Set enabled: true only when Temporal server is running.

@@ -109,9 +109,16 @@ class WifiDenseposeConfig:
 
 @dataclass
 class StreamingConfig:
-    """Streaming mode: 'periodic' (screenshot polling) or 'continuous' (legacy 30FPS)."""
-    mode: str = "periodic"             # "periodic" or "continuous"
-    dashboard_interval: float = 3.0    # seconds between dashboard screenshots
+    """Streaming mode controls how video is delivered to the browser.
+
+    "periodic"   — JPEG screenshot polled every `dashboard_interval` seconds.
+                   Low CPU, high latency (~3s). Good for monitoring dashboards.
+    "continuous" — H264 WebCodecs relay via scrcpy. Raw AVCC bytes sent to browser;
+                   VideoDecoder decodes in-browser (zero server-side decode per frame).
+                   Typical latency: 50-100ms. Requires scrcpy-server on device.
+    """
+    mode: str = "periodic"             # "periodic" | "continuous"
+    dashboard_interval: float = 3.0    # seconds between screenshots (periodic mode only)
 
 
 @dataclass

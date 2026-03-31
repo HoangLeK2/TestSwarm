@@ -12,17 +12,60 @@ from typing import Callable, Optional
 
 import av
 
+from runtime.transports.h264_utils import (
+    annexb_to_avcc_maybe,
+    annexb_to_avcc_record_maybe,
+    _is_annexb,
+)
 from runtime.transports.scrcpy_control import ScrcpyControl
 
 
 SCRCPY_SERVER_PATH_ON_DEVICE = "/data/local/tmp/scrcpy-server"
-SCRCPY_SERVER_VERSION = "3.3.4" 
+SCRCPY_SERVER_VERSION = "3.3.4"
 
 # Packet flags
 PTS_CONFIG_MASK = 0x8000_0000_0000_0000  # set on codec-config (SPS/PPS) packets
 
+# NAL unit type 5 = IDR (keyframe)
+_IDR_NAL_TYPE = 5
+
 
 log = logging.getLogger(__name__)
+
+
+def _is_idr(avcc_data: bytes) -> bool:
+    if not avcc_data:
+        return False
+    if avcc_data[:4] == b"\x00\x00\x00\x01" or avcc_data[:3] == b"\x00\x00\x01":
+        i = 0
+        n = len(avcc_data)
+        while i < n - 2:
+            if i + 3 < n and avcc_data[i:i+4] == b"\x00\x00\x00\x01":
+                nal_start = i + 4
+                if nal_start < n and (avcc_data[nal_start] & 0x1F) == _IDR_NAL_TYPE:
+                    return True
+                i = nal_start
+            elif avcc_data[i:i+3] == b"\x00\x00\x01":
+                nal_start = i + 3
+                if nal_start < n and (avcc_data[nal_start] & 0x1F) == _IDR_NAL_TYPE:
+                    return True
+                i = nal_start
+            else:
+                i += 1
+        return False
+    # AVCC format: iterate length-prefixed NAL units
+    i = 0
+    n = len(avcc_data)
+    while i + 4 <= n:
+        length = struct.unpack(">I", avcc_data[i:i+4])[0]
+        i += 4
+        if length == 0 or i + length > n:
+            break
+        nal_type = avcc_data[i] & 0x1F
+        if nal_type == _IDR_NAL_TYPE:
+            return True
+        i += length
+    return False
 
 
 def _recvall(sock: socket.socket, n: int) -> bytes:
@@ -55,7 +98,24 @@ class ScrcpyReceiver(threading.Thread):
         reconnect_delay: float = 2.0,
         enable_control: bool = False,
         on_frame: Optional[Callable[[bytes], None]] = None,
+        on_h264_config: Optional[Callable[[bytes, int, int, bool], None]] = None,
+        on_h264_packet: Optional[Callable[[bytes, bool, int], None]] = None,
     ) -> None:
+        """
+        on_frame(jpeg_bytes)                       — JPEG fallback (take_screenshot / periodic mode)
+        on_h264_config(avcc_record, w, h, changed) — fires on every SPS/PPS config packet.
+                                                      changed=True when SPS/PPS differs from last
+                                                      seen (rotation / resolution / reconnect) →
+                                                      browser must reset VideoDecoder before
+                                                      reconfiguring.
+        on_h264_packet(avcc_data, is_key, pts_us)  — fires per video frame; relay raw AVCC to
+                                                      browser (no server-side decode needed).
+                                                      P-frames are gated until next IDR after
+                                                      any SPS/PPS change.
+
+        When on_h264_packet is set, JPEG encoding is skipped for live streaming —
+        on_frame is still called for screenshot/periodic-mode consumers.
+        """
         super().__init__(daemon=True, name=f"scrcpy-{serial}")
         self.serial = serial
         self.adb_path = adb_path
@@ -74,6 +134,8 @@ class ScrcpyReceiver(threading.Thread):
         self._last_frame_time: float = 0.0
         self._server_proc: Optional[subprocess.Popen] = None
         self.on_frame: Optional[Callable[[bytes], None]] = on_frame
+        self.on_h264_config: Optional[Callable[[bytes, int, int], None]] = on_h264_config
+        self.on_h264_packet: Optional[Callable[[bytes, bool, int], None]] = on_h264_packet
 
         # ScrcpyControl instance (set when enable_control=True and connected)
         self.control: Optional[ScrcpyControl] = None
@@ -182,6 +244,16 @@ class ScrcpyReceiver(threading.Thread):
             f"max_fps={self.max_fps} "
             f"max_size={self.max_width} "
             f"video_bit_rate=8000000 "       # 8 Mbps for smooth video
+            # Android MediaCodec H264 options (values = MediaCodecInfo constants,
+            # NOT H264 spec profile_idc):
+            #   profile=1     AVCProfileBaseline  → no B-frames, no CABAC.
+            #                 B-frames cause display_order≠decode_order →
+            #                 WebCodecs reorder buffer → latency spike.
+            #   level=4096    AVCLevel4 (0x1000)  → supports up to 1080p@30fps.
+            #   latency=0     KEY_LATENCY=0       → encoder outputs frame
+            #                 immediately; default buffers 2-4 frames (~66-133ms
+            #                 at 30fps) before first output.
+            f"video_codec_options=profile:int=1,level:int=4096,latency:int=0 "
             f"send_device_meta=true "
             f"send_frame_meta=true "
             f"raw_video_stream=false"
@@ -301,10 +373,28 @@ class ScrcpyReceiver(threading.Thread):
         self._logger.debug(f"[{self.serial}] device message drain stopped")
 
     def _decode_stream(self, sock: socket.socket) -> None:
-        """Read scrcpy H264 packets and decode to JPEG via PyAV."""
+        """Read scrcpy H264 packets and relay to browser via WebCodecs (primary path)
+        or decode to JPEG (fallback / screenshot path).
+
+        WebCodecs relay (when on_h264_packet is set):
+          - Config packets  → on_h264_config(avcc_record, w, h)
+          - Video packets   → on_h264_packet(avcc_data, is_key, pts_us)
+          - No server-side decode; no JPEG encode per frame
+          - JPEG still produced at keyframes for take_screenshot() consumers
+
+        JPEG-only mode (when on_h264_packet is None):
+          - Every frame decoded and JPEG-encoded as before
+        """
+        # PyAV codec kept for screenshot path (keyframe → JPEG)
         codec = av.CodecContext.create("h264", "r")
         _fps_count = 0
         _fps_t0 = time.monotonic()
+        _relay_mode = self.on_h264_packet is not None
+
+        # SPS/PPS lifecycle state — local to this stream session.
+        # Reset on every reconnect (_connect_and_stream → _decode_stream).
+        _active_avcc_record: Optional[bytes] = None  # last seen SPS/PPS bytes
+        _waiting_for_idr: bool = False               # gate: drop frames until IDR
 
         while self._running:
             t_read0 = time.monotonic()
@@ -313,9 +403,123 @@ class ScrcpyReceiver(threading.Thread):
             data = _recvall(sock, size)
             t_read = time.monotonic() - t_read0
 
-            # Config (SPS/PPS) packets: feed to codec but produce no displayable frames
             is_config = bool(pts_raw & PTS_CONFIG_MASK)
+            pts_us = pts_raw & ~PTS_CONFIG_MASK  # strip config flag to get real PTS
 
+            # ── WebCodecs relay path ─────────────────────────────────────────
+            if _relay_mode:
+                if is_config:
+                    try:
+                        avcc_record = annexb_to_avcc_record_maybe(data)
+                    except Exception as exc:
+                        self._logger.debug(f"[{self.serial}] h264 config parse error: {exc}")
+                        avcc_record = data
+
+                    # Detect SPS/PPS change: rotation / resolution / reconnect all produce
+                    # a new config packet with different bytes. When changed:
+                    #   1. Recreate PyAV codec (old state invalid for new SPS/PPS)
+                    #   2. Gate video packets until next IDR (P-frames from old stream
+                    #      cannot be decoded with new SPS/PPS → garbage / decoder crash)
+                    #   3. Signal browser to reset VideoDecoder before reconfiguring
+                    config_changed = (
+                        _active_avcc_record is not None
+                        and _active_avcc_record != avcc_record
+                    )
+                    if config_changed:
+                        self._logger.info(
+                            f"[{self.serial}] SPS/PPS changed — resetting codec, waiting for IDR"
+                        )
+                        codec = av.CodecContext.create("h264", "r")  # fresh codec
+                        _waiting_for_idr = True
+
+                    _active_avcc_record = avcc_record
+
+                    cb_cfg = self.on_h264_config
+                    if cb_cfg is not None:
+                        try:
+                            cb_cfg(avcc_record, self.device_width, self.device_height, config_changed)
+                        except Exception as exc:
+                            self._logger.debug(f"[{self.serial}] h264 config relay error: {exc}")
+
+                    # Feed config to codec so keyframe JPEG decode works after config change
+                    try:
+                        codec.decode(av.Packet(data))
+                    except Exception:
+                        pass
+                    continue
+
+                # Video packet: convert Annex-B → AVCC if needed, detect keyframe
+                try:
+                    avcc_data = annexb_to_avcc_maybe(data)
+                except Exception:
+                    avcc_data = data
+
+                # Detect IDR (keyframe) from NAL unit type
+                is_key = _is_idr(avcc_data)
+
+                # IDR gate: after SPS/PPS change or initial startup, drop delta frames
+                # until the first IDR arrives. A P-frame without a preceding I-frame
+                # decoded with the new parameters → garbage output or VideoDecoder crash.
+                if _waiting_for_idr:
+                    if not is_key:
+                        _fps_count += 1  # count dropped frames for FPS log accuracy
+                        now = time.monotonic()
+                        if now - _fps_t0 >= 10.0:
+                            dropped = _fps_count
+                            self._logger.info(
+                                f"[{self.serial}] waiting for IDR, dropped {dropped} frames"
+                            )
+                            _fps_count = 0
+                            _fps_t0 = now
+                        continue  # drop P-frame
+                    # IDR arrived — clear gate
+                    _waiting_for_idr = False
+                    self._logger.info(f"[{self.serial}] IDR received, relay resumed")
+
+                # Relay to browser (zero-copy, no decode)
+                cb_pkt = self.on_h264_packet
+                if cb_pkt is not None:
+                    try:
+                        cb_pkt(avcc_data, is_key, pts_us)
+                    except Exception as exc:
+                        self._logger.debug(f"[{self.serial}] h264 packet relay error: {exc}")
+
+                # Update last_frame_time for capture settle guard
+                with self._lock:
+                    self._last_frame_time = time.monotonic()
+
+                # Decode to JPEG only on keyframes — for take_screenshot() consumers
+                if is_key:
+                    try:
+                        packet = av.Packet(data)
+                        frames = codec.decode(packet)
+                        for frame in frames:
+                            jpeg_bytes = self._frame_to_jpeg(frame, quality=80)
+                            with self._lock:
+                                self._latest_jpeg = jpeg_bytes
+                            cb = self.on_frame
+                            if cb is not None:
+                                try:
+                                    cb(jpeg_bytes)
+                                except Exception:
+                                    pass
+                            break  # only first frame per keyframe
+                    except Exception as exc:
+                        self._logger.debug(f"[{self.serial}] keyframe jpeg error: {exc}")
+
+                _fps_count += 1
+                now = time.monotonic()
+                if now - _fps_t0 >= 10.0:
+                    fps = _fps_count / (now - _fps_t0)
+                    self._logger.info(
+                        f"[{self.serial}] scrcpy relay FPS={fps:.1f} "
+                        f"read={t_read*1000:.0f}ms mode=webcodecs"
+                    )
+                    _fps_count = 0
+                    _fps_t0 = now
+                continue
+
+            # ── JPEG-only fallback path (on_h264_packet not set) ─────────────
             try:
                 packet = av.Packet(data)
                 frames = codec.decode(packet)
@@ -326,7 +530,6 @@ class ScrcpyReceiver(threading.Thread):
                     jpeg_bytes = self._frame_to_jpeg(frame, quality=80)
                     t_jpg = time.monotonic() - t_jpg0
 
-                    t_pub0 = time.monotonic()
                     with self._lock:
                         self._latest_jpeg = jpeg_bytes
                         self._last_frame_time = time.monotonic()
@@ -336,7 +539,6 @@ class ScrcpyReceiver(threading.Thread):
                             cb(jpeg_bytes)
                         except Exception:
                             pass
-                    t_pub = time.monotonic() - t_pub0
 
                     _fps_count += 1
                     now = time.monotonic()
@@ -345,8 +547,7 @@ class ScrcpyReceiver(threading.Thread):
                         self._logger.info(
                             f"[{self.serial}] scrcpy FPS={fps:.1f} "
                             f"read={t_read*1000:.0f}ms "
-                            f"jpg={t_jpg*1000:.0f}ms "
-                            f"pub={t_pub*1000:.0f}ms"
+                            f"jpg={t_jpg*1000:.0f}ms mode=jpeg"
                         )
                         _fps_count = 0
                         _fps_t0 = now

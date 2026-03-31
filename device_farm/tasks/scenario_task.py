@@ -55,6 +55,7 @@ _HASH_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_nam
 
 from runtime.core import DeviceClient
 from common.variable_resolver import VariableContext
+from core.env import capture_pre_step_enabled
 
 
 log = logging.getLogger(__name__)
@@ -1055,12 +1056,22 @@ def run_scenario_task(
         or os.environ.get("DEBUG_AUTO", "").lower() in {"1", "true", "yes"}
     )
     capture_dir: Optional[str] = None
+    capture_pre_step = capture_pre_step_enabled()
+    _capture_settle_ms: int = int(scenario.get("settle_timeout_ms") or os.environ.get("SETTLE_TIMEOUT_MS", "800"))
+    _capture_stale_wait_s: float = float(os.environ.get("CAPTURE_STALE_WAIT_MS", "1000")) / 1000.0
+    _CAPTURE_SKIP_SETTLE: frozenset[str] = frozenset({
+        "wait", "wait_stable", "wait_screen_stable",
+        "set_variable", "assert_variable",
+        "run_scenario",  # sub-steps handle their own captures
+    })
     if capture_enabled:
         ts = datetime.now().strftime("%Y-%m-%d_%H%M%S")
         base = os.path.join(os.path.dirname(os.path.dirname(__file__)), "captures")
         capture_dir = os.path.join(base, f"{serial}_{ts}")
         os.makedirs(capture_dir, exist_ok=True)
-        log.info(f"[{serial}] Step capture enabled → {capture_dir}")
+        log.info(f"[{serial}] Step capture enabled → {capture_dir} settle={_capture_settle_ms}ms")
+        if capture_pre_step:
+            log.info(f"[{serial}] Step pre-capture enabled (CAPTURE_PRE_STEP=1)")
 
     step_results: List[Dict[str, Any]] = []
     # Rate-limit popup checks: at most once every 5 seconds.
@@ -1086,6 +1097,33 @@ def run_scenario_task(
         t = step.get("type")
         log.info(f"[{serial}] step#{idx + 1}: {t} {step}")
         step_result: Dict[str, Any] = {"index": idx, "type": t, "ok": True}
+
+        if capture_dir and capture_pre_step:
+            try:
+                pre_cap = _capture_step_screenshot(
+                    device,
+                    capture_dir,
+                    idx,
+                    f"{t or 'unknown'}_pre",
+                    None,
+                    w,
+                    h,
+                    selector=None,
+                )
+                if pre_cap:
+                    step_result["screenshot_pre"] = pre_cap
+                last_frame_t = float(getattr(device, "_last_frame_time", 0.0) or 0.0)
+                if last_frame_t > 0:
+                    age_ms = int((time.monotonic() - last_frame_t) * 1000)
+                    log.info(f"[{serial}] capture PRE step#{idx + 1} ({t}) frame_age={age_ms}ms")
+                else:
+                    log.info(f"[{serial}] capture PRE step#{idx + 1} ({t}) frame_age=unknown")
+            except Exception as exc:
+                log.debug(f"[{serial}] pre-step capture failed: {exc}")
+
+        # Record timestamp immediately before the action so POST-capture can
+        # detect whether the device has pushed a new frame since action started.
+        step_start_t: float = time.monotonic()
 
         if t == "launch_app":
             pkg = str(step.get("package") or "")
@@ -2461,9 +2499,36 @@ def run_scenario_task(
             step_result["ok"] = False
             step_result["message"] = msg
 
-        # Capture screenshot after step (debug mode)
+        # Capture screenshot after step (debug mode) — Maestro-style:
+        #   1. settle wait  (skip for pure-wait steps where no frame change is expected)
+        #   2. stale-frame guard  (poll until device pushes a frame newer than step_start_t)
+        #   3. capture
         if capture_dir:
             try:
+                need_settle = t not in _CAPTURE_SKIP_SETTLE and _capture_settle_ms > 0
+                if need_settle:
+                    time.sleep(_capture_settle_ms / 1000.0)
+
+                # Poll for fresh frame (frame_time > step_start_t).
+                # Avoids saving the exact same frame captured as PRE (cache hit from
+                # minicap's periodic 3-second push or stale JPEG buffer).
+                if need_settle and _capture_stale_wait_s > 0:
+                    _poll_deadline = time.monotonic() + _capture_stale_wait_s
+                    _poll_interval = 0.05  # 50 ms
+                    while time.monotonic() < _poll_deadline:
+                        _ft = float(getattr(device, "_last_frame_time", 0.0) or 0.0)
+                        if _ft > step_start_t:
+                            break
+                        time.sleep(_poll_interval)
+                    else:
+                        _ft = float(getattr(device, "_last_frame_time", 0.0) or 0.0)
+                        if _ft <= step_start_t:
+                            log.warning(
+                                f"[{serial}] POST step#{idx + 1} ({t}): "
+                                f"frame stale after {int(_capture_stale_wait_s * 1000)}ms wait "
+                                f"— capturing anyway (frame may duplicate PRE)"
+                            )
+
                 # Build selector dict from step for debug context
                 step_selector: Optional[Dict[str, str]] = None
                 if t in ("tap", "tap_selector", "wait_element", "assert_element",
@@ -2481,6 +2546,17 @@ def run_scenario_task(
                 )
                 if cap:
                     step_result["screenshot"] = cap
+
+                last_frame_t = float(getattr(device, "_last_frame_time", 0.0) or 0.0)
+                if last_frame_t > 0:
+                    age_ms = int((time.monotonic() - last_frame_t) * 1000)
+                    fresh = last_frame_t > step_start_t
+                    log.info(
+                        f"[{serial}] capture POST step#{idx + 1} ({t}) "
+                        f"frame_age={age_ms}ms fresh={fresh}"
+                    )
+                else:
+                    log.info(f"[{serial}] capture POST step#{idx + 1} ({t}) frame_age=unknown")
             except Exception as exc:
                 log.debug(f"[{serial}] step capture failed: {exc}")
 

@@ -132,20 +132,18 @@ async def delete_campaign(campaign_id: str, db: DB, user: CurrentUser):
 @router.patch("/{campaign_id}/status")
 async def update_status(campaign_id: str, body: StatusUpdate, db: DB, user: CurrentUser, request: Request):
     await _get_campaign_or_404(campaign_id, user.id, db)
-    valid = {"draft", "running", "paused", "completed", "stopped"}
+    valid = {"idle", "running", "stopped", "draft", "paused", "completed"}
     if body.status not in valid:
         raise HTTPException(status_code=400, detail=f"status must be one of {valid}")
 
     cancelled_count = 0
-    # When stopping/pausing/completing a campaign, cancel all its running/pending tasks
-    if body.status in ("stopped", "paused", "completed"):
-        # 1. Cancel local TaskQueue tasks
+    cancel_trigger = body.status in ("stopped", "idle", "paused", "completed")
+    if cancel_trigger:
         queue = getattr(request.app.state, "queue", None)
         if queue is not None:
             prefix = f"campaign:{campaign_id}:"
             cancelled_count = queue.cancel_by_name_prefix(prefix)
 
-        # 2. Cancel / pause Temporal workflows if Temporal is enabled
         config = getattr(request.app.state, "config", None)
         if config is not None and getattr(config, "temporal", None) and config.temporal.enabled:
             try:
@@ -157,21 +155,18 @@ async def update_status(campaign_id: str, body: StatusUpdate, db: DB, user: Curr
                 async for wf in t_client.list_workflows(wf_query):
                     try:
                         handle = t_client.get_workflow_handle(wf.id)
-                        if body.status == "paused":
-                            await handle.signal(ScenarioWorkflow.pause)
-                        else:
-                            # stopped / completed → hard cancel (propagates to all child workflows)
-                            await handle.cancel()
+                        await handle.cancel()
                     except Exception as exc:
                         import logging
                         logging.getLogger(__name__).warning(
-                            "Failed to %s workflow %s: %s", body.status, wf.id, exc
+                            "Failed to cancel workflow %s: %s", wf.id, exc
                         )
             except Exception as exc:
                 import logging
-                logging.getLogger(__name__).warning("Temporal cancel/pause failed: %s", exc)
+                logging.getLogger(__name__).warning("Temporal cancel failed: %s", exc)
 
-    db_status = "completed" if body.status == "stopped" else body.status
+    # Normalise: all non-running statuses collapse to idle
+    db_status = "running" if body.status == "running" else "idle"
     await repo.update_campaign_status(db, campaign_id, db_status)
     await db.commit()
     return {"id": campaign_id, "status": db_status, "tasks_cancelled": cancelled_count}

@@ -19,8 +19,7 @@ class Campaign(Base):
     description: Mapped[str] = mapped_column(Text, default="")
     scenario: Mapped[dict] = mapped_column(JSON, default=dict)
     variables: Mapped[dict] = mapped_column(JSON, default=dict)
-    status: Mapped[str] = mapped_column(String(20), default="draft")
-    # DF-004: optional device-group target (overrides per-device campaign_devices list)
+    status: Mapped[str] = mapped_column(String(20), default="idle")
     target_group_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("device_groups.id", ondelete="SET NULL"), nullable=True
     )  

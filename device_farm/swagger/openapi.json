@@ -4369,7 +4369,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/api/scenario/schema": {
@@ -4388,7 +4393,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/api/connect/register": {
@@ -4427,7 +4437,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/api/devices/{serial}/scrcpy/attach": {
@@ -4437,6 +4452,11 @@
         ],
         "summary": "Api Scrcpy Attach",
         "operationId": "api_scrcpy_attach_api_devices__serial__scrcpy_attach_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -4487,6 +4507,11 @@
         ],
         "summary": "Api Scrcpy Detach",
         "operationId": "api_scrcpy_detach_api_devices__serial__scrcpy_detach_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -4556,7 +4581,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/api/sessions/end": {
@@ -4595,7 +4625,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/api/sessions/{session_id}": {
@@ -4605,6 +4640,11 @@
         ],
         "summary": "Api Sessions Get",
         "operationId": "api_sessions_get_api_sessions__session_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "session_id",
@@ -4645,6 +4685,11 @@
         ],
         "summary": "Api Devices Reserve",
         "operationId": "api_devices_reserve_api_devices__serial__reserve_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -4685,6 +4730,11 @@
         ],
         "summary": "Api Devices Release",
         "operationId": "api_devices_release_api_devices__serial__release_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -4725,6 +4775,11 @@
         ],
         "summary": "Api Tap",
         "operationId": "api_tap_api_tap__serial__post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -4775,6 +4830,11 @@
         ],
         "summary": "Api Swipe",
         "operationId": "api_swipe_api_swipe__serial__post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -4825,6 +4885,11 @@
         ],
         "summary": "Api Key",
         "operationId": "api_key_api_key__serial__post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -4875,6 +4940,11 @@
         ],
         "summary": "Api Open Url",
         "operationId": "api_open_url_api_open_url__serial__post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -4925,6 +4995,11 @@
         ],
         "summary": "Api Input Text",
         "operationId": "api_input_text_api_devices__serial__input_text_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -4975,6 +5050,11 @@
         ],
         "summary": "Api Long Tap",
         "operationId": "api_long_tap_api_devices__serial__long_tap_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -5025,6 +5105,11 @@
         ],
         "summary": "Api Scroll",
         "operationId": "api_scroll_api_devices__serial__scroll_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -5075,6 +5160,11 @@
         ],
         "summary": "Api Hierarchy",
         "operationId": "api_hierarchy_api_devices__serial__hierarchy_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -5125,6 +5215,11 @@
         ],
         "summary": "Api Ui Elements",
         "operationId": "api_ui_elements_api_devices__serial__ui_elements_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -5175,6 +5270,11 @@
         ],
         "summary": "Api Tap Selector",
         "operationId": "api_tap_selector_api_tap_selector__serial__post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -5225,6 +5325,11 @@
         ],
         "summary": "Api Hit Test",
         "operationId": "api_hit_test_api_devices__serial__hit_test_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -5275,6 +5380,11 @@
         ],
         "summary": "Api Get Task",
         "operationId": "api_get_task_api_tasks__task_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "task_id",
@@ -5315,6 +5425,11 @@
         ],
         "summary": "Api Shell",
         "operationId": "api_shell_api_agent__serial__shell_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -5396,7 +5511,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/api/devices/{serial}/scenario/preview": {
@@ -5406,6 +5526,11 @@
         ],
         "summary": "Api Scenario Preview",
         "operationId": "api_scenario_preview_api_devices__serial__scenario_preview_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -5457,6 +5582,11 @@
         "summary": "Api Scenario Preview Stream",
         "description": "SSE endpoint: streams step results as they complete.\nEach event is a JSON object with the step result.\nFinal event has type \"done\" with full summary.",
         "operationId": "api_scenario_preview_stream_api_devices__serial__scenario_preview_stream_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -5507,6 +5637,11 @@
         ],
         "summary": "Api Scenario Run",
         "operationId": "api_scenario_run_api_devices__serial__scenario_run_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -5557,6 +5692,11 @@
         ],
         "summary": "Api Sessions Scenario Run",
         "operationId": "api_sessions_scenario_run_api_sessions__session_id__scenario_run_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "session_id",
@@ -5607,6 +5747,11 @@
         ],
         "summary": "Api Run Campaign",
         "operationId": "api_run_campaign_api_campaigns__campaign_id__run_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "campaign_id",
@@ -5646,7 +5791,7 @@
           "device-control"
         ],
         "summary": "Api Execution Runtime",
-        "description": "How campaign runs are executed — for UI/docs (Temporal vs in-process TaskQueue).",
+        "description": "How campaign runs are executed — for UI/docs.",
         "operationId": "api_execution_runtime_api_execution_runtime_get",
         "responses": {
           "200": {
@@ -5657,7 +5802,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/api/campaigns/{campaign_id}/workflows": {
@@ -5668,6 +5818,11 @@
         "summary": "Api List Campaign Workflows",
         "description": "List top-level Temporal workflow runs for a campaign.\n\nOnly returns ScenarioWorkflow entries (one per device×scenario).\nChild workflows (ScenarioStepsWorkflow) are excluded — they are an\nimplementation detail and would flood the list.",
         "operationId": "api_list_campaign_workflows_api_campaigns__campaign_id__workflows_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "campaign_id",
@@ -5701,6 +5856,52 @@
         }
       }
     },
+    "/api/devices/{serial}/running-workflows": {
+      "get": {
+        "tags": [
+          "device-control"
+        ],
+        "summary": "Api Device Running Workflows",
+        "description": "List RUNNING/PAUSED top-level scenario workflows for a specific device serial.",
+        "operationId": "api_device_running_workflows_api_devices__serial__running_workflows_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "serial",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Serial"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/workflows/{workflow_id}/progress": {
       "get": {
         "tags": [
@@ -5709,6 +5910,57 @@
         "summary": "Api Workflow Progress",
         "description": "Query real-time progress of a Temporal scenario workflow.",
         "operationId": "api_workflow_progress_api_workflows__workflow_id__progress_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "workflow_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Workflow Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workflows/{workflow_id}/steps": {
+      "get": {
+        "tags": [
+          "device-control"
+        ],
+        "summary": "Api Workflow Steps",
+        "description": "Query step-by-step execution log for a scenario workflow.\n\n- While RUNNING: queries the child steps workflow (live, real-time).\n- After COMPLETED/FAILED: reads the final result from the parent workflow.\n\nReturns a flat list of step entries with index, type, ok, message, depth.",
+        "operationId": "api_workflow_steps_api_workflows__workflow_id__steps_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "workflow_id",
@@ -5748,8 +6000,13 @@
           "device-control"
         ],
         "summary": "Api Workflow Pause",
-        "description": "Pause a running scenario workflow at the next step boundary.",
+        "description": "Pause a running scenario workflow at the next step boundary.\n\nSECURITY NOTE: workflow_id is caller-supplied and not validated for\nownership. Any authenticated caller can pause any workflow whose ID they\nknow. Add campaign-ownership middleware before exposing this to untrusted\nusers.",
         "operationId": "api_workflow_pause_api_workflows__workflow_id__pause_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "workflow_id",
@@ -5791,6 +6048,11 @@
         "summary": "Api Workflow Resume",
         "description": "Resume a paused scenario workflow.",
         "operationId": "api_workflow_resume_api_workflows__workflow_id__resume_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "workflow_id",
@@ -5832,6 +6094,11 @@
         "summary": "Api Workflow Cancel",
         "description": "Cancel a scenario workflow gracefully.",
         "operationId": "api_workflow_cancel_api_workflows__workflow_id__cancel_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "workflow_id",
@@ -5901,7 +6168,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/api/fleet/status": {
@@ -5911,6 +6183,11 @@
         ],
         "summary": "Api Fleet Status",
         "operationId": "api_fleet_status_api_fleet_status_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "run_id",
@@ -5960,6 +6237,11 @@
         "summary": "Stf Status",
         "description": "Get STFService connection status and all event state.",
         "operationId": "stf_status_api_stf_status__serial__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -6001,6 +6283,11 @@
         ],
         "summary": "Stf Get Clipboard",
         "operationId": "stf_get_clipboard_api_stf_clipboard__serial__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -6040,6 +6327,11 @@
         ],
         "summary": "Stf Set Clipboard",
         "operationId": "stf_set_clipboard_api_stf_clipboard__serial__post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -6091,6 +6383,11 @@
         ],
         "summary": "Stf Set Wifi",
         "operationId": "stf_set_wifi_api_stf_wifi__serial__post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -6142,6 +6439,11 @@
         ],
         "summary": "Stf Set Bluetooth",
         "operationId": "stf_set_bluetooth_api_stf_bluetooth__serial__post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -6193,6 +6495,11 @@
         ],
         "summary": "Stf Set Keyguard",
         "operationId": "stf_set_keyguard_api_stf_keyguard__serial__post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -6244,6 +6551,11 @@
         ],
         "summary": "Stf Set Wake Lock",
         "operationId": "stf_set_wake_lock_api_stf_wakelock__serial__post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -6295,6 +6607,11 @@
         ],
         "summary": "Stf Set Ringer",
         "operationId": "stf_set_ringer_api_stf_ringer__serial__post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -6346,6 +6663,11 @@
         ],
         "summary": "Stf Set Mute",
         "operationId": "stf_set_mute_api_stf_mute__serial__post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -6397,6 +6719,11 @@
         ],
         "summary": "Stf Identify",
         "operationId": "stf_identify_api_stf_identify__serial__post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -6438,6 +6765,11 @@
         ],
         "summary": "Stf Get Display",
         "operationId": "stf_get_display_api_stf_display__serial__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -6479,6 +6811,11 @@
         ],
         "summary": "Stf Get Properties",
         "operationId": "stf_get_properties_api_stf_properties__serial__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -6516,6 +6853,11 @@
       "get": {
         "summary": "Mjpeg Stream",
         "operationId": "mjpeg_stream_stream__serial__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -6563,6 +6905,11 @@
       "get": {
         "summary": "Screenshot",
         "operationId": "screenshot_screenshot__serial__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -6611,6 +6958,11 @@
         "summary": "Screenshot B64",
         "description": "Screenshot as base64 JPEG. Cropping is done client-side.",
         "operationId": "screenshot_b64_screenshot_b64__serial__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -6651,6 +7003,11 @@
         ],
         "summary": "Api Extract Hierarchy",
         "operationId": "api_extract_hierarchy_devices__serial__extract_hierarchy_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -6701,6 +7058,11 @@
         ],
         "summary": "Api Extract Ocr",
         "operationId": "api_extract_ocr_devices__serial__extract_ocr_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",
@@ -6751,6 +7113,11 @@
         ],
         "summary": "Api Extract Ai",
         "operationId": "api_extract_ai_devices__serial__extract_ai_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "serial",

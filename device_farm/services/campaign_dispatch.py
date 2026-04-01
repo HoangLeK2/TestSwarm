@@ -80,7 +80,14 @@ async def enqueue_campaign_run_temporal(
     campaign_id: str,
     temporal_client,
     temporal_config=None,
+    *,
+    device_serials_override: list[str] | None = None,
 ) -> Tuple[Dict[str, Any], int]:
+    """Start Temporal workflows for a campaign.
+
+    device_serials_override: if provided, use these serials instead of the
+    campaign's assigned device list. Useful for live-filter runs (fleet-style).
+    """
     if not campaign_id or not _CAMPAIGN_ID_RE.match(campaign_id):
         return {
             "error": (
@@ -99,11 +106,22 @@ async def enqueue_campaign_run_temporal(
         if not campaign:
             return {"error": "Campaign not found"}, 404
 
-        target_group_id = getattr(campaign, "target_group_id", None)
-        if target_group_id:
-            devices = await list_group_devices(db, target_group_id)
+        if device_serials_override is not None:
+            # Live-filter mode: look up device rows by serial so we have .id for account vars
+            from db.crud.device import get_device_by_serial
+            devices = []
+            for serial in device_serials_override:
+                d = await get_device_by_serial(db, serial)
+                if d:
+                    devices.append(d)
+            if not devices:
+                return {"error": "None of the filtered device serials exist in the database"}, 400
         else:
-            devices = await repo.list_campaign_devices(db, campaign_id)
+            target_group_id = getattr(campaign, "target_group_id", None)
+            if target_group_id:
+                devices = await list_group_devices(db, target_group_id)
+            else:
+                devices = await repo.list_campaign_devices(db, campaign_id)
 
         if not devices:
             return {"error": "Campaign has no devices"}, 400

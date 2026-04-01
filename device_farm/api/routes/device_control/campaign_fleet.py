@@ -3,19 +3,24 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
-
 import re
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Body
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
-from api.schemas.device_control import FleetRunRequest
 from core.config import Config
 from runtime.core import DeviceManager, TaskQueue
 from services.campaign_dispatch import enqueue_campaign_run_temporal
-from services.fleet_dispatch import enqueue_fleet_scenario, fleet_run_status
 from temporal.worker import get_temporal_client
+
+
+class CampaignRunBody(BaseModel):
+   
+    filter_state: str = "READY"          # e.g. READY, BUSY
+    filter_model: str | None = None      # substring match on device.model
+    filter_tags: str | None = None       # comma-separated, AND logic
+    max_devices: int | None = None       # cap number of devices
 
 log = logging.getLogger(__name__)
 
@@ -36,7 +41,10 @@ def build_campaign_fleet_router(
     # ── Campaign → Temporal workflow ─────────────────────────────────
 
     @router.post("/campaigns/{campaign_id}/run")
-    async def api_run_campaign(campaign_id: str):
+    async def api_run_campaign(
+        campaign_id: str,
+        body: CampaignRunBody = Body(default_factory=CampaignRunBody),
+    ):
         if not config.database.enabled:
             return JSONResponse(
                 {"error": "Database is disabled; campaigns are not available"},
@@ -48,9 +56,54 @@ def build_campaign_fleet_router(
                 status_code=503,
             )
         try:
+            # Resolve live-device filter if any filter param was explicitly set.
+            device_serials_override: list[str] | None = None
+            use_live_filter = (
+                body.filter_state != "READY"
+                or body.filter_model is not None
+                or body.filter_tags is not None
+                or body.max_devices is not None
+            )
+            if use_live_filter:
+                from services.fleet_dispatch import _device_has_all_tags
+
+                _state = body.filter_state.strip().upper() or "READY"
+                live = [d for d in manager.all_devices() if d.state.name.upper() == _state]
+
+                if body.filter_model:
+                    needle = body.filter_model.lower()
+                    live = [d for d in live if needle in (d.model or "").lower()]
+
+                if body.filter_tags:
+                    from db.database import AsyncSessionLocal
+                    from db.crud.device_group import get_all_device_serial_tags
+
+                    filter_tags_list = [
+                        t.strip().lower() for t in body.filter_tags.split(",") if t.strip()
+                    ]
+                    async with AsyncSessionLocal() as db:
+                        serial_tags = await get_all_device_serial_tags(db)
+                    live = [
+                        d for d in live
+                        if _device_has_all_tags(d.serial, serial_tags, filter_tags_list)
+                    ]
+
+                if body.max_devices is not None:
+                    live = live[: body.max_devices]
+
+                if not live:
+                    return JSONResponse(
+                        {"error": f"No live devices match the filter (state={body.filter_state!r})"},
+                        status_code=400,
+                    )
+                device_serials_override = [d.serial for d in live]
+
             temporal_client = await get_temporal_client(config.temporal)
             payload, status = await enqueue_campaign_run_temporal(
-                campaign_id, temporal_client, config.temporal,
+                campaign_id,
+                temporal_client,
+                config.temporal,
+                device_serials_override=device_serials_override,
             )
             if status != 200:
                 return JSONResponse(payload, status_code=status)
@@ -183,6 +236,75 @@ def build_campaign_fleet_router(
                 {"error": f"Failed to query progress: {exc}"}, status_code=500,
             )
 
+    @router.get("/workflows/{workflow_id}/steps")
+    async def api_workflow_steps(workflow_id: str):
+        """Query step-by-step execution log for a scenario workflow.
+
+        - While RUNNING: queries the child steps workflow (live, real-time).
+        - After COMPLETED/FAILED: reads the final result from the parent workflow.
+
+        Returns a flat list of step entries with index, type, ok, message, depth.
+        """
+        if not config.temporal.enabled:
+            return JSONResponse({"error": "Temporal is not enabled"}, status_code=503)
+        try:
+            from temporal.workflows import ScenarioStepsWorkflow, ScenarioWorkflow
+            from temporalio.service import RPCError
+
+            client = await get_temporal_client(config.temporal)
+            parent_handle = client.get_workflow_handle(workflow_id)
+
+            # Determine current workflow status
+            try:
+                desc = await parent_handle.describe()
+                wf_status = desc.status.name if desc.status else "UNKNOWN"
+            except Exception:
+                wf_status = "UNKNOWN"
+
+            steps: list[dict] = []
+            source = "unknown"
+
+            if wf_status == "RUNNING":
+                # Query the child steps workflow (id: {workflow_id}:steps)
+                child_id = f"{workflow_id}:steps"
+                child_handle = client.get_workflow_handle(child_id)
+                try:
+                    steps = await child_handle.query(ScenarioStepsWorkflow.get_step_log)
+                    source = "live_query"
+                except RPCError:
+                    # Child may not have started yet
+                    steps = []
+                    source = "pending"
+            else:
+                # Completed/failed: get full step_results from the workflow result
+                try:
+                    result = await parent_handle.result(follow_runs=False)
+                    steps = result.step_results or []
+                    source = "final_result"
+                except Exception:
+                    # Result not available (e.g. cancelled before completion)
+                    # Fall back to querying the child workflow anyway
+                    child_id = f"{workflow_id}:steps"
+                    child_handle = client.get_workflow_handle(child_id)
+                    try:
+                        steps = await child_handle.query(ScenarioStepsWorkflow.get_step_log)
+                        source = "child_query_fallback"
+                    except Exception:
+                        steps = []
+                        source = "unavailable"
+
+            return {
+                "workflow_id": workflow_id,
+                "status": wf_status,
+                "source": source,
+                "steps_count": len(steps),
+                "steps": steps,
+            }
+        except Exception as exc:
+            return JSONResponse(
+                {"error": f"Failed to query steps: {exc}"}, status_code=500,
+            )
+
     @router.post("/workflows/{workflow_id}/pause")
     async def api_workflow_pause(workflow_id: str):
         """Pause a running scenario workflow at the next step boundary.
@@ -233,51 +355,5 @@ def build_campaign_fleet_router(
             return JSONResponse(
                 {"error": f"Failed to cancel: {exc}"}, status_code=500,
             )
-
-    # ── Fleet dispatch (TaskQueue — non-campaign) ────────────────────
-
-    @router.post("/fleet/run")
-    async def api_fleet_run(body: FleetRunRequest):
-        group_serials = None
-        serial_tags = None
-        filter_tags_list = None
-
-        needs_db = (body.filter_group_id or body.filter_tags) and config.database.enabled
-        if needs_db:
-            from db.database import AsyncSessionLocal
-            from db.crud.device_group import get_group_device_serials, get_all_device_serial_tags
-            async with AsyncSessionLocal() as db:
-                if body.filter_group_id:
-                    group_serials = await get_group_device_serials(db, body.filter_group_id)
-                if body.filter_tags:
-                    filter_tags_list = [
-                        t.strip().lower()
-                        for t in body.filter_tags.split(",")
-                        if t.strip()
-                    ]
-                    if filter_tags_list:
-                        serial_tags = await get_all_device_serial_tags(db)
-
-        payload, status = enqueue_fleet_scenario(
-            manager,
-            queue,
-            steps=body.steps,
-            filter_state=body.filter_state,
-            filter_model=body.filter_model,
-            max_devices=body.max_devices,
-            priority=body.priority,
-            timeout=body.timeout,
-            max_retries=body.max_retries,
-            group_serials=group_serials,
-            filter_tags=filter_tags_list,
-            serial_tags=serial_tags,
-        )
-        if status != 200:
-            return JSONResponse(payload, status_code=status)
-        return payload
-
-    @router.get("/fleet/status")
-    async def api_fleet_status(run_id: Optional[str] = None):
-        return fleet_run_status(queue, run_id)
 
     return router

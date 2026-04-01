@@ -1186,12 +1186,12 @@ TOOL_DEFS: Dict[str, Dict[str, Any]] = {
         "fn": _df_get_campaign_devices,
     },
     "df_update_campaign_status": {
-        "description": "Update campaign status: draft | running | paused | completed. Requires auth token.",
+        "description": "Update campaign status: idle | running. Requires auth token.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "campaign_id": {"type": "string"},
-                "status": {"type": "string", "enum": ["draft", "running", "paused", "completed"]},
+                "status": {"type": "string", "enum": ["idle", "running"]},
             },
             "required": ["campaign_id", "status"],
         },

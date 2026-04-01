@@ -215,6 +215,14 @@ class ScenarioStepsWorkflow:
     Each nesting level creates a new child workflow instance.
     """
 
+    def __init__(self) -> None:
+        self._step_log: list[dict] = []
+
+    @workflow.query
+    def get_step_log(self) -> list[dict]:
+        """Query accumulated step execution log (works while running or after completion)."""
+        return self._step_log
+
     @workflow.run
     async def run(self, inp: StepsInput) -> StepsResult:
         if inp.depth > MAX_NESTING_DEPTH:
@@ -230,6 +238,10 @@ class ScenarioStepsWorkflow:
         steps_executed = 0
         break_requested = False
 
+        def _append(entry: dict) -> None:
+            step_results.append(entry)
+            self._step_log.append({**entry, "depth": inp.depth})
+
         for idx, raw_step in enumerate(inp.steps):
             # Resolve variables in step
             step = _resolve_step(raw_step, runtime_vars, inp.variables, inp.campaign_vars, idx)
@@ -240,7 +252,7 @@ class ScenarioStepsWorkflow:
                 result_dict = _handle_set_variable(
                     step, raw_step, runtime_vars, inp.variables, inp.campaign_vars, idx,
                 )
-                step_results.append(result_dict)
+                _append(result_dict)
                 steps_executed += 1
                 continue
 
@@ -248,14 +260,14 @@ class ScenarioStepsWorkflow:
             if step_type == "set_var":
                 key = str(step.get("key") or step.get("name") or "")
                 if not key:
-                    step_results.append({
+                    _append({
                         "index": idx, "type": "set_var", "ok": False,
                         "message": "set_var: missing key/name",
                     })
                 else:
                     value = step.get("value")
                     runtime_context.setdefault("vars", {})[key] = value
-                    step_results.append({
+                    _append({
                         "index": idx, "type": "set_var", "ok": True,
                         "message": f"set_var: vars[{key!r}] = {value!r}",
                     })
@@ -266,7 +278,7 @@ class ScenarioStepsWorkflow:
             if step_type == "break_if":
                 condition = step.get("condition") or {}
                 if not condition:
-                    step_results.append({
+                    _append({
                         "index": idx, "type": "break_if", "ok": False,
                         "message": "break_if: missing condition",
                     })
@@ -286,7 +298,7 @@ class ScenarioStepsWorkflow:
                     )
                     if cond_met:
                         break_requested = True
-                    step_results.append({
+                    _append({
                         "index": idx, "type": "break_if", "ok": True,
                         "message": f"break_if: condition={'met — breaking' if cond_met else 'not met'}",
                     })
@@ -300,7 +312,7 @@ class ScenarioStepsWorkflow:
                 ok, msg, sub_results, runtime_context = await self._handle_loop(
                     inp, step, runtime_vars, runtime_context, idx,
                 )
-                step_results.append({
+                _append({
                     "index": idx, "type": "loop", "ok": ok,
                     "message": msg, "sub_results": sub_results,
                 })
@@ -318,9 +330,7 @@ class ScenarioStepsWorkflow:
                 ok, msg, runtime_context, child_break = await self._handle_if(
                     inp, step, runtime_vars, runtime_context, idx,
                 )
-                step_results.append({
-                    "index": idx, "type": "if", "ok": ok, "message": msg,
-                })
+                _append({"index": idx, "type": "if", "ok": ok, "message": msg})
                 steps_executed += 1
                 if child_break:
                     break_requested = True
@@ -339,7 +349,7 @@ class ScenarioStepsWorkflow:
                 ok, msg, sub_results, runtime_context = await self._handle_repeat(
                     inp, step, runtime_vars, runtime_context, idx,
                 )
-                step_results.append({
+                _append({
                     "index": idx, "type": "repeat", "ok": ok,
                     "message": msg, "sub_results": sub_results,
                 })
@@ -357,9 +367,7 @@ class ScenarioStepsWorkflow:
                 ok, msg, runtime_context = await self._handle_repeat_until(
                     inp, step, runtime_vars, runtime_context, idx,
                 )
-                step_results.append({
-                    "index": idx, "type": "repeat_until", "ok": ok, "message": msg,
-                })
+                _append({"index": idx, "type": "repeat_until", "ok": ok, "message": msg})
                 steps_executed += 1
                 if not ok:
                     return StepsResult(
@@ -374,9 +382,7 @@ class ScenarioStepsWorkflow:
                 ok, msg, runtime_context, child_break = await self._handle_if_element(
                     inp, step, runtime_vars, runtime_context, idx,
                 )
-                step_results.append({
-                    "index": idx, "type": "if_element", "ok": ok, "message": msg,
-                })
+                _append({"index": idx, "type": "if_element", "ok": ok, "message": msg})
                 steps_executed += 1
                 if child_break:
                     break_requested = True
@@ -395,9 +401,7 @@ class ScenarioStepsWorkflow:
                 ok, msg, runtime_context, child_break = await self._handle_if_variable(
                     inp, step, runtime_vars, runtime_context, idx,
                 )
-                step_results.append({
-                    "index": idx, "type": "if_variable", "ok": ok, "message": msg,
-                })
+                _append({"index": idx, "type": "if_variable", "ok": ok, "message": msg})
                 steps_executed += 1
                 if child_break:
                     break_requested = True
@@ -416,9 +420,7 @@ class ScenarioStepsWorkflow:
                 ok, msg, runtime_context, child_break = await self._handle_random_pick(
                     inp, step, runtime_vars, runtime_context, idx,
                 )
-                step_results.append({
-                    "index": idx, "type": "random_pick", "ok": ok, "message": msg,
-                })
+                _append({"index": idx, "type": "random_pick", "ok": ok, "message": msg})
                 steps_executed += 1
                 if child_break:
                     break_requested = True
@@ -449,7 +451,7 @@ class ScenarioStepsWorkflow:
                     heartbeat_timeout=timedelta(seconds=30),
                 )
                 runtime_context = {**runtime_context, **extract_result.context}
-                step_results.append({
+                _append({
                     "index": idx, "type": "extract",
                     "ok": extract_result.ok,
                     "message": extract_result.message,
@@ -487,7 +489,7 @@ class ScenarioStepsWorkflow:
                     offsets = dict(runtime_context.get("__save_extraction_offsets__") or {})
                     offsets.update(save_result.details["updated_offsets"])
                     runtime_context = {**runtime_context, "__save_extraction_offsets__": offsets}
-                step_results.append({
+                _append({
                     "index": idx, "type": "save_extraction",
                     "ok": save_result.ok, "message": save_result.message or "",
                     "details": save_result.details,
@@ -519,7 +521,7 @@ class ScenarioStepsWorkflow:
                 heartbeat_timeout=timedelta(seconds=30),
             )
 
-            step_results.append({
+            _append({
                 "index": idx, "type": step_type,
                 "ok": step_result.ok, "message": step_result.message or "",
                 "details": step_result.details,

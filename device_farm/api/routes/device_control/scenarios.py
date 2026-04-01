@@ -22,6 +22,7 @@ from runtime.core import DeviceManager
 def run_scenario_on_device(
     manager: DeviceManager, serial: str, steps: List[Dict[str, Any]],
     on_step_done: Optional[Callable[[Dict[str, Any]], None]] = None,
+    variables: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     from tasks.scenario_task import run_scenario_task
 
@@ -30,7 +31,7 @@ def run_scenario_on_device(
         return {"error": f"Device {serial} not found"}
     if not steps:
         return {"error": "steps must be a non-empty array"}
-    scenario: Dict[str, Any] = {"instructions": "", "steps": steps}
+    scenario: Dict[str, Any] = {"instructions": "", "steps": steps, "variables": variables or {}}
     return run_scenario_task(device, scenario, on_step_done=on_step_done)
 
 
@@ -43,7 +44,9 @@ async def _execute_scenario_body(
             status_code=400,
         )
     loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(None, run_scenario_on_device, manager, serial, body.steps)
+    import functools
+    fn = functools.partial(run_scenario_on_device, manager, serial, body.steps, None, body.variables)
+    result = await loop.run_in_executor(None, fn)
     if "error" in result:
         return JSONResponse(result, status_code=400)
     return result
@@ -84,7 +87,7 @@ def build_scenarios_router(
 
         def run_in_thread() -> None:
             try:
-                final = run_scenario_on_device(manager, serial, body.steps, on_step_done=on_step_done)
+                final = run_scenario_on_device(manager, serial, body.steps, on_step_done=on_step_done, variables=body.variables)
                 q.put({"_event": "done", **final})
             except Exception as exc:
                 q.put({"_event": "error", "error": str(exc)})
@@ -140,9 +143,9 @@ def build_scenarios_router(
                 status_code=400,
             )
         loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            None, run_scenario_on_device, manager, device_id, body.steps
-        )
+        import functools
+        fn = functools.partial(run_scenario_on_device, manager, device_id, body.steps, None, body.variables)
+        result = await loop.run_in_executor(None, fn)
         if "error" in result:
             return JSONResponse(result, status_code=400)
         return {"session_id": session_id, "device_id": device_id, **result}

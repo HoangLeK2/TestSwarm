@@ -65,6 +65,7 @@ async def save_content_item(
     content_type: str = "post",
     device_serial: str | None = None,
     campaign_id: str | None = None,
+    run_id: str | None = None,
     scenario_name: str | None = None,
     dedupe_field: str | None = None,
     screenshot_bytes: bytes | None = None,
@@ -118,6 +119,7 @@ async def save_content_item(
             content_hash=content_hash,
             device_serial=device_serial,
             campaign_id=campaign_id,
+            run_id=run_id,
             scenario_name=scenario_name,
             screenshot_path=screenshot_path,
         )

@@ -21,6 +21,7 @@ AI/MCP sẽ tạo ra JSON `scenario`, ví dụ:
 Executor này chỉ đọc từng step và gọi DeviceClient/u2 cho phù hợp.
 """
 
+import base64
 import concurrent.futures
 import io
 import json
@@ -1140,6 +1141,16 @@ def run_scenario_task(
                     launch_wait = float(step.get("wait_after", 2.0) or 2.0)
                     time.sleep(launch_wait)
                     log.info(f"[{serial}] launch_app {pkg}: waited {launch_wait}s")
+                    # After app launch the u2 tunnel often disconnects briefly while
+                    # UIAutomator restarts.  Poll up to 8 s so subsequent steps that
+                    # need u2 don't start before it is ready.
+                    _u2_poll_start = time.monotonic()
+                    while time.monotonic() - _u2_poll_start < 8.0:
+                        if getattr(device, "_u2", None) is not None:
+                            break
+                        time.sleep(0.5)
+                    if getattr(device, "_u2", None) is None:
+                        log.warning(f"[{serial}] launch_app {pkg}: u2 not ready after 8s poll")
                 except Exception as exc:
                     msg = f"launch_app({pkg}) failed: {exc}"
                     log.warning(f"[{serial}] {msg}")
@@ -1643,6 +1654,108 @@ def run_scenario_task(
                     log.warning(f"[{serial}] {msg}")
                     step_result["ok"] = False
                     step_result["message"] = msg
+
+        elif t == "double_tap":
+            # Supports rx/ry (relative 0-1) or absolute x/y
+            try:
+                rx = step.get("rx")
+                ry = step.get("ry")
+                if rx is not None and ry is not None:
+                    px = int(float(rx) * w)
+                    py = int(float(ry) * h)
+                else:
+                    px = int(step.get("x", w // 2))
+                    py = int(step.get("y", h // 2))
+                device.double_tap(px, py)
+                wait_after = float(step.get("wait_after", 0.5) or 0.5)
+                if wait_after > 0:
+                    time.sleep(wait_after)
+                log.info(f"[{serial}] double_tap ({px},{py})")
+            except Exception as exc:
+                msg = f"double_tap failed: {exc}"
+                log.warning(f"[{serial}] {msg}")
+                step_result["ok"] = False
+                step_result["message"] = msg
+
+        elif t == "pinch":
+            # cx/cy: absolute coords; or rx/ry relative. scale>1=zoom in, <1=zoom out
+            try:
+                rx = step.get("rx")
+                ry = step.get("ry")
+                if rx is not None and ry is not None:
+                    cx = int(float(rx) * w)
+                    cy = int(float(ry) * h)
+                else:
+                    cx = int(step.get("cx", w // 2))
+                    cy = int(step.get("cy", h // 2))
+                scale = float(step.get("scale", 0.5) or 0.5)
+                duration_ms = int(step.get("duration_ms", 400) or 400)
+                device.pinch(cx, cy, scale, duration_ms)
+                time.sleep(0.4)
+                log.info(f"[{serial}] pinch ({cx},{cy}) scale={scale}")
+            except Exception as exc:
+                msg = f"pinch failed: {exc}"
+                log.warning(f"[{serial}] {msg}")
+                step_result["ok"] = False
+                step_result["message"] = msg
+
+        elif t == "drag":
+            # rx1/ry1/rx2/ry2 (relative) or x1/y1/x2/y2 (absolute)
+            try:
+                if step.get("rx1") is not None:
+                    x1 = int(float(step.get("rx1", 0)) * w)
+                    y1 = int(float(step.get("ry1", 0)) * h)
+                    x2 = int(float(step.get("rx2", 0)) * w)
+                    y2 = int(float(step.get("ry2", 0)) * h)
+                else:
+                    x1 = int(step.get("x1", 0))
+                    y1 = int(step.get("y1", 0))
+                    x2 = int(step.get("x2", 0))
+                    y2 = int(step.get("y2", 0))
+                duration_ms = int(step.get("duration_ms", 1000) or 1000)
+                device.drag(x1, y1, x2, y2, duration_ms)
+                time.sleep(0.4)
+                log.info(f"[{serial}] drag ({x1},{y1})→({x2},{y2})")
+            except Exception as exc:
+                msg = f"drag failed: {exc}"
+                log.warning(f"[{serial}] {msg}")
+                step_result["ok"] = False
+                step_result["message"] = msg
+
+        elif t == "take_screenshot":
+            # Capture a screenshot. Result stored in step_result["screenshot"] (base64).
+            # Optional: save_path to write JPEG to disk.
+            try:
+                frame = device.capture_screenshot()
+                if frame is None:
+                    step_result["ok"] = False
+                    step_result["message"] = "take_screenshot: no frame available"
+                else:
+                    save_path = step.get("save_path")
+                    if save_path:
+                        import os as _os
+                        _os.makedirs(_os.path.dirname(_os.path.abspath(save_path)), exist_ok=True)
+                        with open(save_path, "wb") as _f:
+                            _f.write(frame)
+                    step_result["screenshot"] = base64.b64encode(frame).decode()
+                    log.info(f"[{serial}] take_screenshot: {len(frame)} bytes")
+            except Exception as exc:
+                msg = f"take_screenshot failed: {exc}"
+                log.warning(f"[{serial}] {msg}")
+                step_result["ok"] = False
+                step_result["message"] = msg
+
+        elif t == "set_clipboard":
+            text = str(step.get("text") or "")
+            try:
+                device.set_clipboard(text)
+                time.sleep(0.3)
+                log.info(f"[{serial}] set_clipboard: {len(text)} chars")
+            except Exception as exc:
+                msg = f"set_clipboard failed: {exc}"
+                log.warning(f"[{serial}] {msg}")
+                step_result["ok"] = False
+                step_result["message"] = msg
 
         elif t == "scroll_down":
             try:

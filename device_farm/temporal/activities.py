@@ -428,6 +428,8 @@ class DeviceActivities:
                         dedupe_field=dedupe_field,
                         tags=tags,
                         device_serial=inp.device_serial,
+                        campaign_id=inp.campaign_id,
+                        run_id=inp.run_id,
                     )
                     if result.get("saved"):
                         saved += 1

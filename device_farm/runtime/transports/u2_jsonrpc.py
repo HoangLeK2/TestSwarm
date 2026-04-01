@@ -486,6 +486,16 @@ class U2JsonRpcClient:
     def long_click(self, x: int, y: int, duration: float = 0.8) -> None:
         self._rpc("longClick", int(x), int(y), _timeout=self._touch_timeout + duration)
 
+    def double_click(self, x: int, y: int) -> None:
+        """Double-tap at screen coordinates. Falls back to two rapid clicks if server lacks doubleClick."""
+        import time as _time
+        try:
+            self._rpc("doubleClick", int(x), int(y), _timeout=self._touch_timeout)
+        except Exception:
+            self._rpc("click", int(x), int(y), _timeout=self._touch_timeout)
+            _time.sleep(0.1)
+            self._rpc("click", int(x), int(y), _timeout=self._touch_timeout)
+
     # ── Key events ────────────────────────────────────────────────────────────
 
     _KEYCODES: Dict[str, int] = {
@@ -918,6 +928,26 @@ class U2JsonRpcClient:
         except Exception:
             pass
         self._rpc("clearTextField", None, 0, 9999)
+
+    def set_clipboard(self, text: str) -> None:
+        """Set device clipboard text via uiautomator2 server."""
+        for method in ("setClipboard", "clipboardSet", "clipboard"):
+            try:
+                self._rpc(method, text)
+                return
+            except Exception:
+                pass
+
+    def get_clipboard(self) -> Optional[str]:
+        """Get device clipboard text via uiautomator2 server."""
+        for method in ("getClipboard", "clipboardGet", "clipboard"):
+            try:
+                result = self._rpc(method)
+                if isinstance(result, str):
+                    return result
+            except Exception:
+                pass
+        return None
 
     # ── Element builder ───────────────────────────────────────────────────────
 

@@ -43,6 +43,7 @@ async def query_content(
     search: str | None = None,
     device_serial: str | None = None,
     campaign_id: str | None = None,
+    run_id: str | None = None,
     date_from: datetime | None = None,
     date_to: datetime | None = None,
     limit: int = 50,
@@ -61,6 +62,8 @@ async def query_content(
         stmt = stmt.where(ContentItem.device_serial == device_serial)
     if campaign_id:
         stmt = stmt.where(ContentItem.campaign_id == campaign_id)
+    if run_id:
+        stmt = stmt.where(ContentItem.run_id == run_id)
     if date_from:
         stmt = stmt.where(ContentItem.extracted_at >= date_from)
     if date_to:

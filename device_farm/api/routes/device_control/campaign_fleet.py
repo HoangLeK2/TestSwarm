@@ -191,13 +191,14 @@ def build_campaign_fleet_router(
             return {"serial": serial, "workflows": [], "temporal_available": False}
         try:
             client = await get_temporal_client(config.temporal)
-            # Sanitize serial to prevent Temporal query injection
+            # Temporal query language has no CONTAINS operator — fetch all
+            # running workflows and filter by serial client-side.
             safe_serial = serial.replace('"', "").replace("\\", "")
-            # Search for workflows containing :device:{serial}: in their ID
-            # Use ExecutionStatus filter to only get active ones
-            query = f'WorkflowId CONTAINS ":device:{safe_serial}:" AND ExecutionStatus = "Running"'
+            needle = f":device:{safe_serial}:"
             workflows = []
-            async for wf in client.list_workflows(query):
+            async for wf in client.list_workflows('ExecutionStatus = "Running"'):
+                if needle not in wf.id:
+                    continue
                 if not _TOP_LEVEL_WF_RE.match(wf.id):
                     continue
                 workflows.append({

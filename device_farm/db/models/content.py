@@ -48,6 +48,9 @@ class ContentItem(Base):
     campaign_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("campaigns.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    run_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("campaign_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     scenario_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     # Timestamps
@@ -78,6 +81,7 @@ class ContentItem(Base):
             "tags": self.tags,
             "device_serial": self.device_serial,
             "campaign_id": self.campaign_id,
+            "run_id": self.run_id,
             "extracted_at": self.extracted_at.isoformat() if self.extracted_at else None,
         }
 

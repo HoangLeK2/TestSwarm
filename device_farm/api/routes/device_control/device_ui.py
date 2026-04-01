@@ -40,7 +40,7 @@ def build_device_ui_router(manager: DeviceManager) -> APIRouter:
         xml_str = await loop.run_in_executor(
             None, lambda: device.hierarchy_xml(force_refresh=refresh)
         )
-        if xml_str is None:
+        if not xml_str:
             return JSONResponse(
                 {"error": "Hierarchy not available (uiautomator2 not connected or dump failed)"},
                 status_code=503,
@@ -95,16 +95,19 @@ def build_device_ui_router(manager: DeviceManager) -> APIRouter:
 
         seen: set[tuple] = set()
         unique: list[dict] = []
+        duplicates: int = 0
         for el in elements:
             key = (el["selector_by"], el["selector_value"])
             if key not in seen:
                 seen.add(key)
                 unique.append(el)
+            else:
+                duplicates += 1
 
         return {
             "serial": serial,
             "element_count": len(unique),
-            "flat_xml": False,
+            "duplicates_hidden": duplicates,
             "elements": unique,
             "usage": (
                 "Pick element by text/resource_id/content_desc, "
@@ -119,7 +122,12 @@ def build_device_ui_router(manager: DeviceManager) -> APIRouter:
         if not device:
             return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, device.tap_selector, body.by, body.value)
+        try:
+            await loop.run_in_executor(None, device.tap_selector, body.by, body.value)
+        except LookupError as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
+        except Exception as e:
+            return JSONResponse({"error": f"tap_selector failed: {e}"}, status_code=500)
         return {"ok": True}
 
     @router.post("/devices/{serial}/hit_test")
@@ -141,9 +149,10 @@ def build_device_ui_router(manager: DeviceManager) -> APIRouter:
         _LOG.info(
             "hit_test serial=%s rx=%s ry=%s → px=%s py=%s → sel=%s  u2=%s  sw=%s sh=%s  cache=%s",
             serial, body.rx, body.ry, px, py, sel,
-            "ok" if device._u2 is not None else "None",
-            device.screen_width, device.screen_height,
-            "ok" if device._hierarchy_cache else "None",
+            "ok" if getattr(device, "_u2", None) is not None else "None",
+            getattr(device, "screen_width", None),
+            getattr(device, "screen_height", None),
+            "ok" if getattr(device, "_hierarchy_cache", None) else "None",
         )
         if not sel:
             return {"by": None, "value": None}

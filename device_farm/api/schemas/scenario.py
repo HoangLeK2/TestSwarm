@@ -24,7 +24,16 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 # ---------------------------------------------------------------------------
 
 SelectorBy = Literal["resource-id", "text", "xpath", "class name",
-                      "description", "descriptionContains", "descriptionStartsWith"]
+                      "description", "descriptionContains", "descriptionStartsWith",
+                      "content-desc"]
+
+# Fields that support ${VAR} interpolation at runtime use these types.
+# A plain string is accepted (e.g. "${SCROLL_COUNT}"); bounds are only
+# enforced for literal numbers.
+NumOrVar = Union[float, str]   # float fields (seconds, timeout, …)
+IntOrVar = Union[int, str]     # int fields (count, repeats, …)
+TagsOrStr = Union[List[str], str]  # tags: list OR comma-separated string
+
 
 class StepBase(BaseModel):
   
@@ -101,8 +110,8 @@ class ConditionDict(BaseModel):
 # ---------------------------------------------------------------------------
 
 class RandomBranch(BaseModel):
-    steps: List[StepModel] = Field(min_length=1)
-    weight: float = Field(1.0, gt=0)
+    steps: List[StepModel] = []   # empty = no-op branch (valid for skip probability)
+    weight: NumOrVar = 1.0
 
 # ---------------------------------------------------------------------------
 # Step models — one per step type
@@ -128,7 +137,7 @@ class OpenUrlStep(StepBase):
 
 class WaitStep(StepBase):
     type: Literal["wait"]
-    seconds: float = Field(1.0, ge=0, le=300)
+    seconds: NumOrVar = 1.0
 
 class TapStep(StepBase):
     type: Literal["tap"]
@@ -213,7 +222,7 @@ class KeyStep(StepBase):
 
 class ScrollDownStep(StepBase):
     type: Literal["scroll_down"]
-    repeats: int = Field(1, ge=1, le=100)
+    repeats: IntOrVar = 1
     start_y_ratio: float = Field(0.72, ge=0.0, le=1.0)
     end_y_ratio: float = Field(0.38, ge=0.0, le=1.0)
     duration_ms: int = Field(520, ge=50, le=5000)
@@ -239,8 +248,8 @@ class SetVariableStep(StepBase):
     type: Literal["set_variable"]
     name: str = Field(min_length=1)
     value: Optional[Any] = None
-    from_list: Optional[List[Any]] = None
-    increment: Optional[int] = None
+    from_list: Optional[Union[List[Any], str]] = None  # str = "${VAR}" interpolation
+    increment: Optional[IntOrVar] = None
 
     @model_validator(mode="after")
     def at_least_one_source(self):
@@ -256,15 +265,15 @@ class SetVariableStep(StepBase):
 
 class RepeatStep(StepBase):
     type: Literal["repeat"]
-    count: int = Field(ge=1, le=10000)
+    count: IntOrVar
     steps: List[StepModel] = Field(min_length=1)
-    delay_between: float = Field(0, ge=0, le=300)
+    delay_between: NumOrVar = 0
 
 class RepeatUntilStep(StepBase):
     type: Literal["repeat_until"]
     condition: ConditionDict
     steps: List[StepModel] = Field(min_length=1)
-    max_iterations: int = Field(100, ge=1, le=10000)
+    max_iterations: IntOrVar = 100
 
 class IfElementStep(StepBase):
     type: Literal["if_element"]
@@ -292,8 +301,8 @@ class RandomPickStep(StepBase):
 class LoopStep(StepBase):
     type: Literal["loop"]
     steps: List[StepModel] = Field(min_length=1)
-    count: Optional[int] = Field(None, ge=1, le=10000)
-    max_iterations: int = Field(100, ge=1, le=10000)
+    count: Optional[IntOrVar] = None
+    max_iterations: IntOrVar = 100
     # "while" is reserved → model_config handles it
     model_config = {"extra": "allow"}
 
@@ -362,7 +371,7 @@ class SaveExtractionStep(StepBase):
     platform: Optional[str] = None
     content_type: Optional[str] = None
     dedupe_field: Optional[str] = None
-    tags: Optional[List[str]] = None
+    tags: Optional[TagsOrStr] = None
 
 
 # ---------------------------------------------------------------------------

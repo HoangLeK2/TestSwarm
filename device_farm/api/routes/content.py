@@ -1,13 +1,11 @@
 """DF-010: Content Pipeline — API endpoints for content CRUD, collections, exports, stats."""
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
-from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 
 from api.deps import CurrentUser, DB
 from api.schemas.content import (
@@ -27,12 +25,14 @@ router = APIRouter(prefix="/content", tags=["content"])
 @router.get("")
 async def list_content(
     db: DB,
+    _: CurrentUser,
     collection: str | None = None,
     platform: str | None = None,
     content_type: str | None = None,
     search: str | None = None,
     device_serial: str | None = None,
     campaign_id: str | None = None,
+    run_id: str | None = None,
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ):
@@ -44,6 +44,7 @@ async def list_content(
         search=search,
         device_serial=device_serial,
         campaign_id=campaign_id,
+        run_id=run_id,
         limit=limit,
         offset=offset,
     )
@@ -56,12 +57,12 @@ async def list_content(
 
 
 @router.get("/stats", response_model=ContentStatsOut)
-async def get_stats(db: DB):
+async def get_stats(db: DB, _: CurrentUser):
     return await content_crud.content_stats(db)
 
 
 @router.post("/save")
-async def save_content(body: SaveContentBody, db: DB):
+async def save_content(body: SaveContentBody, db: DB, _: CurrentUser):
     """Save extracted content with deduplication (used by scenarios and MCP)."""
     from services.content_store import save_content_item
     result = await save_content_item(
@@ -78,7 +79,7 @@ async def save_content(body: SaveContentBody, db: DB):
 
 
 @router.get("/{item_id}")
-async def get_content_item(item_id: str, db: DB):
+async def get_content_item(item_id: str, db: DB, _: CurrentUser):
     item = await content_crud.get_content_item(db, item_id)
     if not item:
         raise HTTPException(404, "Content item not found")
@@ -86,7 +87,7 @@ async def get_content_item(item_id: str, db: DB):
 
 
 @router.delete("/{item_id}")
-async def delete_content_item(item_id: str, db: DB):
+async def delete_content_item(item_id: str, db: DB, _: CurrentUser):
     ok = await content_crud.delete_content_item(db, item_id)
     if not ok:
         raise HTTPException(404, "Content item not found")
@@ -98,7 +99,7 @@ async def delete_content_item(item_id: str, db: DB):
 
 
 @router.get("/collections/list", response_model=list[CollectionOut])
-async def list_collections(db: DB):
+async def list_collections(db: DB, _: CurrentUser):
     colls = await content_crud.list_collections(db)
     return [
         CollectionOut(
@@ -110,7 +111,7 @@ async def list_collections(db: DB):
 
 
 @router.post("/collections")
-async def create_collection(body: CollectionCreate, db: DB):
+async def create_collection(body: CollectionCreate, db: DB, _: CurrentUser):
     coll = await content_crud.get_or_create_collection(
         db, name=body.name, description=body.description, platform=body.platform
     )
@@ -119,7 +120,7 @@ async def create_collection(body: CollectionCreate, db: DB):
 
 
 @router.delete("/collections/{name}")
-async def delete_collection(name: str, db: DB):
+async def delete_collection(name: str, db: DB, _: CurrentUser):
     count = await content_crud.delete_collection(db, name)
     await db.commit()
     return {"ok": True, "items_deleted": count}
@@ -129,7 +130,12 @@ async def delete_collection(name: str, db: DB):
 
 
 @router.post("/export", response_model=ExportOut)
-async def create_export(body: ExportRequest, db: DB, background_tasks: BackgroundTasks):
+async def create_export(
+    body: ExportRequest,
+    db: DB,
+    background_tasks: BackgroundTasks,
+    _: CurrentUser,
+):
     if body.format not in ("csv", "json"):
         raise HTTPException(400, "format must be 'csv' or 'json'")
 
@@ -151,7 +157,7 @@ async def create_export(body: ExportRequest, db: DB, background_tasks: Backgroun
 
 
 @router.get("/exports/list", response_model=list[ExportOut])
-async def list_exports(db: DB):
+async def list_exports(db: DB, _: CurrentUser):
     exports = await content_crud.list_exports(db)
     return [
         ExportOut(
@@ -165,7 +171,7 @@ async def list_exports(db: DB):
 
 
 @router.get("/exports/{export_id}")
-async def get_export(export_id: str, db: DB):
+async def get_export(export_id: str, db: DB, _: CurrentUser):
     export = await content_crud.get_export(db, export_id)
     if not export:
         raise HTTPException(404, "Export not found")
@@ -178,7 +184,7 @@ async def get_export(export_id: str, db: DB):
 
 
 @router.get("/exports/{export_id}/download")
-async def download_export(export_id: str, db: DB):
+async def download_export(export_id: str, db: DB, _: CurrentUser):
     export = await content_crud.get_export(db, export_id)
     if not export:
         raise HTTPException(404, "Export not found")
@@ -213,5 +219,6 @@ def _item_to_out(item) -> dict:
         "tags": item.tags,
         "device_serial": item.device_serial,
         "campaign_id": item.campaign_id,
+        "run_id": item.run_id,
         "extracted_at": item.extracted_at.isoformat() if item.extracted_at else None,
     }

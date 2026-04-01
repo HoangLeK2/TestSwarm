@@ -724,6 +724,69 @@ class DeviceClient:
             return
         self._log("long_tap skipped (no touch method available)", level=logging.WARNING)
 
+    def double_tap(self, x: int, y: int) -> None:
+        """Double-tap at coordinates. U2 → WsAgent (TouchA11y) → shell fallback."""
+        if self._try_u2_tap(lambda: self._u2.double_click(x, y) if self._u2 else None):
+            return
+        ctrl = self._get_scrcpy_control()
+        if ctrl is not None:
+            try:
+                ctrl.tap(x, y)
+                import time as _t; _t.sleep(0.1)
+                ctrl.tap(x, y)
+                return
+            except Exception as exc:
+                self._log(f"double_tap via scrcpy failed: {exc}", level=logging.WARNING)
+        # WsAgent with TouchAccessibilityService handles double_tap natively
+        self._send_to_agent({"type": "double_tap", "x": x, "y": y})
+
+    def drag(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 1000) -> None:
+        """Drag-and-drop (long-press + move). U2 → WsAgent (TouchA11y) → shell fallback."""
+        if self._try_u2_tap(
+            lambda: self._u2.drag(x1, y1, x2, y2, duration=duration_ms / 1000.0) if self._u2 else None
+        ):
+            return
+        ctrl = self._get_scrcpy_control()
+        if ctrl is not None:
+            try:
+                ctrl.swipe(x1, y1, x2, y2, duration_ms=duration_ms)
+                return
+            except Exception as exc:
+                self._log(f"drag via scrcpy failed: {exc}", level=logging.WARNING)
+        self._send_to_agent({"type": "drag", "x1": x1, "y1": y1, "x2": x2, "y2": y2, "ms": duration_ms})
+
+    def set_clipboard(self, text: str) -> None:
+        """Set device clipboard. STFService → U2 → ADB broadcast fallback."""
+        if self.stf_set_clipboard(text):
+            return
+        with self._u2_lock:
+            u2 = self._u2
+        if u2 is not None:
+            try:
+                u2.set_clipboard(text)
+                return
+            except Exception as exc:
+                self._log(f"set_clipboard via u2 failed: {exc}", level=logging.WARNING)
+        if self.is_adb_mode and self._adb_transport is not None and self._adb_transport.connected:
+            safe = text.replace("'", r"'\''")
+            self._adb_transport.shell_safe(
+                f"am broadcast -a clipper.set -e text '{safe}'", timeout=5.0
+            )
+
+    def get_clipboard(self) -> Optional[str]:
+        """Get device clipboard text. STFService → U2."""
+        text = self.stf_get_clipboard()
+        if text is not None:
+            return text
+        with self._u2_lock:
+            u2 = self._u2
+        if u2 is not None:
+            try:
+                return u2.get_clipboard()
+            except Exception as exc:
+                self._log(f"get_clipboard via u2 failed: {exc}", level=logging.WARNING)
+        return None
+
     def input_text(self, text: str) -> None:
         """Type text into currently focused element."""
         # scrcpy control first: injects text at system level.
@@ -935,9 +998,9 @@ class DeviceClient:
 
         self._log(f"key skipped ({k}): no agent and no adb", level=logging.WARNING)
 
-    def pinch(self, cx: int, cy: int, scale: float) -> None:
-        """Pinch gesture via WebSocket → agent."""
-        self._send_to_agent({"type": "pinch", "cx": cx, "cy": cy, "scale": scale})
+    def pinch(self, cx: int, cy: int, scale: float, duration_ms: int = 400) -> None:
+        """Pinch/zoom via TouchAccessibilityService. scale>1=zoom in, scale<1=zoom out."""
+        self._send_to_agent({"type": "pinch", "cx": cx, "cy": cy, "scale": scale, "ms": duration_ms})
 
     # ── Shell (no-ADB; via WsAgentService) ─────────────────────────────────────
 
@@ -953,15 +1016,35 @@ class DeviceClient:
         """Ask agent to start an app by package name via Intent."""
         if not package:
             return
-        # ADB mode: use monkey or am start to launch by package
+        # ADB mode: use am start (works on all Android versions including 12+)
+        # monkey is blocked on many OEMs; am start via resolve-activity is more reliable.
         if self.is_adb_mode and self._adb_transport is not None and self._adb_transport.connected:
             try:
-                # monkey -p <pkg> -c android.intent.category.LAUNCHER 1 is reliable
-                cmd = f"monkey -p {package} -c android.intent.category.LAUNCHER 1"
+                # Resolve the launcher activity component, then start it directly.
+                resolve = (
+                    f"cmd package resolve-activity --brief"
+                    f" -c android.intent.category.LAUNCHER"
+                    f" -a android.intent.action.MAIN"
+                    f" {package} 2>/dev/null | grep '/' | head -1"
+                )
+                component = (self._adb_transport.shell(resolve, timeout=5.0) or "").strip()
+                if component and "/" in component:
+                    cmd = f"am start -n {component}"
+                else:
+                    # Fallback: generic intent launch (works if app has a MAIN/LAUNCHER activity)
+                    cmd = (
+                        f"am start -a android.intent.action.MAIN"
+                        f" -c android.intent.category.LAUNCHER"
+                        f" -p {package}"
+                    )
                 self._adb_transport.shell(cmd, timeout=10.0)
             except Exception as exc:
                 self._log(f"launch_app via ADB failed: {exc}", level=logging.WARNING)
             return
+        # WsAgent mode: use the Java intent approach (getLaunchIntentForPackage +
+        # queryIntentActivities fallback).  Do NOT use am start via shell here —
+        # Runtime.exec() from app UID (non-shell) is blocked by assertPackageMatchesCallingUid
+        # on Android 12+ (SecurityException: package=com.android.shell does not belong to uid).
         self._send_to_agent({"type": "launch_app", "package": package})
 
     def open_url(self, url: str, package: str | None = None) -> None:

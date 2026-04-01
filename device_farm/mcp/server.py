@@ -7,9 +7,11 @@ import os
 import sys
 import time
 import traceback
+import threading
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 try:
     from dotenv import load_dotenv
@@ -39,6 +41,7 @@ _TIMEOUT_CAMPAIGN = 600   # campaign/run (up to 10 min)
 _MCP_TOKEN = (os.environ.get("DEVICE_FARM_MCP_TOKEN") or os.environ.get("MCP_AUTH_TOKEN") or "").strip() or None
 
 _httpx_clients: Dict[int, Any] = {}  # keyed by timeout value
+_httpx_lock = threading.Lock()
 
 
 def _auth_headers() -> Dict[str, str]:
@@ -50,43 +53,58 @@ def _auth_headers() -> Dict[str, str]:
 def _get_client(timeout: int) -> Any:
     if not _HTTPX_AVAILABLE:
         return None
-    if timeout not in _httpx_clients:
-        headers = _auth_headers()
-        _httpx_clients[timeout] = httpx.Client(
-            base_url=DEVICE_FARM_URL,
-            timeout=timeout,
-            limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
-            headers=headers if headers else None,
-        )
-    return _httpx_clients[timeout]
+    with _httpx_lock:
+        if timeout not in _httpx_clients:
+            headers = _auth_headers()
+            _httpx_clients[timeout] = httpx.Client(
+                base_url=DEVICE_FARM_URL,
+                timeout=timeout,
+                limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+                headers=headers if headers else None,
+            )
+        return _httpx_clients[timeout]
 
 
 def _http_get(path: str, timeout: int = _TIMEOUT_FAST) -> bytes:
     client = _get_client(timeout)
-    headers = _auth_headers()
     if client is not None:
-        r = client.get(path, headers=headers or None)
-        r.raise_for_status()
-        return r.content
+        try:
+            r = client.get(path)
+            r.raise_for_status()
+            return r.content
+        except httpx.HTTPStatusError as e:
+            raise RuntimeError(f"HTTP {e.response.status_code}: {e.response.text}") from e
+        except httpx.RequestError as e:
+            raise RuntimeError(f"HTTP error: {e}") from e
+    headers = _auth_headers()
     url = f"{DEVICE_FARM_URL}{path}"
     req = urlrequest.Request(url, method="GET", headers=headers)
-    with urlrequest.urlopen(req, timeout=timeout) as resp:
-        return resp.read()
+    try:
+        with urlrequest.urlopen(req, timeout=timeout) as resp:
+            return resp.read()
+    except HTTPError as e:
+        raise RuntimeError(f"HTTP {e.code}: {e.read().decode('utf-8', errors='ignore')}") from e
+    except URLError as e:
+        raise RuntimeError(f"HTTP error: {e.reason}") from e
 
 
 def _http_patch_json(path: str, body: Dict[str, Any], timeout: int = _TIMEOUT_CONTROL) -> Dict[str, Any]:
     client = _get_client(timeout)
-    headers = _auth_headers()
     if client is not None:
-        r = client.patch(path, json=body, headers=headers or None)
-        r.raise_for_status()
-        raw = r.content
-        if not raw:
-            return {}
         try:
-            return r.json()
-        except Exception:
-            return {}
+            r = client.patch(path, json=body)
+            r.raise_for_status()
+            if not r.content:
+                return {}
+            try:
+                return r.json()
+            except Exception:
+                return {}
+        except httpx.HTTPStatusError as e:
+            raise RuntimeError(f"HTTP {e.response.status_code}: {e.response.text}") from e
+        except httpx.RequestError as e:
+            raise RuntimeError(f"HTTP error: {e}") from e
+    headers = _auth_headers()
     url = f"{DEVICE_FARM_URL}{path}"
     data = json.dumps(body).encode("utf-8")
     req = urlrequest.Request(url, data=data, headers={"Content-Type": "application/json", **headers}, method="PATCH")
@@ -104,17 +122,21 @@ def _http_patch_json(path: str, body: Dict[str, Any], timeout: int = _TIMEOUT_CO
 
 def _http_post_json(path: str, body: Dict[str, Any], timeout: int = _TIMEOUT_CONTROL) -> Dict[str, Any]:
     client = _get_client(timeout)
-    headers = _auth_headers()
     if client is not None:
-        r = client.post(path, json=body, headers=headers or None)
-        r.raise_for_status()
-        raw = r.content
-        if not raw:
-            return {}
         try:
-            return r.json()
-        except Exception:
-            return {}
+            r = client.post(path, json=body)
+            r.raise_for_status()
+            if not r.content:
+                return {}
+            try:
+                return r.json()
+            except Exception:
+                return {}
+        except httpx.HTTPStatusError as e:
+            raise RuntimeError(f"HTTP {e.response.status_code}: {e.response.text}") from e
+        except httpx.RequestError as e:
+            raise RuntimeError(f"HTTP error: {e}") from e
+    headers = _auth_headers()
     url = f"{DEVICE_FARM_URL}{path}"
     data = json.dumps(body).encode("utf-8")
     req = urlrequest.Request(
@@ -140,12 +162,17 @@ def _http_post_json(path: str, body: Dict[str, Any], timeout: int = _TIMEOUT_CON
 
 def _http_delete(path: str, timeout: int = _TIMEOUT_CONTROL) -> None:
     client = _get_client(timeout)
-    headers = _auth_headers()
     if client is not None:
-        r = client.delete(path, headers=headers or None)
-        if r.status_code not in (200, 204):
-            r.raise_for_status()
+        try:
+            r = client.delete(path)
+            if r.status_code not in (200, 204):
+                r.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            raise RuntimeError(f"HTTP {e.response.status_code}: {e.response.text}") from e
+        except httpx.RequestError as e:
+            raise RuntimeError(f"HTTP error: {e}") from e
         return
+    headers = _auth_headers()
     url = f"{DEVICE_FARM_URL}{path}"
     req = urlrequest.Request(url, method="DELETE", headers=headers)
     try:
@@ -207,9 +234,9 @@ def _df_list_devices(args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     args = args or {}
     params: List[str] = []
     if args.get("state"):
-        params.append(f"state={args['state']}")
+        params.append(f"state={quote(str(args['state']))}")
     if args.get("model"):
-        params.append(f"model={args['model']}")
+        params.append(f"model={quote(str(args['model']))}")
     if args.get("limit") is not None:
         params.append(f"limit={int(args['limit'])}")
     if args.get("offset"):
@@ -382,7 +409,7 @@ def _df_fleet_run(args: Dict[str, Any]) -> Dict[str, Any]:
 def _df_fleet_status(args: Dict[str, Any]) -> Dict[str, Any]:
     """Get aggregate progress of a fleet run or all tasks."""
     run_id = args.get("run_id")
-    qs = f"?run_id={run_id}" if run_id else ""
+    qs = f"?run_id={quote(str(run_id))}" if run_id else ""
     raw = _http_get(f"/api/fleet/status{qs}", timeout=_TIMEOUT_FAST)
     return json.loads(raw.decode("utf-8"))
 
@@ -399,7 +426,7 @@ def _df_fleet_poll(args: Dict[str, Any]) -> Dict[str, Any]:
     status: Dict[str, Any] = {}
     while time.monotonic() < deadline:
         try:
-            raw = _http_get(f"/api/fleet/status?run_id={run_id}", timeout=_TIMEOUT_FAST)
+            raw = _http_get(f"/api/fleet/status?run_id={quote(run_id)}", timeout=_TIMEOUT_FAST)
             status = json.loads(raw.decode("utf-8"))
             if status.get("all_complete"):
                 break
@@ -424,7 +451,7 @@ def _df_enqueue_task(args: Dict[str, Any]) -> Dict[str, Any]:
 
 def _df_list_tasks(args: Dict[str, Any]) -> Dict[str, Any]:
     ids = args.get("ids")
-    path = "/api/tasks" + (f"?ids={ids}" if ids else "")
+    path = "/api/tasks" + (f"?ids={quote(str(ids))}" if ids else "")
     raw = _http_get(path, timeout=_TIMEOUT_FAST)
     return {"tasks": json.loads(raw.decode("utf-8"))}
 
@@ -450,7 +477,7 @@ def _df_poll_tasks(args: Dict[str, Any]) -> Dict[str, Any]:
         pending = [tid for tid in task_ids if statuses.get(tid) not in TERMINAL]
         if not pending:
             break
-        ids_param = ",".join(pending)
+        ids_param = quote(",".join(pending))
         try:
             raw = _http_get(f"/api/tasks?ids={ids_param}", timeout=_TIMEOUT_FAST)
             tasks = json.loads(raw.decode("utf-8"))
@@ -584,9 +611,9 @@ def _df_list_scenario_templates(args: Optional[Dict[str, Any]] = None) -> Dict[s
     args = args or {}
     params: List[str] = []
     if args.get("category"):
-        params.append(f"category={args['category']}")
+        params.append(f"category={quote(str(args['category']))}")
     if args.get("tags"):
-        params.append(f"tags={args['tags']}")
+        params.append(f"tags={quote(str(args['tags']))}")
     qs = ("?" + "&".join(params)) if params else ""
     raw = _http_get(f"/api/scenario-templates{qs}", timeout=_TIMEOUT_FAST)
     return {"templates": json.loads(raw.decode("utf-8"))}
@@ -1311,6 +1338,14 @@ TOOL_DEFS: Dict[str, Dict[str, Any]] = {
     },
 }
 
+# Pre-compute which tool functions accept arguments (avoids inspect on every call)
+import inspect as _inspect
+_TOOL_TAKES_ARGS: Dict[str, bool] = {
+    name: bool(_inspect.signature(meta["fn"]).parameters)
+    for name, meta in TOOL_DEFS.items()
+}
+del _inspect
+
 
 # ── MCP stdio server ──────────────────────────────────────────────────────────
 
@@ -1345,7 +1380,13 @@ def handle_tools_list(_ctx: McpContext, msg: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def handle_tools_call(_ctx: McpContext, msg: Dict[str, Any]) -> Dict[str, Any]:
+def handle_tools_call(ctx: McpContext, msg: Dict[str, Any]) -> Dict[str, Any]:
+    if not ctx.initialized:
+        return {
+            "id": msg.get("id"),
+            "jsonrpc": "2.0",
+            "error": {"code": -32002, "message": "Server not initialized"},
+        }
     params = msg.get("params") or {}
     name = params.get("name")
     args = params.get("arguments") or {}
@@ -1357,9 +1398,7 @@ def handle_tools_call(_ctx: McpContext, msg: Dict[str, Any]) -> Dict[str, Any]:
         }
     fn = TOOL_DEFS[name]["fn"]
     try:
-        import inspect as _inspect
-        sig = _inspect.signature(fn)
-        result = fn(args) if sig.parameters else fn()  # type: ignore[arg-type]
+        result = fn(args) if _TOOL_TAKES_ARGS[name] else fn()  # type: ignore[arg-type]
         content: List[Dict[str, Any]] = []
         if name == "df_screenshot":
             img = result["image"]

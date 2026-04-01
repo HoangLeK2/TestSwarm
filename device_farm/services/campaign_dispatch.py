@@ -145,6 +145,16 @@ async def enqueue_campaign_run_temporal(
             pass
 
         await repo.update_campaign_status(db, campaign_id, "running")
+        # Create a CampaignRun record — populated with workflow IDs after dispatch
+        from db.crud.campaign_run import create_campaign_run
+        run_record = await create_campaign_run(
+            db,
+            campaign_id=campaign_id,
+            device_serials=[d.serial for d in devices],
+            workflow_ids=[],
+            scenarios_count=len(scenarios),
+        )
+        run_id = run_record.id
         await db.commit()
 
     # Resolve per-device account vars
@@ -195,6 +205,7 @@ async def enqueue_campaign_run_temporal(
                             variables={**(scen.variables or {}), **acct_vars},
                             campaign_vars=campaign.variables or {},
                             scenario_registry=registry,
+                            run_id=run_id,
                         ),
                         id=wf_id,
                         task_queue=task_queue,
@@ -220,6 +231,7 @@ async def enqueue_campaign_run_temporal(
                         },
                         campaign_vars=campaign.variables or {},
                         scenario_registry=registry,
+                        run_id=run_id,
                     ),
                     id=wf_id,
                     task_queue=task_queue,
@@ -235,13 +247,30 @@ async def enqueue_campaign_run_temporal(
             "Campaign %s: all %d workflow start(s) failed — no devices are running",
             campaign_id, expected_workflows,
         )
+        # Mark run as failed
+        from db.crud.campaign_run import finish_campaign_run
+        async with AsyncSessionLocal() as db:
+            await finish_campaign_run(db, run_id, status="failed")
+            await db.commit()
         return {
             "error": "Failed to start any workflows — check Temporal server connectivity",
             "campaign_id": campaign_id,
         }, 500
 
+    # Update run record with actual workflow IDs
+    from sqlalchemy import update as sa_update
+    from db.models.campaign import CampaignRun
+    async with AsyncSessionLocal() as db:
+        await db.execute(
+            sa_update(CampaignRun)
+            .where(CampaignRun.id == run_id)
+            .values(workflow_ids=workflow_ids)
+        )
+        await db.commit()
+
     return {
         "id": campaign_id,
+        "run_id": run_id,
         "status": "running",
         "device_serials": [d.serial for d in devices],
         "workflow_ids": workflow_ids,

@@ -307,7 +307,22 @@ class WebSocketManager:
                 cx = int(data.get("cx", 0))
                 cy = int(data.get("cy", 0))
                 scale = float(data.get("scale", 0.5))
-                await loop.run_in_executor(None, device.pinch, cx, cy, scale)
+                duration_ms = int(data.get("ms", 400))
+                await loop.run_in_executor(None, device.pinch, cx, cy, scale, duration_ms)
+
+            elif msg_type == "double_tap":
+                x, y = int(data.get("x", 0)), int(data.get("y", 0))
+                log.info(f"[INPUT] DOUBLE_TAP {serial} ({x},{y})")
+                await loop.run_in_executor(None, device.double_tap, x, y)
+
+            elif msg_type == "drag":
+                x1 = int(data.get("x1", 0))
+                y1 = int(data.get("y1", 0))
+                x2 = int(data.get("x2", 0))
+                y2 = int(data.get("y2", 0))
+                ms = int(data.get("ms", 1000))
+                log.info(f"[INPUT] DRAG {serial} ({x1},{y1})→({x2},{y2}) ms={ms}")
+                await loop.run_in_executor(None, device.drag, x1, y1, x2, y2, ms)
 
             elif msg_type == "tap_selector":
                 by = data.get("by", "text")

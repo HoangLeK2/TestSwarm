@@ -20,6 +20,8 @@ class ScenarioInput:
     # Scenario-level config: visual_anchor, implicit_wait, etc.
     # Passed through to each activity so 1-step mini-scenarios inherit settings.
     scenario_config: dict[str, Any] = field(default_factory=dict)
+    # Run tracking — set by campaign_dispatch when creating a CampaignRun record
+    run_id: str | None = None
 
 
 @dataclass
@@ -35,6 +37,8 @@ class StepsInput:
     scenario_config: dict[str, Any] = field(default_factory=dict)
     # Shared execution context: posts, text_nodes, _no_new_streak, vars (legacy ctx)
     context: dict[str, Any] = field(default_factory=dict)
+    campaign_id: str | None = None
+    run_id: str | None = None
 
 
 @dataclass
@@ -165,3 +169,5 @@ class SaveExtractionInput:
     step_index: int = 0
     # Context carries posts / text_nodes collected so far
     context: dict[str, Any] = field(default_factory=dict)
+    campaign_id: str | None = None
+    run_id: str | None = None

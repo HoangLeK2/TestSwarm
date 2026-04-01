@@ -40,14 +40,31 @@ _RE_LINK_TYPE = re.compile(
     re.IGNORECASE,
 )
 
+# Số có thể đứng sau emoji/ký tự bất kỳ, format: 1.2K / 1,2K / 123 / 1.200
+_RE_NUM = r"(\d[\d.,]*[KMkm]?)"
+
 _RE_REACTIONS = re.compile(
-    r"^(\d[\d.,]*[KMkm]?)\s*(lượt thích|reactions?|likes?)?$", re.IGNORECASE
+    r"[^\d]*" + _RE_NUM + r"\s*(lượt thích|reactions?|likes?)?\s*$", re.IGNORECASE
 )
 _RE_COMMENTS = re.compile(
-    r"^(\d[\d.,]*[KMkm]?)\s*(bình luận|comments?|phản hồi)$", re.IGNORECASE
+    r"[^\d]*" + _RE_NUM + r"\s*(bình luận|comments?|phản hồi)\s*$", re.IGNORECASE
 )
 _RE_SHARES = re.compile(
-    r"^(\d[\d.,]*[KMkm]?)\s*(lượt chia sẻ|shares?)$", re.IGNORECASE
+    r"[^\d]*" + _RE_NUM + r"\s*(lượt chia sẻ|shares?)\s*$", re.IGNORECASE
+)
+_RE_VIEWS = re.compile(
+    r"[^\d]*" + _RE_NUM + r"\s*(lượt xem|views?|lần xem)\s*$", re.IGNORECASE
+)
+# Combined stats node: "1,2K · 45 bình luận · 12 lượt chia sẻ"
+_RE_COMBINED_STATS = re.compile(
+    r"(\d[\d.,]*[KMkm]?)\s*"
+    r"(lượt thích|reactions?|likes?|bình luận|comments?|phản hồi"
+    r"|lượt chia sẻ|shares?|lượt xem|views?)?",
+    re.IGNORECASE,
+)
+# content-desc nút like: "1.200 lượt thích. Nút Thích." → trích số
+_RE_LIKE_BTN_DESC = re.compile(
+    r"^(\d[\d.,]*[KMkm]?)\s+lượt thích[.\s]", re.IGNORECASE
 )
 
 _NOISE_TEXTS = frozenset({
@@ -62,13 +79,16 @@ _NOISE_TEXTS = frozenset({
 
 _NOISE_PREFIXES = (
     "lựa chọn khác cho bài viết",
-    "ảnh đại diện của",
-    "nút thích",
     "nút bình luận",
     "nút chia sẻ",
     "thước phim",
     "action chip profile picture",
 )
+# "nút thích" không bỏ vào noise vì content-desc có thể chứa số like:
+# "1.200 lượt thích. Nút Thích." → cần parse trước rồi skip
+
+# Prefix dùng để trích xuất tên tác giả từ content-desc avatar
+_AUTHOR_PREFIX = "ảnh đại diện của"
 
 _NOISE_CONTAINS = (
     "bảng ở cạnh",
@@ -91,6 +111,55 @@ _LXML_PARSER = _lxml.XMLParser(recover=True, remove_comments=True, encoding="utf
 
 _XPATH_RECYCLER = '//node[contains(@class, "RecyclerView") and @scrollable="true"]'
 _XPATH_LIST = '//node[contains(@class, "ListView") and @scrollable="true"]'
+
+
+def _parse_stats(t: str) -> Dict[str, Optional[str]]:
+    """Parse một text node thành dict stats. Hỗ trợ:
+    - "1,2K lượt thích" / "❤️ 1,2K" / "1.200 lượt thích. Nút Thích."
+    - "45 bình luận" / "12 lượt chia sẻ" / "5,4K lượt xem"
+    - Combined: "1,2K · 45 bình luận · 12 lượt chia sẻ"
+    Trả về dict với các key có giá trị tìm thấy, None nếu không có.
+    """
+    result: Dict[str, Optional[str]] = {
+        "reactions": None, "comments": None, "shares": None, "views": None,
+    }
+    # Thử combined trước (có dấu ·)
+    if "·" in t or "•" in t:
+        parts = re.split(r"[·•]", t)
+        for part in parts:
+            part = part.strip()
+            _apply_stat(part, result)
+        return result
+    _apply_stat(t, result)
+    return result
+
+
+def _apply_stat(t: str, result: Dict[str, Optional[str]]) -> None:
+    """Apply 1 đoạn text vào result dict nếu match stats pattern."""
+    # Like button desc: "1.200 lượt thích. Nút Thích."
+    m = _RE_LIKE_BTN_DESC.match(t)
+    if m and result["reactions"] is None:
+        result["reactions"] = m.group(1)
+        return
+    m = _RE_VIEWS.search(t)
+    if m and result["views"] is None:
+        result["views"] = m.group(1)
+        return
+    m = _RE_SHARES.search(t)
+    if m and result["shares"] is None:
+        result["shares"] = m.group(1)
+        return
+    m = _RE_COMMENTS.search(t)
+    if m and result["comments"] is None:
+        result["comments"] = m.group(1)
+        return
+    # Reactions: số đứng một mình hoặc với nhãn "lượt thích"
+    m = _RE_REACTIONS.search(t)
+    if m and result["reactions"] is None:
+        label = (m.group(2) or "").lower()
+        # Nếu không có label → chỉ chấp nhận nếu text ngắn (tránh nhầm body)
+        if label or len(t.strip()) <= 10:
+            result["reactions"] = m.group(1)
 
 
 def _is_noise_text(text: str) -> bool:
@@ -120,9 +189,33 @@ def _collect_text_nodes(element, toolbar_cutoff_y: int = 200) -> List[Dict[str, 
     for node in element.iter():
         text = (node.get("text") or "").strip()
         desc = (node.get("content-desc") or "").strip()
-        content = text if text else desc
-        if not content:
-            continue
+
+        # Trích xuất tên tác giả từ content-desc avatar: "Ảnh đại diện của {NAME}..."
+        is_author_hint = False
+        desc_lower = desc.lower()
+        if desc_lower.startswith(_AUTHOR_PREFIX):
+            remainder = desc[len(_AUTHOR_PREFIX):].strip().lstrip(",").strip()
+            # Lấy phần trước dấu phẩy đầu tiên (bỏ ", Nút." hoặc phần phụ)
+            name_part = remainder.split(",")[0].strip()
+            if 2 <= len(name_part) <= 80:
+                content = name_part
+                is_author_hint = True
+            else:
+                continue
+        else:
+            # "nút thích" content-desc có thể chứa số like → dùng desc thay vì bỏ
+            desc_lower_full = desc.lower()
+            if not text and desc_lower_full.startswith("nút thích"):
+                # Bỏ qua, không có số
+                continue
+            # Ưu tiên content-desc nếu chứa số stats và text rỗng/ngắn
+            if not text and desc and re.search(r"\d", desc):
+                content = desc
+            else:
+                content = text if text else desc
+            if not content:
+                continue
+
         bounds = _parse_bounds(node)
         if not bounds:
             continue
@@ -135,6 +228,7 @@ def _collect_text_nodes(element, toolbar_cutoff_y: int = 200) -> List[Dict[str, 
             "bounds":      bounds,
             "cy":          _cy(bounds),
             "resource_id": node.get("resource-id") or "",
+            "is_author_hint": is_author_hint,
         })
     nodes.sort(key=lambda n: n["cy"])
     return nodes
@@ -164,9 +258,13 @@ def _extract_post(cluster: List[Dict[str, Any]], source_index: int) -> Optional[
     else:
         post_type = "text"
 
-    author: Optional[str] = None
+    # Ưu tiên node có is_author_hint (từ content-desc avatar) làm author
+    author: Optional[str] = next(
+        (n["text"] for n in cluster if n.get("is_author_hint") and n["text"]),
+        None,
+    )
     body_parts: List[str] = []
-    reactions = comments = shares = None
+    reactions = comments = shares = views = None
     image_desc: Optional[str] = None
     comment_preview: Optional[str] = None
     stats_seen: bool = False
@@ -177,6 +275,8 @@ def _extract_post(cluster: List[Dict[str, Any]], source_index: int) -> Optional[
 
         if i == ts_idx:
             continue
+        if node.get("is_author_hint"):
+            continue  # đã xử lý ở trên
         if _is_noise_text(t) or len(t) <= 1:
             continue
 
@@ -194,18 +294,22 @@ def _extract_post(cluster: List[Dict[str, Any]], source_index: int) -> Optional[
                 image_desc = t
                 continue
 
-            m_r = _RE_REACTIONS.match(t)
-            m_c = _RE_COMMENTS.match(t)
-            m_s = _RE_SHARES.match(t)
+            stats = _parse_stats(t)
+            matched_stat = False
+            if stats["reactions"] is not None and reactions is None:
+                reactions = stats["reactions"]
+                matched_stat = True
+            if stats["comments"] is not None and comments is None:
+                comments = stats["comments"]
+                matched_stat = True
+            if stats["shares"] is not None and shares is None:
+                shares = stats["shares"]
+                matched_stat = True
+            if stats["views"] is not None and views is None:
+                views = stats["views"]
+                matched_stat = True
 
-            if m_r and reactions is None:
-                reactions = m_r.group(1)
-                stats_seen = True
-            elif m_c and comments is None:
-                comments = m_c.group(1)
-                stats_seen = True
-            elif m_s and shares is None:
-                shares = m_s.group(1)
+            if matched_stat:
                 stats_seen = True
             elif not _is_noise_text(t):
                 if stats_seen:
@@ -237,6 +341,7 @@ def _extract_post(cluster: List[Dict[str, Any]], source_index: int) -> Optional[
         "reactions":       reactions,
         "comments":        comments,
         "shares":          shares,
+        "views":           views,
         "source_index":    source_index,
         "post_type":       post_type,
         "image_desc":      image_desc,

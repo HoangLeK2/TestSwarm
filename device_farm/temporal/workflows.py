@@ -74,7 +74,7 @@ def _lookup_var(name: str, *dicts: dict[str, Any]) -> Any:
     return None
 
 
-_LONG_TIMEOUT = timedelta(seconds=60)
+_LONG_TIMEOUT = timedelta(seconds=120)
 _ELEMENT_CHECK_TIMEOUT = timedelta(seconds=15)
 
 
@@ -131,6 +131,8 @@ class ScenarioWorkflow:
                     depth=0,
                     parent_runtime_vars={},
                     scenario_config=merged_config,
+                    campaign_id=inp.campaign_id,
+                    run_id=inp.run_id,
                 ),
                 id=f"{workflow.info().workflow_id}:steps",
                 task_queue=TASK_QUEUE_NAME,
@@ -217,6 +219,19 @@ class ScenarioStepsWorkflow:
 
     def __init__(self) -> None:
         self._step_log: list[dict] = []
+        self._paused = False
+
+    @workflow.signal
+    async def pause(self) -> None:
+        self._paused = True
+
+    @workflow.signal
+    async def resume(self) -> None:
+        self._paused = False
+
+    async def _wait_if_paused(self) -> None:
+        if self._paused:
+            await workflow.wait_condition(lambda: not self._paused)
 
     @workflow.query
     def get_step_log(self) -> list[dict]:
@@ -243,6 +258,7 @@ class ScenarioStepsWorkflow:
             self._step_log.append({**entry, "depth": inp.depth})
 
         for idx, raw_step in enumerate(inp.steps):
+            await self._wait_if_paused()
             # Resolve variables in step
             step = _resolve_step(raw_step, runtime_vars, inp.variables, inp.campaign_vars, idx)
             step_type = step.get("type", "")
@@ -478,6 +494,8 @@ class ScenarioStepsWorkflow:
                         step=step,
                         step_index=idx,
                         context=runtime_context,
+                        campaign_id=inp.campaign_id,
+                        run_id=inp.run_id,
                     ),
                     result_type=StepResult,
                     start_to_close_timeout=timedelta(seconds=120),
@@ -950,6 +968,8 @@ class ScenarioStepsWorkflow:
             parent_runtime_vars=dict(runtime_vars),
             scenario_config=parent_inp.scenario_config if hasattr(parent_inp, "scenario_config") else {},
             context=context_copy,
+            campaign_id=getattr(parent_inp, "campaign_id", None),
+            run_id=getattr(parent_inp, "run_id", None),
         )
         return await self.run(nested_inp)
 

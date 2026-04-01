@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 class ScenarioPreviewRequest(BaseModel):
     steps: List[Dict[str, Any]]
+    variables: Dict[str, Any] = {}
 
 
 class TapRequest(BaseModel):
@@ -57,6 +58,34 @@ class ScrollRequest(BaseModel):
 class OpenUrlRequest(BaseModel):
     url: str
     package: Optional[str] = None
+
+
+class LaunchAppRequest(BaseModel):
+    package: str
+
+
+class DoubleTapRequest(BaseModel):
+    x: int
+    y: int
+
+
+class PinchRequest(BaseModel):
+    cx: int
+    cy: int
+    scale: float = 0.5  # <1 = zoom out, >1 = zoom in
+    duration_ms: int = 400
+
+
+class DragRequest(BaseModel):
+    x1: int
+    y1: int
+    x2: int
+    y2: int
+    duration_ms: int = 1000
+
+
+class ClipboardSetRequest(BaseModel):
+    text: str
 
 
 class AdbRegisterRequest(BaseModel):

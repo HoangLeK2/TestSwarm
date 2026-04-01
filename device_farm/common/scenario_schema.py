@@ -39,6 +39,11 @@ SCENARIO_STEP_TYPES = [
     "extract_text_ai",
     "extract_screen_data",
     "save_extraction",
+    "double_tap",
+    "pinch",
+    "drag",
+    "take_screenshot",
+    "set_clipboard",
 ]
 
 STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
@@ -352,6 +357,49 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "collection: name of content collection (default: 'default'). "
             "dedupe_field: field in data to use for dedup hash (e.g. 'content'). "
             "Data is saved to content_items table with SHA256 hash-based dedup."
+        ),
+    },
+    "double_tap": {
+        "required": [],
+        "optional": ["x", "y", "rx", "ry", "wait_after"],
+        "description": (
+            "Double-tap at coordinates. rx/ry (0.0-1.0 relative) or x/y (absolute pixels). "
+            "wait_after (float, default 0.5s). "
+            "Requires TouchAccessibilityService or uiautomator2."
+        ),
+    },
+    "pinch": {
+        "required": ["scale"],
+        "optional": ["cx", "cy", "rx", "ry", "duration_ms"],
+        "description": (
+            "Pinch/zoom gesture. scale>1 = zoom in (spread), scale<1 = zoom out (pinch). "
+            "Center: cx/cy (absolute) or rx/ry (relative, default 0.5/0.5). "
+            "duration_ms (default 400). Requires TouchAccessibilityService."
+        ),
+    },
+    "drag": {
+        "required": [],
+        "optional": ["x1", "y1", "x2", "y2", "rx1", "ry1", "rx2", "ry2", "duration_ms"],
+        "description": (
+            "Drag-and-drop from point A to point B. "
+            "Use rx1/ry1/rx2/ry2 for relative coords (0.0-1.0) or x1/y1/x2/y2 for absolute pixels. "
+            "duration_ms (default 1000) — longer = more reliable hold detection."
+        ),
+    },
+    "take_screenshot": {
+        "required": [],
+        "optional": ["save_path"],
+        "description": (
+            "Capture device screenshot. Result stored as base64 in step_result['screenshot']. "
+            "Optional save_path: write JPEG to disk at that absolute path."
+        ),
+    },
+    "set_clipboard": {
+        "required": ["text"],
+        "optional": [],
+        "description": (
+            "Set device clipboard text. Uses STFService → uiautomator2 → ADB broadcast fallback. "
+            "After this step, use input_text or key(paste) to paste clipboard content."
         ),
     },
 }

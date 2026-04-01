@@ -16,7 +16,7 @@ from .user import User
 from .organization import Organization, OrganizationMember
 from .device import Device, DeviceSession
 from .device_group import DeviceGroup, DeviceGroupMember
-from .campaign import Campaign, CampaignDevice, Scenario
+from .campaign import Campaign, CampaignDevice, Scenario, CampaignRun
 from .mcp_session import McpSession
 from .scenario_template import ScenarioTemplate
 from .account import Account, DeviceAccount
@@ -34,6 +34,7 @@ __all__ = [
     "Campaign",
     "CampaignDevice",
     "Scenario",
+    "CampaignRun",
     "McpSession",
     "ScenarioTemplate",
     "Account",

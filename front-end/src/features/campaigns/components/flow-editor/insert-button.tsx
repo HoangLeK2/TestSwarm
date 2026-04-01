@@ -43,8 +43,11 @@ export function InsertButton({ onInsert }: Props) {
           {INSERT_MENU.map((group, gi) => (
             <Fragment key={group.group}>
               {gi > 0 ? <DropdownMenuSeparator /> : null}
-              <DropdownMenuLabel className='px-2.5 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground'>
-                {group.group}
+              <DropdownMenuLabel className='px-2.5 pb-0.5 pt-2'>
+                <span className='block text-[11px] font-bold text-foreground'>{group.group}</span>
+                {'description' in group && (
+                  <span className='block text-[10px] font-normal text-muted-foreground'>{(group as any).description}</span>
+                )}
               </DropdownMenuLabel>
               {group.items.map((item) => (
                 <DropdownMenuItem

@@ -2,6 +2,7 @@ import type { FlowStep } from '../scenario-steps/types';
 
 /** Identifies a step that uses resource/text selectors (for pick-from-device). */
 export const SELECTOR_STEP_TYPES = new Set([
+  'tap',           // recorded tap — selector nested in step.selector
   'tap_selector',
   'long_tap_selector',
   'input_selector',
@@ -32,6 +33,10 @@ export function selectorPickTargetEquals(
 }
 
 function mergeSelector(step: FlowStep, by: string, value: string): FlowStep {
+  // 'tap' stores selector nested: step.selector = { by, value }
+  if (step.type === 'tap') {
+    return { ...step, selector: { by, value } };
+  }
   return { ...step, by, value };
 }
 

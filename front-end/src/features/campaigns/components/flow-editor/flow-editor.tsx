@@ -1,6 +1,31 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+  arrayMove,
+  useSortable,
+} from '@dnd-kit/sortable';
+import { restrictToVerticalAxis, restrictToParentElement } from '@dnd-kit/modifiers';
+import { CSS } from '@dnd-kit/utilities';
+import { GripVertical } from 'lucide-react';
 import { isControlFlow, type FlowStep } from '../scenario-steps/types';
 import { StepCard } from './step-card';
 import { BracketBlock } from './bracket-block';
@@ -8,6 +33,47 @@ import { InsertButton } from './insert-button';
 import { StepDetailPanel } from './step-detail-panel';
 import type { SelectorPickTarget } from './selector-pick';
 import { selectorPickTargetEquals } from './selector-pick';
+
+// ── Sortable step wrapper ────────────────────────────────────────────────────
+
+function SortableStepWrapper({
+  id,
+  children,
+}: {
+  id: string;
+  children: (dragHandle: React.ReactNode, isDragging: boolean) => React.ReactNode;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition: transition ?? undefined,
+  };
+
+  const dragHandle = (
+    <button
+      {...listeners}
+      {...attributes}
+      tabIndex={-1}
+      title='Kéo để thay đổi thứ tự'
+      className={[
+        'flex shrink-0 cursor-grab items-center self-stretch px-1 text-muted-foreground/30',
+        'hover:text-muted-foreground/70 active:cursor-grabbing',
+        isDragging ? 'cursor-grabbing text-muted-foreground/70' : '',
+      ].join(' ')}
+    >
+      <GripVertical size={11} />
+    </button>
+  );
+
+  return (
+    <div ref={setNodeRef} style={style} className={isDragging ? 'relative z-50 rounded shadow-lg' : ''}>
+      {children(dragHandle, isDragging)}
+    </div>
+  );
+}
+
+// ── FlowEditor ───────────────────────────────────────────────────────────────
 
 interface Props {
   steps: FlowStep[];
@@ -30,6 +96,36 @@ export function FlowEditor({
 }: Props) {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const selectedStep = selectedIndex != null ? steps[selectedIndex] : null;
+
+  // Stable IDs for DnD — prefer _id, fall back to index-based
+  const stepIds = useMemo(
+    () => steps.map((s, i) => (s as any)._id ?? `step-idx-${i}`),
+    [steps],
+  );
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      const oldIndex = stepIds.indexOf(active.id as string);
+      const newIndex = stepIds.indexOf(over.id as string);
+      if (oldIndex === -1 || newIndex === -1) return;
+      const reordered = arrayMove(steps, oldIndex, newIndex);
+      onChange(reordered);
+      // Adjust selection
+      if (selectedIndex === oldIndex) setSelectedIndex(newIndex);
+      else if (selectedIndex != null) {
+        if (oldIndex < selectedIndex && newIndex >= selectedIndex) setSelectedIndex(selectedIndex - 1);
+        else if (oldIndex > selectedIndex && newIndex <= selectedIndex) setSelectedIndex(selectedIndex + 1);
+      }
+    },
+    [stepIds, steps, onChange, selectedIndex],
+  );
 
   const togglePick = useCallback(
     (path: SelectorPickTarget) => {
@@ -125,48 +221,86 @@ export function FlowEditor({
     [steps, updateAt],
   );
 
-  const showPanel = !compact && selectedStep && selectedIndex != null;
-
   return (
-    <div className={showPanel ? 'flex gap-0' : ''}>
+    <>
+      {/* Edit dialog */}
+      <Dialog open={!compact && selectedIndex != null} onOpenChange={(open) => { if (!open) setSelectedIndex(null); }}>
+        <DialogContent className='max-w-sm p-0 gap-0'>
+          <DialogHeader className='sr-only'>
+            <DialogTitle>Chỉnh sửa bước</DialogTitle>
+          </DialogHeader>
+          {selectedStep && selectedIndex != null && (
+            <StepDetailPanel
+              step={selectedStep}
+              onChange={(s) => updateAt(selectedIndex, s)}
+              onClose={() => setSelectedIndex(null)}
+              onRequestPickSelector={
+                onSelectorPickTargetChange
+                  ? () => {
+                      const idx = selectedIndex;
+                      setSelectedIndex(null); // close dialog first
+                      onSelectorPickTargetChange({ kind: 'root', index: idx });
+                    }
+                  : undefined
+              }
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+
       {/* Flow list */}
-      <div className='min-w-0 flex-1'>
+      <div className='min-w-0'>
         <div className='overflow-y-auto' style={{ maxHeight }}>
           <InsertButton onInsert={(s) => insertAt(0, s)} />
 
-          {steps.map((step, i) => (
-            <div key={i}>
-              {isControlFlow(step.type) ? (
-                <BracketBlock
-                  step={step}
-                  stepIndex={i}
-                  selected={selectedIndex === i}
-                  selectedChild={null}
-                  onSelectSelf={() => setSelectedIndex(selectedIndex === i ? null : i)}
-                  onSelectChild={() => {}}
-                  onUpdate={(s) => updateAt(i, s)}
-                  onRemove={() => removeAt(i)}
-                  onRemoveChild={(key, ci) => removeChild(i, key, ci)}
-                  onInsertChild={(key, at, s) => insertChild(i, key, at, s)}
-                  compact={compact}
-                  selectorPickTarget={selectorPickTarget}
-                  onTogglePickSelector={onSelectorPickTargetChange ? togglePick : undefined}
-                />
-              ) : (
-                <StepCard
-                  step={step}
-                  index={i}
-                  selected={!compact && selectedIndex === i}
-                  onClick={() => !compact && setSelectedIndex(selectedIndex === i ? null : i)}
-                  onRemove={() => removeAt(i)}
-                  stepPath={{ kind: 'root', index: i }}
-                  selectorPickTarget={selectorPickTarget}
-                  onTogglePickSelector={onSelectorPickTargetChange ? togglePick : undefined}
-                />
-              )}
-              <InsertButton onInsert={(s) => insertAt(i + 1, s)} />
-            </div>
-          ))}
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleDragEnd}
+            modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+          >
+            <SortableContext items={stepIds} strategy={verticalListSortingStrategy}>
+              {steps.map((step, i) => (
+                <div key={stepIds[i]}>
+                  <SortableStepWrapper id={stepIds[i]!}>
+                    {(dragHandle, isDragging) => (
+                      <div className={`flex items-stretch ${isDragging ? 'opacity-60' : ''}`}>
+                        {dragHandle}
+                        <div className='min-w-0 flex-1'>
+                          {isControlFlow(step.type) ? (
+                            <BracketBlock
+                              step={step}
+                              stepIndex={i}
+                              selected={selectedIndex === i}
+                              selectedChild={null}
+                              onSelectSelf={() => setSelectedIndex(selectedIndex === i ? null : i)}
+                              onSelectChild={() => {}}
+                              onUpdate={(s) => updateAt(i, s)}
+                              onRemove={() => removeAt(i)}
+                              onRemoveChild={(key, ci) => removeChild(i, key, ci)}
+                              onInsertChild={(key, at, s) => insertChild(i, key, at, s)}
+                              compact={compact}
+                              selectorPickTarget={selectorPickTarget}
+                              onTogglePickSelector={onSelectorPickTargetChange ? togglePick : undefined}
+                            />
+                          ) : (
+                            <StepCard
+                              step={step}
+                              index={i}
+                              selected={!compact && selectedIndex === i}
+                              onClick={() => !compact && setSelectedIndex(selectedIndex === i ? null : i)}
+                              onRemove={() => removeAt(i)}
+                            />
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </SortableStepWrapper>
+                  <InsertButton onInsert={(s) => insertAt(i + 1, s)} />
+                </div>
+              ))}
+            </SortableContext>
+          </DndContext>
 
           {steps.length === 0 && (
             <p className='py-6 text-center text-xs text-muted-foreground'>
@@ -175,19 +309,6 @@ export function FlowEditor({
           )}
         </div>
       </div>
-
-      {/* Detail panel — only in non-compact mode */}
-      {showPanel && (
-        <div className='w-72 shrink-0' style={{ maxHeight }}>
-          <div className='h-full overflow-y-auto'>
-            <StepDetailPanel
-              step={selectedStep!}
-              onChange={(s) => updateAt(selectedIndex!, s)}
-              onClose={() => setSelectedIndex(null)}
-            />
-          </div>
-        </div>
-      )}
-    </div>
+    </>
   );
 }

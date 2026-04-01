@@ -307,9 +307,14 @@ export function CronBuilder({
 
   return (
     <div className='space-y-2'>
-      <div className='flex items-center justify-between gap-2'>
+      <div className='space-y-1'>
         <Label>{t('cronScheduleLabel')}</Label>
-        <span className='text-[11px] text-muted-foreground'>{preview}</span>
+        <div className='rounded-md border bg-muted/30 px-3 py-2 text-sm font-medium'>
+          {preview}
+          {preview !== value && (
+            <span className='ml-2 font-mono text-[11px] text-muted-foreground'>({value})</span>
+          )}
+        </div>
       </div>
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as 'simple' | 'advanced')}>
@@ -336,25 +341,19 @@ export function CronBuilder({
           </div>
 
           {kind === 'everyMinutes' && (
-            <div className='grid grid-cols-2 gap-3'>
-              <div className='space-y-1'>
-                <Label>{t('intervalMinutes')}</Label>
-                <Input
-                  type='number'
-                  min={1}
-                  value={intervalMinutes}
-                  onChange={(e) => setIntervalMinutes(Math.max(1, Number(e.target.value) || 1))}
-                />
-              </div>
-              <div className='space-y-1'>
-                <Label>{t('previewCron')}</Label>
-                <Input value={simpleCron} readOnly />
-              </div>
+            <div className='space-y-1'>
+              <Label>{t('intervalMinutes')}</Label>
+              <Input
+                type='number'
+                min={1}
+                value={intervalMinutes}
+                onChange={(e) => setIntervalMinutes(Math.max(1, Number(e.target.value) || 1))}
+              />
             </div>
           )}
 
           {kind === 'everyHours' && (
-            <div className='grid grid-cols-3 gap-3'>
+            <div className='grid grid-cols-2 gap-3'>
               <div className='space-y-1'>
                 <Label>{t('intervalHours')}</Label>
                 <Input
@@ -374,15 +373,11 @@ export function CronBuilder({
                   onChange={(e) => setMinute(Math.max(0, Math.min(59, Number(e.target.value) || 0)))}
                 />
               </div>
-              <div className='space-y-1'>
-                <Label>{t('previewCron')}</Label>
-                <Input value={simpleCron} readOnly />
-              </div>
             </div>
           )}
 
           {kind === 'dailyAt' && (
-            <div className='grid grid-cols-3 gap-3'>
+            <div className='grid grid-cols-2 gap-3'>
               <div className='space-y-1'>
                 <Label>{t('hour0to23')}</Label>
                 <Input
@@ -403,15 +398,11 @@ export function CronBuilder({
                   onChange={(e) => setMinute(Math.max(0, Math.min(59, Number(e.target.value) || 0)))}
                 />
               </div>
-              <div className='space-y-1'>
-                <Label>{t('previewCron')}</Label>
-                <Input value={simpleCron} readOnly />
-              </div>
             </div>
           )}
 
           {kind === 'windowMinutes' && (
-            <div className='grid grid-cols-4 gap-3'>
+            <div className='grid grid-cols-3 gap-3'>
               <div className='space-y-1'>
                 <Label>{t('intervalMinutes')}</Label>
                 <Input
@@ -441,15 +432,11 @@ export function CronBuilder({
                   onChange={(e) => setEndHour(Math.max(0, Math.min(23, Number(e.target.value) || 0)))}
                 />
               </div>
-              <div className='space-y-1'>
-                <Label>{t('previewCron')}</Label>
-                <Input value={simpleCron} readOnly />
-              </div>
             </div>
           )}
 
           {kind === 'windowHours' && (
-            <div className='grid grid-cols-5 gap-3'>
+            <div className='grid grid-cols-4 gap-3'>
               <div className='space-y-1'>
                 <Label>{t('stepHours')}</Label>
                 <Input
@@ -488,10 +475,6 @@ export function CronBuilder({
                   value={minute}
                   onChange={(e) => setMinute(Math.max(0, Math.min(59, Number(e.target.value) || 0)))}
                 />
-              </div>
-              <div className='space-y-1'>
-                <Label>{t('previewCron')}</Label>
-                <Input value={simpleCron} readOnly />
               </div>
             </div>
           )}

@@ -1,4 +1,5 @@
 'use client';
+
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -10,42 +11,69 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { VariableEditor } from '@/components/variable-editor';
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
 } from '@/components/ui/dialog';
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { useState } from 'react';
-import { Plus } from 'lucide-react';
+import { Plus, Layers, FileText, MonitorSpeaker, Variable } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
+import { cn } from '@/lib/utils';
 
 type FormData = {
   name: string;
   description?: string;
 };
 
+function Section({
+  icon: Icon,
+  title,
+  hint,
+  children,
+}: {
+  icon: React.ElementType;
+  title: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className='space-y-3'>
+      <div className='flex items-center gap-2'>
+        <Icon size={13} className='shrink-0 text-muted-foreground' />
+        <span className='text-xs font-semibold text-foreground'>{title}</span>
+        {hint && <span className='text-[10px] text-muted-foreground'>{hint}</span>}
+      </div>
+      <div className='pl-5'>{children}</div>
+    </div>
+  );
+}
+
 export function CreateCampaignDialog() {
   const t = useTranslations('campaignsFeature.createDialog');
   const schema = z.object({
     name: z.string().min(1, t('nameRequired')),
-    description: z.string().optional()
+    description: z.string().optional(),
   });
   const [open, setOpen] = useState(false);
   const [variables, setVariables] = useState<Record<string, any>>({});
   const [targetGroupId, setTargetGroupId] = useState<string | undefined>(undefined);
   const { mutate, isPending, error } = useCreateCampaign();
   const { data: groups } = useDeviceGroups();
-  const { register, handleSubmit, reset, formState: { errors } } = useForm<FormData>({
-    resolver: zodResolver(schema)
-  });
+  const {
+    register,
+    handleSubmit,
+    reset,
+    formState: { errors },
+  } = useForm<FormData>({ resolver: zodResolver(schema) });
 
   const onSubmit = (data: FormData) => {
     mutate(
       {
         ...data,
         variables: Object.keys(variables).length > 0 ? variables : undefined,
-        target_group_id: targetGroupId || undefined
+        target_group_id: targetGroupId || undefined,
       },
       {
         onSuccess: () => {
@@ -53,67 +81,144 @@ export function CreateCampaignDialog() {
           setVariables({});
           setTargetGroupId(undefined);
           setOpen(false);
-        }
-      }
+        },
+      },
     );
   };
 
   return (
-    <Dialog open={open} onOpenChange={setOpen} >
+    <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button size='sm'><Plus size={16} className='mr-1' />{t('trigger')}</Button>
+        <Button size='sm'>
+          <Plus size={16} className='mr-1' />
+          {t('trigger')}
+        </Button>
       </DialogTrigger>
-      <DialogContent className='z-[1000] max-w-lg'>
-        <DialogHeader>
-          <DialogTitle>{t('title')}</DialogTitle>
+
+      <DialogContent className='max-w-lg p-0 gap-0'>
+        <DialogHeader className='border-b px-5 py-4'>
+          <div className='flex items-center gap-2'>
+            <Layers size={15} className='text-primary' />
+            <DialogTitle className='text-sm font-semibold'>{t('title')}</DialogTitle>
+          </div>
+          <p className='mt-0.5 text-[11px] text-muted-foreground'>
+            Campaign gộp nhiều thiết bị và kịch bản vào một lần chạy.
+          </p>
         </DialogHeader>
-        <form onSubmit={handleSubmit(onSubmit)} className='space-y-4 pt-2'>
-          <div className='space-y-1'>
-            <Label>{t('nameLabel')}</Label>
-            <Input placeholder={t('namePlaceholder')} {...register('name')} />
-            {errors.name && <p className='text-xs text-destructive'>{errors.name.message}</p>}
-          </div>
-          <div className='space-y-1'>
-            <Label>{t('descriptionLabel')}</Label>
-            <Textarea placeholder={t('descriptionPlaceholder')} {...register('description')} />
-          </div>
-          <div className='space-y-1'>
-            <Label>{t('targetGroupLabel')}</Label>
-            <Select
-              value={targetGroupId ?? '_none'}
-              onValueChange={(v) => setTargetGroupId(v === '_none' ? undefined : v)}
+
+        <form onSubmit={handleSubmit(onSubmit)}>
+          <div className='space-y-5 px-5 py-5'>
+
+            {/* Basic info */}
+            <Section icon={FileText} title='Thông tin cơ bản'>
+              <div className='space-y-3'>
+                <div className='space-y-1.5'>
+                  <Label className='text-xs'>{t('nameLabel')}</Label>
+                  <Input
+                    placeholder={t('namePlaceholder')}
+                    className={cn('h-9', errors.name && 'border-destructive')}
+                    {...register('name')}
+                  />
+                  {errors.name && (
+                    <p className='text-[11px] text-destructive'>{errors.name.message}</p>
+                  )}
+                </div>
+                <div className='space-y-1.5'>
+                  <Label className='text-xs'>{t('descriptionLabel')}</Label>
+                  <Textarea
+                    placeholder={t('descriptionPlaceholder')}
+                    className='min-h-[60px] resize-none text-sm'
+                    {...register('description')}
+                  />
+                </div>
+              </div>
+            </Section>
+
+            <hr className='border-border' />
+
+            {/* Target group */}
+            <Section
+              icon={MonitorSpeaker}
+              title={t('targetGroupLabel')}
+              hint='(tuỳ chọn)'
             >
-              <SelectTrigger>
-                <SelectValue placeholder={t('targetGroupPlaceholder')} />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value='_none'>{t('noGroup')}</SelectItem>
-                {(groups ?? []).map((g) => (
-                  <SelectItem key={g.id} value={g.id}>
-                    <span className='flex items-center gap-2'>
-                      <span
-                        className='inline-block size-3 rounded-full'
-                        style={{ backgroundColor: g.color }}
-                      />
-                      {g.name} ({g.device_count})
-                    </span>
+              <Select
+                value={targetGroupId ?? '_none'}
+                onValueChange={(v) => setTargetGroupId(v === '_none' ? undefined : v)}
+              >
+                <SelectTrigger className='h-9 w-full'>
+                  <SelectValue placeholder={t('targetGroupPlaceholder')} />
+                </SelectTrigger>
+                {/* z-[10001] to appear above DialogContent (which is at z-10000) */}
+                <SelectContent className='z-[10001]'>
+                  <SelectItem value='_none'>
+                    <span className='text-muted-foreground'>{t('noGroup')}</span>
                   </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+                  {(groups ?? []).map((g) => (
+                    <SelectItem key={g.id} value={g.id}>
+                      <span className='flex items-center gap-2'>
+                        <span
+                          className='inline-block size-3 shrink-0 rounded-full'
+                          style={{ backgroundColor: g.color }}
+                        />
+                        <span>{g.name}</span>
+                        <span className='text-muted-foreground'>({g.device_count})</span>
+                      </span>
+                    </SelectItem>
+                  ))}
+                  {(groups ?? []).length === 0 && (
+                    <div className='px-2 py-1.5 text-xs text-muted-foreground'>
+                      Chưa có nhóm nào. Tạo nhóm thiết bị trước.
+                    </div>
+                  )}
+                </SelectContent>
+              </Select>
+              <p className='mt-1.5 text-[11px] text-muted-foreground'>
+                Campaign sẽ chạy trên tất cả thiết bị trong nhóm này. Bỏ trống để chọn thiết bị sau.
+              </p>
+            </Section>
+
+            <hr className='border-border' />
+
+            {/* Variables */}
+            <Section
+              icon={Variable}
+              title={t('variablesLabel')}
+              hint='(tuỳ chọn)'
+            >
+              <p className='mb-2 text-[11px] text-muted-foreground'>
+                Biến được dùng trong kịch bản qua cú pháp{' '}
+                <code className='rounded bg-muted px-1 font-mono'>{'${tên_biến}'}</code>.
+                Ví dụ: <code className='rounded bg-muted px-1 font-mono'>username</code>,{' '}
+                <code className='rounded bg-muted px-1 font-mono'>password</code>.
+              </p>
+              <VariableEditor variables={variables} onChange={setVariables} />
+            </Section>
+
           </div>
-          <div className='space-y-1'>
-            <Label>{t('variablesLabel')}</Label>
-            <VariableEditor variables={variables} onChange={setVariables} />
+
+          {/* Footer */}
+          <div className='border-t bg-muted/30 px-5 py-3'>
+            {error && (
+              <p className='mb-2 text-[11px] text-destructive'>
+                {formatFarmApiError(error, t('createFailed'))}
+              </p>
+            )}
+            <div className='flex justify-end gap-2'>
+              <Button
+                type='button'
+                variant='ghost'
+                size='sm'
+                onClick={() => setOpen(false)}
+                disabled={isPending}
+              >
+                Huỷ
+              </Button>
+              <Button type='submit' size='sm' disabled={isPending}>
+                {isPending ? t('creating') : t('submit')}
+              </Button>
+            </div>
           </div>
-          {error && (
-            <p className='text-xs text-destructive'>
-              {formatFarmApiError(error, t('createFailed'))}
-            </p>
-          )}
-          <Button type='submit' className='w-full' disabled={isPending}>
-            {isPending ? t('creating') : t('submit')}
-          </Button>
         </form>
       </DialogContent>
     </Dialog>

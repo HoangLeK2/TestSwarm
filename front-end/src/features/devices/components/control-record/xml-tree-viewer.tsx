@@ -80,9 +80,9 @@ export function XmlTreeViewer({
   );
 
   return (
-    <div className='flex h-full flex-col rounded-lg border border-border bg-card'>
+    <div className='flex h-full flex-col'>
       {/* Header */}
-      <div className='flex items-center gap-2 border-b border-border px-3 py-2'>
+      <div className='flex items-center gap-2 border-b border-border/60 bg-background/80 px-3 py-2'>
         <div className='flex items-center gap-1'>
           <span className='text-xs font-semibold text-foreground'>{t('hierarchyTitle')}</span>
           <Tooltip delayDuration={400}>
@@ -151,6 +151,7 @@ export function XmlTreeViewer({
   );
 }
 
+
 // ── Recursive tree node renderer ─────────────────────────────────────────
 
 interface TreeNodeProps {
@@ -169,7 +170,7 @@ function TreeNode({ node, expanded, matchingIds, selectedNodeId, onToggle, onCli
   const isExpanded = expanded.has(node.id);
   const hasChildren = node.children.length > 0;
   const isSelected = selectedNodeId === node.id;
-  const indent = node.depth * 16;
+  const indent = node.depth * 14;
 
   const label = node.className || node.tag;
   const resId = node.resourceId ? node.resourceId.split('/').pop() : '';

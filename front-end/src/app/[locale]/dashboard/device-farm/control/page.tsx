@@ -6,11 +6,17 @@ import { ControlRecordView } from '@/features/devices/components/control-record-
 export default function DeviceControlRecordPage() {
   const searchParams = useSearchParams();
   const serial = searchParams.get('serial') ?? undefined;
+  const campaignId = searchParams.get('campaignId') ?? undefined;
+  const scenarioId = searchParams.get('scenarioId') ?? undefined;
 
   return (
-    <div className='mx-auto max-w-6xl space-y-4 px-4 py-4'>
+    <div>
       <h1 className='text-xl font-semibold'>Điều khiển & ghi kịch bản</h1>
-      <ControlRecordView initialSerial={serial} />
+      <ControlRecordView
+        initialSerial={serial}
+        initialCampaignId={campaignId}
+        initialScenarioId={scenarioId}
+      />
     </div>
   );
 }

@@ -1,12 +1,16 @@
 'use client';
 
 import { useMemo } from 'react';
+import Link from 'next/link';
 import type { Device } from '../types';
 import { serialToId } from '../helpers';
 import { deviceFarmBackendBase } from '@/lib/farm-api';
 import { tokenStorage } from '@/lib/token-storage';
+import { ROUTES } from '@/config/routes';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import { useTranslations } from 'next-intl';
+import { DeviceStepMonitor } from './device-step-monitor';
 
 interface DeviceTilePreviewProps {
   device: Device;
@@ -32,15 +36,32 @@ export function DeviceTilePreview({ device }: DeviceTilePreviewProps) {
       className='flex h-full flex-col border-border bg-card shadow-sm'
     >
       <CardHeader className='border-b border-border/60 px-4 py-3'>
-        <div className='flex flex-col gap-1'>
-          <CardTitle className='flex items-center justify-between gap-2 text-xs'>
-            <span className='truncate font-medium text-foreground'>
+        <div className='flex items-center justify-between gap-2'>
+          <div className='flex min-w-0 flex-col gap-0.5'>
+            <CardTitle className='truncate text-xs font-medium text-foreground'>
               {device.brand} {device.model}
+            </CardTitle>
+            <span className='font-mono text-[10px] text-muted-foreground'>
+              {device.serial}
             </span>
-          </CardTitle>
-          <span className='font-mono text-[10px] text-muted-foreground'>
-            {device.serial}
-          </span>
+          </div>
+          <div className='flex shrink-0 items-center gap-1.5'>
+            <DeviceStepMonitor
+              serial={device.serial}
+              isBusy={device.state?.toUpperCase() === 'BUSY'}
+            />
+            {isActive ? (
+              <Button asChild size='sm' className='shrink-0'>
+                <Link href={ROUTES.DEVICES.CONTROL_RECORD_WITH_SERIAL(device.serial)}>
+                  {t('controlDevice')}
+                </Link>
+              </Button>
+            ) : (
+              <Button size='sm' className='shrink-0' disabled>
+                {t('controlDevice')}
+              </Button>
+            )}
+          </div>
         </div>
       </CardHeader>
       <CardContent className='flex flex-1 flex-col gap-2 px-3 pb-3 pt-3'>

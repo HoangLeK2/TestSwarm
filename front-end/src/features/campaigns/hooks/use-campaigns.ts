@@ -9,6 +9,7 @@ import type {
   ScenarioCreate,
   ScenarioUpdate
 } from '../types';
+import { isIdleStatus } from '../types';
 import { fleetRun, fleetStatus, type FleetStatusResult } from '../../devices/services/api';
 
 const KEYS = {
@@ -25,7 +26,7 @@ export function useCampaigns() {
     refetchInterval: (query) => {
       const data = query.state.data as CampaignOut[] | undefined;
       return data && data.some((c: CampaignOut) => c.status === 'running') ? 3000 : false;
-    }
+    },
   });
 }
 
@@ -238,6 +239,24 @@ export function useCampaignWorkflows(campaignId: string, enabled: boolean) {
   });
 }
 
+export function useDeviceRunningWorkflows(serial: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['device-running-workflows', serial],
+    queryFn: () => workflowsApi.listForDevice(serial),
+    enabled: enabled && !!serial,
+    refetchInterval: 3000,
+  });
+}
+
+export function useWorkflowSteps(workflowId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['workflow-steps', workflowId],
+    queryFn: () => workflowsApi.steps(workflowId),
+    enabled: enabled && !!workflowId,
+    refetchInterval: 2000,
+  });
+}
+
 export function useWorkflowProgress(workflowId: string, enabled: boolean) {
   return useQuery({
     queryKey: ['workflow-progress', workflowId],
@@ -321,7 +340,7 @@ export function useRunCampaign(onAllDone?: () => void, options?: RunCampaignOpti
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => campaignsApi.run(id),
-    onSuccess: (data: CampaignRunResponse, id) => {
+    onSuccess: async (data: CampaignRunResponse, id) => {
       qc.invalidateQueries({ queryKey: KEYS.list });
       qc.invalidateQueries({ queryKey: KEYS.detail(id) });
 
@@ -338,22 +357,24 @@ export function useRunCampaign(onAllDone?: () => void, options?: RunCampaignOpti
         options?.onTemporalFallback?.();
       }
 
+      const resetToIdle = async () => {
+        try { await campaignsApi.updateStatus(id, 'idle'); } catch { /* ignore */ }
+        qc.invalidateQueries({ queryKey: KEYS.list });
+        qc.invalidateQueries({ queryKey: KEYS.detail(id) });
+        onAllDone?.();
+      };
+
       // Temporal: poll workflow status
       const workflowIds = data.workflow_ids;
       if (engine === 'temporal' && workflowIds?.length) {
         const deadline = Date.now() + POLL_TIMEOUT_MS;
         const timer = setInterval(async () => {
-          if (Date.now() > deadline) { clearInterval(timer); onAllDone?.(); return; }
+          if (Date.now() > deadline) { clearInterval(timer); await resetToIdle(); return; }
           try {
             const res = await workflowsApi.listForCampaign(id);
             const allTerminal = res.workflows.length >= workflowIds.length &&
               res.workflows.every((w) => TERMINAL_STATUSES.includes(w.status));
-            if (allTerminal) {
-              clearInterval(timer);
-              qc.invalidateQueries({ queryKey: KEYS.list });
-              qc.invalidateQueries({ queryKey: KEYS.detail(id) });
-              onAllDone?.();
-            }
+            if (allTerminal) { clearInterval(timer); await resetToIdle(); }
           } catch { /* ignore */ }
         }, POLL_INTERVAL_MS);
         return;
@@ -364,23 +385,18 @@ export function useRunCampaign(onAllDone?: () => void, options?: RunCampaignOpti
       if (taskIds?.length) {
         const deadline = Date.now() + POLL_TIMEOUT_MS;
         const timer = setInterval(async () => {
-          if (Date.now() > deadline) { clearInterval(timer); onAllDone?.(); return; }
+          if (Date.now() > deadline) { clearInterval(timer); await resetToIdle(); return; }
           try {
             const tasks = await tasksApi.list(taskIds);
             const allTerminal = tasks.length >= taskIds.length &&
               tasks.every((task) => TERMINAL_STATUSES.includes(task.status));
-            if (allTerminal) {
-              clearInterval(timer);
-              qc.invalidateQueries({ queryKey: KEYS.list });
-              qc.invalidateQueries({ queryKey: KEYS.detail(id) });
-              onAllDone?.();
-            }
+            if (allTerminal) { clearInterval(timer); await resetToIdle(); }
           } catch { /* ignore */ }
         }, POLL_INTERVAL_MS);
         return;
       }
 
-      onAllDone?.();
+      await resetToIdle();
     }
   });
 }

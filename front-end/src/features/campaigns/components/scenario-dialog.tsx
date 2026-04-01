@@ -1,16 +1,18 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import {
   useCampaignDevices,
   useCompileCampaignScenario,
+  useScenarios,
   useUpdateCampaignScenario,
   useUpdateScenario,
   useCompileScenario,
 } from '../hooks/use-campaigns';
 import type { CampaignOut, ScenarioOut } from '../types';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import {
   Dialog,
   DialogContent,
@@ -18,8 +20,16 @@ import {
   DialogTitle,
   DialogTrigger
 } from '@/components/ui/dialog';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Separator } from '@/components/ui/separator';
 import { Textarea } from '@/components/ui/textarea';
-import { FileText, Trash2, Play, Circle, Square, RefreshCw, Sparkles } from 'lucide-react';
+import { FileText, Trash2, Circle, Square, RefreshCw, Sparkles, FolderOpen } from 'lucide-react';
 import { fetchHierarchy, previewScenario } from '@/features/devices/services/api';
 import { DeviceControlEmbed } from '@/features/devices/components/device-control-embed';
 import { VariableEditor } from '@/components/variable-editor';
@@ -328,7 +338,6 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
   /** Nhiều màn hình: mỗi lần "Thu thập XML" = 1 snapshot từ màn hình hiện tại */
   const [collectedXmls, setCollectedXmls] = useState<Array<{ id: string; xml: string }>>([]);
   const [previewingAll, setPreviewingAll] = useState(false);
-  const [previewingIndex, setPreviewingIndex] = useState<number | null>(null);
   const [fetchingXml, setFetchingXml] = useState(false);
   const [recording, setRecording] = useState(false);
   const recordingRef = useRef(false);
@@ -542,32 +551,6 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
     }
   };
 
-  const handlePreviewUntil = async (index: number) => {
-    if (!previewSerial) {
-      toast.error('Chọn thiết bị để test');
-      return;
-    }
-    const sanitizedSteps = sanitizeScenarioStepsForApi(steps);
-    if (!sanitizedSteps.length) return;
-    const subset = sanitizedSteps.slice(0, index + 1);
-    setPreviewingIndex(index);
-    try {
-      const res = await previewScenario(previewSerial, subset as any[]);
-      const last =
-        res.step_results && res.step_results.length
-          ? res.step_results[res.step_results.length - 1]
-          : null;
-      if (last && !last.ok) {
-        toast.error(last.message || `Bước #${index + 1} backend báo lỗi`);
-      } else {
-        toast.success(`Đã chạy kịch bản tới bước #${index + 1}`);
-      }
-    } catch {
-      toast.error('Test bước thất bại');
-    } finally {
-      setPreviewingIndex(null);
-    }
-  };
 
   const handleCompile = async () => {
     const text = instructions.trim();
@@ -666,64 +649,21 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
     ]);
   };
 
-  const handleRemoveStep = (index: number) => {
-    setSteps((prev) => prev.filter((_, i) => i !== index));
-  };
 
-  const handleStepTypeChange = (index: number, type: StepType) => {
-    setSteps((prev) =>
-      prev.map((s, i) => {
-        if (i !== index) return s;
-        switch (type) {
-          case 'launch_app':
-            return { type: 'launch_app', package: '' };
-          case 'open_url':
-            return { type: 'open_url', url: '', package: undefined };
-          case 'wait':
-            return { type: 'wait', seconds: 1 };
-          case 'tap_position':
-            return { type: 'tap_position', pos: 'middle_center' };
-          case 'tap':
-            return { type: 'tap', selector: { by: 'text', value: '' }, fallback: { rx: 0.5, ry: 0.5 }, timeout: 5 };
-          case 'tap_ratio':
-            return { type: 'tap_ratio', x: 0.5, y: 0.5 };
-          case 'swipe_ratio':
-            return { type: 'swipe_ratio', x1: 0.5, y1: 0.8, x2: 0.5, y2: 0.2, duration_ms: 300 };
-          case 'tap_selector':
-            return { type: 'tap_selector', by: 'text' as SelectorBy, value: '' };
-          case 'wait_element':
-            return { type: 'wait_element', by: 'text' as SelectorBy, value: '', timeout: 10 };
-          case 'assert_element':
-            return { type: 'assert_element', by: 'text' as SelectorBy, value: '', timeout: 5 };
-          case 'input_selector':
-            return { type: 'input_selector', by: 'resource-id' as SelectorBy, value: '', text: '', clear_first: true };
-          case 'long_tap_selector':
-            return { type: 'long_tap_selector', by: 'text' as SelectorBy, value: '', duration_ms: 800 };
-          case 'scroll_to':
-            return { type: 'scroll_to', by: 'text' as SelectorBy, value: '', direction: 'down', max_swipes: 5 };
-          case 'wait_stable':
-            return { type: 'wait_stable', timeout: 5, stable_duration: 0.4 };
-          case 'dismiss_popup':
-            return { type: 'dismiss_popup', retries: 3 };
-          case 'input_text':
-            return { type: 'input_text', via: 'u2', text: '' };
-          case 'key':
-            return { type: 'key', key: 'enter' };
-          case 'scroll_down':
-            return { type: 'scroll_down', repeats: 1 };
-          case 'set_variable':
-            return { type: 'set_variable', name: '', value: '' };
-          default:
-            return s;
-        }
-      })
-    );
-  };
+  /** Other scenarios in the campaign — used for the "load from template" picker. */
+  const { data: allScenarios = [] } = useScenarios(campaign.id);
+  const loadableScenarios = useMemo(
+    () => allScenarios.filter((s) => s.id !== scenarioProp?.id && Array.isArray(s.steps) && s.steps.length > 0),
+    [allScenarios, scenarioProp?.id]
+  );
 
-  const updateStepField = (index: number, patch: Partial<Step>) => {
-    setSteps((prev) =>
-      prev.map((s, i) => (i === index ? { ...s, ...patch } as Step : s))
-    );
+  const handleLoadFromScenario = (scenarioId: string) => {
+    const source = allScenarios.find((s) => s.id === scenarioId);
+    if (!source) return;
+    if (steps.length > 0 && !window.confirm(`Kịch bản hiện tại có ${steps.length} bước. Tải từ "${source.name}" sẽ ghi đè — tiếp tục?`)) return;
+    setSteps(Array.isArray(source.steps) ? coerceSteps(source.steps) : []);
+    if (source.instructions) setInstructions(source.instructions);
+    toast.success(`Đã tải ${(source.steps as any[]).length} bước từ "${source.name}"`);
   };
 
   /** Luôn có thiết bị xem trước khi campaign có device — tránh cột phải trống khi chọn "Không gửi XML". */
@@ -743,10 +683,31 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
         className="z-[1000] max-w-5xl lg:max-w-6xl max-h-[92vh] min-h-0 md:min-h-[48vh] overflow-hidden flex flex-col rounded-lg p-3 sm:p-4 gap-0 sm:max-w-[min(100%-2rem,72rem)] [&>button.absolute]:right-3 [&>button.absolute]:top-3 [&>button.absolute]:h-7 [&>button.absolute]:w-7 [&>button.absolute_svg]:!size-3.5"
       >
         <DialogHeader className="shrink-0">
-          <DialogTitle>
-            {scenarioProp ? `Kịch bản: ${scenarioProp.name}` : 'Kịch bản campaign'}
-          </DialogTitle>
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <DialogTitle className="text-base">
+              {scenarioProp ? `Kịch bản: ${scenarioProp.name}` : 'Kịch bản campaign'}
+            </DialogTitle>
+            {loadableScenarios.length > 0 && (
+              <div className="flex items-center gap-1.5">
+                <FolderOpen size={12} className="text-muted-foreground shrink-0" />
+                <span className="text-[11px] text-muted-foreground whitespace-nowrap">Tải từ kịch bản:</span>
+                <Select onValueChange={handleLoadFromScenario}>
+                  <SelectTrigger className="h-7 text-[11px] w-[160px]">
+                    <SelectValue placeholder="Chọn kịch bản…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {loadableScenarios.map((s) => (
+                      <SelectItem key={s.id} value={s.id} className="text-[11px]">
+                        {s.name} ({(s.steps as any[]).length} bước)
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+          </div>
         </DialogHeader>
+        <Separator className="shrink-0" />
         <div
           className="flex flex-col lg:flex-row gap-4 pt-2 min-h-0 flex-1 overflow-hidden"
         >
@@ -773,18 +734,19 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
                 {devices.length > 0 && (
                   <>
                     <span>Thiết bị để lấy UI XML:</span>
-                    <select
-                      className="border bg-background px-1 py-0.5 rounded text-[11px]"
-                      value={xmlSerial}
-                      onChange={(e) => setXmlSerial(e.target.value)}
-                    >
-                      <option value="">Không gửi XML</option>
-                      {devices.map((d) => (
-                        <option key={d.id} value={d.serial}>
-                          {d.name || d.serial}
-                        </option>
-                      ))}
-                    </select>
+                    <Select value={xmlSerial || '_none'} onValueChange={(v) => setXmlSerial(v === '_none' ? '' : v)}>
+                      <SelectTrigger className="h-6 text-[11px] w-[140px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="_none" className="text-[11px]">Không gửi XML</SelectItem>
+                        {devices.map((d) => (
+                          <SelectItem key={d.id} value={d.serial} className="text-[11px]">
+                            {d.name || d.serial}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                     {xmlSerial && (
                       <>
                         <Button
@@ -855,38 +817,38 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1">
                 <p className="text-[11px] text-muted-foreground">Model / dòng máy</p>
-                <input
-                  className="w-full border rounded px-1 py-0.5 bg-background text-[11px]"
+                <Input
+                  className="h-7 text-[11px]"
                   value={deviceModel}
                   onChange={(e) => setDeviceModel(e.target.value)}
-                  placeholder="Ví dụ: Galaxy S23, Pixel 8..."
+                  placeholder="Galaxy S23, Pixel 8…"
                 />
               </div>
               <div className="space-y-1">
                 <p className="text-[11px] text-muted-foreground">Android version</p>
-                <input
-                  className="w-full border rounded px-1 py-0.5 bg-background text-[11px]"
+                <Input
+                  className="h-7 text-[11px]"
                   value={androidVersion}
                   onChange={(e) => setAndroidVersion(e.target.value)}
-                  placeholder="Ví dụ: Android 13, 14..."
+                  placeholder="Android 13, 14…"
                 />
               </div>
               <div className="space-y-1">
                 <p className="text-[11px] text-muted-foreground">Ưu tiên browser / app</p>
-                <input
-                  className="w-full border rounded px-1 py-0.5 bg-background text-[11px]"
+                <Input
+                  className="h-7 text-[11px]"
                   value={browserApp}
                   onChange={(e) => setBrowserApp(e.target.value)}
-                  placeholder="Ví dụ: Chrome, app Facebook..."
+                  placeholder="Chrome, Facebook…"
                 />
               </div>
               <div className="space-y-1">
                 <p className="text-[11px] text-muted-foreground">Ghi chú khác</p>
-                <input
-                  className="w-full border rounded px-1 py-0.5 bg-background text-[11px]"
+                <Input
+                  className="h-7 text-[11px]"
                   value={deviceNotes}
                   onChange={(e) => setDeviceNotes(e.target.value)}
-                  placeholder="Ví dụ: màn hình nhỏ, ưu tiên tap bằng text..."
+                  placeholder="màn hình nhỏ, ưu tiên tap bằng text…"
                 />
               </div>
             </div>
@@ -925,9 +887,6 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
                   variables={variables}
                   onChange={setVariables}
                 />
-                <p className="text-[10px] text-muted-foreground">
-                  Built-in: {'${__NOW__}'} {'${__DATE__}'} {'${__TIME__}'} {'${__DEVICE_SERIAL__}'} {'${__DEVICE_MODEL__}'} {'${__RANDOM_INT_1_100__}'} {'${__RANDOM_UUID__}'} {'${__STEP_INDEX__}'} {'${__ACCOUNT_USERNAME__}'} {'${__ACCOUNT_PASSWORD__}'}
-                </p>
               </div>
             </details>
           </div>
@@ -938,18 +897,19 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
               <div className="flex items-center gap-2">
                 {devices.length > 0 && (
                   <>
-                    <select
-                      className="border bg-background text-[11px] px-1 py-0.5 rounded"
-                      value={previewSerial}
-                      onChange={(e) => setPreviewSerial(e.target.value)}
-                    >
-                      <option value="">Chọn device để test</option>
-                      {devices.map((d) => (
-                        <option key={d.id} value={d.serial}>
-                          {d.name || d.serial}
-                        </option>
-                      ))}
-                    </select>
+                    <Select value={previewSerial || '_none'} onValueChange={(v) => setPreviewSerial(v === '_none' ? '' : v)}>
+                      <SelectTrigger className="h-6 text-[11px] w-[140px]">
+                        <SelectValue placeholder="Chọn device để test" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="_none" className="text-[11px]">Chọn device để test</SelectItem>
+                        {devices.map((d) => (
+                          <SelectItem key={d.id} value={d.serial} className="text-[11px]">
+                            {d.name || d.serial}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                     <Button
                       size="sm"
                       variant="outline"
@@ -982,620 +942,6 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
             )}
           </div>
 
-          {/* Legacy step list — kept for reference, replaced by NestedStepList above */}
-          {false && steps.length > 0 && (
-              <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
-                {steps.map((step: any, index: number) => (
-                  <div
-                    key={index}
-                    className="rounded border p-2 space-y-1 bg-muted/40"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[11px] font-medium">
-                        Bước #{index + 1}
-                      </span>
-                      <div className="flex items-center gap-2">
-                        {previewSerial && (
-                          <button
-                            type="button"
-                            className="p-1 text-primary hover:bg-primary/10 rounded disabled:opacity-50"
-                            title="Chạy kịch bản tới bước này trên thiết bị đã chọn"
-                            onClick={() => handlePreviewUntil(index)}
-                            disabled={previewingIndex === index || previewingAll}
-                          >
-                            <Play size={12} />
-                          </button>
-                        )}
-                        <select
-                          className="border bg-background text-[11px] px-1 py-0.5 rounded"
-                          value={step.type}
-                          onChange={(e) =>
-                            handleStepTypeChange(index, e.target.value as StepType)
-                          }
-                        >
-                          <option value="launch_app">launch_app</option>
-                          <option value="open_url">open_url</option>
-                          <option value="wait">wait (cố định)</option>
-                          <option value="tap_position">tap_position</option>
-                          <option value="tap">tap ⚡ unified</option>
-                          <option value="tap_ratio">tap_ratio</option>
-                          <option value="swipe_ratio">swipe_ratio</option>
-                          <optgroup label="── uiautomator2 ──">
-                          <option value="tap_selector">tap_selector</option>
-                          <option value="wait_element">wait_element ⚡</option>
-                          <option value="assert_element">assert_element ✓</option>
-                          <option value="input_selector">input_selector</option>
-                          <option value="long_tap_selector">long_tap_selector</option>
-                          <option value="scroll_to">scroll_to</option>
-                          <option value="wait_stable">wait_stable</option>
-                          <option value="dismiss_popup">dismiss_popup</option>
-                          </optgroup>
-                          <option value="input_text">input_text</option>
-                          <option value="key">key</option>
-                          <option value="scroll_down">scroll_down</option>
-                          <option value="set_variable">set_variable</option>
-                        </select>
-                        <button
-                          type="button"
-                          className="p-1 text-destructive hover:bg-destructive/10 rounded"
-                          onClick={() => handleRemoveStep(index)}
-                        >
-                          <Trash2 size={12} />
-                        </button>
-                      </div>
-                    </div>
-
-                    {step.type === 'launch_app' && (
-                      <div className="flex items-center gap-2 text-[11px]">
-                        <span className="shrink-0">package:</span>
-                        <input
-                          className="flex-1 border rounded px-1 py-0.5 bg-background"
-                          value={step.package}
-                          onChange={(e) =>
-                            updateStepField(index, { package: e.target.value } as any)
-                          }
-                          placeholder="com.android.chrome"
-                        />
-                      </div>
-                    )}
-
-                    {step.type === 'open_url' && (
-                      <>
-                        <div className="flex items-center gap-2 text-[11px]">
-                          <span className="shrink-0">url:</span>
-                          <input
-                            className="flex-1 border rounded px-1 py-0.5 bg-background"
-                            value={step.url}
-                            onChange={(e) =>
-                              updateStepField(index, { url: e.target.value } as any)
-                            }
-                            placeholder="https://www.google.com"
-                          />
-                        </div>
-                        <div className="flex items-center gap-2 text-[11px]">
-                          <span className="shrink-0">package (optional):</span>
-                          <input
-                            className="flex-1 border rounded px-1 py-0.5 bg-background"
-                            value={step.package ?? ''}
-                            onChange={(e) =>
-                              updateStepField(index, { package: e.target.value || undefined } as any)
-                            }
-                            placeholder="com.android.chrome"
-                          />
-                        </div>
-                      </>
-                    )}
-                    {step.type === 'wait' && (
-                      <div className="flex items-center gap-2 text-[11px]">
-                        <span className="shrink-0">seconds:</span>
-                        <input
-                          type="number"
-                          min={0}
-                          step={0.5}
-                          className="w-20 border rounded px-1 py-0.5 bg-background"
-                          value={step.seconds}
-                          onChange={(e) =>
-                            updateStepField(index, { seconds: Number(e.target.value) } as any)
-                          }
-                        />
-                      </div>
-                    )}
-
-                    {step.type === 'tap_position' && (
-                      <div className="flex items-center gap-2 text-[11px]">
-                        <span className="shrink-0">pos:</span>
-                        <select
-                          className="border rounded px-1 py-0.5 bg-background"
-                          value={step.pos}
-                          onChange={(e) =>
-                            updateStepField(index, { pos: e.target.value as any })
-                          }
-                        >
-                          <option value="top_center">top_center</option>
-                          <option value="search_bar">search_bar</option>
-                          <option value="middle_center">middle_center</option>
-                          <option value="bottom_center">bottom_center</option>
-                        </select>
-                      </div>
-                    )}
-
-                    {step.type === 'tap_ratio' && (
-                      <div className="flex flex-wrap items-center gap-2 text-[11px]">
-                        <span className="shrink-0">x:</span>
-                        <input
-                          type="number"
-                          min={0}
-                          max={1}
-                          step={0.05}
-                          className="w-20 border rounded px-1 py-0.5 bg-background"
-                          value={step.x}
-                          onChange={(e) =>
-                            updateStepField(index, { x: Number(e.target.value) } as any)
-                          }
-                        />
-                        <span className="shrink-0">y:</span>
-                        <input
-                          type="number"
-                          min={0}
-                          max={1}
-                          step={0.05}
-                          className="w-20 border rounded px-1 py-0.5 bg-background"
-                          value={step.y}
-                          onChange={(e) =>
-                            updateStepField(index, { y: Number(e.target.value) } as any)
-                          }
-                        />
-                      </div>
-                    )}
-
-                    {step.type === 'tap' && (
-                      <div className="space-y-1 text-[11px]">
-                        <div className="flex items-center gap-2">
-                          <span className="shrink-0">selector by:</span>
-                          <select
-                            className="border rounded px-1 py-0.5 bg-background"
-                            value={step.selector?.by ?? 'text'}
-                            onChange={(e) =>
-                              updateStepField(index, {
-                                selector: { ...(step.selector ?? {}), by: e.target.value as SelectorBy },
-                              } as any)
-                            }
-                          >
-                            <option value="text">text</option>
-                            <option value="resource-id">resource-id</option>
-                            <option value="xpath">xpath</option>
-                            <option value="class name">class name</option>
-                          </select>
-                          <span className="shrink-0">timeout:</span>
-                          <input
-                            type="number"
-                            min={1}
-                            className="w-14 border rounded px-1 py-0.5 bg-background"
-                            value={step.timeout ?? 5}
-                            onChange={(e) => updateStepField(index, { timeout: Number(e.target.value) } as any)}
-                          />
-                          <span className="text-muted-foreground">s</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="shrink-0">selector value:</span>
-                          <input
-                            className="flex-1 border rounded px-1 py-0.5 bg-background font-mono"
-                            value={step.selector?.value ?? ''}
-                            onChange={(e) =>
-                              updateStepField(index, {
-                                selector: { ...(step.selector ?? {}), value: e.target.value },
-                              } as any)
-                            }
-                            placeholder="Text/id/xpath để tap"
-                          />
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="shrink-0">fallback rx,ry:</span>
-                          <input
-                            type="number"
-                            min={0}
-                            max={1}
-                            step={0.05}
-                            className="w-16 border rounded px-1 py-0.5 bg-background"
-                            value={step.fallback?.rx ?? 0.5}
-                            onChange={(e) =>
-                              updateStepField(index, {
-                                fallback: { ...(step.fallback ?? {}), rx: Number(e.target.value) },
-                              } as any)
-                            }
-                          />
-                          <input
-                            type="number"
-                            min={0}
-                            max={1}
-                            step={0.05}
-                            className="w-16 border rounded px-1 py-0.5 bg-background"
-                            value={step.fallback?.ry ?? 0.5}
-                            onChange={(e) =>
-                              updateStepField(index, {
-                                fallback: { ...(step.fallback ?? {}), ry: Number(e.target.value) },
-                              } as any)
-                            }
-                          />
-                        </div>
-                      </div>
-                    )}
-
-                    {step.type === 'tap_selector' && (
-                      <div className="space-y-1 text-[11px]">
-                        <div className="flex items-center gap-2">
-                          <span className="shrink-0">by:</span>
-                          <select
-                            className="border rounded px-1 py-0.5 bg-background"
-                            value={step.by}
-                            onChange={(e) =>
-                              updateStepField(index, { by: e.target.value as 'text' | 'resource-id' | 'xpath' | 'class name' } as any)
-                            }
-                          >
-                            <option value="text">text</option>
-                            <option value="resource-id">resource-id</option>
-                            <option value="xpath">xpath</option>
-                            <option value="class name">class name</option>
-                          </select>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="shrink-0">value:</span>
-                          <input
-                            className="flex-1 border rounded px-1 py-0.5 bg-background font-mono"
-                            value={step.value}
-                            onChange={(e) =>
-                              updateStepField(index, { value: e.target.value } as any)
-                            }
-                            placeholder="Đăng nhập | id/btn_ok | //node[@text='OK']"
-                          />
-                        </div>
-                      </div>
-                    )}
-
-                    {(step.type === 'wait_element' || step.type === 'assert_element') && (
-                      <div className="space-y-1 text-[11px]">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className="shrink-0 text-primary font-medium">{step.type === 'wait_element' ? '⚡ Smart wait' : '✓ Assert'}</span>
-                          <select
-                            className="border rounded px-1 py-0.5 bg-background"
-                            value={step.by}
-                            onChange={(e) => updateStepField(index, { by: e.target.value } as any)}
-                          >
-                            <option value="text">text</option>
-                            <option value="resource-id">resource-id</option>
-                            <option value="xpath">xpath</option>
-                          </select>
-                          <input
-                            className="flex-1 min-w-[120px] border rounded px-1 py-0.5 bg-background font-mono"
-                            value={step.value}
-                            onChange={(e) => updateStepField(index, { value: e.target.value } as any)}
-                            placeholder="Tên element cần đợi/kiểm tra"
-                          />
-                          <span className="shrink-0">timeout:</span>
-                          <input
-                            type="number" min={1} max={60}
-                            className="w-12 border rounded px-1 py-0.5 bg-background"
-                            value={step.timeout ?? (step.type === 'wait_element' ? 10 : 5)}
-                            onChange={(e) => updateStepField(index, { timeout: Number(e.target.value) } as any)}
-                          />
-                          <span className="text-muted-foreground">s</span>
-                        </div>
-                      </div>
-                    )}
-
-                    {step.type === 'input_selector' && (
-                      <div className="space-y-1 text-[11px]">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <select
-                            className="border rounded px-1 py-0.5 bg-background"
-                            value={step.by}
-                            onChange={(e) => updateStepField(index, { by: e.target.value } as any)}
-                          >
-                            <option value="resource-id">resource-id</option>
-                            <option value="text">text</option>
-                            <option value="xpath">xpath</option>
-                          </select>
-                          <input
-                            className="flex-1 min-w-[100px] border rounded px-1 py-0.5 bg-background font-mono"
-                            value={step.value}
-                            onChange={(e) => updateStepField(index, { value: e.target.value } as any)}
-                            placeholder="id/edit_text hoặc 'Search'"
-                          />
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <span className="shrink-0">text:</span>
-                          <input
-                            className="flex-1 border rounded px-1 py-0.5 bg-background"
-                            value={step.text}
-                            onChange={(e) => updateStepField(index, { text: e.target.value } as any)}
-                            placeholder="Nội dung gõ vào"
-                          />
-                        </div>
-                      </div>
-                    )}
-
-                    {step.type === 'long_tap_selector' && (
-                      <div className="space-y-1 text-[11px]">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <select
-                            className="border rounded px-1 py-0.5 bg-background"
-                            value={step.by}
-                            onChange={(e) => updateStepField(index, { by: e.target.value } as any)}
-                          >
-                            <option value="text">text</option>
-                            <option value="resource-id">resource-id</option>
-                            <option value="xpath">xpath</option>
-                          </select>
-                          <input
-                            className="flex-1 min-w-[100px] border rounded px-1 py-0.5 bg-background font-mono"
-                            value={step.value}
-                            onChange={(e) => updateStepField(index, { value: e.target.value } as any)}
-                            placeholder="Element để long press"
-                          />
-                          <span className="shrink-0">ms:</span>
-                          <input
-                            type="number" min={300}
-                            className="w-16 border rounded px-1 py-0.5 bg-background"
-                            value={step.duration_ms ?? 800}
-                            onChange={(e) => updateStepField(index, { duration_ms: Number(e.target.value) } as any)}
-                          />
-                        </div>
-                      </div>
-                    )}
-
-                    {step.type === 'scroll_to' && (
-                      <div className="space-y-1 text-[11px]">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <select
-                            className="border rounded px-1 py-0.5 bg-background"
-                            value={step.by}
-                            onChange={(e) => updateStepField(index, { by: e.target.value } as any)}
-                          >
-                            <option value="text">text</option>
-                            <option value="resource-id">resource-id</option>
-                            <option value="xpath">xpath</option>
-                          </select>
-                          <input
-                            className="flex-1 min-w-[100px] border rounded px-1 py-0.5 bg-background font-mono"
-                            value={step.value}
-                            onChange={(e) => updateStepField(index, { value: e.target.value } as any)}
-                            placeholder="Element cần tìm"
-                          />
-                          <select
-                            className="border rounded px-1 py-0.5 bg-background"
-                            value={step.direction ?? 'down'}
-                            onChange={(e) => updateStepField(index, { direction: e.target.value } as any)}
-                          >
-                            <option value="down">scroll xuống</option>
-                            <option value="up">scroll lên</option>
-                          </select>
-                          <input
-                            type="number" min={1} max={20}
-                            className="w-12 border rounded px-1 py-0.5 bg-background"
-                            value={step.max_swipes ?? 5}
-                            onChange={(e) => updateStepField(index, { max_swipes: Number(e.target.value) } as any)}
-                          />
-                          <span className="text-muted-foreground">lần</span>
-                        </div>
-                      </div>
-                    )}
-
-                    {step.type === 'wait_stable' && (
-                      <div className="flex flex-wrap items-center gap-2 text-[11px]">
-                        <span className="shrink-0">timeout:</span>
-                        <input
-                          type="number"
-                          min={0.5}
-                          step={0.1}
-                          className="w-16 border rounded px-1 py-0.5 bg-background"
-                          value={step.timeout ?? 5}
-                          onChange={(e) => updateStepField(index, { timeout: Number(e.target.value) } as any)}
-                        />
-                        <span className="shrink-0">stable_duration:</span>
-                        <input
-                          type="number"
-                          min={0.1}
-                          step={0.1}
-                          className="w-16 border rounded px-1 py-0.5 bg-background"
-                          value={step.stable_duration ?? 0.4}
-                          onChange={(e) => updateStepField(index, { stable_duration: Number(e.target.value) } as any)}
-                        />
-                      </div>
-                    )}
-
-                    {step.type === 'dismiss_popup' && (
-                      <div className="flex items-center gap-2 text-[11px]">
-                        <span className="shrink-0">retries:</span>
-                        <input
-                          type="number"
-                          min={1}
-                          max={10}
-                          className="w-16 border rounded px-1 py-0.5 bg-background"
-                          value={step.retries ?? 3}
-                          onChange={(e) => updateStepField(index, { retries: Number(e.target.value) } as any)}
-                        />
-                      </div>
-                    )}
-
-                    {step.type === 'swipe_ratio' && (
-                      <div className="flex flex-wrap items-center gap-2 text-[11px]">
-                        <span className="shrink-0">x1,y1:</span>
-                        <input
-                          type="number"
-                          min={0}
-                          max={1}
-                          step={0.05}
-                          className="w-14 border rounded px-1 py-0.5 bg-background"
-                          value={step.x1}
-                          onChange={(e) =>
-                            updateStepField(index, { x1: Number(e.target.value) } as any)
-                          }
-                        />
-                        <input
-                          type="number"
-                          min={0}
-                          max={1}
-                          step={0.05}
-                          className="w-14 border rounded px-1 py-0.5 bg-background"
-                          value={step.y1}
-                          onChange={(e) =>
-                            updateStepField(index, { y1: Number(e.target.value) } as any)
-                          }
-                        />
-                        <span className="shrink-0">x2,y2:</span>
-                        <input
-                          type="number"
-                          min={0}
-                          max={1}
-                          step={0.05}
-                          className="w-14 border rounded px-1 py-0.5 bg-background"
-                          value={step.x2}
-                          onChange={(e) =>
-                            updateStepField(index, { x2: Number(e.target.value) } as any)
-                          }
-                        />
-                        <input
-                          type="number"
-                          min={0}
-                          max={1}
-                          step={0.05}
-                          className="w-14 border rounded px-1 py-0.5 bg-background"
-                          value={step.y2}
-                          onChange={(e) =>
-                            updateStepField(index, { y2: Number(e.target.value) } as any)
-                          }
-                        />
-                        <span className="shrink-0">ms:</span>
-                        <input
-                          type="number"
-                          min={50}
-                          className="w-16 border rounded px-1 py-0.5 bg-background"
-                          value={step.duration_ms ?? 300}
-                          onChange={(e) =>
-                            updateStepField(index, { duration_ms: Number(e.target.value) } as any)
-                          }
-                        />
-                      </div>
-                    )}
-
-                    {step.type === 'input_text' && (
-                      <div className="space-y-1 text-[11px]">
-                        <div className="flex items-center gap-2">
-                          <span className="shrink-0">via:</span>
-                          <select
-                            className="border rounded px-1 py-0.5 bg-background"
-                            value={step.via}
-                            onChange={(e) =>
-                              updateStepField(index, { via: e.target.value as any })
-                            }
-                          >
-                            <option value="u2">u2</option>
-                            <option value="a11y_key">a11y_key</option>
-                          </select>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="shrink-0">text:</span>
-                          <input
-                            className="flex-1 border rounded px-1 py-0.5 bg-background"
-                            value={step.text}
-                            onChange={(e) =>
-                              updateStepField(index, { text: e.target.value } as any)
-                            }
-                            placeholder="nội dung cần nhập..."
-                          />
-                        </div>
-                      </div>
-                    )}
-
-                    {step.type === 'key' && (
-                      <div className="flex items-center gap-2 text-[11px]">
-                        <span className="shrink-0">key:</span>
-                        <input
-                          className="w-32 border rounded px-1 py-0.5 bg-background"
-                          value={step.key}
-                          onChange={(e) =>
-                            updateStepField(index, { key: e.target.value } as any)
-                          }
-                          placeholder="enter / back / home"
-                        />
-                      </div>
-                    )}
-
-                    {step.type === 'scroll_down' && (
-                      <div className="flex items-center gap-2 text-[11px]">
-                        <span className="shrink-0">repeats:</span>
-                        <input
-                          type="number"
-                          min={1}
-                          className="w-20 border rounded px-1 py-0.5 bg-background"
-                          value={step.repeats}
-                          onChange={(e) =>
-                            updateStepField(index, { repeats: Number(e.target.value) } as any)
-                          }
-                        />
-                      </div>
-                    )}
-
-                    {step.type === 'set_variable' && (
-                      <div className="space-y-1.5 text-[11px]">
-                        <div className="flex items-center gap-2">
-                          <span className="shrink-0 w-14">name:</span>
-                          <input
-                            className="flex-1 border rounded px-1 py-0.5 bg-background font-mono"
-                            placeholder="MY_VAR"
-                            value={step.name}
-                            onChange={(e) =>
-                              updateStepField(index, { name: e.target.value } as any)
-                            }
-                          />
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="shrink-0 w-14">value:</span>
-                          <input
-                            className="flex-1 border rounded px-1 py-0.5 bg-background"
-                            placeholder="static value or ${__BUILTIN__}"
-                            value={step.value ?? ''}
-                            onChange={(e) =>
-                              updateStepField(index, { value: e.target.value } as any)
-                            }
-                          />
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="shrink-0 w-14">from_list:</span>
-                          <input
-                            className="flex-1 border rounded px-1 py-0.5 bg-background"
-                            placeholder="item1, item2, item3 (random pick)"
-                            value={(step.from_list ?? []).join(', ')}
-                            onChange={(e) =>
-                              updateStepField(index, {
-                                from_list: e.target.value.split(',').map((s: string) => s.trim()).filter(Boolean)
-                              } as any)
-                            }
-                          />
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="shrink-0 w-14">increment:</span>
-                          <input
-                            type="number"
-                            className="w-20 border rounded px-1 py-0.5 bg-background"
-                            placeholder="0"
-                            value={step.increment ?? ''}
-                            onChange={(e) =>
-                              updateStepField(index, {
-                                increment: e.target.value ? Number(e.target.value) : undefined
-                              } as any)
-                            }
-                          />
-                        </div>
-                        <p className="text-muted-foreground text-[10px]">
-                          Built-in: {'${__NOW__}'} {'${__DATE__}'} {'${__DEVICE_SERIAL__}'} {'${__RANDOM_INT_1_100__}'} {'${__RANDOM_UUID__}'} {'${__STEP_INDEX__}'}
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-          )}
 
           <div className="flex justify-end gap-2 pt-2">
             <Button

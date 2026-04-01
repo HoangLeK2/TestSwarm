@@ -19,8 +19,9 @@ import {
   Save,
   ArrowLeft,
   Play,
-  GitBranch,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   RefreshCw,
   Video,
   Clapperboard,
@@ -63,17 +64,18 @@ import { findSelectorInXml } from '../utils/control-record-xml';
 import { parseHierarchyTree, findNodeIdAtRatio } from '../utils/hierarchy-tree';
 import { useTranslations } from 'next-intl';
 
-type Props = { initialSerial?: string | null };
+type Props = { initialSerial?: string | null; initialCampaignId?: string | null; initialScenarioId?: string | null };
 
-export function ControlRecordView({ initialSerial }: Props = {}) {
+export function ControlRecordView({ initialSerial, initialCampaignId, initialScenarioId }: Props = {}) {
   const t = useTranslations('devicesControlRecord.view');
-  const { error, device, record, steps, save, hierarchy, selector } = useControlRecord(initialSerial);
+  const { error, device, record, steps, save, hierarchy, selector } = useControlRecord(initialSerial, initialCampaignId, initialScenarioId);
   const { setSkipTapRecordingWhilePick } = record;
 
   const [highlightBounds, setHighlightBounds] = useState<[number, number, number, number] | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null);
   const [playerMode, setPlayerMode] = useState(false);
   const [selectorPickTarget, setSelectorPickTarget] = useState<SelectorPickTarget | null>(null);
+  const [leftCollapsed, setLeftCollapsed] = useState(false);
 
   useEffect(() => {
     setSkipTapRecordingWhilePick(selectorPickTarget != null);
@@ -153,387 +155,428 @@ export function ControlRecordView({ initialSerial }: Props = {}) {
   const { selectedDevice } = device;
 
   return (
-    <div className='flex h-[calc(100vh-80px)] flex-col overflow-hidden'>
+    <div className='flex h-[calc(100vh-80px)] flex-col overflow-hidden bg-background'>
 
       {/* ── Top bar ─────────────────────────────────────────────────────── */}
-      <div className='flex shrink-0 flex-col gap-2 border-b bg-background/95 px-4 py-3 backdrop-blur sm:flex-row sm:items-center sm:gap-4'>
-        <div className='flex min-w-0 flex-1 items-center gap-2 sm:gap-3'>
-          <Button asChild variant='ghost' size='sm' className='shrink-0 -ml-1'>
-            <Link href={ROUTES.DEVICES.ROOT}>
-              <ArrowLeft className='mr-1 size-4' />
-              Farm
-            </Link>
-          </Button>
-          <div className='hidden h-6 w-px bg-border sm:block' />
-          <div className='min-w-0'>
-            <p className='text-[10px] font-medium uppercase tracking-wider text-muted-foreground'>
-              {t('pageEyebrow')}
-            </p>
-            <p className='truncate text-sm font-semibold leading-tight'>{t('pageTitle')}</p>
-          </div>
+      <div className='flex shrink-0 items-center gap-3 border-b bg-background px-3 py-2'>
+        {/* Back */}
+        <Button asChild variant='ghost' size='sm' className='-ml-1 shrink-0 gap-1.5 text-muted-foreground hover:text-foreground'>
+          <Link href={ROUTES.DEVICES.ROOT}>
+            <ArrowLeft className='size-3.5' />
+            Farm
+          </Link>
+        </Button>
+
+        <div className='h-5 w-px bg-border' />
+
+        {/* Title */}
+        <div className='min-w-0 flex-1'>
+          <p className='truncate text-sm font-semibold leading-tight'>
+            {save.editingContext ? save.editingContext.name : t('pageTitle')}
+          </p>
+          <p className='text-[10px] text-muted-foreground'>{t('pageEyebrow')}</p>
         </div>
 
-        <div className='flex flex-wrap items-center gap-2 sm:justify-end'>
-          <Select
-            value={device.selectedSerial ?? ''}
-            onValueChange={(v) => device.setSelectedSerial(v || null)}
-          >
-            <SelectTrigger className='h-9 w-full min-w-[200px] max-w-[min(100%,320px)] sm:w-[280px]'>
-              <SelectValue placeholder={t('selectPhonePlaceholder')} />
-            </SelectTrigger>
-            <SelectContent>
-              {device.connectedDevices.map((d) => (
-                <SelectItem key={d.serial} value={d.serial}>
-                  {d.brand} {d.model} — {d.serial.slice(0, 12)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-
-          <span
-            className={cn(
-              'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium',
-              device.wsConnected
-                ? 'border-green-500/20 bg-green-500/10 text-green-700 dark:text-green-400'
-                : 'border-red-500/20 bg-red-500/10 text-red-600 dark:text-red-400',
-            )}
-          >
-            <span
-              className={cn('size-2 rounded-full', device.wsConnected ? 'bg-green-500' : 'bg-red-500')}
-            />
-            {device.wsConnected ? t('wsConnected') : t('wsDisconnected')}
+        {save.editingContext && (
+          <span className='shrink-0 inline-flex items-center rounded-full border border-amber-400/40 bg-amber-400/10 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300'>
+            Đang chỉnh sửa
           </span>
+        )}
 
-          {selectedDevice?.touch_method && (
-            <span className='text-xs text-muted-foreground'>
-              {t('touchPrefix')}{' '}
-              {selectedDevice.touch_method === 'u2' ? 'uiautomator2' : selectedDevice.touch_method}
-            </span>
-          )}
-        </div>
+        {/* Device selector */}
+        <Select
+          value={device.selectedSerial ?? ''}
+          onValueChange={(v) => device.setSelectedSerial(v || null)}
+        >
+          <SelectTrigger className='h-8 w-[220px] shrink-0 text-xs'>
+            <SelectValue placeholder={t('selectPhonePlaceholder')} />
+          </SelectTrigger>
+          <SelectContent>
+            {device.connectedDevices.map((d) => (
+              <SelectItem key={d.serial} value={d.serial} className='text-xs'>
+                {d.brand} {d.model} — {d.serial.slice(0, 10)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        {/* WS status dot */}
+        <span className={cn(
+          'shrink-0 inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-[11px] font-medium',
+          device.wsConnected
+            ? 'border-green-500/20 bg-green-500/10 text-green-700 dark:text-green-400'
+            : 'border-red-500/20 bg-red-500/10 text-red-600 dark:text-red-400',
+        )}>
+          <span className={cn('size-1.5 rounded-full', device.wsConnected ? 'bg-green-500' : 'bg-red-500')} />
+          {device.wsConnected ? 'Online' : 'Offline'}
+        </span>
       </div>
 
-      {/* ── Main layout ─────────────────────────────────────────────────── */}
+      {/* ── 3-column main layout ────────────────────────────────────────── */}
       <div className='flex flex-1 overflow-hidden'>
 
-        {/* LEFT: device screen only ──────────────────────────────────────── */}
-        <div className='w-[min(100%,360px)] shrink-0 overflow-y-auto border-r border-border/60 bg-muted/20 p-3'>
-          {selectedDevice && (
-            <div className='min-h-[660px]'>
-              <DeviceTile
-                device={selectedDevice}
-                logLines={device.logs[selectedDevice.serial] ?? []}
-                mode={device.mode}
-                wsSend={record.sendAndRecord}
-                onToggleMode={record.handleToggleMode}
-                onRestart={record.handleRestart}
-                onTap={handleScreenTap}
-                highlightBounds={highlightBounds}
-              />
+        {/* ── COL 1: UI Hierarchy tree ──────────────────────────────────── */}
+        <div className={cn(
+          'flex shrink-0 flex-col border-r border-border/60 bg-muted/10 transition-all duration-200',
+          leftCollapsed ? 'w-0 overflow-hidden' : 'w-[272px]',
+        )}>
+          {/* Tree */}
+          <div className='min-h-0 flex-1 overflow-hidden'>
+            <XmlTreeViewer
+              xml={hierarchy.xml}
+              loading={hierarchy.loading}
+              onNodeSelect={({ bounds, by, value, nodeId }) => {
+                setHighlightBounds(bounds);
+                if (nodeId != null) setSelectedNodeId(nodeId);
+                if (selectorPickTarget) {
+                  if (value?.trim()) applySelectorPick(by, value.trim());
+                  else toast.warning(t('pickSelectorNoElement'));
+                  return;
+                }
+                selector.setBy(by as typeof selector.by);
+                selector.setValue(value);
+              }}
+              selectedNodeId={selectedNodeId}
+              onRefresh={() => selectedDevice && hierarchy.refresh()}
+              autoRefresh={hierarchy.autoRefresh}
+              onAutoRefreshChange={hierarchy.setAutoRefresh}
+            />
+          </div>
+
+          {/* Selector bar */}
+          <div className={cn(
+            'flex shrink-0 items-center gap-2 border-t border-border/60 px-2.5 py-2',
+            selector.value ? 'bg-primary/5' : 'bg-muted/30',
+          )}>
+            {selector.value ? (
+              <>
+                <span className='min-w-0 flex-1 truncate font-mono text-[10px] text-muted-foreground'>
+                  <span className='font-bold text-primary'>[{selector.by}]</span> {selector.value}
+                </span>
+                <Button size='sm' variant='secondary' className='h-6 shrink-0 px-2 text-[10px]' onClick={selector.tap} disabled={!selectedDevice}>
+                  Tap
+                </Button>
+              </>
+            ) : (
+              <p className='text-[10px] text-muted-foreground'>{t('selectorBarHint')}</p>
+            )}
+          </div>
+        </div>
+
+        {/* Collapse toggle button */}
+        <button
+          type='button'
+          onClick={() => setLeftCollapsed(!leftCollapsed)}
+          className='relative z-10 flex w-4 shrink-0 items-center justify-center border-r border-border/40 bg-muted/20 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground'
+          title={leftCollapsed ? 'Mở cây giao diện' : 'Thu cây giao diện'}
+        >
+          {leftCollapsed ? <ChevronRight className='size-3' /> : <ChevronLeft className='size-3' />}
+        </button>
+
+        {/* ── COL 2: Phone screen ───────────────────────────────────────── */}
+        <div className='flex w-[320px] shrink-0 flex-col items-center border-r border-border/60 bg-muted/20 overflow-y-auto'>
+          {selectedDevice ? (
+            <>
+              {/* Device label */}
+              <div className='flex w-full shrink-0 items-center gap-2 border-b border-border/40 bg-background/60 px-3 py-1.5'>
+                <span className={cn('size-2 rounded-full shrink-0', device.wsConnected ? 'bg-green-500' : 'bg-muted-foreground/40')} />
+                <span className='truncate text-[11px] font-medium text-foreground'>
+                  {selectedDevice.brand} {selectedDevice.model}
+                </span>
+                <span className='ml-auto font-mono text-[10px] text-muted-foreground'>
+                  {selectedDevice.serial.slice(0, 10)}
+                </span>
+              </div>
+              <div className='p-3 w-full'>
+                <DeviceTile
+                  device={selectedDevice}
+                  logLines={device.logs[selectedDevice.serial] ?? []}
+                  mode={device.mode}
+                  wsSend={record.sendAndRecord}
+                  onToggleMode={record.handleToggleMode}
+                  onRestart={record.handleRestart}
+                  onTap={handleScreenTap}
+                  highlightBounds={highlightBounds}
+                />
+              </div>
+            </>
+          ) : (
+            <div className='flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center'>
+              <Video className='size-8 text-muted-foreground/30' strokeWidth={1.25} />
+              <p className='text-xs text-muted-foreground'>Chọn thiết bị từ thanh trên</p>
             </div>
           )}
         </div>
 
-        {/* RIGHT: hierarchy (top) + recording editor (bottom) ───────────── */}
+        {/* ── COL 3: Recording / scenario editor ───────────────────────── */}
         <div className='flex flex-1 flex-col overflow-hidden'>
 
-          {/* ── Hierarchy / phần tử màn hình ─────────────────────────────── */}
-          <div
-            className='flex shrink-0 flex-col border-b border-border/60 bg-muted/10'
-            style={{ height: 'min(40vh, 420px)', minHeight: 200 }}
-          >
-            <div className='min-h-0 flex-1 overflow-hidden p-2 pb-0'>
-              <XmlTreeViewer
-                xml={hierarchy.xml}
-                loading={hierarchy.loading}
-                onNodeSelect={({ bounds, by, value, nodeId }) => {
-                  setHighlightBounds(bounds);
-                  if (nodeId != null) setSelectedNodeId(nodeId);
-                  if (selectorPickTarget) {
-                    if (value?.trim()) applySelectorPick(by, value.trim());
-                    else toast.warning(t('pickSelectorNoElement'));
-                    return;
-                  }
-                  selector.setBy(by as typeof selector.by);
-                  selector.setValue(value);
-                }}
-                selectedNodeId={selectedNodeId}
-                onRefresh={() => selectedDevice && hierarchy.refresh()}
-                autoRefresh={hierarchy.autoRefresh}
-                onAutoRefreshChange={hierarchy.setAutoRefresh}
-              />
-            </div>
-
-            {/* Selector: hint or selected element */}
-            <div
-              className={cn(
-                'flex shrink-0 items-center gap-2 border-t px-3 py-2',
-                selector.value ? 'bg-primary/8' : 'bg-muted/40',
-              )}
-            >
-              {selector.value ? (
-                <>
-                  <span className='min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground'>
-                    <span className='font-semibold text-primary'>[{selector.by}]</span> {selector.value}
-                  </span>
-                  <Button
-                    size='sm'
-                    variant='secondary'
-                    className='h-8 shrink-0 px-3 text-xs'
-                    onClick={selector.tap}
-                    disabled={!selectedDevice}
-                  >
-                    {t('tapSelected')}
-                  </Button>
-                </>
-              ) : (
-                <p className='min-w-0 flex-1 text-[11px] leading-snug text-muted-foreground'>
-                  {t('selectorBarHint')}
-                </p>
-              )}
-              <Tooltip delayDuration={400}>
-                <TooltipTrigger asChild>
-                  <button
-                    type='button'
-                    className='shrink-0 rounded-full p-1 text-muted-foreground hover:bg-muted hover:text-foreground'
-                    aria-label={t('tooltipSelectorBar')}
-                  >
-                    <HelpCircle className='size-3.5' />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side='top' className='max-w-[min(100vw-2rem,20rem)] text-xs leading-relaxed'>
-                  {t('tooltipSelectorBar')}
-                </TooltipContent>
-              </Tooltip>
-            </div>
-          </div>
-
-          {/* ── Recording + scenario editor ───────────────────────────────── */}
-          <div className='flex flex-1 flex-col overflow-hidden'>
-
           {playerMode && selectedDevice ? (
-            /* ── Player mode ─────────────────────────────────────────────── */
-            <div className='flex flex-1 flex-col items-center justify-start gap-4 overflow-auto p-6'>
-              <div className='w-full max-w-lg'>
-                <ScenarioPlayer
-                  serial={selectedDevice.serial}
-                  onClose={() => setPlayerMode(false)}
-                  onPlayingChange={hierarchy.setPaused}
-                />
-              </div>
+            /* Player mode */
+            <div className='flex flex-1 flex-col overflow-auto p-4'>
+              <ScenarioPlayer
+                serial={selectedDevice.serial}
+                onClose={() => setPlayerMode(false)}
+                onPlayingChange={hierarchy.setPaused}
+                preloadedSteps={steps.items.length > 0 ? (steps.items as any[]) : undefined}
+                preloadedName={save.editingContext?.name}
+              />
             </div>
           ) : (
             <>
-              {/* ── Recording status bar ──────────────────────────────────── */}
+              {/* Recording bar */}
               {record.recording ? (
-                <div className='flex shrink-0 flex-col gap-3 border-b border-red-200/80 bg-red-50/90 px-4 py-3 dark:border-red-900/40 dark:bg-red-950/25 sm:flex-row sm:items-center'>
-                  <div className='flex min-w-0 flex-1 items-center gap-3'>
-                    <span className='relative flex size-3 shrink-0'>
-                      <span className='absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75' />
-                      <span className='relative inline-flex size-3 rounded-full bg-red-500' />
+                <div className='flex shrink-0 items-center gap-3 border-b border-red-200/60 bg-red-50/80 px-4 py-2.5 dark:border-red-900/30 dark:bg-red-950/20'>
+                  <span className='relative flex size-2.5 shrink-0'>
+                    <span className='absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75' />
+                    <span className='relative inline-flex size-2.5 rounded-full bg-red-500' />
+                  </span>
+                  <span className='text-xs font-semibold text-red-800 dark:text-red-300'>{t('recordingActive')}</span>
+                  {steps.items.length > 0 && (
+                    <span className='rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300'>
+                      {steps.items.length} bước
                     </span>
-                    <span className='text-sm font-semibold text-red-800 dark:text-red-300'>
-                      {t('recordingActive')}
-                    </span>
-                    {steps.items.length > 0 && (
-                      <span className='rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800 dark:bg-red-900/50 dark:text-red-200'>
-                        {t('stepCount', { count: steps.items.length })}
-                      </span>
-                    )}
-                    {record.pollingXml && (
-                      <span className='flex items-center gap-1.5 text-xs text-red-600/80 dark:text-red-400/90'>
-                        <RefreshCw size={12} className='animate-spin' />
-                        {t('recordingReadingUi')}
-                      </span>
-                    )}
-                  </div>
+                  )}
+                  {record.pollingXml && (
+                    <RefreshCw size={11} className='animate-spin text-red-500/70' />
+                  )}
                   <Button
                     size='sm'
                     variant='destructive'
-                    className='w-full shrink-0 sm:w-auto'
+                    className='ml-auto h-7 gap-1.5 px-3 text-xs'
                     onClick={() => void record.toggleRecording()}
                   >
-                    <Square className='mr-1.5 size-3.5' />
+                    <Square className='size-3' />
                     {t('stopRecording')}
                   </Button>
                 </div>
               ) : (
-                <div className='flex shrink-0 flex-col gap-3 border-b bg-gradient-to-r from-muted/40 to-muted/20 px-4 py-3 sm:flex-row sm:items-center'>
-                  <div className='min-w-0 flex-1 space-y-0.5'>
-                    <p className='text-xs font-semibold text-foreground'>{t('recordingIdleTitle')}</p>
-                    <p className='text-[11px] leading-relaxed text-muted-foreground sm:text-xs'>
-                      {t.rich('recordingIdleSubtitle', {
-                        strong: (c) => <strong className='font-semibold text-foreground'>{c}</strong>,
-                      })}
-                    </p>
+                <div className='flex shrink-0 items-center gap-2 border-b border-border/60 bg-background px-4 py-2'>
+                  <div className='min-w-0 flex-1'>
+                    <p className='text-[11px] font-semibold text-foreground'>{t('recordingIdleTitle')}</p>
+                    <p className='text-[10px] text-muted-foreground'>{t.rich('recordingIdleSubtitle', { strong: (c) => <strong>{c}</strong> })}</p>
                   </div>
-                  <div className='flex shrink-0 flex-wrap items-center gap-2'>
-                    <Button
-                      size='default'
-                      variant='default'
-                      className='min-h-10 gap-2 shadow-sm'
-                      onClick={() => void record.toggleRecording()}
-                      disabled={!selectedDevice}
-                    >
-                      <Circle className='size-4 fill-current' />
-                      {t('startRecording')}
-                    </Button>
-                    <Button
-                      size='default'
-                      variant='outline'
-                      className='min-h-10 gap-2'
-                      onClick={() => setPlayerMode(true)}
-                      disabled={!selectedDevice}
-                    >
-                      <Play className='size-4' />
-                      {t('tryRun')}
-                    </Button>
-                  </div>
+                  <Button
+                    size='sm'
+                    variant='default'
+                    className='h-8 shrink-0 gap-1.5 text-xs'
+                    onClick={() => void record.toggleRecording()}
+                    disabled={!selectedDevice}
+                  >
+                    <Circle className='size-3 fill-current' />
+                    {t('startRecording')}
+                  </Button>
+                  <Button
+                    size='sm'
+                    variant='outline'
+                    className='h-8 shrink-0 gap-1.5 text-xs'
+                    onClick={() => setPlayerMode(true)}
+                    disabled={!selectedDevice}
+                  >
+                    <Play className='size-3' />
+                    {t('tryRun')}
+                  </Button>
                 </div>
               )}
 
-              {/* ── Steps / flow editor ───────────────────────────────────── */}
-              <div className='flex min-h-0 flex-1 flex-col overflow-hidden px-4 pt-3'>
-                <div className='mb-2 flex items-center gap-1.5'>
-                  <Clapperboard className='size-3.5 text-muted-foreground' aria-hidden />
-                  <span className='text-xs font-semibold uppercase tracking-wide text-muted-foreground'>
-                    {t('editorSectionTitle')}
+              {/* Selector pick banner */}
+              {selectorPickTarget && (
+                <div className='flex shrink-0 items-center gap-2 border-b border-amber-400/30 bg-amber-50/80 px-4 py-2 dark:bg-amber-950/20'>
+                  <Crosshair className='size-3.5 shrink-0 text-amber-600' />
+                  <p className='flex-1 text-[11px] text-amber-800 dark:text-amber-300'>{t('pickSelectorBanner')}</p>
+                  <button
+                    type='button'
+                    className='text-[10px] text-amber-700 underline underline-offset-2 hover:no-underline dark:text-amber-400'
+                    onClick={() => setSelectorPickTarget(null)}
+                  >
+                    Huỷ
+                  </button>
+                </div>
+              )}
+
+              {/* Section header */}
+              <div className='flex shrink-0 items-center gap-2 border-b border-border/40 bg-muted/20 px-4 py-1.5'>
+                <Clapperboard className='size-3.5 shrink-0 text-muted-foreground' />
+                <span className='text-[11px] font-semibold text-foreground'>
+                  {t('editorSectionTitle')}
+                </span>
+                {steps.items.length > 0 && (
+                  <span className='rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary'>
+                    {steps.items.length} bước
                   </span>
-                  <Tooltip delayDuration={400}>
-                    <TooltipTrigger asChild>
-                      <button
-                        type='button'
-                        className='rounded-full p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground'
-                        aria-label={t('tooltipScenarioSection')}
-                      >
-                        <HelpCircle className='size-3.5' />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side='bottom' className='max-w-[min(100vw-2rem,22rem)] text-xs leading-relaxed'>
-                      {t('tooltipScenarioSection')}
-                    </TooltipContent>
-                  </Tooltip>
-                </div>
-                {selectorPickTarget && (
-                  <div className='mb-2 flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-950 dark:text-amber-100'>
-                    <Crosshair className='mt-0.5 size-4 shrink-0' aria-hidden />
-                    <p className='min-w-0 flex-1 leading-snug'>{t('pickSelectorBanner')}</p>
-                    <Tooltip delayDuration={400}>
-                      <TooltipTrigger asChild>
-                        <button
-                          type='button'
-                          className='shrink-0 rounded-full p-0.5 text-amber-900/80 hover:bg-amber-500/20 dark:text-amber-200'
-                          aria-label={t('tooltipPickBannerMore')}
-                        >
-                          <HelpCircle className='size-3.5' />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side='left' className='max-w-[min(100vw-2rem,22rem)] text-xs leading-relaxed'>
-                        {t('tooltipPickBannerMore')}
-                      </TooltipContent>
-                    </Tooltip>
-                  </div>
                 )}
-                <div className='min-h-0 flex-1 overflow-hidden rounded-lg border border-dashed border-border/80 bg-background/50'>
-                  {steps.items.length === 0 ? (
-                    <div className='flex h-full min-h-[160px] flex-col items-center justify-center gap-2 px-6 py-10 text-center'>
-                      <div className='rounded-full bg-muted/60 p-3'>
-                        <Circle className='size-8 text-muted-foreground/35' strokeWidth={1.25} />
-                      </div>
-                      <p className='text-sm font-medium text-foreground'>{t('emptyStepsTitle')}</p>
-                      <p className='max-w-sm text-xs leading-relaxed text-muted-foreground'>
-                        {t('emptyStepsHint')}
-                      </p>
-                    </div>
-                  ) : (
-                    <div className='h-full overflow-hidden p-2'>
-                      <FlowEditor
-                        steps={steps.items as FlowStep[]}
-                        onChange={(newSteps) =>
-                          steps.setItems(
-                            newSteps.map((s: FlowStep, i: number) => ({
-                              ...s,
-                              _id: (s as any)._id || `step-${Date.now()}-${i}`,
-                            })) as any
-                          )
-                        }
-                        maxHeight='calc(100vh - 420px)'
-                        selectorPickTarget={selectorPickTarget}
-                        onSelectorPickTargetChange={setSelectorPickTarget}
-                      />
-                    </div>
-                  )}
+                <div className='flex-1' />
+                {/* Workflow breadcrumb */}
+                <div className='hidden items-center gap-1 sm:flex'>
+                  {[
+                    { label: '① Ghi', done: steps.items.length > 0 },
+                    { label: '② Chỉnh', done: false },
+                    { label: '③ Lưu', done: false },
+                  ].map(({ label, done }) => (
+                    <span key={label} className={`text-[9px] font-medium ${done ? 'text-primary' : 'text-muted-foreground/50'}`}>
+                      {label}
+                    </span>
+                  ))}
                 </div>
+                <Tooltip delayDuration={400}>
+                  <TooltipTrigger asChild>
+                    <button type='button' className='rounded-full p-0.5 text-muted-foreground hover:bg-muted'>
+                      <HelpCircle className='size-3.5' />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side='bottom' className='max-w-xs text-xs'>{t('tooltipScenarioSection')}</TooltipContent>
+                </Tooltip>
               </div>
 
-              {/* ── Bottom action bar ─────────────────────────────────────── */}
-              <div className='flex shrink-0 flex-wrap items-center gap-2 border-t border-border/60 bg-muted/15 px-4 py-3'>
-                <Button size='sm' variant='outline' onClick={steps.addWait}>
-                  <Plus className='mr-1.5 size-3.5' />
-                  Thêm chờ
-                </Button>
+              {/* Flow editor */}
+              <div className='min-h-0 flex-1 overflow-hidden px-3 pb-2'>
+                {steps.items.length === 0 ? (
+                  <div className='flex h-full flex-col justify-center gap-4 overflow-y-auto rounded-xl border border-dashed border-border/50 bg-muted/10 px-5 py-6'>
+                    {/* Guide header */}
+                    <div className='text-center'>
+                      <p className='text-sm font-semibold text-foreground'>Cách tạo kịch bản</p>
+                      <p className='mt-0.5 text-[11px] text-muted-foreground'>Làm theo 3 bước đơn giản dưới đây</p>
+                    </div>
 
+                    {/* Steps */}
+                    <ol className='space-y-3'>
+                      {[
+                        {
+                          n: '1',
+                          icon: <Circle className='size-4 fill-current text-primary' />,
+                          title: 'Bắt đầu ghi',
+                          desc: 'Nhấn nút "Bắt đầu ghi" phía trên, rồi thao tác trên màn hình điện thoại.',
+                          active: !record.recording,
+                        },
+                        {
+                          n: '2',
+                          icon: <Square className='size-4 text-red-500' />,
+                          title: 'Dừng ghi',
+                          desc: 'Nhấn "Dừng ghi" khi đã thực hiện đủ các thao tác cần kịch bản.',
+                          active: record.recording,
+                        },
+                        {
+                          n: '3',
+                          icon: <Save className='size-4 text-emerald-600' />,
+                          title: 'Lưu kịch bản',
+                          desc: 'Kiểm tra lại danh sách bước, chỉnh sửa nếu cần rồi nhấn "Lưu kịch bản".',
+                          active: false,
+                        },
+                      ].map(({ n, icon, title, desc, active }) => (
+                        <li key={n} className={`flex gap-3 rounded-lg px-3 py-2.5 transition-colors ${active ? 'bg-primary/8 ring-1 ring-primary/20' : 'bg-background/60'}`}>
+                          <div className={`flex size-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${active ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>
+                            {n}
+                          </div>
+                          <div className='min-w-0'>
+                            <div className='flex items-center gap-1.5'>
+                              {icon}
+                              <span className='text-[12px] font-semibold text-foreground'>{title}</span>
+                              {active && <span className='rounded-full bg-primary/15 px-1.5 py-px text-[9px] font-bold text-primary'>Bước hiện tại</span>}
+                            </div>
+                            <p className='mt-0.5 text-[11px] leading-relaxed text-muted-foreground'>{desc}</p>
+                          </div>
+                        </li>
+                      ))}
+                    </ol>
+
+                    <Button
+                      size='sm'
+                      className='mx-auto gap-1.5'
+                      onClick={() => void record.toggleRecording()}
+                      disabled={!selectedDevice}
+                    >
+                      <Circle className='size-3 fill-current' />
+                      {t('startRecording')}
+                    </Button>
+                  </div>
+                ) : (
+                  <div className='h-full overflow-hidden rounded-lg border border-border/50 bg-background'>
+                    <FlowEditor
+                      steps={steps.items as FlowStep[]}
+                      onChange={(newSteps) =>
+                        steps.setItems(
+                          newSteps.map((s: FlowStep, i: number) => ({
+                            ...s,
+                            _id: (s as any)._id || `step-${Date.now()}-${i}`,
+                          })) as any
+                        )
+                      }
+                      maxHeight='calc(100vh - 300px)'
+                      selectorPickTarget={selectorPickTarget}
+                      onSelectorPickTargetChange={setSelectorPickTarget}
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* Action bar */}
+              <div className='flex shrink-0 items-center gap-1.5 border-t border-border/60 bg-background/80 px-3 py-2.5'>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button size='sm' variant='outline'>
-                      <GitBranch className='mr-1.5 size-3.5' />
-                      Điều kiện
-                      <ChevronDown className='ml-1.5 size-3' />
+                    <Button size='sm' variant='outline' className='h-7 gap-1 text-xs'>
+                      <Plus className='size-3' />
+                      Luồng
+                      <ChevronDown className='size-3' />
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align='start' className='w-56'>
-                    <DropdownMenuLabel className='text-[10px] font-semibold uppercase tracking-wider text-muted-foreground'>
-                      Điều kiện
+                    <DropdownMenuLabel className='pb-0.5 pt-2'>
+                      <span className='block text-[11px] font-bold text-foreground'>Chờ / Delay</span>
                     </DropdownMenuLabel>
-                    <DropdownMenuItem className='gap-2' onClick={() => steps.addFlow('if_element')}>
-                      <StepIcon type='if_element' size={14} />
-                      Nếu phần tử tồn tại
+                    <DropdownMenuItem className='gap-2 text-xs' onClick={steps.addWait}>
+                      <StepIcon type='wait' size={13} /> Chờ (giây)
                     </DropdownMenuItem>
-                    <DropdownMenuItem className='gap-2' onClick={() => steps.addFlow('if_variable')}>
-                      <StepIcon type='if_variable' size={14} />
-                      Nếu biến thỏa điều kiện
+                    <DropdownMenuItem className='gap-2 text-xs' onClick={() => steps.addFlow('wait_element')}>
+                      <StepIcon type='wait_element' size={13} /> Chờ phần tử xuất hiện
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
-                    <DropdownMenuLabel className='text-[10px] font-semibold uppercase tracking-wider text-muted-foreground'>
-                      Lặp lại
+                    <DropdownMenuLabel className='pb-0.5 pt-1'>
+                      <span className='block text-[11px] font-bold text-foreground'>Điều kiện</span>
                     </DropdownMenuLabel>
-                    <DropdownMenuItem className='gap-2' onClick={() => steps.addFlow('repeat')}>
-                      <StepIcon type='repeat' size={14} />
-                      Lặp N lần
+                    <DropdownMenuItem className='gap-2 text-xs' onClick={() => steps.addFlow('if_element')}>
+                      <StepIcon type='if_element' size={13} /> Nếu phần tử tồn tại
                     </DropdownMenuItem>
-                    <DropdownMenuItem className='gap-2' onClick={() => steps.addFlow('repeat_until')}>
-                      <StepIcon type='repeat_until' size={14} />
-                      Lặp cho đến khi
+                    <DropdownMenuItem className='gap-2 text-xs' onClick={() => steps.addFlow('if_variable')}>
+                      <StepIcon type='if_variable' size={13} /> Nếu biến thỏa điều kiện
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel className='pb-0.5 pt-1'>
+                      <span className='block text-[11px] font-bold text-foreground'>Lặp lại</span>
+                    </DropdownMenuLabel>
+                    <DropdownMenuItem className='gap-2 text-xs' onClick={() => steps.addFlow('repeat')}>
+                      <StepIcon type='repeat' size={13} /> Lặp N lần
+                    </DropdownMenuItem>
+                    <DropdownMenuItem className='gap-2 text-xs' onClick={() => steps.addFlow('repeat_until')}>
+                      <StepIcon type='repeat_until' size={13} /> Lặp cho đến khi
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
 
-                <div className='ml-auto flex items-center gap-2'>
-                  <Button
-                    size='sm'
-                    variant='ghost'
-                    onClick={steps.copyJson}
-                    disabled={steps.items.length === 0}
-                    title='Copy JSON'
-                  >
-                    <Copy className='size-3.5' />
-                  </Button>
+                <div className='ml-auto flex items-center gap-1.5'>
+                  <Tooltip delayDuration={300}>
+                    <TooltipTrigger asChild>
+                      <Button size='sm' variant='ghost' className='h-7 w-7 p-0' onClick={steps.copyJson} disabled={steps.items.length === 0}>
+                        <Copy className='size-3.5' />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side='top' className='text-xs'>Copy JSON</TooltipContent>
+                  </Tooltip>
                   <Button
                     size='sm'
                     variant='default'
+                    className='h-7 gap-1.5 px-3 text-xs'
                     onClick={steps.openSave}
                     disabled={steps.items.length === 0}
                   >
-                    <Save className='mr-1.5 size-3.5' />
+                    <Save className='size-3' />
                     Lưu kịch bản
                   </Button>
                 </div>
               </div>
             </>
           )}
-          </div>  {/* end recording editor */}
-        </div>    {/* end right column */}
-      </div>      {/* end main layout */}
+        </div>
+      </div>
 
       {/* ── Save dialog ─────────────────────────────────────────────────────── */}
       <Dialog
@@ -552,7 +595,7 @@ export function ControlRecordView({ initialSerial }: Props = {}) {
             </DialogTitle>
           </DialogHeader>
 
-          {!save.selectedCampaignId ? (
+          {!save.selectedCampaignId && !save.editingContext ? (
             <div className='space-y-2'>
               <p className='text-xs text-muted-foreground'>{t('stepsRecorded', { count: steps.items.length })}</p>
               {save.campaigns.length === 0 ? (
@@ -573,14 +616,16 @@ export function ControlRecordView({ initialSerial }: Props = {}) {
             </div>
           ) : (
             <div className='space-y-2'>
-              <Button
-                variant='ghost'
-                size='sm'
-                className='text-xs text-muted-foreground'
-                onClick={() => save.setSelectedCampaignId(null)}
-              >
-                {t('chooseCampaignAgain')}
-              </Button>
+              {!save.editingContext && (
+                <Button
+                  variant='ghost'
+                  size='sm'
+                  className='text-xs text-muted-foreground'
+                  onClick={() => save.setSelectedCampaignId(null)}
+                >
+                  {t('chooseCampaignAgain')}
+                </Button>
+              )}
               <Button
                 variant='default'
                 className='w-full justify-start gap-2'

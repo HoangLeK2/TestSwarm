@@ -24,10 +24,11 @@ export const BRACKET_COLORS: Record<string, { border: string; bg: string; label:
   run_scenario: { border: 'border-pink-400/60', bg: 'bg-pink-50/50 dark:bg-pink-950/20', label: 'text-pink-600 dark:text-pink-400' },
 };
 
-/** Insert menu — Vietnamese. */
+/** Insert menu — Vietnamese. Two top-level categories: Action vs Flow. */
 export const INSERT_MENU = [
   {
-    group: 'Thao tác',
+    group: 'Hành động',
+    description: 'Thao tác trực tiếp lên màn hình',
     items: [
       { type: 'tap_selector', label: 'Chạm phần tử', icon: '👆' },
       { type: 'tap_ratio', label: 'Chạm tọa độ', icon: '👆' },
@@ -40,38 +41,30 @@ export const INSERT_MENU = [
       { type: 'open_url', label: 'Mở URL', icon: '🌐' },
       { type: 'scroll_down', label: 'Cuộn xuống', icon: '⬇️' },
       { type: 'scroll_to', label: 'Cuộn tới phần tử', icon: '⬇️' },
-    ]
-  },
-  {
-    group: 'Chờ & Kiểm tra',
-    items: [
-      { type: 'wait', label: 'Chờ (giây)', icon: '⏳' },
-      { type: 'wait_element', label: 'Chờ phần tử', icon: '🔍' },
       { type: 'assert_element', label: 'Kiểm tra phần tử', icon: '✅' },
       { type: 'dismiss_popup', label: 'Đóng popup', icon: '❌' },
+      { type: 'set_variable', label: 'Gán biến', icon: '📝' },
     ]
   },
   {
-    group: 'Luồng điều khiển',
+    group: 'Luồng',
+    description: 'Điều kiện, lặp, chờ — kiểm soát luồng chạy',
     items: [
+      { type: 'wait', label: 'Chờ (giây)', icon: '⏱' },
+      { type: 'wait_element', label: 'Chờ phần tử xuất hiện', icon: '🔍' },
+      { type: 'if_element', label: 'Nếu phần tử tồn tại', icon: '🔀' },
+      { type: 'if_variable', label: 'Nếu biến thỏa điều kiện', icon: '🔀' },
       { type: 'repeat', label: 'Lặp N lần', icon: '🔄' },
       { type: 'repeat_until', label: 'Lặp cho đến khi', icon: '🔁' },
-      { type: 'if_element', label: 'Nếu phần tử tồn tại', icon: '🔀' },
-      { type: 'if_variable', label: 'Nếu biến', icon: '🔀' },
       { type: 'random_pick', label: 'Chọn ngẫu nhiên', icon: '🎲' },
       { type: 'run_scenario', label: 'Chạy kịch bản con', icon: '📦' },
     ]
   },
-  {
-    group: 'Dữ liệu',
-    items: [
-      { type: 'set_variable', label: 'Gán biến', icon: '📝' },
-    ]
-  }
 ];
 
 export function getStepSummary(step: FlowStep): string {
   switch (step.type) {
+    case 'tap': return step.selector ? `[${step.selector.by}] "${step.selector.value}"` : (step.fallback ? `(${step.fallback.rx}, ${step.fallback.ry})` : '');
     case 'tap_selector': return `[${step.by}] "${step.value}"`;
     case 'tap_ratio': return `(${step.x}, ${step.y})`;
     case 'tap_position': return step.pos;
@@ -100,6 +93,76 @@ export function getStepSummary(step: FlowStep): string {
     case 'run_scenario': return step.scenario_name || step.scenario_id || '';
     default: return '';
   }
+}
+
+/**
+ * Human-readable display for a step card.
+ * `target`  — the main value/subject (shown prominently)
+ * `selectorBadge` — selector type badge (text / resource-id / xpath …)
+ */
+export function getStepDisplay(step: FlowStep): { target: string; selectorBadge?: string } {
+  const pct = (v: number) => `${Math.round(v * 100)}%`;
+  switch (step.type) {
+    case 'tap_selector':
+    case 'long_tap_selector':
+    case 'wait_element':
+    case 'assert_element':
+    case 'scroll_to':
+      return { target: step.value ?? '', selectorBadge: step.by };
+    case 'input_selector':
+      return { target: step.value ?? '', selectorBadge: step.by };
+    case 'tap':
+      return step.selector?.value
+        ? { target: step.selector.value, selectorBadge: step.selector.by }
+        : { target: step.fallback ? `(${pct(step.fallback.rx)}, ${pct(step.fallback.ry)})` : '' };
+    case 'tap_ratio':
+      return { target: `(${pct(step.x ?? 0.5)}, ${pct(step.y ?? 0.5)})` };
+    case 'swipe_ratio':
+      return { target: `(${pct(step.x1 ?? 0.5)},${pct(step.y1 ?? 0.5)}) → (${pct(step.x2 ?? 0.5)},${pct(step.y2 ?? 0.5)})` };
+    case 'input_text':
+      return { target: step.text ?? '' };
+    case 'wait':
+      return { target: step.seconds != null ? `${step.seconds} giây` : '' };
+    case 'key':
+      return { target: step.key ?? '' };
+    case 'launch_app':
+      return { target: step.package ?? '' };
+    case 'open_url':
+      return { target: step.url ?? '' };
+    case 'scroll_down':
+      return { target: step.repeats != null ? `${step.repeats} lần` : '' };
+    case 'set_variable':
+      return { target: step.name ? `${step.name} = ${step.value ?? '…'}` : '' };
+    case 'repeat':
+      return { target: step.count != null ? `${step.count} lần` : '' };
+    case 'repeat_until':
+      return { target: step.max_iterations != null ? `tối đa ${step.max_iterations} lần` : '' };
+    case 'if_element':
+      return { target: step.value ?? '', selectorBadge: step.by };
+    case 'if_variable':
+      return {
+        target: step.name
+          ? `${step.name} ${step.equals != null ? `= "${step.equals}"` : step.not_equals != null ? `≠ "${step.not_equals}"` : step.contains != null ? `⊃ "${step.contains}"` : step.greater_than != null ? `> ${step.greater_than}` : ''}`
+          : '',
+      };
+    case 'random_pick':
+      return { target: `${step.branches?.length ?? 0} nhánh` };
+    case 'run_scenario':
+      return { target: step.scenario_name || step.scenario_id || '' };
+    default:
+      return { target: getStepSummary(step) };
+  }
+}
+
+/** Returns which top-level category a step type belongs to. */
+export function getStepCategory(type: string): 'action' | 'flow' {
+  const flowTypes = new Set([
+    'wait', 'wait_element', 'wait_stable',
+    'repeat', 'repeat_until',
+    'if_element', 'if_variable',
+    'random_pick', 'run_scenario',
+  ]);
+  return flowTypes.has(type) ? 'flow' : 'action';
 }
 
 /** Vietnamese step type names. */

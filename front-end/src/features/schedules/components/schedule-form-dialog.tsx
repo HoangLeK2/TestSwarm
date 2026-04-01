@@ -237,115 +237,125 @@ export function ScheduleFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className='z-[1000] max-w-6xl max-h-[90vh] overflow-y-auto'>
-        <DialogHeader>
+      <DialogContent className='z-[1000] max-w-2xl flex flex-col max-h-[90vh]'>
+        <DialogHeader className='shrink-0'>
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
 
-        <div className='space-y-5 pt-2'>
-          <div className='grid grid-cols-2 gap-4'>
+        <div className='overflow-y-auto flex-1 space-y-5 pr-1 pt-2'>
+          {/* ── Thông tin cơ bản ── */}
+          <div className='space-y-3'>
             <div className='space-y-1'>
               <Label>{t('nameLabel')}</Label>
               <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t('namePlaceholder')} />
             </div>
             <div className='space-y-1'>
-              <Label>{t('enabledLabel')}</Label>
-              <div className='flex items-center gap-3 pt-2'>
-                <Switch checked={isEnabled} onCheckedChange={setIsEnabled} />
-                <span className='text-sm text-muted-foreground'>{isEnabled ? t('enabledOn') : t('enabledOff')}</span>
-              </div>
+              <Label>{t('descriptionLabel')}</Label>
+              <Textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                rows={2}
+                placeholder={t('optional')}
+              />
+            </div>
+            <div className='flex items-center gap-3'>
+              <Switch checked={isEnabled} onCheckedChange={setIsEnabled} id='schedule-enabled' />
+              <label htmlFor='schedule-enabled' className='text-sm cursor-pointer select-none'>
+                {isEnabled ? t('enabledOn') : t('enabledOff')}
+              </label>
             </div>
           </div>
 
-          <div className='space-y-1'>
-            <Label>{t('descriptionLabel')}</Label>
-            <Textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={2}
-              placeholder={t('optional')}
-            />
-          </div>
+          {/* ── Mục tiêu ── */}
+          <div className='space-y-3 rounded-lg border p-3'>
+            <p className='text-xs font-semibold uppercase tracking-wide text-muted-foreground'>{t('targetTypeLabel')}</p>
+            <Select
+              value={targetType}
+              onValueChange={(v) => {
+                const next = v as ScheduleCreate['target_type'];
+                setTargetType(next);
+                if (next === 'fleet') setTargetId(null);
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className='z-[10001]'>
+                <SelectItem value='campaign'>{t('targetCampaign')}</SelectItem>
+                <SelectItem value='template'>{t('targetTemplate')}</SelectItem>
+                <SelectItem value='fleet'>{t('targetFleet')}</SelectItem>
+              </SelectContent>
+            </Select>
 
-          <div className='space-y-3 rounded border p-3'>
-            <div className='grid grid-cols-2 gap-3'>
+            {(targetType === 'campaign' || targetType === 'template') && (
               <div className='space-y-1'>
-                <Label>{t('targetTypeLabel')}</Label>
-                <Select
-                  value={targetType}
-                  onValueChange={(v) => {
-                    const next = v as ScheduleCreate['target_type'];
-                    setTargetType(next);
-                    if (next === 'fleet') setTargetId(null);
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className='z-[10001]'>
-                    <SelectItem value='campaign'>{t('targetCampaign')}</SelectItem>
-                    <SelectItem value='template'>{t('targetTemplate')}</SelectItem>
-                    <SelectItem value='fleet'>{t('targetFleet')}</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Label>{t('targetLabel')}</Label>
+                {targetType === 'campaign' ? (
+                  <Select value={targetId ?? '_none'} onValueChange={(v) => setTargetId(v === '_none' ? null : v)}>
+                    <SelectTrigger>
+                      <SelectValue placeholder={t('pickCampaign')} />
+                    </SelectTrigger>
+                    <SelectContent className='z-[10001]'>
+                      <SelectItem value='_none'>{t('selectCampaign')}</SelectItem>
+                      {(campaigns ?? []).map((c) => (
+                        <SelectItem key={c.id} value={c.id}>
+                          {c.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <Select value={targetId ?? '_none'} onValueChange={(v) => setTargetId(v === '_none' ? null : v)}>
+                    <SelectTrigger>
+                      <SelectValue placeholder={t('pickTemplate')} />
+                    </SelectTrigger>
+                    <SelectContent className='z-[10001]'>
+                      <SelectItem value='_none'>{t('selectTemplate')}</SelectItem>
+                      {(templates ?? []).map((tpl) => (
+                        <SelectItem key={tpl.id} value={tpl.id}>
+                          {tpl.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
               </div>
-
-              {(targetType === 'campaign' || targetType === 'template') && (
-                <div className='space-y-1'>
-                  <Label>{t('targetLabel')}</Label>
-                  {targetType === 'campaign' ? (
-                    <Select value={targetId ?? '_none'} onValueChange={(v) => setTargetId(v === '_none' ? null : v)}>
-                      <SelectTrigger>
-                        <SelectValue placeholder={t('pickCampaign')} />
-                      </SelectTrigger>
-                      <SelectContent className='z-[10001]'>
-                        <SelectItem value='_none'>{t('selectCampaign')}</SelectItem>
-                        {(campaigns ?? []).map((c) => (
-                          <SelectItem key={c.id} value={c.id}>
-                            {c.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  ) : (
-                    <Select value={targetId ?? '_none'} onValueChange={(v) => setTargetId(v === '_none' ? null : v)}>
-                      <SelectTrigger>
-                        <SelectValue placeholder={t('pickTemplate')} />
-                      </SelectTrigger>
-                      <SelectContent className='z-[10001]'>
-                        <SelectItem value='_none'>{t('selectTemplate')}</SelectItem>
-                        {(templates ?? []).map((tpl) => (
-                          <SelectItem key={tpl.id} value={tpl.id}>
-                            {tpl.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
-                </div>
-              )}
-            </div>
+            )}
 
             {targetType === 'fleet' && (
-              <div className='space-y-2 pt-2'>
-                <Label>
-                  {t('inlineStepsLabel', { count: inlineSteps.length })}
-                </Label>
-                <FlowEditor steps={inlineSteps} onChange={setInlineSteps} compact maxHeight='min(420px,48vh)' />
+              <div className='space-y-2'>
+                <Label>{t('inlineStepsLabel', { count: inlineSteps.length })}</Label>
+                <FlowEditor steps={inlineSteps} onChange={setInlineSteps} compact maxHeight='min(320px,40vh)' />
               </div>
+            )}
+
+            {targetType === 'fleet' && (
+              <details className='group'>
+                <summary className='cursor-pointer text-sm font-medium flex items-center gap-2'>
+                  {t('inlineVariablesSummary')}
+                  {Object.keys(inlineVariables ?? {}).length > 0 && (
+                    <span className='text-xs text-muted-foreground'>({Object.keys(inlineVariables).length})</span>
+                  )}
+                </summary>
+                <div className='pt-2'>
+                  <VariableEditor variables={inlineVariables} onChange={setInlineVariables} />
+                  <p className='mt-1 text-[10px] text-muted-foreground'>
+                    {t('inlineVariablesHintPrefix')}{' '}
+                    <code className='rounded bg-muted px-1 py-0.5'>{'${__DEVICE_SERIAL__}'}</code>
+                    {t('inlineVariablesHintSuffix')}
+                  </p>
+                </div>
+              </details>
             )}
           </div>
 
+          {/* ── Lịch cron ── */}
           <div className='space-y-2'>
             <CronBuilder value={cronExpression} onChange={(next) => setCronExpression(next)} />
           </div>
 
+          {/* ── Nhóm thiết bị ── */}
           <div className='grid grid-cols-2 gap-4'>
-            <div className='space-y-1'>
-              <Label>{t('timezoneLabel')}</Label>
-              <Input value={timezone} onChange={(e) => setTimezone(e.target.value)} placeholder={t('timezonePlaceholder')} />
-            </div>
-
             <div className='space-y-1'>
               <Label>{t('deviceGroupLabel')}</Label>
               <Select value={deviceGroupId ?? '_none'} onValueChange={(v) => setDeviceGroupId(v === '_none' ? null : v)}>
@@ -362,8 +372,13 @@ export function ScheduleFormDialog({
                 </SelectContent>
               </Select>
             </div>
+            <div className='space-y-1'>
+              <Label>{t('timezoneLabel')}</Label>
+              <Input value={timezone} onChange={(e) => setTimezone(e.target.value)} placeholder={t('timezonePlaceholder')} />
+            </div>
           </div>
 
+          {/* ── Lọc thiết bị ── */}
           <div className='grid grid-cols-3 gap-4'>
             <div className='space-y-1'>
               <Label>{t('filterStateLabel')}</Label>
@@ -387,7 +402,9 @@ export function ScheduleFormDialog({
             </div>
           </div>
 
-          <div className='rounded border p-3 space-y-3'>
+          {/* ── Tuỳ chọn thời gian ── */}
+          <div className='rounded-lg border p-3 space-y-3'>
+            <p className='text-xs font-semibold uppercase tracking-wide text-muted-foreground'>{t('staggerDevicesLabel')}</p>
             <div className='grid grid-cols-2 gap-4'>
               <div className='space-y-1'>
                 <Label>{t('randomDelayMinLabel')}</Label>
@@ -399,13 +416,13 @@ export function ScheduleFormDialog({
               </div>
             </div>
 
-            <div className='flex items-center justify-between gap-3'>
-              <div className='space-y-1'>
-                <Label>{t('staggerDevicesLabel')}</Label>
+            <div className='flex items-center gap-3'>
+              <Switch checked={staggerDevices} onCheckedChange={setStaggerDevices} id='stagger-toggle' />
+              <div>
+                <label htmlFor='stagger-toggle' className='text-sm font-medium cursor-pointer select-none block'>
+                  {t('staggerDevicesLabel')}
+                </label>
                 <p className='text-[11px] text-muted-foreground'>{t('staggerHint')}</p>
-              </div>
-              <div className='flex items-center gap-3'>
-                <Switch checked={staggerDevices} onCheckedChange={setStaggerDevices} />
               </div>
             </div>
 
@@ -423,25 +440,6 @@ export function ScheduleFormDialog({
             )}
           </div>
 
-          {targetType === 'fleet' && (
-            <details className='group'>
-              <summary className='cursor-pointer text-sm font-medium flex items-center gap-2'>
-                {t('inlineVariablesSummary')}
-                {Object.keys(inlineVariables ?? {}).length > 0 && (
-                  <span className='text-xs text-muted-foreground'>({Object.keys(inlineVariables).length})</span>
-                )}
-              </summary>
-              <div className='pt-2'>
-                <VariableEditor variables={inlineVariables} onChange={setInlineVariables} />
-                <p className='mt-1 text-[10px] text-muted-foreground'>
-                  {t('inlineVariablesHintPrefix')}{' '}
-                  <code className='rounded bg-muted px-1 py-0.5'>{'${__DEVICE_SERIAL__}'}</code>
-                  {t('inlineVariablesHintSuffix')}
-                </p>
-              </div>
-            </details>
-          )}
-
           {(createMutation.error || updateMutation.error) && (
             <p className='text-xs text-destructive'>
               {formatFarmApiError(
@@ -450,15 +448,16 @@ export function ScheduleFormDialog({
               )}
             </p>
           )}
+        </div>
 
-          <div className='flex items-center justify-end gap-2 pt-2'>
-            <Button size='sm' variant='outline' onClick={() => onOpenChange(false)} disabled={isPending}>
-              {t('cancel')}
-            </Button>
-            <Button size='sm' onClick={() => void onSubmit()} disabled={isPending}>
-              {isPending ? t('saving') : mode === 'create' ? t('createCta') : t('saveCta')}
-            </Button>
-          </div>
+        {/* ── Footer ── */}
+        <div className='shrink-0 flex items-center justify-end gap-2 border-t pt-3'>
+          <Button size='sm' variant='outline' onClick={() => onOpenChange(false)} disabled={isPending}>
+            {t('cancel')}
+          </Button>
+          <Button size='sm' onClick={() => void onSubmit()} disabled={isPending}>
+            {isPending ? t('saving') : mode === 'create' ? t('createCta') : t('saveCta')}
+          </Button>
         </div>
       </DialogContent>
     </Dialog>

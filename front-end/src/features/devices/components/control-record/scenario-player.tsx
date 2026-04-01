@@ -7,14 +7,19 @@ import { Play, Square, ArrowLeft, CheckCircle2, XCircle, Loader2, Info } from 'l
 import { useCampaigns, useScenarios } from '@/features/campaigns/hooks/use-campaigns';
 import { previewScenarioStream, type PreviewStepResult } from '../../services/api';
 import type { ScenarioOut } from '@/features/campaigns/types';
+import { getStepTypeName, getStepSummary } from '@/features/campaigns/components/flow-editor/constants';
+import type { FlowStep } from '@/features/campaigns/components/scenario-steps/types';
 
 interface ScenarioPlayerProps {
   serial: string;
   onClose: () => void;
   onPlayingChange?: (playing: boolean) => void;
+  /** When provided, skip campaign/scenario selection and play these steps directly. */
+  preloadedSteps?: Array<Record<string, any>>;
+  preloadedName?: string;
 }
 
-export function ScenarioPlayer({ serial, onClose, onPlayingChange }: ScenarioPlayerProps) {
+export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedSteps, preloadedName }: ScenarioPlayerProps) {
   const { data: campaigns = [] } = useCampaigns();
   const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(null);
   const { data: scenarios = [] } = useScenarios(selectedCampaignId ?? '');
@@ -27,8 +32,10 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange }: ScenarioPla
   const [currentLoop, setCurrentLoop] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
 
+  const activeSteps = preloadedSteps ?? (selectedScenario?.steps as Array<Record<string, any>> | undefined);
+
   const handlePlay = useCallback(async () => {
-    if (!selectedScenario || !serial) return;
+    if (!activeSteps?.length || !serial) return;
     setPlaying(true);
     onPlayingChange?.(true);
     setResults([]);
@@ -48,7 +55,7 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange }: ScenarioPla
 
         await previewScenarioStream(
           serial,
-          selectedScenario.steps,
+          activeSteps,
           (event) => {
             if (ctrl.signal.aborted) return;
             if (event.event === 'start') {
@@ -78,15 +85,15 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange }: ScenarioPla
       setCurrentStepIndex(-1);
       abortRef.current = null;
     }
-  }, [selectedScenario, serial, loopCount, currentStepIndex]);
+  }, [activeSteps, serial, loopCount, currentStepIndex]);
 
   const handleStop = useCallback(() => {
     abortRef.current?.abort();
     setPlaying(false);
   }, []);
 
-  // Step 1: Select campaign
-  if (!selectedCampaignId) {
+  // Step 1: Select campaign (skip if preloaded)
+  if (!preloadedSteps && !selectedCampaignId) {
     return (
       <div className='space-y-3'>
         <div className='flex items-center gap-2'>
@@ -117,8 +124,8 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange }: ScenarioPla
     );
   }
 
-  // Step 2: Select scenario
-  if (!selectedScenario) {
+  // Step 2: Select scenario (skip if preloaded)
+  if (!preloadedSteps && !selectedScenario) {
     return (
       <div className='space-y-3'>
         <div className='flex items-center gap-2'>
@@ -151,16 +158,17 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange }: ScenarioPla
   }
 
   // Step 3: Play scenario
-  const steps = selectedScenario.steps as Array<Record<string, any>>;
+  const steps = activeSteps ?? [];
+  const displayName = preloadedName ?? selectedScenario?.name ?? '';
 
   return (
     <div className='space-y-3'>
       <div className='flex items-center gap-2'>
-        <Button size='sm' variant='ghost' onClick={() => { setSelectedScenario(null); setResults([]); }}>
+        <Button size='sm' variant='ghost' onClick={preloadedSteps ? onClose : () => { setSelectedScenario(null); setResults([]); }}>
           <ArrowLeft className='mr-1 size-3.5' />
-          Scenarios
+          {preloadedSteps ? 'Đóng' : 'Scenarios'}
         </Button>
-        <span className='truncate text-sm font-medium'>{selectedScenario.name}</span>
+        <span className='truncate text-sm font-medium'>{displayName || 'Kịch bản hiện tại'}</span>
         <div className='flex-1' />
         {/* Loop count */}
         <div className='flex items-center gap-1'>
@@ -227,12 +235,18 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange }: ScenarioPla
               </span>
 
               {/* Step description */}
-              <span className='flex-1 truncate font-mono'>
-                {step.type}
-                {step.selector ? ` [${step.selector.by}="${step.selector.value}"]` : ''}
-                {step.package ? ` ${step.package}` : ''}
-                {step.seconds ? ` ${step.seconds}s` : ''}
-                {step.key ? ` ${step.key}` : ''}
+              <span className='min-w-0 flex-1 overflow-hidden'>
+                <span className='block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground leading-tight'>
+                  {getStepTypeName(step.type)}
+                </span>
+                {(() => {
+                  const summary = getStepSummary(step as unknown as FlowStep);
+                  return summary ? (
+                    <span className='block truncate text-xs font-mono leading-tight' title={summary}>
+                      {summary}
+                    </span>
+                  ) : null;
+                })()}
               </span>
 
               {/* Fallback badge */}

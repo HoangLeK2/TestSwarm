@@ -62,7 +62,9 @@ export function DeviceScreen({ device, wsSend, mode, onTap, highlightBounds }: D
           if (!r) return;
           const p1 = clientToDevice(initial[0] - r.left, initial[1] - r.top, r.width, r.height);
           const p2 = clientToDevice(xy[0] - r.left, xy[1] - r.top, r.width, r.height);
-          wsSend({ type: 'swipe', serial: device.serial, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, ms: Math.min(elapsed, 1000) });
+          // Clamp duration: floor at 300ms so Android doesn't interpret as a fling (reduces drift).
+          const ms = Math.max(300, Math.min(elapsed, 1000));
+          wsSend({ type: 'swipe', serial: device.serial, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, ms });
         }
       },
     },

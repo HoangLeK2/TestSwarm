@@ -20,7 +20,13 @@ export const ROUTES = {
     CONTROL_RECORD: '/dashboard/device-farm/control',
     /** Điều khiển thiết bị với serial đã chọn (để vào đúng màn hình rồi lấy XML). */
     CONTROL_RECORD_WITH_SERIAL: (serial: string) =>
-      `/dashboard/device-farm/control?serial=${encodeURIComponent(serial)}`
+      `/dashboard/device-farm/control?serial=${encodeURIComponent(serial)}`,
+    /** Mở trang điều khiển để chỉnh sửa một scenario cụ thể của campaign. */
+    CONTROL_RECORD_EDIT_SCENARIO: (campaignId: string, scenarioId: string, serial?: string) => {
+      const params = new URLSearchParams({ campaignId, scenarioId });
+      if (serial) params.set('serial', serial);
+      return `/dashboard/device-farm/control?${params.toString()}`;
+    }
   },
   CAMPAIGNS: {
     ROOT: '/dashboard/campaigns',

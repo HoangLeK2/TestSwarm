@@ -136,7 +136,17 @@ export const workflowsApi = {
   resume: (workflowId: string) =>
     farmApi.post(`/workflows/${workflowId}/resume`).then((r) => r.data),
   cancel: (workflowId: string) =>
-    farmApi.post(`/workflows/${workflowId}/cancel`).then((r) => r.data)
+    farmApi.post(`/workflows/${workflowId}/cancel`).then((r) => r.data),
+  listForDevice: (serial: string) =>
+    farmApi
+      .get<{ serial: string; workflows: import('../types').WorkflowInfo[]; temporal_available: boolean }>(
+        `/devices/${encodeURIComponent(serial)}/running-workflows`,
+      )
+      .then((r) => r.data),
+  steps: (workflowId: string) =>
+    farmApi
+      .get<import('../types').WorkflowStepLog>(`/workflows/${encodeURIComponent(workflowId)}/steps`)
+      .then((r) => r.data),
 };
 
 export const tasksApi = {

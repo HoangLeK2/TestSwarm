@@ -94,7 +94,7 @@ function sanitizeScenarioStepsForApi(input: unknown): any[] {
   return input.map(sanitizeScenarioStep);
 }
 
-export function useControlRecord(initialSerial?: string | null) {
+export function useControlRecord(initialSerial?: string | null, initialCampaignId?: string | null, initialScenarioId?: string | null) {
   const t = useTranslations('devicesControlRecord');
   const errorPrefix = t('errorPrefix');
   const {
@@ -339,6 +339,27 @@ export function useControlRecord(initialSerial?: string | null) {
     );
   }, [cleanSteps, t]);
 
+  // ── Editing context (pre-loaded from URL params) ─────────────────────────
+  const [editingContext, setEditingContext] = useState<{
+    campaignId: string;
+    scenarioId: string;
+    name: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!initialCampaignId || !initialScenarioId) return;
+    scenariosApi.get(initialCampaignId, initialScenarioId).then((sc) => {
+      const loaded = Array.isArray(sc.steps)
+        ? sc.steps.map((s: any) => ({ ...s, _id: nextStepId() }) as StepWithId)
+        : [];
+      setSteps(loaded);
+      setEditingContext({ campaignId: initialCampaignId, scenarioId: initialScenarioId, name: sc.name });
+      if (loaded.length > 0) toast.info(t('toast.loadedScenario', { name: sc.name, count: loaded.length }));
+    }).catch(() => toast.error(t('toast.loadScenarioFailed')));
+  // intentionally runs once on mount
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ── Save dialog ──────────────────────────────────────────────────────────
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [campaigns, setCampaigns] = useState<{ id: string; name: string }[]>([]);
@@ -348,12 +369,20 @@ export function useControlRecord(initialSerial?: string | null) {
 
   const openSaveDialog = useCallback(() => {
     setSaveDialogOpen(true);
-    setSelectedCampaignId(null);
-    setCampaignScenarios([]);
-    campaignsApi.list()
-      .then((list) => setCampaigns(list.map((c) => ({ id: c.id, name: c.name }))))
-      .catch(() => setCampaigns([]));
-  }, []);
+    if (editingContext) {
+      // Pre-select the campaign and load its scenarios so the user can directly overwrite
+      setSelectedCampaignId(editingContext.campaignId);
+      setCampaignScenarios([]);
+      scenariosApi.list(editingContext.campaignId).then(setCampaignScenarios).catch(() => setCampaignScenarios([]));
+      setCampaigns([]);
+    } else {
+      setSelectedCampaignId(null);
+      setCampaignScenarios([]);
+      campaignsApi.list()
+        .then((list) => setCampaigns(list.map((c) => ({ id: c.id, name: c.name }))))
+        .catch(() => setCampaigns([]));
+    }
+  }, [editingContext]);
 
   const handlePickCampaign = useCallback((campaignId: string) => {
     setSelectedCampaignId(campaignId);
@@ -505,6 +534,7 @@ export function useControlRecord(initialSerial?: string | null) {
       pickCampaign: handlePickCampaign,
       saveTo: saveToScenario,
       saveAsNew: saveAsNewScenario,
+      editingContext,
     },
 
     hierarchy: {

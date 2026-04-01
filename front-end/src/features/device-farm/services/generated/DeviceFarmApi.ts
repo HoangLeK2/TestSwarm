@@ -3679,11 +3679,13 @@ export class DeviceFarmHttpClient<
      * @name ApiConnectInfoApiConnectInfoGet
      * @summary Api Connect Info
      * @request GET:/api/connect/info
+     * @secure
      */
     apiConnectInfoApiConnectInfoGet: (params: RequestParams = {}) =>
       this.request<any, any>({
         path: `/api/connect/info`,
         method: "GET",
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -3695,11 +3697,13 @@ export class DeviceFarmHttpClient<
      * @name ApiScenarioSchemaApiScenarioSchemaGet
      * @summary Api Scenario Schema
      * @request GET:/api/scenario/schema
+     * @secure
      */
     apiScenarioSchemaApiScenarioSchemaGet: (params: RequestParams = {}) =>
       this.request<any, any>({
         path: `/api/scenario/schema`,
         method: "GET",
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -3711,6 +3715,7 @@ export class DeviceFarmHttpClient<
      * @name ApiConnectRegisterApiConnectRegisterPost
      * @summary Api Connect Register
      * @request POST:/api/connect/register
+     * @secure
      */
     apiConnectRegisterApiConnectRegisterPost: (
       data: AdbRegisterRequest,
@@ -3720,6 +3725,7 @@ export class DeviceFarmHttpClient<
         path: `/api/connect/register`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
@@ -3732,6 +3738,7 @@ export class DeviceFarmHttpClient<
      * @name ApiScrcpyAttachApiDevicesSerialScrcpyAttachPost
      * @summary Api Scrcpy Attach
      * @request POST:/api/devices/{serial}/scrcpy/attach
+     * @secure
      */
     apiScrcpyAttachApiDevicesSerialScrcpyAttachPost: (
       serial: string,
@@ -3742,6 +3749,7 @@ export class DeviceFarmHttpClient<
         path: `/api/devices/${serial}/scrcpy/attach`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
@@ -3754,6 +3762,7 @@ export class DeviceFarmHttpClient<
      * @name ApiScrcpyDetachApiDevicesSerialScrcpyDetachPost
      * @summary Api Scrcpy Detach
      * @request POST:/api/devices/{serial}/scrcpy/detach
+     * @secure
      */
     apiScrcpyDetachApiDevicesSerialScrcpyDetachPost: (
       serial: string,
@@ -3762,6 +3771,7 @@ export class DeviceFarmHttpClient<
       this.request<any, HTTPValidationError>({
         path: `/api/devices/${serial}/scrcpy/detach`,
         method: "POST",
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -3773,6 +3783,7 @@ export class DeviceFarmHttpClient<
      * @name ApiSessionsStartApiSessionsStartPost
      * @summary Api Sessions Start
      * @request POST:/api/sessions/start
+     * @secure
      */
     apiSessionsStartApiSessionsStartPost: (
       data: StartSessionRequest,
@@ -3782,6 +3793,7 @@ export class DeviceFarmHttpClient<
         path: `/api/sessions/start`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
@@ -3794,6 +3806,7 @@ export class DeviceFarmHttpClient<
      * @name ApiSessionsEndApiSessionsEndPost
      * @summary Api Sessions End
      * @request POST:/api/sessions/end
+     * @secure
      */
     apiSessionsEndApiSessionsEndPost: (
       data: EndSessionRequest,
@@ -3803,6 +3816,7 @@ export class DeviceFarmHttpClient<
         path: `/api/sessions/end`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
@@ -3815,6 +3829,7 @@ export class DeviceFarmHttpClient<
      * @name ApiSessionsGetApiSessionsSessionIdGet
      * @summary Api Sessions Get
      * @request GET:/api/sessions/{session_id}
+     * @secure
      */
     apiSessionsGetApiSessionsSessionIdGet: (
       sessionId: string,
@@ -3823,6 +3838,7 @@ export class DeviceFarmHttpClient<
       this.request<any, HTTPValidationError>({
         path: `/api/sessions/${sessionId}`,
         method: "GET",
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -3834,6 +3850,7 @@ export class DeviceFarmHttpClient<
      * @name ApiDevicesReserveApiDevicesSerialReservePost
      * @summary Api Devices Reserve
      * @request POST:/api/devices/{serial}/reserve
+     * @secure
      */
     apiDevicesReserveApiDevicesSerialReservePost: (
       serial: string,
@@ -3842,6 +3859,7 @@ export class DeviceFarmHttpClient<
       this.request<any, HTTPValidationError>({
         path: `/api/devices/${serial}/reserve`,
         method: "POST",
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -3853,6 +3871,7 @@ export class DeviceFarmHttpClient<
      * @name ApiDevicesReleaseApiDevicesSerialReleasePost
      * @summary Api Devices Release
      * @request POST:/api/devices/{serial}/release
+     * @secure
      */
     apiDevicesReleaseApiDevicesSerialReleasePost: (
       serial: string,
@@ -3861,6 +3880,7 @@ export class DeviceFarmHttpClient<
       this.request<any, HTTPValidationError>({
         path: `/api/devices/${serial}/release`,
         method: "POST",
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -3872,6 +3892,7 @@ export class DeviceFarmHttpClient<
      * @name ApiTapApiTapSerialPost
      * @summary Api Tap
      * @request POST:/api/tap/{serial}
+     * @secure
      */
     apiTapApiTapSerialPost: (
       serial: string,
@@ -3882,6 +3903,7 @@ export class DeviceFarmHttpClient<
         path: `/api/tap/${serial}`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
@@ -3894,6 +3916,7 @@ export class DeviceFarmHttpClient<
      * @name ApiSwipeApiSwipeSerialPost
      * @summary Api Swipe
      * @request POST:/api/swipe/{serial}
+     * @secure
      */
     apiSwipeApiSwipeSerialPost: (
       serial: string,
@@ -3904,6 +3927,7 @@ export class DeviceFarmHttpClient<
         path: `/api/swipe/${serial}`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
@@ -3916,6 +3940,7 @@ export class DeviceFarmHttpClient<
      * @name ApiKeyApiKeySerialPost
      * @summary Api Key
      * @request POST:/api/key/{serial}
+     * @secure
      */
     apiKeyApiKeySerialPost: (
       serial: string,
@@ -3926,6 +3951,7 @@ export class DeviceFarmHttpClient<
         path: `/api/key/${serial}`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
@@ -3938,6 +3964,7 @@ export class DeviceFarmHttpClient<
      * @name ApiOpenUrlApiOpenUrlSerialPost
      * @summary Api Open Url
      * @request POST:/api/open_url/{serial}
+     * @secure
      */
     apiOpenUrlApiOpenUrlSerialPost: (
       serial: string,
@@ -3948,6 +3975,7 @@ export class DeviceFarmHttpClient<
         path: `/api/open_url/${serial}`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
@@ -3960,6 +3988,7 @@ export class DeviceFarmHttpClient<
      * @name ApiInputTextApiDevicesSerialInputTextPost
      * @summary Api Input Text
      * @request POST:/api/devices/{serial}/input_text
+     * @secure
      */
     apiInputTextApiDevicesSerialInputTextPost: (
       serial: string,
@@ -3970,6 +3999,7 @@ export class DeviceFarmHttpClient<
         path: `/api/devices/${serial}/input_text`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
@@ -3982,6 +4012,7 @@ export class DeviceFarmHttpClient<
      * @name ApiLongTapApiDevicesSerialLongTapPost
      * @summary Api Long Tap
      * @request POST:/api/devices/{serial}/long_tap
+     * @secure
      */
     apiLongTapApiDevicesSerialLongTapPost: (
       serial: string,
@@ -3992,6 +4023,7 @@ export class DeviceFarmHttpClient<
         path: `/api/devices/${serial}/long_tap`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
@@ -4004,6 +4036,7 @@ export class DeviceFarmHttpClient<
      * @name ApiScrollApiDevicesSerialScrollPost
      * @summary Api Scroll
      * @request POST:/api/devices/{serial}/scroll
+     * @secure
      */
     apiScrollApiDevicesSerialScrollPost: (
       serial: string,
@@ -4014,6 +4047,7 @@ export class DeviceFarmHttpClient<
         path: `/api/devices/${serial}/scroll`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
@@ -4026,6 +4060,7 @@ export class DeviceFarmHttpClient<
      * @name ApiHierarchyApiDevicesSerialHierarchyGet
      * @summary Api Hierarchy
      * @request GET:/api/devices/{serial}/hierarchy
+     * @secure
      */
     apiHierarchyApiDevicesSerialHierarchyGet: (
       serial: string,
@@ -4042,6 +4077,7 @@ export class DeviceFarmHttpClient<
         path: `/api/devices/${serial}/hierarchy`,
         method: "GET",
         query: query,
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -4053,6 +4089,7 @@ export class DeviceFarmHttpClient<
      * @name ApiUiElementsApiDevicesSerialUiElementsGet
      * @summary Api Ui Elements
      * @request GET:/api/devices/{serial}/ui_elements
+     * @secure
      */
     apiUiElementsApiDevicesSerialUiElementsGet: (
       serial: string,
@@ -4069,6 +4106,7 @@ export class DeviceFarmHttpClient<
         path: `/api/devices/${serial}/ui_elements`,
         method: "GET",
         query: query,
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -4080,6 +4118,7 @@ export class DeviceFarmHttpClient<
      * @name ApiTapSelectorApiTapSelectorSerialPost
      * @summary Api Tap Selector
      * @request POST:/api/tap_selector/{serial}
+     * @secure
      */
     apiTapSelectorApiTapSelectorSerialPost: (
       serial: string,
@@ -4090,6 +4129,7 @@ export class DeviceFarmHttpClient<
         path: `/api/tap_selector/${serial}`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
@@ -4102,6 +4142,7 @@ export class DeviceFarmHttpClient<
      * @name ApiHitTestApiDevicesSerialHitTestPost
      * @summary Api Hit Test
      * @request POST:/api/devices/{serial}/hit_test
+     * @secure
      */
     apiHitTestApiDevicesSerialHitTestPost: (
       serial: string,
@@ -4112,6 +4153,7 @@ export class DeviceFarmHttpClient<
         path: `/api/devices/${serial}/hit_test`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
@@ -4124,11 +4166,13 @@ export class DeviceFarmHttpClient<
      * @name ApiGetTaskApiTasksTaskIdGet
      * @summary Api Get Task
      * @request GET:/api/tasks/{task_id}
+     * @secure
      */
     apiGetTaskApiTasksTaskIdGet: (taskId: string, params: RequestParams = {}) =>
       this.request<any, HTTPValidationError>({
         path: `/api/tasks/${taskId}`,
         method: "GET",
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -4140,6 +4184,7 @@ export class DeviceFarmHttpClient<
      * @name ApiShellApiAgentSerialShellPost
      * @summary Api Shell
      * @request POST:/api/agent/{serial}/shell
+     * @secure
      */
     apiShellApiAgentSerialShellPost: (
       serial: string,
@@ -4150,6 +4195,7 @@ export class DeviceFarmHttpClient<
         path: `/api/agent/${serial}/shell`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
@@ -4162,6 +4208,7 @@ export class DeviceFarmHttpClient<
      * @name ApiEnqueueTaskApiTaskPost
      * @summary Api Enqueue Task
      * @request POST:/api/task
+     * @secure
      */
     apiEnqueueTaskApiTaskPost: (
       data: TaskRequest,
@@ -4171,6 +4218,7 @@ export class DeviceFarmHttpClient<
         path: `/api/task`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
@@ -4183,6 +4231,7 @@ export class DeviceFarmHttpClient<
      * @name ApiScenarioPreviewApiDevicesSerialScenarioPreviewPost
      * @summary Api Scenario Preview
      * @request POST:/api/devices/{serial}/scenario/preview
+     * @secure
      */
     apiScenarioPreviewApiDevicesSerialScenarioPreviewPost: (
       serial: string,
@@ -4193,6 +4242,7 @@ export class DeviceFarmHttpClient<
         path: `/api/devices/${serial}/scenario/preview`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
@@ -4205,6 +4255,7 @@ export class DeviceFarmHttpClient<
      * @name ApiScenarioPreviewStreamApiDevicesSerialScenarioPreviewStreamPost
      * @summary Api Scenario Preview Stream
      * @request POST:/api/devices/{serial}/scenario/preview-stream
+     * @secure
      */
     apiScenarioPreviewStreamApiDevicesSerialScenarioPreviewStreamPost: (
       serial: string,
@@ -4215,6 +4266,7 @@ export class DeviceFarmHttpClient<
         path: `/api/devices/${serial}/scenario/preview-stream`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
@@ -4227,6 +4279,7 @@ export class DeviceFarmHttpClient<
      * @name ApiScenarioRunApiDevicesSerialScenarioRunPost
      * @summary Api Scenario Run
      * @request POST:/api/devices/{serial}/scenario/run
+     * @secure
      */
     apiScenarioRunApiDevicesSerialScenarioRunPost: (
       serial: string,
@@ -4237,6 +4290,7 @@ export class DeviceFarmHttpClient<
         path: `/api/devices/${serial}/scenario/run`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
@@ -4249,6 +4303,7 @@ export class DeviceFarmHttpClient<
      * @name ApiSessionsScenarioRunApiSessionsSessionIdScenarioRunPost
      * @summary Api Sessions Scenario Run
      * @request POST:/api/sessions/{session_id}/scenario/run
+     * @secure
      */
     apiSessionsScenarioRunApiSessionsSessionIdScenarioRunPost: (
       sessionId: string,
@@ -4259,6 +4314,7 @@ export class DeviceFarmHttpClient<
         path: `/api/sessions/${sessionId}/scenario/run`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
@@ -4271,6 +4327,7 @@ export class DeviceFarmHttpClient<
      * @name ApiRunCampaignApiCampaignsCampaignIdRunPost
      * @summary Api Run Campaign
      * @request POST:/api/campaigns/{campaign_id}/run
+     * @secure
      */
     apiRunCampaignApiCampaignsCampaignIdRunPost: (
       campaignId: string,
@@ -4279,22 +4336,25 @@ export class DeviceFarmHttpClient<
       this.request<any, HTTPValidationError>({
         path: `/api/campaigns/${campaignId}/run`,
         method: "POST",
+        secure: true,
         format: "json",
         ...params,
       }),
 
     /**
-     * @description How campaign runs are executed — for UI/docs (Temporal vs in-process TaskQueue).
+     * @description How campaign runs are executed — for UI/docs.
      *
      * @tags device-control
      * @name ApiExecutionRuntimeApiExecutionRuntimeGet
      * @summary Api Execution Runtime
      * @request GET:/api/execution/runtime
+     * @secure
      */
     apiExecutionRuntimeApiExecutionRuntimeGet: (params: RequestParams = {}) =>
       this.request<any, any>({
         path: `/api/execution/runtime`,
         method: "GET",
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -4306,6 +4366,7 @@ export class DeviceFarmHttpClient<
      * @name ApiListCampaignWorkflowsApiCampaignsCampaignIdWorkflowsGet
      * @summary Api List Campaign Workflows
      * @request GET:/api/campaigns/{campaign_id}/workflows
+     * @secure
      */
     apiListCampaignWorkflowsApiCampaignsCampaignIdWorkflowsGet: (
       campaignId: string,
@@ -4314,6 +4375,28 @@ export class DeviceFarmHttpClient<
       this.request<any, HTTPValidationError>({
         path: `/api/campaigns/${campaignId}/workflows`,
         method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description List RUNNING/PAUSED top-level scenario workflows for a specific device serial.
+     *
+     * @tags device-control
+     * @name ApiDeviceRunningWorkflowsApiDevicesSerialRunningWorkflowsGet
+     * @summary Api Device Running Workflows
+     * @request GET:/api/devices/{serial}/running-workflows
+     * @secure
+     */
+    apiDeviceRunningWorkflowsApiDevicesSerialRunningWorkflowsGet: (
+      serial: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/devices/${serial}/running-workflows`,
+        method: "GET",
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -4325,6 +4408,7 @@ export class DeviceFarmHttpClient<
      * @name ApiWorkflowProgressApiWorkflowsWorkflowIdProgressGet
      * @summary Api Workflow Progress
      * @request GET:/api/workflows/{workflow_id}/progress
+     * @secure
      */
     apiWorkflowProgressApiWorkflowsWorkflowIdProgressGet: (
       workflowId: string,
@@ -4333,17 +4417,40 @@ export class DeviceFarmHttpClient<
       this.request<any, HTTPValidationError>({
         path: `/api/workflows/${workflowId}/progress`,
         method: "GET",
+        secure: true,
         format: "json",
         ...params,
       }),
 
     /**
-     * @description Pause a running scenario workflow at the next step boundary.
+     * @description Query step-by-step execution log for a scenario workflow. - While RUNNING: queries the child steps workflow (live, real-time). - After COMPLETED/FAILED: reads the final result from the parent workflow. Returns a flat list of step entries with index, type, ok, message, depth.
+     *
+     * @tags device-control
+     * @name ApiWorkflowStepsApiWorkflowsWorkflowIdStepsGet
+     * @summary Api Workflow Steps
+     * @request GET:/api/workflows/{workflow_id}/steps
+     * @secure
+     */
+    apiWorkflowStepsApiWorkflowsWorkflowIdStepsGet: (
+      workflowId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/workflows/${workflowId}/steps`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Pause a running scenario workflow at the next step boundary. SECURITY NOTE: workflow_id is caller-supplied and not validated for ownership. Any authenticated caller can pause any workflow whose ID they know. Add campaign-ownership middleware before exposing this to untrusted users.
      *
      * @tags device-control
      * @name ApiWorkflowPauseApiWorkflowsWorkflowIdPausePost
      * @summary Api Workflow Pause
      * @request POST:/api/workflows/{workflow_id}/pause
+     * @secure
      */
     apiWorkflowPauseApiWorkflowsWorkflowIdPausePost: (
       workflowId: string,
@@ -4352,6 +4459,7 @@ export class DeviceFarmHttpClient<
       this.request<any, HTTPValidationError>({
         path: `/api/workflows/${workflowId}/pause`,
         method: "POST",
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -4363,6 +4471,7 @@ export class DeviceFarmHttpClient<
      * @name ApiWorkflowResumeApiWorkflowsWorkflowIdResumePost
      * @summary Api Workflow Resume
      * @request POST:/api/workflows/{workflow_id}/resume
+     * @secure
      */
     apiWorkflowResumeApiWorkflowsWorkflowIdResumePost: (
       workflowId: string,
@@ -4371,6 +4480,7 @@ export class DeviceFarmHttpClient<
       this.request<any, HTTPValidationError>({
         path: `/api/workflows/${workflowId}/resume`,
         method: "POST",
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -4382,6 +4492,7 @@ export class DeviceFarmHttpClient<
      * @name ApiWorkflowCancelApiWorkflowsWorkflowIdCancelPost
      * @summary Api Workflow Cancel
      * @request POST:/api/workflows/{workflow_id}/cancel
+     * @secure
      */
     apiWorkflowCancelApiWorkflowsWorkflowIdCancelPost: (
       workflowId: string,
@@ -4390,6 +4501,7 @@ export class DeviceFarmHttpClient<
       this.request<any, HTTPValidationError>({
         path: `/api/workflows/${workflowId}/cancel`,
         method: "POST",
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -4401,6 +4513,7 @@ export class DeviceFarmHttpClient<
      * @name ApiFleetRunApiFleetRunPost
      * @summary Api Fleet Run
      * @request POST:/api/fleet/run
+     * @secure
      */
     apiFleetRunApiFleetRunPost: (
       data: FleetRunRequest,
@@ -4410,6 +4523,7 @@ export class DeviceFarmHttpClient<
         path: `/api/fleet/run`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
@@ -4422,6 +4536,7 @@ export class DeviceFarmHttpClient<
      * @name ApiFleetStatusApiFleetStatusGet
      * @summary Api Fleet Status
      * @request GET:/api/fleet/status
+     * @secure
      */
     apiFleetStatusApiFleetStatusGet: (
       query?: {
@@ -4434,6 +4549,7 @@ export class DeviceFarmHttpClient<
         path: `/api/fleet/status`,
         method: "GET",
         query: query,
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -4445,6 +4561,7 @@ export class DeviceFarmHttpClient<
      * @name StfStatusApiStfStatusSerialGet
      * @summary Stf Status
      * @request GET:/api/stf/status/{serial}
+     * @secure
      */
     stfStatusApiStfStatusSerialGet: (
       serial: string,
@@ -4453,6 +4570,7 @@ export class DeviceFarmHttpClient<
       this.request<any, HTTPValidationError>({
         path: `/api/stf/status/${serial}`,
         method: "GET",
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -4464,6 +4582,7 @@ export class DeviceFarmHttpClient<
      * @name StfGetClipboardApiStfClipboardSerialGet
      * @summary Stf Get Clipboard
      * @request GET:/api/stf/clipboard/{serial}
+     * @secure
      */
     stfGetClipboardApiStfClipboardSerialGet: (
       serial: string,
@@ -4472,6 +4591,7 @@ export class DeviceFarmHttpClient<
       this.request<any, HTTPValidationError>({
         path: `/api/stf/clipboard/${serial}`,
         method: "GET",
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -4483,6 +4603,7 @@ export class DeviceFarmHttpClient<
      * @name StfSetClipboardApiStfClipboardSerialPost
      * @summary Stf Set Clipboard
      * @request POST:/api/stf/clipboard/{serial}
+     * @secure
      */
     stfSetClipboardApiStfClipboardSerialPost: (
       serial: string,
@@ -4493,6 +4614,7 @@ export class DeviceFarmHttpClient<
         path: `/api/stf/clipboard/${serial}`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
@@ -4505,6 +4627,7 @@ export class DeviceFarmHttpClient<
      * @name StfSetWifiApiStfWifiSerialPost
      * @summary Stf Set Wifi
      * @request POST:/api/stf/wifi/{serial}
+     * @secure
      */
     stfSetWifiApiStfWifiSerialPost: (
       serial: string,
@@ -4515,6 +4638,7 @@ export class DeviceFarmHttpClient<
         path: `/api/stf/wifi/${serial}`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
@@ -4527,6 +4651,7 @@ export class DeviceFarmHttpClient<
      * @name StfSetBluetoothApiStfBluetoothSerialPost
      * @summary Stf Set Bluetooth
      * @request POST:/api/stf/bluetooth/{serial}
+     * @secure
      */
     stfSetBluetoothApiStfBluetoothSerialPost: (
       serial: string,
@@ -4537,6 +4662,7 @@ export class DeviceFarmHttpClient<
         path: `/api/stf/bluetooth/${serial}`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
@@ -4549,6 +4675,7 @@ export class DeviceFarmHttpClient<
      * @name StfSetKeyguardApiStfKeyguardSerialPost
      * @summary Stf Set Keyguard
      * @request POST:/api/stf/keyguard/{serial}
+     * @secure
      */
     stfSetKeyguardApiStfKeyguardSerialPost: (
       serial: string,
@@ -4559,6 +4686,7 @@ export class DeviceFarmHttpClient<
         path: `/api/stf/keyguard/${serial}`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
@@ -4571,6 +4699,7 @@ export class DeviceFarmHttpClient<
      * @name StfSetWakeLockApiStfWakelockSerialPost
      * @summary Stf Set Wake Lock
      * @request POST:/api/stf/wakelock/{serial}
+     * @secure
      */
     stfSetWakeLockApiStfWakelockSerialPost: (
       serial: string,
@@ -4581,6 +4710,7 @@ export class DeviceFarmHttpClient<
         path: `/api/stf/wakelock/${serial}`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
@@ -4593,6 +4723,7 @@ export class DeviceFarmHttpClient<
      * @name StfSetRingerApiStfRingerSerialPost
      * @summary Stf Set Ringer
      * @request POST:/api/stf/ringer/{serial}
+     * @secure
      */
     stfSetRingerApiStfRingerSerialPost: (
       serial: string,
@@ -4603,6 +4734,7 @@ export class DeviceFarmHttpClient<
         path: `/api/stf/ringer/${serial}`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
@@ -4615,6 +4747,7 @@ export class DeviceFarmHttpClient<
      * @name StfSetMuteApiStfMuteSerialPost
      * @summary Stf Set Mute
      * @request POST:/api/stf/mute/{serial}
+     * @secure
      */
     stfSetMuteApiStfMuteSerialPost: (
       serial: string,
@@ -4625,6 +4758,7 @@ export class DeviceFarmHttpClient<
         path: `/api/stf/mute/${serial}`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
@@ -4637,6 +4771,7 @@ export class DeviceFarmHttpClient<
      * @name StfIdentifyApiStfIdentifySerialPost
      * @summary Stf Identify
      * @request POST:/api/stf/identify/{serial}
+     * @secure
      */
     stfIdentifyApiStfIdentifySerialPost: (
       serial: string,
@@ -4645,6 +4780,7 @@ export class DeviceFarmHttpClient<
       this.request<any, HTTPValidationError>({
         path: `/api/stf/identify/${serial}`,
         method: "POST",
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -4656,6 +4792,7 @@ export class DeviceFarmHttpClient<
      * @name StfGetDisplayApiStfDisplaySerialGet
      * @summary Stf Get Display
      * @request GET:/api/stf/display/{serial}
+     * @secure
      */
     stfGetDisplayApiStfDisplaySerialGet: (
       serial: string,
@@ -4664,6 +4801,7 @@ export class DeviceFarmHttpClient<
       this.request<any, HTTPValidationError>({
         path: `/api/stf/display/${serial}`,
         method: "GET",
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -4675,6 +4813,7 @@ export class DeviceFarmHttpClient<
      * @name StfGetPropertiesApiStfPropertiesSerialGet
      * @summary Stf Get Properties
      * @request GET:/api/stf/properties/{serial}
+     * @secure
      */
     stfGetPropertiesApiStfPropertiesSerialGet: (
       serial: string,
@@ -4683,6 +4822,7 @@ export class DeviceFarmHttpClient<
       this.request<any, HTTPValidationError>({
         path: `/api/stf/properties/${serial}`,
         method: "GET",
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -4710,6 +4850,7 @@ export class DeviceFarmHttpClient<
      * @name MjpegStreamStreamSerialGet
      * @summary Mjpeg Stream
      * @request GET:/stream/{serial}
+     * @secure
      */
     mjpegStreamStreamSerialGet: (
       serial: string,
@@ -4726,6 +4867,7 @@ export class DeviceFarmHttpClient<
         path: `/stream/${serial}`,
         method: "GET",
         query: query,
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -4737,6 +4879,7 @@ export class DeviceFarmHttpClient<
      * @name ScreenshotScreenshotSerialGet
      * @summary Screenshot
      * @request GET:/screenshot/{serial}
+     * @secure
      */
     screenshotScreenshotSerialGet: (
       serial: string,
@@ -4753,6 +4896,7 @@ export class DeviceFarmHttpClient<
         path: `/screenshot/${serial}`,
         method: "GET",
         query: query,
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -4764,6 +4908,7 @@ export class DeviceFarmHttpClient<
      * @name ScreenshotB64ScreenshotB64SerialGet
      * @summary Screenshot B64
      * @request GET:/screenshot-b64/{serial}
+     * @secure
      */
     screenshotB64ScreenshotB64SerialGet: (
       serial: string,
@@ -4772,6 +4917,7 @@ export class DeviceFarmHttpClient<
       this.request<any, HTTPValidationError>({
         path: `/screenshot-b64/${serial}`,
         method: "GET",
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -4784,6 +4930,7 @@ export class DeviceFarmHttpClient<
      * @name ApiExtractHierarchyDevicesSerialExtractHierarchyPost
      * @summary Api Extract Hierarchy
      * @request POST:/devices/{serial}/extract/hierarchy
+     * @secure
      */
     apiExtractHierarchyDevicesSerialExtractHierarchyPost: (
       serial: string,
@@ -4794,6 +4941,7 @@ export class DeviceFarmHttpClient<
         path: `/devices/${serial}/extract/hierarchy`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
@@ -4806,6 +4954,7 @@ export class DeviceFarmHttpClient<
      * @name ApiExtractOcrDevicesSerialExtractOcrPost
      * @summary Api Extract Ocr
      * @request POST:/devices/{serial}/extract/ocr
+     * @secure
      */
     apiExtractOcrDevicesSerialExtractOcrPost: (
       serial: string,
@@ -4816,6 +4965,7 @@ export class DeviceFarmHttpClient<
         path: `/devices/${serial}/extract/ocr`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
@@ -4828,6 +4978,7 @@ export class DeviceFarmHttpClient<
      * @name ApiExtractAiDevicesSerialExtractAiPost
      * @summary Api Extract Ai
      * @request POST:/devices/{serial}/extract/ai
+     * @secure
      */
     apiExtractAiDevicesSerialExtractAiPost: (
       serial: string,
@@ -4838,6 +4989,7 @@ export class DeviceFarmHttpClient<
         path: `/devices/${serial}/extract/ai`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,

@@ -1,4 +1,9 @@
-export type CampaignStatus = 'draft' | 'running' | 'paused' | 'completed';
+export type CampaignStatus = 'idle' | 'running' | 'draft' | 'paused' | 'completed';
+
+/** Returns true when the campaign is in a non-running (ready) state */
+export function isIdleStatus(s: string): boolean {
+  return s === 'idle' || s === 'draft' || s === 'paused' || s === 'completed';
+}
 
 export type ScenarioOut = {
   id: string;
@@ -91,6 +96,22 @@ export type WorkflowProgress = {
   loop_iteration: number | null;
   message: string;
   device_serial: string;
+};
+
+export type StepLogEntry = {
+  index: number;
+  step_type: string;
+  ok: boolean;
+  message: string | null;
+  depth: number;
+};
+
+export type WorkflowStepLog = {
+  workflow_id: string;
+  status: string;
+  source: string;
+  steps_count: number;
+  steps: StepLogEntry[];
 };
 
 export type CampaignExecutionEngine = 'temporal' | 'task_queue';

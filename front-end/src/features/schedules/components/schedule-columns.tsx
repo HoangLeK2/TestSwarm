@@ -33,12 +33,7 @@ export function getScheduleColumns(tList: TFn, tCron: TFn): ColumnDef<ScheduleOu
                 ? tList('targetFleet')
                 : s.target_type;
         return (
-          <div className='space-y-0.5'>
-            <div className='truncate text-sm'>
-              <span className='font-medium'>{targetLabel}</span>
-            </div>
-            <div className='truncate text-[11px] text-muted-foreground'>{s.target_id ?? '-'}</div>
-          </div>
+          <span className='truncate text-sm font-medium'>{targetLabel}</span>
         );
       }
     },
@@ -48,12 +43,14 @@ export function getScheduleColumns(tList: TFn, tCron: TFn): ColumnDef<ScheduleOu
       header: tList('colCron'),
       cell: ({ row }) => {
         const s = row.original;
+        const human = cronExpressionToHumanReadable(s.cron_expression, tCron);
+        const parsed = human !== s.cron_expression;
         return (
           <div className='space-y-0.5'>
-            <div className='truncate text-sm'>
-              {cronExpressionToHumanReadable(s.cron_expression, tCron)}
-            </div>
-            <div className='truncate text-[11px] text-muted-foreground font-mono'>{s.cron_expression}</div>
+            <div className='truncate text-sm'>{human}</div>
+            {!parsed && (
+              <div className='truncate text-[11px] text-muted-foreground font-mono'>{s.cron_expression}</div>
+            )}
           </div>
         );
       }

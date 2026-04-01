@@ -1,9 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { ChevronDown, ChevronRight, Crosshair, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { type FlowStep } from '../scenario-steps/types';
+import { isControlFlow, type FlowStep } from '../scenario-steps/types';
 import { BRACKET_COLORS, getStepTypeName, getStepSummary } from './constants';
 import { StepIcon } from './step-icon';
 import { StepCard } from './step-card';
@@ -17,7 +17,58 @@ import {
 import type { SelectorPickTarget } from './selector-pick';
 import { selectorPickTargetEquals } from './selector-pick';
 
-interface Props {
+// ── Step mutation helpers ────────────────────────────────────────────────────
+
+function removeFromStep(step: FlowStep, key: string, ci: number): FlowStep {
+  const next = { ...step } as any;
+  if (key.startsWith('branches.')) {
+    const bi = parseInt(key.split('.')[1] ?? '0');
+    const branches = [...(next.branches ?? [])];
+    branches[bi] = { ...branches[bi], steps: branches[bi].steps.filter((_: any, i: number) => i !== ci) };
+    next.branches = branches;
+  } else {
+    next[key] = (next[key] ?? []).filter((_: any, i: number) => i !== ci);
+  }
+  return next as FlowStep;
+}
+
+function insertIntoStep(step: FlowStep, key: string, at: number, newStep: FlowStep): FlowStep {
+  const next = { ...step } as any;
+  if (key.startsWith('branches.')) {
+    const bi = parseInt(key.split('.')[1] ?? '0');
+    const branches = [...(next.branches ?? [])];
+    const bSteps = [...(branches[bi].steps ?? [])];
+    bSteps.splice(at, 0, newStep);
+    branches[bi] = { ...branches[bi], steps: bSteps };
+    next.branches = branches;
+  } else {
+    const arr = [...(next[key] ?? [])];
+    arr.splice(at, 0, newStep);
+    next[key] = arr;
+  }
+  return next as FlowStep;
+}
+
+function updateChildInStep(step: FlowStep, key: string, ci: number, newChild: FlowStep): FlowStep {
+  const next = { ...step } as any;
+  if (key.startsWith('branches.')) {
+    const bi = parseInt(key.split('.')[1] ?? '0');
+    const branches = [...(next.branches ?? [])];
+    const bSteps = [...(branches[bi].steps ?? [])];
+    bSteps[ci] = newChild;
+    branches[bi] = { ...branches[bi], steps: bSteps };
+    next.branches = branches;
+  } else {
+    const arr = [...(next[key] ?? [])];
+    arr[ci] = newChild;
+    next[key] = arr;
+  }
+  return next as FlowStep;
+}
+
+// ── Props ────────────────────────────────────────────────────────────────────
+
+interface BracketBlockProps {
   step: FlowStep;
   stepIndex: number;
   selected: boolean;
@@ -32,14 +83,41 @@ interface Props {
   compact?: boolean;
   selectorPickTarget?: SelectorPickTarget | null;
   onTogglePickSelector?: (path: SelectorPickTarget) => void;
+  /** Nesting depth — used for visual indentation cues. */
+  depth?: number;
 }
 
-function SectionLabel({ label, color }: { label: string; color: string }) {
+// ── ChildStepList ────────────────────────────────────────────────────────────
+
+function SectionLabel({ label, color, variant }: { label: string; color: string; variant?: 'then' | 'else' }) {
   return (
-    <div className={cn('py-0.5 text-[9px] font-bold uppercase tracking-widest', color)}>
+    <div className={cn(
+      'my-1 flex items-center gap-1.5 rounded px-2 py-1 text-[10px] font-bold',
+      variant === 'then' && 'bg-green-500/10 text-green-700 dark:text-green-400',
+      variant === 'else' && 'bg-red-500/10 text-red-600 dark:text-red-400',
+      !variant && cn('text-[9px] uppercase tracking-widest', color),
+    )}>
+      {variant === 'then' && <span>✓</span>}
+      {variant === 'else' && <span>✗</span>}
       {label}
     </div>
   );
+}
+
+interface ChildStepListProps {
+  steps: FlowStep[];
+  listKey: string;
+  selectedChild: number | null;
+  startIndex: number;
+  parentStepIndex: number;
+  onSelectChild: (flatIndex: number) => void;
+  onRemoveChild: (key: string, childIndex: number) => void;
+  onInsertChild: (key: string, insertAt: number, newStep: FlowStep) => void;
+  onUpdateChild: (key: string, childIndex: number, newStep: FlowStep) => void;
+  compact?: boolean;
+  selectorPickTarget?: SelectorPickTarget | null;
+  onTogglePickSelector?: (path: SelectorPickTarget) => void;
+  depth?: number;
 }
 
 function ChildStepList({
@@ -47,24 +125,16 @@ function ChildStepList({
   listKey,
   selectedChild,
   startIndex,
+  parentStepIndex,
   onSelectChild,
   onRemoveChild,
   onInsertChild,
-  parentStepIndex,
+  onUpdateChild,
+  compact,
   selectorPickTarget,
   onTogglePickSelector,
-}: {
-  steps: FlowStep[];
-  listKey: string;
-  selectedChild: number | null;
-  startIndex: number;
-  onSelectChild: (flatIndex: number) => void;
-  onRemoveChild: (key: string, childIndex: number) => void;
-  onInsertChild: (key: string, insertAt: number, newStep: FlowStep) => void;
-  parentStepIndex: number;
-  selectorPickTarget?: SelectorPickTarget | null;
-  onTogglePickSelector?: (path: SelectorPickTarget) => void;
-}) {
+  depth = 0,
+}: ChildStepListProps) {
   return (
     <div className='space-y-0'>
       <InsertButton onInsert={(s) => onInsertChild(listKey, 0, s)} />
@@ -75,6 +145,35 @@ function ChildStepList({
           listKey,
           childIndex: ci,
         };
+
+        if (isControlFlow(child.type)) {
+          return (
+            <div key={ci}>
+              <BracketBlock
+                step={child}
+                stepIndex={ci}
+                selected={false}
+                selectedChild={null}
+                onSelectSelf={() => onSelectChild(startIndex + ci)}
+                onSelectChild={() => {}}
+                onUpdate={(newChild) => onUpdateChild(listKey, ci, newChild)}
+                onRemove={() => onRemoveChild(listKey, ci)}
+                onRemoveChild={(nestedKey, nci) =>
+                  onUpdateChild(listKey, ci, removeFromStep(child, nestedKey, nci))
+                }
+                onInsertChild={(nestedKey, at, newStep) =>
+                  onUpdateChild(listKey, ci, insertIntoStep(child, nestedKey, at, newStep))
+                }
+                compact={compact}
+                selectorPickTarget={selectorPickTarget}
+                onTogglePickSelector={onTogglePickSelector}
+                depth={depth + 1}
+              />
+              <InsertButton onInsert={(s) => onInsertChild(listKey, ci + 1, s)} />
+            </div>
+          );
+        }
+
         return (
           <div key={ci}>
             <StepCard
@@ -83,9 +182,6 @@ function ChildStepList({
               selected={selectedChild === startIndex + ci}
               onClick={() => onSelectChild(startIndex + ci)}
               onRemove={() => onRemoveChild(listKey, ci)}
-              stepPath={path}
-              selectorPickTarget={selectorPickTarget}
-              onTogglePickSelector={onTogglePickSelector}
             />
             <InsertButton onInsert={(s) => onInsertChild(listKey, ci + 1, s)} />
           </div>
@@ -98,13 +194,16 @@ function ChildStepList({
   );
 }
 
+// ── BracketBlock ─────────────────────────────────────────────────────────────
+
 export function BracketBlock({
   step, stepIndex, selected, selectedChild,
   onSelectSelf, onSelectChild, onUpdate, onRemove, onRemoveChild, onInsertChild,
   compact = false,
   selectorPickTarget,
   onTogglePickSelector,
-}: Props) {
+  depth = 0,
+}: BracketBlockProps) {
   const [collapsed, setCollapsed] = useState(false);
   const colors = BRACKET_COLORS[step.type] ?? BRACKET_COLORS.repeat;
   const typeName = getStepTypeName(step.type);
@@ -115,10 +214,34 @@ export function BracketBlock({
     selectorPickTarget &&
     selectorPickTargetEquals(selectorPickTarget, rootPickPath);
 
+  // Update a child step within one of this bracket's arrays
+  const handleUpdateChild = useCallback(
+    (key: string, ci: number, newChild: FlowStep) => {
+      onUpdate(updateChildInStep(step, key, ci, newChild));
+    },
+    [step, onUpdate],
+  );
+
+  const childListProps = {
+    selectedChild,
+    startIndex: 0,
+    parentStepIndex: stepIndex,
+    onSelectChild,
+    onRemoveChild,
+    onInsertChild,
+    onUpdateChild: handleUpdateChild,
+    compact,
+    selectorPickTarget,
+    onTogglePickSelector,
+    depth,
+  };
+
   return (
     <div
       className={cn(
-        'rounded-md border-2 overflow-hidden',
+        'rounded-md overflow-hidden',
+        // Thicker border for top-level, thinner for nested
+        depth === 0 ? 'border-2' : 'border',
         colors.border,
         selected && 'ring-2 ring-primary/40',
         pickingCondition && 'ring-2 ring-amber-500/80 shadow-[0_0_0_1px_rgba(245,158,11,0.35)]',
@@ -135,6 +258,14 @@ export function BracketBlock({
         <StepIcon type={step.type} size={12} />
         <span className={cn('text-[11px] font-bold', colors.label)}>{typeName}</span>
         <span className='min-w-0 flex-1 truncate text-[10px] text-muted-foreground'>{summary}</span>
+
+        {/* Nesting depth badge — helps user track where they are */}
+        {depth > 0 && (
+          <span className={cn('shrink-0 rounded px-1 py-px text-[8px] font-bold opacity-60', colors.label)}>
+            L{depth + 1}
+          </span>
+        )}
+
         {step.type === 'if_element' && onTogglePickSelector && (
           <button
             type='button'
@@ -181,15 +312,12 @@ export function BracketBlock({
 
       {/* Body */}
       {!collapsed && (
-        <div className='px-2 pb-1'>
+        <div className={cn('pb-1', depth === 0 ? 'px-2' : 'px-1.5')}>
           {(step.type === 'repeat' || step.type === 'repeat_until') && (
             <ChildStepList
-              steps={step.steps ?? []} listKey='steps' selectedChild={selectedChild}
-              startIndex={0} onSelectChild={onSelectChild}
-              onRemoveChild={onRemoveChild} onInsertChild={onInsertChild}
-              parentStepIndex={stepIndex}
-              selectorPickTarget={selectorPickTarget}
-              onTogglePickSelector={onTogglePickSelector}
+              steps={step.steps ?? []}
+              listKey='steps'
+              {...childListProps}
             />
           )}
 
@@ -198,24 +326,10 @@ export function BracketBlock({
             const elseSteps = step.else ?? [];
             return (
               <>
-                <SectionLabel label='Thì →' color={colors.label} />
-                <ChildStepList
-                  steps={thenSteps} listKey='then' selectedChild={selectedChild}
-                  startIndex={0} onSelectChild={onSelectChild}
-                  onRemoveChild={onRemoveChild} onInsertChild={onInsertChild}
-                  parentStepIndex={stepIndex}
-                  selectorPickTarget={selectorPickTarget}
-                  onTogglePickSelector={onTogglePickSelector}
-                />
-                <SectionLabel label='Ngược lại →' color={colors.label} />
-                <ChildStepList
-                  steps={elseSteps} listKey='else' selectedChild={selectedChild}
-                  startIndex={thenSteps.length} onSelectChild={onSelectChild}
-                  onRemoveChild={onRemoveChild} onInsertChild={onInsertChild}
-                  parentStepIndex={stepIndex}
-                  selectorPickTarget={selectorPickTarget}
-                  onTogglePickSelector={onTogglePickSelector}
-                />
+                <SectionLabel label='Nếu đúng — thực hiện' color={colors.label} variant='then' />
+                <ChildStepList steps={thenSteps} listKey='then' {...childListProps} />
+                <SectionLabel label='Nếu sai — thực hiện' color={colors.label} variant='else' />
+                <ChildStepList steps={elseSteps} listKey='else' {...childListProps} />
               </>
             );
           })()}
@@ -228,13 +342,9 @@ export function BracketBlock({
                     Nhánh {String.fromCharCode(65 + bi)} (w={branch.weight ?? 1})
                   </span>
                   <ChildStepList
-                    steps={branch.steps ?? []} listKey={`branches.${bi}.steps`}
-                    selectedChild={selectedChild} startIndex={0}
-                    onSelectChild={onSelectChild} onRemoveChild={onRemoveChild}
-                    onInsertChild={onInsertChild}
-                    parentStepIndex={stepIndex}
-                    selectorPickTarget={selectorPickTarget}
-                    onTogglePickSelector={onTogglePickSelector}
+                    steps={branch.steps ?? []}
+                    listKey={`branches.${bi}.steps`}
+                    {...childListProps}
                   />
                 </div>
               ))}
@@ -251,8 +361,9 @@ export function BracketBlock({
 
       {/* End bar */}
       {!collapsed && (
-        <div className={cn('border-t px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest', colors.bg, colors.label)}>
-          KẾT THÚC {typeName}
+        <div className={cn('flex items-center gap-1 border-t px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest opacity-60', colors.bg, colors.label)}>
+          <span>└</span>
+          <span>KẾT THÚC {typeName}</span>
         </div>
       )}
     </div>

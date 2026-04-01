@@ -4,7 +4,7 @@ import { DeviceGroupList } from '@/features/device-groups/components/device-grou
 
 export default function DeviceGroupsPage() {
   return (
-    <div className='container max-w-6xl py-6'>
+    <div >
       <DeviceGroupList />
     </div>
   );

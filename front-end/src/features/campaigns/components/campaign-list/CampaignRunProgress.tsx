@@ -88,31 +88,15 @@ export function CampaignRunProgress({
     const pct = total ? Math.round((terminal / total) * 100) : 0;
 
     return (
-      <div className='flex flex-col gap-1 pt-0.5'>
-        {engineLabel && (
-          <div className='text-[9px] font-medium uppercase tracking-wide text-muted-foreground'>
-            {engineLabel === 'temporal' ? t('engineTemporal') : t('engineTaskQueue')}
-          </div>
-        )}
-        <div className='flex items-center justify-between text-[10px] text-muted-foreground'>
-          <span>
-            {completed}/{total} done
-            {running > 0 && <span className='text-blue-500 ml-1'>{running} running</span>}
-            {paused > 0 && <span className='text-amber-500 ml-1'>{paused} paused</span>}
-          </span>
-          {failed > 0 && (
-            <span className='text-destructive'>{failed} failed</span>
-          )}
-          <span>{pct}%</span>
+      <div className='flex flex-col gap-1'>
+        <div className='flex items-center gap-2 text-[10px] text-muted-foreground'>
+          <span className='font-medium tabular-nums text-foreground'>{completed}/{total}</span>
+          {running > 0 && <span className='text-blue-500'>{t('wfRunning', { count: running })}</span>}
+          {paused > 0 && <span className='text-amber-500'>{t('wfPaused', { count: paused })}</span>}
+          {failed > 0 && <span className='text-destructive'>{t('wfFailed', { count: failed })}</span>}
+          <span className='ml-auto tabular-nums'>{pct}%</span>
         </div>
         <Progress value={pct} className='h-1' />
-        {workflows.length <= 6 && (
-          <div className='space-y-0.5 pt-0.5'>
-            {workflows.map((wf) => (
-              <WorkflowRow key={wf.workflow_id} wf={wf} />
-            ))}
-          </div>
-        )}
       </div>
     );
   }
@@ -121,25 +105,15 @@ export function CampaignRunProgress({
   if (!legacyProgress || legacyProgress.total === 0) return null;
 
   return (
-    <div className='flex flex-col gap-1 pt-0.5'>
-      {engineLabel && (
-        <div className='text-[9px] font-medium uppercase tracking-wide text-muted-foreground'>
-          {engineLabel === 'temporal' ? t('engineTemporal') : t('engineTaskQueue')}
-        </div>
-      )}
-      <div className='flex items-center justify-between text-[10px] text-muted-foreground'>
-        <span>
-          {t('progressDone', {
-            done: legacyProgress.done,
-            total: legacyProgress.total,
-          })}
+    <div className='flex flex-col gap-1'>
+      <div className='flex items-center gap-2 text-[10px] text-muted-foreground'>
+        <span className='font-medium text-foreground'>
+          {t('progressDone', { done: legacyProgress.done, total: legacyProgress.total })}
         </span>
         {legacyProgress.failed > 0 && (
-          <span className='text-destructive'>
-            {t('progressFailed', { count: legacyProgress.failed })}
-          </span>
+          <span className='text-destructive'>{t('progressFailed', { count: legacyProgress.failed })}</span>
         )}
-        <span>{legacyProgress.pct}%</span>
+        <span className='ml-auto tabular-nums'>{legacyProgress.pct}%</span>
       </div>
       <Progress value={legacyProgress.pct} className='h-1' />
     </div>

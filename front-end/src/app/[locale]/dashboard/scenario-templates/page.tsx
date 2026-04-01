@@ -4,7 +4,7 @@ import { TemplateList } from '@/features/scenario-templates/components/template-
 
 export default function ScenarioTemplatesPage() {
   return (
-    <div className='container max-w-6xl py-6'>
+    <div>
       <TemplateList />
     </div>
   );

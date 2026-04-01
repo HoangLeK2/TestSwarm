@@ -93,7 +93,7 @@ export function RunScenarioFields({ step, onChange, campaignScenarios = [] }: Pr
         <VariableEditor
           variables={step.variables ?? {}}
           onChange={(vars) => onChange('variables', vars)}
-          placeholder={{ key: 'VAR_NAME', value: 'override value' }}
+          showBuiltins={false}
         />
       </div>
 

@@ -5,6 +5,7 @@ import { serialToId } from '../helpers';
 import { DeviceScreen } from './device-screen';
 import { DeviceControls } from './device-controls';
 import { DeviceSTFPanel } from './device-stf-panel';
+import { DeviceStepMonitor } from './device-step-monitor';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useTranslations } from 'next-intl';
 
@@ -49,6 +50,10 @@ export function DeviceTile({
             <span className='truncate font-medium text-foreground'>
               {device.brand} {device.model}
             </span>
+            <DeviceStepMonitor
+              serial={device.serial}
+              isBusy={device.state?.toUpperCase() === 'BUSY'}
+            />
           </CardTitle>
           <span className='font-mono text-[10px] text-muted-foreground'>
             {device.serial}

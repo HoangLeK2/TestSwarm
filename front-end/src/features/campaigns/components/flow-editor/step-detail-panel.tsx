@@ -1,6 +1,6 @@
 'use client';
 
-import { X } from 'lucide-react';
+import { Crosshair } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -12,6 +12,8 @@ interface Props {
   step: FlowStep;
   onChange: (step: FlowStep) => void;
   onClose: () => void;
+  /** Called when user wants to pick a selector from the device screen/tree. Should close the panel first. */
+  onRequestPickSelector?: () => void;
 }
 
 const SELECTOR_OPTIONS = ['text', 'resource-id', 'xpath', 'class name', 'description'] as const;
@@ -35,21 +37,81 @@ function SelectorFields({ step, onChange }: { step: FlowStep; onChange: (s: Flow
   );
 }
 
-export function StepDetailPanel({ step, onChange, onClose }: Props) {
+export function StepDetailPanel({ step, onChange, onClose: _onClose, onRequestPickSelector }: Props) {
   const typeName = getStepTypeName(step.type);
   const update = (fields: Partial<FlowStep>) => onChange({ ...step, ...fields });
 
   return (
-    <div className='flex h-full flex-col border-l bg-card'>
-      <div className='flex items-center justify-between border-b px-3 py-2'>
-        <div className='flex items-center gap-2'>
-          <StepIcon type={step.type} size={18} />
-          <span className='text-xs font-semibold'>{typeName}</span>
-        </div>
-        <Button size='icon' variant='ghost' className='size-6' onClick={onClose}><X size={12} /></Button>
+    <div className='flex flex-col bg-card'>
+      <div className='flex items-center gap-2 border-b px-3 py-2'>
+        <StepIcon type={step.type} size={16} />
+        <span className='text-xs font-semibold'>{typeName}</span>
       </div>
 
-      <div className='flex-1 space-y-3 overflow-y-auto p-3'>
+      <div className='max-h-[70vh] space-y-3 overflow-y-auto p-3'>
+        {/* Title & description — user-defined labels for any step */}
+        <F label='Tiêu đề (tuỳ chọn)'>
+          <Input className='h-8 text-xs' placeholder='VD: Đăng nhập, Mở trang chủ…'
+            value={(step as any).title ?? ''}
+            onChange={(e) => update({ title: e.target.value || undefined } as any)} />
+        </F>
+        <F label='Mô tả (tuỳ chọn)'>
+          <Input className='h-8 text-xs' placeholder='Ghi chú thêm cho bước này'
+            value={(step as any).description ?? ''}
+            onChange={(e) => update({ description: e.target.value || undefined } as any)} />
+        </F>
+        {step.type === 'tap' && (
+          <>
+            <p className='rounded bg-muted/60 px-2 py-1.5 text-[11px] text-muted-foreground'>
+              Bước ghi tự động. Gắn selector để chạm đúng phần tử; tọa độ là dự phòng khi không tìm thấy selector.
+            </p>
+
+            <div className='space-y-2 rounded-md border border-border/60 p-2.5'>
+              <div className='flex items-center justify-between'>
+                <span className='text-[11px] font-semibold text-foreground'>Selector phần tử</span>
+                {onRequestPickSelector && (
+                  <Button
+                    size='sm'
+                    variant='outline'
+                    className='h-6 gap-1 px-2 text-[10px] text-amber-700 border-amber-400/50 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-950/30'
+                    onClick={onRequestPickSelector}
+                  >
+                    <Crosshair size={10} />
+                    Chọn từ màn hình
+                  </Button>
+                )}
+              </div>
+              <F label='Loại selector'>
+                <select className='w-full rounded border bg-background px-2 py-1.5 text-xs'
+                  value={step.selector?.by ?? 'text'}
+                  onChange={(e) => update({ selector: { ...(step.selector ?? {}), by: e.target.value } })}>
+                  {SELECTOR_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
+                </select>
+              </F>
+              <F label='Giá trị'>
+                <Input className='h-8 text-xs' placeholder='VD: Đăng nhập hoặc com.app:id/btn_login'
+                  value={step.selector?.value ?? ''}
+                  onChange={(e) => update({ selector: { ...(step.selector ?? {}), value: e.target.value } })} />
+              </F>
+            </div>
+
+            {/* Fallback coords */}
+            <div className='space-y-2 rounded-md border border-border/60 p-2.5'>
+              <span className='text-[11px] font-semibold text-foreground'>Tọa độ dự phòng</span>
+              <div className='grid grid-cols-2 gap-2'>
+                <div><Label className='text-[10px] text-muted-foreground'>X (0–1)</Label>
+                  <Input type='number' min={0} max={1} step={0.01} className='h-8 text-xs'
+                    value={step.fallback?.rx ?? 0.5}
+                    onChange={(e) => update({ fallback: { ...(step.fallback ?? {}), rx: parseFloat(e.target.value) || 0 } })} /></div>
+                <div><Label className='text-[10px] text-muted-foreground'>Y (0–1)</Label>
+                  <Input type='number' min={0} max={1} step={0.01} className='h-8 text-xs'
+                    value={step.fallback?.ry ?? 0.5}
+                    onChange={(e) => update({ fallback: { ...(step.fallback ?? {}), ry: parseFloat(e.target.value) || 0 } })} /></div>
+              </div>
+            </div>
+          </>
+        )}
+
         {step.type === 'launch_app' && <F label='Tên package'><Input className='h-8 text-xs font-mono' value={step.package ?? ''} onChange={(e) => update({ package: e.target.value })} placeholder='com.android.chrome' /></F>}
 
         {step.type === 'open_url' && (<><F label='URL'><Input className='h-8 text-xs' value={step.url ?? ''} onChange={(e) => update({ url: e.target.value })} /></F><F label='Package trình duyệt'><Input className='h-8 text-xs font-mono' value={step.package ?? ''} onChange={(e) => update({ package: e.target.value || undefined })} /></F></>)}
@@ -131,7 +193,7 @@ export function StepDetailPanel({ step, onChange, onClose }: Props) {
           <>
             <F label='Tên kịch bản'><Input className='h-8 text-xs font-mono' value={step.scenario_name ?? ''} onChange={(e) => update({ scenario_name: e.target.value, scenario_id: undefined })} placeholder='login_facebook' /></F>
             <F label='Hoặc ID kịch bản'><Input className='h-8 text-xs font-mono' value={step.scenario_id ?? ''} onChange={(e) => update({ scenario_id: e.target.value, scenario_name: undefined })} /></F>
-            <F label='Ghi đè biến'><VariableEditor variables={step.variables ?? {}} onChange={(vars) => update({ variables: vars })} /></F>
+            <F label='Ghi đè biến'><VariableEditor variables={step.variables ?? {}} onChange={(vars) => update({ variables: vars } as any)} showBuiltins={false} /></F>
           </>
         )}
       </div>

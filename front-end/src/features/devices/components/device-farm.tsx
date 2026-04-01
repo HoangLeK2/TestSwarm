@@ -70,23 +70,14 @@ export function DeviceFarm() {
             </div>
           </div>
         ) : (
-          <>
-            <div className='flex justify-end'>
-              <Button asChild size='sm' variant='outline'>
-                <Link href={ROUTES.DEVICES.CONTROL_RECORD}>
-                  {t('controlAndRecord')}
-                </Link>
-              </Button>
-            </div>
-            <section className='grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4'>
-              {activeDevices.map((device) => (
-                <DeviceTilePreview
-                  key={device.serial}
-                  device={device}
-                />
-              ))}
-            </section>
-          </>
+          <section className='grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4'>
+            {activeDevices.map((device) => (
+              <DeviceTilePreview
+                key={device.serial}
+                device={device}
+              />
+            ))}
+          </section>
         )}
       </main>
       <ConnectDeviceDialog

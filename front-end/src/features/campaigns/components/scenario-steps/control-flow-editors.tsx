@@ -186,6 +186,24 @@ export function IfVariableFields({ step, onChange }: FieldProps) {
   );
 }
 
+/**
+ * loop — count supports variable references like ${MAX_SCROLLS}
+ */
+export function LoopFields({ step, onChange }: FieldProps) {
+  return (
+    <div className='flex flex-wrap items-center gap-2'>
+      <span className={labelCls}>count:</span>
+      <input
+        className={`${inputCls} w-36 font-mono`}
+        placeholder='10 hoặc ${MAX_SCROLLS}'
+        value={step.count ?? '10'}
+        onChange={(e) => onChange('count', e.target.value)}
+      />
+      <span className={`${labelCls} text-[9px]`}>(hỗ trợ biến)</span>
+    </div>
+  );
+}
+
 /** random_pick — branch weights (sub-steps handled by parent) */
 export function RandomPickFields({ step, onChange }: FieldProps) {
   const branches = step.branches ?? [];

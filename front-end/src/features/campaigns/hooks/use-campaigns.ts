@@ -145,7 +145,13 @@ export function useCampaignProgress(campaignId: string, enabled: boolean) {
     queryKey: ['campaign-progress', campaignId],
     queryFn: () => tasksApi.listByPrefix(`campaign:${campaignId}:`),
     enabled,
-    refetchInterval: 2000,
+    refetchInterval: (query) => {
+      const tasks = query.state.data as any[] | undefined;
+      if (!tasks) return 2000;
+      // Stop polling when all tasks are in terminal state
+      if (tasks.length > 0 && tasks.every((t) => t.status === 'DONE' || t.status === 'FAILED')) return false;
+      return 2000;
+    },
     select: (tasks) => {
       const total = tasks.length;
       const done = tasks.filter((t) => t.status === 'DONE').length;

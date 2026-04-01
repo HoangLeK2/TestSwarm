@@ -3336,6 +3336,11 @@
         ],
         "summary": "List Content",
         "operationId": "list_content_api_content_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "collection",
@@ -3486,6 +3491,11 @@
         ],
         "summary": "Get Stats",
         "operationId": "get_stats_api_content_stats_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -3508,6 +3518,11 @@
         "summary": "Save Content",
         "description": "Save extracted content with deduplication (used by scenarios and MCP).",
         "operationId": "save_content_api_content_save_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -3547,6 +3562,11 @@
         ],
         "summary": "Get Content Item",
         "operationId": "get_content_item_api_content__item_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "item_id",
@@ -3585,6 +3605,11 @@
         ],
         "summary": "Delete Content Item",
         "operationId": "delete_content_item_api_content__item_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "item_id",
@@ -3625,6 +3650,11 @@
         ],
         "summary": "List Collections",
         "operationId": "list_collections_api_content_collections_list_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -3650,6 +3680,11 @@
         ],
         "summary": "Create Collection",
         "operationId": "create_collection_api_content_collections_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -3689,6 +3724,11 @@
         ],
         "summary": "Delete Collection",
         "operationId": "delete_collection_api_content_collections__name__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "name",
@@ -3729,6 +3769,11 @@
         ],
         "summary": "Create Export",
         "operationId": "create_export_api_content_export_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -3770,6 +3815,11 @@
         ],
         "summary": "List Exports",
         "operationId": "list_exports_api_content_exports_list_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -3795,6 +3845,11 @@
         ],
         "summary": "Get Export",
         "operationId": "get_export_api_content_exports__export_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "export_id",
@@ -3835,6 +3890,11 @@
         ],
         "summary": "Download Export",
         "operationId": "download_export_api_content_exports__export_id__download_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "parameters": [
           {
             "name": "export_id",
@@ -4907,6 +4967,113 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/KeyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/devices/{serial}/double_tap": {
+      "post": {
+        "tags": ["device-control"],
+        "summary": "Api Double Tap",
+        "operationId": "api_double_tap_api_devices__serial__double_tap_post",
+        "security": [{"HTTPBearer": []}],
+        "parameters": [{"name": "serial", "in": "path", "required": true, "schema": {"type": "string", "title": "Serial"}}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DoubleTapRequest"}}}},
+        "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {}}}}, "422": {"description": "Validation Error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}}}}
+      }
+    },
+    "/api/devices/{serial}/pinch": {
+      "post": {
+        "tags": ["device-control"],
+        "summary": "Api Pinch",
+        "operationId": "api_pinch_api_devices__serial__pinch_post",
+        "security": [{"HTTPBearer": []}],
+        "parameters": [{"name": "serial", "in": "path", "required": true, "schema": {"type": "string", "title": "Serial"}}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PinchRequest"}}}},
+        "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {}}}}, "422": {"description": "Validation Error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}}}}
+      }
+    },
+    "/api/devices/{serial}/drag": {
+      "post": {
+        "tags": ["device-control"],
+        "summary": "Api Drag",
+        "operationId": "api_drag_api_devices__serial__drag_post",
+        "security": [{"HTTPBearer": []}],
+        "parameters": [{"name": "serial", "in": "path", "required": true, "schema": {"type": "string", "title": "Serial"}}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DragRequest"}}}},
+        "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {}}}}, "422": {"description": "Validation Error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}}}}
+      }
+    },
+    "/api/devices/{serial}/clipboard": {
+      "get": {
+        "tags": ["device-control"],
+        "summary": "Api Get Clipboard",
+        "operationId": "api_get_clipboard_api_devices__serial__clipboard_get",
+        "security": [{"HTTPBearer": []}],
+        "parameters": [{"name": "serial", "in": "path", "required": true, "schema": {"type": "string", "title": "Serial"}}],
+        "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {}}}}, "422": {"description": "Validation Error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}}}}
+      },
+      "post": {
+        "tags": ["device-control"],
+        "summary": "Api Set Clipboard",
+        "operationId": "api_set_clipboard_api_devices__serial__clipboard_post",
+        "security": [{"HTTPBearer": []}],
+        "parameters": [{"name": "serial", "in": "path", "required": true, "schema": {"type": "string", "title": "Serial"}}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ClipboardSetRequest"}}}},
+        "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {}}}}, "422": {"description": "Validation Error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}}}}
+      }
+    },
+    "/api/launch_app/{serial}": {
+      "post": {
+        "tags": [
+          "device-control"
+        ],
+        "summary": "Api Launch App",
+        "operationId": "api_launch_app_api_launch_app__serial__post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "serial",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Serial"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LaunchAppRequest"
               }
             }
           }
@@ -8888,6 +9055,57 @@
         },
         "type": "object",
         "title": "OCRExtractBody"
+      },
+      "ClipboardSetRequest": {
+        "properties": {"text": {"type": "string", "title": "Text"}},
+        "type": "object",
+        "required": ["text"],
+        "title": "ClipboardSetRequest"
+      },
+      "DoubleTapRequest": {
+        "properties": {
+          "x": {"type": "integer", "title": "X"},
+          "y": {"type": "integer", "title": "Y"}
+        },
+        "type": "object",
+        "required": ["x", "y"],
+        "title": "DoubleTapRequest"
+      },
+      "DragRequest": {
+        "properties": {
+          "x1": {"type": "integer", "title": "X1"},
+          "y1": {"type": "integer", "title": "Y1"},
+          "x2": {"type": "integer", "title": "X2"},
+          "y2": {"type": "integer", "title": "Y2"},
+          "duration_ms": {"type": "integer", "title": "Duration Ms", "default": 1000}
+        },
+        "type": "object",
+        "required": ["x1", "y1", "x2", "y2"],
+        "title": "DragRequest"
+      },
+      "PinchRequest": {
+        "properties": {
+          "cx": {"type": "integer", "title": "Cx"},
+          "cy": {"type": "integer", "title": "Cy"},
+          "scale": {"type": "number", "title": "Scale", "default": 0.5},
+          "duration_ms": {"type": "integer", "title": "Duration Ms", "default": 400}
+        },
+        "type": "object",
+        "required": ["cx", "cy"],
+        "title": "PinchRequest"
+      },
+      "LaunchAppRequest": {
+        "properties": {
+          "package": {
+            "type": "string",
+            "title": "Package"
+          }
+        },
+        "type": "object",
+        "required": [
+          "package"
+        ],
+        "title": "LaunchAppRequest"
       },
       "OpenUrlRequest": {
         "properties": {

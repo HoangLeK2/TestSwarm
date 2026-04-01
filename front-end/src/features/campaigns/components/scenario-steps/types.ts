@@ -5,7 +5,8 @@ export type ControlFlowType =
   | 'if_element'
   | 'if_variable'
   | 'random_pick'
-  | 'run_scenario';
+  | 'run_scenario'
+  | 'loop';
 
 export type ActionType =
   | 'launch_app'
@@ -26,7 +27,14 @@ export type ActionType =
   | 'input_text'
   | 'key'
   | 'scroll_down'
-  | 'set_variable';
+  | 'set_variable'
+  | 'double_tap'
+  | 'pinch'
+  | 'drag'
+  | 'take_screenshot'
+  | 'set_clipboard'
+  | 'extract'
+  | 'save_extraction';
 
 export type AnyStepType = ControlFlowType | ActionType;
 
@@ -37,13 +45,16 @@ export type FlowStep = {
 };
 
 export function isControlFlow(type: string): type is ControlFlowType {
-  return ['repeat', 'repeat_until', 'if_element', 'if_variable', 'random_pick', 'run_scenario'].includes(type);
+  return ['repeat', 'repeat_until', 'if_element', 'if_variable', 'random_pick', 'run_scenario', 'loop'].includes(type);
 }
 
 export function getStepIcon(type: string): string {
   switch (type) {
     case 'repeat': return '🔄';
     case 'repeat_until': return '🔁';
+    case 'loop': return '🔃';
+    case 'extract': return '🔎';
+    case 'save_extraction': return '💾';
     case 'if_element': return '🔀';
     case 'if_variable': return '🔀';
     case 'random_pick': return '🎲';
@@ -61,6 +72,11 @@ export function getStepIcon(type: string): string {
     case 'set_variable': return '📝';
     case 'key': return '⌨️';
     case 'wait_stable': return '⏱️';
+    case 'double_tap': return '👆';
+    case 'pinch': return '🤏';
+    case 'drag': return '✊';
+    case 'take_screenshot': return '📸';
+    case 'set_clipboard': return '📋';
     default: return '⚡';
   }
 }
@@ -79,6 +95,9 @@ export function getStepLabel(step: FlowStep): string {
     }
     case 'random_pick': return `random_pick (${step.branches?.length ?? 0} branches)`;
     case 'run_scenario': return `run_scenario "${step.scenario_name || step.scenario_id || '?'}"`;
+    case 'loop': return `loop ×${step.count ?? '?'}`;
+    case 'extract': return `extract [${step.strategy ?? 'fb_posts'}]`;
+    case 'save_extraction': return `save_extraction → ${step.collection ?? 'default'}`;
 
     case 'launch_app': return `launch_app ${step.package || ''}`;
     case 'open_url': return `open_url ${step.url || ''}`;
@@ -112,7 +131,15 @@ export const ALL_STEP_TYPES: { value: string; label: string; group: 'action' | '
   { value: 'wait_stable', label: 'wait_stable', group: 'action' },
   { value: 'dismiss_popup', label: 'dismiss_popup', group: 'action' },
   { value: 'key', label: 'key', group: 'action' },
+  { value: 'double_tap', label: 'double_tap', group: 'action' },
+  { value: 'pinch', label: 'pinch', group: 'action' },
+  { value: 'drag', label: 'drag', group: 'action' },
+  { value: 'take_screenshot', label: 'take_screenshot', group: 'action' },
+  { value: 'set_clipboard', label: 'set_clipboard', group: 'action' },
+  { value: 'extract', label: 'extract', group: 'action' },
+  { value: 'save_extraction', label: 'save_extraction', group: 'action' },
   { value: 'set_variable', label: 'set_variable', group: 'variable' },
+  { value: 'loop', label: 'loop', group: 'control' },
   { value: 'repeat', label: 'repeat', group: 'control' },
   { value: 'repeat_until', label: 'repeat_until', group: 'control' },
   { value: 'if_element', label: 'if_element', group: 'control' },
@@ -147,7 +174,15 @@ export function createDefaultStep(type: string): FlowStep {
     case 'wait_stable': return { type: 'wait_stable', timeout: 5, stable_duration: 0.4 };
     case 'dismiss_popup': return { type: 'dismiss_popup', retries: 3 };
     case 'key': return { type: 'key', key: 'enter' };
+    case 'double_tap': return { type: 'double_tap', rx: 0.5, ry: 0.5 };
+    case 'pinch': return { type: 'pinch', scale: 0.5, rx: 0.5, ry: 0.5 };
+    case 'drag': return { type: 'drag', rx1: 0.5, ry1: 0.3, rx2: 0.5, ry2: 0.7, duration_ms: 1000 };
+    case 'take_screenshot': return { type: 'take_screenshot' };
+    case 'set_clipboard': return { type: 'set_clipboard', text: '' };
     case 'set_variable': return { type: 'set_variable', name: '', value: '' };
+    case 'loop': return { type: 'loop', count: '10', steps: [] };
+    case 'extract': return { type: 'extract', strategy: 'fb_posts', expand_see_more: true, stop_if_no_new: true, no_new_threshold: 30 };
+    case 'save_extraction': return { type: 'save_extraction', data_var: 'posts', collection: 'default', platform: 'facebook', content_type: 'post', dedupe_field: 'text', tags: '' };
     default: return { type };
   }
 }

@@ -768,6 +768,52 @@ export interface OCRExtractBody {
   scale_factor?: number;
 }
 
+/** ClipboardSetRequest */
+export interface ClipboardSetRequest {
+  /** Text */
+  text: string;
+}
+
+/** DoubleTapRequest */
+export interface DoubleTapRequest {
+  /** X */
+  x: number;
+  /** Y */
+  y: number;
+}
+
+/** DragRequest */
+export interface DragRequest {
+  /** X1 */
+  x1: number;
+  /** Y1 */
+  y1: number;
+  /** X2 */
+  x2: number;
+  /** Y2 */
+  y2: number;
+  /** Duration Ms */
+  duration_ms?: number;
+}
+
+/** PinchRequest */
+export interface PinchRequest {
+  /** Cx */
+  cx: number;
+  /** Cy */
+  cy: number;
+  /** Scale: >1 zoom in, <1 zoom out */
+  scale?: number;
+  /** Duration Ms */
+  duration_ms?: number;
+}
+
+/** LaunchAppRequest */
+export interface LaunchAppRequest {
+  /** Package */
+  package: string;
+}
+
 /** OpenUrlRequest */
 export interface OpenUrlRequest {
   /** Url */
@@ -3208,6 +3254,7 @@ export class DeviceFarmHttpClient<
      * @name ListContentApiContentGet
      * @summary List Content
      * @request GET:/api/content
+     * @secure
      */
     listContentApiContentGet: (
       query?: {
@@ -3243,6 +3290,7 @@ export class DeviceFarmHttpClient<
         path: `/api/content`,
         method: "GET",
         query: query,
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -3254,11 +3302,13 @@ export class DeviceFarmHttpClient<
      * @name GetStatsApiContentStatsGet
      * @summary Get Stats
      * @request GET:/api/content/stats
+     * @secure
      */
     getStatsApiContentStatsGet: (params: RequestParams = {}) =>
       this.request<ContentStatsOut, any>({
         path: `/api/content/stats`,
         method: "GET",
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -3270,6 +3320,7 @@ export class DeviceFarmHttpClient<
      * @name SaveContentApiContentSavePost
      * @summary Save Content
      * @request POST:/api/content/save
+     * @secure
      */
     saveContentApiContentSavePost: (
       data: SaveContentBody,
@@ -3279,6 +3330,7 @@ export class DeviceFarmHttpClient<
         path: `/api/content/save`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
@@ -3291,6 +3343,7 @@ export class DeviceFarmHttpClient<
      * @name GetContentItemApiContentItemIdGet
      * @summary Get Content Item
      * @request GET:/api/content/{item_id}
+     * @secure
      */
     getContentItemApiContentItemIdGet: (
       itemId: string,
@@ -3299,6 +3352,7 @@ export class DeviceFarmHttpClient<
       this.request<any, HTTPValidationError>({
         path: `/api/content/${itemId}`,
         method: "GET",
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -3310,6 +3364,7 @@ export class DeviceFarmHttpClient<
      * @name DeleteContentItemApiContentItemIdDelete
      * @summary Delete Content Item
      * @request DELETE:/api/content/{item_id}
+     * @secure
      */
     deleteContentItemApiContentItemIdDelete: (
       itemId: string,
@@ -3318,6 +3373,7 @@ export class DeviceFarmHttpClient<
       this.request<any, HTTPValidationError>({
         path: `/api/content/${itemId}`,
         method: "DELETE",
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -3329,11 +3385,13 @@ export class DeviceFarmHttpClient<
      * @name ListCollectionsApiContentCollectionsListGet
      * @summary List Collections
      * @request GET:/api/content/collections/list
+     * @secure
      */
     listCollectionsApiContentCollectionsListGet: (params: RequestParams = {}) =>
       this.request<CollectionOut[], any>({
         path: `/api/content/collections/list`,
         method: "GET",
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -3345,6 +3403,7 @@ export class DeviceFarmHttpClient<
      * @name CreateCollectionApiContentCollectionsPost
      * @summary Create Collection
      * @request POST:/api/content/collections
+     * @secure
      */
     createCollectionApiContentCollectionsPost: (
       data: CollectionCreate,
@@ -3354,6 +3413,7 @@ export class DeviceFarmHttpClient<
         path: `/api/content/collections`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
@@ -3366,6 +3426,7 @@ export class DeviceFarmHttpClient<
      * @name DeleteCollectionApiContentCollectionsNameDelete
      * @summary Delete Collection
      * @request DELETE:/api/content/collections/{name}
+     * @secure
      */
     deleteCollectionApiContentCollectionsNameDelete: (
       name: string,
@@ -3374,6 +3435,7 @@ export class DeviceFarmHttpClient<
       this.request<any, HTTPValidationError>({
         path: `/api/content/collections/${name}`,
         method: "DELETE",
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -3385,6 +3447,7 @@ export class DeviceFarmHttpClient<
      * @name CreateExportApiContentExportPost
      * @summary Create Export
      * @request POST:/api/content/export
+     * @secure
      */
     createExportApiContentExportPost: (
       data: ExportRequest,
@@ -3394,6 +3457,7 @@ export class DeviceFarmHttpClient<
         path: `/api/content/export`,
         method: "POST",
         body: data,
+        secure: true,
         type: ContentType.Json,
         format: "json",
         ...params,
@@ -3406,11 +3470,13 @@ export class DeviceFarmHttpClient<
      * @name ListExportsApiContentExportsListGet
      * @summary List Exports
      * @request GET:/api/content/exports/list
+     * @secure
      */
     listExportsApiContentExportsListGet: (params: RequestParams = {}) =>
       this.request<ExportOut[], any>({
         path: `/api/content/exports/list`,
         method: "GET",
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -3422,6 +3488,7 @@ export class DeviceFarmHttpClient<
      * @name GetExportApiContentExportsExportIdGet
      * @summary Get Export
      * @request GET:/api/content/exports/{export_id}
+     * @secure
      */
     getExportApiContentExportsExportIdGet: (
       exportId: string,
@@ -3430,6 +3497,7 @@ export class DeviceFarmHttpClient<
       this.request<any, HTTPValidationError>({
         path: `/api/content/exports/${exportId}`,
         method: "GET",
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -3441,6 +3509,7 @@ export class DeviceFarmHttpClient<
      * @name DownloadExportApiContentExportsExportIdDownloadGet
      * @summary Download Export
      * @request GET:/api/content/exports/{export_id}/download
+     * @secure
      */
     downloadExportApiContentExportsExportIdDownloadGet: (
       exportId: string,
@@ -3449,6 +3518,7 @@ export class DeviceFarmHttpClient<
       this.request<any, HTTPValidationError>({
         path: `/api/content/exports/${exportId}/download`,
         method: "GET",
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -3949,6 +4019,137 @@ export class DeviceFarmHttpClient<
     ) =>
       this.request<any, HTTPValidationError>({
         path: `/api/key/${serial}`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @tags device-control
+     * @name ApiDoubleTapApiDevicesSerialDoubleTapPost
+     * @summary Api Double Tap
+     * @request POST:/api/devices/{serial}/double_tap
+     * @secure
+     */
+    apiDoubleTapApiDevicesSerialDoubleTapPost: (
+      serial: string,
+      data: DoubleTapRequest,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/devices/${serial}/double_tap`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @tags device-control
+     * @name ApiPinchApiDevicesSerialPinchPost
+     * @summary Api Pinch
+     * @request POST:/api/devices/{serial}/pinch
+     * @secure
+     */
+    apiPinchApiDevicesSerialPinchPost: (
+      serial: string,
+      data: PinchRequest,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/devices/${serial}/pinch`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @tags device-control
+     * @name ApiDragApiDevicesSerialDragPost
+     * @summary Api Drag
+     * @request POST:/api/devices/{serial}/drag
+     * @secure
+     */
+    apiDragApiDevicesSerialDragPost: (
+      serial: string,
+      data: DragRequest,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/devices/${serial}/drag`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @tags device-control
+     * @name ApiGetClipboardApiDevicesSerialClipboardGet
+     * @summary Api Get Clipboard
+     * @request GET:/api/devices/{serial}/clipboard
+     * @secure
+     */
+    apiGetClipboardApiDevicesSerialClipboardGet: (
+      serial: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<{ text: string | null }, HTTPValidationError>({
+        path: `/api/devices/${serial}/clipboard`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @tags device-control
+     * @name ApiSetClipboardApiDevicesSerialClipboardPost
+     * @summary Api Set Clipboard
+     * @request POST:/api/devices/{serial}/clipboard
+     * @secure
+     */
+    apiSetClipboardApiDevicesSerialClipboardPost: (
+      serial: string,
+      data: ClipboardSetRequest,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/devices/${serial}/clipboard`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags device-control
+     * @name ApiLaunchAppApiLaunchAppSerialPost
+     * @summary Api Launch App
+     * @request POST:/api/launch_app/{serial}
+     * @secure
+     */
+    apiLaunchAppApiLaunchAppSerialPost: (
+      serial: string,
+      data: LaunchAppRequest,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/launch_app/${serial}`,
         method: "POST",
         body: data,
         secure: true,

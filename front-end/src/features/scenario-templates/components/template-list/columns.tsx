@@ -107,7 +107,7 @@ export function getTemplateColumns(
         return (
           <div className='flex items-center gap-1'>
             <UseTemplateDialog template={tpl} />
-            <EditTemplateDialog template={tpl} />
+            {!tpl.is_builtin && <EditTemplateDialog template={tpl} />}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button size='icon' variant='ghost' className='size-8'>

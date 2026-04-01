@@ -3,7 +3,7 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
-import { Play, Square, ArrowLeft, CheckCircle2, XCircle, Loader2, Info } from 'lucide-react';
+import { Play, Square, ArrowLeft, CheckCircle2, XCircle, Loader2, Info, StepForward, ListRestart } from 'lucide-react';
 import { useCampaigns, useScenarios } from '@/features/campaigns/hooks/use-campaigns';
 import { previewScenarioStream, type PreviewStepResult } from '../../services/api';
 import type { ScenarioOut } from '@/features/campaigns/types';
@@ -17,9 +17,11 @@ interface ScenarioPlayerProps {
   /** When provided, skip campaign/scenario selection and play these steps directly. */
   preloadedSteps?: Array<Record<string, any>>;
   preloadedName?: string;
+  /** Variables for template substitution (e.g. APP_PACKAGE) when using preloadedSteps. */
+  preloadedVariables?: Record<string, any>;
 }
 
-export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedSteps, preloadedName }: ScenarioPlayerProps) {
+export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedSteps, preloadedName, preloadedVariables }: ScenarioPlayerProps) {
   const { data: campaigns = [] } = useCampaigns();
   const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(null);
   const { data: scenarios = [] } = useScenarios(selectedCampaignId ?? '');
@@ -32,7 +34,12 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedStep
   const [currentLoop, setCurrentLoop] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
 
+  // Step-by-step mode
+  const [stepByStep, setStepByStep] = useState(false);
+  const [stepCursor, setStepCursor] = useState(0); // next step to run
+
   const activeSteps = preloadedSteps ?? (selectedScenario?.steps as Array<Record<string, any>> | undefined);
+  const activeVariables: Record<string, any> = preloadedVariables ?? (selectedScenario?.variables as Record<string, any> | undefined) ?? {};
 
   const handlePlay = useCallback(async () => {
     if (!activeSteps?.length || !serial) return;
@@ -73,6 +80,7 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedStep
             // 'done' and 'error' events handled by promise completion
           },
           ctrl.signal,
+          activeVariables,
         );
       }
     } catch (e) {
@@ -85,12 +93,49 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedStep
       setCurrentStepIndex(-1);
       abortRef.current = null;
     }
-  }, [activeSteps, serial, loopCount, currentStepIndex]);
+  }, [activeSteps, activeVariables, serial, loopCount, currentStepIndex]);
 
   const handleStop = useCallback(() => {
     abortRef.current?.abort();
     setPlaying(false);
   }, []);
+
+  const handleRunOneStep = useCallback(async () => {
+    if (!activeSteps?.length || !serial || playing) return;
+    const idx = stepCursor;
+    if (idx >= activeSteps.length) return;
+    const step = activeSteps[idx];
+    setPlaying(true);
+    setCurrentStepIndex(idx);
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    try {
+      await previewScenarioStream(
+        serial,
+        [step],
+        (event) => {
+          if (ctrl.signal.aborted) return;
+          if (event.event === 'step_done') {
+            setResults((prev) => {
+              const next = prev.filter((r) => r.index !== idx);
+              return [...next, { index: idx, type: event.type, ok: event.ok, message: event.message }];
+            });
+          }
+        },
+        ctrl.signal,
+        activeVariables,
+      );
+    } catch (e) {
+      if (!ctrl.signal.aborted) {
+        setResults((prev) => [...prev.filter((r) => r.index !== idx), { index: idx, ok: false, message: String(e) }]);
+      }
+    } finally {
+      setPlaying(false);
+      setCurrentStepIndex(-1);
+      abortRef.current = null;
+      if (!ctrl.signal.aborted) setStepCursor(idx + 1);
+    }
+  }, [activeSteps, serial, playing, stepCursor]);
 
   // Step 1: Select campaign (skip if preloaded)
   if (!preloadedSteps && !selectedCampaignId) {
@@ -170,29 +215,75 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedStep
         </Button>
         <span className='truncate text-sm font-medium'>{displayName || 'Kịch bản hiện tại'}</span>
         <div className='flex-1' />
-        {/* Loop count */}
-        <div className='flex items-center gap-1'>
-          <label className='text-[10px] text-muted-foreground'>Loop</label>
-          <input
-            type='number'
-            min={1}
-            max={100}
-            value={loopCount}
-            onChange={(e) => setLoopCount(Math.max(1, Math.min(100, +e.target.value || 1)))}
-            disabled={playing}
-            className='w-12 rounded border bg-background px-1.5 py-0.5 text-xs text-center'
-          />
-        </div>
-        {playing ? (
-          <Button size='sm' variant='destructive' onClick={handleStop}>
-            <Square className='mr-1 size-3.5' />
-            Stop
-          </Button>
+        {/* Mode toggle */}
+        <Button
+          size='sm'
+          variant={stepByStep ? 'secondary' : 'outline'}
+          className='h-7 gap-1 px-2 text-[11px]'
+          onClick={() => { setStepByStep(!stepByStep); setResults([]); setStepCursor(0); }}
+          disabled={playing}
+          title={stepByStep ? 'Chuyển sang chạy toàn bộ' : 'Chuyển sang chạy từng bước'}
+        >
+          <StepForward className='size-3.5' />
+          {stepByStep ? 'Từng bước' : 'Tất cả'}
+        </Button>
+
+        {stepByStep ? (
+          <>
+            <Button
+              size='sm'
+              variant='outline'
+              className='h-7 gap-1 px-2 text-[11px]'
+              onClick={() => { setResults([]); setStepCursor(0); }}
+              disabled={playing}
+              title='Reset về bước đầu'
+            >
+              <ListRestart className='size-3.5' />
+            </Button>
+            {playing ? (
+              <Button size='sm' variant='destructive' onClick={handleStop} className='h-7 px-3 text-xs'>
+                <Square className='mr-1 size-3.5' />
+                Stop
+              </Button>
+            ) : (
+              <Button
+                size='sm'
+                onClick={handleRunOneStep}
+                disabled={!activeSteps?.length || stepCursor >= (activeSteps?.length ?? 0)}
+                className='h-7 gap-1 px-3 text-xs'
+              >
+                <StepForward className='size-3.5' />
+                Bước {stepCursor + 1}/{activeSteps?.length ?? 0}
+              </Button>
+            )}
+          </>
         ) : (
-          <Button size='sm' onClick={handlePlay}>
-            <Play className='mr-1 size-3.5' />
-            Play
-          </Button>
+          <>
+            {/* Loop count */}
+            <div className='flex items-center gap-1'>
+              <label className='text-[10px] text-muted-foreground'>Loop</label>
+              <input
+                type='number'
+                min={1}
+                max={100}
+                value={loopCount}
+                onChange={(e) => setLoopCount(Math.max(1, Math.min(100, +e.target.value || 1)))}
+                disabled={playing}
+                className='w-12 rounded border bg-background px-1.5 py-0.5 text-xs text-center'
+              />
+            </div>
+            {playing ? (
+              <Button size='sm' variant='destructive' onClick={handleStop}>
+                <Square className='mr-1 size-3.5' />
+                Stop
+              </Button>
+            ) : (
+              <Button size='sm' onClick={handlePlay}>
+                <Play className='mr-1 size-3.5' />
+                Play
+              </Button>
+            )}
+          </>
         )}
       </div>
 
@@ -208,12 +299,14 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedStep
         {steps.map((step, i) => {
           const result = results.find((r) => r.index === i);
           const isRunning = playing && i === currentStepIndex;
+          const isCursor = stepByStep && !playing && i === stepCursor && !result;
           const isPending = playing && i > currentStepIndex && !result;
           return (
             <div
               key={i}
               className={`flex items-center gap-2 rounded px-2 py-1.5 text-xs transition-colors ${
                 isRunning ? 'bg-primary/10 ring-1 ring-primary/30' :
+                isCursor ? 'bg-amber-500/10 ring-1 ring-amber-400/40' :
                 result?.ok ? 'bg-emerald-500/10' :
                 result && !result.ok ? 'bg-red-500/10' :
                 'bg-background'

@@ -32,7 +32,7 @@ import { BracketBlock } from './bracket-block';
 import { InsertButton } from './insert-button';
 import { StepDetailPanel } from './step-detail-panel';
 import type { SelectorPickTarget } from './selector-pick';
-import { selectorPickTargetEquals } from './selector-pick';
+import { selectorPickTargetEquals, isSelectorPickableStep } from './selector-pick';
 
 // ── Sortable step wrapper ────────────────────────────────────────────────────
 
@@ -84,6 +84,10 @@ interface Props {
   /** When set, user is assigning a selector from device/hierarchy to this step. */
   selectorPickTarget?: SelectorPickTarget | null;
   onSelectorPickTargetChange?: (target: SelectorPickTarget | null) => void;
+  /** Run a single step on the device inline (without entering player mode). */
+  onRunStep?: (step: FlowStep, index: number) => void;
+  /** Per-step run state from the parent. */
+  stepRunStates?: Record<number, 'idle' | 'running' | 'ok' | 'error'>;
 }
 
 export function FlowEditor({
@@ -93,6 +97,8 @@ export function FlowEditor({
   compact = false,
   selectorPickTarget = null,
   onSelectorPickTargetChange,
+  onRunStep,
+  stepRunStates = {},
 }: Props) {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const selectedStep = selectedIndex != null ? steps[selectedIndex] : null;
@@ -161,7 +167,7 @@ export function FlowEditor({
       onChange(steps.filter((_, i) => i !== index));
       if (selectedIndex === index) setSelectedIndex(null);
       if (onSelectorPickTargetChange) {
-        if (selectorPickTarget?.kind === 'root' && selectorPickTarget.index === index) {
+        if (selectorPickTarget?.rootIndex === index) {
           onSelectorPickTargetChange(null);
         }
       }
@@ -239,7 +245,7 @@ export function FlowEditor({
                   ? () => {
                       const idx = selectedIndex;
                       setSelectedIndex(null); // close dialog first
-                      onSelectorPickTargetChange({ kind: 'root', index: idx });
+                      onSelectorPickTargetChange({ rootIndex: idx, path: [] });
                     }
                   : undefined
               }
@@ -271,6 +277,8 @@ export function FlowEditor({
                             <BracketBlock
                               step={step}
                               stepIndex={i}
+                              rootStepIndex={i}
+                              pathFromRoot={[]}
                               selected={selectedIndex === i}
                               selectedChild={null}
                               onSelectSelf={() => setSelectedIndex(selectedIndex === i ? null : i)}
@@ -282,6 +290,7 @@ export function FlowEditor({
                               compact={compact}
                               selectorPickTarget={selectorPickTarget}
                               onTogglePickSelector={onSelectorPickTargetChange ? togglePick : undefined}
+                              onRunChild={onRunStep ? (s) => onRunStep(s, -1) : undefined}
                             />
                           ) : (
                             <StepCard
@@ -290,6 +299,18 @@ export function FlowEditor({
                               selected={!compact && selectedIndex === i}
                               onClick={() => !compact && setSelectedIndex(selectedIndex === i ? null : i)}
                               onRemove={() => removeAt(i)}
+                              onRun={onRunStep ? () => onRunStep(step, i) : undefined}
+                              runState={stepRunStates[i] ?? 'idle'}
+                              isPickTarget={
+                                selectorPickTarget != null &&
+                                selectorPickTarget.rootIndex === i &&
+                                (selectorPickTarget.path ?? []).length === 0
+                              }
+                              onTogglePickSelector={
+                                onSelectorPickTargetChange && isSelectorPickableStep(step)
+                                  ? () => togglePick({ rootIndex: i, path: [] })
+                                  : undefined
+                              }
                             />
                           )}
                         </div>

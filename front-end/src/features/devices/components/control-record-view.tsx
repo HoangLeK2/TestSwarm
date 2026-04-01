@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { DeviceTile } from './device-tile';
 import { Button } from '@/components/ui/button';
 import {
@@ -62,6 +62,7 @@ import { StepIcon } from '@/features/campaigns/components/flow-editor/step-icon'
 import type { FlowStep } from '@/features/campaigns/components/scenario-steps/types';
 import { findSelectorInXml } from '../utils/control-record-xml';
 import { parseHierarchyTree, findNodeIdAtRatio } from '../utils/hierarchy-tree';
+import { previewScenarioStream } from '../services/api';
 import { useTranslations } from 'next-intl';
 
 type Props = { initialSerial?: string | null; initialCampaignId?: string | null; initialScenarioId?: string | null };
@@ -76,6 +77,49 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
   const [playerMode, setPlayerMode] = useState(false);
   const [selectorPickTarget, setSelectorPickTarget] = useState<SelectorPickTarget | null>(null);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
+
+  // Inline step runner (step-by-step without entering player mode)
+  const [stepRunStates, setStepRunStates] = useState<Record<number, 'idle' | 'running' | 'ok' | 'error'>>({});
+  const stepRunAbortRef = useRef<AbortController | null>(null);
+
+  const handleRunStep = useCallback(
+    async (step: FlowStep, index: number) => {
+      if (!device.selectedDevice) { toast.warning('Chưa chọn thiết bị'); return; }
+      if (stepRunStates[index] === 'running') return;
+      stepRunAbortRef.current?.abort();
+      const ctrl = new AbortController();
+      stepRunAbortRef.current = ctrl;
+      setStepRunStates((s) => ({ ...s, [index]: 'running' }));
+      try {
+        await previewScenarioStream(
+          device.selectedDevice.serial,
+          [step as Record<string, any>],
+          (event) => {
+            if (event.event === 'step_done') {
+              setStepRunStates((s) => ({ ...s, [index]: event.ok ? 'ok' : 'error' }));
+              if (!event.ok) toast.error(`Bước ${index + 1}: ${event.message ?? 'Lỗi'}`);
+            }
+          },
+          ctrl.signal,
+        );
+      } catch (e) {
+        if (!ctrl.signal.aborted) {
+          setStepRunStates((s) => ({ ...s, [index]: 'error' }));
+          toast.error(`Bước ${index + 1}: ${String(e)}`);
+        }
+      } finally {
+        if (!ctrl.signal.aborted) {
+          // Reset to idle after 3s so indicator fades
+          setTimeout(() => setStepRunStates((s) => {
+            const n = { ...s };
+            if (n[index] !== 'running') delete n[index];
+            return n;
+          }), 3000);
+        }
+      }
+    },
+    [device.selectedDevice, stepRunStates],
+  );
 
   useEffect(() => {
     setSkipTapRecordingWhilePick(selectorPickTarget != null);
@@ -320,6 +364,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                 onPlayingChange={hierarchy.setPaused}
                 preloadedSteps={steps.items.length > 0 ? (steps.items as any[]) : undefined}
                 preloadedName={save.editingContext?.name}
+                preloadedVariables={save.editingContext?.variables}
               />
             </div>
           ) : (
@@ -504,6 +549,8 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                       maxHeight='calc(100vh - 300px)'
                       selectorPickTarget={selectorPickTarget}
                       onSelectorPickTargetChange={setSelectorPickTarget}
+                      onRunStep={selectedDevice ? handleRunStep : undefined}
+                      stepRunStates={stepRunStates}
                     />
                   </div>
                 )}

@@ -8,14 +8,22 @@ import { BRACKET_COLORS, getStepTypeName, getStepSummary } from './constants';
 import { StepIcon } from './step-icon';
 import { StepCard } from './step-card';
 import { InsertButton } from './insert-button';
+import { StepDetailPanel } from './step-detail-panel';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import {
   RepeatFields,
   RepeatUntilFields,
   IfElementFields,
   IfVariableFields,
+  LoopFields,
 } from '../scenario-steps/control-flow-editors';
 import type { SelectorPickTarget } from './selector-pick';
-import { selectorPickTargetEquals } from './selector-pick';
+import { selectorPickTargetEquals, isSelectorPickableStep } from './selector-pick';
 
 // ── Step mutation helpers ────────────────────────────────────────────────────
 
@@ -85,6 +93,20 @@ interface BracketBlockProps {
   onTogglePickSelector?: (path: SelectorPickTarget) => void;
   /** Nesting depth — used for visual indentation cues. */
   depth?: number;
+  /** Run a child step on the device inline. */
+  onRunChild?: (step: FlowStep) => void;
+  /**
+   * The index of this block in the ROOT steps array (not local).
+   * Needed for correct SelectorPickTarget when blocks are nested.
+   * Defaults to stepIndex (correct for root-level blocks).
+   */
+  rootStepIndex?: number;
+  /**
+   * Path from the root step to this block's position.
+   * Each segment: { listKey, childIndex } traversed to reach this block.
+   * Empty array (default) = this IS a root step.
+   */
+  pathFromRoot?: Array<{ listKey: string; childIndex: number }>;
 }
 
 // ── ChildStepList ────────────────────────────────────────────────────────────
@@ -118,6 +140,10 @@ interface ChildStepListProps {
   selectorPickTarget?: SelectorPickTarget | null;
   onTogglePickSelector?: (path: SelectorPickTarget) => void;
   depth?: number;
+  onEditChild?: (listKey: string, ci: number) => void;
+  onRunChild?: (step: FlowStep) => void;
+  rootStepIndex?: number;
+  pathFromRoot?: Array<{ listKey: string; childIndex: number }>;
 }
 
 function ChildStepList({
@@ -134,24 +160,23 @@ function ChildStepList({
   selectorPickTarget,
   onTogglePickSelector,
   depth = 0,
+  onEditChild,
+  onRunChild,
+  rootStepIndex,
+  pathFromRoot,
 }: ChildStepListProps) {
   return (
     <div className='space-y-0'>
       <InsertButton onInsert={(s) => onInsertChild(listKey, 0, s)} />
       {steps.map((child, ci) => {
-        const path: SelectorPickTarget = {
-          kind: 'child',
-          parentIndex: parentStepIndex,
-          listKey,
-          childIndex: ci,
-        };
-
         if (isControlFlow(child.type)) {
           return (
             <div key={ci}>
               <BracketBlock
                 step={child}
                 stepIndex={ci}
+                rootStepIndex={rootStepIndex}
+                pathFromRoot={[...(pathFromRoot ?? []), { listKey, childIndex: ci }]}
                 selected={false}
                 selectedChild={null}
                 onSelectSelf={() => onSelectChild(startIndex + ci)}
@@ -168,20 +193,33 @@ function ChildStepList({
                 selectorPickTarget={selectorPickTarget}
                 onTogglePickSelector={onTogglePickSelector}
                 depth={depth + 1}
+                onRunChild={onRunChild}
               />
               <InsertButton onInsert={(s) => onInsertChild(listKey, ci + 1, s)} />
             </div>
           );
         }
 
+        const childPickPath: SelectorPickTarget = {
+          rootIndex: rootStepIndex ?? parentStepIndex,
+          path: [...(pathFromRoot ?? []), { listKey, childIndex: ci }],
+        };
+        const isPickTarget = selectorPickTarget != null && selectorPickTargetEquals(selectorPickTarget, childPickPath);
         return (
           <div key={ci}>
             <StepCard
               step={child}
               index={startIndex + ci}
               selected={selectedChild === startIndex + ci}
-              onClick={() => onSelectChild(startIndex + ci)}
+              onClick={() => onEditChild ? onEditChild(listKey, ci) : onSelectChild(startIndex + ci)}
               onRemove={() => onRemoveChild(listKey, ci)}
+              onRun={onRunChild ? () => onRunChild(child) : undefined}
+              isPickTarget={isPickTarget}
+              onTogglePickSelector={
+                onTogglePickSelector && isSelectorPickableStep(child)
+                  ? () => onTogglePickSelector(childPickPath)
+                  : undefined
+              }
             />
             <InsertButton onInsert={(s) => onInsertChild(listKey, ci + 1, s)} />
           </div>
@@ -196,6 +234,14 @@ function ChildStepList({
 
 // ── BracketBlock ─────────────────────────────────────────────────────────────
 
+function getChildStep(step: FlowStep, listKey: string, ci: number): FlowStep | null {
+  if (listKey.startsWith('branches.')) {
+    const bi = parseInt(listKey.split('.')[1] ?? '0', 10);
+    return (step.branches as any[])?.[bi]?.steps?.[ci] ?? null;
+  }
+  return ((step as any)[listKey] as FlowStep[])?.[ci] ?? null;
+}
+
 export function BracketBlock({
   step, stepIndex, selected, selectedChild,
   onSelectSelf, onSelectChild, onUpdate, onRemove, onRemoveChild, onInsertChild,
@@ -203,16 +249,27 @@ export function BracketBlock({
   selectorPickTarget,
   onTogglePickSelector,
   depth = 0,
+  onRunChild,
+  rootStepIndex,
+  pathFromRoot,
 }: BracketBlockProps) {
   const [collapsed, setCollapsed] = useState(false);
+  const [editingChildPath, setEditingChildPath] = useState<{ listKey: string; ci: number } | null>(null);
+  const editingChild = editingChildPath ? getChildStep(step, editingChildPath.listKey, editingChildPath.ci) : null;
   const colors = BRACKET_COLORS[step.type] ?? BRACKET_COLORS.repeat;
   const typeName = getStepTypeName(step.type);
   const summary = getStepSummary(step);
-  const rootPickPath: SelectorPickTarget = { kind: 'root', index: stepIndex };
+
+  // Effective root info — for nested blocks, rootStepIndex differs from stepIndex
+  const effectiveRootIndex = rootStepIndex ?? stepIndex;
+  const effectivePath = pathFromRoot ?? [];
+
+  // Pick target pointing to THIS block's step (for if_element condition picking)
+  const selfPickPath: SelectorPickTarget = { rootIndex: effectiveRootIndex, path: effectivePath };
   const pickingCondition =
     step.type === 'if_element' &&
     selectorPickTarget &&
-    selectorPickTargetEquals(selectorPickTarget, rootPickPath);
+    selectorPickTargetEquals(selectorPickTarget, selfPickPath);
 
   // Update a child step within one of this bracket's arrays
   const handleUpdateChild = useCallback(
@@ -234,9 +291,37 @@ export function BracketBlock({
     selectorPickTarget,
     onTogglePickSelector,
     depth,
+    onEditChild: (lk: string, ci: number) => setEditingChildPath({ listKey: lk, ci }),
+    onRunChild,
+    rootStepIndex: effectiveRootIndex,
+    pathFromRoot: effectivePath,
   };
 
   return (
+    <>
+    {/* Dialog for editing a child step */}
+    <Dialog open={!compact && editingChild != null} onOpenChange={(open) => { if (!open) setEditingChildPath(null); }}>
+      <DialogContent className='max-w-sm p-0 gap-0'>
+        <DialogHeader className='sr-only'>
+          <DialogTitle>Chỉnh sửa bước</DialogTitle>
+        </DialogHeader>
+        {editingChild && editingChildPath && (
+          <StepDetailPanel
+            step={editingChild}
+            onChange={(s) => onUpdate(updateChildInStep(step, editingChildPath.listKey, editingChildPath.ci, s))}
+            onClose={() => setEditingChildPath(null)}
+            onRequestPickSelector={onTogglePickSelector ? () => {
+              const path: SelectorPickTarget = {
+                rootIndex: effectiveRootIndex,
+                path: [...effectivePath, { listKey: editingChildPath.listKey, childIndex: editingChildPath.ci }],
+              };
+              setEditingChildPath(null);
+              onTogglePickSelector(path);
+            } : undefined}
+          />
+        )}
+      </DialogContent>
+    </Dialog>
     <div
       className={cn(
         'rounded-md overflow-hidden',
@@ -277,7 +362,7 @@ export function BracketBlock({
             aria-label='Chọn selector điều kiện if_element trên màn hình'
             onClick={(e) => {
               e.stopPropagation();
-              onTogglePickSelector(rootPickPath);
+              onTogglePickSelector(selfPickPath);
             }}
           >
             <Crosshair size={12} strokeWidth={2} />
@@ -295,6 +380,9 @@ export function BracketBlock({
       {/* Inline parameter editor — shown in compact mode when block is selected */}
       {compact && selected && (
         <div className='border-t px-2 py-1.5 bg-accent/30'>
+          {step.type === 'loop' && (
+            <LoopFields step={step} onChange={(f, v) => onUpdate({ ...step, [f]: v })} />
+          )}
           {step.type === 'repeat' && (
             <RepeatFields step={step} onChange={(f, v) => onUpdate({ ...step, [f]: v })} />
           )}
@@ -313,7 +401,7 @@ export function BracketBlock({
       {/* Body */}
       {!collapsed && (
         <div className={cn('pb-1', depth === 0 ? 'px-2' : 'px-1.5')}>
-          {(step.type === 'repeat' || step.type === 'repeat_until') && (
+          {(step.type === 'loop' || step.type === 'repeat' || step.type === 'repeat_until') && (
             <ChildStepList
               steps={step.steps ?? []}
               listKey='steps'
@@ -367,5 +455,6 @@ export function BracketBlock({
         </div>
       )}
     </div>
+    </>
   );
 }

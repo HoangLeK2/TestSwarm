@@ -1,5 +1,6 @@
 'use client';
 
+import { useState, useCallback } from 'react';
 import type { Device } from '../types';
 import { serialToId } from '../helpers';
 import { DeviceScreen } from './device-screen';
@@ -37,6 +38,14 @@ export function DeviceTile({
   const id = serialToId(device.serial);
   const isActive =
     device.state && !['DISCONNECTED', 'DEAD'].includes(device.state.toUpperCase());
+
+  const [gestureMode, setGestureMode] = useState<'tap' | 'swipe' | 'double_tap' | 'drag'>('tap');
+
+  const handlePinch = useCallback((scale: number) => {
+    const dw = device.screen_width || 1080;
+    const dh = device.screen_height || 1920;
+    wsSend({ type: 'pinch', serial: device.serial, cx: Math.round(dw / 2), cy: Math.round(dh / 2), scale, ms: 400 });
+  }, [wsSend, device.serial, device.screen_width, device.screen_height]);
 
   return (
     <Card
@@ -77,6 +86,7 @@ export function DeviceTile({
                     mode={mode}
                     onTap={onTap}
                     highlightBounds={highlightBounds}
+                    gestureMode={gestureMode}
                   />
                 ) : (
                   <div className='flex h-full w-full items-center justify-center bg-zinc-900 text-[11px] text-muted-foreground'>
@@ -94,6 +104,9 @@ export function DeviceTile({
           onKey={(key) => wsSend({ type: 'key', serial: device.serial, key })}
           onRestart={() => onRestart(device.serial)}
           compact={compact}
+          gestureMode={gestureMode}
+          onGestureMode={setGestureMode}
+          onPinch={handlePinch}
         />
         {isActive && <DeviceSTFPanel serial={device.serial} />}
       </CardContent>

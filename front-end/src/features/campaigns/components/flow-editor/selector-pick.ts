@@ -12,9 +12,17 @@ export const SELECTOR_STEP_TYPES = new Set([
   'if_element',
 ]);
 
-export type SelectorPickTarget =
-  | { kind: 'root'; index: number }
-  | { kind: 'child'; parentIndex: number; listKey: string; childIndex: number };
+/**
+ * Unified selector pick target using a root index + path array.
+ *
+ * - `path = []`                          → update the root step itself (e.g. if_element condition)
+ * - `path = [{ listKey, childIndex }]`   → update a direct child (1-level nesting)
+ * - longer paths                         → arbitrary deep nesting
+ */
+export type SelectorPickTarget = {
+  rootIndex: number;
+  path: Array<{ listKey: string; childIndex: number }>;
+};
 
 export function selectorPickTargetEquals(
   a: SelectorPickTarget | null | undefined,
@@ -22,14 +30,11 @@ export function selectorPickTargetEquals(
 ): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
-  if (a.kind !== b.kind) return false;
-  if (a.kind === 'root') return b.kind === 'root' && a.index === b.index;
-  return (
-    b.kind === 'child' &&
-    a.parentIndex === b.parentIndex &&
-    a.listKey === b.listKey &&
-    a.childIndex === b.childIndex
-  );
+  if (a.rootIndex !== b.rootIndex) return false;
+  const ap = a.path ?? [];
+  const bp = b.path ?? [];
+  if (ap.length !== bp.length) return false;
+  return ap.every((seg, i) => seg.listKey === bp[i]!.listKey && seg.childIndex === bp[i]!.childIndex);
 }
 
 function mergeSelector(step: FlowStep, by: string, value: string): FlowStep {
@@ -40,52 +45,58 @@ function mergeSelector(step: FlowStep, by: string, value: string): FlowStep {
   return { ...step, by, value };
 }
 
-function applyToChildParent(
-  parent: FlowStep,
-  listKey: string,
-  childIndex: number,
-  by: string,
-  value: string,
-): FlowStep {
-  if (listKey.startsWith('branches.')) {
-    const bi = parseInt(listKey.split('.')[1] ?? '0', 10);
-    const branches = [...(parent.branches ?? [])];
-    const b = branches[bi];
-    if (!b) return parent;
-    const stepsArr = [...(b.steps ?? [])];
-    const ch = stepsArr[childIndex];
-    if (!ch || !SELECTOR_STEP_TYPES.has(ch.type)) return parent;
-    stepsArr[childIndex] = mergeSelector(ch, by, value);
-    branches[bi] = { ...b, steps: stepsArr };
-    return { ...parent, branches };
-  }
-  const arr = [...(((parent as Record<string, unknown>)[listKey] as FlowStep[]) ?? [])];
-  const ch = arr[childIndex];
-  if (!ch || !SELECTOR_STEP_TYPES.has(ch.type)) return parent;
-  arr[childIndex] = mergeSelector(ch, by, value);
-  return { ...parent, [listKey]: arr };
-}
-
-/** Apply uiautomator2 selector to the step at `target`. Returns same reference if nothing changed. */
+/**
+ * Apply uiautomator2 selector to the step identified by `target`.
+ * Returns the same `steps` reference if nothing changed.
+ */
 export function applySelectorToSteps(
   steps: FlowStep[],
   target: SelectorPickTarget,
   by: string,
   value: string,
 ): FlowStep[] {
-  if (target.kind === 'root') {
-    const s = steps[target.index];
-    if (!s || !SELECTOR_STEP_TYPES.has(s.type)) return steps;
-    const next = [...steps];
-    next[target.index] = mergeSelector(s, by, value);
-    return next;
+  const root = steps[target.rootIndex];
+  if (!root) return steps;
+  const targetPath = target.path ?? [];
+
+  function applyAtPath(node: FlowStep, pathIdx: number): FlowStep {
+    if (pathIdx === targetPath.length) {
+      // This IS the node to update
+      if (!SELECTOR_STEP_TYPES.has(node.type)) return node;
+      return mergeSelector(node, by, value);
+    }
+
+    const seg = targetPath[pathIdx]!;
+    const { listKey, childIndex } = seg;
+
+    if (listKey.startsWith('branches.')) {
+      const bi = parseInt(listKey.split('.')[1] ?? '0', 10);
+      const branches = [...((node.branches as any[]) ?? [])];
+      const b = branches[bi];
+      if (!b) return node;
+      const stepsArr = [...(b.steps ?? [])];
+      const child = stepsArr[childIndex];
+      if (!child) return node;
+      const updatedChild = applyAtPath(child, pathIdx + 1);
+      if (updatedChild === child) return node;
+      stepsArr[childIndex] = updatedChild;
+      branches[bi] = { ...b, steps: stepsArr };
+      return { ...node, branches };
+    }
+
+    const arr = [...(((node as Record<string, unknown>)[listKey] as FlowStep[]) ?? [])];
+    const child = arr[childIndex];
+    if (!child) return node;
+    const updatedChild = applyAtPath(child, pathIdx + 1);
+    if (updatedChild === child) return node;
+    arr[childIndex] = updatedChild;
+    return { ...node, [listKey]: arr };
   }
-  const parent = steps[target.parentIndex];
-  if (!parent) return steps;
-  const updated = applyToChildParent(parent, target.listKey, target.childIndex, by, value);
-  if (updated === parent) return steps;
+
+  const updated = applyAtPath(root, 0);
+  if (updated === root) return steps;
   const next = [...steps];
-  next[target.parentIndex] = updated;
+  next[target.rootIndex] = updated;
   return next;
 }
 

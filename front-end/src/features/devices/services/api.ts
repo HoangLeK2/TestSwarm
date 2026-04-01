@@ -343,6 +343,7 @@ export async function previewScenarioStream(
   steps: Array<Record<string, any>>,
   onEvent: (event: { event: string; [key: string]: any }) => void,
   signal?: AbortSignal,
+  variables?: Record<string, any>,
 ): Promise<void> {
   // Use farmApi's baseURL for the SSE endpoint
   const baseUrl = farmApi.defaults.baseURL || '';
@@ -355,7 +356,7 @@ export async function previewScenarioStream(
   const response = await fetch(url, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ steps }),
+    body: JSON.stringify({ steps, variables: variables ?? {} }),
     signal,
   });
 

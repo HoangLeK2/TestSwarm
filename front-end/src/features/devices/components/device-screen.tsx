@@ -15,11 +15,14 @@ interface DeviceScreenProps {
   apiBase?: string;
   /** Highlight bounds overlay [x1, y1, x2, y2] in device pixels */
   highlightBounds?: [number, number, number, number] | null;
+  /** Gesture mode: tap, swipe, double_tap, drag */
+  gestureMode?: 'tap' | 'swipe' | 'double_tap' | 'drag';
 }
 
-export function DeviceScreen({ device, wsSend, mode, onTap, highlightBounds }: DeviceScreenProps) {
+export function DeviceScreen({ device, wsSend, mode, onTap, highlightBounds, gestureMode }: DeviceScreenProps) {
   const wrapRef    = useRef<HTMLDivElement>(null);
   const draggedRef = useRef(false);
+  const dragStartRef = useRef<{ x: number; y: number } | null>(null);
   const [hasFrame, setHasFrame] = useState(false);
 
   const id = serialToId(device.serial);
@@ -62,10 +65,22 @@ export function DeviceScreen({ device, wsSend, mode, onTap, highlightBounds }: D
           if (!r) return;
           const p1 = clientToDevice(initial[0] - r.left, initial[1] - r.top, r.width, r.height);
           const p2 = clientToDevice(xy[0] - r.left, xy[1] - r.top, r.width, r.height);
-          // Clamp duration: floor at 300ms so Android doesn't interpret as a fling (reduces drift).
-          const ms = Math.max(300, Math.min(elapsed, 1000));
-          wsSend({ type: 'swipe', serial: device.serial, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, ms });
+          if (gestureMode === 'drag') {
+            wsSend({ type: 'drag', serial: device.serial, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, ms: 1000 });
+          } else {
+            const ms = Math.max(300, Math.min(elapsed, 1000));
+            wsSend({ type: 'swipe', serial: device.serial, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, ms });
+          }
         }
+      },
+      onPinch: (state) => {
+        if (!state.last) return;
+        const r = wrapRef.current?.getBoundingClientRect();
+        if (!r) return;
+        const origin = state.origin as [number, number];
+        const p = clientToDevice(origin[0] - r.left, origin[1] - r.top, r.width, r.height);
+        const scale = (state as { offset?: [number, number] }).offset?.[0] ?? 1;
+        wsSend({ type: 'pinch', serial: device.serial, cx: p.x, cy: p.y, scale, ms: 400 });
       },
     },
     { drag: { threshold: 5 }, pointer: { touch: true }, event: { passive: false } }
@@ -73,16 +88,46 @@ export function DeviceScreen({ device, wsSend, mode, onTap, highlightBounds }: D
 
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
-      if (mode !== 'tap' || draggedRef.current) { draggedRef.current = false; return; }
+      if (draggedRef.current) { draggedRef.current = false; return; }
       const el   = (e.target as HTMLElement) ?? e.currentTarget;
       const rect = el.getBoundingClientRect();
       const p    = clientToDevice(e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height);
+
+      if (gestureMode === 'double_tap') {
+        wsSend({ type: 'double_tap', serial: device.serial, x: p.x, y: p.y });
+        return;
+      }
+      if (mode !== 'tap') return;
       wsSend({ type: 'tap', serial: device.serial, x: p.x, y: p.y });
       if (onTap && rect.width > 0 && rect.height > 0) {
         onTap((e.clientX - rect.left) / rect.width, (e.clientY - rect.top) / rect.height);
       }
     },
-    [mode, clientToDevice, wsSend, device.serial, onTap]
+    [mode, gestureMode, clientToDevice, wsSend, device.serial, onTap]
+  );
+
+  const handleDoubleClick = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (mode !== 'tap' || gestureMode === 'double_tap') return; // double_tap mode uses single click
+      const el   = (e.target as HTMLElement) ?? e.currentTarget;
+      const rect = el.getBoundingClientRect();
+      const p    = clientToDevice(e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height);
+      wsSend({ type: 'double_tap', serial: device.serial, x: p.x, y: p.y });
+    },
+    [mode, gestureMode, clientToDevice, wsSend, device.serial]
+  );
+
+  const handleWheel = useCallback(
+    (e: React.WheelEvent<HTMLDivElement>) => {
+      if (!e.ctrlKey) return; // Ctrl+scroll = pinch
+      e.preventDefault();
+      const el   = (e.target as HTMLElement) ?? e.currentTarget;
+      const rect = el.getBoundingClientRect();
+      const p    = clientToDevice(e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height);
+      const scale = e.deltaY < 0 ? 2.0 : 0.5; // scroll up = zoom in, down = zoom out
+      wsSend({ type: 'pinch', serial: device.serial, cx: p.x, cy: p.y, scale, ms: 400 });
+    },
+    [clientToDevice, wsSend, device.serial]
   );
 
   return (
@@ -91,7 +136,11 @@ export function DeviceScreen({ device, wsSend, mode, onTap, highlightBounds }: D
         {...bind()}
         ref={wrapRef}
         onClick={handleClick}
+        onDoubleClick={handleDoubleClick}
+        onWheel={handleWheel}
         className={`relative w-full overflow-hidden rounded-md border border-border bg-black ${
+          gestureMode === 'double_tap' ? 'cursor-cell' :
+          gestureMode === 'drag' ? 'cursor-grab' :
           mode === 'swipe' ? 'cursor-crosshair' : 'cursor-pointer'
         }`}
         style={{ aspectRatio: `${dw}/${dh}` }}

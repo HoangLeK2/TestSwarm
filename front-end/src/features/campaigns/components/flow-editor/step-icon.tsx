@@ -19,6 +19,10 @@ import {
   Package,
   Hand,
   CircleDot,
+  ZoomIn,
+  GripVertical,
+  Camera,
+  Clipboard,
   type LucideProps
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -49,6 +53,11 @@ const ICON_MAP: Record<string, React.ComponentType<LucideProps>> = {
   if_variable: GitBranch,
   random_pick: Dice5,
   run_scenario: Package,
+  double_tap: MousePointerClick,
+  pinch: ZoomIn,
+  drag: GripVertical,
+  take_screenshot: Camera,
+  set_clipboard: Clipboard,
 };
 
 const COLOR_MAP: Record<string, string> = {
@@ -59,6 +68,8 @@ const COLOR_MAP: Record<string, string> = {
   scroll_down: 'text-indigo-400', scroll_to: 'text-indigo-400',
   wait: 'text-green-500', wait_element: 'text-green-500', wait_stable: 'text-green-500',
   assert_element: 'text-green-600', dismiss_popup: 'text-red-400',
+  double_tap: 'text-blue-400', pinch: 'text-sky-500', drag: 'text-blue-600',
+  take_screenshot: 'text-violet-500', set_clipboard: 'text-teal-500',
   set_variable: 'text-purple-500',
   repeat: 'text-orange-500', repeat_until: 'text-orange-500',
   if_element: 'text-amber-500', if_variable: 'text-amber-500',

@@ -60,6 +60,15 @@ function sanitizeScenarioStep(step: any): any {
   if (!step || typeof step !== 'object') return step;
   const next: any = { ...step };
   if (next.by != null) next.by = normalizeSelectorBy(next.by);
+  // Auto-fix repeat.count: if missing or < 1, default to 3
+  if (next.type === 'repeat') {
+    const c = Number(next.count);
+    if (!Number.isFinite(c) || c < 1) next.count = 3;
+  }
+  // Auto-fix random_pick: drop branches with no steps
+  if (next.type === 'random_pick' && Array.isArray(next.branches)) {
+    next.branches = next.branches.filter((br: any) => Array.isArray(br?.steps) && br.steps.length > 0);
+  }
   if (next.selector && typeof next.selector === 'object') {
     next.selector = {
       ...next.selector,
@@ -317,6 +326,21 @@ export function useControlRecord(initialSerial?: string | null, initialCampaignI
           y2: parseFloat((m.y2 / h).toFixed(4)),
           duration_ms: m.ms ?? 300
         });
+
+      } else if (m.type === 'double_tap' && typeof m.x === 'number' && typeof m.y === 'number') {
+        const rx = parseFloat((m.x / w).toFixed(4));
+        const ry = parseFloat((m.y / h).toFixed(4));
+        recordStep({ type: 'double_tap', rx, ry });
+
+      } else if (m.type === 'drag' && typeof m.x1 === 'number' && typeof m.y1 === 'number' && typeof m.x2 === 'number' && typeof m.y2 === 'number') {
+        recordStep({
+          type: 'drag',
+          rx1: parseFloat((m.x1 / w).toFixed(4)),
+          ry1: parseFloat((m.y1 / h).toFixed(4)),
+          rx2: parseFloat((m.x2 / w).toFixed(4)),
+          ry2: parseFloat((m.y2 / h).toFixed(4)),
+          duration_ms: m.ms ?? 1000
+        });
       }
     },
     [wsSend, selectedDevice, recordStep, t, trackScreenshotTask]
@@ -333,10 +357,28 @@ export function useControlRecord(initialSerial?: string | null, initialCampaignI
   const cleanSteps = useCallback(() => steps.map(({ _id, ...rest }) => rest), [steps]);
 
   const copyJson = useCallback(() => {
-    navigator.clipboard.writeText(scenarioToJson(cleanSteps())).then(
-      () => toast.success(t('toast.copyJsonSuccess')),
-      () => toast.error(t('toast.copyJsonError'))
-    );
+    const text = scenarioToJson(cleanSteps());
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).then(
+        () => toast.success(t('toast.copyJsonSuccess')),
+        () => toast.error(t('toast.copyJsonError'))
+      );
+      return;
+    }
+    // Fallback for non-HTTPS (HTTP dev server accessed via IP)
+    const el = document.createElement('textarea');
+    el.value = text;
+    el.style.cssText = 'position:fixed;opacity:0;top:0;left:0';
+    document.body.appendChild(el);
+    el.focus();
+    el.select();
+    try {
+      document.execCommand('copy');
+      toast.success(t('toast.copyJsonSuccess'));
+    } catch {
+      toast.error(t('toast.copyJsonError'));
+    }
+    document.body.removeChild(el);
   }, [cleanSteps, t]);
 
   // ── Editing context (pre-loaded from URL params) ─────────────────────────
@@ -344,6 +386,7 @@ export function useControlRecord(initialSerial?: string | null, initialCampaignI
     campaignId: string;
     scenarioId: string;
     name: string;
+    variables?: Record<string, any>;
   } | null>(null);
 
   useEffect(() => {
@@ -353,7 +396,7 @@ export function useControlRecord(initialSerial?: string | null, initialCampaignI
         ? sc.steps.map((s: any) => ({ ...s, _id: nextStepId() }) as StepWithId)
         : [];
       setSteps(loaded);
-      setEditingContext({ campaignId: initialCampaignId, scenarioId: initialScenarioId, name: sc.name });
+      setEditingContext({ campaignId: initialCampaignId, scenarioId: initialScenarioId, name: sc.name, variables: sc.variables });
       if (loaded.length > 0) toast.info(t('toast.loadedScenario', { name: sc.name, count: loaded.length }));
     }).catch(() => toast.error(t('toast.loadScenarioFailed')));
   // intentionally runs once on mount

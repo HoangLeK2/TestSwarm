@@ -7,7 +7,6 @@ They are non-deterministic (I/O, randomness) so they live here, not in the workf
 from __future__ import annotations
 
 import logging
-import random
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -47,7 +46,7 @@ class ScheduleActivities:
     @activity.defn
     async def load_schedule(self, schedule_id: str) -> dict[str, Any]:
         """Load schedule config from DB. Returns serializable dict."""
-        from db.database import AsyncSessionLocal
+        from db.database import activity_session as AsyncSessionLocal
         from db.crud.schedule import get_schedule
 
         activity.heartbeat("load_schedule")
@@ -78,7 +77,7 @@ class ScheduleActivities:
     @activity.defn
     async def create_run_record(self, schedule_id: str) -> str:
         """Create a ScheduleRun record and return its ID."""
-        from db.database import AsyncSessionLocal
+        from db.database import activity_session as AsyncSessionLocal
         from db.crud.schedule import create_schedule_run
 
         activity.heartbeat("create_run_record")
@@ -95,15 +94,19 @@ class ScheduleActivities:
         Dispatch the scheduled workload to devices.
 
         Handles three target_types:
-        - campaign: delegates to enqueue_campaign_run / enqueue_campaign_run_temporal
-        - template: resolves template steps then dispatches as fleet
-        - fleet: dispatches inline_steps to matching devices
+        - campaign: delegates to enqueue_campaign_run_temporal (Temporal workflow)
+        - template: resolves template steps then dispatches as fleet (TaskQueue)
+        - fleet: dispatches inline_steps to matching devices (TaskQueue)
         """
         activity.heartbeat("dispatch_start")
 
         target_type = schedule_config["target_type"]
         stagger = schedule_config.get("stagger_devices", False)
         stagger_interval = int(schedule_config.get("stagger_interval_seconds", 60))
+
+        # NOTE: random delay is applied by ScheduleRunWorkflow via workflow.sleep()
+        # before this activity is called. Do NOT add a delay here — it would
+        # double the intended jitter (once in the workflow, once in the activity).
 
         try:
             if target_type == "campaign":
@@ -140,29 +143,32 @@ class ScheduleActivities:
         stagger: bool,
         stagger_interval: int,
     ) -> dict[str, Any]:
+        """Dispatch a campaign via Temporal.
+
+        NOTE: stagger/stagger_interval are not applied here — Temporal workflows
+        start immediately and stagger is not supported for campaign dispatch.
+        Stagger only applies to fleet/template dispatch (TaskQueue path).
+        To stagger campaign devices, implement delay steps at the start of the
+        scenario itself or use the workflow sleep mechanism.
+        """
         target_id = cfg.get("target_id")
         if not target_id:
             raise ValueError("campaign target_type requires target_id")
 
         temporal_client = _temporal_client_ref
-        if temporal_client is not None:
-            from services.campaign_dispatch import enqueue_campaign_run_temporal
-            result, _ = await enqueue_campaign_run_temporal(
-                target_id, temporal_client, _temporal_config_ref
+        if temporal_client is None:
+            raise RuntimeError(
+                f"Temporal is required for campaign dispatch (campaign_id={target_id!r}). "
+                "Ensure temporal.enabled=true and the Temporal server is reachable."
             )
-        else:
-            queue = _queue_ref
-            if queue is None:
-                raise RuntimeError("No task queue available")
-            from services.campaign_dispatch import enqueue_campaign_run
-            result, _ = await enqueue_campaign_run(target_id, queue)
 
-        if stagger and result.get("task_ids"):
-            _apply_stagger_to_tasks(result["task_ids"], stagger_interval, queue=_queue_ref)
+        from services.campaign_dispatch import enqueue_campaign_run_temporal
+        result, _ = await enqueue_campaign_run_temporal(
+            target_id, temporal_client, _temporal_config_ref
+        )
 
         return {
             "devices_dispatched": len(result.get("device_serials", [])),
-            "task_ids": result.get("task_ids", []),
             "workflow_ids": result.get("workflow_ids", []),
         }
 
@@ -173,7 +179,7 @@ class ScheduleActivities:
         stagger_interval: int,
     ) -> dict[str, Any]:
         """Resolve scenario template then dispatch as fleet."""
-        from db.database import AsyncSessionLocal
+        from db.database import activity_session as AsyncSessionLocal
         from db.models.scenario_template import ScenarioTemplate
         from sqlalchemy import select
 
@@ -200,7 +206,7 @@ class ScheduleActivities:
         stagger_interval: int,
     ) -> dict[str, Any]:
         """Dispatch inline steps to a filtered set of devices."""
-        from db.database import AsyncSessionLocal
+        from db.database import activity_session as AsyncSessionLocal
         from db.crud.scenario_template import list_templates
         from services.campaign_dispatch import _build_scenario_registry
         from runtime.core import Task
@@ -216,8 +222,8 @@ class ScheduleActivities:
         filter_model = cfg.get("filter_model")
         max_devices = cfg.get("max_devices")
 
-        # Resolve devices
-        devices = _resolve_fleet_devices(
+        # Resolve devices — async to avoid event-loop conflicts with asyncpg.
+        devices = await _resolve_fleet_devices(
             device_group_id=device_group_id,
             filter_state=filter_state,
             filter_model=filter_model,
@@ -238,6 +244,7 @@ class ScheduleActivities:
 
         task_ids: list[str] = []
         for i, device in enumerate(devices):
+            activity.heartbeat(f"dispatch_device:{i}:{device.serial}")
             delay = i * stagger_interval if stagger else 0
             payload = {
                 "steps": steps,
@@ -279,12 +286,15 @@ class ScheduleActivities:
 
         Idempotent: safe to call multiple times.
         """
-        from db.database import AsyncSessionLocal
+        from db.database import activity_session as AsyncSessionLocal
         from db.crud.schedule import update_schedule_run, update_schedule_after_run
         from datetime import timezone as tz
 
         activity.heartbeat("finalize_run")
-        now = datetime.now(timezone.utc)
+        # Capture finalization time once. This is used as finished_at and as the
+        # base for computing next_run_at. It reflects when dispatch completed
+        # (finalize_schedule_run runs immediately after dispatch_schedule).
+        finished_at = datetime.now(timezone.utc)
         if isinstance(dispatch_result, dict):
             normalized = ScheduleDispatchResult(
                 run_id=str(dispatch_result.get("run_id", run_id)),
@@ -302,16 +312,16 @@ class ScheduleActivities:
                 db,
                 run_id,
                 status=status,
-                finished_at=now,
+                finished_at=finished_at,
                 devices_dispatched=normalized.devices_dispatched,
                 task_ids=normalized.task_ids,
                 error_message=normalized.error,
             )
-            next_run = _compute_next_run(cron_expression, timezone_name, now)
+            next_run = _compute_next_run(cron_expression, timezone_name, finished_at)
             await update_schedule_after_run(
                 db,
                 schedule_id,
-                last_run_at=now,
+                last_run_at=finished_at,
                 next_run_at=next_run,
             )
             await db.commit()
@@ -320,39 +330,25 @@ class ScheduleActivities:
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-def _resolve_fleet_devices(
+async def _resolve_fleet_devices(
     *,
     device_group_id: str | None,
     filter_state: str,
     filter_model: str | None,
     max_devices: int | None,
 ):
-    """Resolve devices from DeviceManager (synchronous, in-process)."""
+    """Resolve devices from DeviceManager (async to avoid asyncpg event-loop conflicts)."""
     manager = _manager_ref
     if manager is None:
         return []
 
     if device_group_id:
-        # Filter by group membership — requires DB access, done synchronously via
-        # asyncio.run inside worker thread context. Acceptable since activities run
-        # in a thread pool.
-        import asyncio
-        from db.database import AsyncSessionLocal
+        from db.database import activity_session as AsyncSessionLocal
         from db.crud.device_group import list_group_devices
 
-        async def _get_group_devices():
-            async with AsyncSessionLocal() as db:
-                return await list_group_devices(db, device_group_id)
-
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    future = pool.submit(asyncio.run, _get_group_devices())
-                    db_devices = future.result(timeout=10)
-            else:
-                db_devices = loop.run_until_complete(_get_group_devices())
+            async with AsyncSessionLocal() as db:
+                db_devices = await list_group_devices(db, device_group_id)
         except Exception:
             db_devices = []
 
@@ -376,7 +372,13 @@ def _resolve_fleet_devices(
 
 
 def _make_staggered_task(fn, delay_seconds: float):
-    """Wrap a task function with an initial sleep for device stagger."""
+    """Wrap a task function with an initial sleep for device stagger.
+
+    Uses time.sleep (blocking) intentionally: this wrapper is executed by the
+    TaskQueue thread pool, NOT on the asyncio event loop. Using asyncio.sleep here
+    would require the wrapper to be async, which is incompatible with the sync
+    Task.fn contract.
+    """
     if delay_seconds <= 0:
         return fn
 
@@ -385,23 +387,6 @@ def _make_staggered_task(fn, delay_seconds: float):
         return fn(device)
 
     return _wrapper
-
-
-def _apply_stagger_to_tasks(task_ids: list[str], interval_seconds: int, queue) -> None:
-    """
-    Post-dispatch stagger: inject delays into already-queued tasks.
-    Only applicable for TaskQueue mode (not Temporal workflows).
-    """
-    if queue is None or not task_ids:
-        return
-    for i, task_id in enumerate(task_ids):
-        task = queue.get_task(task_id)
-        if task is None:
-            continue
-        delay = i * interval_seconds
-        if delay > 0:
-            original_fn = task.fn
-            task.fn = _make_staggered_task(original_fn, float(delay))
 
 
 def _compute_next_run(cron_expression: str, timezone_name: str, base: datetime) -> datetime | None:

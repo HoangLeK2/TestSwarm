@@ -75,7 +75,7 @@ async def save_content_item(
 
     Returns {"saved": True, "id": ...} or {"saved": False, "reason": "duplicate", "id": ...}
     """
-    from db.database import AsyncSessionLocal
+    from db.database import activity_session
     from db.crud.content import (
         create_content_item, get_content_by_hash,
         get_or_create_collection, increment_collection_count,
@@ -83,7 +83,7 @@ async def save_content_item(
 
     content_hash = compute_content_hash(data, dedupe_field)
 
-    async with AsyncSessionLocal() as db:
+    async with activity_session() as db:
         # Dedup check
         existing = await get_content_by_hash(db, content_hash, collection)
         if existing:

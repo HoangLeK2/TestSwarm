@@ -39,17 +39,16 @@ async def create_temporal_worker(
         manager: DeviceManager instance (provides get_device())
         cfg: TemporalConfig from config.yaml
         client: Optional pre-created Temporal client
-        queue: TaskQueue instance (for ScheduleActivities fallback dispatch)
+        queue: TaskQueue instance (for fleet/template schedule dispatch)
     """
     # Inject device registry into device activities
     set_device_registry(manager)
-    # Inject runtime deps into schedule activities
-    set_scheduler_deps(queue=queue, manager=manager, temporal_client=client, temporal_config=cfg)
 
     if client is None:
         client = await _create_client(cfg)
-        # Re-inject client now that it's created
-        set_scheduler_deps(queue=queue, manager=manager, temporal_client=client, temporal_config=cfg)
+
+    # Inject runtime deps after client is guaranteed to be non-None.
+    set_scheduler_deps(queue=queue, manager=manager, temporal_client=client, temporal_config=cfg)
 
     task_queue = cfg.task_queue or TASK_QUEUE_NAME
 
@@ -63,6 +62,9 @@ async def create_temporal_worker(
             _activities.execute_device_action,
             _activities.check_element_exists,
             _activities.evaluate_condition,
+            _activities.evaluate_legacy_condition,
+            _activities.execute_extract,
+            _activities.execute_save_extraction,
             _schedule_activities.load_schedule,
             _schedule_activities.create_run_record,
             _schedule_activities.dispatch_schedule,

@@ -81,9 +81,9 @@ def create_app(
                     config.temporal.server_url, config.temporal.task_queue,
                 )
             except Exception as exc:
-                log.warning("Temporal worker failed to start: %s — campaigns will use TaskQueue", exc)
+                log.warning("Temporal worker failed to start: %s — campaign execution will be unavailable", exc)
         else:
-            log.info("Temporal disabled — campaigns run via in-process TaskQueue")
+            log.warning("Temporal disabled — campaign execution endpoints will return 503")
 
         from services.scheduler import SchedulerService, SchedulerEngine
         scheduler = SchedulerService(

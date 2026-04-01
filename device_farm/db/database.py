@@ -4,16 +4,22 @@ db/database.py — Async SQLAlchemy engine + session factory.
 Usage in FastAPI:
     async with get_db() as db:
         result = await db.execute(...)
+
+Usage in Temporal activities (separate thread/loop):
+    async with activity_session() as db:
+        result = await db.execute(...)
 """
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import NullPool
 from sqlalchemy.orm import DeclarativeBase
 
 from core.config import load_config
@@ -41,6 +47,7 @@ def _build_url() -> str:
 
 DATABASE_URL = _build_url()
 
+# Main engine — pooled, used by FastAPI (single event loop).
 engine = create_async_engine(
     DATABASE_URL,
     echo=False,
@@ -54,6 +61,32 @@ AsyncSessionLocal = async_sessionmaker(
     class_=AsyncSession,
     expire_on_commit=False,
 )
+
+
+@asynccontextmanager
+async def activity_session() -> AsyncGenerator[AsyncSession, None]:
+    """
+    Session factory for Temporal activities (or any code running in a
+    separate thread/event loop from the main FastAPI process).
+
+    Uses NullPool so each connection is created fresh in the caller's event
+    loop — avoids the "Future attached to a different loop" error that occurs
+    when the pooled engine's connections are borrowed across loop boundaries.
+    """
+    act_engine = create_async_engine(DATABASE_URL, echo=False, poolclass=NullPool)
+    act_session_factory = async_sessionmaker(
+        act_engine, class_=AsyncSession, expire_on_commit=False
+    )
+    try:
+        async with act_session_factory() as session:
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+    finally:
+        await act_engine.dispose()
 
 
 class Base(DeclarativeBase):

@@ -14,6 +14,10 @@ from temporal.shared import (
     ElementCheckInput,
     ElementCheckResult,
     ConditionCheckInput,
+    LegacyConditionCheckInput,
+    ExtractInput,
+    ExtractResult,
+    SaveExtractionInput,
     StepResult,
 )
 
@@ -94,9 +98,43 @@ class DeviceActivities:
                 mini_scenario["_scenario_registry"] = inp.scenario_registry
 
             # Create VariableContext with all variable layers
+            resolved_campaign_vars = dict(inp.campaign_vars)
+
+            # SECURITY: Credentials are resolved here at activity time — never stored in
+            # Temporal event history. __ACCOUNT_ID__ is a safe reference passed via workflow
+            # input; the actual password is fetched+decrypted only within this activity scope.
+            # SECURITY: Credentials resolved here at activity time — never stored in
+            # Temporal event history. __ACCOUNT_ID__ is the safe reference from workflow
+            # input; the password is fetched+decrypted only within this activity scope
+            # and passed via scenario_vars (activity-local), NOT campaign_vars, to
+            # prevent it from leaking into serialized workflow state.
+            credential_vars: dict[str, Any] = {}
+            if "__ACCOUNT_ID__" in resolved_campaign_vars:
+                from db.database import activity_session
+                from db.crud.account import get_account
+                from common.crypto import decrypt_password
+
+                acct_id = resolved_campaign_vars["__ACCOUNT_ID__"]
+                async with activity_session() as acct_db:
+                    account = await get_account(acct_db, acct_id)
+                if account is None:
+                    return StepResult(
+                        index=idx, step_type=step_type, ok=False,
+                        message=(
+                            f"Account {acct_id!r} not found — cannot resolve credentials. "
+                            "Check that the account still exists in the database."
+                        ),
+                    )
+                credential_vars["__ACCOUNT_PASSWORD__"] = decrypt_password(
+                    account.password_encrypted
+                )
+
             var_ctx = VariableContext(
-                scenario_vars=inp.variables,
-                campaign_vars=inp.campaign_vars,
+                # Merge credentials into scenario_vars (activity-scoped) so the
+                # password is available for variable resolution but never enters
+                # campaign_vars, which could be serialized or logged.
+                scenario_vars={**inp.variables, **credential_vars},
+                campaign_vars=resolved_campaign_vars,
                 device_serial=inp.device_serial,
                 device_model=getattr(device, "model", ""),
             )
@@ -135,7 +173,20 @@ class DeviceActivities:
                 message=result.get("failed_message") or "",
             )
 
-        except Exception as exc:
+        except BaseException as exc:
+            # Re-raise cancellation signals so Temporal can propagate them correctly.
+            # temporalio.exceptions.CancelledError inherits from Exception, so it must
+            # be explicitly re-raised before the generic handler converts it to StepResult.
+            import asyncio as _asyncio
+            try:
+                from temporalio.exceptions import CancelledError as _TemporalCancelledError
+                if isinstance(exc, (_asyncio.CancelledError, _TemporalCancelledError)):
+                    raise
+            except ImportError:
+                if isinstance(exc, _asyncio.CancelledError):
+                    raise
+            if not isinstance(exc, Exception):
+                raise  # re-raise other BaseException (KeyboardInterrupt, SystemExit, etc.)
             log.error(
                 "[%s] activity error step#%d (%s): %s",
                 inp.device_serial, idx, step_type, exc,
@@ -176,6 +227,248 @@ class DeviceActivities:
         except Exception as exc:
             log.debug("[%s] check_element error: %s", inp.device_serial, exc)
             return ElementCheckResult(found=False, message=f"check error: {exc}")
+
+    @activity.defn
+    async def evaluate_legacy_condition(self, inp: LegacyConditionCheckInput) -> bool:
+        """
+        Evaluate a generic condition dict (if / loop while / break_if steps).
+
+        Supports: element_exists, element_not_exists, posts_count_gte,
+        posts_count_lt, no_new_posts. Delegates to _evaluate_condition from
+        scenario_task.py so condition semantics stay in one place.
+        """
+        _validate_serial(inp.device_serial)
+        device = _get_device(inp.device_serial)
+        activity.heartbeat("evaluate_legacy_condition")
+
+        try:
+            from tasks.scenario_task import _evaluate_condition
+
+            # Reconstruct a ctx dict that _evaluate_condition expects.
+            # Merge: runtime_vars under "vars" key + flat context keys (posts, etc.)
+            ctx: dict[str, Any] = dict(inp.context)
+            if inp.runtime_vars:
+                ctx.setdefault("vars", {}).update(inp.runtime_vars)
+
+            return _evaluate_condition(device, inp.condition, ctx)
+        except Exception as exc:
+            log.error("[%s] evaluate_legacy_condition error: %s", inp.device_serial, exc)
+            return False
+
+    @activity.defn
+    async def execute_extract(self, inp: ExtractInput) -> ExtractResult:
+        """
+        Execute an 'extract' step (fb_posts / text_nodes strategies).
+
+        Returns updated context (posts, text_nodes, _no_new_streak) and
+        break_requested flag when stop_if_no_new triggers.
+        """
+        _validate_serial(inp.device_serial)
+        device = _get_device(inp.device_serial)
+        step = inp.step
+        idx = inp.step_index
+        activity.heartbeat(f"extract:{idx}:{step.get('strategy', 'fb_posts')}")
+
+        # Work on a deep-enough copy so we never mutate the input.
+        # Lists (posts, text_nodes) are copied explicitly to prevent shared-reference mutation.
+        ctx: dict[str, Any] = {}
+        for _k, _v in inp.context.items():
+            ctx[_k] = list(_v) if isinstance(_v, list) else _v
+        ctx.setdefault("posts", [])
+
+        strategy = str(step.get("strategy", "fb_posts"))
+        stop_if_no_new = bool(step.get("stop_if_no_new", False))
+        no_new_threshold = int(step.get("no_new_threshold", 3))
+        expand_see_more = bool(step.get("expand_see_more", True))
+        break_requested = False
+        details: dict[str, Any] = {}
+
+        try:
+            if strategy == "fb_posts" and expand_see_more:
+                try:
+                    from tasks.fb_extract import _expand_see_more
+                    if _expand_see_more(device):
+                        import asyncio as _asyncio
+                        await _asyncio.sleep(0.5)
+                except Exception:
+                    pass
+
+            xml = device.hierarchy_xml(force_refresh=True)
+            if not xml:
+                return ExtractResult(
+                    ok=False,
+                    message="extract: hierarchy_xml returned None",
+                    context=ctx,
+                )
+
+            if strategy == "fb_posts":
+                from tasks.fb_extract import parse_fb_posts_from_xml, _dedup
+                scroll_idx = ctx.get("_loop_iter", 0)
+                new_posts = parse_fb_posts_from_xml(xml, source_index=scroll_idx)
+                prev_count = len(ctx["posts"])
+                ctx["posts"] = _dedup(ctx["posts"] + new_posts)
+                added = len(ctx["posts"]) - prev_count
+                details["extracted"] = added
+                details["total_posts"] = len(ctx["posts"])
+                msg = f"extract fb_posts: +{added} new (total {len(ctx['posts'])})"
+                if stop_if_no_new:
+                    if added == 0:
+                        ctx["_no_new_streak"] = ctx.get("_no_new_streak", 0) + 1
+                        if ctx["_no_new_streak"] >= no_new_threshold:
+                            break_requested = True
+                            msg += f" — breaking (no new for {ctx['_no_new_streak']} scrolls)"
+                    else:
+                        ctx["_no_new_streak"] = 0
+
+            elif strategy == "text_nodes":
+                import xml.etree.ElementTree as ET
+                root = ET.fromstring(xml)
+                texts = [
+                    (node.get("text") or "").strip()
+                    for node in root.iter()
+                    if len((node.get("text") or "").strip()) > 2
+                ]
+                # Ensure we have our own list (not shared with inp.context)
+                ctx["text_nodes"] = list(ctx.get("text_nodes") or [])
+                ctx["text_nodes"].extend(texts)
+                details["extracted"] = len(texts)
+                msg = f"extract text_nodes: {len(texts)} texts"
+
+            else:
+                return ExtractResult(
+                    ok=False,
+                    message=f"extract: unknown strategy {strategy!r}",
+                    context=ctx,
+                )
+
+            return ExtractResult(
+                ok=True,
+                message=msg,
+                context=ctx,
+                break_requested=break_requested,
+                details=details,
+            )
+
+        except Exception as exc:
+            log.error("[%s] execute_extract error: %s", inp.device_serial, exc)
+            return ExtractResult(ok=False, message=f"extract failed: {exc}", context=ctx)
+
+    @activity.defn
+    async def execute_save_extraction(self, inp: SaveExtractionInput) -> StepResult:
+        """
+        Execute a 'save_extraction' step as a native async activity.
+
+        Unlike the TaskQueue path (which uses asyncio.run in a thread),
+        this activity is fully async and safe with the asyncpg connection pool.
+        """
+        _validate_serial(inp.device_serial)
+        step = inp.step
+        idx = inp.step_index
+        activity.heartbeat(f"save_extraction:{idx}")
+
+        data_var = step.get("data_var", "")
+        if not data_var:
+            return StepResult(
+                index=idx, step_type="save_extraction", ok=False,
+                message="save_extraction: missing data_var",
+            )
+
+        ctx = dict(inp.context)
+        data = ctx.get(data_var)
+
+        if data is None:
+            return StepResult(
+                index=idx, step_type="save_extraction", ok=False,
+                message=f"save_extraction: variable '{data_var}' not found in context",
+            )
+
+        try:
+            from services.content_store import save_content_item
+
+            items: list[dict[str, Any]] = []
+            if isinstance(data, str):
+                items = [{"text": data}]
+            elif isinstance(data, dict):
+                items = [data]
+            elif isinstance(data, list):
+                items = [item for item in data if isinstance(item, dict)]
+            else:
+                return StepResult(
+                    index=idx, step_type="save_extraction", ok=False,
+                    message=f"save_extraction: unsupported type for '{data_var}': {type(data).__name__}",
+                )
+
+            # Offset tracking so repeated calls don't re-save already-saved items
+            offsets = ctx.get("__save_extraction_offsets__", {})
+            start_idx = int(offsets.get(data_var, 0))
+            if start_idx > 0:
+                items = items[start_idx:]
+
+            if not items:
+                return StepResult(
+                    index=idx, step_type="save_extraction", ok=True,
+                    message="save_extraction: no new items to save",
+                    details={"saved_count": 0, "duplicate_count": 0, "error_count": 0},
+                )
+
+            coll = step.get("collection", "default")
+            platform = step.get("platform")
+            ctype = step.get("content_type", "post")
+            dedupe_field = step.get("dedupe_field")
+            tags = step.get("tags", "")
+            saved = dup = err = 0
+
+            for item in items:
+                try:
+                    result = await save_content_item(
+                        data=item,
+                        collection=coll,
+                        platform=platform,
+                        content_type=ctype,
+                        dedupe_field=dedupe_field,
+                        tags=tags,
+                        device_serial=inp.device_serial,
+                    )
+                    if result.get("saved"):
+                        saved += 1
+                    else:
+                        dup += 1
+                except Exception as exc:
+                    err += 1
+                    log.warning("[%s] save_extraction item failed: %s", inp.device_serial, exc)
+                    # Continue processing remaining items — don't bail on first error.
+
+            ok = not (err > 0 and saved == 0 and dup == 0)
+            msg = f"save_extraction: saved={saved}, duplicate={dup}, errors={err}"
+            if not ok:
+                msg = "save_extraction: all items failed"
+
+            # Advance offset only past items that were successfully processed (saved or
+            # deduplicated). Items that errored are NOT counted so a Temporal retry
+            # will re-attempt them rather than silently skipping them.
+            # Design trade-off (at-least-once): if the activity is retried after a partial
+            # write (e.g. DB commit succeeded but activity heartbeat was lost), previously
+            # saved items will be re-attempted. The `dedupe_field` key prevents duplicate
+            # rows — so at-least-once is safe as long as dedupe_field is configured.
+            new_offset = start_idx + saved + dup
+            updated_offsets = {data_var: new_offset}
+
+            return StepResult(
+                index=idx, step_type="save_extraction", ok=ok, message=msg,
+                details={
+                    "saved_count": saved,
+                    "duplicate_count": dup,
+                    "error_count": err,
+                    "updated_offsets": updated_offsets,
+                },
+            )
+
+        except Exception as exc:
+            log.error("[%s] execute_save_extraction error: %s", inp.device_serial, exc)
+            return StepResult(
+                index=idx, step_type="save_extraction", ok=False,
+                message=f"save_extraction failed: {exc}",
+            )
 
     @activity.defn
     async def evaluate_condition(self, inp: ConditionCheckInput) -> bool:

@@ -5,17 +5,25 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+import re
+
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from api.schemas.device_control import FleetRunRequest
 from core.config import Config
 from runtime.core import DeviceManager, TaskQueue
-from services.campaign_dispatch import enqueue_campaign_run, enqueue_campaign_run_temporal
+from services.campaign_dispatch import enqueue_campaign_run_temporal
 from services.fleet_dispatch import enqueue_fleet_scenario, fleet_run_status
 from temporal.worker import get_temporal_client
 
 log = logging.getLogger(__name__)
+
+# Compiled once at import time — matches top-level ScenarioWorkflow IDs:
+#   campaign:<id>:device:<serial>:scenario:<scen_id>
+# Device serial may contain colons (WiFi ADB: 192.168.1.1:5555) so we cannot
+# count colons; instead we use a greedy .+ for the serial segment.
+_TOP_LEVEL_WF_RE = re.compile(r"^campaign:[^:]+:device:.+:scenario:[^:]+$")
 
 
 def build_campaign_fleet_router(
@@ -34,38 +42,19 @@ def build_campaign_fleet_router(
                 {"error": "Database is disabled; campaigns are not available"},
                 status_code=503,
             )
-
-        temporal_exc: BaseException | None = None
-        if config.temporal.enabled:
-            try:
-                temporal_client = await get_temporal_client(config.temporal)
-                payload, status = await enqueue_campaign_run_temporal(
-                    campaign_id, temporal_client, config.temporal,
-                )
-                if status != 200:
-                    return JSONResponse(payload, status_code=status)
-                log.info("Campaign %s dispatched via Temporal", campaign_id)
-                return payload
-            except BaseException as exc:
-                temporal_exc = exc
-                log.warning(
-                    "Temporal unavailable (%s) — falling back to TaskQueue for campaign %s",
-                    exc, campaign_id,
-                )
-
+        if not config.temporal.enabled:
+            return JSONResponse(
+                {"error": "Temporal is required for campaign execution"},
+                status_code=503,
+            )
         try:
-            payload, status = await enqueue_campaign_run(campaign_id, queue)
+            temporal_client = await get_temporal_client(config.temporal)
+            payload, status = await enqueue_campaign_run_temporal(
+                campaign_id, temporal_client, config.temporal,
+            )
             if status != 200:
                 return JSONResponse(payload, status_code=status)
-            log.info("Campaign %s dispatched via TaskQueue", campaign_id)
-            if temporal_exc is not None and isinstance(payload, dict):
-                payload = {
-                    **payload,
-                    "execution_engine": payload.get("execution_engine", "task_queue"),
-                    "engine": payload.get("engine", "task_queue"),
-                    "temporal_fallback": True,
-                    "temporal_fallback_reason": f"{type(temporal_exc).__name__}: {temporal_exc}",
-                }
+            log.info("Campaign %s dispatched via Temporal", campaign_id)
             return payload
         except Exception as exc:
             log.exception("Campaign dispatch failed")
@@ -76,7 +65,7 @@ def build_campaign_fleet_router(
 
     @router.get("/execution/runtime")
     async def api_execution_runtime():
-        """How campaign runs are executed — for UI/docs (Temporal vs in-process TaskQueue)."""
+        """How campaign runs are executed — for UI/docs."""
         return {
             "temporal": {
                 "enabled": config.temporal.enabled,
@@ -85,11 +74,10 @@ def build_campaign_fleet_router(
                 "task_queue": config.temporal.task_queue,
             },
             "campaign_run": {
-                "primary_engine": "temporal" if config.temporal.enabled else "task_queue",
-                "response_fields": (
-                    "POST /api/campaigns/{id}/run returns execution_engine (temporal | task_queue). "
-                    "If Temporal is enabled but unreachable, the API falls back to task_queue and sets "
-                    "temporal_fallback=true."
+                "engine": "temporal",
+                "note": (
+                    "All campaign executions use Temporal workflows. "
+                    "POST /api/campaigns/{id}/run returns 503 if Temporal is disabled or unreachable."
                 ),
             },
         }
@@ -117,13 +105,14 @@ def build_campaign_fleet_router(
             # Top-level IDs have pattern: campaign:{id}:device:{serial}:scenario:{scen_id}
             # Child IDs have extra suffixes like :steps, :repeat:…, :if_element:…
             # We match exactly 5 colon-separated segments to exclude children.
-            prefix = f"campaign:{campaign_id}:"
+            # Sanitize campaign_id before embedding in Temporal query string to
+            # prevent injection through double-quote characters.
+            safe_campaign_id = campaign_id.replace('"', "").replace("\\", "")
+            prefix = f"campaign:{safe_campaign_id}:"
             async for wf in client.list_workflows(
                 f'WorkflowId STARTS_WITH "{prefix}"'
             ):
-                # Top-level workflow IDs: campaign:X:device:Y:scenario:Z  (5 colons)
-                # Child workflow IDs:     campaign:X:device:Y:scenario:Z:steps (6+ colons)
-                if wf.id.count(":") > 5:
+                if not _TOP_LEVEL_WF_RE.match(wf.id):
                     continue
                 workflows.append({
                     "workflow_id": wf.id,
@@ -140,6 +129,34 @@ def build_campaign_fleet_router(
         except Exception as exc:
             return JSONResponse(
                 {"error": f"Failed to list workflows: {exc}"}, status_code=500,
+            )
+
+    @router.get("/devices/{serial}/running-workflows")
+    async def api_device_running_workflows(serial: str):
+        """List RUNNING/PAUSED top-level scenario workflows for a specific device serial."""
+        if not config.temporal.enabled:
+            return {"serial": serial, "workflows": [], "temporal_available": False}
+        try:
+            client = await get_temporal_client(config.temporal)
+            # Sanitize serial to prevent Temporal query injection
+            safe_serial = serial.replace('"', "").replace("\\", "")
+            # Search for workflows containing :device:{serial}: in their ID
+            # Use ExecutionStatus filter to only get active ones
+            query = f'WorkflowId CONTAINS ":device:{safe_serial}:" AND ExecutionStatus = "Running"'
+            workflows = []
+            async for wf in client.list_workflows(query):
+                if not _TOP_LEVEL_WF_RE.match(wf.id):
+                    continue
+                workflows.append({
+                    "workflow_id": wf.id,
+                    "run_id": wf.run_id,
+                    "status": wf.status.name if wf.status else "UNKNOWN",
+                    "start_time": wf.start_time.isoformat() if wf.start_time else None,
+                })
+            return {"serial": serial, "workflows": workflows, "temporal_available": True}
+        except Exception as exc:
+            return JSONResponse(
+                {"error": f"Failed to list device workflows: {exc}"}, status_code=500,
             )
 
     @router.get("/workflows/{workflow_id}/progress")
@@ -168,7 +185,13 @@ def build_campaign_fleet_router(
 
     @router.post("/workflows/{workflow_id}/pause")
     async def api_workflow_pause(workflow_id: str):
-        """Pause a running scenario workflow at the next step boundary."""
+        """Pause a running scenario workflow at the next step boundary.
+
+        SECURITY NOTE: workflow_id is caller-supplied and not validated for
+        ownership. Any authenticated caller can pause any workflow whose ID they
+        know. Add campaign-ownership middleware before exposing this to untrusted
+        users.
+        """
         try:
             from temporal.workflows import ScenarioWorkflow
 

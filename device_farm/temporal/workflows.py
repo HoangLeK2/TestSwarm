@@ -19,6 +19,7 @@ Security:
 from __future__ import annotations
 
 import asyncio
+import logging
 import re as _re
 from datetime import timedelta
 from typing import Any
@@ -39,6 +40,10 @@ with workflow.unsafe.imports_passed_through():
         DeviceActionInput,
         ElementCheckInput,
         ElementCheckResult,
+        ExtractInput,
+        ExtractResult,
+        LegacyConditionCheckInput,
+        SaveExtractionInput,
         ScenarioInput,
         StepResult,
         StepsInput,
@@ -69,7 +74,6 @@ def _lookup_var(name: str, *dicts: dict[str, Any]) -> Any:
     return None
 
 
-_SHORT_TIMEOUT = timedelta(seconds=30)
 _LONG_TIMEOUT = timedelta(seconds=60)
 _ELEMENT_CHECK_TIMEOUT = timedelta(seconds=15)
 
@@ -109,7 +113,13 @@ class ScenarioWorkflow:
                 success=False, steps_executed=0,
                 failed_message="Cancelled before start",
             )
+        result: StepsResult | None = None
         try:
+            # Merge capture_steps from ScenarioInput into scenario_config so activities
+            # can access it via inp.scenario_config["capture_steps"].
+            merged_config = dict(inp.scenario_config or {})
+            if inp.capture_steps:
+                merged_config["capture_steps"] = True
             result = await workflow.execute_child_workflow(
                 ScenarioStepsWorkflow.run,
                 StepsInput(
@@ -120,7 +130,7 @@ class ScenarioWorkflow:
                     scenario_registry=inp.scenario_registry,
                     depth=0,
                     parent_runtime_vars={},
-                    scenario_config=inp.scenario_config,
+                    scenario_config=merged_config,
                 ),
                 id=f"{workflow.info().workflow_id}:steps",
                 task_queue=TASK_QUEUE_NAME,
@@ -144,19 +154,31 @@ class ScenarioWorkflow:
             # Native Temporal cancel (handle.cancel()) — propagated from API
             self._progress.status = WorkflowStatus.CANCELLED.value
             return StepsResult(
-                success=False, steps_executed=0,
+                success=False,
+                steps_executed=result.steps_executed if result else 0,
                 failed_message="Cancelled by Temporal",
             )
         except Exception as exc:
             self._progress.status = WorkflowStatus.FAILED.value
             return StepsResult(
-                success=False, steps_executed=0,
+                success=False,
+                steps_executed=result.steps_executed if result else 0,
                 failed_message=f"Workflow error: {exc}",
             )
 
     @workflow.signal
     async def pause(self) -> None:
-        """Signal to pause execution at the next step boundary."""
+        """Signal to pause execution.
+
+        LIMITATION: Pause only takes effect BEFORE the ScenarioStepsWorkflow child
+        workflow starts. If the child is already running, it continues until it
+        completes — Temporal child workflows do not receive signals from their parent.
+        Effectively this means pause works as a pre-execution gate, not a mid-execution
+        step-boundary pause.
+
+        To pause mid-execution, the child workflow would need its own pause signal
+        and the parent would need to forward it — a future enhancement.
+        """
         self._paused = True
         self._progress.status = WorkflowStatus.PAUSED.value
 
@@ -202,13 +224,18 @@ class ScenarioStepsWorkflow:
             )
 
         runtime_vars: dict[str, Any] = dict(inp.parent_runtime_vars)
+        # Shared execution context: posts, text_nodes, _no_new_streak, vars (legacy ctx)
+        runtime_context: dict[str, Any] = dict(inp.context)
         step_results: list[dict[str, Any]] = []
         steps_executed = 0
+        break_requested = False
 
         for idx, raw_step in enumerate(inp.steps):
             # Resolve variables in step
             step = _resolve_step(raw_step, runtime_vars, inp.variables, inp.campaign_vars, idx)
             step_type = step.get("type", "")
+
+            # ── set_variable (no activity needed) ────────────────────────────
             if step_type == "set_variable":
                 result_dict = _handle_set_variable(
                     step, raw_step, runtime_vars, inp.variables, inp.campaign_vars, idx,
@@ -217,9 +244,100 @@ class ScenarioStepsWorkflow:
                 steps_executed += 1
                 continue
 
+            # ── set_var — writes to legacy ctx["vars"] ────────────────────────
+            if step_type == "set_var":
+                key = str(step.get("key") or step.get("name") or "")
+                if not key:
+                    step_results.append({
+                        "index": idx, "type": "set_var", "ok": False,
+                        "message": "set_var: missing key/name",
+                    })
+                else:
+                    value = step.get("value")
+                    runtime_context.setdefault("vars", {})[key] = value
+                    step_results.append({
+                        "index": idx, "type": "set_var", "ok": True,
+                        "message": f"set_var: vars[{key!r}] = {value!r}",
+                    })
+                steps_executed += 1
+                continue
+
+            # ── break_if — sets break_requested so enclosing loop exits ──────
+            if step_type == "break_if":
+                condition = step.get("condition") or {}
+                if not condition:
+                    step_results.append({
+                        "index": idx, "type": "break_if", "ok": False,
+                        "message": "break_if: missing condition",
+                    })
+                else:
+                    cond_met: bool = await workflow.execute_activity(
+                        "evaluate_legacy_condition",
+                        LegacyConditionCheckInput(
+                            device_serial=inp.device_serial,
+                            condition=condition,
+                            runtime_vars=runtime_vars,
+                            context=runtime_context,
+                        ),
+                        result_type=bool,
+                        start_to_close_timeout=_ELEMENT_CHECK_TIMEOUT,
+                        heartbeat_timeout=_ELEMENT_CHECK_TIMEOUT,
+                        retry_policy=_ACTIVITY_RETRY,
+                    )
+                    if cond_met:
+                        break_requested = True
+                    step_results.append({
+                        "index": idx, "type": "break_if", "ok": True,
+                        "message": f"break_if: condition={'met — breaking' if cond_met else 'not met'}",
+                    })
+                steps_executed += 1
+                if break_requested:
+                    break
+                continue
+
+            # ── loop ─────────────────────────────────────────────────────────
+            if step_type == "loop":
+                ok, msg, sub_results, runtime_context = await self._handle_loop(
+                    inp, step, runtime_vars, runtime_context, idx,
+                )
+                step_results.append({
+                    "index": idx, "type": "loop", "ok": ok,
+                    "message": msg, "sub_results": sub_results,
+                })
+                steps_executed += 1
+                if not ok:
+                    return StepsResult(
+                        success=False, steps_executed=steps_executed,
+                        step_results=step_results, runtime_vars=runtime_vars,
+                        failed_message=msg, context=runtime_context,
+                    )
+                continue
+
+            # ── if (generic condition) ────────────────────────────────────────
+            if step_type == "if":
+                ok, msg, runtime_context, child_break = await self._handle_if(
+                    inp, step, runtime_vars, runtime_context, idx,
+                )
+                step_results.append({
+                    "index": idx, "type": "if", "ok": ok, "message": msg,
+                })
+                steps_executed += 1
+                if child_break:
+                    break_requested = True
+                if not ok:
+                    return StepsResult(
+                        success=False, steps_executed=steps_executed,
+                        step_results=step_results, runtime_vars=runtime_vars,
+                        failed_message=msg, context=runtime_context,
+                    )
+                if break_requested:
+                    break
+                continue
+
+            # ── repeat ───────────────────────────────────────────────────────
             if step_type == "repeat":
-                ok, msg, sub_results = await self._handle_repeat(
-                    inp, step, runtime_vars, idx,
+                ok, msg, sub_results, runtime_context = await self._handle_repeat(
+                    inp, step, runtime_vars, runtime_context, idx,
                 )
                 step_results.append({
                     "index": idx, "type": "repeat", "ok": ok,
@@ -229,15 +347,15 @@ class ScenarioStepsWorkflow:
                 if not ok:
                     return StepsResult(
                         success=False, steps_executed=steps_executed,
-                        step_results=step_results,
-                        runtime_vars=runtime_vars,
-                        failed_message=msg,
+                        step_results=step_results, runtime_vars=runtime_vars,
+                        failed_message=msg, context=runtime_context,
                     )
                 continue
 
+            # ── repeat_until ─────────────────────────────────────────────────
             if step_type == "repeat_until":
-                ok, msg = await self._handle_repeat_until(
-                    inp, step, runtime_vars, idx,
+                ok, msg, runtime_context = await self._handle_repeat_until(
+                    inp, step, runtime_vars, runtime_context, idx,
                 )
                 step_results.append({
                     "index": idx, "type": "repeat_until", "ok": ok, "message": msg,
@@ -246,63 +364,144 @@ class ScenarioStepsWorkflow:
                 if not ok:
                     return StepsResult(
                         success=False, steps_executed=steps_executed,
-                        step_results=step_results,
-                        runtime_vars=runtime_vars,
-                        failed_message=msg,
+                        step_results=step_results, runtime_vars=runtime_vars,
+                        failed_message=msg, context=runtime_context,
                     )
                 continue
 
+            # ── if_element ───────────────────────────────────────────────────
             if step_type == "if_element":
-                ok, msg = await self._handle_if_element(
-                    inp, step, runtime_vars, idx,
+                ok, msg, runtime_context, child_break = await self._handle_if_element(
+                    inp, step, runtime_vars, runtime_context, idx,
                 )
                 step_results.append({
                     "index": idx, "type": "if_element", "ok": ok, "message": msg,
                 })
                 steps_executed += 1
+                if child_break:
+                    break_requested = True
                 if not ok:
                     return StepsResult(
                         success=False, steps_executed=steps_executed,
-                        step_results=step_results,
-                        runtime_vars=runtime_vars,
-                        failed_message=msg,
+                        step_results=step_results, runtime_vars=runtime_vars,
+                        failed_message=msg, context=runtime_context,
                     )
+                if break_requested:
+                    break
                 continue
 
+            # ── if_variable ──────────────────────────────────────────────────
             if step_type == "if_variable":
-                ok, msg = await self._handle_if_variable(
-                    inp, step, runtime_vars, idx,
+                ok, msg, runtime_context, child_break = await self._handle_if_variable(
+                    inp, step, runtime_vars, runtime_context, idx,
                 )
                 step_results.append({
                     "index": idx, "type": "if_variable", "ok": ok, "message": msg,
                 })
                 steps_executed += 1
+                if child_break:
+                    break_requested = True
                 if not ok:
                     return StepsResult(
                         success=False, steps_executed=steps_executed,
-                        step_results=step_results,
-                        runtime_vars=runtime_vars,
-                        failed_message=msg,
+                        step_results=step_results, runtime_vars=runtime_vars,
+                        failed_message=msg, context=runtime_context,
                     )
+                if break_requested:
+                    break
                 continue
 
+            # ── random_pick ──────────────────────────────────────────────────
             if step_type == "random_pick":
-                ok, msg = await self._handle_random_pick(
-                    inp, step, runtime_vars, idx,
+                ok, msg, runtime_context, child_break = await self._handle_random_pick(
+                    inp, step, runtime_vars, runtime_context, idx,
                 )
                 step_results.append({
                     "index": idx, "type": "random_pick", "ok": ok, "message": msg,
                 })
                 steps_executed += 1
+                if child_break:
+                    break_requested = True
                 if not ok:
                     return StepsResult(
                         success=False, steps_executed=steps_executed,
-                        step_results=step_results,
-                        runtime_vars=runtime_vars,
-                        failed_message=msg,
+                        step_results=step_results, runtime_vars=runtime_vars,
+                        failed_message=msg, context=runtime_context,
+                    )
+                if break_requested:
+                    break
+                continue
+
+            # ── extract — writes to context (posts / text_nodes) ─────────────
+            if step_type == "extract":
+                extract_result: ExtractResult = await workflow.execute_activity(
+                    "execute_extract",
+                    ExtractInput(
+                        device_serial=inp.device_serial,
+                        step=step,
+                        step_index=idx,
+                        context=runtime_context,
+                        scenario_config=inp.scenario_config,
+                    ),
+                    result_type=ExtractResult,
+                    start_to_close_timeout=_LONG_TIMEOUT,
+                    retry_policy=_ACTIVITY_RETRY,
+                    heartbeat_timeout=timedelta(seconds=30),
+                )
+                runtime_context = {**runtime_context, **extract_result.context}
+                step_results.append({
+                    "index": idx, "type": "extract",
+                    "ok": extract_result.ok,
+                    "message": extract_result.message,
+                    "details": extract_result.details,
+                })
+                steps_executed += 1
+                if extract_result.break_requested:
+                    break_requested = True
+                    break
+                if not extract_result.ok:
+                    return StepsResult(
+                        success=False, steps_executed=steps_executed,
+                        step_results=step_results, runtime_vars=runtime_vars,
+                        failed_message=extract_result.message, context=runtime_context,
                     )
                 continue
 
+            # ── save_extraction ──────────────────────────────────────────────
+            if step_type == "save_extraction":
+                save_result: StepResult = await workflow.execute_activity(
+                    "execute_save_extraction",
+                    SaveExtractionInput(
+                        device_serial=inp.device_serial,
+                        step=step,
+                        step_index=idx,
+                        context=runtime_context,
+                    ),
+                    result_type=StepResult,
+                    start_to_close_timeout=timedelta(seconds=120),
+                    retry_policy=_ACTIVITY_RETRY,
+                    heartbeat_timeout=timedelta(seconds=60),
+                )
+                # Apply offset update returned by the activity so retries skip processed items.
+                if save_result.details and "updated_offsets" in save_result.details:
+                    offsets = dict(runtime_context.get("__save_extraction_offsets__") or {})
+                    offsets.update(save_result.details["updated_offsets"])
+                    runtime_context = {**runtime_context, "__save_extraction_offsets__": offsets}
+                step_results.append({
+                    "index": idx, "type": "save_extraction",
+                    "ok": save_result.ok, "message": save_result.message or "",
+                    "details": save_result.details,
+                })
+                steps_executed += 1
+                if not save_result.ok:
+                    return StepsResult(
+                        success=False, steps_executed=steps_executed,
+                        step_results=step_results, runtime_vars=runtime_vars,
+                        failed_message=save_result.message or "", context=runtime_context,
+                    )
+                continue
+
+            # ── Default: device action via activity ──────────────────────────
             step_result: StepResult = await workflow.execute_activity(
                 "execute_device_action",
                 DeviceActionInput(
@@ -311,7 +510,7 @@ class ScenarioStepsWorkflow:
                     step_index=idx,
                     variables=inp.variables,
                     campaign_vars=inp.campaign_vars,
-                    scenario_config=getattr(inp, "scenario_config", {}),  # compat with pre-field workflows
+                    scenario_config=getattr(inp, "scenario_config", {}),
                     scenario_registry=inp.scenario_registry,
                 ),
                 result_type=StepResult,
@@ -330,9 +529,8 @@ class ScenarioStepsWorkflow:
             if not step_result.ok:
                 return StepsResult(
                     success=False, steps_executed=steps_executed,
-                    step_results=step_results,
-                    runtime_vars=runtime_vars,
-                    failed_message=step_result.message or "",
+                    step_results=step_results, runtime_vars=runtime_vars,
+                    failed_message=step_result.message or "", context=runtime_context,
                 )
 
         return StepsResult(
@@ -340,37 +538,161 @@ class ScenarioStepsWorkflow:
             steps_executed=steps_executed,
             step_results=step_results,
             runtime_vars=runtime_vars,
+            context=runtime_context,
+            break_requested=break_requested,
         )
 
+    async def _handle_loop(
+        self,
+        inp: StepsInput,
+        step: dict,
+        runtime_vars: dict,
+        runtime_context: dict,
+        idx: int,
+    ) -> tuple[bool, str, list, dict]:
+        """Handle loop step: count or while condition, supports break_if."""
+        count_raw = step.get("count")
+        while_cond = step.get("while")
+        max_iterations = max(1, min(int(step.get("max_iterations", 100) or 100), 10_000))
+        sub_steps = step.get("steps") or []
+
+        if not sub_steps:
+            return False, "loop: no nested steps", [], runtime_context
+
+        if count_raw is not None:
+            try:
+                iterations = min(int(count_raw), max_iterations)
+            except (TypeError, ValueError):
+                return False, f"loop: invalid count={count_raw!r}", [], runtime_context
+            use_while = False
+        elif while_cond:
+            iterations = max_iterations
+            use_while = True
+        else:
+            return False, "loop: must specify either 'count' or 'while'", [], runtime_context
+
+        sub_results = []
+        ctx = dict(runtime_context)
+
+        for i in range(iterations):
+            runtime_vars["__LOOP_ITER__"] = i
+            ctx["_loop_iter"] = i
+
+            if use_while:
+                cond_met: bool = await workflow.execute_activity(
+                    "evaluate_legacy_condition",
+                    LegacyConditionCheckInput(
+                        device_serial=inp.device_serial,
+                        condition=while_cond,
+                        runtime_vars=runtime_vars,
+                        context=ctx,
+                    ),
+                    result_type=bool,
+                    start_to_close_timeout=_ELEMENT_CHECK_TIMEOUT,
+                    heartbeat_timeout=_ELEMENT_CHECK_TIMEOUT,
+                    retry_policy=_ACTIVITY_RETRY,
+                )
+                if not cond_met:
+                    break
+
+            child_result = await self._execute_child_steps(inp, sub_steps, runtime_vars, ctx)
+            sub_results.append({"iteration": i, "success": child_result.success})
+            runtime_vars.update(child_result.runtime_vars)
+            ctx = {**ctx, **child_result.context}
+
+            if child_result.break_requested:
+                break
+
+            if not child_result.success:
+                ctx.pop("_loop_iter", None)
+                return (
+                    False,
+                    f"loop: iteration {i} failed — {child_result.failed_message}",
+                    sub_results,
+                    ctx,
+                )
+
+        ctx.pop("_loop_iter", None)
+        return True, f"loop: {len(sub_results)} iteration(s) completed", sub_results, ctx
+
+    async def _handle_if(
+        self,
+        inp: StepsInput,
+        step: dict,
+        runtime_vars: dict,
+        runtime_context: dict,
+        idx: int,
+    ) -> tuple[bool, str, dict, bool]:
+        """Handle generic 'if' step using _evaluate_condition."""
+        condition = step.get("condition") or {}
+        then_steps = step.get("then") or []
+        else_steps = step.get("else") or []
+
+        if not condition:
+            return False, "if: missing condition", runtime_context, False
+
+        cond_met: bool = await workflow.execute_activity(
+            "evaluate_legacy_condition",
+            LegacyConditionCheckInput(
+                device_serial=inp.device_serial,
+                condition=condition,
+                runtime_vars=runtime_vars,
+                context=runtime_context,
+            ),
+            result_type=bool,
+            start_to_close_timeout=_ELEMENT_CHECK_TIMEOUT,
+            heartbeat_timeout=_ELEMENT_CHECK_TIMEOUT,
+            retry_policy=_ACTIVITY_RETRY,
+        )
+
+        branch_steps = then_steps if cond_met else else_steps
+        branch_name = "then" if cond_met else "else"
+
+        if not branch_steps:
+            return True, f"if: no {branch_name} steps, skip", runtime_context, False
+
+        child_result = await self._execute_child_steps(
+            inp, branch_steps, runtime_vars, runtime_context,
+        )
+        runtime_vars.update(child_result.runtime_vars)
+        merged_ctx = {**runtime_context, **child_result.context}
+
+        if not child_result.success:
+            return False, f"if: {branch_name} branch failed — {child_result.failed_message}", merged_ctx, False
+
+        return True, f"if: executed {branch_name}", merged_ctx, child_result.break_requested
+
     async def _handle_repeat(
-        self, inp: StepsInput, step: dict, runtime_vars: dict, idx: int,
-    ) -> tuple[bool, str, list]:
+        self,
+        inp: StepsInput,
+        step: dict,
+        runtime_vars: dict,
+        runtime_context: dict,
+        idx: int,
+    ) -> tuple[bool, str, list, dict]:
         """Handle repeat step: loop N times with optional delay."""
         count_raw = step.get("count")
         delay = float(step.get("delay_between", 0.0) or 0.0)
         sub_steps = step.get("steps") or []
 
         if count_raw is None:
-            return False, "repeat: missing count", []
+            return False, "repeat: missing count", [], runtime_context
         if not sub_steps:
-            return False, "repeat: no nested steps", []
+            return False, "repeat: no nested steps", [], runtime_context
 
         try:
             count = int(count_raw)
         except (TypeError, ValueError):
-            return False, f"repeat: invalid count={count_raw!r}", []
+            return False, f"repeat: invalid count={count_raw!r}", [], runtime_context
 
-        # Safety cap
         count = min(count, 10_000)
         sub_results = []
+        ctx = dict(runtime_context)
 
         for i in range(count):
             runtime_vars["__LOOP_INDEX__"] = i
 
-            child_result = await self._execute_child_steps(
-                inp, sub_steps, runtime_vars,
-                workflow_id_suffix=f"repeat:{idx}:iter:{i}",
-            )
+            child_result = await self._execute_child_steps(inp, sub_steps, runtime_vars, ctx)
             sub_results.append({"iteration": i, "success": child_result.success})
 
             if not child_result.success:
@@ -378,34 +700,52 @@ class ScenarioStepsWorkflow:
                     False,
                     f"repeat: iteration {i} failed — {child_result.failed_message}",
                     sub_results,
+                    ctx,
                 )
 
-            # Merge runtime vars back only on success
             runtime_vars.update(child_result.runtime_vars)
+            ctx = {**ctx, **child_result.context}
+
+            if child_result.break_requested:
+                break
 
             if delay > 0 and i < count - 1:
-                # Durable sleep — survives worker restart
                 await workflow.sleep(min(delay, 300.0))
 
-        return True, f"repeat: {count} iteration(s) completed", sub_results
+        return True, f"repeat: {len(sub_results)} iteration(s) completed", sub_results, ctx
 
     async def _handle_repeat_until(
-        self, inp: StepsInput, step: dict, runtime_vars: dict, idx: int,
-    ) -> tuple[bool, str]:
-        """Handle repeat_until: loop until condition met or max iterations."""
+        self,
+        inp: StepsInput,
+        step: dict,
+        runtime_vars: dict,
+        runtime_context: dict,
+        idx: int,
+    ) -> tuple[bool, str, dict]:
+        """Handle repeat_until: loop until condition met or max iterations.
+
+        Semantics: CHECK condition → if met, exit immediately (zero body iterations);
+        otherwise execute body, then CHECK again. This is a pre-condition check loop
+        (while-not), NOT a do-while. If the condition is already satisfied on entry,
+        the body never runs.
+
+        Returns success=True when condition is met, success=False when max_iterations
+        is exhausted without the condition becoming true.
+        """
         condition = step.get("condition") or {}
         max_iter = max(1, min(int(step.get("max_iterations", 100) or 100), 10_000))
         sub_steps = step.get("steps") or []
 
         if not condition:
-            return False, "repeat_until: missing condition"
+            return False, "repeat_until: missing condition", runtime_context
         if not sub_steps:
-            return False, "repeat_until: no nested steps"
+            return False, "repeat_until: no nested steps", runtime_context
+
+        ctx = dict(runtime_context)
 
         for i in range(max_iter):
             runtime_vars["__LOOP_INDEX__"] = i
 
-            # Check condition via activity (reads device state)
             condition_met: bool = await workflow.execute_activity(
                 "evaluate_condition",
                 ConditionCheckInput(
@@ -415,31 +755,35 @@ class ScenarioStepsWorkflow:
                 ),
                 result_type=bool,
                 start_to_close_timeout=_ELEMENT_CHECK_TIMEOUT,
+                heartbeat_timeout=_ELEMENT_CHECK_TIMEOUT,
                 retry_policy=_ACTIVITY_RETRY,
             )
 
             if condition_met:
-                return True, f"repeat_until: condition met after {i} iteration(s)"
+                return True, f"repeat_until: condition met after {i} iteration(s)", ctx
 
-            child_result = await self._execute_child_steps(
-                inp, sub_steps, runtime_vars,
-                workflow_id_suffix=f"repeat_until:{idx}:iter:{i}",
-            )
+            child_result = await self._execute_child_steps(inp, sub_steps, runtime_vars, ctx)
 
             if not child_result.success:
                 return (
                     False,
                     f"repeat_until: iteration {i} failed — {child_result.failed_message}",
+                    ctx,
                 )
 
-            # Merge runtime vars back only on success
             runtime_vars.update(child_result.runtime_vars)
+            ctx = {**ctx, **child_result.context}
 
-        return False, f"repeat_until: max_iterations ({max_iter}) reached"
+        return False, f"repeat_until: max_iterations ({max_iter}) reached", ctx
 
     async def _handle_if_element(
-        self, inp: StepsInput, step: dict, runtime_vars: dict, idx: int,
-    ) -> tuple[bool, str]:
+        self,
+        inp: StepsInput,
+        step: dict,
+        runtime_vars: dict,
+        runtime_context: dict,
+        idx: int,
+    ) -> tuple[bool, str, dict, bool]:
         """Handle if_element: branch based on element existence."""
         by = str(step.get("by") or "")
         value = str(step.get("value") or "").strip()
@@ -448,9 +792,8 @@ class ScenarioStepsWorkflow:
         else_steps = step.get("else") or []
 
         if not by or not value:
-            return False, "if_element: missing by/value"
+            return False, "if_element: missing by/value", runtime_context, False
 
-        # Check element via activity
         check_result: ElementCheckResult = await workflow.execute_activity(
             "check_element_exists",
             ElementCheckInput(
@@ -459,6 +802,7 @@ class ScenarioStepsWorkflow:
             ),
             result_type=ElementCheckResult,
             start_to_close_timeout=timedelta(seconds=timeout + 10),
+            heartbeat_timeout=timedelta(seconds=timeout + 10),
             retry_policy=_ACTIVITY_RETRY,
         )
 
@@ -466,32 +810,35 @@ class ScenarioStepsWorkflow:
         branch_name = "then" if check_result.found else "else"
 
         if not branch_steps:
-            return True, f"if_element(found={check_result.found}): no {branch_name} steps, skip"
+            return True, f"if_element(found={check_result.found}): no {branch_name} steps, skip", runtime_context, False
 
         child_result = await self._execute_child_steps(
-            inp, branch_steps, runtime_vars,
-            workflow_id_suffix=f"if_element:{idx}:{branch_name}",
+            inp, branch_steps, runtime_vars, runtime_context,
         )
         runtime_vars.update(child_result.runtime_vars)
+        merged_ctx = {**runtime_context, **child_result.context}
 
         if not child_result.success:
-            return False, f"if_element: {branch_name} branch failed — {child_result.failed_message}"
+            return False, f"if_element: {branch_name} branch failed — {child_result.failed_message}", merged_ctx, False
 
-        return True, f"if_element(found={check_result.found}): executed {branch_name}"
+        return True, f"if_element(found={check_result.found}): executed {branch_name}", merged_ctx, child_result.break_requested
 
     async def _handle_if_variable(
-        self, inp: StepsInput, step: dict, runtime_vars: dict, idx: int,
-    ) -> tuple[bool, str]:
+        self,
+        inp: StepsInput,
+        step: dict,
+        runtime_vars: dict,
+        runtime_context: dict,
+        idx: int,
+    ) -> tuple[bool, str, dict, bool]:
         """Handle if_variable: branch based on variable value."""
         name = str(step.get("name") or "")
         then_steps = step.get("then") or []
         else_steps = step.get("else") or []
 
         if not name:
-            return False, "if_variable: missing name"
+            return False, "if_variable: missing name", runtime_context, False
 
-        # Resolve variable with explicit key check (not `or` chaining)
-        # to avoid skipping falsy values like 0, False, ""
         raw_val = _lookup_var(name, runtime_vars, inp.variables, inp.campaign_vars)
         str_val = str(raw_val) if raw_val is not None else ""
 
@@ -508,54 +855,59 @@ class ScenarioStepsWorkflow:
             except (TypeError, ValueError):
                 condition_met = False
         else:
-            # Truthy check
-            condition_met = bool(raw_val) and str_val not in ("None", "", "0")
+            # No comparator specified: treat variable as truthy/falsy.
+            # Falsy: None, empty string, "0", "None", "False".
+            condition_met = bool(raw_val) and str_val not in ("None", "", "0", "False")
 
         branch_steps = then_steps if condition_met else else_steps
         branch_name = "then" if condition_met else "else"
 
         if not branch_steps:
-            return True, f"if_variable({name}={str_val!r}): no {branch_name} steps, skip"
+            return True, f"if_variable({name}={str_val!r}): no {branch_name} steps, skip", runtime_context, False
 
         child_result = await self._execute_child_steps(
-            inp, branch_steps, runtime_vars,
-            workflow_id_suffix=f"if_variable:{idx}:{branch_name}",
+            inp, branch_steps, runtime_vars, runtime_context,
         )
         runtime_vars.update(child_result.runtime_vars)
+        merged_ctx = {**runtime_context, **child_result.context}
 
         if not child_result.success:
-            return False, f"if_variable: {branch_name} branch failed"
+            return False, f"if_variable: {branch_name} branch failed", merged_ctx, False
 
-        return True, f"if_variable({name}={str_val!r}): executed {branch_name}"
+        return True, f"if_variable({name}={str_val!r}): executed {branch_name}", merged_ctx, child_result.break_requested
 
     async def _handle_random_pick(
-        self, inp: StepsInput, step: dict, runtime_vars: dict, idx: int,
-    ) -> tuple[bool, str]:
+        self,
+        inp: StepsInput,
+        step: dict,
+        runtime_vars: dict,
+        runtime_context: dict,
+        idx: int,
+    ) -> tuple[bool, str, dict, bool]:
         """Handle random_pick: weighted random branch selection."""
         branches = step.get("branches") or []
         if not branches:
-            return False, "random_pick: no branches"
+            return False, "random_pick: no branches", runtime_context, False
 
         weights = [max(1, int(b.get("weight", 1))) for b in branches]
-        # Use workflow.random() for deterministic replay on worker restart
         wf_random = _get_wf_random()
         chosen_idx = wf_random.choices(range(len(branches)), weights=weights, k=1)[0]
         chosen = branches[chosen_idx]
         branch_steps = chosen.get("steps") or []
 
         if not branch_steps:
-            return True, f"random_pick: branch {chosen_idx} has no steps, skip"
+            return True, f"random_pick: branch {chosen_idx} has no steps, skip", runtime_context, False
 
         child_result = await self._execute_child_steps(
-            inp, branch_steps, runtime_vars,
-            workflow_id_suffix=f"random_pick:{idx}:branch:{chosen_idx}",
+            inp, branch_steps, runtime_vars, runtime_context,
         )
         runtime_vars.update(child_result.runtime_vars)
+        merged_ctx = {**runtime_context, **child_result.context}
 
         if not child_result.success:
-            return False, f"random_pick: branch {chosen_idx} failed"
+            return False, f"random_pick: branch {chosen_idx} failed", merged_ctx, False
 
-        return True, f"random_pick: executed branch {chosen_idx}"
+        return True, f"random_pick: executed branch {chosen_idx}", merged_ctx, child_result.break_requested
 
     # ── Inline step execution (no child workflow spawn) ──────────────────
 
@@ -564,7 +916,7 @@ class ScenarioStepsWorkflow:
         parent_inp: StepsInput,
         steps: list[dict],
         runtime_vars: dict,
-        workflow_id_suffix: str = "",  # kept for API compat, unused
+        runtime_context: dict,
     ) -> StepsResult:
         """Execute a list of steps inline (same workflow, no child spawn).
 
@@ -574,12 +926,18 @@ class ScenarioStepsWorkflow:
         Child workflows are only used for truly independent top-level executions
         (one per device per scenario, from ScenarioWorkflow.run).
         """
-        if parent_inp.depth > MAX_NESTING_DEPTH:
+        if parent_inp.depth >= MAX_NESTING_DEPTH:
             return StepsResult(
                 success=False, steps_executed=0,
                 failed_message=f"Max nesting depth {MAX_NESTING_DEPTH} exceeded",
             )
 
+        # Copy lists explicitly to prevent shared-reference mutation across nesting levels.
+        # dict() is a shallow copy — list values (posts, text_nodes) would be shared otherwise.
+        context_copy = {
+            k: list(v) if isinstance(v, list) else v
+            for k, v in runtime_context.items()
+        }
         nested_inp = StepsInput(
             device_serial=parent_inp.device_serial,
             steps=steps,
@@ -589,6 +947,7 @@ class ScenarioStepsWorkflow:
             depth=parent_inp.depth + 1,
             parent_runtime_vars=dict(runtime_vars),
             scenario_config=parent_inp.scenario_config if hasattr(parent_inp, "scenario_config") else {},
+            context=context_copy,
         )
         return await self.run(nested_inp)
 
@@ -597,10 +956,38 @@ class ScenarioStepsWorkflow:
 
 
 def _get_wf_random():
-    """Get workflow-safe random instance. Falls back to stdlib for testing."""
+    """Get workflow-safe random instance.
+
+    Uses workflow.random() inside a real Temporal workflow to guarantee replay
+    determinism. Falls back to stdlib random ONLY during unit tests where there
+    is no Temporal context — the exception type expected is RuntimeError/AttributeError
+    from the Temporal sandbox.
+
+    If workflow.random() raises an unexpected exception type during a live workflow
+    run, this is logged at ERROR level because using stdlib random would corrupt
+    Temporal replay determinism.
+    """
     try:
         return workflow.random()
-    except Exception:
+    except Exception as exc:
+        # Expected during unit tests: Temporal sandbox not active.
+        # Unexpected during real workflow runs: log loudly so the issue is visible.
+        _wf_random_log = logging.getLogger(__name__)
+        # AttributeError, RuntimeError, NotImplementedError are raised by Temporal SDK
+        # internally when workflow.random() is called outside a workflow context (unit tests).
+        # Also accept any exception whose class name contains "NotInWorkflow" or "EventLoop"
+        # to cover Temporal's internal _NotInWorkflowEventLoopError.
+        expected_test_types = (AttributeError, RuntimeError, NotImplementedError)
+        is_expected = isinstance(exc, expected_test_types) or any(
+            s in type(exc).__name__ for s in ("NotInWorkflow", "EventLoop", "Sandbox")
+        )
+        if not is_expected:
+            _wf_random_log.error(
+                "workflow.random() raised unexpected %s: %s — "
+                "falling back to stdlib random which BREAKS Temporal replay determinism. "
+                "This MUST be investigated.",
+                type(exc).__name__, exc,
+            )
         import random
         return random
 

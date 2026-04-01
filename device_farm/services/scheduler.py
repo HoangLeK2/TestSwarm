@@ -275,29 +275,42 @@ class SchedulerService:
             result = await _dispatch_schedule_config(
                 cfg, queue=self._queue, manager=self._manager,
             )
+            finished_at = datetime.now(timezone.utc)
             async with AsyncSessionLocal() as udb:
                 await update_schedule_run(
                     udb, run.id,
                     status="completed",
-                    finished_at=datetime.now(timezone.utc),
+                    finished_at=finished_at,
                     devices_dispatched=result.get("devices_dispatched", 0),
                     task_ids=result.get("task_ids", []),
                 )
                 await update_schedule_after_run(
                     udb, schedule.id,
-                    last_run_at=datetime.now(timezone.utc),
-                    next_run_at=compute_next_run(schedule.cron_expression, schedule.timezone),
+                    last_run_at=finished_at,
+                    next_run_at=compute_next_run(
+                        schedule.cron_expression, schedule.timezone, base=finished_at
+                    ),
                 )
                 await udb.commit()
         except Exception as exc:
             log.error("[scheduler] fallback dispatch error: %s", exc)
+            failed_at = datetime.now(timezone.utc)
             from db.database import AsyncSessionLocal as _ASL
             async with _ASL() as udb:
                 await update_schedule_run(
                     udb, run.id,
                     status="failed",
-                    finished_at=datetime.now(timezone.utc),
+                    finished_at=failed_at,
                     error_message=str(exc),
+                )
+                # Update next_run_at even on failure so the scheduler doesn't
+                # stall with a stale value from before this run started.
+                await update_schedule_after_run(
+                    udb, schedule.id,
+                    last_run_at=failed_at,
+                    next_run_at=compute_next_run(
+                        schedule.cron_expression, schedule.timezone, base=failed_at
+                    ),
                 )
                 await udb.commit()
 
@@ -316,7 +329,7 @@ class SchedulerService:
                 ScheduleSpec,
                 ScheduleState,
             )
-            from temporalio.common import SearchAttributeKey
+            from temporalio.common import SearchAttributeKey, WorkflowIDReusePolicy
             from temporal.schedule_workflow import ScheduleRunWorkflow
             from temporal.schedule_shared import ScheduleRunInput
             from temporal.shared import TASK_QUEUE_NAME
@@ -336,6 +349,10 @@ class SchedulerService:
                         ScheduleRunInput(schedule_id=schedule_id),
                         id=workflow_id_prefix,
                         task_queue=task_queue,
+                        # ALLOW_DUPLICATE lets each scheduled fire start a new workflow
+                        # even if a previous run with the same prefix-id is still running
+                        # or completed — prevents ID collision on repeated firings.
+                        workflow_id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
                     ),
                     spec=ScheduleSpec(
                         cron_expressions=[cron_expression],
@@ -348,9 +365,18 @@ class SchedulerService:
                 temporal_id, cron_expression, timezone_name,
             )
         except Exception as exc:
-            # Schedule already exists or other Temporal error — log and continue.
-            # The fallback engine will handle execution.
-            log.warning("[scheduler] create_temporal_schedule failed: %s", exc)
+            exc_str = str(exc).lower()
+            if "already exists" in exc_str or "already_exists" in exc_str:
+                # Temporal schedule already registered — treat as success.
+                log.info("[scheduler] Temporal schedule %s already exists, skipping create", schedule_id)
+            else:
+                # Unexpected error — the schedule will NOT fire until this is resolved.
+                log.error(
+                    "[scheduler] create_temporal_schedule failed for %s: %s — "
+                    "schedule will not fire until Temporal registration succeeds",
+                    schedule_id, exc,
+                )
+                raise
 
     async def _update_temporal_schedule_spec(
         self, schedule_id: str, cron_expression: str, timezone_name: str
@@ -562,18 +588,19 @@ async def _dispatch_campaign(
     if not target_id:
         raise ValueError("campaign dispatch requires target_id")
 
-    if temporal_client is not None:
-        from services.campaign_dispatch import enqueue_campaign_run_temporal
-        result, _ = await enqueue_campaign_run_temporal(
-            target_id, temporal_client, temporal_config
+    if temporal_client is None:
+        raise RuntimeError(
+            f"Temporal is required for campaign dispatch (campaign_id={target_id!r}). "
+            "Ensure temporal.enabled=true and the Temporal server is reachable."
         )
-    else:
-        from services.campaign_dispatch import enqueue_campaign_run
-        result, _ = await enqueue_campaign_run(target_id, queue)
+
+    from services.campaign_dispatch import enqueue_campaign_run_temporal
+    result, _ = await enqueue_campaign_run_temporal(
+        target_id, temporal_client, temporal_config
+    )
 
     return {
         "devices_dispatched": len(result.get("device_serials", [])),
-        "task_ids": result.get("task_ids", []),
         "workflow_ids": result.get("workflow_ids", []),
     }
 

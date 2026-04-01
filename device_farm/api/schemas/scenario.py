@@ -26,9 +26,11 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 SelectorBy = Literal["resource-id", "text", "xpath", "class name",
                       "description", "descriptionContains", "descriptionStartsWith"]
 
-# ---------------------------------------------------------------------------
-# Implicit wait config (reusable across step types)
-# ---------------------------------------------------------------------------
+class StepBase(BaseModel):
+  
+    title: Optional[str] = None        
+    description: Optional[str] = None  
+
 
 class ImplicitWaitDict(BaseModel):
     timeout: float = Field(10.0, ge=0.1, le=60.0)
@@ -106,12 +108,12 @@ class RandomBranch(BaseModel):
 # Step models — one per step type
 # ---------------------------------------------------------------------------
 
-class LaunchAppStep(BaseModel):
+class LaunchAppStep(StepBase):
     type: Literal["launch_app"]
     package: str = Field(min_length=1)
     wait_after: float = Field(2.0, ge=0, le=30)
 
-class OpenUrlStep(BaseModel):
+class OpenUrlStep(StepBase):
     type: Literal["open_url"]
     url: str = Field(min_length=1)
     package: Optional[str] = None
@@ -124,11 +126,11 @@ class OpenUrlStep(BaseModel):
             raise ValueError("url must start with http:// or https://")
         return v
 
-class WaitStep(BaseModel):
+class WaitStep(StepBase):
     type: Literal["wait"]
     seconds: float = Field(1.0, ge=0, le=300)
 
-class TapStep(BaseModel):
+class TapStep(StepBase):
     type: Literal["tap"]
     selector: Optional[TapSelector] = None
     fallback: Optional[TapFallback] = None
@@ -137,16 +139,16 @@ class TapStep(BaseModel):
     wait_after: bool = True
     implicit_wait: Optional[ImplicitWait] = None
 
-class TapRatioStep(BaseModel):
+class TapRatioStep(StepBase):
     type: Literal["tap_ratio"]
     x: float = Field(ge=0.0, le=1.0)
     y: float = Field(ge=0.0, le=1.0)
 
-class TapPositionStep(BaseModel):
+class TapPositionStep(StepBase):
     type: Literal["tap_position"]
     pos: Literal["top_center", "middle_center", "bottom_center", "search_bar"]
 
-class SwipeRatioStep(BaseModel):
+class SwipeRatioStep(StepBase):
     type: Literal["swipe_ratio"]
     x1: float = Field(ge=0.0, le=1.0)
     y1: float = Field(ge=0.0, le=1.0)
@@ -154,7 +156,7 @@ class SwipeRatioStep(BaseModel):
     y2: float = Field(ge=0.0, le=1.0)
     duration_ms: int = Field(300, ge=50, le=5000)
 
-class TapSelectorStep(BaseModel):
+class TapSelectorStep(StepBase):
     type: Literal["tap_selector"]
     by: SelectorBy = "text"
     value: str = Field(min_length=1)
@@ -164,21 +166,21 @@ class TapSelectorStep(BaseModel):
     implicit_wait: Optional[ImplicitWait] = None
     element_image: Optional[str] = None  # base64 for visual anchoring
 
-class WaitElementStep(BaseModel):
+class WaitElementStep(StepBase):
     type: Literal["wait_element"]
     by: SelectorBy = "text"
     value: str = Field(min_length=1)
     timeout: float = Field(10.0, ge=0.1, le=120)
     poll: float = Field(0.5, ge=0.1, le=10)
 
-class AssertElementStep(BaseModel):
+class AssertElementStep(StepBase):
     type: Literal["assert_element"]
     by: SelectorBy = "text"
     value: str = Field(min_length=1)
     timeout: float = Field(5.0, ge=0.1, le=60)
     poll: float = Field(0.5, ge=0.1, le=10)
 
-class InputSelectorStep(BaseModel):
+class InputSelectorStep(StepBase):
     type: Literal["input_selector"]
     by: SelectorBy = "resource-id"
     value: str = Field(min_length=1)
@@ -186,30 +188,30 @@ class InputSelectorStep(BaseModel):
     clear_first: bool = True
     implicit_wait: Optional[ImplicitWait] = None
 
-class LongTapSelectorStep(BaseModel):
+class LongTapSelectorStep(StepBase):
     type: Literal["long_tap_selector"]
     by: SelectorBy = "text"
     value: str = Field(min_length=1)
     duration_ms: int = Field(800, ge=100, le=10000)
     implicit_wait: Optional[ImplicitWait] = None
 
-class ScrollToStep(BaseModel):
+class ScrollToStep(StepBase):
     type: Literal["scroll_to"]
     by: SelectorBy = "text"
     value: str = Field(min_length=1)
     direction: Literal["down", "up"] = "down"
     max_swipes: int = Field(5, ge=1, le=50)
 
-class InputTextStep(BaseModel):
+class InputTextStep(StepBase):
     type: Literal["input_text"]
     text: str
     via: Literal["u2", "a11y_key"] = "u2"
 
-class KeyStep(BaseModel):
+class KeyStep(StepBase):
     type: Literal["key"]
     key: str = Field(min_length=1)
 
-class ScrollDownStep(BaseModel):
+class ScrollDownStep(StepBase):
     type: Literal["scroll_down"]
     repeats: int = Field(1, ge=1, le=100)
     start_y_ratio: float = Field(0.72, ge=0.0, le=1.0)
@@ -217,23 +219,23 @@ class ScrollDownStep(BaseModel):
     duration_ms: int = Field(520, ge=50, le=5000)
     pause_seconds: float = Field(0.6, ge=0, le=10)
 
-class WaitStableStep(BaseModel):
+class WaitStableStep(StepBase):
     type: Literal["wait_stable"]
     timeout: float = Field(5.0, ge=0.1, le=60)
     stable_duration: float = Field(0.4, ge=0.1, le=10)
 
-class VerifyScreenStep(BaseModel):
+class VerifyScreenStep(StepBase):
     type: Literal["verify_screen"]
     screenshot: str = Field(min_length=10)  # base64 JPEG
     ssim_threshold: float = Field(0.75, ge=0.0, le=1.0)
     timeout: float = Field(8.0, ge=0.1, le=60)
     poll: float = Field(0.5, ge=0.1, le=10)
 
-class DismissPopupStep(BaseModel):
+class DismissPopupStep(StepBase):
     type: Literal["dismiss_popup"]
     retries: int = Field(3, ge=1, le=20)
 
-class SetVariableStep(BaseModel):
+class SetVariableStep(StepBase):
     type: Literal["set_variable"]
     name: str = Field(min_length=1)
     value: Optional[Any] = None
@@ -252,19 +254,19 @@ class SetVariableStep(BaseModel):
 
 # ── Control flow steps ──
 
-class RepeatStep(BaseModel):
+class RepeatStep(StepBase):
     type: Literal["repeat"]
     count: int = Field(ge=1, le=10000)
     steps: List[StepModel] = Field(min_length=1)
     delay_between: float = Field(0, ge=0, le=300)
 
-class RepeatUntilStep(BaseModel):
+class RepeatUntilStep(StepBase):
     type: Literal["repeat_until"]
     condition: ConditionDict
     steps: List[StepModel] = Field(min_length=1)
     max_iterations: int = Field(100, ge=1, le=10000)
 
-class IfElementStep(BaseModel):
+class IfElementStep(StepBase):
     type: Literal["if_element"]
     by: SelectorBy = "text"
     value: str = Field(min_length=1)
@@ -273,7 +275,7 @@ class IfElementStep(BaseModel):
     # pydantic: "else" is a reserved word → alias
     else_steps: Optional[List[StepModel]] = Field(None, alias="else")
 
-class IfVariableStep(BaseModel):
+class IfVariableStep(StepBase):
     type: Literal["if_variable"]
     name: str = Field(min_length=1)
     then: List[StepModel] = Field(min_length=1)
@@ -283,11 +285,11 @@ class IfVariableStep(BaseModel):
     greater_than: Optional[float] = None
     else_steps: Optional[List[StepModel]] = Field(None, alias="else")
 
-class RandomPickStep(BaseModel):
+class RandomPickStep(StepBase):
     type: Literal["random_pick"]
     branches: List[RandomBranch] = Field(min_length=1)
 
-class LoopStep(BaseModel):
+class LoopStep(StepBase):
     type: Literal["loop"]
     steps: List[StepModel] = Field(min_length=1)
     count: Optional[int] = Field(None, ge=1, le=10000)
@@ -295,11 +297,11 @@ class LoopStep(BaseModel):
     # "while" is reserved → model_config handles it
     model_config = {"extra": "allow"}
 
-class BreakIfStep(BaseModel):
+class BreakIfStep(StepBase):
     type: Literal["break_if"]
     condition: ConditionDict
 
-class RunScenarioStep(BaseModel):
+class RunScenarioStep(StepBase):
     type: Literal["run_scenario"]
     scenario_id: Optional[str] = None
     scenario_name: Optional[str] = None
@@ -313,21 +315,21 @@ class RunScenarioStep(BaseModel):
 
 # ── Extraction steps ──
 
-class ExtractStep(BaseModel):
+class ExtractStep(StepBase):
     type: Literal["extract"]
     strategy: Literal["fb_posts", "text_nodes"]
     stop_if_no_new: bool = False
     no_new_threshold: int = Field(3, ge=1, le=50)
     expand_see_more: bool = True
 
-class ExtractTextHierarchyStep(BaseModel):
+class ExtractTextHierarchyStep(StepBase):
     type: Literal["extract_text_hierarchy"]
     save_as: str = Field(min_length=1)
     filter_class: Optional[List[str]] = None
     exclude_empty: bool = True
     format: Literal["text", "json"] = "text"
 
-class ExtractTextOcrStep(BaseModel):
+class ExtractTextOcrStep(StepBase):
     type: Literal["extract_text_ocr"]
     save_as: str = Field(min_length=1)
     region: Optional[Dict[str, float]] = None
@@ -336,7 +338,7 @@ class ExtractTextOcrStep(BaseModel):
     preprocess: Optional[str] = None
     scale_factor: float = Field(1.0, ge=0.5, le=4.0)
 
-class ExtractTextAiStep(BaseModel):
+class ExtractTextAiStep(StepBase):
     type: Literal["extract_text_ai"]
     save_as: str = Field(min_length=1)
     prompt: str = Field(min_length=1)
@@ -345,7 +347,7 @@ class ExtractTextAiStep(BaseModel):
     model: Optional[str] = None
     region: Optional[Dict[str, float]] = None
 
-class ExtractScreenDataStep(BaseModel):
+class ExtractScreenDataStep(StepBase):
     type: Literal["extract_screen_data"]
     save_as: str = Field(min_length=1)
     output_schema: Optional[Dict[str, Any]] = Field(None, alias="schema")
@@ -353,7 +355,7 @@ class ExtractScreenDataStep(BaseModel):
     language: str = "eng"
     model_config = {"populate_by_name": True}
 
-class SaveExtractionStep(BaseModel):
+class SaveExtractionStep(StepBase):
     type: Literal["save_extraction"]
     data_var: str = Field(min_length=1)
     collection: str = "default"

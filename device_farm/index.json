@@ -4,6 +4,7 @@
     "GROUP_NAME": "openclaw vn",
     "GROUP_XPATH": "//*[@content-desc=\"OpenClaw VN,Công khai · 123K thành viên\"]",
     "MAX_SCROLLS": 3600,
+    "SCROLL_X_RATIO": 0.18,
     "SAVE_COLLECTION": "fb_group_posts"
   },
   "steps": [
@@ -48,8 +49,8 @@
     { "type": "tap_selector", "by": "xpath", "value": "${GROUP_XPATH}", "timeout": 6 },
     { "type": "wait_stable", "timeout": 6, "stable_duration": 0.5 },
 
-    { "_comment": "Cuộn qua header nhóm vào feed bài viết" },
-    { "type": "scroll_down", "repeats": 2 },
+    { "_comment": "Cuộn qua header nhóm vào feed bài viết (neo trái — tránh mở ảnh full-width)" },
+    { "type": "scroll_down", "repeats": 2, "start_x_ratio": "${SCROLL_X_RATIO}" },
     { "type": "wait", "seconds": 3 },
     { "type": "wait_stable", "timeout": 4, "stable_duration": 0.5 },
 
@@ -71,8 +72,9 @@
           "platform": "facebook", "content_type": "group_post",
           "dedupe_field": "text", "tags": "group,crawl,${GROUP_NAME}"
         },
-        { "type": "scroll_down", "repeats": 1 },
-        { "type": "wait", "seconds": 1 }
+        { "type": "scroll_down", "repeats": 1, "start_x_ratio": "${SCROLL_X_RATIO}" },
+        { "type": "wait", "seconds": 1 },
+        { "type": "dismiss_popup", "retries": 2 }
       ]
     },
 

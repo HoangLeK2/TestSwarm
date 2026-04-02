@@ -316,11 +316,17 @@ def build_campaign_fleet_router(
         users.
         """
         try:
-            from temporal.workflows import ScenarioWorkflow
+            from temporal.workflows import ScenarioStepsWorkflow, ScenarioWorkflow
 
             client = await get_temporal_client(config.temporal)
-            handle = client.get_workflow_handle(workflow_id)
-            await handle.signal(ScenarioWorkflow.pause)
+            for wf_id, signal in [
+                (workflow_id, ScenarioWorkflow.pause),
+                (f"{workflow_id}:steps", ScenarioStepsWorkflow.pause),
+            ]:
+                try:
+                    await client.get_workflow_handle(wf_id).signal(signal)
+                except Exception:
+                    pass
             return {"workflow_id": workflow_id, "action": "paused"}
         except Exception as exc:
             return JSONResponse(
@@ -331,11 +337,17 @@ def build_campaign_fleet_router(
     async def api_workflow_resume(workflow_id: str):
         """Resume a paused scenario workflow."""
         try:
-            from temporal.workflows import ScenarioWorkflow
+            from temporal.workflows import ScenarioStepsWorkflow, ScenarioWorkflow
 
             client = await get_temporal_client(config.temporal)
-            handle = client.get_workflow_handle(workflow_id)
-            await handle.signal(ScenarioWorkflow.resume)
+            for wf_id, signal in [
+                (workflow_id, ScenarioWorkflow.resume),
+                (f"{workflow_id}:steps", ScenarioStepsWorkflow.resume),
+            ]:
+                try:
+                    await client.get_workflow_handle(wf_id).signal(signal)
+                except Exception:
+                    pass
             return {"workflow_id": workflow_id, "action": "resumed"}
         except Exception as exc:
             return JSONResponse(
@@ -344,13 +356,14 @@ def build_campaign_fleet_router(
 
     @router.post("/workflows/{workflow_id}/cancel")
     async def api_workflow_cancel(workflow_id: str):
-        """Cancel a scenario workflow gracefully."""
+        """Cancel a scenario workflow — cancels both parent and child steps workflow."""
         try:
-            from temporal.workflows import ScenarioWorkflow
-
             client = await get_temporal_client(config.temporal)
-            handle = client.get_workflow_handle(workflow_id)
-            await handle.signal(ScenarioWorkflow.cancel_scenario)
+            for wf_id in [workflow_id, f"{workflow_id}:steps"]:
+                try:
+                    await client.get_workflow_handle(wf_id).cancel()
+                except Exception:
+                    pass
             return {"workflow_id": workflow_id, "action": "cancelled"}
         except Exception as exc:
             return JSONResponse(

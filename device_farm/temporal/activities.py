@@ -27,12 +27,19 @@ _SERIAL_RE = re.compile(r"^[\w.:_-]{1,128}$")
 
 # Global device registry reference — set by worker at startup (before any activity runs).
 _device_registry = None
+_temporal_config = None
 
 
 def set_device_registry(registry) -> None:
     """Called by worker startup to inject DeviceManager reference."""
     global _device_registry
     _device_registry = registry
+
+
+def set_temporal_config(cfg) -> None:
+    """Called by worker startup to inject TemporalConfig for finalize_campaign."""
+    global _temporal_config
+    _temporal_config = cfg
 
 
 def _validate_serial(serial: str) -> None:
@@ -501,6 +508,39 @@ class DeviceActivities:
             log.warning("evaluate_condition error: %s", exc)
             return False
 
+    @activity.defn
+    async def finalize_campaign(self, campaign_id: str) -> None:
+        """Update campaign DB status to 'idle' when all its workflows have finished.
+
+        Called at the end of ScenarioWorkflow.run (success, failure, or cancel).
+        Queries Temporal to check if any other workflows for this campaign are still
+        running. If none remain, marks the campaign as idle in the DB.
+        """
+        activity.heartbeat("finalize_campaign")
+        cfg = _temporal_config
+        if cfg is None:
+            log.warning("finalize_campaign: no temporal config, skipping status update")
+            return
+        try:
+            from temporal.worker import get_temporal_client
+            client = await get_temporal_client(cfg)
+            wf_query = (
+                f'WorkflowId STARTS_WITH "campaign:{campaign_id}:" '
+                f'AND ExecutionStatus="Running"'
+            )
+            still_running = 0
+            async for _ in client.list_workflows(wf_query):
+                still_running += 1
+                break  # one is enough to know we're not done
+            if still_running == 0:
+                from db.database import activity_session
+                from db.crud.campaign import update_campaign_status
+                async with activity_session() as db:
+                    await update_campaign_status(db, campaign_id, "idle")
+                    await db.commit()
+                log.info("finalize_campaign: campaign %s → idle", campaign_id)
+        except Exception as exc:
+            log.warning("finalize_campaign error (campaign %s): %s", campaign_id, exc)
 
 
 def _xml_has_element(xml: str, by: str, value: str) -> bool:

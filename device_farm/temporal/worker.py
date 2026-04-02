@@ -10,7 +10,7 @@ from temporalio.client import Client
 from temporalio.worker import Worker
 
 from core.config import TemporalConfig
-from temporal.activities import DeviceActivities, set_device_registry
+from temporal.activities import DeviceActivities, set_device_registry, set_temporal_config
 from temporal.schedule_activities import ScheduleActivities, set_scheduler_deps
 from temporal.schedule_workflow import ScheduleRunWorkflow
 from temporal.shared import TASK_QUEUE_NAME
@@ -43,6 +43,7 @@ async def create_temporal_worker(
     """
     # Inject device registry into device activities
     set_device_registry(manager)
+    set_temporal_config(cfg)
 
     if client is None:
         client = await _create_client(cfg)
@@ -65,6 +66,7 @@ async def create_temporal_worker(
             _activities.evaluate_legacy_condition,
             _activities.execute_extract,
             _activities.execute_save_extraction,
+            _activities.finalize_campaign,
             _schedule_activities.load_schedule,
             _schedule_activities.create_run_record,
             _schedule_activities.dispatch_schedule,

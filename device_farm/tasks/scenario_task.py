@@ -106,6 +106,7 @@ class KeyStep(StepBase):
 class ScrollDownStep(StepBase):
     type: Literal["scroll_down"]
     repeats: int
+    start_x_ratio: float = 0.5
     start_y_ratio: float = 0.72
     end_y_ratio: float = 0.38
     duration_ms: int = 520
@@ -1778,6 +1779,10 @@ def run_scenario_task(
                 pause_seconds = float(step.get("pause_seconds", 0.6) or 0.6)
             except Exception:
                 pause_seconds = 0.6
+            try:
+                start_x_ratio = float(step.get("start_x_ratio", 0.5) or 0.5)
+            except Exception:
+                start_x_ratio = 0.5
 
             # Keep scroll gesture in safe viewport range and ensure downward move.
             start_y_ratio = min(0.95, max(0.55, start_y_ratio))
@@ -1785,7 +1790,8 @@ def run_scenario_task(
             if end_y_ratio >= start_y_ratio:
                 end_y_ratio = max(0.1, start_y_ratio - 0.22)
 
-            sx = w // 2
+            start_x_ratio = min(0.95, max(0.05, start_x_ratio))
+            sx = int(w * start_x_ratio)
             sy1 = int(h * start_y_ratio)
             sy2 = int(h * end_y_ratio)
             failed = False

@@ -141,6 +141,7 @@ class ScenarioWorkflow:
 
             if self._cancelled:
                 self._progress.status = WorkflowStatus.CANCELLED.value
+                await self._finalize(inp.campaign_id)
                 return StepsResult(
                     success=False, steps_executed=result.steps_executed,
                     failed_message="Cancelled during execution",
@@ -150,11 +151,17 @@ class ScenarioWorkflow:
                 WorkflowStatus.COMPLETED.value if result.success
                 else WorkflowStatus.FAILED.value
             )
+            await self._finalize(inp.campaign_id)
             return result
 
         except asyncio.CancelledError:
             # Native Temporal cancel (handle.cancel()) — propagated from API
             self._progress.status = WorkflowStatus.CANCELLED.value
+            # Best-effort finalize — may fail if Temporal rejects activities after cancel
+            try:
+                await self._finalize(inp.campaign_id)
+            except Exception:
+                pass
             return StepsResult(
                 success=False,
                 steps_executed=result.steps_executed if result else 0,
@@ -162,6 +169,7 @@ class ScenarioWorkflow:
             )
         except Exception as exc:
             self._progress.status = WorkflowStatus.FAILED.value
+            await self._finalize(inp.campaign_id)
             return StepsResult(
                 success=False,
                 steps_executed=result.steps_executed if result else 0,
@@ -205,6 +213,17 @@ class ScenarioWorkflow:
         """Block until unpaused or cancelled."""
         await workflow.wait_condition(
             lambda: not self._paused or self._cancelled,
+        )
+
+    async def _finalize(self, campaign_id: str) -> None:
+        """Call finalize_campaign activity to update DB status when this workflow ends."""
+        if not campaign_id:
+            return
+        await workflow.execute_activity(
+            "finalize_campaign",
+            campaign_id,
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=RetryPolicy(maximum_attempts=2),
         )
 
 
@@ -478,6 +497,8 @@ class ScenarioStepsWorkflow:
                     break_requested = True
                     break
                 if not extract_result.ok:
+                    if step.get("ignore_error"):
+                        continue
                     return StepsResult(
                         success=False, steps_executed=steps_executed,
                         step_results=step_results, runtime_vars=runtime_vars,
@@ -514,6 +535,8 @@ class ScenarioStepsWorkflow:
                 })
                 steps_executed += 1
                 if not save_result.ok:
+                    if step.get("ignore_error"):
+                        continue
                     return StepsResult(
                         success=False, steps_executed=steps_executed,
                         step_results=step_results, runtime_vars=runtime_vars,
@@ -547,6 +570,8 @@ class ScenarioStepsWorkflow:
             steps_executed += 1
 
             if not step_result.ok:
+                if step.get("ignore_error"):
+                    continue
                 return StepsResult(
                     success=False, steps_executed=steps_executed,
                     step_results=step_results, runtime_vars=runtime_vars,

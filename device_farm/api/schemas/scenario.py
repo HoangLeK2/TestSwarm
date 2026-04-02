@@ -223,10 +223,11 @@ class KeyStep(StepBase):
 class ScrollDownStep(StepBase):
     type: Literal["scroll_down"]
     repeats: IntOrVar = 1
-    start_y_ratio: float = Field(0.72, ge=0.0, le=1.0)
-    end_y_ratio: float = Field(0.38, ge=0.0, le=1.0)
-    duration_ms: int = Field(520, ge=50, le=5000)
-    pause_seconds: float = Field(0.6, ge=0, le=10)
+    start_x_ratio: NumOrVar = 0.5
+    start_y_ratio: NumOrVar = 0.72
+    end_y_ratio: NumOrVar = 0.38
+    duration_ms: IntOrVar = 520
+    pause_seconds: NumOrVar = 0.6
 
 class WaitStableStep(StepBase):
     type: Literal["wait_stable"]
@@ -328,7 +329,7 @@ class ExtractStep(StepBase):
     type: Literal["extract"]
     strategy: Literal["fb_posts", "text_nodes"]
     stop_if_no_new: bool = False
-    no_new_threshold: int = Field(3, ge=1, le=50)
+    no_new_threshold: int = Field(3, ge=1, le=1000)
     expand_see_more: bool = True
 
 class ExtractTextHierarchyStep(StepBase):

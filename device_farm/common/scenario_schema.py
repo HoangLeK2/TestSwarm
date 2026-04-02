@@ -159,8 +159,19 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
     },
     "scroll_down": {
         "required": [],
-        "optional": ["repeats"],
-        "description": "Vuốt xuống N lần (mặc định 1). Dùng scroll_to nếu biết element cần tìm.",
+        "optional": [
+            "repeats",
+            "start_x_ratio",
+            "start_y_ratio",
+            "end_y_ratio",
+            "duration_ms",
+            "pause_seconds",
+        ],
+        "description": (
+            "Vuốt xuống N lần (mặc định 1). "
+            "start_x_ratio (0–1, mặc định 0.5): neo ngang — dùng ~0.15–0.25 để tránh vuốt xuyên ảnh full-width ở giữa feed Facebook. "
+            "start_y_ratio/end_y_ratio/duration_ms/pause_seconds: tinh chỉnh gesture."
+        ),
     },
     "wait_stable": {
         "required": [],

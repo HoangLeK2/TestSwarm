@@ -1325,11 +1325,14 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
         "description": (
             "Deep crawl 1 nhóm Facebook: expand 'Xem thêm' trực tiếp tại feed "
             "(không vào detail), extract author + full text + reactions. "
-            "Loop tự dừng khi 5 lần liên tiếp không thấy bài mới. "
+            "Scroll neo trái (SCROLL_X_RATIO) để giảm mở nhầm viewer ảnh do vuốt xuyên giữa màn hình; "
+            "mỗi vòng gọi dismiss_popup sau scroll (đóng dialog/overlay có nút Close/OK…). "
+            "Loop tự dừng theo stop_if_no_new (no_new_threshold). "
             "\n"
             "GROUP_NAME: tên nhóm cần tìm kiếm. "
             "GROUP_XPATH: xpath chính xác vào nhóm (đổi theo nhóm thực tế). "
             "MAX_SCROLLS: số vòng lặp tối đa (default 1000). "
+            "SCROLL_X_RATIO: neo ngang khi scroll (0.12–0.28 khuyến nghị; mặc định 0.18). "
             "SAVE_COLLECTION: collection lưu data."
         ),
         "tags": "facebook,group,deep,crawl,1000,full-content,author,single,feed",
@@ -1337,6 +1340,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "GROUP_NAME": "openclaw vn",
             "GROUP_XPATH": "//*[@content-desc=\"OpenClaw VN,Công khai · 123K thành viên\"]",
             "MAX_SCROLLS": 3600,
+            "SCROLL_X_RATIO": 0.18,
             "SAVE_COLLECTION": "fb_group_posts",
         },
         "steps": [
@@ -1355,29 +1359,15 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             {"type": "wait", "seconds": 2},
             {"type": "key", "key": "enter"},
             {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
-            {
-                "type": "if_element", "by": "descriptionContains", "value": "tab Nhóm", "timeout": 5,
-                "then": [{"type": "tap_selector", "by": "descriptionContains", "value": "tab Nhóm", "timeout": 4}],
-                "else": [
-                    {
-                        "type": "if_element", "by": "text", "value": "Nhóm", "timeout": 3,
-                        "then": [{"type": "tap_selector", "by": "text", "value": "Nhóm", "timeout": 3}],
-                        "else": [
-                            {
-                                "type": "if_element", "by": "text", "value": "Groups", "timeout": 3,
-                                "then": [{"type": "tap_selector", "by": "text", "value": "Groups", "timeout": 3}],
-                                "else": [],
-                            },
-                        ],
-                    },
-                ],
-            },
-            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
 
             {"type": "tap_selector", "by": "xpath", "value": "${GROUP_XPATH}", "timeout": 6},
             {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
 
-            {"type": "scroll_down", "repeats": 2},
+            {
+                "type": "scroll_down",
+                "repeats": 2,
+                "start_x_ratio": "${SCROLL_X_RATIO}",
+            },
             {"type": "wait", "seconds": 3},
             {"type": "wait_stable", "timeout": 4, "stable_duration": 0.5},
 
@@ -1390,7 +1380,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                         "strategy": "fb_posts",
                         "expand_see_more": True,
                         "stop_if_no_new": True,
-                        "no_new_threshold": 30,
+                        "no_new_threshold": 100,
                     },
                     {
                         "type": "save_extraction",
@@ -1398,8 +1388,13 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                         "platform": "facebook", "content_type": "group_post",
                         "dedupe_field": "text", "tags": "group,crawl,${GROUP_NAME}",
                     },
-                    {"type": "scroll_down", "repeats": 1},
+                    {
+                        "type": "scroll_down",
+                        "repeats": 1,
+                        "start_x_ratio": "${SCROLL_X_RATIO}",
+                    },
                     {"type": "wait", "seconds": 1},
+                    {"type": "dismiss_popup", "retries": 2},
                 ],
             },
             {"type": "key", "key": "home"},
@@ -2179,296 +2174,6 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
     },
 ]
 
-
-_TIKTOK_TEMPLATES: List[Dict[str, Any]] = [
-    # ── tt_scroll_fyp ───────────────────────────────────────────────────────
-    {
-        "name": "tt_scroll_fyp",
-        "category": "tiktok",
-        "description": (
-            "Xem TikTok For You Page (FYP) với hành vi tự nhiên. "
-            "Dừng xem từng video VIEW_MIN_S–VIEW_MAX_S giây, "
-            "thỉnh thoảng like (LIKE_WEIGHT%), thỉnh thoảng follow creator (FOLLOW_WEIGHT%), "
-            "sau đó swipe lên video tiếp theo. "
-            "VIDEO_COUNT: tổng số video xem. "
-            "APP_PACKAGE: com.zhiliaoapp.musically (global) "
-            "hoặc com.ss.android.ugc.trill (một số vùng). "
-            "LIKE_WEIGHT + FOLLOW_WEIGHT phải < 100 để branch 'bỏ qua' có weight > 0."
-        ),
-        "tags": "tiktok,fyp,scroll,watch,like,follow,engagement,behavior",
-        "variables": {
-            "VIDEO_COUNT": 20,
-            "LIKE_WEIGHT": 20,
-            "FOLLOW_WEIGHT": 5,
-            "VIEW_MIN_S": 5,
-            "VIEW_MAX_S": 30,
-            "APP_PACKAGE": "com.zhiliaoapp.musically",
-        },
-        "steps": [
-            {"type": "launch_app", "package": "${APP_PACKAGE}", "wait_after": 5},
-            {"type": "dismiss_popup", "retries": 3},
-            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
-            {
-                "type": "repeat",
-                "count": "${VIDEO_COUNT}",
-                "steps": [
-                    # Watch video for random duration
-                    {
-                        "type": "set_variable",
-                        "name": "_VIEW",
-                        "from_list": [5, 7, 9, 12, 15, 18, 22, 28, 30],
-                    },
-                    {"type": "wait", "seconds": "${_VIEW}"},
-                    # Like with LIKE_WEIGHT% probability
-                    {
-                        "type": "random_pick",
-                        "branches": [
-                            {
-                                "weight": "${LIKE_WEIGHT}",
-                                "steps": [
-                                    {
-                                        "type": "if_element",
-                                        "by": "content-desc",
-                                        "value": "Like",
-                                        "timeout": 1,
-                                        "then": [
-                                            {
-                                                "type": "tap_selector",
-                                                "by": "content-desc",
-                                                "value": "Like",
-                                                "timeout": 2,
-                                            }
-                                        ],
-                                    }
-                                ],
-                            },
-                            {"weight": 80, "steps": []},
-                        ],
-                    },
-                    # Follow creator with FOLLOW_WEIGHT% probability
-                    {
-                        "type": "random_pick",
-                        "branches": [
-                            {
-                                "weight": "${FOLLOW_WEIGHT}",
-                                "steps": [
-                                    {
-                                        "type": "if_element",
-                                        "by": "text",
-                                        "value": "Follow",
-                                        "timeout": 1,
-                                        "then": [
-                                            {
-                                                "type": "tap_selector",
-                                                "by": "text",
-                                                "value": "Follow",
-                                                "timeout": 2,
-                                            },
-                                            {"type": "wait", "seconds": 1},
-                                        ],
-                                    }
-                                ],
-                            },
-                            {"weight": 95, "steps": []},
-                        ],
-                    },
-                    # Swipe up to next video
-                    {
-                        "type": "swipe_ratio",
-                        "x1": 0.5,
-                        "y1": 0.78,
-                        "x2": 0.5,
-                        "y2": 0.22,
-                        "duration_ms": 250,
-                    },
-                    {"type": "wait_stable", "timeout": 3, "stable_duration": 0.3},
-                    {"type": "dismiss_popup", "retries": 1},
-                ],
-            },
-        ],
-    },
-
-    # ── tt_search_hashtag ───────────────────────────────────────────────────
-    {
-        "name": "tt_search_hashtag",
-        "category": "tiktok",
-        "description": (
-            "Tìm kiếm TikTok theo hashtag và xem kết quả. "
-            "Mở TikTok, tap icon Search, gõ '#HASHTAG', nhấn Enter, "
-            "chọn tab Videos, tap video đầu tiên, xem BROWSE_COUNT video "
-            "bằng cách swipe lên. Thỉnh thoảng like (LIKE_WEIGHT%). "
-            "HASHTAG: không cần dấu # (template tự thêm). "
-            "BROWSE_COUNT: số video xem sau khi tìm kiếm. "
-            "⚠ Selector cho tab Videos có thể thay đổi giữa các phiên bản TikTok."
-        ),
-        "tags": "tiktok,search,hashtag,browse,like,engagement",
-        "variables": {
-            "HASHTAG": "trending",
-            "BROWSE_COUNT": 10,
-            "LIKE_WEIGHT": 30,
-            "APP_PACKAGE": "com.zhiliaoapp.musically",
-        },
-        "steps": [
-            {"type": "launch_app", "package": "${APP_PACKAGE}", "wait_after": 5},
-            {"type": "dismiss_popup", "retries": 3},
-            {"type": "wait_stable", "timeout": 5, "stable_duration": 0.5},
-            # Open search (try content-desc "Search" → fallback to tap_position search_bar)
-            {
-                "type": "if_element",
-                "by": "content-desc",
-                "value": "Search",
-                "timeout": 5,
-                "then": [
-                    {
-                        "type": "tap_selector",
-                        "by": "content-desc",
-                        "value": "Search",
-                        "timeout": 4,
-                    }
-                ],
-                "else": [{"type": "tap_position", "pos": "search_bar"}],
-            },
-            {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
-            # Type hashtag (assumes search input is focused after tap)
-            {"type": "input_text", "text": "#${HASHTAG}", "via": "u2"},
-            {"type": "key", "key": "enter"},
-            {"type": "wait_stable", "timeout": 5, "stable_duration": 0.5},
-            # Select Videos tab
-            {
-                "type": "if_element",
-                "by": "text",
-                "value": "Videos",
-                "timeout": 5,
-                "then": [
-                    {"type": "tap_selector", "by": "text", "value": "Videos", "timeout": 4}
-                ],
-            },
-            {"type": "wait_stable", "timeout": 3, "stable_duration": 0.4},
-            # Tap first video to enter full-screen player
-            {"type": "tap_ratio", "x": 0.25, "y": 0.45},
-            {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
-            # Browse videos
-            {
-                "type": "repeat",
-                "count": "${BROWSE_COUNT}",
-                "steps": [
-                    # Watch for random duration
-                    {
-                        "type": "set_variable",
-                        "name": "_VIEW",
-                        "from_list": [5, 8, 10, 14, 18, 22],
-                    },
-                    {"type": "wait", "seconds": "${_VIEW}"},
-                    # Like with probability
-                    {
-                        "type": "random_pick",
-                        "branches": [
-                            {
-                                "weight": "${LIKE_WEIGHT}",
-                                "steps": [
-                                    {
-                                        "type": "if_element",
-                                        "by": "content-desc",
-                                        "value": "Like",
-                                        "timeout": 1,
-                                        "then": [
-                                            {
-                                                "type": "tap_selector",
-                                                "by": "content-desc",
-                                                "value": "Like",
-                                                "timeout": 2,
-                                            }
-                                        ],
-                                    }
-                                ],
-                            },
-                            {"weight": 70, "steps": []},
-                        ],
-                    },
-                    # Swipe up to next
-                    {
-                        "type": "swipe_ratio",
-                        "x1": 0.5,
-                        "y1": 0.78,
-                        "x2": 0.5,
-                        "y2": 0.22,
-                        "duration_ms": 250,
-                    },
-                    {"type": "wait_stable", "timeout": 3, "stable_duration": 0.3},
-                ],
-            },
-        ],
-    },
-]
-
-# ─────────────────────────────────────────────────────────────────────────────
-# DF-006: Utility Templates
-# ─────────────────────────────────────────────────────────────────────────────
-
-_UTILITY_TEMPLATES: List[Dict[str, Any]] = [
-    # ── dismiss_all_setup ───────────────────────────────────────────────────
-    {
-        "name": "dismiss_all_setup",
-        "category": "utility",
-        "description": (
-            "Đóng tất cả popup, dialog setup, permission request khi mới mở app. "
-            "Lặp 5 lần: dismiss_popup + tap Skip/Not now/Maybe later/Allow/Close nếu có. "
-            "Chạy ngay sau launch_app trên device mới hoặc sau update app. "
-            "Sau khi xong, màn hình sẽ ở trạng thái ổn định (wait_stable)."
-        ),
-        "tags": "utility,popup,setup,cleanup,startup,permission",
-        "variables": {},
-        "steps": [
-            {
-                "type": "repeat",
-                "count": 5,
-                "delay_between": 1.5,
-                "steps": [
-                    {"type": "dismiss_popup"},
-                    {
-                        "type": "if_element",
-                        "by": "text",
-                        "value": "Skip",
-                        "timeout": 1,
-                        "then": [{"type": "tap_selector", "by": "text", "value": "Skip"}],
-                    },
-                    {
-                        "type": "if_element",
-                        "by": "text",
-                        "value": "Not now",
-                        "timeout": 1,
-                        "then": [{"type": "tap_selector", "by": "text", "value": "Not now"}],
-                    },
-                    {
-                        "type": "if_element",
-                        "by": "text",
-                        "value": "Maybe later",
-                        "timeout": 1,
-                        "then": [
-                            {"type": "tap_selector", "by": "text", "value": "Maybe later"}
-                        ],
-                    },
-                    {
-                        "type": "if_element",
-                        "by": "text",
-                        "value": "Allow",
-                        "timeout": 1,
-                        "then": [{"type": "tap_selector", "by": "text", "value": "Allow"}],
-                    },
-                    {
-                        "type": "if_element",
-                        "by": "text",
-                        "value": "Close",
-                        "timeout": 1,
-                        "then": [{"type": "tap_selector", "by": "text", "value": "Close"}],
-                    },
-                ],
-            },
-            {"type": "wait_stable", "timeout": 4, "stable_duration": 0.5},
-        ],
-    },
-]
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Aggregate list
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2476,8 +2181,6 @@ _UTILITY_TEMPLATES: List[Dict[str, Any]] = [
 BUILTIN_TEMPLATES: List[Dict[str, Any]] = (
     _GENERIC_TEMPLATES
     + _FACEBOOK_TEMPLATES
-    + _TIKTOK_TEMPLATES
-    + _UTILITY_TEMPLATES
 )
 
 

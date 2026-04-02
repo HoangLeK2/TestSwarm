@@ -1,9 +1,12 @@
 'use client';
 
-import { Play, Pause, Square, Trash2, Eye, MoreHorizontal, Smartphone, FileText } from 'lucide-react';
+import { useState } from 'react';
+import { Play, Pause, Square, Trash2, Eye, MoreHorizontal, Smartphone, FileText, BarChart3 } from 'lucide-react';
+import { Link } from '@/i18n/navigation';
 import { toast } from 'sonner';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
+import { RunCampaignDialog } from '../run-campaign-dialog';
 import {
   Dialog,
   DialogContent,
@@ -24,8 +27,11 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { DeviceControlEmbed } from '@/features/devices/components/device-control-embed';
+import { DeviceStepsPanel } from '@/features/devices/components/device-step-monitor';
+import { List } from 'lucide-react';
 import { AddDevicesToCampaignDialog } from '../add-devices-dialog';
 import { ScenarioListDialog } from '../scenario-list-dialog';
+import { ROUTES } from '@/config/routes';
 import { CampaignRunProgress } from './CampaignRunProgress';
 import {
   useCampaignDevices,
@@ -46,10 +52,12 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
   const tAdd = useTranslations('campaignsFeature.addDevices');
   const tScenario = useTranslations('campaignsFeature.scenarioList');
 
+  const [runDialogOpen, setRunDialogOpen] = useState(false);
+
   const { data: devices = [] } = useCampaignDevices(campaign.id);
   const { data: scenarios = [] } = useScenarios(campaign.id);
 
-  const { mutate: updateStatus, isPending } = useUpdateCampaignStatus();
+  const { isPending } = useUpdateCampaignStatus();
   const runMutation = useRunCampaign(
     () => toast.success(t('campaignDone')),
     { onTemporalFallback: () => toast.warning(t('temporalFallback')) }
@@ -148,39 +156,62 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
           </TooltipContent>
         </Tooltip>
 
+        {/* ── Kết quả ── */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button size='sm' variant='ghost' className='h-7 gap-1.5 px-2 text-xs' asChild>
+              <Link href={ROUTES.CONTENT.BY_CAMPAIGN(campaign.id)}>
+                <BarChart3 size={13} />
+              </Link>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side='top' className='text-xs'>Xem kết quả thu thập</TooltipContent>
+        </Tooltip>
+
         <div className='mx-1 h-4 w-px bg-border' />
 
         {/* ── Run ── */}
         {isIdleStatus(campaign.status) && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                size='sm'
-                variant={hasScenario ? 'default' : 'outline'}
-                className='h-7 gap-1.5 px-2.5 text-xs'
-                disabled={isPending || isRunning}
-                onClick={() =>
-                  runCampaign(campaign.id, {
-                    onError: (err: unknown) => {
-                      const msg =
-                        err && typeof err === 'object' && 'response' in err
-                          ? (err as { response?: { data?: { error?: string } } }).response?.data?.error
-                          : null;
-                      toast.error(msg ?? t('runFailed'));
-                    },
-                  })
-                }
-              >
-                <Play size={13} />
-                {t('titleRun')}
-              </Button>
-            </TooltipTrigger>
-            {devices.length === 0 && (
-              <TooltipContent side='top' className='text-xs'>
-                {t('titleNeedDevice')}
-              </TooltipContent>
-            )}
-          </Tooltip>
+          <>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size='sm'
+                  variant={hasScenario ? 'default' : 'outline'}
+                  className='h-7 gap-1.5 px-2.5 text-xs'
+                  disabled={isPending || isRunning}
+                  onClick={() => setRunDialogOpen(true)}
+                >
+                  <Play size={13} />
+                  {t('titleRun')}
+                </Button>
+              </TooltipTrigger>
+              {devices.length === 0 && (
+                <TooltipContent side='top' className='text-xs'>
+                  {t('titleNeedDevice')}
+                </TooltipContent>
+              )}
+            </Tooltip>
+
+            <RunCampaignDialog
+              open={runDialogOpen}
+              onClose={() => setRunDialogOpen(false)}
+              devices={devices}
+              isRunning={isRunning}
+              onConfirm={(deviceSerials) => {
+                setRunDialogOpen(false);
+                runCampaign({ id: campaign.id, deviceSerials }, {
+                  onError: (err: unknown) => {
+                    const msg =
+                      err && typeof err === 'object' && 'response' in err
+                        ? (err as { response?: { data?: { error?: string } } }).response?.data?.error
+                        : null;
+                    toast.error(msg ?? t('runFailed'));
+                  },
+                });
+              }}
+            />
+          </>
         )}
 
         {/* ── Running controls ── */}
@@ -221,7 +252,6 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
                 <Square size={13} />
               </Button>
             )}
-            {/* Live preview */}
             {previewSerial && (
               <Dialog>
                 <DialogTrigger asChild>
@@ -230,11 +260,23 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
                     Live
                   </Button>
                 </DialogTrigger>
-                <DialogContent className='max-w-[420px]'>
-                  <DialogHeader>
+                <DialogContent className='w-[90vw] sm:max-w-[1200px] max-h-[90vh] overflow-hidden flex flex-col'>
+                  <DialogHeader className='shrink-0'>
                     <DialogTitle className='text-sm'>{t('liveDialogTitle')}</DialogTitle>
                   </DialogHeader>
-                  <DeviceControlEmbed initialSerial={previewSerial} compact />
+                  <div className='flex min-h-0 flex-1 divide-x overflow-hidden'>
+                    <div className='w-[380px] shrink-0 overflow-y-auto pr-3'>
+                      <DeviceControlEmbed initialSerial={previewSerial} compact hideStepMonitor />
+                    </div>
+                    <div className='flex min-w-0 flex-1 flex-col pl-3'>
+                      <p className='mb-2 shrink-0 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>
+                        <List size={10} /> Các bước
+                      </p>
+                      <div className='flex-1 overflow-y-auto'>
+                        <DeviceStepsPanel serial={previewSerial} />
+                      </div>
+                    </div>
+                  </div>
                 </DialogContent>
               </Dialog>
             )}

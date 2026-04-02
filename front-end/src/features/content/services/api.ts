@@ -25,6 +25,9 @@ export interface ContentItem {
   extracted_at: string | null;
   content_date: string | null;
   created_at: string;
+  content_hash: string;
+  parent_id: string | null;
+  item_level: number;
 }
 
 export interface ContentListResponse {
@@ -42,32 +45,10 @@ export interface ContentFilters {
   device_serial?: string | null;
   campaign_id?: string | null;
   run_id?: string | null;
+  content_hash?: string | null;
+  parent_id?: string | null;
   limit?: number;
   offset?: number;
-}
-
-export interface CampaignRun {
-  id: string;
-  campaign_id: string;
-  status: 'running' | 'completed' | 'failed';
-  device_serials: string[];
-  workflow_ids: string[];
-  scenarios_count: number;
-  total_saved: number;
-  total_duplicate: number;
-  started_at: string | null;
-  finished_at: string | null;
-}
-
-export interface CampaignRunListResponse {
-  items: CampaignRun[];
-  total: number;
-}
-
-export interface RunContentStats {
-  run_id: string;
-  total_items: number;
-  latest_extraction: string | null;
 }
 
 export interface ContentStats {
@@ -77,44 +58,32 @@ export interface ContentStats {
   latest_extraction: string | null;
 }
 
-export const campaignRunApi = {
-  listRuns: async (campaignId: string, params?: { limit?: number; offset?: number }): Promise<CampaignRunListResponse> => {
-    const res = await farmApi.campaigns.listRunsApiCampaignsCampaignIdRunsGet(campaignId, params);
-    return res.data as CampaignRunListResponse;
-  },
-
-  getRun: async (campaignId: string, runId: string): Promise<CampaignRun> => {
-    const res = await farmApi.campaigns.getRunApiCampaignsCampaignIdRunsRunIdGet(campaignId, runId);
-    return res.data as CampaignRun;
-  },
-
-  runStats: async (campaignId: string, runId: string): Promise<RunContentStats> => {
-    const res = await farmApi.campaigns.runContentStatsApiCampaignsCampaignIdRunsRunIdContentStatsGet(campaignId, runId);
-    return res.data as RunContentStats;
-  },
-};
-
 export const contentApi = {
   list: async (filters?: ContentFilters): Promise<ContentListResponse> => {
-    const res = await farmApi.content.listContentApiContentGet({
-      ...filters,
+    const params: Record<string, unknown> = {
       limit: filters?.limit ?? 50,
       offset: filters?.offset ?? 0,
-    });
-    return res.data as ContentListResponse;
+    };
+    if (filters?.collection != null) params.collection = filters.collection;
+    if (filters?.platform != null) params.platform = filters.platform;
+    if (filters?.content_type != null) params.content_type = filters.content_type;
+    if (filters?.search != null) params.search = filters.search;
+    if (filters?.device_serial != null) params.device_serial = filters.device_serial;
+    if (filters?.campaign_id != null) params.campaign_id = filters.campaign_id;
+    if (filters?.run_id != null) params.run_id = filters.run_id;
+    if (filters?.content_hash != null) params.content_hash = filters.content_hash;
+    if (filters?.parent_id != null) params.parent_id = filters.parent_id;
+
+    return farmApi.get<ContentListResponse>('/content', { params }).then((r) => r.data);
   },
 
-  stats: async (): Promise<ContentStats> => {
-    const res = await farmApi.content.getStatsApiContentStatsGet();
-    return res.data as ContentStats;
-  },
+  stats: async (): Promise<ContentStats> =>
+    farmApi.get<ContentStats>('/content/stats').then((r) => r.data),
 
-  getItem: async (id: string): Promise<ContentItem> => {
-    const res = await farmApi.content.getContentItemApiContentItemIdGet(id);
-    return res.data as ContentItem;
-  },
+  getItem: async (id: string): Promise<ContentItem> =>
+    farmApi.get<ContentItem>(`/content/${id}`).then((r) => r.data),
 
   deleteItem: async (id: string): Promise<void> => {
-    await farmApi.content.deleteContentItemApiContentItemIdDelete(id);
+    await farmApi.delete(`/content/${id}`);
   },
 };

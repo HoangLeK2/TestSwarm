@@ -36,9 +36,9 @@ export const campaignsApi = {
   delete: (id: string) => farmApi.delete(`/campaigns/${id}`).then((r) => r.data),
   updateStatus: (id: string, status: CampaignStatus) =>
     farmApi.patch<CampaignOut>(`/campaigns/${id}/status`, { status }).then((r) => r.data),
-  run: (id: string) =>
+  run: (id: string, deviceSerials?: string[]) =>
     farmApi
-      .post<CampaignRunResponse>(`/campaigns/${id}/run`, {})
+      .post<CampaignRunResponse>(`/campaigns/${id}/run`, deviceSerials?.length ? { device_serials_override: deviceSerials } : {})
       .then((r) => r.data),
   compileScenario: (
     id: string,

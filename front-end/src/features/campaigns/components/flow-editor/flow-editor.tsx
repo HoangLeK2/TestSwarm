@@ -290,6 +290,7 @@ export function FlowEditor({
                               compact={compact}
                               selectorPickTarget={selectorPickTarget}
                               onTogglePickSelector={onSelectorPickTargetChange ? togglePick : undefined}
+                              onRunSelf={onRunStep ? () => onRunStep(step, i) : undefined}
                               onRunChild={onRunStep ? (s) => onRunStep(s, -1) : undefined}
                             />
                           ) : (

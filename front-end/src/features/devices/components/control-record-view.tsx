@@ -27,7 +27,13 @@ import {
   Clapperboard,
   Crosshair,
   HelpCircle,
+  SlidersHorizontal,
+  MousePointerClick,
+  Timer,
+  Keyboard,
+  CheckSquare,
 } from 'lucide-react';
+import { VariableEditor } from '@/components/variable-editor';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -77,10 +83,21 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
   const [playerMode, setPlayerMode] = useState(false);
   const [selectorPickTarget, setSelectorPickTarget] = useState<SelectorPickTarget | null>(null);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
+  const [varDialogOpen, setVarDialogOpen] = useState(false);
 
   // Inline step runner (step-by-step without entering player mode)
   const [stepRunStates, setStepRunStates] = useState<Record<number, 'idle' | 'running' | 'ok' | 'error'>>({});
   const stepRunAbortRef = useRef<AbortController | null>(null);
+
+  // Variables for step execution (synced from loaded scenario, editable inline)
+  const [scenarioVariables, setScenarioVariables] = useState<Record<string, any>>(
+    () => save.editingContext?.variables ?? {}
+  );
+  useEffect(() => {
+    if (save.editingContext?.variables) {
+      setScenarioVariables(save.editingContext.variables);
+    }
+  }, [save.editingContext]);
 
   const handleRunStep = useCallback(
     async (step: FlowStep, index: number) => {
@@ -101,6 +118,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
             }
           },
           ctrl.signal,
+          scenarioVariables,
         );
       } catch (e) {
         if (!ctrl.signal.aborted) {
@@ -118,7 +136,28 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
         }
       }
     },
-    [device.selectedDevice, stepRunStates],
+    [device.selectedDevice, stepRunStates, scenarioVariables],
+  );
+
+  const addStepFromSelector = useCallback(
+    (stepType: 'tap_selector' | 'long_tap_selector' | 'wait_element' | 'assert_element' | 'input_selector') => {
+      const by = selector.by as string;
+      const value = selector.value;
+      if (!value) return;
+      const newStep: FlowStep = stepType === 'tap_selector'
+        ? { type: 'tap_selector', by, value }
+        : stepType === 'long_tap_selector'
+        ? { type: 'long_tap_selector', by, value, duration_ms: 800 }
+        : stepType === 'wait_element'
+        ? { type: 'wait_element', by, value, timeout: 10 }
+        : stepType === 'assert_element'
+        ? { type: 'assert_element', by, value, timeout: 5 }
+        : { type: 'input_selector', by, value, text: '', clear_first: true };
+      const id = `step-${Date.now()}-${steps.items.length}`;
+      steps.setItems([...(steps.items as any[]), { ...newStep, _id: id }] as any);
+      toast.success(`Đã thêm bước ${stepType}`);
+    },
+    [selector.by, selector.value, steps],
   );
 
   useEffect(() => {
@@ -289,17 +328,81 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
 
           {/* Selector bar */}
           <div className={cn(
-            'flex shrink-0 items-center gap-2 border-t border-border/60 px-2.5 py-2',
+            'shrink-0 border-t border-border/60 px-2.5 py-2',
             selector.value ? 'bg-primary/5' : 'bg-muted/30',
           )}>
             {selector.value ? (
               <>
-                <span className='min-w-0 flex-1 truncate font-mono text-[10px] text-muted-foreground'>
-                  <span className='font-bold text-primary'>[{selector.by}]</span> {selector.value}
-                </span>
-                <Button size='sm' variant='secondary' className='h-6 shrink-0 px-2 text-[10px]' onClick={selector.tap} disabled={!selectedDevice}>
-                  Tap
-                </Button>
+                <div className='flex items-center gap-1.5 pb-1.5'>
+                  <span className='min-w-0 flex-1 truncate font-mono text-[10px] text-muted-foreground'>
+                    <span className='font-bold text-primary'>[{selector.by}]</span> {selector.value}
+                  </span>
+                  <Button size='sm' variant='secondary' className='h-5 shrink-0 px-1.5 text-[9px]' onClick={selector.tap} disabled={!selectedDevice}>
+                    Tap
+                  </Button>
+                </div>
+                <div className='flex flex-wrap gap-1'>
+                  <Tooltip delayDuration={300}>
+                    <TooltipTrigger asChild>
+                      <button
+                        type='button'
+                        onClick={() => addStepFromSelector('tap_selector')}
+                        className='flex items-center gap-0.5 rounded bg-blue-500/10 px-1.5 py-0.5 text-[9px] font-medium text-blue-700 hover:bg-blue-500/20 dark:text-blue-400'
+                      >
+                        <MousePointerClick className='size-2.5' /> Tap
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side='top' className='text-[10px]'>Thêm bước tap_selector</TooltipContent>
+                  </Tooltip>
+                  <Tooltip delayDuration={300}>
+                    <TooltipTrigger asChild>
+                      <button
+                        type='button'
+                        onClick={() => addStepFromSelector('long_tap_selector')}
+                        className='flex items-center gap-0.5 rounded bg-purple-500/10 px-1.5 py-0.5 text-[9px] font-medium text-purple-700 hover:bg-purple-500/20 dark:text-purple-400'
+                      >
+                        <MousePointerClick className='size-2.5' /> Long
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side='top' className='text-[10px]'>Thêm bước long_tap_selector</TooltipContent>
+                  </Tooltip>
+                  <Tooltip delayDuration={300}>
+                    <TooltipTrigger asChild>
+                      <button
+                        type='button'
+                        onClick={() => addStepFromSelector('wait_element')}
+                        className='flex items-center gap-0.5 rounded bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-medium text-amber-700 hover:bg-amber-500/20 dark:text-amber-400'
+                      >
+                        <Timer className='size-2.5' /> Wait
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side='top' className='text-[10px]'>Thêm bước wait_element</TooltipContent>
+                  </Tooltip>
+                  <Tooltip delayDuration={300}>
+                    <TooltipTrigger asChild>
+                      <button
+                        type='button'
+                        onClick={() => addStepFromSelector('assert_element')}
+                        className='flex items-center gap-0.5 rounded bg-green-500/10 px-1.5 py-0.5 text-[9px] font-medium text-green-700 hover:bg-green-500/20 dark:text-green-400'
+                      >
+                        <CheckSquare className='size-2.5' /> Assert
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side='top' className='text-[10px]'>Thêm bước assert_element</TooltipContent>
+                  </Tooltip>
+                  <Tooltip delayDuration={300}>
+                    <TooltipTrigger asChild>
+                      <button
+                        type='button'
+                        onClick={() => addStepFromSelector('input_selector')}
+                        className='flex items-center gap-0.5 rounded bg-orange-500/10 px-1.5 py-0.5 text-[9px] font-medium text-orange-700 hover:bg-orange-500/20 dark:text-orange-400'
+                      >
+                        <Keyboard className='size-2.5' /> Input
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side='top' className='text-[10px]'>Thêm bước input_selector</TooltipContent>
+                  </Tooltip>
+                </div>
               </>
             ) : (
               <p className='text-[10px] text-muted-foreground'>{t('selectorBarHint')}</p>
@@ -463,6 +566,33 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                     </span>
                   ))}
                 </div>
+                {/* Variables editor button */}
+                <Tooltip delayDuration={400}>
+                  <TooltipTrigger asChild>
+                    <button
+                      type='button'
+                      onClick={() => setVarDialogOpen(true)}
+                      className={cn(
+                        'flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors',
+                        Object.keys(scenarioVariables).length > 0
+                          ? 'bg-primary/10 text-primary hover:bg-primary/20'
+                          : 'text-muted-foreground hover:bg-muted',
+                      )}
+                    >
+                      <SlidersHorizontal className='size-3' />
+                      Biến
+                      {Object.keys(scenarioVariables).length > 0 && (
+                        <span className='rounded-full bg-primary/20 px-1 text-[9px] font-bold'>
+                          {Object.keys(scenarioVariables).length}
+                        </span>
+                      )}
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side='bottom' className='text-xs'>
+                    Chỉnh biến — giá trị thay thế cho {'${VAR}'} khi chạy thử bước
+                  </TooltipContent>
+                </Tooltip>
+
                 <Tooltip delayDuration={400}>
                   <TooltipTrigger asChild>
                     <button type='button' className='rounded-full p-0.5 text-muted-foreground hover:bg-muted'>
@@ -624,6 +754,26 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           )}
         </div>
       </div>
+
+      {/* ── Variables dialog ────────────────────────────────────────────────── */}
+      <Dialog open={varDialogOpen} onOpenChange={setVarDialogOpen}>
+        <DialogContent className='max-w-xl'>
+          <DialogHeader>
+            <DialogTitle className='flex items-center gap-2 text-base'>
+              <SlidersHorizontal className='size-4' />
+              Biến kịch bản
+            </DialogTitle>
+          </DialogHeader>
+          <p className='text-[12px] text-muted-foreground -mt-1'>
+            Đặt giá trị cho biến như <code className='rounded bg-muted px-1 font-mono'>{'${GROUP_NAME}'}</code>.
+            Khi chạy thử bước, giá trị này sẽ thay thế tên biến.
+          </p>
+          <VariableEditor
+            variables={scenarioVariables}
+            onChange={setScenarioVariables}
+          />
+        </DialogContent>
+      </Dialog>
 
       {/* ── Save dialog ─────────────────────────────────────────────────────── */}
       <Dialog

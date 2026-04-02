@@ -13,6 +13,18 @@ import type { ContentItem } from '../services/api';
 interface Props {
   item: ContentItem | null;
   onClose: () => void;
+  onViewParent?: (parentId: string) => void;
+}
+
+/** tags có thể là JSON array '["a","b"]' hoặc CSV "a,b,c" */
+function parseTags(raw: string): string[] {
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed.map(String).filter(Boolean);
+  } catch {
+    // not JSON — treat as comma-separated
+  }
+  return raw.split(',').map((s) => s.trim()).filter(Boolean);
 }
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
@@ -24,7 +36,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   );
 }
 
-export function ContentDetailDialog({ item, onClose }: Props) {
+export function ContentDetailDialog({ item, onClose, onViewParent }: Props) {
   if (!item) return null;
 
   const time = item.extracted_at
@@ -43,6 +55,18 @@ export function ContentDetailDialog({ item, onClose }: Props) {
         </DialogHeader>
 
         <div className='space-y-0.5'>
+          {(item as any).item_level > 0 && (item as any).parent_id && (
+            <Row label='Bài gốc'>
+              <button
+                type='button'
+                onClick={() => { onViewParent?.((item as any).parent_id); onClose(); }}
+                className='flex items-center gap-1 text-blue-600 hover:underline dark:text-blue-400'
+              >
+                <ExternalLink size={10} />
+                Xem bài đăng gốc
+              </button>
+            </Row>
+          )}
           <Row label='Collection'>{item.collection}</Row>
           <Row label='Thời gian cào'>{time}</Row>
           {item.device_serial && <Row label='Thiết bị'><span className='font-mono'>{item.device_serial}</span></Row>}
@@ -105,10 +129,10 @@ export function ContentDetailDialog({ item, onClose }: Props) {
             </Row>
           )}
 
-          {item.tags && item.tags !== '[]' && (
+          {item.tags && item.tags !== '[]' && item.tags !== '' && (
             <Row label='Tags'>
               <div className='flex flex-wrap gap-1'>
-                {JSON.parse(item.tags).map((tag: string, i: number) => (
+                {parseTags(item.tags).map((tag: string, i: number) => (
                   <Badge key={i} variant='secondary' className='text-[9px]'>{tag}</Badge>
                 ))}
               </div>

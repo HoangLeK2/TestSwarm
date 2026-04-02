@@ -53,6 +53,11 @@ export function useNavItems(): {
           title: t('scenario_templates'),
           url: ROUTES.SCENARIO_TEMPLATES.ROOT,
           icon: 'template'
+        },
+        {
+          title: t('content'),
+          url: ROUTES.CONTENT.ROOT,
+          icon: 'stats'
         }
       ]
     }

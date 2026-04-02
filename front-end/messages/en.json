@@ -151,7 +151,8 @@
     "schedules": "Schedules",
     "device_groups": "Device Groups",
     "accounts": "Accounts",
-    "scenario_templates": "Scenario Templates"
+    "scenario_templates": "Scenario Templates",
+    "content": "Collected Results"
   },
   "deviceGroupsFeature": {
     "list": {

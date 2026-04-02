@@ -1056,6 +1056,7 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
               <DeviceControlEmbed
                 initialSerial={embedSerial}
                 compact
+                hideStepMonitor
                 onTap={recording ? (serial, rx, ry) => handleRecordTap(serial, rx, ry) : undefined}
               />
             </div>

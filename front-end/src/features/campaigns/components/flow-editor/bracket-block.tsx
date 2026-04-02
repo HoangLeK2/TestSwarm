@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useState } from 'react';
-import { ChevronDown, ChevronRight, Crosshair, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Crosshair, Play, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { isControlFlow, type FlowStep } from '../scenario-steps/types';
 import { BRACKET_COLORS, getStepTypeName, getStepSummary } from './constants';
@@ -98,6 +98,8 @@ interface BracketBlockProps {
   depth?: number;
   /** Run a child step on the device inline. */
   onRunChild?: (step: FlowStep) => void;
+  /** Run the entire control-flow block (loop / if / repeat) on the device. */
+  onRunSelf?: () => void;
   /**
    * The index of this block in the ROOT steps array (not local).
    * Needed for correct SelectorPickTarget when blocks are nested.
@@ -257,6 +259,7 @@ export function BracketBlock({
   onTogglePickSelector,
   depth = 0,
   onRunChild,
+  onRunSelf,
   rootStepIndex,
   pathFromRoot,
 }: BracketBlockProps) {
@@ -396,6 +399,16 @@ export function BracketBlock({
             }}
           >
             <Crosshair size={12} strokeWidth={2} />
+          </button>
+        )}
+        {onRunSelf && (
+          <button
+            type='button'
+            className='shrink-0 rounded p-0.5 hover:bg-green-500/15 hover:text-green-600'
+            title='Chạy khối này trên thiết bị'
+            onClick={(e) => { e.stopPropagation(); onRunSelf(); }}
+          >
+            <Play size={10} strokeWidth={2} />
           </button>
         )}
         <button

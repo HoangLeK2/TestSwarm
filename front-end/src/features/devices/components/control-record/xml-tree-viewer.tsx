@@ -174,7 +174,9 @@ function TreeNode({ node, expanded, matchingIds, selectedNodeId, onToggle, onCli
 
   const label = node.className || node.tag;
   const resId = node.resourceId ? node.resourceId.split('/').pop() : '';
-  const textPreview = node.text ? (node.text.length > 30 ? node.text.slice(0, 30) + '...' : node.text) : '';
+  const rawText = node.text || node.contentDesc;
+  const textPreview = rawText ? (rawText.length > 30 ? rawText.slice(0, 30) + '...' : rawText) : '';
+  const isFromDesc = !node.text && !!node.contentDesc;
 
   return (
     <>
@@ -211,9 +213,9 @@ function TreeNode({ node, expanded, matchingIds, selectedNodeId, onToggle, onCli
           </span>
         )}
 
-        {/* Text preview */}
+        {/* Text / content-desc preview */}
         {textPreview && (
-          <span className='truncate text-[10px] text-orange-600 dark:text-orange-400'>
+          <span className={`truncate text-[10px] ${isFromDesc ? 'text-sky-600 dark:text-sky-400' : 'text-orange-600 dark:text-orange-400'}`}>
             &quot;{textPreview}&quot;
           </span>
         )}

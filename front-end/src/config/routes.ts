@@ -44,6 +44,11 @@ export const ROUTES = {
   SCHEDULES: {
     ROOT: '/dashboard/schedules'
   },
+  CONTENT: {
+    ROOT: '/dashboard/content',
+    /** Jump to content page pre-filtered by campaign */
+    BY_CAMPAIGN: (campaignId: string) => `/dashboard/content?campaign_id=${encodeURIComponent(campaignId)}`,
+  },
   DASHBOARD: {
     ROOT: '/dashboard',
     ORGANIZATION: '/dashboard/settings/organization',

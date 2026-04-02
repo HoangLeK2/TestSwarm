@@ -7,10 +7,11 @@ import { DeviceTile } from './device-tile';
 type Props = {
   initialSerial: string;
   compact?: boolean;
+  hideStepMonitor?: boolean;
   onTap?: (serial: string, rx: number, ry: number) => void;
 };
 
-export function DeviceControlEmbed({ initialSerial, compact = true, onTap }: Props) {
+export function DeviceControlEmbed({ initialSerial, compact = true, hideStepMonitor = false, onTap }: Props) {
   const {
     devices,
     logs,
@@ -75,6 +76,7 @@ export function DeviceControlEmbed({ initialSerial, compact = true, onTap }: Pro
         onRestart={handleRestart}
         onTap={onTap ? (rx, ry) => onTap(selectedDevice.serial, rx, ry) : undefined}
         compact={compact}
+        hideStepMonitor={hideStepMonitor}
       />
     </div>
   );

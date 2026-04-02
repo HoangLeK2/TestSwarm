@@ -1,243 +1,20 @@
 'use client';
 
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import {
-  Activity, CheckCircle2, Circle, Loader2, XCircle,
-  ChevronDown, ChevronRight, AlertCircle,
+  Activity, ChevronDown, ChevronRight,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
 } from '@/components/ui/dialog';
-import { Progress } from '@/components/ui/progress';
+import { Loader2 } from 'lucide-react';
 import {
   useDeviceRunningWorkflows,
-  useWorkflowProgress,
-  useWorkflowSteps,
 } from '@/features/campaigns/hooks/use-campaigns';
-import { scenariosApi } from '@/features/campaigns/services/api';
-import { getStepTypeName, getStepDisplay } from '@/features/campaigns/components/flow-editor/constants';
-import type { FlowStep } from '@/features/campaigns/components/scenario-steps/types';
-import type { WorkflowInfo, StepLogEntry } from '@/features/campaigns/types';
-
-// ── Parse workflow ID ─────────────────────────────────────────────────────────
-
-function parseWorkflowId(id: string) {
-  const m = id.match(/^campaign:([^:]+):device:.+:scenario:([^:]+)$/);
-  return { campaignId: m?.[1] ?? '', scenarioId: m?.[2] ?? '' };
-}
-
-// ── Step row ──────────────────────────────────────────────────────────────────
-
-function StepRow({
-  index,
-  stepDef,
-  logEntry,
-  isCurrentlyRunning,
-  currentStepType,
-  currentMessage,
-  loopIter,
-  isPending,
-}: {
-  index: number;
-  stepDef?: FlowStep;
-  logEntry?: StepLogEntry;
-  isCurrentlyRunning: boolean;
-  currentStepType: string;
-  currentMessage: string;
-  loopIter: number | null;
-  isPending: boolean;
-}) {
-  const type = stepDef?.type ?? logEntry?.step_type ?? (isCurrentlyRunning ? currentStepType : '');
-  const userTitle = (stepDef as any)?.title?.trim() || undefined;
-  const { target } = stepDef ? getStepDisplay(stepDef) : { target: '' };
-  const label = userTitle ?? (type ? getStepTypeName(type) : `Bước ${index + 1}`);
-  const sublabel = !userTitle && target ? target : undefined;
-  const depth = logEntry?.depth ?? 0;
-
-  // Status
-  const isDone = !!logEntry && !isCurrentlyRunning;
-  const isFailed = isDone && !logEntry.ok;
-  const isOk = isDone && logEntry.ok;
-  const msg = isCurrentlyRunning ? currentMessage : (logEntry?.message ?? '');
-
-  return (
-    <div
-      className={cn(
-        'flex items-start gap-2 border-b last:border-b-0 py-2 pr-3 text-[11px] transition-colors',
-        isCurrentlyRunning && 'bg-primary/5',
-        isFailed && 'bg-destructive/5',
-        isPending && 'opacity-40',
-      )}
-      style={{ paddingLeft: `${12 + depth * 14}px` }}
-    >
-      {/* Icon */}
-      <div className='mt-0.5 w-3 shrink-0'>
-        {isFailed ? (
-          <XCircle size={12} className='text-destructive' />
-        ) : isCurrentlyRunning ? (
-          <Loader2 size={12} className='animate-spin text-primary' />
-        ) : isOk ? (
-          <CheckCircle2 size={12} className='text-green-500' />
-        ) : (
-          <Circle size={12} className='text-muted-foreground/25' />
-        )}
-      </div>
-
-      {/* Number */}
-      <span className={cn(
-        'mt-0.5 w-5 shrink-0 tabular-nums text-[10px]',
-        isCurrentlyRunning ? 'font-bold text-primary' : 'text-muted-foreground',
-      )}>
-        {index + 1}
-      </span>
-
-      {/* Name + sublabel + message */}
-      <div className='min-w-0 flex-1'>
-        <div className={cn(
-          'truncate leading-tight',
-          isCurrentlyRunning ? 'font-semibold text-primary' : isFailed ? 'text-destructive' : isOk ? 'text-foreground' : 'text-muted-foreground/60',
-        )}>
-          {label}
-        </div>
-        {sublabel && !isCurrentlyRunning && (
-          <div className='truncate text-[10px] text-muted-foreground' title={sublabel}>{sublabel}</div>
-        )}
-        {isCurrentlyRunning && msg && (
-          <div className='truncate text-[10px] italic text-primary/70' title={msg}>{msg}</div>
-        )}
-        {isCurrentlyRunning && loopIter !== null && (
-          <div className='text-[10px] text-primary/60'>Vòng #{loopIter + 1}</div>
-        )}
-        {isFailed && msg && (
-          <div className='truncate text-[10px] text-destructive/80' title={msg}>{msg}</div>
-        )}
-      </div>
-
-      {/* Type badge */}
-      {type && (
-        <span className={cn(
-          'mt-0.5 shrink-0 rounded px-1 py-px text-[9px] font-bold uppercase tracking-wide',
-          isCurrentlyRunning ? 'bg-primary/15 text-primary'
-            : isOk ? 'bg-green-500/10 text-green-600 dark:text-green-400'
-            : isFailed ? 'bg-destructive/10 text-destructive'
-            : 'bg-muted text-muted-foreground/50',
-        )}>
-          {getStepTypeName(type)}
-        </span>
-      )}
-    </div>
-  );
-}
-
-// ── Step list for one workflow ────────────────────────────────────────────────
-
-function WorkflowStepList({ wf }: { wf: WorkflowInfo }) {
-  const isActive = wf.status === 'RUNNING' || wf.status === 'PAUSED';
-  const { campaignId, scenarioId } = parseWorkflowId(wf.workflow_id);
-
-  // 1. Live progress (current step index + type)
-  const { data: prog } = useWorkflowProgress(wf.workflow_id, isActive);
-
-  // 2. Step execution log (executed steps with ok/fail)
-  const { data: stepLog, isLoading: logLoading } = useWorkflowSteps(wf.workflow_id, true);
-
-  // 3. Scenario step definitions (type names, titles, values)
-  const { data: scenario, isLoading: scenarioLoading } = useQuery({
-    queryKey: ['scenario-steps', campaignId, scenarioId],
-    queryFn: () => scenariosApi.get(campaignId, scenarioId),
-    enabled: !!campaignId && !!scenarioId,
-    staleTime: 30_000,
-  });
-
-  if (logLoading || scenarioLoading) {
-    return (
-      <div className='flex items-center gap-2 py-4 text-xs text-muted-foreground'>
-        <Loader2 size={12} className='animate-spin' /> Đang tải...
-      </div>
-    );
-  }
-
-  const scenarioDefs: FlowStep[] = (scenario?.steps ?? []) as FlowStep[];
-  const executedSteps: StepLogEntry[] = stepLog?.steps ?? [];
-
-  const current = prog?.current_step ?? 0;
-  const total = prog?.total_steps ?? scenarioDefs.length ?? executedSteps.length;
-  const stepType = prog?.current_step_type ?? '';
-  const message = prog?.message ?? '';
-  const loopIter = prog?.loop_iteration != null && prog.loop_iteration >= 0 ? prog.loop_iteration : null;
-  const pct = total > 0
-    ? Math.round(((isActive ? current : executedSteps.length) / total) * 100)
-    : wf.status === 'COMPLETED' ? 100 : 0;
-
-  // Build a merged row list: scenario defs drive the list; log entries enrich each row
-  const logByIndex = new Map(executedSteps.map((e) => [e.index, e]));
-  const rowCount = Math.max(total, scenarioDefs.length, executedSteps.length > 0 ? (executedSteps[executedSteps.length - 1]?.index ?? 0) + 1 : 0);
-
-  return (
-    <div className='space-y-3'>
-      {/* Progress bar */}
-      <div className='flex items-center gap-2'>
-        <Progress
-          value={pct}
-          className={cn(
-            'h-1.5 flex-1',
-            wf.status === 'FAILED' && '[&>div]:bg-destructive',
-            wf.status === 'PAUSED' && '[&>div]:bg-amber-500',
-            wf.status === 'COMPLETED' && '[&>div]:bg-green-500',
-          )}
-        />
-        <span className='shrink-0 tabular-nums text-[10px] text-muted-foreground'>
-          {isActive ? `${current}/${total}` : `${executedSteps.length}/${total}`}
-        </span>
-      </div>
-
-      {/* Step list */}
-      {rowCount > 0 ? (
-        <div className='overflow-hidden rounded-md border bg-background'>
-          <div className='max-h-[400px] overflow-y-auto'>
-            {Array.from({ length: rowCount }).map((_, i) => {
-              const logEntry = logByIndex.get(i);
-              const stepDef = scenarioDefs[i];
-              const isCurrentlyRunning = isActive && i === current && !logEntry;
-
-              return (
-                <StepRow
-                  key={i}
-                  index={i}
-                  stepDef={stepDef}
-                  logEntry={logEntry}
-                  isCurrentlyRunning={isCurrentlyRunning}
-                  currentStepType={stepType}
-                  currentMessage={message}
-                  loopIter={loopIter}
-                  isPending={!logEntry && !isCurrentlyRunning && i > current}
-                />
-              );
-            })}
-          </div>
-        </div>
-      ) : (
-        <p className='text-center text-[11px] text-muted-foreground py-4'>Chưa có dữ liệu bước.</p>
-      )}
-
-      {/* Summary */}
-      {wf.status === 'COMPLETED' && (
-        <div className='flex items-center gap-1.5 text-[11px] text-green-600 dark:text-green-400'>
-          <CheckCircle2 size={12} /> Hoàn thành {executedSteps.length} bước
-        </div>
-      )}
-      {wf.status === 'FAILED' && (
-        <div className='flex items-center gap-1.5 text-[11px] text-destructive'>
-          <AlertCircle size={12} />
-          {message || `Thất bại tại bước ${current + 1}`}
-        </div>
-      )}
-    </div>
-  );
-}
+import { parseWorkflowId, WorkflowStepList } from '@/features/campaigns/components/workflow-step-list';
+import type { WorkflowInfo } from '@/features/campaigns/types';
 
 // ── Accordion per workflow ────────────────────────────────────────────────────
 
@@ -270,6 +47,29 @@ function WorkflowSection({ wf, defaultOpen }: { wf: WorkflowInfo; defaultOpen?: 
           <WorkflowStepList wf={wf} />
         </div>
       )}
+    </div>
+  );
+}
+
+export function DeviceStepsPanel({ serial }: { serial: string }) {
+  const { data, isLoading } = useDeviceRunningWorkflows(serial, true);
+  const workflows = data?.workflows ?? [];
+
+  return (
+    <div className='flex flex-col gap-2'>
+      {isLoading && (
+        <div className='flex items-center justify-center py-8 text-xs text-muted-foreground'>
+          <Loader2 size={14} className='mr-2 animate-spin' /> Đang tải...
+        </div>
+      )}
+      {!isLoading && workflows.length === 0 && (
+        <p className='py-8 text-center text-xs text-muted-foreground'>
+          Không có workflow đang chạy.
+        </p>
+      )}
+      {workflows.map((wf, i) => (
+        <WorkflowSection key={wf.workflow_id} wf={wf} defaultOpen={i === 0} />
+      ))}
     </div>
   );
 }

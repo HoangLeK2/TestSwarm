@@ -1,13 +1,14 @@
 'use client';
 
 import { useState } from 'react';
-import { CheckCircle2, XCircle, Pause, Loader2, Clock, ChevronDown, ChevronRight, Smartphone } from 'lucide-react';
+import { CheckCircle2, XCircle, Pause, Loader2, Clock, ChevronDown, ChevronRight, Smartphone, List } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Progress } from '@/components/ui/progress';
 import { DeviceControlEmbed } from '@/features/devices/components/device-control-embed';
 import { useWorkflowProgress } from '../../hooks/use-campaigns';
 import type { WorkflowInfo } from '../../types';
 import { getStepTypeName } from '../flow-editor/constants';
+import { WorkflowStepList } from '../workflow-step-list';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -187,10 +188,20 @@ export function WorkflowProgressCard({ wf }: Props) {
         )}
       </button>
 
-      {/* ── Expanded: live device view ── */}
+      {/* ── Expanded: device left + steps right ── */}
       {expanded && (
-        <div className='border-t bg-card px-4 py-3'>
-          <DeviceControlEmbed initialSerial={serial} compact />
+        <div className='border-t bg-card overflow-hidden'>
+          <div className='flex min-h-0 divide-x overflow-x-auto'>
+            <div className='w-[220px] shrink-0 p-2'>
+              <DeviceControlEmbed initialSerial={serial} compact hideStepMonitor />
+            </div>
+            <div className='min-w-0 flex-1 px-3 py-3'>
+              <p className='mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>
+                <List size={10} /> Các bước
+              </p>
+              <WorkflowStepList wf={wf} maxHeight='400px' />
+            </div>
+          </div>
         </div>
       )}
     </div>

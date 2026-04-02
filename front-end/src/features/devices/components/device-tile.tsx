@@ -21,6 +21,8 @@ interface DeviceTileProps {
   highlightBounds?: [number, number, number, number] | null;
   /** Thu nhỏ khung màn + nút — dùng trong dialog kịch bản */
   compact?: boolean;
+  /** Ẩn nút Steps trong header (khi steps đã hiện panel riêng bên cạnh) */
+  hideStepMonitor?: boolean;
 }
 
 export function DeviceTile({
@@ -33,6 +35,7 @@ export function DeviceTile({
   onTap,
   highlightBounds,
   compact = false,
+  hideStepMonitor = false,
 }: DeviceTileProps) {
   const t = useTranslations('devicesFarm');
   const id = serialToId(device.serial);
@@ -51,7 +54,7 @@ export function DeviceTile({
     <Card
       id={`tile-${id}`}
       data-serial={device.serial}
-      className='flex h-full flex-col border-border bg-card shadow-sm'
+      className='flex h-full flex-col border-border bg-card shadow-sm overflow-hidden'
     >
       <CardHeader className={compact ? 'border-b border-border/60 px-2 py-2' : 'border-b border-border/60 px-4 py-3'}>
         <div className='flex flex-col gap-1'>
@@ -59,10 +62,12 @@ export function DeviceTile({
             <span className='truncate font-medium text-foreground'>
               {device.brand} {device.model}
             </span>
-            <DeviceStepMonitor
-              serial={device.serial}
-              isBusy={device.state?.toUpperCase() === 'BUSY'}
-            />
+            {!hideStepMonitor && (
+              <DeviceStepMonitor
+                serial={device.serial}
+                isBusy={device.state?.toUpperCase() === 'BUSY'}
+              />
+            )}
           </CardTitle>
           <span className='font-mono text-[10px] text-muted-foreground'>
             {device.serial}

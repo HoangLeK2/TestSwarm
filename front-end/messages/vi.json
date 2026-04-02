@@ -124,7 +124,8 @@
     "schedules": "Lịch chạy tự động",
     "device_groups": "Nhóm thiết bị",
     "accounts": "Danh sách tài khoản",
-    "scenario_templates": "Mẫu kịch bản"
+    "scenario_templates": "Mẫu kịch bản",
+    "content": "Kết quả thu thập"
   },
   "deviceGroupsFeature": {
     "list": {

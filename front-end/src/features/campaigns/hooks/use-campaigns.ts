@@ -345,8 +345,9 @@ export type RunCampaignOptions = {
 export function useRunCampaign(onAllDone?: () => void, options?: RunCampaignOptions) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => campaignsApi.run(id),
-    onSuccess: async (data: CampaignRunResponse, id) => {
+    mutationFn: ({ id, deviceSerials }: { id: string; deviceSerials?: string[] }) =>
+      campaignsApi.run(id, deviceSerials),
+    onSuccess: async (data: CampaignRunResponse, { id }) => {
       qc.invalidateQueries({ queryKey: KEYS.list });
       qc.invalidateQueries({ queryKey: KEYS.detail(id) });
 

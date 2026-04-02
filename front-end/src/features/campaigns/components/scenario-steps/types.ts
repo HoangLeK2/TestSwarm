@@ -107,7 +107,10 @@ export function getStepLabel(step: FlowStep): string {
     case 'input_selector': return `input [${step.by}="${step.value}"] "${step.text}"`;
     case 'input_text': return `input_text "${step.text}"`;
     case 'set_variable': return `set ${step.name}=${step.value ?? step.from_list ? 'list' : '?'}`;
-    case 'scroll_down': return `scroll_down ×${step.repeats ?? 1}`;
+    case 'scroll_down': {
+      const x = step.start_x_ratio != null ? ` x@${step.start_x_ratio}` : '';
+      return `scroll_down ×${step.repeats ?? 1}${x}`;
+    }
     default: return step.type;
   }
 }

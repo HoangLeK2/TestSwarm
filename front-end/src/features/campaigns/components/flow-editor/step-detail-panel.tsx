@@ -172,7 +172,34 @@ export function StepDetailPanel({ step, onChange, onClose: _onClose, onRequestPi
           </F>
         )}
 
-        {step.type === 'scroll_down' && <F label='Số lần cuộn'><Input type='number' min={1} className='h-8 w-24 text-xs' value={step.repeats ?? 1} onChange={(e) => update({ repeats: Number(e.target.value) })} /></F>}
+        {step.type === 'scroll_down' && (
+          <div className='grid grid-cols-2 gap-2'>
+            <F label='Số lần cuộn'>
+              <Input type='number' min={1} className='h-8 w-full text-xs' value={step.repeats ?? 1} onChange={(e) => update({ repeats: Number(e.target.value) })} />
+            </F>
+            <F label='start_x_ratio (neo ngang)'>
+              <Input
+                className='h-8 w-full text-xs font-mono'
+                placeholder='0.18 hoặc ${SCROLL_X_RATIO}'
+                value={step.start_x_ratio != null ? String(step.start_x_ratio) : ''}
+                onChange={(e) => {
+                  const v = e.target.value.trim();
+                  if (v === '') {
+                    const { start_x_ratio: _sx, ...rest } = step as FlowStep & { start_x_ratio?: unknown };
+                    onChange(rest as FlowStep);
+                    return;
+                  }
+                  if (/^\$\{[^}]+\}$/.test(v)) {
+                    update({ start_x_ratio: v } as Partial<FlowStep>);
+                    return;
+                  }
+                  const n = Number(v);
+                  update({ start_x_ratio: (Number.isFinite(n) ? n : v) as number | string } as Partial<FlowStep>);
+                }}
+              />
+            </F>
+          </div>
+        )}
 
         {step.type === 'wait_stable' && (
           <div className='grid grid-cols-2 gap-2'>

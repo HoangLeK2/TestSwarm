@@ -112,7 +112,7 @@ export function CreateTemplateDialog() {
           {/* Steps — FlowEditor */}
           <div className='space-y-1'>
             <Label>{t('stepsLabel', { fallback: 'Các bước' })} ({steps.length})</Label>
-            <FlowEditor steps={steps} onChange={setSteps} maxHeight='300px' />
+            <FlowEditor nestedInDialog steps={steps} onChange={setSteps} maxHeight='300px' />
           </div>
 
           {/* Variables */}

@@ -170,7 +170,7 @@ type Step =
   | { type: 'dismiss_popup'; retries?: number }
   | { type: 'input_text'; via: 'u2' | 'a11y_key'; text: string }
   | { type: 'key'; key: string }
-  | { type: 'scroll_down'; repeats: number }
+  | { type: 'scroll_down'; repeats: number; start_x_ratio?: number | string }
   | { type: 'set_variable'; name: string; value?: string; from_list?: string[]; increment?: number }
   | { type: 'run_scenario'; scenario_id?: string; scenario_name?: string; variables?: Record<string, any> };
 
@@ -303,8 +303,17 @@ function coerceSteps(raw: any[]): Step[] {
         };
       case 'key':
         return { type: 'key', key: String(s.key || '') };
-      case 'scroll_down':
-        return { type: 'scroll_down', repeats: Number(s.repeats || 1) };
+      case 'scroll_down': {
+        const repeats = Number(s.repeats || 1);
+        const sx = s.start_x_ratio;
+        if (sx == null || sx === '') {
+          return { type: 'scroll_down', repeats };
+        }
+        if (typeof sx === 'number' && Number.isFinite(sx)) {
+          return { type: 'scroll_down', repeats, start_x_ratio: sx };
+        }
+        return { type: 'scroll_down', repeats, start_x_ratio: String(sx) };
+      }
       case 'set_variable':
         return {
           type: 'set_variable',
@@ -894,6 +903,15 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
                   variables={variables}
                   onChange={setVariables}
                 />
+                <p className="text-[10px] text-muted-foreground leading-relaxed">
+                  Crawl nhóm FB (ví dụ):{' '}
+                  <code className="rounded bg-muted px-1 font-mono">GROUP_NAME</code>,{' '}
+                  <code className="rounded bg-muted px-1 font-mono">GROUP_XPATH</code>,{' '}
+                  <code className="rounded bg-muted px-1 font-mono">MAX_SCROLLS</code>,{' '}
+                  <code className="rounded bg-muted px-1 font-mono">SCROLL_X_RATIO</code>{' '}
+                  (dùng trong <code className="rounded bg-muted px-1 font-mono">scroll_down.start_x_ratio</code>),{' '}
+                  <code className="rounded bg-muted px-1 font-mono">SAVE_COLLECTION</code>.
+                </p>
               </div>
             </details>
           </div>

@@ -99,7 +99,10 @@ export function getStepSummary(step: FlowStep): string {
     case 'wait': return `${step.seconds}s`;
     case 'wait_element': return `[${step.by}] "${step.value}"`;
     case 'assert_element': return `[${step.by}] "${step.value}"`;
-    case 'scroll_down': return `×${step.repeats}`;
+    case 'scroll_down': {
+      const x = step.start_x_ratio != null ? ` @${step.start_x_ratio}` : '';
+      return `×${step.repeats}${x}`;
+    }
     case 'scroll_to': return `[${step.by}] "${step.value}"`;
     case 'dismiss_popup': return '';
     case 'double_tap': return step.rx != null ? `(${step.rx}, ${step.ry})` : (step.x != null ? `(${step.x}, ${step.y})` : '');
@@ -164,8 +167,10 @@ export function getStepDisplay(step: FlowStep): { target: string; selectorBadge?
       return { target: step.retries != null ? `×${step.retries}` : '' };
     case 'tap_position':
       return { target: step.pos ?? '' };
-    case 'scroll_down':
-      return { target: step.repeats != null ? `${step.repeats} lần` : '' };
+    case 'scroll_down': {
+      const x = step.start_x_ratio != null ? ` · x=${step.start_x_ratio}` : '';
+      return { target: step.repeats != null ? `${step.repeats} lần${x}` : '' };
+    }
     case 'set_variable':
       return { target: step.name ? `${step.name} = ${step.value ?? '…'}` : '' };
     case 'repeat':

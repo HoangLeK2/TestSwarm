@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Label } from '@/components/ui/label';
@@ -257,7 +257,10 @@ export function CronBuilder({
   const [endHour, setEndHour] = useState(22);
   const [stepHours, setStepHours] = useState(2);
 
-  useEffect(() => {
+  // useLayoutEffect so local state matches `value` before useEffect below can call
+  // onChange — otherwise the onChange effect runs with default everyMinutes (*/30…)
+  // while value is e.g. "5 */2 * * *" and causes an infinite update loop with the parent.
+  useLayoutEffect(() => {
     if (parsed) {
       setTab('simple');
       setKind(parsed.kind);

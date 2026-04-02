@@ -1,6 +1,6 @@
 'use client';
 
-import { Play, Pause, Square, Trash2, Eye, MoreHorizontal, Smartphone, FileText, Activity } from 'lucide-react';
+import { Play, Pause, Square, Trash2, Eye, MoreHorizontal, Smartphone, FileText } from 'lucide-react';
 import { toast } from 'sonner';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
@@ -27,7 +27,6 @@ import { DeviceControlEmbed } from '@/features/devices/components/device-control
 import { AddDevicesToCampaignDialog } from '../add-devices-dialog';
 import { ScenarioListDialog } from '../scenario-list-dialog';
 import { CampaignRunProgress } from './CampaignRunProgress';
-import { CampaignMonitorDialog } from '../campaign-monitor';
 import {
   useCampaignDevices,
   useCampaignWorkflows,
@@ -103,9 +102,17 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
     toast.info(t('cancellingAll', { count: allActive.length }));
   };
 
+  const running = campaign.status === 'running';
+
   return (
-    <div className='flex flex-col gap-1.5'>
-      <div className='flex items-center gap-1'>
+    <div
+      className={
+        running
+          ? 'flex min-w-0 flex-col gap-2 rounded-lg border border-border/40 bg-muted/5 p-2'
+          : 'flex min-w-0 flex-col'
+      }
+    >
+      <div className='flex flex-wrap items-center gap-1'>
 
         {/* ── Thiết bị ── */}
         <Tooltip>
@@ -177,20 +184,8 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
         )}
 
         {/* ── Running controls ── */}
-        {campaign.status === 'running' && (
+        {running && (
           <>
-            {/* Monitor button */}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <CampaignMonitorDialog campaign={campaign}>
-                  <Button size='sm' variant='ghost' className='h-7 gap-1 px-2 text-xs text-blue-600 hover:text-blue-600 hover:bg-blue-500/10'>
-                    <Activity size={13} />
-                  </Button>
-                </CampaignMonitorDialog>
-              </TooltipTrigger>
-              <TooltipContent side='top' className='text-xs'>Theo dõi từng bước</TooltipContent>
-            </Tooltip>
-
             {runningWorkflowIds.length > 0 && (
               <Button
                 size='sm'
@@ -267,14 +262,7 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
         </DropdownMenu>
       </div>
 
-      {/* ── Progress ── */}
-      <CampaignRunProgress
-        campaignId={campaign.id}
-        isRunning={campaign.status === 'running'}
-        executionEngineHint={
-          runMutation.data?.execution_engine ?? runMutation.data?.engine ?? undefined
-        }
-      />
+      <CampaignRunProgress campaignId={campaign.id} isRunning={running} />
     </div>
   );
 }

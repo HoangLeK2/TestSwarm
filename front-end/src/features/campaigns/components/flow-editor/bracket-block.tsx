@@ -9,6 +9,7 @@ import { StepIcon } from './step-icon';
 import { StepCard } from './step-card';
 import { InsertButton } from './insert-button';
 import { StepDetailPanel } from './step-detail-panel';
+import { StepEditOverlay } from './step-edit-overlay';
 import {
   Dialog,
   DialogContent,
@@ -89,6 +90,8 @@ interface BracketBlockProps {
   onInsertChild: (key: string, insertAt: number, newStep: FlowStep) => void;
   /** Compact mode: show inline parameter editor when selected instead of detail panel. */
   compact?: boolean;
+  /** See FlowEditor — must match when this block is inside a parent Radix Dialog. */
+  nestedInDialog?: boolean;
   selectorPickTarget?: SelectorPickTarget | null;
   onTogglePickSelector?: (path: SelectorPickTarget) => void;
   /** Nesting depth — used for visual indentation cues. */
@@ -144,6 +147,7 @@ interface ChildStepListProps {
   onRunChild?: (step: FlowStep) => void;
   rootStepIndex?: number;
   pathFromRoot?: Array<{ listKey: string; childIndex: number }>;
+  nestedInDialog?: boolean;
 }
 
 function ChildStepList({
@@ -164,6 +168,7 @@ function ChildStepList({
   onRunChild,
   rootStepIndex,
   pathFromRoot,
+  nestedInDialog,
 }: ChildStepListProps) {
   return (
     <div className='space-y-0'>
@@ -190,6 +195,7 @@ function ChildStepList({
                   onUpdateChild(listKey, ci, insertIntoStep(child, nestedKey, at, newStep))
                 }
                 compact={compact}
+                nestedInDialog={nestedInDialog}
                 selectorPickTarget={selectorPickTarget}
                 onTogglePickSelector={onTogglePickSelector}
                 depth={depth + 1}
@@ -246,6 +252,7 @@ export function BracketBlock({
   step, stepIndex, selected, selectedChild,
   onSelectSelf, onSelectChild, onUpdate, onRemove, onRemoveChild, onInsertChild,
   compact = false,
+  nestedInDialog = false,
   selectorPickTarget,
   onTogglePickSelector,
   depth = 0,
@@ -295,12 +302,34 @@ export function BracketBlock({
     onRunChild,
     rootStepIndex: effectiveRootIndex,
     pathFromRoot: effectivePath,
+    nestedInDialog,
   };
 
   return (
     <>
-    {/* Dialog for editing a child step */}
-    <Dialog open={!compact && editingChild != null} onOpenChange={(open) => { if (!open) setEditingChildPath(null); }}>
+    {nestedInDialog && !compact && editingChild != null && editingChildPath && editingChild && (
+      <StepEditOverlay onClose={() => setEditingChildPath(null)}>
+        <StepDetailPanel
+          step={editingChild}
+          onChange={(s) => onUpdate(updateChildInStep(step, editingChildPath.listKey, editingChildPath.ci, s))}
+          onClose={() => setEditingChildPath(null)}
+          onRequestPickSelector={onTogglePickSelector ? () => {
+            const path: SelectorPickTarget = {
+              rootIndex: effectiveRootIndex,
+              path: [...effectivePath, { listKey: editingChildPath.listKey, childIndex: editingChildPath.ci }],
+            };
+            setEditingChildPath(null);
+            onTogglePickSelector(path);
+          } : undefined}
+        />
+      </StepEditOverlay>
+    )}
+
+    {!nestedInDialog && !compact && (
+    <Dialog
+      open={editingChild != null}
+      onOpenChange={(open) => { if (!open) setEditingChildPath(null); }}
+    >
       <DialogContent className='max-w-sm p-0 gap-0'>
         <DialogHeader className='sr-only'>
           <DialogTitle>Chỉnh sửa bước</DialogTitle>
@@ -322,6 +351,7 @@ export function BracketBlock({
         )}
       </DialogContent>
     </Dialog>
+    )}
     <div
       className={cn(
         'rounded-md overflow-hidden',

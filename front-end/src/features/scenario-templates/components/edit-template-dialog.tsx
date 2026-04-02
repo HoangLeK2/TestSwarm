@@ -131,7 +131,7 @@ export function EditTemplateDialog({
           {/* Steps — FlowEditor */}
           <div className='space-y-1'>
             <Label>{t('stepsLabel')} ({steps.length})</Label>
-            <FlowEditor steps={steps} onChange={setSteps} maxHeight='350px' />
+            <FlowEditor nestedInDialog steps={steps} onChange={setSteps} maxHeight='350px' />
           </div>
 
           {/* Variables */}

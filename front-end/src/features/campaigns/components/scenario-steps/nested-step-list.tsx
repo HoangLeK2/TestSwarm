@@ -94,7 +94,29 @@ function ActionStepFields({
       );
     case 'scroll_down':
       return (
-        <input type='number' min={1} className={`${inputCls} w-16`} value={step.repeats ?? 1} onChange={(e) => onChange('repeats', Number(e.target.value) || 1)} />
+        <div className='flex flex-1 min-w-0 items-center gap-1'>
+          <input type='number' min={1} className={`${inputCls} w-14 shrink-0`} value={step.repeats ?? 1} onChange={(e) => onChange('repeats', Number(e.target.value) || 1)} />
+          <span className='text-[10px] text-muted-foreground shrink-0'>x</span>
+          <input
+            className={`${inputCls} min-w-0 flex-1 font-mono`}
+            placeholder='0.18'
+            title='start_x_ratio — neo trái, tránh mở ảnh full-width'
+            value={step.start_x_ratio != null ? String(step.start_x_ratio) : ''}
+            onChange={(e) => {
+              const v = e.target.value.trim();
+              if (v === '') {
+                onChange('start_x_ratio', undefined);
+                return;
+              }
+              if (/^\$\{[^}]+\}$/.test(v)) {
+                onChange('start_x_ratio', v);
+                return;
+              }
+              const n = Number(v);
+              onChange('start_x_ratio', Number.isFinite(n) ? n : v);
+            }}
+          />
+        </div>
       );
     case 'key':
       return (
@@ -132,7 +154,11 @@ function StepRow({
 
   const updateField = useCallback(
     (field: string, value: any) => {
-      onUpdate({ ...step, [field]: value });
+      const next = { ...step, [field]: value } as FlowStep;
+      if (value === undefined) {
+        delete (next as Record<string, unknown>)[field];
+      }
+      onUpdate(next);
     },
     [step, onUpdate]
   );

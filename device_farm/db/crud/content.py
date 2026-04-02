@@ -44,6 +44,8 @@ async def query_content(
     device_serial: str | None = None,
     campaign_id: str | None = None,
     run_id: str | None = None,
+    content_hash: str | None = None,
+    parent_id: str | None = None,
     date_from: datetime | None = None,
     date_to: datetime | None = None,
     limit: int = 50,
@@ -64,6 +66,10 @@ async def query_content(
         stmt = stmt.where(ContentItem.campaign_id == campaign_id)
     if run_id:
         stmt = stmt.where(ContentItem.run_id == run_id)
+    if content_hash:
+        stmt = stmt.where(ContentItem.content_hash == content_hash)
+    if parent_id:
+        stmt = stmt.where(ContentItem.parent_id == parent_id)
     if date_from:
         stmt = stmt.where(ContentItem.extracted_at >= date_from)
     if date_to:
@@ -83,6 +89,34 @@ async def query_content(
     items = list(result.scalars().all())
 
     return items, total
+
+
+async def update_content_stats(
+    db: AsyncSession,
+    content_hash: str,
+    likes_count: int | None = None,
+    shares_count: int | None = None,
+) -> bool:
+    """Update likes_count / shares_count for a post identified by content_hash.
+
+    Called after opening a post's comment section where Facebook shows the
+    exact reaction/share counts (more accurate than feed-level counts).
+    Only updates fields that are provided (not None).
+    Returns True if a row was updated.
+    """
+    values: dict[str, Any] = {}
+    if likes_count is not None:
+        values["likes_count"] = likes_count
+    if shares_count is not None:
+        values["shares_count"] = shares_count
+    if not values:
+        return False
+    result = await db.execute(
+        update(ContentItem)
+        .where(ContentItem.content_hash == content_hash, ContentItem.item_level == 0)
+        .values(**values)
+    )
+    return result.rowcount > 0
 
 
 async def delete_content_item(db: AsyncSession, item_id: str) -> bool:

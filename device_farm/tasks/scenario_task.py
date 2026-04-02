@@ -1892,6 +1892,7 @@ def run_scenario_task(
             else:
                 if strategy == "fb_posts":
                     from tasks.fb_extract import parse_fb_posts_from_xml, _dedup
+                    from services.content_store import compute_content_hash
                     scroll_idx = ctx.get("_loop_iter", 0)
                     new_posts = parse_fb_posts_from_xml(xml, source_index=scroll_idx)
                     prev_count = len(ctx["posts"])
@@ -1901,6 +1902,14 @@ def run_scenario_task(
                     step_result["total_posts"] = len(ctx["posts"])
                     step_result["message"] = f"extract fb_posts: +{added} new (total {len(ctx['posts'])})"
                     log.info(f"[{serial}] {step_result['message']}")
+                    # Track first VISIBLE post for comment linking.
+                    # Uses new_posts[0] (topmost post on screen), NOT the first "new" post,
+                    # because tap_selector("Bình luận") taps the topmost button on screen.
+                    # Even if new_posts[0] is a duplicate, its content_hash exists in DB.
+                    if new_posts:
+                        ctx["_first_new_post_hash"] = compute_content_hash(
+                            new_posts[0], dedupe_field="text"
+                        )
                     # Track no-new streak for auto-break
                     if stop_if_no_new:
                         if added == 0:
@@ -1926,6 +1935,70 @@ def run_scenario_task(
                     except Exception as exc:
                         step_result["ok"] = False
                         step_result["message"] = f"extract text_nodes failed: {exc}"
+                elif strategy == "fb_comments":
+                    from tasks.fb_extract import (
+                        parse_fb_comments_from_xml, _dedup_comments, _post_id_from_ctx,
+                    )
+                    parent_post_id_var = step.get("parent_post_id_var")
+                    max_items = int(step.get("max_items") or 50)
+                    parent_post_id = _post_id_from_ctx(ctx, parent_post_id_var)
+                    raw_items = parse_fb_comments_from_xml(
+                        xml, parent_post_id=parent_post_id, max_items=max_items,
+                    )
+                    # Separate post_stats sentinel from actual comments
+                    post_stats = next((x for x in raw_items if x.get("_type") == "post_stats"), None)
+                    new_comments = [x for x in raw_items if x.get("_type") != "post_stats"]
+
+                    # If comment view exposes better reaction/share counts, update parent post
+                    if post_stats:
+                        ctx["_comment_view_stats"] = post_stats
+                        parent_hash = ctx.get("_first_new_post_hash")
+                        if parent_hash:
+                            try:
+                                import asyncio
+                                import concurrent.futures as _cf
+                                from db.database import activity_session
+                                from db.crud.content import update_content_stats
+                                from services.content_store import _safe_int
+                                _ph = parent_hash
+                                _ps = post_stats
+                                _serial = serial
+
+                                async def _do_update_stats():
+                                    async with activity_session() as _db:
+                                        updated = await update_content_stats(
+                                            _db,
+                                            content_hash=_ph,
+                                            likes_count=_safe_int(_ps.get("reactions")),
+                                            shares_count=_safe_int(_ps.get("shares")),
+                                        )
+                                        if updated:
+                                            await _db.commit()
+                                            log.info(
+                                                f"[{_serial}] post stats updated: "
+                                                f"hash={_ph[:12]} "
+                                                f"reactions={_ps.get('reactions')} "
+                                                f"shares={_ps.get('shares')}"
+                                            )
+
+                                with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
+                                    _pool.submit(asyncio.run, _do_update_stats()).result(timeout=10)
+                            except Exception as exc:
+                                log.warning(f"[{serial}] update_content_stats failed: {exc}")
+
+                    ctx.setdefault("comments", [])
+                    prev_count = len(ctx["comments"])
+                    ctx["comments"] = _dedup_comments(ctx["comments"] + new_comments)
+                    added = len(ctx["comments"]) - prev_count
+                    step_result["extracted"] = added
+                    step_result["total_comments"] = len(ctx["comments"])
+                    step_result["parent_post_id"] = parent_post_id
+                    step_result["post_stats"] = post_stats
+                    step_result["message"] = (
+                        f"extract fb_comments: +{added} new "
+                        f"(total {len(ctx['comments'])}, post={parent_post_id})"
+                    )
+                    log.info(f"[{serial}] {step_result['message']}")
                 else:
                     step_result["ok"] = False
                     step_result["message"] = f"extract: unknown strategy {strategy!r}"
@@ -2156,6 +2229,10 @@ def run_scenario_task(
                         _tags = step.get("tags", "")
                         _dserial = device.serial
                         _items_snap = list(items)
+                        # Hierarchy: read parent_id from ctx via parent_id_var
+                        _parent_id_var = step.get("parent_id_var")
+                        _parent_id = ctx.get(_parent_id_var) if _parent_id_var else None
+                        _item_level = int(step.get("item_level") or 0)
 
                         async def _save_all_items() -> tuple[int, int, int, int, dict[str, Any]]:
                             _sv = _dp = _er = _pc = 0
@@ -2170,6 +2247,8 @@ def run_scenario_task(
                                         dedupe_field=_dedup_f,
                                         tags=_tags,
                                         device_serial=_dserial,
+                                        parent_id=_parent_id,
+                                        item_level=_item_level,
                                     )
                                     _last = _r
                                     if _r.get("saved"):

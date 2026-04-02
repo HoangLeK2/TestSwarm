@@ -33,6 +33,8 @@ async def list_content(
     device_serial: str | None = None,
     campaign_id: str | None = None,
     run_id: str | None = None,
+    content_hash: str | None = None,
+    parent_id: str | None = None,
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ):
@@ -45,6 +47,8 @@ async def list_content(
         device_serial=device_serial,
         campaign_id=campaign_id,
         run_id=run_id,
+        content_hash=content_hash,
+        parent_id=parent_id,
         limit=limit,
         offset=offset,
     )
@@ -221,4 +225,7 @@ def _item_to_out(item) -> dict:
         "campaign_id": item.campaign_id,
         "run_id": item.run_id,
         "extracted_at": item.extracted_at.isoformat() if item.extracted_at else None,
+        "content_hash": item.content_hash,
+        "parent_id": item.parent_id,
+        "item_level": item.item_level,
     }

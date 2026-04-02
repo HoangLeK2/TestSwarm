@@ -327,10 +327,14 @@ class RunScenarioStep(StepBase):
 
 class ExtractStep(StepBase):
     type: Literal["extract"]
-    strategy: Literal["fb_posts", "text_nodes"]
+    strategy: Literal["fb_posts", "text_nodes", "fb_comments"]
     stop_if_no_new: bool = False
     no_new_threshold: int = Field(3, ge=1, le=1000)
     expand_see_more: bool = True
+    # fb_comments-specific
+    parent_post_id_var: Optional[str] = None  # ctx var holding parent post id
+    # int or "${VAR}" string — resolved at runtime before use
+    max_items: Optional[Union[int, str]] = None
 
 class ExtractTextHierarchyStep(StepBase):
     type: Literal["extract_text_hierarchy"]
@@ -373,6 +377,12 @@ class SaveExtractionStep(StepBase):
     content_type: Optional[str] = None
     dedupe_field: Optional[str] = None
     tags: Optional[TagsOrStr] = None
+    # Hierarchy linking
+    # parent_id_var: ctx variable that holds the parent item's content_hash
+    #   (set automatically by executor after extract(fb_posts) as "_first_new_post_hash")
+    # item_level: 0=post (default), 1=comment, 2=reply
+    parent_id_var: Optional[str] = None
+    item_level: int = Field(0, ge=0, le=2)
 
 
 # ---------------------------------------------------------------------------

@@ -432,30 +432,336 @@ def _dedup(posts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return out
 
 
-def _expand_see_more(device) -> int:
-    """Tap all visible 'See more' / 'Xem thêm' buttons. Returns count expanded."""
-    xml = device.hierarchy_xml(force_refresh=True)
-    if not xml:
-        return 0
-    expanded = 0
-    try:
-        root = _parse_xml(xml)
-        if root is None:
-            return 0
-        candidates = root.xpath(
-            '//node[@clickable="true" and ('
-            '@text="See more" or @text="Xem thêm" or '
-            '@text="see more" or @text="xem thêm"'
-            ')]'
-        )
-        for node in candidates:
-            b = _parse_bounds(node)
-            if b:
-                device.tap((b[0] + b[2]) // 2, (b[1] + b[3]) // 2)
-                expanded += 1
-                time.sleep(0.4)
-    except Exception:
-        pass
-    if expanded:
-        time.sleep(0.8)
-    return expanded
+# ── Comment-like button patterns (from real UIAutomator XML) ─────────────────
+# "Nút Thích bình luận của Đỗ. Nhấn đúp..."  → author short name = "Đỗ"
+# "Trả lời bình luận của Tuấn, nút. ..."     → author short name = "Tuấn"
+_RE_CMT_LIKE_BTN = re.compile(
+    r"^Nút Thích bình luận của (.+?)\.", re.IGNORECASE
+)
+_RE_CMT_REPLY_BTN = re.compile(
+    r"^Trả lời bình luận của (.+?),", re.IGNORECASE
+)
+# "N cảm xúc" → comment reaction count (different from post reactions)
+_RE_CMT_REACTIONS = re.compile(r"^(\d[\d.,]*[KMkm]?)\s+cảm xúc$", re.IGNORECASE)
+
+# Timestamp or post-share suffix that can appear in comment timestamp field
+_RE_CMT_TS_SHARE = re.compile(r"•\s*Chia sẻ với.*$", re.IGNORECASE)
+
+# Noise specific to comment area
+_CMT_NOISE_TEXTS = frozenset({
+    "thích", "trả lời", "like", "reply",
+    "xem thêm câu trả lời", "ẩn câu trả lời",
+    "theo dõi", "· theo dõi",
+})
+
+
+def _is_cmt_noise(text: str) -> bool:
+    t = text.strip().lower()
+    if not t or t in _CMT_NOISE_TEXTS:
+        return True
+    if t.startswith("nút thích bình luận"):
+        return True
+    if t.startswith("trả lời bình luận"):
+        return True
+    return False
+
+
+def _cluster_into_comments(nodes: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+    """Cluster comment text-nodes into per-comment groups.
+
+    Strategy:
+    - Each comment starts with an author node (short text, x≥180).
+    - A "Nút Thích bình luận của X." desc-node marks the boundary AFTER a comment.
+    - Gap > 80px also starts a new cluster.
+    """
+    if not nodes:
+        return []
+    GAP = 80
+    clusters: List[List[Dict]] = []
+    current: List[Dict] = [nodes[0]]
+    prev_cy = nodes[0]["cy"]
+
+    for node in nodes[1:]:
+        gap = node["cy"] - prev_cy
+        t = node["text"].strip()
+        # A "Nút Thích bình luận" button marks the end of a comment block
+        is_end_marker = bool(_RE_CMT_LIKE_BTN.match(t))
+        if gap > GAP or is_end_marker:
+            if is_end_marker:
+                current.append(node)  # include the marker in current cluster
+            clusters.append(current)
+            current = [] if is_end_marker else [node]
+        else:
+            current.append(node)
+        prev_cy = node["cy"]
+
+    if current:
+        clusters.append(current)
+    return clusters
+
+
+def _extract_comment(
+    cluster: List[Dict[str, Any]],
+    parent_post_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Extract one comment from a text-node cluster.
+
+    Based on observed Facebook feed XML:
+    - Author:    first short text (x≥180, len 2-80, no "·")
+    - Body:      subsequent longer text node(s)
+    - Timestamp: optional, matches _RE_TS; strip "•Chia sẻ với..." suffix
+    - Likes:     "N cảm xúc" text node OR author from "Nút Thích bình luận của X."
+    """
+    author: Optional[str] = None
+    body_parts: List[str] = []
+    timestamp: Optional[str] = None
+    likes: Optional[str] = None
+
+    for node in cluster:
+        t = node["text"].strip()
+        if not t or len(t) <= 1:
+            continue
+
+        # Extract author name from like-button desc
+        m = _RE_CMT_LIKE_BTN.match(t)
+        if m:
+            if author is None:
+                author = m.group(1).strip()
+            continue
+
+        # Extract author from reply-button desc (secondary fallback)
+        m = _RE_CMT_REPLY_BTN.match(t)
+        if m:
+            if author is None:
+                author = m.group(1).strip()
+            continue
+
+        # Skip other noise
+        if _is_cmt_noise(t):
+            continue
+
+        # "N cảm xúc" → likes
+        m = _RE_CMT_REACTIONS.match(t)
+        if m:
+            likes = m.group(1)
+            continue
+
+        # Timestamp
+        if _RE_TS.search(t):
+            # Strip "•Chia sẻ với: Nhóm công khai" suffix (appears on post timestamps leaking in)
+            clean = _RE_CMT_TS_SHARE.sub("", t).strip()
+            if timestamp is None:
+                timestamp = clean if clean else t
+            continue
+
+        # Author: first short text that hasn't been assigned yet
+        if author is None and 2 <= len(t) <= 80 and "·" not in t and "•" not in t:
+            author = t
+            continue
+
+        # Everything else = body
+        body_parts.append(t)
+
+    text = " ".join(body_parts).strip()
+    if not author and not text:
+        return None
+
+    return {
+        "author":         author or "",
+        "text":           text,
+        "timestamp":      timestamp,
+        "likes":          likes,
+        "parent_post_id": parent_post_id,
+    }
+
+
+def _compute_post_id_from_nodes(nodes: List[Dict[str, Any]]) -> Optional[str]:
+    """Compute parent_post_id from the post header nodes at top of comment view.
+
+    Post author node has is_author_hint=True and x≈34 (left-aligned, not indented).
+    Post body is the first long text at x≈34 below the author.
+    """
+    import hashlib
+    # Author hint at x < 60 (post author avatar, e.g. "Ảnh đại diện của Khanh Châu")
+    post_author = next(
+        (n["text"] for n in nodes if n.get("is_author_hint") and n["bounds"][0] < 60),
+        None,
+    )
+    if not post_author:
+        return None
+    # First substantial body text at x < 60
+    post_body = next(
+        (n["text"] for n in nodes
+         if not n.get("is_author_hint") and n["bounds"][0] < 60 and len(n["text"]) > 20),
+        "",
+    )
+    raw = f"{post_author}\x00{post_body[:120]}"
+    return hashlib.md5(raw.encode()).hexdigest()[:16]
+
+
+def parse_fb_comments_from_xml(
+    xml: str,
+    parent_post_id: Optional[str] = None,
+    max_items: int = 50,
+) -> List[Dict[str, Any]]:
+    """Parse comments from current screen XML.
+
+    Works for both:
+    - Feed view: extracts comment-preview nodes below post action buttons
+    - Post detail view: extracts all visible comments
+
+    Each returned dict: {author, text, timestamp, likes, parent_post_id}.
+
+    parent_post_id is:
+    1. Passed in externally (from executor ctx), OR
+    2. Auto-derived from the post header nodes in the XML (for post detail view)
+    """
+    root = _parse_xml(xml)
+    if root is None:
+        return []
+
+    all_nodes = _collect_text_nodes(root, toolbar_cutoff_y=200)
+    if not all_nodes:
+        return []
+
+    # Auto-derive parent_post_id from post header if not provided
+    if parent_post_id is None:
+        parent_post_id = _compute_post_id_from_nodes(all_nodes)
+
+    # Find the y-coordinate of the action buttons row (Thích / Bình luận / Chia sẻ)
+    # Comments only appear BELOW this row.
+    action_btn_y2 = None
+    for node in root.iter():
+        text = (node.get("text") or "").strip()
+        desc = (node.get("content-desc") or "").strip()
+        cls = node.get("class", "")
+        if (text == "Bình luận" or desc == "Bình luận") and "Button" in cls:
+            m = re.match(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", node.get("bounds", ""))
+            if m:
+                action_btn_y2 = int(m.group(4))
+                # Take the LAST such button if multiple posts on screen
+                # (we want comments for the last post's button we see)
+
+    # Filter: only comment-region nodes (indented x≥150, below action buttons)
+    comment_nodes = [
+        n for n in all_nodes
+        if n["bounds"][0] >= 150
+        and (action_btn_y2 is None or n["cy"] > action_btn_y2)
+        and not n.get("is_author_hint")
+    ]
+
+    if not comment_nodes:
+        return []
+
+    clusters = _cluster_into_comments(comment_nodes)
+    result: List[Dict[str, Any]] = []
+    for cluster in clusters:
+        if len(result) >= max_items:
+            break
+        comment = _extract_comment(cluster, parent_post_id)
+        if comment:
+            result.append(comment)
+
+    # Prepend post-level stats from the comment view header (reactions, shares)
+    # so the executor can update the parent post's stats in the DB.
+    header_stats = _extract_header_stats(root)
+    if header_stats:
+        result.insert(0, header_stats)
+
+    return result
+
+
+def _dedup_comments(comments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Deduplicate comments: same author + text[:60] = same comment."""
+    seen: set = set()
+    out: List[Dict[str, Any]] = []
+    for c in comments:
+        key = (c["author"], c["text"][:60])
+        if key not in seen:
+            seen.add(key)
+            out.append(c)
+    return out
+
+
+def _post_id_from_ctx(ctx: Dict[str, Any], post_id_var: Optional[str]) -> Optional[str]:
+    """Read parent_post_id from ctx. Returns None → parser will auto-derive from XML."""
+    if post_id_var:
+        return ctx.get(post_id_var)
+    return None
+
+
+def _expand_see_more(device, max_passes: int = 2) -> int:
+    """Tap all visible 'See more' / 'Xem thêm' buttons. Runs up to max_passes to catch
+    nested expansions (e.g. long posts with multiple truncated paragraphs).
+    Returns total count expanded."""
+    total = 0
+    for _ in range(max_passes):
+        xml = device.hierarchy_xml(force_refresh=True)
+        if not xml:
+            break
+        expanded = 0
+        try:
+            root = _parse_xml(xml)
+            if root is None:
+                break
+            candidates = root.xpath(
+                '//node[@clickable="true" and ('
+                '@text="See more" or @text="Xem thêm" or '
+                '@text="see more" or @text="xem thêm"'
+                ')]'
+            )
+            for node in candidates:
+                b = _parse_bounds(node)
+                if b:
+                    device.tap((b[0] + b[2]) // 2, (b[1] + b[3]) // 2)
+                    expanded += 1
+                    time.sleep(0.4)
+        except Exception:
+            break
+        if expanded:
+            time.sleep(1.0)  # Allow content to fully expand before next pass
+            total += expanded
+        else:
+            break  # Nothing left to expand
+    return total
+
+
+def _extract_header_stats(root) -> Optional[Dict[str, Any]]:
+    """Extract post-level stats from the comment view header area (y < 250).
+
+    When a post's comment section is open, Facebook shows a header row with:
+    - Reactions count: a Button with text="83" (numeric only)
+    - Shares count: a Button with text="42 lượt chia sẻ"
+
+    These nodes sit above toolbar_cutoff_y=200, so they're invisible to the
+    normal comment extractor. This function scans for them explicitly.
+    """
+    reactions: Optional[str] = None
+    shares: Optional[str] = None
+    for node in root.iter():
+        bounds = _parse_bounds(node)
+        if not bounds:
+            continue
+        # Only consider nodes completely above y=260 (header area)
+        if bounds[1] > 260:
+            continue
+        cls = node.get("class", "")
+        if "Button" not in cls:
+            continue
+        text = (node.get("text") or "").strip()
+        desc = (node.get("content-desc") or "").strip()
+        t = text or desc
+        if not t:
+            continue
+        # Numeric-only → reactions count (e.g. "83")
+        if re.match(r"^\d[\d.,]*[KMkm]?$", t) and reactions is None:
+            reactions = t
+            continue
+        # "N lượt chia sẻ" → shares count
+        m = _RE_SHARES.search(t)
+        if m and shares is None:
+            shares = m.group(1)
+
+    if reactions is None and shares is None:
+        return None
+    return {"_type": "post_stats", "reactions": reactions, "shares": shares}

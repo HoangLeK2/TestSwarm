@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, JSON, String, Text, Index
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, JSON, SmallInteger, String, Text, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.database import Base
@@ -43,6 +43,12 @@ class ContentItem(Base):
     tags: Mapped[str] = mapped_column(String(500), default="")
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
 
+    # Hierarchy — links comments/replies to their parent item
+    # parent_id = content_hash of the parent ContentItem (NULL for top-level posts)
+    # item_level: 0=post, 1=comment, 2=reply
+    parent_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    item_level: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
+
     # Source tracking
     device_serial: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
     campaign_id: Mapped[Optional[str]] = mapped_column(
@@ -61,6 +67,7 @@ class ContentItem(Base):
     __table_args__ = (
         Index("idx_ci_hash_collection", "content_hash", "collection", unique=True),
         Index("idx_ci_extracted_at", "extracted_at"),
+        Index("idx_ci_parent_level", "parent_id", "item_level"),
     )
 
     def to_dict(self) -> dict:

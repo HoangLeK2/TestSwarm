@@ -70,6 +70,8 @@ async def save_content_item(
     dedupe_field: str | None = None,
     screenshot_bytes: bytes | None = None,
     tags: str = "",
+    parent_id: str | None = None,
+    item_level: int = 0,
 ) -> dict[str, Any]:
     """
     Save extracted content to database with deduplication.
@@ -122,6 +124,8 @@ async def save_content_item(
             run_id=run_id,
             scenario_name=scenario_name,
             screenshot_path=screenshot_path,
+            parent_id=parent_id,
+            item_level=item_level,
         )
 
         await increment_collection_count(db, collection)

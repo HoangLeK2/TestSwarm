@@ -141,7 +141,7 @@ class ScenarioWorkflow:
 
             if self._cancelled:
                 self._progress.status = WorkflowStatus.CANCELLED.value
-                await self._finalize(inp.campaign_id)
+                await self._finalize(inp.campaign_id, inp.run_id, success=False)
                 return StepsResult(
                     success=False, steps_executed=result.steps_executed,
                     failed_message="Cancelled during execution",
@@ -151,7 +151,7 @@ class ScenarioWorkflow:
                 WorkflowStatus.COMPLETED.value if result.success
                 else WorkflowStatus.FAILED.value
             )
-            await self._finalize(inp.campaign_id)
+            await self._finalize(inp.campaign_id, inp.run_id, success=result.success)
             return result
 
         except asyncio.CancelledError:
@@ -159,7 +159,7 @@ class ScenarioWorkflow:
             self._progress.status = WorkflowStatus.CANCELLED.value
             # Best-effort finalize — may fail if Temporal rejects activities after cancel
             try:
-                await self._finalize(inp.campaign_id)
+                await self._finalize(inp.campaign_id, inp.run_id, success=False)
             except Exception:
                 pass
             return StepsResult(
@@ -169,7 +169,7 @@ class ScenarioWorkflow:
             )
         except Exception as exc:
             self._progress.status = WorkflowStatus.FAILED.value
-            await self._finalize(inp.campaign_id)
+            await self._finalize(inp.campaign_id, inp.run_id, success=False)
             return StepsResult(
                 success=False,
                 steps_executed=result.steps_executed if result else 0,
@@ -215,13 +215,13 @@ class ScenarioWorkflow:
             lambda: not self._paused or self._cancelled,
         )
 
-    async def _finalize(self, campaign_id: str) -> None:
+    async def _finalize(self, campaign_id: str, run_id: str | None, *, success: bool) -> None:
         """Call finalize_campaign activity to update DB status when this workflow ends."""
         if not campaign_id:
             return
         await workflow.execute_activity(
             "finalize_campaign",
-            campaign_id,
+            {"campaign_id": campaign_id, "run_id": run_id, "success": success},
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=RetryPolicy(maximum_attempts=2),
         )
@@ -353,6 +353,8 @@ class ScenarioStepsWorkflow:
                 })
                 steps_executed += 1
                 if not ok:
+                    if step.get("ignore_error"):
+                        continue
                     return StepsResult(
                         success=False, steps_executed=steps_executed,
                         step_results=step_results, runtime_vars=runtime_vars,
@@ -370,6 +372,8 @@ class ScenarioStepsWorkflow:
                 if child_break:
                     break_requested = True
                 if not ok:
+                    if step.get("ignore_error"):
+                        continue
                     return StepsResult(
                         success=False, steps_executed=steps_executed,
                         step_results=step_results, runtime_vars=runtime_vars,
@@ -390,6 +394,8 @@ class ScenarioStepsWorkflow:
                 })
                 steps_executed += 1
                 if not ok:
+                    if step.get("ignore_error"):
+                        continue
                     return StepsResult(
                         success=False, steps_executed=steps_executed,
                         step_results=step_results, runtime_vars=runtime_vars,
@@ -405,6 +411,8 @@ class ScenarioStepsWorkflow:
                 _append({"index": idx, "type": "repeat_until", "ok": ok, "message": msg})
                 steps_executed += 1
                 if not ok:
+                    if step.get("ignore_error"):
+                        continue
                     return StepsResult(
                         success=False, steps_executed=steps_executed,
                         step_results=step_results, runtime_vars=runtime_vars,
@@ -422,6 +430,8 @@ class ScenarioStepsWorkflow:
                 if child_break:
                     break_requested = True
                 if not ok:
+                    if step.get("ignore_error"):
+                        continue
                     return StepsResult(
                         success=False, steps_executed=steps_executed,
                         step_results=step_results, runtime_vars=runtime_vars,
@@ -441,6 +451,8 @@ class ScenarioStepsWorkflow:
                 if child_break:
                     break_requested = True
                 if not ok:
+                    if step.get("ignore_error"):
+                        continue
                     return StepsResult(
                         success=False, steps_executed=steps_executed,
                         step_results=step_results, runtime_vars=runtime_vars,
@@ -460,6 +472,8 @@ class ScenarioStepsWorkflow:
                 if child_break:
                     break_requested = True
                 if not ok:
+                    if step.get("ignore_error"):
+                        continue
                     return StepsResult(
                         success=False, steps_executed=steps_executed,
                         step_results=step_results, runtime_vars=runtime_vars,

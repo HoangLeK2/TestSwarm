@@ -265,9 +265,9 @@ class DeviceActivities:
     @activity.defn
     async def execute_extract(self, inp: ExtractInput) -> ExtractResult:
         """
-        Execute an 'extract' step (fb_posts / text_nodes strategies).
+        Execute an 'extract' step (fb_posts / text_nodes / fb_comments strategies).
 
-        Returns updated context (posts, text_nodes, _no_new_streak) and
+        Returns updated context (posts, text_nodes, comments, _no_new_streak) and
         break_requested flag when stop_if_no_new triggers.
         """
         _validate_serial(inp.device_serial)
@@ -282,6 +282,7 @@ class DeviceActivities:
         for _k, _v in inp.context.items():
             ctx[_k] = list(_v) if isinstance(_v, list) else _v
         ctx.setdefault("posts", [])
+        ctx.setdefault("comments", [])
 
         strategy = str(step.get("strategy", "fb_posts"))
         stop_if_no_new = bool(step.get("stop_if_no_new", False))
@@ -310,6 +311,7 @@ class DeviceActivities:
 
             if strategy == "fb_posts":
                 from tasks.fb_extract import parse_fb_posts_from_xml, _dedup
+                from services.content_store import compute_content_hash
                 scroll_idx = ctx.get("_loop_iter", 0)
                 new_posts = parse_fb_posts_from_xml(xml, source_index=scroll_idx)
                 prev_count = len(ctx["posts"])
@@ -318,6 +320,13 @@ class DeviceActivities:
                 details["extracted"] = added
                 details["total_posts"] = len(ctx["posts"])
                 msg = f"extract fb_posts: +{added} new (total {len(ctx['posts'])})"
+                # Track first VISIBLE post for comment linking.
+                # Uses new_posts[0] (topmost post on screen), NOT the first "new" post,
+                # because tap_selector("Bình luận") taps the topmost button on screen.
+                if new_posts:
+                    ctx["_first_new_post_hash"] = compute_content_hash(
+                        new_posts[0], dedupe_field="text"
+                    )
                 if stop_if_no_new:
                     if added == 0:
                         ctx["_no_new_streak"] = ctx.get("_no_new_streak", 0) + 1
@@ -341,6 +350,53 @@ class DeviceActivities:
                 details["extracted"] = len(texts)
                 msg = f"extract text_nodes: {len(texts)} texts"
 
+            elif strategy == "fb_comments":
+                from tasks.fb_extract import (
+                    parse_fb_comments_from_xml, _dedup_comments, _post_id_from_ctx,
+                )
+                parent_post_id_var = inp.step.get("parent_post_id_var")
+                max_items = int(inp.step.get("max_items") or 50)
+                parent_post_id = _post_id_from_ctx(ctx, parent_post_id_var)
+                raw_items = parse_fb_comments_from_xml(
+                    xml, parent_post_id=parent_post_id, max_items=max_items,
+                )
+                # Separate post_stats sentinel from actual comments
+                post_stats = next((x for x in raw_items if x.get("_type") == "post_stats"), None)
+                new_comments = [x for x in raw_items if x.get("_type") != "post_stats"]
+
+                # Update parent post reaction/share counts with more accurate comment-view values
+                if post_stats:
+                    ctx["_comment_view_stats"] = post_stats
+                    parent_hash = ctx.get("_first_new_post_hash")
+                    if parent_hash:
+                        try:
+                            from db.database import activity_session
+                            from db.crud.content import update_content_stats
+                            from services.content_store import _safe_int
+                            async with activity_session() as _db:
+                                updated = await update_content_stats(
+                                    _db,
+                                    content_hash=parent_hash,
+                                    likes_count=_safe_int(post_stats.get("reactions")),
+                                    shares_count=_safe_int(post_stats.get("shares")),
+                                )
+                                if updated:
+                                    await _db.commit()
+                        except Exception as exc:
+                            log.warning(f"update_content_stats failed: {exc}")
+
+                ctx.setdefault("comments", [])
+                prev_count = len(ctx["comments"])
+                ctx["comments"] = _dedup_comments(ctx["comments"] + new_comments)
+                added = len(ctx["comments"]) - prev_count
+                details["extracted"] = added
+                details["total_comments"] = len(ctx["comments"])
+                details["parent_post_id"] = parent_post_id
+                details["post_stats"] = post_stats
+                msg = (
+                    f"extract fb_comments: +{added} new "
+                    f"(total {len(ctx['comments'])}, post={parent_post_id})"
+                )
             else:
                 return ExtractResult(
                     ok=False,
@@ -423,6 +479,9 @@ class DeviceActivities:
             ctype = step.get("content_type", "post")
             dedupe_field = step.get("dedupe_field")
             tags = step.get("tags", "")
+            parent_id_var = step.get("parent_id_var")
+            parent_id = ctx.get(parent_id_var) if parent_id_var else None
+            item_level = int(step.get("item_level") or 0)
             saved = dup = err = 0
 
             for item in items:
@@ -437,6 +496,8 @@ class DeviceActivities:
                         device_serial=inp.device_serial,
                         campaign_id=inp.campaign_id,
                         run_id=inp.run_id,
+                        parent_id=parent_id,
+                        item_level=item_level,
                     )
                     if result.get("saved"):
                         saved += 1
@@ -509,17 +570,47 @@ class DeviceActivities:
             return False
 
     @activity.defn
-    async def finalize_campaign(self, campaign_id: str) -> None:
-        """Update campaign DB status to 'idle' when all its workflows have finished.
+    async def finalize_campaign(self, inp: dict) -> None:
+        """Update CampaignRun + Campaign DB status when a workflow ends.
 
         Called at the end of ScenarioWorkflow.run (success, failure, or cancel).
-        Queries Temporal to check if any other workflows for this campaign are still
-        running. If none remain, marks the campaign as idle in the DB.
+        - Always updates CampaignRun.status to "completed" or "failed".
+        - When all workflows for the campaign are done, sets Campaign.status = "idle".
+
+        Accepts a dict: {"campaign_id": str, "run_id": str|None, "success": bool}
+        (kept as dict for Temporal serialization simplicity).
         """
+        # Support both old str payload (backward compat) and new dict payload.
+        if isinstance(inp, str):
+            campaign_id: str = inp
+            run_id = None
+            success = True
+        else:
+            campaign_id = inp.get("campaign_id", "")
+            run_id = inp.get("run_id")
+            success = bool(inp.get("success", True))
+
         activity.heartbeat("finalize_campaign")
+
+        # Always update the CampaignRun status so the UI reflects real outcome.
+        if run_id:
+            try:
+                from db.database import activity_session
+                from db.crud.campaign_run import finish_campaign_run
+                run_status = "completed" if success else "failed"
+                async with activity_session() as db:
+                    await finish_campaign_run(db, run_id, status=run_status)
+                    await db.commit()
+                log.info("finalize_campaign: run %s → %s", run_id, run_status)
+            except Exception as exc:
+                log.warning("finalize_campaign: run status update failed (%s): %s", run_id, exc)
+
+        if not campaign_id:
+            return
+
         cfg = _temporal_config
         if cfg is None:
-            log.warning("finalize_campaign: no temporal config, skipping status update")
+            log.warning("finalize_campaign: no temporal config, skipping campaign status update")
             return
         try:
             from temporal.worker import get_temporal_client

@@ -460,6 +460,16 @@ class DeviceAgentSession:
             touch_mode = hello.get("touch_mode")
             if isinstance(touch_mode, str) and touch_mode:
                 device.set_agent_touch_mode(touch_mode.strip())
+            # Set ADB serial for legacy ADB fallback.
+            # WiFi devices: use "client_ip:5555" (Build.getSerial() != ADB WiFi serial).
+            # USB devices: Build.getSerial() == ADB serial so self.serial already works.
+            if client_ip and client_ip not in ("127.0.0.1", "::1", "localhost"):
+                device._adb_serial = f"{client_ip}:5555"
+                # atx-agent runs on device — connect directly to device_ip:7912
+                device._u2_host = client_ip
+            else:
+                device._adb_serial = serial  # USB: Build.getSerial() matches ADB serial
+                device._u2_host = None  # USB: no direct IP access; fall back to WS tunnel
 
             loop = asyncio.get_running_loop()
 
@@ -503,10 +513,15 @@ class DeviceAgentSession:
                 self._sessions[serial] = ws
 
             # Acknowledge — send tunnel ports + stream options (FPS for scrcpy/MediaProjection)
+            # WiFi devices use atx-agent at device_ip:7912 directly — don't send u2 tunnel
+            # port to APK so it won't create a u2 ServiceTunnel that reconnects endlessly.
+            tunnels_for_ack = dict(device._tunnel_ports)
+            if client_ip and client_ip not in ("127.0.0.1", "::1", "localhost"):
+                tunnels_for_ack.pop("u2", None)
             hello_ack_msg: Dict[str, Any] = {
                 "type": "hello_ack",
                 "serial": serial,
-                "tunnels": device._tunnel_ports,
+                "tunnels": tunnels_for_ack,
             }
             if self._config:
                 so = {
@@ -524,9 +539,9 @@ class DeviceAgentSession:
                 log.warning("[DEVICE-WS] Agent %s: failed to send hello_ack (broken pipe?): %s", serial, exc)
                 return
 
-            # Request agent to auto-start minitouch, uiautomator2 (no-op if already running)
+            # Request agent to auto-start uiautomator2 (no-op if already running)
             try:
-                await ws.send_json({"type": "start_services", "services": ["minitouch", "u2"]})
+                await ws.send_json({"type": "start_services", "services": ["u2"]})
             except Exception as exc:
                 log.warning("[DEVICE-WS] Agent %s: failed to send start_services: %s", serial, exc)
                 return
@@ -613,122 +628,141 @@ class DeviceAgentSession:
             # ── Message loop ─────────────────────────────────────────────────
             log.info("Agent %s: ready, streaming…", serial)
             frame_count = 0
-            while True:
-                raw_msg = await ws.receive()
-                # Handle disconnect
-                if raw_msg.get("type") == "websocket.disconnect":
-                    break
 
-                # ── Binary frame from agent (H264 binary protocol, same as server→browser) ──
-                if raw_msg.get("bytes"):
-                    binary = raw_msg["bytes"]
-                    if len(binary) >= 2:
-                        frame_type = binary[0]
-                        if frame_type == 0x10:
-                            # H264 config — parse and relay
-                            parsed = _parse_agent_binary_frame(binary)
-                            if parsed:
-                                device.on_agent_h264_config(parsed["data"], parsed["w"], parsed["h"])
-                        elif frame_type == 0x11:
-                            # H264 video frame — parse and relay
-                            parsed = _parse_agent_binary_frame(binary)
-                            if parsed:
-                                device.on_agent_h264_video(
-                                    parsed["data"], parsed["is_key"], parsed["pts_us"]
-                                )
-                        elif frame_type == 0x01:
-                            # Binary JPEG — parse and relay
-                            parsed = _parse_agent_binary_frame(binary)
-                            if parsed:
-                                device.on_agent_frame_bytes(parsed["data"])
-                    continue
+            async def _keepalive() -> None:
+                """Send periodic ping to keep WS alive through NAT/router idle timeouts."""
+                while True:
+                    await asyncio.sleep(20)
+                    try:
+                        await ws.send_json({"type": "ping"})
+                    except Exception:
+                        break
 
-                # ── JSON text message ──────────────────────────────────────────
-                text = raw_msg.get("text", "")
-                if not text:
-                    continue
-                try:
-                    msg = json.loads(text)
-                except Exception:
-                    continue
-                msg_type = msg.get("type")
+            _keepalive_task = asyncio.create_task(_keepalive())
+            try:
+                while True:
+                    raw_msg = await ws.receive()
+                    # Handle disconnect
+                    if raw_msg.get("type") == "websocket.disconnect":
+                        break
 
-                if msg_type == "frame":
-                    frame_count += 1
-                    if frame_count == 1 or frame_count % 300 == 0:
-                        log.debug("Agent %s: frame #%s", serial, frame_count)
-                    jpeg_b64 = msg.get("jpeg_b64", "")
-                    if jpeg_b64:
-                        device.on_agent_frame_b64(jpeg_b64)
+                    # ── Binary frame from agent (H264 binary protocol, same as server→browser) ──
+                    if raw_msg.get("bytes"):
+                        binary = raw_msg["bytes"]
+                        if len(binary) >= 2:
+                            frame_type = binary[0]
+                            if frame_type == 0x10:
+                                # H264 config — parse and relay
+                                parsed = _parse_agent_binary_frame(binary)
+                                if parsed:
+                                    device.on_agent_h264_config(parsed["data"], parsed["w"], parsed["h"])
+                            elif frame_type == 0x11:
+                                # H264 video frame — parse and relay
+                                parsed = _parse_agent_binary_frame(binary)
+                                if parsed:
+                                    device.on_agent_h264_video(
+                                        parsed["data"], parsed["is_key"], parsed["pts_us"]
+                                    )
+                            elif frame_type == 0x01:
+                                # Binary JPEG — parse and relay
+                                parsed = _parse_agent_binary_frame(binary)
+                                if parsed:
+                                    device.on_agent_frame_bytes(parsed["data"])
+                        continue
 
-                elif msg_type == "h264_config":
-                    # Agent sends H264 SPS+PPS config as JSON+base64
-                    # data_b64 can be either AVCDecoderConfigurationRecord or Annex B SPS+PPS
-                    data_b64 = msg.get("data", "") or msg.get("data_b64", "")
-                    if data_b64:
-                        raw_config = base64.b64decode(data_b64)
-                        w = int(msg.get("width", 0) or msg.get("w", 0) or device.screen_width or 0)
-                        h = int(msg.get("height", 0) or msg.get("h", 0) or device.screen_height or 0)
-                        # Detect if it's Annex B and convert to AVCDecoderConfigurationRecord if needed
-                        from runtime.transports.h264_utils import annexb_to_avcc_record_maybe
-                        avcc_record = annexb_to_avcc_record_maybe(raw_config)
-                        device.on_agent_h264_config(avcc_record, w, h)
-                        log.debug("Agent %s: h264_config %dx%d %d bytes", serial, w, h, len(avcc_record))
+                    # ── JSON text message ──────────────────────────────────────────
+                    text = raw_msg.get("text", "")
+                    if not text:
+                        continue
+                    try:
+                        msg = json.loads(text)
+                    except Exception:
+                        continue
+                    msg_type = msg.get("type")
 
-                elif msg_type == "h264_frame":
-                    # Agent sends H264 NAL unit(s) as JSON+base64
-                    data_b64 = msg.get("data", "") or msg.get("data_b64", "")
-                    if data_b64:
-                        raw_data = base64.b64decode(data_b64)
-                        is_key = bool(msg.get("key", False) or msg.get("is_key", False))
-                        pts_us = int(msg.get("pts", 0) or msg.get("pts_us", 0) or 0)
-                        # Convert Annex B → AVCC if needed
-                        from runtime.transports.h264_utils import annexb_to_avcc_maybe
-                        avcc_data = annexb_to_avcc_maybe(raw_data)
-                        device.on_agent_h264_video(avcc_data, is_key, pts_us)
+                    if msg_type == "ping":
+                        # Server-initiated keepalive — agent should reply with pong (ignored if not)
+                        pass
 
-                elif msg_type == "tunnel_data":
-                    channel = msg.get("channel", "")
-                    b64_data = msg.get("data", "")
-                    if channel and b64_data:
-                        device.route_tunnel_data(channel, b64_data)
+                    elif msg_type == "frame":
+                        frame_count += 1
+                        if frame_count == 1 or frame_count % 300 == 0:
+                            log.debug("Agent %s: frame #%s", serial, frame_count)
+                        jpeg_b64 = msg.get("jpeg_b64", "")
+                        if jpeg_b64:
+                            device.on_agent_frame_b64(jpeg_b64)
 
-                elif msg_type == "tunnels_ready":
-                    raw = msg.get("connected")
-                    channels = set()
-                    if isinstance(raw, list):
-                        channels = {str(c).strip() for c in raw}
-                    elif isinstance(raw, str):
-                        s = raw.strip("[]").replace(",", " ")
-                        channels = {x.strip() for x in s.split() if x.strip()}
-                    device.on_agent_ready(ready_channels=channels)
-                    log.info(
-                        "[DEVICE-WS] Tunnels ready: serial=%s channels=%s",
-                        serial,
-                        channels,
-                    )
+                    elif msg_type == "h264_config":
+                        # Agent sends H264 SPS+PPS config as JSON+base64
+                        # data_b64 can be either AVCDecoderConfigurationRecord or Annex B SPS+PPS
+                        data_b64 = msg.get("data", "") or msg.get("data_b64", "")
+                        if data_b64:
+                            raw_config = base64.b64decode(data_b64)
+                            w = int(msg.get("width", 0) or msg.get("w", 0) or device.screen_width or 0)
+                            h = int(msg.get("height", 0) or msg.get("h", 0) or device.screen_height or 0)
+                            # Detect if it's Annex B and convert to AVCDecoderConfigurationRecord if needed
+                            from runtime.transports.h264_utils import annexb_to_avcc_record_maybe
+                            avcc_record = annexb_to_avcc_record_maybe(raw_config)
+                            device.on_agent_h264_config(avcc_record, w, h)
+                            log.debug("Agent %s: h264_config %dx%d %d bytes", serial, w, h, len(avcc_record))
 
-                elif msg_type == "status":
-                    device.on_agent_status(msg)
+                    elif msg_type == "h264_frame":
+                        # Agent sends H264 NAL unit(s) as JSON+base64
+                        data_b64 = msg.get("data", "") or msg.get("data_b64", "")
+                        if data_b64:
+                            raw_data = base64.b64decode(data_b64)
+                            is_key = bool(msg.get("key", False) or msg.get("is_key", False))
+                            pts_us = int(msg.get("pts", 0) or msg.get("pts_us", 0) or 0)
+                            # Convert Annex B → AVCC if needed
+                            from runtime.transports.h264_utils import annexb_to_avcc_maybe
+                            avcc_data = annexb_to_avcc_maybe(raw_data)
+                            device.on_agent_h264_video(avcc_data, is_key, pts_us)
 
-                elif msg_type == "log":
-                    device.on_agent_log(msg.get("line", ""))
+                    elif msg_type == "tunnel_data":
+                        channel = msg.get("channel", "")
+                        b64_data = msg.get("data", "")
+                        if channel and b64_data:
+                            device.route_tunnel_data(channel, b64_data)
 
-                elif msg_type == "open_url_result":
-                    device.on_agent_open_url_result(
-                        msg.get("success", False),
-                        msg.get("error", ""),
-                    )
+                    elif msg_type == "tunnels_ready":
+                        raw = msg.get("connected")
+                        channels = set()
+                        if isinstance(raw, list):
+                            channels = {str(c).strip() for c in raw}
+                        elif isinstance(raw, str):
+                            s = raw.strip("[]").replace(",", " ")
+                            channels = {x.strip() for x in s.split() if x.strip()}
+                        device.on_agent_ready(ready_channels=channels)
+                        log.info(
+                            "[DEVICE-WS] Tunnels ready: serial=%s channels=%s",
+                            serial,
+                            channels,
+                        )
 
-                elif msg_type == "hierarchy":
-                    # Response from dump_hierarchy WS command (AccessibilityService)
-                    device.on_agent_hierarchy_response(
-                        xml=msg.get("xml"),
-                        error=msg.get("error"),
-                    )
+                    elif msg_type == "status":
+                        device.on_agent_status(msg)
 
-                else:
-                    log.debug("Agent %s: unknown msg type: %r", serial, msg_type)
+                    elif msg_type == "log":
+                        device.on_agent_log(msg.get("line", ""))
+
+                    elif msg_type == "open_url_result":
+                        device.on_agent_open_url_result(
+                            msg.get("success", False),
+                            msg.get("error", ""),
+                        )
+
+                    elif msg_type == "hierarchy":
+                        # Response from dump_hierarchy WS command (AccessibilityService)
+                        device.on_agent_hierarchy_response(
+                            xml=msg.get("xml"),
+                            error=msg.get("error"),
+                        )
+
+                    else:
+                        log.debug("Agent %s: unknown msg type: %r", serial, msg_type)
+
+            finally:
+                _keepalive_task.cancel()
 
         except asyncio.TimeoutError:
             log.warning("[DEVICE-WS] Agent %s: hello timeout (15s)", serial or "unknown")

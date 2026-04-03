@@ -52,7 +52,11 @@ import java.io.OutputStream;
 import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import android.content.ComponentName;
+import android.content.pm.ActivityInfo;
+import android.content.pm.ResolveInfo;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -801,6 +805,51 @@ public class WsAgentService extends android.app.Service {
                     }
                     break;
                 }
+                case "double_tap": {
+                    final int dtx = msg.optInt("x", 0);
+                    final int dty = msg.optInt("y", 0);
+                    if (TouchAccessibilityService.isAvailable()) {
+                        mainHandler.post(() -> {
+                            TouchAccessibilityService svc = TouchAccessibilityService.instance;
+                            if (svc != null) svc.doDoubleTap(dtx, dty);
+                        });
+                    } else if (Build.VERSION.SDK_INT < 34 && inputManager != null) {
+                        // Fallback: two injected taps 100ms apart
+                        executor.submit(() -> {
+                            injectTouchEvent(dtx, dty);
+                            try { Thread.sleep(100); } catch (InterruptedException ignored) {}
+                            injectTouchEvent(dtx, dty);
+                        });
+                    }
+                    break;
+                }
+                case "pinch": {
+                    final int pcx = msg.optInt("cx", 0);
+                    final int pcy = msg.optInt("cy", 0);
+                    final float pscale = (float) msg.optDouble("scale", 0.5);
+                    final int pdur = Math.max(msg.optInt("ms", 400), 100);
+                    if (TouchAccessibilityService.isAvailable()) {
+                        mainHandler.post(() -> {
+                            TouchAccessibilityService svc = TouchAccessibilityService.instance;
+                            if (svc != null) svc.doPinch(pcx, pcy, pscale, pdur);
+                        });
+                    }
+                    break;
+                }
+                case "drag": {
+                    final int drx1 = msg.optInt("x1", 0), dry1 = msg.optInt("y1", 0);
+                    final int drx2 = msg.optInt("x2", 0), dry2 = msg.optInt("y2", 0);
+                    final int drdur = Math.max(msg.optInt("ms", 1000), 500);
+                    if (TouchAccessibilityService.isAvailable()) {
+                        mainHandler.post(() -> {
+                            TouchAccessibilityService svc = TouchAccessibilityService.instance;
+                            if (svc != null) svc.doDrag(drx1, dry1, drx2, dry2, drdur);
+                        });
+                    } else if (Build.VERSION.SDK_INT < 34 && inputManager != null) {
+                        executor.submit(() -> injectSwipeEvent(drx1, dry1, drx2, dry2, drdur));
+                    }
+                    break;
+                }
                 case "key":
                     executor.submit(() -> injectKey(msg.optString("key", "home")));
                     break;
@@ -828,10 +877,29 @@ public class WsAgentService extends android.app.Service {
                         try {
                             Intent i = getPackageManager().getLaunchIntentForPackage(pkg);
                             if (i == null) {
+                                // Fallback: query all LAUNCHER activities for the package.
+                                // Some apps (e.g. Facebook) do not expose a standard launch
+                                // intent via getLaunchIntentForPackage on certain OEMs.
+                                Intent query = new Intent(Intent.ACTION_MAIN);
+                                query.addCategory(Intent.CATEGORY_LAUNCHER);
+                                query.setPackage(pkg);
+                                List<ResolveInfo> resolved = getPackageManager()
+                                        .queryIntentActivities(query, 0);
+                                if (!resolved.isEmpty()) {
+                                    ActivityInfo ai = resolved.get(0).activityInfo;
+                                    i = new Intent(Intent.ACTION_MAIN);
+                                    i.addCategory(Intent.CATEGORY_LAUNCHER);
+                                    i.setComponent(new ComponentName(ai.packageName, ai.name));
+                                    sendLog("launch_app: resolved via queryIntentActivities → " + ai.name);
+                                }
+                            }
+                            if (i == null) {
                                 sendLog("launch_app: no launch intent for " + pkg);
                                 return;
                             }
-                            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                                    | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
+                                    | Intent.FLAG_ACTIVITY_CLEAR_TASK);
                             startActivity(i);
                             sendLog("launch_app: started " + pkg);
                         } catch (Exception e) {

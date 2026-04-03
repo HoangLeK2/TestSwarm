@@ -159,7 +159,7 @@ class DeviceManager:
 
         log.info(f"[{serial}] Re-bootstrapping ADB device ({host}:{port})...")
 
-        # 1. Tear down existing transports (scrcpy, minitouch, u2)
+        # 1. Tear down existing transports (scrcpy, u2)
         device.state = DeviceState.CONNECTING
         device.detach_all_transports()
 

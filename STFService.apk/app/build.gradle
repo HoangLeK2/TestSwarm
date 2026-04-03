@@ -10,6 +10,16 @@ buildscript {
     }
 }
 
+// AGP's `androidJdkImage` runs `jlink` while building. If the selected Java installation
+// is a JRE without `jlink`, the build fails. Force toolchains to use the full JDK
+// shipped with Android Studio (JBR).
+java {
+    toolchain {
+        // `androidJdkImage` needs a newer JDK for creating the runtime image.
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
 android {
     compileSdk 36
 

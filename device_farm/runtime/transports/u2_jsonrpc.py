@@ -276,12 +276,18 @@ class _WatcherContext:
         return None
 
     def _fetch_page_source(self) -> str:
-        """Fetch UI hierarchy using the dedicated watcher session."""
+        """Fetch UI hierarchy using the dedicated watcher session.
+
+        Uses compressed=True so dumpWindowHierarchy skips off-screen/invisible
+        sub-trees — same as the main hierarchy path.  The original False caused
+        concurrent 3-10 s full dumps that overwhelmed u2's single-threaded
+        NanoHTTPD and led to timeouts on the main session.
+        """
         payload = {
             "jsonrpc": "2.0",
             "id": 0,
             "method": "dumpWindowHierarchy",
-            "params": [False, 50],
+            "params": [True, 50],
         }
         try:
             r = self._session.post(

@@ -155,6 +155,20 @@ async def enqueue_campaign_run_temporal(
             scenarios_count=len(scenarios),
         )
         run_id = run_record.id
+
+        # Create Execution coordinator record (DF-011)
+        from db.crud.execution import create_execution, add_device_to_execution
+        execution_record = await create_execution(
+            db,
+            run_type="campaign_run",
+            campaign_id=campaign_id,
+            user_id=getattr(campaign, "user_id", None),
+            status="running",
+        )
+        execution_id = execution_record.id
+        for d in devices:
+            await add_device_to_execution(db, execution_id, d.id)
+
         await db.commit()
 
     # Resolve per-device account vars
@@ -206,6 +220,7 @@ async def enqueue_campaign_run_temporal(
                             campaign_vars=campaign.variables or {},
                             scenario_registry=registry,
                             run_id=run_id,
+                            execution_id=execution_id,
                         ),
                         id=wf_id,
                         task_queue=task_queue,
@@ -232,6 +247,7 @@ async def enqueue_campaign_run_temporal(
                         campaign_vars=campaign.variables or {},
                         scenario_registry=registry,
                         run_id=run_id,
+                        execution_id=execution_id,
                     ),
                     id=wf_id,
                     task_queue=task_queue,
@@ -271,6 +287,7 @@ async def enqueue_campaign_run_temporal(
     return {
         "id": campaign_id,
         "run_id": run_id,
+        "execution_id": execution_id,
         "status": "running",
         "device_serials": [d.serial for d in devices],
         "workflow_ids": workflow_ids,

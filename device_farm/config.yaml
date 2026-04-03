@@ -18,8 +18,6 @@ adb:
 device:
   index_file: "device_index.json"
 
-  minitouch_bin: "/data/local/tmp/minitouch"
-
   stf_package: "jp.co.cyberagent.stf"
   stf_apk_path: ""       
 
@@ -92,8 +90,12 @@ temporal:
   server_url: "localhost:7233"          # Temporal gRPC endpoint
   namespace: "default"
   task_queue: "device-scenario"
-  worker_max_concurrent_activities: 10  # Max parallel device actions per worker
-  worker_max_concurrent_workflows: 50   # Max parallel workflow tasks per worker
+  worker_count: 1                      # Worker threads per process (each has own event loop + thread pool)
+                                         # Total capacity = worker_count × worker_max_concurrent_activities
+                                         # Override via TEMPORAL_WORKER_COUNT env var
+                                         # For cloud scale: run more farm pods, each with worker_count=2-4
+  worker_max_concurrent_activities: 10  # Max parallel device actions per worker thread
+  worker_max_concurrent_workflows: 50   # Max parallel workflow tasks per worker thread
   workflow_execution_timeout: 3600      # Max seconds for one campaign workflow
   activity_start_to_close_timeout: 60   # Max seconds per device action
   activity_retry_max_attempts: 3        # Retry failed device actions

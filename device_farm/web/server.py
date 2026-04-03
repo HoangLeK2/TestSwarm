@@ -70,16 +70,12 @@ def create_app(
 
         # ── Scheduler setup (DF-008) ──────────────────────────────────────
         temporal_client = None
-        temporal_thread = None
+        temporal_threads: list = []
         if config.temporal.enabled:
             try:
                 from temporal.worker import start_temporal_worker, get_temporal_client
                 temporal_client = await get_temporal_client(config.temporal)
-                temporal_thread = start_temporal_worker(manager, config.temporal, queue=queue)
-                log.info(
-                    "Temporal worker started: server=%s queue=%s",
-                    config.temporal.server_url, config.temporal.task_queue,
-                )
+                temporal_threads = start_temporal_worker(manager, config.temporal, queue=queue)
             except Exception as exc:
                 log.warning("Temporal worker failed to start: %s — campaign execution will be unavailable", exc)
         else:

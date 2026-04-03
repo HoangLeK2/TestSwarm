@@ -55,7 +55,7 @@ def _attach(device: DeviceClient,
     # Patch TunnelSet so attach_agent_sender() doesn't open real sockets
     mock_tunnels = MagicMock(name="tunnels")
     mock_tunnels.start_all.return_value = {
-        "u2": u2_port, "stfservice": u2_port + 1, "minitouch": 0
+        "u2": u2_port, "stfservice": u2_port + 1
     }
     with patch("runtime.core.device_client.TunnelSet", return_value=mock_tunnels):
         device.attach_agent_sender(send)
@@ -93,7 +93,7 @@ class TestAttachAgentSenderReset:
 
         new_send = _make_send("new")
         mock_tunnels = MagicMock()
-        mock_tunnels.start_all.return_value = {"u2": 9100, "stfservice": 9101, "minitouch": 0}
+        mock_tunnels.start_all.return_value = {"u2": 9100, "stfservice": 9101}
         with patch("runtime.core.device_client.TunnelSet", return_value=mock_tunnels):
             d.attach_agent_sender(new_send)
 
@@ -106,7 +106,7 @@ class TestAttachAgentSenderReset:
 
         new_send = _make_send("new")
         mock_tunnels = MagicMock()
-        mock_tunnels.start_all.return_value = {"u2": 9100, "stfservice": 9101, "minitouch": 0}
+        mock_tunnels.start_all.return_value = {"u2": 9100, "stfservice": 9101}
         with patch("runtime.core.device_client.TunnelSet", return_value=mock_tunnels):
             d.attach_agent_sender(new_send)
 
@@ -118,7 +118,7 @@ class TestAttachAgentSenderReset:
         _attach(d, send=old_send)
         new_send = _make_send("new")
         mock_tunnels = MagicMock()
-        mock_tunnels.start_all.return_value = {"u2": 9100, "stfservice": 9101, "minitouch": 0}
+        mock_tunnels.start_all.return_value = {"u2": 9100, "stfservice": 9101}
         with patch("runtime.core.device_client.TunnelSet", return_value=mock_tunnels):
             d.attach_agent_sender(new_send)
         assert d._agent_send is new_send
@@ -128,7 +128,7 @@ class TestAttachAgentSenderReset:
         _attach(d, u2_port=9000)
         new_send = _make_send("new")
         mock_tunnels = MagicMock()
-        mock_tunnels.start_all.return_value = {"u2": 9100, "stfservice": 9101, "minitouch": 0}
+        mock_tunnels.start_all.return_value = {"u2": 9100, "stfservice": 9101}
         with patch("runtime.core.device_client.TunnelSet", return_value=mock_tunnels):
             d.attach_agent_sender(new_send)
         assert d._tunnel_ports["u2"] == 9100
@@ -142,7 +142,7 @@ class TestAttachAgentSenderReset:
 
         new_send = _make_send("new")
         mock_tunnels = MagicMock()
-        mock_tunnels.start_all.return_value = {"u2": 9100, "stfservice": 9101, "minitouch": 0}
+        mock_tunnels.start_all.return_value = {"u2": 9100, "stfservice": 9101}
         with patch("runtime.core.device_client.TunnelSet", return_value=mock_tunnels):
             d.attach_agent_sender(new_send)
 
@@ -289,7 +289,7 @@ class TestDisconnectedMatchingSender:
         # New attach_agent_sender also resets channels (even if they were leftover)
         new_send = _make_send("new")
         mock_tunnels = MagicMock()
-        mock_tunnels.start_all.return_value = {"u2": 9100, "stfservice": 9101, "minitouch": 0}
+        mock_tunnels.start_all.return_value = {"u2": 9100, "stfservice": 9101}
         with patch("runtime.core.device_client.TunnelSet", return_value=mock_tunnels):
             d.attach_agent_sender(new_send)
 
@@ -468,7 +468,7 @@ class TestFullReconnectSequence:
         new_send = _make_send("new")
         mock_tunnels_new = MagicMock(name="new_tunnels")
         mock_tunnels_new.start_all.return_value = {
-            "u2": 9100, "stfservice": 9101, "minitouch": 0
+            "u2": 9100, "stfservice": 9101
         }
         with patch("runtime.core.device_client.TunnelSet", return_value=mock_tunnels_new):
             d.attach_agent_sender(new_send)
@@ -502,7 +502,7 @@ class TestFullReconnectSequence:
         # Reconnect
         new_send = _make_send("new")
         mock_tunnels = MagicMock()
-        mock_tunnels.start_all.return_value = {"u2": 9100, "stfservice": 9101, "minitouch": 0}
+        mock_tunnels.start_all.return_value = {"u2": 9100, "stfservice": 9101}
         with patch("runtime.core.device_client.TunnelSet", return_value=mock_tunnels):
             d.attach_agent_sender(new_send)
 
@@ -582,7 +582,7 @@ class TestThreadSafety:
                     new_send = _make_send(f"send@{port}")
                     mock_t = MagicMock()
                     mock_t.start_all.return_value = {
-                        "u2": port, "stfservice": port + 1, "minitouch": 0
+                        "u2": port, "stfservice": port + 1
                     }
                     with patch("runtime.core.device_client.TunnelSet", return_value=mock_t):
                         d.attach_agent_sender(new_send)

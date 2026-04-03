@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import functools
 import logging
 import re
 import xml.etree.ElementTree as ET
-from typing import Any
+from typing import Any, Callable
 
 from temporalio import activity
 
 from temporal.shared import (
+    DeviceActionBatchInput,
+    DeviceActionBatchResult,
     DeviceActionInput,
     ElementCheckInput,
     ElementCheckResult,
@@ -42,6 +47,37 @@ def set_temporal_config(cfg) -> None:
     _temporal_config = cfg
 
 
+async def _to_thread_with_heartbeat(
+    fn: Callable,
+    *args: Any,
+    heartbeat_interval: float = 20.0,
+    **kwargs: Any,
+) -> Any:
+    """Run a sync blocking function in the thread pool while sending Temporal heartbeats.
+
+    Without this, an activity with heartbeat_timeout=30s that blocks for >30s in a
+    thread (waiting for UI elements, scrolling, etc.) will be cancelled by Temporal
+    with CancelledError because no heartbeat arrives within the timeout window.
+
+    heartbeat_interval should be < heartbeat_timeout (default 20s vs 30s timeout).
+    """
+    async def _heartbeat_loop() -> None:
+        n = 0
+        while True:
+            await asyncio.sleep(heartbeat_interval)
+            with contextlib.suppress(Exception):
+                activity.heartbeat(f"running:{n}")
+            n += 1
+
+    heartbeat_task = asyncio.create_task(_heartbeat_loop())
+    try:
+        return await asyncio.to_thread(functools.partial(fn, *args, **kwargs))
+    finally:
+        heartbeat_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await heartbeat_task
+
+
 def _validate_serial(serial: str) -> None:
     """Validate device serial to prevent injection attacks."""
     if not serial or not _SERIAL_RE.match(serial):
@@ -68,7 +104,45 @@ class DeviceActivities:
     which has the full, battle-tested execution pipeline:
     - pre_hash → auto_dismiss_popup → _execute_tap(retries=2) → _wait_ui_change
     - Smart waits, fallback logic, container class skip, wrong element detection
+
+    Credential cache: account passwords are fetched once per account_id and
+    cached for the lifetime of this Worker instance. activity_session() creates
+    a new async engine per call (NullPool), so caching avoids repeated
+    engine-create/dispose on every step of a multi-step campaign.
     """
+
+    def __init__(self) -> None:
+        # account_id -> decrypted password; populated lazily, never evicted
+        # (passwords don't change mid-campaign; Worker restarts clear the cache).
+        self._cred_cache: dict[str, str] = {}
+        # Prevents duplicate DB fetches when two coroutines miss the cache
+        # simultaneously for the same account_id.
+        self._cred_lock: asyncio.Lock = asyncio.Lock()
+
+    async def _resolve_password(self, account_id: str) -> str | None:
+        """Fetch and cache the decrypted password for account_id.
+
+        The lock prevents the check-then-act race: without it, two coroutines
+        could both miss the cache and issue duplicate DB queries for the same
+        account. The fast path (cache hit) does not acquire the lock.
+        """
+        if account_id in self._cred_cache:
+            return self._cred_cache[account_id]
+        async with self._cred_lock:
+            # Re-check after acquiring lock — another coroutine may have
+            # populated the cache while we waited.
+            if account_id in self._cred_cache:
+                return self._cred_cache[account_id]
+            from db.database import activity_session
+            from db.crud.account import get_account
+            from common.crypto import decrypt_password
+            async with activity_session() as acct_db:
+                account = await get_account(acct_db, account_id)
+            if account is None:
+                return None
+            pwd = decrypt_password(account.password_encrypted)
+            self._cred_cache[account_id] = pwd
+            return pwd
 
     @activity.defn
     async def execute_device_action(self, inp: DeviceActionInput) -> StepResult:
@@ -107,24 +181,15 @@ class DeviceActivities:
             # Create VariableContext with all variable layers
             resolved_campaign_vars = dict(inp.campaign_vars)
 
-            # SECURITY: Credentials are resolved here at activity time — never stored in
-            # Temporal event history. __ACCOUNT_ID__ is a safe reference passed via workflow
-            # input; the actual password is fetched+decrypted only within this activity scope.
-            # SECURITY: Credentials resolved here at activity time — never stored in
-            # Temporal event history. __ACCOUNT_ID__ is the safe reference from workflow
-            # input; the password is fetched+decrypted only within this activity scope
-            # and passed via scenario_vars (activity-local), NOT campaign_vars, to
-            # prevent it from leaking into serialized workflow state.
+            # SECURITY: Credentials resolved at activity time — never stored in Temporal
+            # event history. __ACCOUNT_ID__ is a safe reference; password is fetched+decrypted
+            # inside _resolve_password() (activity-local) and passed via scenario_vars,
+            # NOT campaign_vars, to prevent leaking into serialized workflow state.
             credential_vars: dict[str, Any] = {}
             if "__ACCOUNT_ID__" in resolved_campaign_vars:
-                from db.database import activity_session
-                from db.crud.account import get_account
-                from common.crypto import decrypt_password
-
                 acct_id = resolved_campaign_vars["__ACCOUNT_ID__"]
-                async with activity_session() as acct_db:
-                    account = await get_account(acct_db, acct_id)
-                if account is None:
+                pwd = await self._resolve_password(acct_id)
+                if pwd is None:
                     return StepResult(
                         index=idx, step_type=step_type, ok=False,
                         message=(
@@ -132,9 +197,7 @@ class DeviceActivities:
                             "Check that the account still exists in the database."
                         ),
                     )
-                credential_vars["__ACCOUNT_PASSWORD__"] = decrypt_password(
-                    account.password_encrypted
-                )
+                credential_vars["__ACCOUNT_PASSWORD__"] = pwd
 
             var_ctx = VariableContext(
                 # Merge credentials into scenario_vars (activity-scoped) so the
@@ -146,10 +209,8 @@ class DeviceActivities:
                 device_model=getattr(device, "model", ""),
             )
 
-            result = run_scenario_task(
-                device,
-                mini_scenario,
-                _var_ctx=var_ctx,
+            result = await _to_thread_with_heartbeat(
+                run_scenario_task, device, mini_scenario, _var_ctx=var_ctx,
             )
 
             # Extract the single step result
@@ -184,10 +245,9 @@ class DeviceActivities:
             # Re-raise cancellation signals so Temporal can propagate them correctly.
             # temporalio.exceptions.CancelledError inherits from Exception, so it must
             # be explicitly re-raised before the generic handler converts it to StepResult.
-            import asyncio as _asyncio
             try:
                 from temporalio.exceptions import CancelledError as _TemporalCancelledError
-                if isinstance(exc, (_asyncio.CancelledError, _TemporalCancelledError)):
+                if isinstance(exc, (asyncio.CancelledError, _TemporalCancelledError)):
                     raise
             except ImportError:
                 if isinstance(exc, _asyncio.CancelledError):
@@ -202,6 +262,92 @@ class DeviceActivities:
                 index=idx, step_type=step_type, ok=False,
                 message=f"Activity error: {exc}",
             )
+
+    @activity.defn
+    async def execute_device_action_batch(
+        self, inp: DeviceActionBatchInput,
+    ) -> DeviceActionBatchResult:
+        """Run N consecutive leaf steps as one activity call.
+
+        History cost: 3 events regardless of batch size (vs 3N for individual calls).
+        Steps are executed sequentially; stops on the first failure unless
+        the step has ignore_error=True.
+        """
+        _validate_serial(inp.device_serial)
+        device = _get_device(inp.device_serial)
+        activity.heartbeat(f"batch:0/{len(inp.steps)}")
+
+        from tasks.scenario_task import run_scenario_task
+        from common.variable_resolver import VariableContext
+
+        results: list[dict[str, Any]] = []
+        first_failure_index = -1
+
+        # Resolve credentials once for the whole batch.
+        credential_vars: dict[str, Any] = {}
+        acct_id = inp.campaign_vars.get("__ACCOUNT_ID__")
+        if acct_id:
+            pwd = await self._resolve_password(acct_id)
+            if pwd is None:
+                return DeviceActionBatchResult(
+                    results=[{
+                        "index": inp.step_indices[0] if inp.step_indices else 0,
+                        "type": "batch",
+                        "ok": False,
+                        "message": f"Account {acct_id!r} not found",
+                    }],
+                    first_failure_index=0,
+                )
+            credential_vars["__ACCOUNT_PASSWORD__"] = pwd
+
+        var_ctx = VariableContext(
+            scenario_vars={**inp.variables, **credential_vars},
+            campaign_vars=inp.campaign_vars,
+            device_serial=inp.device_serial,
+            device_model=getattr(device, "model", ""),
+        )
+
+        for batch_pos, (step, step_idx) in enumerate(zip(inp.steps, inp.step_indices)):
+            activity.heartbeat(f"batch:{batch_pos}/{len(inp.steps)}")
+            step_type = step.get("type", "")
+            mini_scenario: dict[str, Any] = {"steps": [step]}
+            if inp.scenario_config:
+                for key in ("visual_anchor", "implicit_wait", "capture_steps"):
+                    if key in inp.scenario_config:
+                        mini_scenario[key] = inp.scenario_config[key]
+            if inp.scenario_registry:
+                mini_scenario["_scenario_registry"] = inp.scenario_registry
+
+            try:
+                result = await _to_thread_with_heartbeat(
+                    run_scenario_task, device, mini_scenario, _var_ctx=var_ctx,
+                )
+                step_results = result.get("step_results", [])
+                if step_results:
+                    sr = step_results[0]
+                    entry = {
+                        "index": step_idx, "type": step_type,
+                        "ok": sr.get("ok", False),
+                        "message": sr.get("message") or "",
+                        "details": {k: v for k, v in sr.items()
+                                    if k not in ("index", "type", "ok", "message")},
+                    }
+                else:
+                    entry = {
+                        "index": step_idx, "type": step_type,
+                        "ok": result.get("success", False),
+                        "message": result.get("failed_message") or "",
+                    }
+            except Exception as exc:
+                log.error("[%s] batch step#%d (%s): %s", inp.device_serial, step_idx, step_type, exc)
+                entry = {"index": step_idx, "type": step_type, "ok": False, "message": str(exc)}
+
+            results.append(entry)
+            if not entry["ok"] and not step.get("ignore_error"):
+                first_failure_index = batch_pos
+                break
+
+        return DeviceActionBatchResult(results=results, first_failure_index=first_failure_index)
 
     @activity.defn
     async def check_element_exists(self, inp: ElementCheckInput) -> ElementCheckResult:
@@ -225,7 +371,7 @@ class DeviceActivities:
             if u2 is None:
                 return ElementCheckResult(found=False, message="u2 not available")
 
-            eid = _wait_for_element(u2, inp.by, inp.value, timeout=inp.timeout)
+            eid = await _to_thread_with_heartbeat(_wait_for_element, u2, inp.by, inp.value, timeout=inp.timeout)
             found = eid is not None
             return ElementCheckResult(
                 found=found,
@@ -257,7 +403,7 @@ class DeviceActivities:
             if inp.runtime_vars:
                 ctx.setdefault("vars", {}).update(inp.runtime_vars)
 
-            return _evaluate_condition(device, inp.condition, ctx)
+            return await _to_thread_with_heartbeat(_evaluate_condition, device, inp.condition, ctx)
         except Exception as exc:
             log.error("[%s] evaluate_legacy_condition error: %s", inp.device_serial, exc)
             return False
@@ -295,13 +441,13 @@ class DeviceActivities:
             if strategy == "fb_posts" and expand_see_more:
                 try:
                     from tasks.fb_extract import _expand_see_more
-                    if _expand_see_more(device):
-                        import asyncio as _asyncio
-                        await _asyncio.sleep(0.5)
+                    expanded = await _to_thread_with_heartbeat(_expand_see_more, device)
+                    if expanded:
+                        await asyncio.sleep(0.5)
                 except Exception:
                     pass
 
-            xml = device.hierarchy_xml(force_refresh=True)
+            xml = await _to_thread_with_heartbeat(device.hierarchy_xml, force_refresh=True)
             if not xml:
                 return ExtractResult(
                     ok=False,
@@ -496,6 +642,7 @@ class DeviceActivities:
                         device_serial=inp.device_serial,
                         campaign_id=inp.campaign_id,
                         run_id=inp.run_id,
+                        execution_id=inp.execution_id,
                         parent_id=parent_id,
                         item_level=item_level,
                     )
@@ -585,10 +732,16 @@ class DeviceActivities:
             campaign_id: str = inp
             run_id = None
             success = True
+            execution_id = None
+            device_serial = None
+            step_results: list = []
         else:
             campaign_id = inp.get("campaign_id", "")
             run_id = inp.get("run_id")
             success = bool(inp.get("success", True))
+            execution_id = inp.get("execution_id")
+            device_serial = inp.get("device_serial")
+            step_results = inp.get("step_results") or []
 
         activity.heartbeat("finalize_campaign")
 
@@ -604,6 +757,39 @@ class DeviceActivities:
                 log.info("finalize_campaign: run %s → %s", run_id, run_status)
             except Exception as exc:
                 log.warning("finalize_campaign: run status update failed (%s): %s", run_id, exc)
+
+        # Persist per-device execution result (DF-011)
+        if execution_id and device_serial:
+            try:
+                from datetime import datetime, timezone as _tz
+                from db.database import activity_session
+                from db.crud.execution import upsert_execution_result
+                from db.crud.device import get_device_by_serial
+                er_status = "passed" if success else "failed"
+                passed_steps = [s for s in step_results if s.get("ok")]
+                failed_steps = [s for s in step_results if not s.get("ok")]
+                async with activity_session() as db:
+                    device = await get_device_by_serial(db, device_serial)
+                    if device:
+                        await upsert_execution_result(
+                            db,
+                            execution_id=execution_id,
+                            device_id=device.id,
+                            status=er_status,
+                            passed_steps=passed_steps,
+                            failed_steps=failed_steps,
+                            finished_at=datetime.now(_tz.utc),
+                        )
+                        await db.commit()
+                log.info(
+                    "finalize_campaign: execution_result %s/%s → %s",
+                    execution_id, device_serial, er_status,
+                )
+            except Exception as exc:
+                log.warning(
+                    "finalize_campaign: execution_result update failed (%s/%s): %s",
+                    execution_id, device_serial, exc,
+                )
 
         if not campaign_id:
             return

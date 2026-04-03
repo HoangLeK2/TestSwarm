@@ -19,15 +19,10 @@
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
-    
-  <queries>
-    <package android:name="com.github.uiautomator" />
-    <package android:name="com.github.uiautomator.test" />
-    <intent>
-      <action android:name="android.intent.action.VIEW" />
-      <data android:scheme="http" />
-    </intent>
-  </queries>
+    <!-- Needed to query/launch ANY installed app (e.g. com.facebook.katana) on Android 11+.
+         Without this, getLaunchIntentForPackage and queryIntentActivities return null
+         for apps not explicitly listed in <queries>. -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
 
     <!-- persistent removed: triggers Play Protect; only system apps use it and it is ignored for non-system -->
     <application android:allowBackup="true"

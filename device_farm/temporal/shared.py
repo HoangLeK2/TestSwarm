@@ -22,6 +22,8 @@ class ScenarioInput:
     scenario_config: dict[str, Any] = field(default_factory=dict)
     # Run tracking — set by campaign_dispatch when creating a CampaignRun record
     run_id: str | None = None
+    # Execution coordinator ID — links to executions table (DF-011)
+    execution_id: str | None = None
 
 
 @dataclass
@@ -39,6 +41,7 @@ class StepsInput:
     context: dict[str, Any] = field(default_factory=dict)
     campaign_id: str | None = None
     run_id: str | None = None
+    execution_id: str | None = None
 
 
 @dataclass
@@ -77,6 +80,28 @@ class DeviceActionInput:
     # Scenario registry for run_scenario sub-step resolution.
     # Contains by_id, by_campaign_name, by_template_name dicts.
     scenario_registry: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class DeviceActionBatchInput:
+    """Batch of consecutive leaf steps executed in one activity call.
+
+    Reduces Temporal history events: N steps → 3 events instead of 3N.
+    Steps must all target the same device and share the same scenario context.
+    """
+    device_serial: str
+    steps: list[dict[str, Any]]           # list of individual step dicts
+    step_indices: list[int]               # original step indices (for logging)
+    variables: dict[str, Any] = field(default_factory=dict)
+    campaign_vars: dict[str, Any] = field(default_factory=dict)
+    scenario_config: dict[str, Any] = field(default_factory=dict)
+    scenario_registry: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class DeviceActionBatchResult:
+    results: list[dict[str, Any]] = field(default_factory=list)   # per-step StepResult dicts
+    first_failure_index: int = -1   # index into results of first failed step, -1 if all ok
 
 
 @dataclass
@@ -171,3 +196,4 @@ class SaveExtractionInput:
     context: dict[str, Any] = field(default_factory=dict)
     campaign_id: str | None = None
     run_id: str | None = None
+    execution_id: str | None = None

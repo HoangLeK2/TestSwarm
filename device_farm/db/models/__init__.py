@@ -10,6 +10,7 @@ split into smaller modules for easier maintenance:
 - campaign.py      — Campaign, CampaignDevice
 - account.py       — Account, DeviceAccount  (DF-007)
 - content.py       — ContentItem, ContentCollection, ContentExport
+- execution.py     — Execution, ExecutionDevice, ExecutionResult  (DF-011)
 """
 
 from .user import User
@@ -22,6 +23,7 @@ from .scenario_template import ScenarioTemplate
 from .account import Account, DeviceAccount
 from .content import ContentItem, ContentCollection, ContentExport
 from .schedule import Schedule, ScheduleRun
+from .execution import Execution, ExecutionDevice, ExecutionResult
 
 __all__ = [
     "User",
@@ -44,5 +46,8 @@ __all__ = [
     "ContentExport",
     "Schedule",
     "ScheduleRun",
+    "Execution",
+    "ExecutionDevice",
+    "ExecutionResult",
 ]
 

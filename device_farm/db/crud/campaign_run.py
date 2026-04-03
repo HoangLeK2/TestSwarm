@@ -53,11 +53,12 @@ async def finish_campaign_run(
     run_id: str,
     status: str = "completed",
 ) -> None:
-    await db.execute(
-        update(CampaignRun)
-        .where(CampaignRun.id == run_id)
-        .values(status=status, finished_at=datetime.now(timezone.utc))
-    )
+    stmt = update(CampaignRun).where(CampaignRun.id == run_id)
+    if status == "completed":
+        # Never overwrite a prior "failed" result — if any device failed,
+        # the run stays failed regardless of which workflow finishes last.
+        stmt = stmt.where(CampaignRun.status != "failed")
+    await db.execute(stmt.values(status=status, finished_at=datetime.now(timezone.utc)))
 
 
 async def run_content_stats(

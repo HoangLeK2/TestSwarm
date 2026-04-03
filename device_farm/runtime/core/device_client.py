@@ -6,20 +6,20 @@ Supports two connection modes:
 MODE A — WebSocket Agent (existing):
   Android Agent APK  ←→  WebSocket  ←→  Server
   Screen  : MediaProjection → H.264/JPEG → WS → server
-  Touch   : MinitouchWsClient → tunnel_data WS → Agent, or U2JsonRpcClient via TcpWsTunnel (9008)
+  Touch   : U2JsonRpcClient via TcpWsTunnel (9008), or WS tap/swipe/key fallback to agent
   Events  : STFServiceClient via TcpWsTunnel
 
 MODE B — ADB Transport:
   Farm Server ─── adb TCP ──► device:5555  (shell, push)
   Farm Server ◄── scrcpy (H264→JPEG)       (screen frames)
-  Farm Server ◄── TCP:9008   u2-server, minitouch (touch / UI)
+  Farm Server ◄── TCP:9008   u2-server (touch / UI)
   Farm Server ─── poll via shell ── battery / rotation
   No STFService needed, no WS agent needed, no port forwarding.
 
   Activated via: device.attach_adb_transport(transport)
   Requires Android 11+ Wireless Debugging (or adb tcpip 5555 once via USB).
 
-Touch: minitouch (WS/ADB) or uiautomator2 (U2). No a11y.
+Touch: uiautomator2 (U2) over WS tunnel, or agent shell / scrcpy control. No a11y.
 State: DISCONNECTED → CONNECTING → READY → BUSY → ERROR → DEAD
 """
 from __future__ import annotations
@@ -36,7 +36,7 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import re
 import xml.etree.ElementTree as ET
-from runtime.xml_utils import parse_xml, XML_PARSE_ERRORS
+from runtime.xml_utils import parse_xml, trim_hierarchy_xml as _trim_xml, XML_PARSE_ERRORS
 
 from core.config import Config
 from runtime.transports.adb_device_bootstrap import AdbDeviceBootstrap
@@ -69,7 +69,7 @@ class DeviceClient:
     Server-side proxy for one Android device connected via WebSocket agent.
 
     Screen frames arrive as JPEG via WebSocket (MediaProjection on device).
-    Touch: minitouch or u2 over WebSocket tunnels. Key/pinch: WS → agent.
+    Touch: u2 over WebSocket tunnels; key/pinch: WS → agent.
     """
 
     def __init__(self, serial: str, index: int, config: Config) -> None:
@@ -114,13 +114,11 @@ class DeviceClient:
         # Frame sequence counter for optional low-bandwidth throttling
         self._frame_seq: int = 0
 
-        # TCP-over-WebSocket tunnels (minitouch / u2 / stfservice)
+        # TCP-over-WebSocket tunnels (u2 / stfservice)
         self._tunnels: Optional[TunnelSet] = None
         self._tunnel_ports: Dict[str, int] = {}
         self._tunnels_ready_channels: set = set()  # channels device actually set up (from tunnels_ready)
 
-        # Minitouch support disabled.
-        self._minitouch = None
         self._u2:          Optional[U2JsonRpcClient]  = None
         self._u2_lock      = threading.Lock()  # serializes reconnect + identity-safe nulling
         self._u2_request_lock = threading.Lock()  # serializes ALL u2 HTTP requests (NanoHTTPD is single-threaded)
@@ -156,10 +154,16 @@ class DeviceClient:
         self._u2_last_ok_at: float = 0.0           # monotonic time of last confirmed-live ping
         # Periodic screenshot timer state
         self._periodic_ss_started: bool = False
-        # Agent-reported capabilities (e.g. ["u2","stfservice","h264","minitouch"])
+        # Agent-reported capabilities (e.g. ["u2","stfservice","h264"])
         self._agent_capabilities: List[str] = []
         # Touch mode parsed from agent log: "a11y" | "inputMgr" | "NONE" | ""
         self._agent_touch_mode: str = ""
+        # ADB serial for WS-mode u2 restart (may differ from self.serial on TCP devices)
+        self._adb_serial: Optional[str] = None
+        self._u2_adb_restart_at: float = 0.0   # monotonic time of last ADB restart attempt
+        # Direct IP for atx-agent connection (device_ip:7912). Set by ws.py on WS connect.
+        # None → fall back to WS tunnel (USB devices or atx-agent not available).
+        self._u2_host: Optional[str] = None
         # open_url: wait for agent to send open_url_result before marking step done
         self._open_url_result_event = threading.Event()
         self._open_url_result: Optional[Tuple[bool, str]] = None  # (success, error_msg)
@@ -170,11 +174,11 @@ class DeviceClient:
         self._ws_hierarchy_a11y_available: bool = True  # optimistic, disabled on first "accessibility_not_available"
 
     def set_agent_capabilities(self, caps: List[str]) -> None:
-        """Set capabilities from agent hello; server only tries minitouch when \"minitouch\" in caps."""
+        """Set capabilities from agent hello (informational)."""
         self._agent_capabilities = list(caps) if caps else []
 
     def set_agent_touch_mode(self, mode: str) -> None:
-        """Set touch mode from agent hello (touch_mode in payload). Enables minitouch setup before tunnels_ready."""
+        """Set touch mode from agent hello (touch_mode in payload)."""
         if mode and mode != self._agent_touch_mode:
             self._agent_touch_mode = mode
             self._log(f"Agent touch mode (from hello): {mode}")
@@ -204,7 +208,7 @@ class DeviceClient:
     def attach_agent_sender(self, send: Callable[[Dict[str, Any]], None]) -> TunnelSet:
         """
         Called when the Android agent WebSocket connects.
-        Creates WS tunnels for minitouch, u2, stfservice.
+        Creates WS tunnels for u2, stfservice.
         Returns TunnelSet so the session can route tunnel_data messages back.
         """
         self._ws_hierarchy_a11y_available = True  # retry a11y on each new connection
@@ -222,14 +226,14 @@ class DeviceClient:
         self._tunnel_ports = ports
         self._log(
             f"Agent connected. Tunnels: "
-            + " ".join(f"{ch}={ports[ch]}" for ch in ("u2", "stfservice", "minitouch") if ch in ports)
+            + " ".join(f"{ch}={ports[ch]}" for ch in ("u2", "stfservice") if ch in ports)
         )
         return tunnels
 
     def on_agent_ready(self, ready_channels: Optional[set] = None) -> None:
         """
         Called after agent sends tunnels_ready. ready_channels = set of channel names
-        the agent actually connected (e.g. {"minitouch", "stfservice"} when u2 is missing).
+        the agent actually connected (e.g. {"stfservice"} when u2 is missing).
 
         May be called multiple times (e.g. agent retries u2 via start_services).
         On re-call: only reconnect u2 if newly available, avoid re-creating other tools.
@@ -443,7 +447,7 @@ class DeviceClient:
 
     def detach_all_transports(self) -> None:
         """
-        Tear down all transport connections (scrcpy, minitouch, u2, tunnels, ADB bootstrap)
+        Tear down all transport connections (scrcpy, u2, tunnels, ADB bootstrap)
         without changing device state. Used before re-bootstrap.
         """
         self._teardown_tools()
@@ -1182,6 +1186,10 @@ class DeviceClient:
             )
             if self._is_empty_hierarchy(xml or ""):
                 return None  # Don't cache; UI can show "enable Accessibility" etc.
+            # Strip redundant false-boolean and empty-string attributes before
+            # caching.  Reduces cached XML size by ~40-50% and speeds up all
+            # downstream consumers (HierarchyExtractor, selector_healer, etc.).
+            xml = _trim_xml(xml)
             self._hierarchy_cache = (now, xml)
             return xml
         except Exception as exc:
@@ -1280,7 +1288,7 @@ class DeviceClient:
         Attach scrcpy screen streaming + control to a WS-Agent device (Mode A hybrid).
 
         When enable_control=True (default), scrcpy also provides touch/key input
-        via its control channel — smoother than minitouch/u2.
+        via its control channel — smoother than raw U2 injection.
 
         Args:
             device_ip:       Device IP address (e.g. "192.168.1.100")
@@ -1563,6 +1571,10 @@ class DeviceClient:
 
         u2 = self._u2
         if u2 is None:
+            # atx-agent mode: connect directly to device_ip:7912, no tunnel needed
+            if self._u2_host:
+                return self._reconnect_u2()
+            # Legacy WS tunnel mode: need tunnel port
             ports = self._tunnel_ports or {}
             if "u2" not in ports or "u2" not in self._tunnels_ready_channels:
                 return False
@@ -1578,9 +1590,8 @@ class DeviceClient:
                 with self._u2_lock:
                     if self._u2 is u2:
                         self._u2 = None
-                if self._agent_send is not None:
-                    self._send_to_agent({"type": "start_services", "services": ["u2"]})
-                    time.sleep(0.5)
+                if not self.is_adb_mode and self._agent_send is not None:
+                    self._recover_u2_ws_mode()
                 return self._reconnect_u2()
             self._u2_last_ok_at = now
 
@@ -1645,22 +1656,125 @@ class DeviceClient:
         self._log(f"u2 did not recover within {timeout:.0f}s", level=logging.ERROR)
         return False
 
-    _U2_RECONNECT_ATTEMPTS = 10
-    _U2_RECONNECT_DELAY = 1.5   # u2 server restart typically takes 2-5 s
-    _U2_RECONNECT_PROBE_TIMEOUT = 6.0   # short verify() timeout per attempt (not full wait_timeout)
-    _U2_RECONNECT_BACKOFF = 30.0  # seconds before re-attempting after a full failed cycle
+    _U2_RECONNECT_ATTEMPTS = 3
+    _U2_RECONNECT_DELAY = 0.5        # APK reconnects in ~50ms; short delay is enough
+    _U2_RECONNECT_PROBE_TIMEOUT = 2.0  # fail fast: APK already reconnected, if still no response → dead
+    _U2_RECONNECT_BACKOFF = 10.0
+    _U2_RECOVERY_COOLDOWN = 30.0  # min seconds between recovery attempts (start_services + ADB)
+
+    def _recover_u2_ws_mode(self) -> None:
+        """
+        WS-mode u2 recovery after keepalive detects dead connection.
+
+        atx-agent path (_u2_host set):
+          atx-agent on device detects u2 death and restarts it automatically.
+          We just null the stale client and reset backoff — keepalive will
+          reconnect to device_ip:7912 once atx-agent brings u2 back up.
+
+        Legacy path (USB / no atx-agent):
+          Rate-limited ADB restart: ask APK to reconnect tunnel, and if u2
+          process is dead, restart am instrument via ADB.
+        """
+        if self._u2_host:
+            # atx-agent handles restart on-device — nothing to do here.
+            self._log("u2 recovery: atx-agent will restart u2 on device", level=logging.DEBUG)
+            self._u2_reconnect_failed_at = 0.0  # allow keepalive to retry immediately
+            return
+
+        # ── Legacy: no atx-agent — ADB restart ───────────────────────────────
+        import shutil
+
+        # Protect check-and-update with _u2_lock to prevent two concurrent
+        # threads both passing the cooldown guard and spawning duplicate restarts.
+        now = time.monotonic()
+        with self._u2_lock:
+            if now - self._u2_adb_restart_at < self._U2_RECOVERY_COOLDOWN:
+                remaining = self._U2_RECOVERY_COOLDOWN - (now - self._u2_adb_restart_at)
+                self._log(f"u2 recovery: cooldown {remaining:.0f}s remaining", level=logging.DEBUG)
+                return
+            self._u2_adb_restart_at = now
+        self._send_to_agent({"type": "start_services", "services": ["u2"]})
+        self._log("u2 recovery: sent start_services to APK")
+
+        adb_bin = shutil.which("adb")
+        if adb_bin is None:
+            return
+
+        serial = self._adb_serial or self.serial
+        try:
+            r = subprocess.run(
+                [adb_bin, "-s", serial, "shell",
+                 "cat /proc/net/tcp6 /proc/net/tcp 2>/dev/null | grep -i ':2330' | head -1 || true"],
+                capture_output=True, text=True, timeout=5,
+            )
+            process_alive = bool(r.stdout.strip())
+        except Exception:
+            process_alive = False
+
+        if process_alive:
+            self._log("u2 recovery: process alive on :9008 — tunnel reconnect sufficient")
+            self._u2_reconnect_failed_at = 0.0
+            return
+
+        self._log("u2 recovery: process dead — launching ADB restart in background")
+
+        def _do_restart() -> None:
+            _U2_TEST_PKG = "com.github.uiautomator.test"
+            _U2_RUNNER   = "androidx.test.runner.AndroidJUnitRunner"
+            try:
+                subprocess.run(
+                    [adb_bin, "-s", serial, "shell", f"am force-stop {_U2_TEST_PKG}"],
+                    timeout=10, capture_output=True,
+                )
+                subprocess.Popen(
+                    [adb_bin, "-s", serial, "shell",
+                     f"am instrument -w {_U2_TEST_PKG}/{_U2_RUNNER}"
+                     " </dev/null >/data/local/tmp/u2.log 2>&1"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                self._log("u2 recovery: am instrument launched via ADB")
+                for _ in range(15):
+                    time.sleep(1.0)
+                    try:
+                        r2 = subprocess.run(
+                            [adb_bin, "-s", serial, "shell",
+                             "cat /proc/net/tcp6 /proc/net/tcp 2>/dev/null | grep -i ':2330' | head -1 || true"],
+                            capture_output=True, text=True, timeout=5,
+                        )
+                        if r2.stdout.strip():
+                            self._log("u2 recovery: :9008 ready — resetting backoff")
+                            self._u2_reconnect_failed_at = 0.0
+                            self._send_to_agent({"type": "start_services", "services": ["u2"]})
+                            return
+                    except Exception:
+                        pass
+                self._log("u2 recovery: :9008 not ready after 15s", level=logging.WARNING)
+                self._u2_reconnect_failed_at = 0.0
+            except Exception as exc:
+                self._log(f"u2 recovery: ADB restart error: {exc}", level=logging.WARNING)
+
+        t = threading.Thread(target=_do_restart, daemon=True, name=f"u2-recover-{self.serial}")
+        t.start()
 
     def _reconnect_u2(self) -> bool:
-        """Connect (or reconnect) the u2 client. Tries JSON-RPC first, then WebDriver.
+        """Connect (or reconnect) the u2 client.
 
-        Retries up to _U2_RECONNECT_ATTEMPTS with _U2_RECONNECT_DELAY when tunnel/agent
-        returns 404 or connection errors (transient during agent reconnect).
-        Serialised by _u2_lock so concurrent callers don't open multiple TCP connections.
+        WS mode + atx-agent (_u2_host set): connect directly to device_ip:7912.
+          atx-agent auto-manages u2 lifecycle — no tunnel port needed.
+
+        WS mode legacy (USB / no atx-agent): connect via WS tunnel port.
+
+        Serialised by _u2_lock so concurrent callers don't open multiple connections.
         """
         with self._u2_lock:
             if self._u2 is not None:
                 return True
 
+        if not self.is_adb_mode and self._u2_host:
+            return self._reconnect_u2_atx()
+
+        # Legacy WS tunnel path
         ports = self._tunnel_ports or {}
         if "u2" not in ports:
             return False
@@ -1674,13 +1788,10 @@ class DeviceClient:
                     if self._u2 is not None:
                         return True
 
-            # ── JSON-RPC only (android-uiautomator-server on port 9008); U2CompatServer disabled ──────
             d_rpc: Any = U2JsonRpcClient("127.0.0.1", port, timeout=cfg.wait_timeout)
             d_rpc.implicitly_wait(cfg.implicitly_wait)
             d_rpc.settings["wait_timeout"] = cfg.wait_timeout
             try:
-                # Use a short probe timeout so a dead/restarting server fails fast
-                # instead of blocking for the full wait_timeout (20 s) × 10 attempts.
                 d_rpc.verify(timeout=self._U2_RECONNECT_PROBE_TIMEOUT)
                 with self._u2_lock:
                     self._u2 = d_rpc
@@ -1694,6 +1805,68 @@ class DeviceClient:
                 )
 
         self._u2 = None
+        self._u2_reconnect_failed_at = time.monotonic()
+        return False
+
+    # atx-agent typically needs 3–8s to restart u2 instrumentation.
+    # Use more attempts with longer delay than the WS tunnel path.
+    _U2_ATX_RECONNECT_ATTEMPTS = 8
+    _U2_ATX_RECONNECT_DELAY    = 1.5
+
+    def _reconnect_u2_atx(self) -> bool:
+        """Connect to atx-agent HTTP proxy at device_ip:7912.
+
+        atx-agent manages u2 lifecycle on-device — verify() may need several
+        retries while atx-agent restarts u2 instrumentation (typically 3–8s).
+
+        Thread safety: re-checks _u2 under lock before each attempt so
+        concurrent callers don't create duplicate connections.
+        """
+        # Snapshot host under no lock — it's set once on WS connect and
+        # only cleared on disconnect, which also nulls _u2.  A None here
+        # means we raced with disconnect; bail out cleanly.
+        host = self._u2_host
+        if not host:
+            return False
+
+        port = 7912
+        cfg = self.config.u2
+
+        for attempt in range(1, self._U2_ATX_RECONNECT_ATTEMPTS + 1):
+            # Always check under lock first — another thread may have connected.
+            with self._u2_lock:
+                if self._u2 is not None:
+                    return True
+
+            if attempt > 1:
+                time.sleep(self._U2_ATX_RECONNECT_DELAY)
+                # Re-check after sleep; device may have disconnected meanwhile.
+                if not self._u2_host:
+                    return False
+                with self._u2_lock:
+                    if self._u2 is not None:
+                        return True
+
+            d_rpc: Any = U2JsonRpcClient(host, port, timeout=cfg.wait_timeout)
+            d_rpc.implicitly_wait(cfg.implicitly_wait)
+            d_rpc.settings["wait_timeout"] = cfg.wait_timeout
+            try:
+                d_rpc.verify(timeout=self._U2_RECONNECT_PROBE_TIMEOUT)
+                with self._u2_lock:
+                    if self._u2 is None:  # double-check under lock before writing
+                        self._u2 = d_rpc
+                    else:
+                        d_rpc._session.close()  # another thread beat us; discard
+                self._log(f"uiautomator2 connected via atx-agent ({host}:{port})")
+                return True
+            except Exception as exc:
+                d_rpc._session.close()
+                self._log(
+                    f"atx-agent connect attempt {attempt}/{self._U2_ATX_RECONNECT_ATTEMPTS}"
+                    f" ({host}:{port}): {exc}",
+                    level=logging.WARNING,
+                )
+
         self._u2_reconnect_failed_at = time.monotonic()
         return False
 
@@ -1783,7 +1956,6 @@ class DeviceClient:
             "screen_width":     self.screen_width,
             "screen_height":    self.screen_height,
             "agent_connected":  self._agent_send is not None,
-            "minitouch_ready":  False,
             "u2_ready":         u2_ok,
             "touch_method":     touch_method,
             "stf_connected":    self._stf_service is not None and self._stf_service.connected,
@@ -1811,9 +1983,9 @@ class DeviceClient:
         input_mgr_mode = self._agent_touch_mode in ("inputMgr",)
         force_u2 = bool(getattr(self.config, "force_u2_mode", False))
         if force_u2:
-            self._log("force_u2_mode: touch via U2 (minitouch disabled)", level=logging.INFO)
+            self._log("force_u2_mode: touch via U2", level=logging.INFO)
         elif input_mgr_mode:
-            self._log("touch=inputMgr: using U2 (minitouch disabled)", level=logging.INFO)
+            self._log("touch=inputMgr: using U2", level=logging.INFO)
 
         # Connect U2 eagerly so first tap has no latency.
         threading.Thread(
@@ -1927,16 +2099,8 @@ class DeviceClient:
                             level=logging.DEBUG,
                         )
                     else:
-                        # In WS mode: ask agent to (re)start u2 on device before
-                        # trying to reconnect the tunnel.  This covers the case
-                        # where the am-instrument process has died and the agent
-                        # needs to relaunch it.
                         if not self.is_adb_mode and self._agent_send is not None:
-                            self._send_to_agent({"type": "start_services", "services": ["u2"]})
-                            self._log("u2 keepalive: sent start_services(u2) to agent", level=logging.DEBUG)
-                        # Use ensure_u2_healthy so the channel-readiness check is
-                        # respected; also avoids a direct call that bypasses the
-                        # _tunnels_ready_channels guard.
+                            self._recover_u2_ws_mode()
                         self.ensure_u2_healthy()
                 misses = 0
                 continue
@@ -1962,12 +2126,8 @@ class DeviceClient:
                         if self._u2 is u2:
                             self._u2 = None
                     misses = 0
-                    # In WS mode: tell agent to restart u2 on device before reconnecting
                     if not self.is_adb_mode and self._agent_send is not None:
-                        self._send_to_agent({"type": "start_services", "services": ["u2"]})
-                        self._log("u2 keepalive: sent start_services(u2) after dead ping", level=logging.DEBUG)
-                        # Give agent a moment to restart u2 before we try to reconnect
-                        time.sleep(3.0)
+                        self._recover_u2_ws_mode()
                     self.ensure_u2_healthy()
 
     def _teardown_tools(self) -> None:

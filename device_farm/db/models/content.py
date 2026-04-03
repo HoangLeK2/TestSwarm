@@ -57,12 +57,21 @@ class ContentItem(Base):
     run_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("campaign_runs.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    execution_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("executions.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     scenario_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     # Timestamps
     extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     content_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    execution: Mapped[Optional["Execution"]] = relationship(
+        "Execution",
+        back_populates="content_items",
+        foreign_keys="ContentItem.execution_id",
+    )
 
     __table_args__ = (
         Index("idx_ci_hash_collection", "content_hash", "collection", unique=True),
@@ -89,6 +98,7 @@ class ContentItem(Base):
             "device_serial": self.device_serial,
             "campaign_id": self.campaign_id,
             "run_id": self.run_id,
+            "execution_id": self.execution_id,
             "extracted_at": self.extracted_at.isoformat() if self.extracted_at else None,
         }
 

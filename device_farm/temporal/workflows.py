@@ -37,6 +37,8 @@ with workflow.unsafe.imports_passed_through():
         MAX_NESTING_DEPTH,
         TASK_QUEUE_NAME,
         ConditionCheckInput,
+        DeviceActionBatchInput,
+        DeviceActionBatchResult,
         DeviceActionInput,
         ElementCheckInput,
         ElementCheckResult,
@@ -76,6 +78,15 @@ def _lookup_var(name: str, *dicts: dict[str, Any]) -> Any:
 
 _LONG_TIMEOUT = timedelta(seconds=120)
 _ELEMENT_CHECK_TIMEOUT = timedelta(seconds=15)
+
+# Step types that require individual activity calls (cannot be batched).
+# All other step types are "leaf" steps dispatched via execute_device_action_batch.
+_CONTROL_FLOW_TYPES = frozenset({
+    "set_variable", "set_var", "break_if",
+    "loop", "if", "repeat", "repeat_until",
+    "if_element", "if_variable", "random_pick",
+    "extract", "save_extraction",
+})
 
 
 # ── ScenarioWorkflow ─────────────────────────────────────────────────────────
@@ -133,6 +144,7 @@ class ScenarioWorkflow:
                     scenario_config=merged_config,
                     campaign_id=inp.campaign_id,
                     run_id=inp.run_id,
+                    execution_id=inp.execution_id,
                 ),
                 id=f"{workflow.info().workflow_id}:steps",
                 task_queue=TASK_QUEUE_NAME,
@@ -141,7 +153,10 @@ class ScenarioWorkflow:
 
             if self._cancelled:
                 self._progress.status = WorkflowStatus.CANCELLED.value
-                await self._finalize(inp.campaign_id, inp.run_id, success=False)
+                await self._finalize(
+                    inp.campaign_id, inp.run_id, success=False,
+                    execution_id=inp.execution_id, device_serial=inp.device_serial,
+                )
                 return StepsResult(
                     success=False, steps_executed=result.steps_executed,
                     failed_message="Cancelled during execution",
@@ -151,7 +166,11 @@ class ScenarioWorkflow:
                 WorkflowStatus.COMPLETED.value if result.success
                 else WorkflowStatus.FAILED.value
             )
-            await self._finalize(inp.campaign_id, inp.run_id, success=result.success)
+            await self._finalize(
+                inp.campaign_id, inp.run_id, success=result.success,
+                execution_id=inp.execution_id, device_serial=inp.device_serial,
+                step_results=result.step_results,
+            )
             return result
 
         except asyncio.CancelledError:
@@ -159,7 +178,10 @@ class ScenarioWorkflow:
             self._progress.status = WorkflowStatus.CANCELLED.value
             # Best-effort finalize — may fail if Temporal rejects activities after cancel
             try:
-                await self._finalize(inp.campaign_id, inp.run_id, success=False)
+                await self._finalize(
+                    inp.campaign_id, inp.run_id, success=False,
+                    execution_id=inp.execution_id, device_serial=inp.device_serial,
+                )
             except Exception:
                 pass
             return StepsResult(
@@ -169,7 +191,10 @@ class ScenarioWorkflow:
             )
         except Exception as exc:
             self._progress.status = WorkflowStatus.FAILED.value
-            await self._finalize(inp.campaign_id, inp.run_id, success=False)
+            await self._finalize(
+                inp.campaign_id, inp.run_id, success=False,
+                execution_id=inp.execution_id, device_serial=inp.device_serial,
+            )
             return StepsResult(
                 success=False,
                 steps_executed=result.steps_executed if result else 0,
@@ -215,13 +240,29 @@ class ScenarioWorkflow:
             lambda: not self._paused or self._cancelled,
         )
 
-    async def _finalize(self, campaign_id: str, run_id: str | None, *, success: bool) -> None:
+    async def _finalize(
+        self,
+        campaign_id: str,
+        run_id: str | None,
+        *,
+        success: bool,
+        execution_id: str | None = None,
+        device_serial: str | None = None,
+        step_results: list | None = None,
+    ) -> None:
         """Call finalize_campaign activity to update DB status when this workflow ends."""
         if not campaign_id:
             return
         await workflow.execute_activity(
             "finalize_campaign",
-            {"campaign_id": campaign_id, "run_id": run_id, "success": success},
+            {
+                "campaign_id": campaign_id,
+                "run_id": run_id,
+                "success": success,
+                "execution_id": execution_id,
+                "device_serial": device_serial,
+                "step_results": step_results or [],
+            },
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=RetryPolicy(maximum_attempts=2),
         )
@@ -257,6 +298,12 @@ class ScenarioStepsWorkflow:
         """Query accumulated step execution log (works while running or after completion)."""
         return self._step_log
 
+    # Trigger continue_as_new when Temporal history approaches the 50K event limit.
+    # Each activity execution = ~3 events (Scheduled + Started + Completed).
+    # At 10K events we have ~3.3K activity calls burned — reset early so we never
+    # hit the hard limit mid-step.  Only checked at depth=0 (top-level step loop).
+    _HISTORY_CONTINUE_THRESHOLD = 10_000
+
     @workflow.run
     async def run(self, inp: StepsInput) -> StepsResult:
         if inp.depth > MAX_NESTING_DEPTH:
@@ -276,11 +323,88 @@ class ScenarioStepsWorkflow:
             step_results.append(entry)
             self._step_log.append({**entry, "depth": inp.depth})
 
+        # ── Batch accumulator for leaf steps ────────────────────────────────
+        # Consecutive non-control-flow steps are grouped into one activity call
+        # (3 Temporal history events per batch vs 3N for individual calls).
+        # batch_size is configurable via scenario_config; default 10.
+        _batch_size = max(1, int((inp.scenario_config or {}).get("batch_size", 10)))
+        _pending_steps: list[dict] = []
+        _pending_indices: list[int] = []
+
+        async def _flush_batch() -> tuple[bool, str]:
+            """Dispatch accumulated leaf steps as one batch activity. Returns (ok, err_msg)."""
+            nonlocal steps_executed
+            if not _pending_steps:
+                return True, ""
+            n = len(_pending_steps)
+            batch_result: DeviceActionBatchResult = await workflow.execute_activity(
+                "execute_device_action_batch",
+                DeviceActionBatchInput(
+                    device_serial=inp.device_serial,
+                    steps=list(_pending_steps),
+                    step_indices=list(_pending_indices),
+                    variables=inp.variables,
+                    campaign_vars=inp.campaign_vars,
+                    scenario_config=getattr(inp, "scenario_config", {}),
+                    scenario_registry=inp.scenario_registry,
+                ),
+                result_type=DeviceActionBatchResult,
+                # 120 s per step, cap at 10 min
+                start_to_close_timeout=timedelta(seconds=min(120 * n, 600)),
+                retry_policy=_ACTIVITY_RETRY,
+                heartbeat_timeout=timedelta(seconds=30),
+            )
+            _pending_steps.clear()
+            _pending_indices.clear()
+            for r in batch_result.results:
+                _append(r)
+                steps_executed += 1
+            if batch_result.first_failure_index >= 0:
+                failed = batch_result.results[batch_result.first_failure_index]
+                return False, failed.get("message", "batch step failed")
+            return True, ""
+
         for idx, raw_step in enumerate(inp.steps):
+            # ── continue_as_new guard (top-level loop only) ──────────────────
+            # Checked every 25 steps to amortise the workflow.info() call cost.
+            # continue_as_new resets event history while preserving full state:
+            # remaining steps, runtime_vars, context, and all scenario metadata.
+            # The parent ScenarioWorkflow transparently follows the continuation.
+            if inp.depth == 0 and idx > 0 and idx % 25 == 0:
+                history_len = workflow.info().get_current_history_length()
+                if history_len >= self._HISTORY_CONTINUE_THRESHOLD:
+                    await workflow.continue_as_new(
+                        StepsInput(
+                            device_serial=inp.device_serial,
+                            steps=inp.steps[idx:],       # remaining steps only
+                            variables=inp.variables,
+                            campaign_vars=inp.campaign_vars,
+                            scenario_registry=inp.scenario_registry,
+                            depth=0,
+                            parent_runtime_vars=runtime_vars,
+                            scenario_config=inp.scenario_config,
+                            context=runtime_context,
+                            campaign_id=inp.campaign_id,
+                            run_id=inp.run_id,
+                            execution_id=inp.execution_id,
+                        ),
+                    )
             await self._wait_if_paused()
             # Resolve variables in step
             step = _resolve_step(raw_step, runtime_vars, inp.variables, inp.campaign_vars, idx)
             step_type = step.get("type", "")
+
+            # ── Flush pending batch before any control-flow step ─────────────
+            # Leaf steps accumulate in _pending_steps; control-flow types force
+            # a flush so results are appended in execution order.
+            if step_type in _CONTROL_FLOW_TYPES:
+                ok, msg = await _flush_batch()
+                if not ok:
+                    return StepsResult(
+                        success=False, steps_executed=steps_executed,
+                        step_results=step_results, runtime_vars=runtime_vars,
+                        failed_message=msg, context=runtime_context,
+                    )
 
             # ── set_variable (no activity needed) ────────────────────────────
             if step_type == "set_variable":
@@ -531,6 +655,7 @@ class ScenarioStepsWorkflow:
                         context=runtime_context,
                         campaign_id=inp.campaign_id,
                         run_id=inp.run_id,
+                        execution_id=inp.execution_id,
                     ),
                     result_type=StepResult,
                     start_to_close_timeout=timedelta(seconds=120),
@@ -558,39 +683,29 @@ class ScenarioStepsWorkflow:
                     )
                 continue
 
-            # ── Default: device action via activity ──────────────────────────
-            step_result: StepResult = await workflow.execute_activity(
-                "execute_device_action",
-                DeviceActionInput(
-                    device_serial=inp.device_serial,
-                    step=step,
-                    step_index=idx,
-                    variables=inp.variables,
-                    campaign_vars=inp.campaign_vars,
-                    scenario_config=getattr(inp, "scenario_config", {}),
-                    scenario_registry=inp.scenario_registry,
-                ),
-                result_type=StepResult,
-                start_to_close_timeout=_LONG_TIMEOUT,
-                retry_policy=_ACTIVITY_RETRY,
-                heartbeat_timeout=timedelta(seconds=30),
+            # ── Default: accumulate leaf step for batch dispatch ─────────────
+            # Steps are grouped and sent as one execute_device_action_batch call.
+            # The batch activity handles ignore_error per-step internally and only
+            # sets first_failure_index for genuinely hard failures.
+            _pending_steps.append(step)
+            _pending_indices.append(idx)
+            if len(_pending_steps) >= _batch_size:
+                ok, msg = await _flush_batch()
+                if not ok:
+                    return StepsResult(
+                        success=False, steps_executed=steps_executed,
+                        step_results=step_results, runtime_vars=runtime_vars,
+                        failed_message=msg, context=runtime_context,
+                    )
+
+        # Flush any remaining leaf steps accumulated after the last control-flow step.
+        ok, msg = await _flush_batch()
+        if not ok:
+            return StepsResult(
+                success=False, steps_executed=steps_executed,
+                step_results=step_results, runtime_vars=runtime_vars,
+                failed_message=msg, context=runtime_context,
             )
-
-            _append({
-                "index": idx, "type": step_type,
-                "ok": step_result.ok, "message": step_result.message or "",
-                "details": step_result.details,
-            })
-            steps_executed += 1
-
-            if not step_result.ok:
-                if step.get("ignore_error"):
-                    continue
-                return StepsResult(
-                    success=False, steps_executed=steps_executed,
-                    step_results=step_results, runtime_vars=runtime_vars,
-                    failed_message=step_result.message or "", context=runtime_context,
-                )
 
         return StepsResult(
             success=True,

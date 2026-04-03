@@ -1,4 +1,4 @@
-"""Unit tests for DeviceClient touch fallback flow: U2 → Agent shell → minitouch."""
+"""Unit tests for DeviceClient touch fallback flow: U2 → Agent shell."""
 from __future__ import annotations
 
 import threading
@@ -23,8 +23,8 @@ def _make_device_with_u2() -> DeviceClient:
     mock_u2 = MagicMock()
     mock_u2.ping.return_value = True
     d._u2 = mock_u2
-    d._tunnel_ports = {"u2": 9008, "stfservice": 9009, "minitouch": 0}
-    d._tunnels_ready_channels = {"u2", "stfservice", "minitouch"}
+    d._tunnel_ports = {"u2": 9008, "stfservice": 9009}
+    d._tunnels_ready_channels = {"u2", "stfservice"}
     return d, mock_u2
 
 
@@ -47,7 +47,7 @@ class TestTapFallbackFlow:
         assert "input tap 100 200" in msg["cmd"]
 
     def test_tap_logs_warning_when_no_u2_no_scrcpy_no_agent(self):
-        """Minitouch is disabled; tap logs a warning and returns without crash."""
+        """No touch path; tap logs a warning and returns without crash."""
         d = _make_device()
         d._u2 = None
         d._agent_send = None
@@ -57,7 +57,6 @@ class TestTapFallbackFlow:
         d = _make_device()
         d._u2 = None
         d._agent_send = None
-        d._minitouch = None
         # Should not raise, just log
         d.tap(100, 200)
 
@@ -79,7 +78,7 @@ class TestSwipeFallbackFlow:
         assert "input swipe 10 20 30 40 500" in msg["cmd"]
 
     def test_swipe_logs_warning_when_no_u2_no_scrcpy_no_agent(self):
-        """Minitouch is disabled; swipe logs a warning and returns without crash."""
+        """No touch path; swipe logs a warning and returns without crash."""
         d = _make_device()
         d._u2 = None
         d._agent_send = None

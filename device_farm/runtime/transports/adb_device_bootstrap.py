@@ -17,7 +17,6 @@ from runtime.transports.u2_jsonrpc import U2JsonRpcClient
 log = logging.getLogger(__name__)
 
 # ── Binary assets directory ───────────────────────────────────────────────────
-# Put prebuilt minitouch binary here: assets/minitouch/<abi>/minitouch or bundle/minitouch/<abi>/minitouch
 _ASSETS_DIR = Path(__file__).parent.parent / "assets"
 _BUNDLE_DIR = Path(__file__).parent.parent / "bundle"
 
@@ -25,9 +24,6 @@ _BUNDLE_DIR = Path(__file__).parent.parent / "bundle"
 _REMOTE_TMP = "/data/local/tmp"
 # u2-server listens on this TCP port (openatx/android-uiautomator-server default)
 U2_TCP_PORT = 9008
-# minitouch: abstract socket "minitouch" on device → adb forward to this host port
-MINITOUCH_HOST_PORT = 27184
-_MINITOUCH_REMOTE = f"{_REMOTE_TMP}/minitouch"
 # uiautomator2 APK packages (openatx)
 U2_SERVER_PKG = "com.github.uiautomator"
 U2_SERVER_TEST_PKG = "com.github.uiautomator.test"
@@ -128,7 +124,6 @@ class AdbDeviceBootstrap:
                 pass
             self._scrcpy_receiver = None
 
-        # Touch via minitouch is disabled; no minitouch disconnect/forward cleanup.
         try:
             self._transport.shell_safe(
                 f"am force-stop {U2_SERVER_PKG}"
@@ -175,18 +170,15 @@ class AdbDeviceBootstrap:
             elif self._skip_scrcpy:
                 log.info(f"[{serial}] Skipping scrcpy (periodic screenshot mode)")
 
-            # 3. Start minitouch (push binary, start process, forward, connect)
-            # Touch via minitouch disabled; always rely on U2 (and optionally agent shell/scrcpy).
-
-            # 4. Start uiautomator2-server
+            # 3. Start uiautomator2-server
             if self._running:
                 self._start_u2_server()
 
-            # 4b. Start u2 watchdog (monitors u2 health, auto-restarts if dead)
+            # 3b. Start u2 watchdog (monitors u2 health, auto-restarts if dead)
             if self._running and self._u2_client is not None:
                 self._start_u2_watchdog()
 
-            # 5. Try STFService for push-based events; fall back to shell polling
+            # 4. Try STFService for push-based events; fall back to shell polling
             if self._running:
                 if self._try_stf_service():
                     log.info(f"[{serial}] Using STFService for events (push-based, no polling)")
@@ -371,14 +363,6 @@ class AdbDeviceBootstrap:
         self._scrcpy_receiver.start_receiver()
         log.info(f"[{serial}] ScrcpyReceiver → 127.0.0.1:{port}")
 
-    def _ensure_minitouch(self) -> bool:
-        # Touch via minitouch is disabled.
-        return False
-
-    def _start_minitouch(self) -> None:
-        # Touch via minitouch is disabled.
-        raise RuntimeError("minitouch disabled (use U2/scrcpy/agent shell instead)")
-
     def _start_u2_server(self) -> None:
         """
         Start uiautomator2-server on device via am instrument.
@@ -393,7 +377,6 @@ class AdbDeviceBootstrap:
             log.info(f"[{serial}] DISABLE_U2=1 → skipping uiautomator2-server startup")
             return
 
-        # Ensure adb transport is connected (minitouch probing may run a command that fails with rc!=0)
         if not t.connected:
             t.connect(retries=2, retry_delay=1.0)
 

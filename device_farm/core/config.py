@@ -30,16 +30,14 @@ class PortsConfig:
         base = self.base_port + index * self.stride
         return DevicePorts(
             u2=base + 0,
-            minitouch=base + 1,
-            stfservice=base + 2,
-            stfagent=base + 3,
+            stfservice=base + 1,
+            stfagent=base + 2,
         )
 
 
 @dataclass
 class DevicePorts:
     u2: int
-    minitouch: int
     stfservice: int
     stfagent: int
 
@@ -55,7 +53,6 @@ class AdbConfig:
 @dataclass
 class DeviceConfig:
     index_file: str = "device_index.json"
-    minitouch_bin: str = "/data/local/tmp/minitouch"
     stf_package: str = "jp.co.cyberagent.stf"
     stf_apk_path: str = ""
     scrcpy_jar: str = "/opt/homebrew/share/scrcpy/scrcpy-server"
@@ -145,6 +142,7 @@ class TemporalConfig:
     server_url: str = "localhost:7233"       # Temporal gRPC endpoint
     namespace: str = "default"
     task_queue: str = "device-scenario"
+    worker_count: int = 1                    # parallel worker threads per process; each has own event loop + thread pool
     worker_max_concurrent_activities: int = 10
     worker_max_concurrent_workflows: int = 50
     workflow_execution_timeout: int = 3600   # seconds
@@ -189,6 +187,12 @@ def _build_temporal_config(raw: dict) -> TemporalConfig:
     env_queue = os.environ.get("TEMPORAL_TASK_QUEUE")
     if env_queue:
         cfg.task_queue = env_queue
+    env_wc = os.environ.get("TEMPORAL_WORKER_COUNT")
+    if env_wc:
+        try:
+            cfg.worker_count = max(1, int(env_wc))
+        except ValueError:
+            pass
     return cfg
 
 
@@ -239,7 +243,6 @@ def load_config(path: str = "config.yaml") -> Config:
         ),
         device=DeviceConfig(
             index_file=_get(device_raw, "index_file", "device_index.json"),
-            minitouch_bin=_get(device_raw, "minitouch_bin", "/data/local/tmp/minitouch"),
             stf_package=_get(device_raw, "stf_package", "jp.co.cyberagent.stf"),
             stf_apk_path=_get(device_raw, "stf_apk_path", ""),
             scrcpy_jar=_get(device_raw, "scrcpy_jar", "/opt/homebrew/share/scrcpy/scrcpy-server"),

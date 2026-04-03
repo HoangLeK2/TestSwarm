@@ -6,32 +6,37 @@ KHÔNG deploy lên cloud — chỉ dùng 1 lần để cài đặt + cấp quy�
 Luồng:
   1. (Tuỳ chọn) Bật adb tcpip 5555 để device kết nối WiFi cloud sau này
   2. Cài uiautomator2 APKs (app-uiautomator + app-uiautomator-test)
-  3. Boot uiautomator2 server (am instrument, port 9008) — cần ADB
+  3. Push + khởi động atx-agent daemon (port 7912) — quản lý u2 lifecycle tự động
   4. Cài STFService.apk
   5. Cấp quyền cho STFService (WRITE_SECURE_SETTINGS, READ_PHONE_STATE)
   6. Mở STFService IdentityActivity → user scan QR ws:// cloud
 
-Tại sao cần boot u2 qua ADB (bước 3):
-  - am instrument yêu cầu shell UID — Android app không thể tự gọi.
-  - STFService chỉ kết nối vào u2 server đang chạy sẵn, không tự khởi động.
-  - Khi device reboot → cần chạy lại agent-boot (hoặc chạy lệnh adb riêng).
+atx-agent (bước 3):
+  - Binary Go chạy liên tục trên device, tự restart u2 khi process chết.
+  - Farm server kết nối thẳng device_ip:7912 — không cần WS tunnel cho u2.
+  - Sau reboot: atx-agent KHÔNG tự khởi động lại → cần chạy lại bước này.
+    (Hoặc thêm atx-agent vào boot script trên device.)
 
 Từ lần sau (không reboot):
   - Chỉ cần mở app STFService trên điện thoại → tự kết nối cloud WS.
   - Không cần chạy lại agent này (trừ khi reboot/reset/cài lại điện thoại).
 
 Usage:
-  uv run main.py
-  uv run main.py --serial 192.168.1.10:5555
+  uv run main.py                          # boot tất cả thiết bị song song
+  uv run main.py --serial 192.168.1.10:5555  # chỉ boot 1 thiết bị
   uv run main.py --apk /path/to/STFService.apk
   uv run main.py --skip-tcpip --skip-stf
+  uv run main.py --skip-atx              # bỏ qua push atx-agent (đã chạy sẵn)
 """
 from __future__ import annotations
 
 import argparse
 import subprocess
 import sys
+import tarfile
 import time
+import threading
+import urllib.request
 from pathlib import Path
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
@@ -63,6 +68,12 @@ _U2_PKG      = "com.github.uiautomator"
 _U2_TEST_PKG = "com.github.uiautomator.test"
 _STF_PKG     = "jp.co.cyberagent.stf"
 
+# atx-agent
+_ATX_AGENT_VERSION = "0.10.1"
+_ATX_AGENT_REMOTE  = "/data/local/tmp/atx-agent"
+_ATX_AGENT_PORT_HEX = "1EE8"  # 7912 decimal
+_ATX_BUNDLE_DIR    = _DEVICE_FARM / "bundle" / "atx-agent"
+
 
 # ── ADB Helpers ───────────────────────────────────────────────────────────────
 
@@ -82,7 +93,7 @@ def _adb_shell(cmd: str, serial: str, timeout: int = 30) -> str:
     return (r.stdout + r.stderr).strip()
 
 
-def _pick_serial() -> str:
+def _list_serials() -> list[str]:
     result = _run(["adb", "devices"], check=False)
     lines = result.stdout.strip().splitlines()[1:]
     devices = [
@@ -96,18 +107,7 @@ def _pick_serial() -> str:
             "  → Cắm USB và bật USB Debugging,\n"
             "    hoặc kết nối qua WiFi: adb connect <ip>:5555"
         )
-    if len(devices) > 1:
-        # Prefer wireless debugging targets by default (matches farm workflow).
-        # Override by passing --serial explicitly.
-        preferred = sorted(
-            devices,
-            key=lambda s: (0 if ":5555" in s else 1, 0 if "." in s else 1, s),
-        )
-        devices = preferred
-        print(f"[agent] Nhiều thiết bị: {devices}")
-        print(f"[agent] Dùng thiết bị ưu tiên: {devices[0]}")
-        print("[agent] (Dùng --serial để chọn thiết bị khác)")
-    return devices[0]
+    return sorted(devices, key=lambda s: (0 if ":5555" in s else 1, 0 if "." in s else 1, s))
 
 
 def _get_sdk(serial: str) -> int:
@@ -135,6 +135,94 @@ def _adb_install(apk_path: Path, serial: str, label: str, extra_flags: list[str]
     else:
         print(f"      ✗ {label} cài thất bại (rc={r.returncode}): {out[:300]}", file=sys.stderr)
     return ok
+
+
+# ── atx-agent Helpers ─────────────────────────────────────────────────────────
+
+def _get_device_abi(serial: str) -> str:
+    """Trả về arm64, arm, x86_64 hoặc x86 dựa trên ro.product.cpu.abi."""
+    abi = _adb_shell("getprop ro.product.cpu.abi", serial=serial)
+    if "arm64" in abi:
+        return "arm64"
+    if "x86_64" in abi:
+        return "x86_64"
+    if "x86" in abi:
+        return "x86"
+    return "arm"
+
+
+def _atx_agent_local(abi: str) -> Path:
+    return _ATX_BUNDLE_DIR / f"atx-agent-{abi}"
+
+
+def _download_atx_agent(abi: str) -> Path | None:
+    """Tải atx-agent binary từ GitHub releases, cache vào bundle/atx-agent/.
+
+    Bảo mật:
+    - Chỉ extract regular file (isfile()), bỏ symlink/hardlink/device node.
+    - Dùng tarfile filter="data" (Python 3.12+) để block path traversal.
+    - urlopen với timeout=120s để không hang vô thời hạn.
+    """
+    # Go arch naming
+    # Filename format: atx-agent_{version}_linux_{go_arch}.tar.gz
+    # ARM 32-bit devices use "armv7" in filename (not "arm")
+    go_arch = {"arm64": "arm64", "arm": "armv7", "x86_64": "amd64", "x86": "386"}.get(abi, "arm64")
+    version = _ATX_AGENT_VERSION
+    filename = f"atx-agent_{version}_linux_{go_arch}.tar.gz"
+    url = f"https://github.com/openatx/atx-agent/releases/download/{version}/{filename}"
+
+    dest = _atx_agent_local(abi)
+    if dest.is_file() and dest.stat().st_size > 0:
+        return dest
+
+    _ATX_BUNDLE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = _ATX_BUNDLE_DIR / filename
+
+    print(f"      Tải atx-agent v{version} ({go_arch}) từ GitHub…")
+    try:
+        with urllib.request.urlopen(url, timeout=120) as resp:
+            with open(tmp, "wb") as f:
+                while True:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+    except Exception as e:
+        print(f"      ✗ Tải thất bại: {e}\n"
+              f"        URL: {url}\n"
+              f"        Tải thủ công rồi đặt vào: {dest}",
+              file=sys.stderr)
+        tmp.unlink(missing_ok=True)
+        return None
+
+    try:
+        with tarfile.open(tmp) as tf:
+            # Chỉ lấy regular file tên kết thúc "atx-agent" — bỏ symlink/hardlink
+            member = next(
+                (m for m in tf.getmembers()
+                 if m.name.endswith("atx-agent") and m.isfile()),
+                None,
+            )
+            if member is None:
+                raise RuntimeError("atx-agent regular-file binary không tìm thấy trong archive")
+            member.name = "atx-agent"  # strip any directory prefix
+            # filter="data" (Python 3.12+): block absolute paths, "..", symlink targets
+            try:
+                tf.extract(member, _ATX_BUNDLE_DIR, filter="data")
+            except TypeError:
+                # Python < 3.12: filter kwarg chưa có — extract thủ công sau khi đã
+                # validate member.isfile() và member.name (đã set ở trên)
+                tf.extract(member, _ATX_BUNDLE_DIR)
+        (_ATX_BUNDLE_DIR / "atx-agent").rename(dest)
+        print(f"      ✓ Đã lưu: {dest}")
+    except Exception as e:
+        print(f"      ✗ Giải nén thất bại: {e}", file=sys.stderr)
+        dest.unlink(missing_ok=True)
+        return None
+    finally:
+        tmp.unlink(missing_ok=True)
+
+    return dest
 
 
 # ── Asset Finders ─────────────────────────────────────────────────────────────
@@ -173,8 +261,7 @@ def _find_stf_apk(override: str | None = None) -> Path | None:
 
 TOTAL_STEPS = 6
 
-_REMOTE_U2_LOG = "/data/local/tmp/u2.log"
-_U2_RUNNER     = "androidx.test.runner.AndroidJUnitRunner"
+_U2_RUNNER = "androidx.test.runner.AndroidJUnitRunner"
 
 
 def step_tcpip(serial: str, port: int) -> None:
@@ -232,55 +319,72 @@ def step_install_u2(serial: str, skip: bool) -> bool:
     return ok
 
 
-def step_boot_u2(serial: str, skip: bool) -> None:
+def step_push_atx_agent(serial: str, skip: bool) -> bool:
     """
-    Start uiautomator2 server qua ADB (am instrument, port 9008).
-    Cần ADB vì am instrument yêu cầu shell UID — Android app không thể tự gọi.
+    Push atx-agent binary lên device và khởi động daemon trên port 7912.
+
+    atx-agent tự quản lý vòng đời của uiautomator2-server:
+    - Tự start am instrument khi cần
+    - Tự restart khi u2 chết
+    Farm server kết nối thẳng device_ip:7912 thay vì qua WS tunnel.
+
+    Lưu ý: atx-agent KHÔNG tự khởi động sau reboot. Cần chạy lại bước này.
     """
     if skip:
-        print(f"\n[3/{TOTAL_STEPS}] Bỏ qua boot uiautomator2 (--skip-u2).")
-        return
+        print(f"\n[3/{TOTAL_STEPS}] Bỏ qua push atx-agent (--skip-atx hoặc --skip-u2).")
+        return False
 
-    print(f"\n[3/{TOTAL_STEPS}] Boot uiautomator2 server (port 9008)…")
+    print(f"\n[3/{TOTAL_STEPS}] Push + khởi động atx-agent (port 7912)…")
 
     if not _is_pkg_installed(_U2_TEST_PKG, serial):
         print(
-            f"      ✗ {_U2_TEST_PKG} chưa cài — bỏ qua boot u2.\n"
-            "        Cài APK trước (bước 2) rồi chạy lại.",
+            f"      ✗ {_U2_TEST_PKG} chưa cài — atx-agent cần APK này để start u2.\n"
+            "        Đảm bảo bước 2 thành công trước.",
             file=sys.stderr,
         )
-        return
+        return False
 
-    # Kill tiến trình cũ nếu còn
-    _adb_shell(f"am force-stop {_U2_TEST_PKG}", serial=serial)
-    time.sleep(0.5)
+    abi = _get_device_abi(serial)
+    print(f"      CPU ABI: {abi}")
 
-    # Start uiautomator2 server dưới background (am instrument -w block cho đến khi done)
-    subprocess.Popen(
-        ["adb", "-s", serial, "shell",
-         f"am instrument -w {_U2_TEST_PKG}/{_U2_RUNNER}"
-         f" </dev/null >{_REMOTE_U2_LOG} 2>&1"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    binary = _atx_agent_local(abi)
+    if not (binary.is_file() and binary.stat().st_size > 0):
+        binary = _download_atx_agent(abi)
+    if binary is None:
+        return False
 
-    # Chờ tối đa 12s cho port 9008
-    for i in range(12):
+    # Push binary lên device
+    r = _adb("push", str(binary), _ATX_AGENT_REMOTE, serial=serial, check=False, timeout=30)
+    if r.returncode != 0:
+        print(f"      ✗ adb push thất bại: {(r.stdout + r.stderr).strip()[:200]}", file=sys.stderr)
+        return False
+    _adb_shell(f"chmod 755 {_ATX_AGENT_REMOTE}", serial=serial)
+    print(f"      ✓ Đã push {binary.name} lên {_ATX_AGENT_REMOTE}")
+
+    # Dừng instance cũ (nếu có)
+    _adb_shell(f"{_ATX_AGENT_REMOTE} server --stop 2>/dev/null; sleep 0.3", serial=serial)
+
+    # Khởi động daemon
+    _adb_shell(f"{_ATX_AGENT_REMOTE} server -d 2>/dev/null", serial=serial)
+
+    # Chờ tối đa 15s cho port 7912 (0x1EE8)
+    for i in range(15):
         time.sleep(1)
         tcp = _adb_shell(
-            "cat /proc/net/tcp6 /proc/net/tcp 2>/dev/null | grep -i ':2330' | head -1 || true",
+            f"cat /proc/net/tcp6 /proc/net/tcp 2>/dev/null"
+            f" | grep -i ':{_ATX_AGENT_PORT_HEX}' | head -1 || true",
             serial=serial,
         )
         if tcp.strip():
-            print(f"      ✓ uiautomator2 server đang chạy trên :9008")
-            return
+            print(f"      ✓ atx-agent daemon đang chạy trên :7912")
+            return True
 
-    u2_log = _adb_shell(f"cat {_REMOTE_U2_LOG} 2>/dev/null | tail -10 || true", serial=serial)
     print(
-        f"      ⚠ uiautomator2 chưa khởi động sau 12s.\n"
-        f"        Log:\n{u2_log[:400]}",
+        f"      ⚠ atx-agent chưa sẵn sàng sau 15s.\n"
+        f"        Kiểm tra log: adb -s {serial} shell {_ATX_AGENT_REMOTE} server",
         file=sys.stderr,
     )
+    return False
 
 
 def step_install_stf(serial: str, apk_path: Path | None, skip: bool) -> bool:
@@ -357,19 +461,64 @@ def step_open_app(serial: str, skip: bool) -> None:
     print("  ══════════════════════════════════════════════════")
 
 
+# ── Per-device bootstrap ──────────────────────────────────────────────────────
+
+_print_lock = threading.Lock()
+
+
+def _pprint(*msg: str) -> None:
+    """Thread-safe print."""
+    with _print_lock:
+        print(*msg)
+
+
+def boot_device(serial: str, args: argparse.Namespace, stf_apk: Path | None) -> bool:
+    """Bootstrap một thiết bị. Trả về True nếu thành công."""
+    sdk   = _get_sdk(serial)
+    model = _adb_shell("getprop ro.product.model", serial=serial)
+
+    with _print_lock:
+        print("=" * 60)
+        print(f"[agent-boot] [{serial}] Bắt đầu bootstrap")
+        print(f"  Model  : {model}")
+        print(f"  SDK    : {sdk}")
+        print("=" * 60)
+
+    try:
+        if not args.skip_tcpip:
+            step_tcpip(serial, args.tcpip_port)
+        else:
+            _pprint(f"\n[1/{TOTAL_STEPS}] [{serial}] Bỏ qua adb tcpip (--skip-tcpip).")
+
+        step_install_u2(serial, skip=args.skip_u2)
+        step_push_atx_agent(serial, skip=args.skip_u2 or args.skip_atx)
+        step_install_stf(serial, stf_apk, skip=args.skip_stf)
+        step_grant_permissions(serial, skip=args.skip_stf)
+        step_open_app(serial, skip=args.skip_stf)
+
+        with _print_lock:
+            print()
+            print(f"[agent-boot] [{serial}] ✅ Hoàn tất bootstrap")
+        return True
+    except Exception as e:
+        with _print_lock:
+            print(f"[agent-boot] [{serial}] ✗ Lỗi: {e}", file=sys.stderr)
+        return False
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Agent boot — cài uiautomator2/STFService + cấp quyền 1 lần.\n"
-            "Từ lần sau chỉ cần mở app STFService → tự kết nối cloud.\n"
-            "STFService tự khởi động uiautomator2 và minitouch agent."
+            "Mặc định boot TẤT CẢ thiết bị song song.\n"
+            "Dùng --serial để chỉ boot 1 thiết bị cụ thể."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--serial", "-s",
-                        help="ADB serial thiết bị (bỏ qua = tự phát hiện)")
+                        help="ADB serial thiết bị (bỏ qua = boot tất cả)")
     parser.add_argument("--apk",
                         help="Đường dẫn STFService.apk (bỏ qua = tự tìm)")
     parser.add_argument("--tcpip-port", type=int, default=5555, metavar="PORT",
@@ -377,54 +526,49 @@ def main() -> None:
     parser.add_argument("--skip-tcpip", action="store_true",
                         help="Bỏ qua bước adb tcpip")
     parser.add_argument("--skip-u2", action="store_true",
-                        help="Bỏ qua cài uiautomator2 APKs")
+                        help="Bỏ qua cài uiautomator2 APKs và push atx-agent")
+    parser.add_argument("--skip-atx", action="store_true",
+                        help="Bỏ qua push atx-agent (APKs vẫn được cài)")
     parser.add_argument("--skip-stf", action="store_true",
                         help="Bỏ qua cài STFService, cấp quyền và mở app")
     args = parser.parse_args()
 
-    serial = args.serial or _pick_serial()
-    sdk    = _get_sdk(serial)
-    model  = _adb_shell("getprop ro.product.model", serial=serial)
-
-    print("=" * 60)
-    print("[agent-boot] Bắt đầu bootstrap thiết bị")
-    print(f"  Serial : {serial}")
-    print(f"  Model  : {model}")
-    print(f"  SDK    : {sdk}")
-    print("=" * 60)
-
-    # Step 1: tcpip
-    if not args.skip_tcpip:
-        step_tcpip(serial, args.tcpip_port)
-    else:
-        print(f"\n[1/{TOTAL_STEPS}] Bỏ qua adb tcpip (--skip-tcpip).")
-
-    # Step 2: install u2 APKs
-    step_install_u2(serial, skip=args.skip_u2)
-
-    # Step 3: boot uiautomator2 server (requires ADB shell, app cannot do this)
-    step_boot_u2(serial, skip=args.skip_u2)
-
-    # Step 4: install STFService
+    serials = [args.serial] if args.serial else _list_serials()
     stf_apk = _find_stf_apk(args.apk)
-    step_install_stf(serial, stf_apk, skip=args.skip_stf)
 
-    # Step 5: grant permissions
-    step_grant_permissions(serial, skip=args.skip_stf)
+    if len(serials) > 1:
+        print(f"[agent] Boot {len(serials)} thiết bị song song: {serials}")
+    else:
+        print(f"[agent] Boot thiết bị: {serials[0]}")
 
-    # Step 6: open STFService IdentityActivity
-    step_open_app(serial, skip=args.skip_stf)
+    results: dict[str, bool] = {}
+    if len(serials) == 1:
+        results[serials[0]] = boot_device(serials[0], args, stf_apk)
+    else:
+        threads = [
+            threading.Thread(
+                target=lambda s=s: results.__setitem__(s, boot_device(s, args, stf_apk)),
+                daemon=True,
+            )
+            for s in serials
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
 
-    # Summary
+    ok = all(results.values())
+    failed = [s for s, v in results.items() if not v]
+
     print()
     print("=" * 60)
-    print("[agent-boot] ✅ Hoàn tất bootstrap lần đầu")
+    if ok:
+        print("[agent-boot] ✅ Tất cả thiết bị đã bootstrap xong")
+    else:
+        print(f"[agent-boot] ⚠ Một số thiết bị thất bại: {failed}")
     print()
     print("Bước tiếp theo: trên điện thoại mở STFService → quét mã QR từ dashboard")
-    print("(STFService đã tích hợp WebSocket, không cần Termux hay agent_local trên máy.)")
-    print()
     print("Lần sau: chỉ cần mở app STFService → quét QR để kết nối.")
-    print("(Chạy lại agent-boot chỉ khi reset/cài lại điện thoại)")
     print("=" * 60)
 
 

@@ -1,11 +1,13 @@
 'use client';
 
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useGesture } from '@use-gesture/react';
 import type { Device } from '../types';
 import { serialToId } from '../helpers';
 import { deviceFarmBackendBase } from '@/lib/farm-api';
 import { tokenStorage } from '@/lib/token-storage';
+import { useH264Video } from '../hooks/use-h264-canvas';
+
 
 interface DeviceScreenProps {
   device: Device;
@@ -21,9 +23,13 @@ interface DeviceScreenProps {
 
 export function DeviceScreen({ device, wsSend, mode, onTap, highlightBounds, gestureMode }: DeviceScreenProps) {
   const wrapRef    = useRef<HTMLDivElement>(null);
+  const canvasRef  = useRef<HTMLCanvasElement>(null);
   const draggedRef = useRef(false);
   const dragStartRef = useRef<{ x: number; y: number } | null>(null);
   const [hasFrame, setHasFrame] = useState(false);
+  const [fps, setFps] = useState<number | null>(null);
+  const frameCountRef = useRef(0);
+  const fpsTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const id = serialToId(device.serial);
   const dw = device.screen_width  || 1080;
@@ -32,12 +38,55 @@ export function DeviceScreen({ device, wsSend, mode, onTap, highlightBounds, ges
   const isActive =
     device.state && !['DISCONNECTED', 'DEAD'].includes(device.state.toUpperCase());
 
+  // Track whether jmuxer has delivered at least one H264 frame
+  const [h264Active, setH264Active] = useState(false);
+  const h264TimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Always show MJPEG as baseline — it's hidden (opacity-0) once H264 starts playing
   const mjpegUrl = React.useMemo(() => {
     if (!isActive) return null;
     const base = `${deviceFarmBackendBase}/stream/${encodeURIComponent(device.serial)}?fps=30`;
     const token = tokenStorage.getAuthToken();
     return token ? `${base}&token=${encodeURIComponent(token)}` : base;
   }, [isActive, device.serial]);
+
+  // Always pass real serial so binary frames are subscribed immediately on mount.
+  // jmuxer gracefully handles missing MSE via onError — MJPEG fallback stays visible.
+  useH264Video(
+    isActive ? device.serial : '',
+    canvasRef,
+    {
+      onFrame: useCallback(() => {
+        if (!hasFrame) setHasFrame(true);
+        if (!h264Active) setH264Active(true);
+        frameCountRef.current += 1;
+        // Reset inactivity timer — fall back to MJPEG if H264 stops for 3s
+        if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
+        h264TimeoutRef.current = setTimeout(() => setH264Active(false), 8000);
+      }, [hasFrame, h264Active]),
+    }
+  );
+
+  // Reset h264Active when device changes or goes offline
+  useEffect(() => {
+    setH264Active(false);
+    if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
+  }, [device.serial, isActive]);
+
+  // Whether to attempt H264 — MSE is available in all modern browsers; jmuxer handles gracefully if not
+  const useH264 = isActive;
+
+  useEffect(() => {
+    if (!isActive) { setFps(null); return; }
+    frameCountRef.current = 0;
+    fpsTimerRef.current = setInterval(() => {
+      setFps(frameCountRef.current);
+      frameCountRef.current = 0;
+    }, 1000);
+    return () => {
+      if (fpsTimerRef.current) clearInterval(fpsTimerRef.current);
+    };
+  }, [isActive]);
 
   // ── Touch / gesture ──────────────────────────────────────────────────────
   const clientToDevice = useCallback(
@@ -146,15 +195,21 @@ export function DeviceScreen({ device, wsSend, mode, onTap, highlightBounds, ges
         style={{ aspectRatio: `${dw}/${dh}` }}
         id={`wrap-${id}`}
       >
-        {mjpegUrl ? (
+        {/* MJPEG baseline — always shown until H264 takes over */}
+        {mjpegUrl && (
           <img
             src={mjpegUrl}
             alt={`${device.brand} ${device.model}`}
-            className='absolute inset-0 h-full w-full object-contain'
-            onLoad={() => setHasFrame(true)}
+            className={`absolute inset-0 h-full w-full object-contain transition-opacity duration-500 ${h264Active ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
+            onLoad={() => { setHasFrame(true); if (!h264Active) frameCountRef.current += 1; }}
             draggable={false}
           />
-        ) : null}
+        )}
+        {/* H264 live canvas — WebCodecs decode, zero MSE buffering latency */}
+        <canvas
+          ref={canvasRef}
+          className={`pointer-events-none absolute inset-0 h-full w-full object-contain transition-opacity duration-500 ${h264Active ? 'opacity-100' : 'opacity-0'}`}
+        />
 
         {/* Highlight bounds overlay for XML tree node selection */}
         {highlightBounds && dw > 0 && dh > 0 && (
@@ -182,7 +237,7 @@ export function DeviceScreen({ device, wsSend, mode, onTap, highlightBounds, ges
           </div>
         )}
         <div className='pointer-events-none absolute right-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-mono text-white'>
-          5 FPS
+          {fps !== null ? `${fps} FPS` : '— FPS'}
         </div>
       </div>
       <div className='mt-1 flex items-center justify-between text-[10px] text-muted-foreground'>

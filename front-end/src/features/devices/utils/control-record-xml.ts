@@ -30,7 +30,7 @@ export function hashXml(xml: string): number {
 
 /**
  * Parse XML, find element at (rx,ry).
- * Priority: resource-id > content-desc > text > class
+ * Priority: resource-id (unique) > description > text > resource-id (non-unique) > class
  *
  * bounds.rx1/ry1/rx2/ry2 are normalized to XML root dims (0–1) so the caller
  * can pass them directly to the screenshot-b64 API without knowing device resolution.
@@ -40,7 +40,7 @@ export function findSelectorInXml(
   rx: number,
   ry: number
 ): {
-  by: 'resource-id' | 'text' | 'xpath' | 'class name';
+  by: 'resource-id' | 'text' | 'description' | 'xpath' | 'class name';
   value: string;
   bounds?: {
     left: number; top: number; right: number; bottom: number;
@@ -54,23 +54,47 @@ export function findSelectorInXml(
   } catch {
     return null;
   }
-  const rootNode = doc.querySelector('node');
-  const rootBounds = rootNode?.getAttribute('bounds') ?? '';
-  const rootM = /\[0,0\]\[(\d+),(\d+)\]/.exec(rootBounds);
-  const dw = rootM ? parseInt(rootM[1]) : 1080;
-  const dh = rootM ? parseInt(rootM[2]) : 1920;
+
+  // Determine screen dimensions from the first root node with [0,0][W,H] bounds
+  const allNodes = Array.from(doc.getElementsByTagName('node'));
+  let dw = 1080, dh = 1920;
+  for (const n of allNodes) {
+    const m = /\[0,0\]\[(\d+),(\d+)\]/.exec(n.getAttribute('bounds') ?? '');
+    if (m) { dw = parseInt(m[1]); dh = parseInt(m[2]); break; }
+  }
   const px = rx * dw;
   const py = ry * dh;
 
+  // Pre-compute which resource-ids and texts appear more than once (ambiguous)
+  const ridCount = new Map<string, number>();
+  const textCount = new Map<string, number>();
+  for (const node of allNodes) {
+    const rid = (node.getAttribute('resource-id') ?? '').trim();
+    const txt = (node.getAttribute('text') ?? '').trim();
+    if (rid) ridCount.set(rid, (ridCount.get(rid) ?? 0) + 1);
+    if (txt && txt.length < 80) textCount.set(txt, (textCount.get(txt) ?? 0) + 1);
+  }
+
   const BOUNDS = /\[(\d+),(\d+)\]\[(\d+),(\d+)\]/;
   let best: {
-    by: 'resource-id' | 'text' | 'xpath' | 'class name';
+    by: 'resource-id' | 'text' | 'description' | 'xpath' | 'class name';
     value: string;
-    bounds?: { left: number; top: number; right: number; bottom: number };
+    bounds?: { left: number; top: number; right: number; bottom: number; rx1: number; ry1: number; rx2: number; ry2: number };
   } | null = null;
   let bestArea = Infinity;
 
-  for (const node of Array.from(doc.getElementsByTagName('node'))) {
+  const CONTAINER_CLASSES = new Set([
+    'android.widget.FrameLayout',
+    'android.widget.LinearLayout',
+    'android.widget.RelativeLayout',
+    'android.view.View',
+    'android.view.ViewGroup',
+    'androidx.constraintlayout.widget.ConstraintLayout',
+    'android.widget.ScrollView',
+    'androidx.recyclerview.widget.RecyclerView',
+  ]);
+
+  for (const node of allNodes) {
     const m = BOUNDS.exec(node.getAttribute('bounds') ?? '');
     if (!m) continue;
     const [x1, y1, x2, y2] = [+m[1], +m[2], +m[3], +m[4]];
@@ -84,39 +108,34 @@ export function findSelectorInXml(
     const pkg = (node.getAttribute('package') ?? '').trim();
     const cls = (node.getAttribute('class') ?? '').trim();
 
-    const ambiguousLauncher = rid && isAmbiguousLauncherResourceId(rid, pkg);
-
-    const CONTAINER_CLASSES = new Set([
-      'android.widget.FrameLayout',
-      'android.widget.LinearLayout',
-      'android.widget.RelativeLayout',
-      'android.view.View',
-      'android.view.ViewGroup',
-      'androidx.constraintlayout.widget.ConstraintLayout',
-      'android.widget.ScrollView',
-      'androidx.recyclerview.widget.RecyclerView'
-    ]);
+    const ambiguousLauncher = rid ? isAmbiguousLauncherResourceId(rid, pkg) : false;
+    const ridUnique = rid && !ambiguousLauncher && (ridCount.get(rid) ?? 0) === 1;
+    const textUnique = text && text.length < 80 && (textCount.get(text) ?? 0) === 1;
 
     type Sel = {
-      by: 'resource-id' | 'text' | 'xpath' | 'class name';
+      by: 'resource-id' | 'text' | 'description' | 'xpath' | 'class name';
       value: string;
       bounds?: { left: number; top: number; right: number; bottom: number; rx1: number; ry1: number; rx2: number; ry2: number };
     };
     let sel: Sel | null = null;
+
     if (ambiguousLauncher && text && text.length < 120) {
       sel = { by: 'text', value: text };
     } else if (ambiguousLauncher && desc && desc.length < 80) {
-      const safeDesc = desc.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      sel = { by: 'xpath', value: `//*[@content-desc="${safeDesc}"]` };
-    } else if (rid && rid.includes('/')) {
+      sel = { by: 'description', value: desc };
+    } else if (ridUnique) {
       sel = { by: 'resource-id', value: rid };
     } else if (desc && desc.length < 80) {
-      const safeDesc = desc.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      sel = { by: 'xpath', value: `//*[@content-desc="${safeDesc}"]` };
-    } else if (text && text.length < 80) {
+      sel = { by: 'description', value: desc };
+    } else if (textUnique) {
       sel = { by: 'text', value: text };
-    } else if (rid) {
-      sel = { by: 'resource-id', value: rid };
+    } else if (rid && rid.includes('/')) {
+      // Non-unique resource-id: use xpath with instance index to pin to exact element
+      const idx = allNodes.filter((n) => (n.getAttribute('resource-id') ?? '') === rid).indexOf(node);
+      sel = { by: 'xpath', value: `(//*[@resource-id="${rid}"])[${idx + 1}]` };
+    } else if (text && text.length < 80) {
+      // Non-unique text: fall back to plain text (best effort)
+      sel = { by: 'text', value: text };
     } else if (cls && !CONTAINER_CLASSES.has(cls)) {
       sel = { by: 'class name', value: cls };
     }

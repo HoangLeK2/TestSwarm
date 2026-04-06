@@ -5,14 +5,19 @@
 #   docker compose down            # stop all
 #
 # Services:
-#   farm       — Backend API + Temporal worker (port 8081)
+#   farm       — Backend API + Temporal worker + gRPC relay server (ports 8081, 50051)
 #   frontend   — Next.js dashboard (port 3000)
 #   postgres   — PostgreSQL (host port 5433 → container 5432; avoid clash with local PG)
 #   temporal   — Temporal Server (port 7233, UI: 8233)
+#   minio      — Object storage for screenshots (API: 9000, Console: 9001)
+#
+# agent-boot (local relay):
+#   Runs on the physical machine that has ADB access to devices.
+#   NOT a docker service — run manually:
+#     cd agent-boot && python main.py --server <host>:50051 --api-key <RELAY_API_KEY>
+#   It connects outbound to farm:50051 (gRPC bidi stream) and proxies ADB + scrcpy.
 
 services:
-
-
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -65,42 +70,53 @@ services:
     ports:
       - "8233:8080"   # Temporal UI at http://localhost:8233
 
-  # farm:
-  #   build:
-  #     context: ./device_farm
-  #     dockerfile: Dockerfile
-  #   restart: unless-stopped
-  #   depends_on:
-  #     postgres:
-  #       condition: service_healthy
-  #     temporal:
-  #       condition: service_healthy
-  #   ports:
-  #     - "8081:8081"
-  #   environment:
-  #     # Database
-  #     DATABASE_URL: postgresql://postgres:${DB_PASSWORD:-postgres}@postgres:5432/device_farm
-  #     # Temporal — point to temporal service, not localhost
-  #     TEMPORAL_SERVER_URL: temporal:7233
-  #     # Auth
-  #     SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
-  #     ACCESS_EXPIRE_HOURS: ${ACCESS_EXPIRE_HOURS:-1}
-  #     # AI (optional)
-  #     OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-  #     GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-  #     # Agent boot — skip in container (no USB/ADB)
-  #     FARM_AGENT_BOOT: "0"
-  #   volumes:
-  #     # Config override (optional — mount custom config.yaml)
-  #     - ./device_farm/config.yaml:/app/config.yaml:ro
-  #     # Persist captures/screenshots
-  #     - farm_captures:/app/captures
-  #   healthcheck:
-  #     test: ["CMD", "curl", "-f", "http://localhost:8081/api/health"]
-  #     interval: 15s
-  #     timeout: 5s
-  #     retries: 3
-  #     start_period: 10s
+  farm:
+    build:
+      context: ./device_farm
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+    # network_mode: "host"  # Linux only: eliminates Docker bridge NAT overhead (~2-5ms/packet).
+    #                         Uncomment when deploying on Linux cloud (removes ports mapping below).
+    #                         Do NOT use on macOS — Docker Desktop runs in a VM, host mode = VM's host.
+    ports:
+      - "8081:8081"
+      # Legacy gRPC port (deprecated). agent-boot uses WebSocket: ws://<host>:8081/relay-agent
+      - "50051:50051"
+    environment:
+      # Database
+      DATABASE_URL: postgresql://postgres:${DB_PASSWORD:-postgres}@postgres:5432/device_farm
+      # Temporal — point to temporal service, not localhost
+      TEMPORAL_SERVER_URL: temporal:7233
+      # Auth
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+      ACCESS_EXPIRE_HOURS: ${ACCESS_EXPIRE_HOURS:-1}
+      # AI (optional)
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      # MinIO — screenshot / image storage
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-device-farm}
+      MINIO_PUBLIC_BASE_URL: ${MINIO_PUBLIC_BASE_URL:-}
+      RELAY_API_KEY: ${RELAY_API_KEY:-}
+      RELAY_PORT: ${RELAY_PORT:-50051}
+      # Farm in container cannot open TCP to device_ip:7912; U2 must use WS tunnel.
+      DEVICE_FARM_U2_ALWAYS_TUNNEL: ${DEVICE_FARM_U2_ALWAYS_TUNNEL:-1}
+    volumes:
+      - ./device_farm/config.yaml:/app/config.yaml:ro
+      - farm_captures:/app/captures
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
 
   # frontend:
@@ -117,6 +133,43 @@ services:
   #     NEXT_PUBLIC_API_URL: http://farm:8081
   #     NEXT_PUBLIC_WS_URL: ws://farm:8081
 
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Web Console → http://localhost:9001
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+
+  # One-shot: tạo bucket device-farm ngay sau khi MinIO healthy
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: >
+      /bin/sh -c "
+        mc alias set local http://minio:9000 ${MINIO_ACCESS_KEY:-minioadmin} ${MINIO_SECRET_KEY:-minioadmin} &&
+        mc mb --ignore-existing local/${MINIO_BUCKET:-device-farm} &&
+        mc anonymous set download local/${MINIO_BUCKET:-device-farm} &&
+        echo 'Bucket ${MINIO_BUCKET:-device-farm} ready.'
+      "
+
+
 volumes:
   pgdata:
   farm_captures:
+  minio_data:

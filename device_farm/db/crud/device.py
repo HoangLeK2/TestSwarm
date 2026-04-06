@@ -92,7 +92,12 @@ async def bind_pending_device(
     if device.serial.startswith(PENDING_SERIAL_PREFIX):
         existing = await get_device_by_serial(db, serial)
         if existing and existing.id != device.id:
-            return None  # serial đã thuộc thiết bị khác
+            if existing.user_id is not None:
+                return None  # serial đã thuộc thiết bị của user khác → reject
+            # Auto-created device (không có owner, do phone kết nối trước khi quét QR)
+            # → xóa để pending device lấy serial này
+            await db.execute(delete(Device).where(Device.id == existing.id))
+            await db.flush()
         await db.execute(
             update(Device)
             .where(Device.id == device.id)

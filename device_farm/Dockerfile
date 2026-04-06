@@ -14,19 +14,17 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 FROM base AS deps
 
-# System deps for compiled wheels (adb-shell[usb], cryptography, lxml, numpy, av)
+# System deps for compiled wheels (cryptography, lxml, numpy, av/PyAV)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
     libffi-dev \
     libxml2-dev \
     libxslt1-dev \
-    pkg-config \
     libavformat-dev \
     libavcodec-dev \
     libavutil-dev \
     libswscale-dev \
-    libusb-1.0-0-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv for fast Python package management
@@ -51,7 +49,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxslt1.1 \
     libavformat61 \
     libavcodec61 \
-    libusb-1.0-0 \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
@@ -78,6 +75,8 @@ RUN mkdir -p /app/captures /app/data && \
 USER farm
 
 EXPOSE 8081
+# gRPC relay — agent-boot (local) connects inbound here
+EXPOSE 50051
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD curl -f http://localhost:8081/api/health || exit 1

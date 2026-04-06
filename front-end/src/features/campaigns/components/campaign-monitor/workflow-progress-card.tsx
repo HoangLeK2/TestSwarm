@@ -1,11 +1,12 @@
 'use client';
 
-import { useState } from 'react';
-import { CheckCircle2, XCircle, Pause, Loader2, Clock, ChevronDown, ChevronRight, Smartphone, List } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { CheckCircle2, XCircle, Pause, Loader2, Clock, ChevronDown, ChevronRight, Smartphone, List, AlertTriangle, RefreshCw, SkipForward } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Progress } from '@/components/ui/progress';
+import { Button } from '@/components/ui/button';
 import { DeviceControlEmbed } from '@/features/devices/components/device-control-embed';
-import { useWorkflowProgress } from '../../hooks/use-campaigns';
+import { useWorkflowProgress, useStepAction } from '../../hooks/use-campaigns';
 import type { WorkflowInfo } from '../../types';
 import { getStepTypeName } from '../flow-editor/constants';
 import { WorkflowStepList } from '../workflow-step-list';
@@ -45,6 +46,11 @@ function StatusBadge({ status }: { status: string }) {
       icon: <Pause size={10} />,
       cls: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
       label: 'Tạm dừng',
+    },
+    paused_on_error: {
+      icon: <AlertTriangle size={10} />,
+      cls: 'bg-orange-500/15 text-orange-600 dark:text-orange-400 animate-pulse',
+      label: 'Lỗi — chờ xử lý',
     },
     CANCELLED: {
       icon: <XCircle size={10} />,
@@ -97,13 +103,16 @@ function StepDots({ current, total }: { current: number; total: number }) {
 
 interface Props {
   wf: WorkflowInfo;
+  campaignId: string;
 }
 
-export function WorkflowProgressCard({ wf }: Props) {
+export function WorkflowProgressCard({ wf, campaignId }: Props) {
   const [expanded, setExpanded] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
 
-  const isActive = wf.status === 'RUNNING' || wf.status === 'PAUSED';
+  const isActive = wf.status === 'RUNNING' || wf.status === 'PAUSED' || wf.status === 'paused_on_error';
   const { data: prog } = useWorkflowProgress(wf.workflow_id, isActive);
+  const stepAction = useStepAction(campaignId);
 
   const serial = parseSerial(wf.workflow_id);
   const scenarioId = parseScenarioId(wf.workflow_id);
@@ -114,6 +123,20 @@ export function WorkflowProgressCard({ wf }: Props) {
   const stepType = prog?.current_step_type ?? '';
   const message = prog?.message ?? '';
   const loopIter = prog?.loop_iteration != null && prog.loop_iteration >= 0 ? prog.loop_iteration : null;
+  // paused_on_error can come from the live progress poll (more up-to-date than wf.status)
+  // dismissed is optimistically set when user clicks Retry/Skip to hide the bar immediately.
+  const isPausedOnError =
+    !dismissed &&
+    (prog?.status === 'paused_on_error' || wf.status === 'paused_on_error');
+  const errorMessage = prog?.error_message || (isPausedOnError ? message : null);
+
+  // When the status transitions back to running (after retry/skip was acknowledged by
+  // the server) reset dismissed so the bar can reappear if the workflow errors again.
+  useEffect(() => {
+    if (prog?.status === 'running' || prog?.status === 'RUNNING') {
+      setDismissed(false);
+    }
+  }, [prog?.status]);
 
   return (
     <div className={cn('transition-colors', expanded && 'bg-accent/20')}>
@@ -186,7 +209,55 @@ export function WorkflowProgressCard({ wf }: Props) {
             {message}
           </p>
         )}
+
+        {isPausedOnError && errorMessage && (
+          <p className='mt-1 pl-[26px] text-[10px] text-orange-600 dark:text-orange-400 truncate' title={errorMessage}>
+            Lỗi: {errorMessage}
+          </p>
+        )}
       </button>
+
+      {/* ── Retry / Skip bar (shown when paused on error) ── */}
+      {isPausedOnError && (
+        <div className='flex items-center gap-2 px-4 py-2 border-t bg-orange-500/5'>
+          <AlertTriangle size={11} className='text-orange-500 shrink-0' />
+          <span className='text-[10px] text-orange-600 dark:text-orange-400 flex-1'>
+            Workflow đang chờ — chọn hành động:
+          </span>
+          <Button
+            size='sm'
+            variant='outline'
+            className='h-6 gap-1 px-2 text-[10px] border-orange-400 text-orange-600 hover:bg-orange-500/10'
+            disabled={stepAction.isPending}
+            onClick={(e) => {
+              e.stopPropagation();
+              setDismissed(true);
+              stepAction.mutate({ action: 'retry', deviceSerial: serial }, {
+                onError: () => setDismissed(false),
+              });
+            }}
+          >
+            <RefreshCw size={10} className={stepAction.isPending ? 'animate-spin' : ''} />
+            Thử lại
+          </Button>
+          <Button
+            size='sm'
+            variant='outline'
+            className='h-6 gap-1 px-2 text-[10px]'
+            disabled={stepAction.isPending}
+            onClick={(e) => {
+              e.stopPropagation();
+              setDismissed(true);
+              stepAction.mutate({ action: 'skip', deviceSerial: serial }, {
+                onError: () => setDismissed(false),
+              });
+            }}
+          >
+            <SkipForward size={10} />
+            Bỏ qua
+          </Button>
+        </div>
+      )}
 
       {/* ── Expanded: device left + steps right ── */}
       {expanded && (

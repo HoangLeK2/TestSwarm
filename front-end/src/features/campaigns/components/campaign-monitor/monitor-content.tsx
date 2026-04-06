@@ -38,7 +38,7 @@ export function MonitorContent({ campaignId }: Props) {
   return (
     <div className='max-h-[70vh] overflow-y-auto divide-y'>
       {workflows.map((wf) => (
-        <WorkflowProgressCard key={wf.workflow_id} wf={wf} />
+        <WorkflowProgressCard key={wf.workflow_id} wf={wf} campaignId={campaignId} />
       ))}
     </div>
   );

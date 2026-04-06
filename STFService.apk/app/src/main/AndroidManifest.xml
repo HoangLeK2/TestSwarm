@@ -38,8 +38,6 @@
         <service android:name=".WsAgentService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
-
-        <!-- Touch injection + UI hierarchy via AccessibilityService -->
         <service android:name=".TouchAccessibilityService"
             android:exported="false"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">

@@ -16,18 +16,28 @@ adb:
   connect_timeout: 10
 
 device:
-  index_file: "device_index.json"
+  # Use data/ so Docker (non-root farm user) can write; /app/data is writable in the image.
+  index_file: "data/device_index.json"
 
   stf_package: "jp.co.cyberagent.stf"
   stf_apk_path: ""       
 
   scrcpy_jar: "/opt/homebrew/share/scrcpy/scrcpy-server"
-  scrcpy_max_fps: 20      
+  scrcpy_max_fps: 30
   scrcpy_max_width: 800   # downscale max dimension
-  scrcpy_bitrate: 8000000  # H.264 bitrate bps (8Mbps). Use 2–4M when behind ngrok to avoid "Network bandwidth exceeded"
+  scrcpy_bitrate: 8000000        # H.264 bitrate bps for local ADB path (8Mbps)
+  scrcpy_relay_bitrate: 2000000  # H.264 bitrate for WiFi ADB relay (keep ≤4Mbps — IDR frames at 8Mbps take 200ms+ over WiFi ADB, causing 1fps freeze)
   scrcpy_control: true     # Enable scrcpy control channel for touch/key/text (smoothest input method)
+  u2_always_tunnel: true   # Docker/cloud: farm container cannot reach device_ip:7912 — always use WS tunnel
 
 force_u2_mode: true
+
+# ADB relay — gRPC server for local agent-boot/relay.py
+# Enable when running device_farm in cloud (devices connect via relay agents)
+relay:
+  enabled: true
+  port: 50051
+  api_key: ""   # set via RELAY_API_KEY env var
 
 # Leave empty to skip app monitoring in watchdog
 target_app: ""           # e.g., "com.example.mygame"
@@ -53,8 +63,7 @@ task:
 
 # ─── PostgreSQL Database ──────────────────────────────────────────────────────
 # Set enabled: true and configure connection details to activate DB integration.
-# Alternatively set DATABASE_URL env var:
-#   export DATABASE_URL=postgresql://user:pass@localhost:5432/device_farm
+# In Docker Compose, set DATABASE_URL on the farm service (overrides host/port/user below).
 database:
   enabled: true
   host: "localhost"
@@ -78,13 +87,25 @@ u2:
 # mode: "periodic" = server captures screenshots on interval (low CPU/bandwidth)
 #        "continuous" = legacy 30FPS streaming via agent/scrcpy
 streaming:
-  mode: "periodic"
+  mode: "continuous"
   dashboard_interval: 0.1    # 10fps — scrcpy decode → JPEG cache → MJPEG endpoint
 
-# Temporal workflow engine (optional).
 # Set enabled: true only when Temporal server is running.
 # When disabled, campaigns fall back to the in-process TaskQueue automatically.
 # Start server: docker run -p 7233:7233 temporalio/auto-setup:latest
+# ─── MinIO Object Storage ─────────────────────────────────────────────────────
+# Save screenshots to MinIO instead of filesystem local.
+# Khi dùng Docker Compose, minio-init service tự tạo bucket.
+# Console: http://localhost:9001  (username/password = minioadmin/minioadmin)
+minio:
+  enabled: true
+  endpoint: "localhost:9000"
+  access_key: "minioadmin"
+  secret_key: "minioadmin"
+  bucket: "device-farm"
+  secure: false
+  public_base_url: "http://localhost:9000"   # URL screenshots returned as http://localhost:9000/device-farm/...
+
 temporal:
   enabled: true                        # Set true to use Temporal
   server_url: "localhost:7233"          # Temporal gRPC endpoint

@@ -33,11 +33,14 @@ dependencies = [
     "pyngrok>=7.0.0",
     "tenacity>=8.2.0",            # retry-until-visible for scenario steps
     "airtest>=1.3.0",                 # Airtest aircv: SSIM + template matching for visual anchoring
+    # ── Object storage ──
+    "minio>=7.2.0",               # MinIO/S3 client for screenshot storage
     # ── Temporal workflow orchestration (DF-002) ──
     "temporalio>=1.7.1",
     # ── Scheduler & Cron (DF-008) ──
     "croniter>=2.0.0",             # cron expression parsing + next_run_at computation
     "pytz>=2024.1",                # timezone-aware datetime for cron schedules
+    # ADB relay uses WebSocket on /relay-agent (no gRPC dependency needed)
 ]
 
 [project.optional-dependencies]

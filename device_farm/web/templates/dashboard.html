@@ -70,7 +70,6 @@
     }
     .device-card:hover { border-color: var(--accent); }
     .device-card.active { border-color: var(--accent); background: #1e2040; }
-
     .device-card .row { display: flex; align-items: center; gap: 8px; }
     .device-card .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
     .device-card .dot.READY    { background: var(--green); box-shadow: 0 0 5px var(--green); }
@@ -80,217 +79,204 @@
     .device-card .serial { font-size: 11px; color: var(--text2); margin-top: 2px; font-family: monospace; }
     .device-card .meta { font-size: 11px; color: var(--text2); margin-top: 6px; display: flex; gap: 12px; flex-wrap: wrap; }
     .device-card .meta span { display: flex; align-items: center; gap: 4px; }
-    .battery-icon { font-size: 12px; }
 
-    .no-devices {
-      text-align: center;
-      padding: 40px 16px;
-      color: var(--text2);
-      font-size: 13px;
-    }
+    .no-devices { text-align: center; padding: 40px 16px; color: var(--text2); font-size: 13px; }
     .no-devices .icon { font-size: 32px; margin-bottom: 8px; }
 
     /* ── Content ── */
-    .content {
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
+    .content { display: flex; flex-direction: column; overflow: hidden; }
 
     .empty-state {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      color: var(--text2);
-      gap: 12px;
+      flex: 1; display: flex; flex-direction: column; align-items: center;
+      justify-content: center; color: var(--text2); gap: 12px;
     }
     .empty-state .icon { font-size: 48px; }
     .empty-state h3 { font-size: 18px; color: var(--text); }
     .empty-state p { font-size: 13px; max-width: 320px; text-align: center; line-height: 1.6; }
 
     /* ── Device View ── */
-    .device-view {
-      display: none;
-      flex: 1;
-      flex-direction: column;
-      overflow: hidden;
-    }
+    .device-view { display: none; flex: 1; flex-direction: column; overflow: hidden; }
     .device-view.visible { display: flex; }
 
     .device-toolbar {
-      display: flex;
-      align-items: center;
-      gap: 10px;
+      display: flex; align-items: center; gap: 10px;
       padding: 10px 20px;
-      background: var(--surface);
-      border-bottom: 1px solid var(--border);
-      flex-shrink: 0;
+      background: var(--surface); border-bottom: 1px solid var(--border); flex-shrink: 0;
     }
     .device-toolbar .name { font-weight: 600; font-size: 14px; }
     .device-toolbar .badge {
-      padding: 2px 8px;
-      border-radius: 99px;
-      font-size: 11px;
-      font-weight: 600;
-      background: var(--surface2);
-      color: var(--text2);
+      padding: 2px 8px; border-radius: 99px; font-size: 11px; font-weight: 600;
+      background: var(--surface2); color: var(--text2);
     }
     .device-toolbar .badge.READY { background: #14532d; color: var(--green); }
     .device-toolbar .battery { margin-left: auto; font-size: 12px; color: var(--text2); }
 
-    .view-area {
-      display: grid;
-      grid-template-columns: auto 1fr;
-      flex: 1;
-      overflow: hidden;
-      gap: 0;
-    }
+    .view-area { display: grid; grid-template-columns: auto 1fr; flex: 1; overflow: hidden; }
 
-    /* ── Screen ── */
+    /* ── Screen Panel ── */
     .screen-panel {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 16px;
-      background: var(--bg);
-      border-right: 1px solid var(--border);
-      gap: 12px;
-      overflow-y: auto;
+      display: flex; flex-direction: column; align-items: center;
+      padding: 16px; background: var(--bg); border-right: 1px solid var(--border);
+      gap: 8px; overflow-y: auto;
     }
 
     .screen-wrap {
       position: relative;
-      border-radius: 16px;
-      overflow: hidden;
-      border: 2px solid var(--border);
-      background: #000;
+      border-radius: 16px; overflow: hidden;
+      border: 2px solid var(--border); background: #000;
       cursor: crosshair;
       box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+      user-select: none;
     }
-    .screen-wrap canvas {
-      display: block;
-      width: 300px;
-      height: auto;
+    .screen-wrap canvas { display: block; width: 320px; height: auto; }
+    #overlayCanvas {
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      pointer-events: none; display: block;
     }
     .screen-placeholder {
-      width: 300px;
-      height: 534px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: var(--gray);
-      font-size: 13px;
-      flex-direction: column;
-      gap: 8px;
+      width: 320px; height: 568px;
+      display: flex; align-items: center; justify-content: center;
+      color: var(--gray); font-size: 13px; flex-direction: column; gap: 8px;
     }
 
-    /* ── Key Controls ── */
-    .key-controls {
-      display: flex;
-      gap: 8px;
-      justify-content: center;
-      flex-wrap: wrap;
+    /* ── Coord bar ── */
+    .coord-bar {
+      width: 320px;
+      display: flex; align-items: center; gap: 8px;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 8px; padding: 6px 10px; font-size: 11px;
+      font-family: monospace; color: var(--text2); flex-wrap: wrap;
+      min-height: 30px;
     }
+    .coord-bar .coord-xy { color: var(--accent2); font-weight: 600; white-space: nowrap; }
+    .coord-bar .coord-elem { color: var(--text2); flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .coord-bar .coord-by { color: var(--green); font-size: 10px; }
+
+    /* ── Key Controls ── */
+    .key-controls { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; width: 320px; }
     .key-btn {
-      padding: 7px 14px;
-      border-radius: 8px;
-      background: var(--surface2);
-      border: 1px solid var(--border);
-      color: var(--text);
-      font-size: 12px;
-      cursor: pointer;
-      transition: all 0.15s;
+      padding: 6px 12px; border-radius: 8px; background: var(--surface2);
+      border: 1px solid var(--border); color: var(--text); font-size: 11px;
+      cursor: pointer; transition: all 0.15s;
     }
     .key-btn:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
     .key-btn:active { transform: scale(0.95); }
 
     /* ── Right Panel ── */
-    .right-panel {
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
+    .right-panel { display: flex; flex-direction: column; overflow: hidden; }
 
     .tabs {
-      display: flex;
-      border-bottom: 1px solid var(--border);
-      background: var(--surface);
-      padding: 0 16px;
+      display: flex; border-bottom: 1px solid var(--border);
+      background: var(--surface); padding: 0 16px; flex-shrink: 0;
     }
     .tab {
-      padding: 10px 16px;
-      font-size: 13px;
-      color: var(--text2);
-      cursor: pointer;
-      border-bottom: 2px solid transparent;
-      transition: all 0.15s;
-      user-select: none;
+      padding: 10px 14px; font-size: 13px; color: var(--text2);
+      cursor: pointer; border-bottom: 2px solid transparent;
+      transition: all 0.15s; user-select: none;
     }
     .tab.active { color: var(--accent2); border-bottom-color: var(--accent); }
-
     .tab-content { display: none; flex: 1; overflow-y: auto; padding: 16px; }
-    .tab-content.active { display: block; }
+    .tab-content.active { display: flex; flex-direction: column; gap: 12px; }
 
-    /* Info */
-    .info-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 10px;
-    }
+    /* ── Info ── */
+    .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
     .info-item {
-      background: var(--surface2);
-      padding: 12px 14px;
-      border-radius: 8px;
-      border: 1px solid var(--border);
+      background: var(--surface2); padding: 12px 14px;
+      border-radius: 8px; border: 1px solid var(--border);
     }
     .info-item label { font-size: 11px; color: var(--text2); display: block; margin-bottom: 4px; }
     .info-item .val { font-size: 14px; font-weight: 600; font-family: monospace; }
 
-    /* Logs */
+    /* ── Logs ── */
     .log-box {
-      background: #0a0c14;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 12px;
-      font-family: 'Fira Code', 'Cascadia Code', monospace;
-      font-size: 12px;
-      line-height: 1.6;
-      min-height: 200px;
-      max-height: 100%;
-      overflow-y: auto;
-      color: #a0aec0;
+      background: #0a0c14; border: 1px solid var(--border); border-radius: 8px;
+      padding: 12px; font-family: 'Fira Code', monospace; font-size: 12px;
+      line-height: 1.6; min-height: 200px; overflow-y: auto; color: #a0aec0; flex: 1;
     }
     .log-line.error { color: var(--red); }
     .log-line.warn  { color: var(--yellow); }
     .log-line.info  { color: #7dd3fc; }
 
-    /* Swipe UI */
+    /* ── Touch ── */
     .swipe-form { display: flex; flex-direction: column; gap: 10px; }
-    .swipe-form label { font-size: 12px; color: var(--text2); }
+    .swipe-form .form-label { font-size: 12px; color: var(--text2); }
     .swipe-form .row { display: flex; gap: 8px; }
     .swipe-form input[type=number] {
-      flex: 1;
-      background: var(--surface2);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 6px 10px;
-      color: var(--text);
-      font-size: 13px;
+      flex: 1; background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 6px; padding: 6px 10px; color: var(--text); font-size: 13px;
     }
     .btn-primary {
-      padding: 8px 18px;
-      border-radius: 8px;
-      background: var(--accent);
-      color: #fff;
-      font-size: 13px;
-      font-weight: 600;
-      border: none;
-      cursor: pointer;
-      transition: background 0.15s;
+      padding: 8px 18px; border-radius: 8px; background: var(--accent);
+      color: #fff; font-size: 13px; font-weight: 600; border: none;
+      cursor: pointer; transition: background 0.15s;
     }
     .btn-primary:hover { background: var(--accent2); }
+    .btn-sm {
+      padding: 5px 12px; border-radius: 6px; background: var(--surface2);
+      border: 1px solid var(--border); color: var(--text); font-size: 12px;
+      cursor: pointer; transition: all 0.15s; white-space: nowrap;
+    }
+    .btn-sm:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn-sm.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+    /* ── Inspect Tab ── */
+    .inspect-toolbar {
+      display: flex; align-items: center; gap: 8px; flex-shrink: 0; flex-wrap: wrap;
+    }
+    .inspect-toolbar input[type=text] {
+      flex: 1; min-width: 100px; background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 6px; padding: 5px 10px; color: var(--text); font-size: 12px;
+    }
+    .inspect-toolbar input[type=text]:focus { outline: none; border-color: var(--accent); }
+    .elem-stats { font-size: 11px; color: var(--text2); flex-shrink: 0; }
+
+    .elem-list { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; flex: 1; }
+    .elem-card {
+      background: var(--surface2); border: 1px solid var(--border); border-radius: 8px;
+      padding: 8px 12px; cursor: pointer; transition: all 0.12s;
+    }
+    .elem-card:hover { border-color: var(--accent); background: #1e2040; }
+    .elem-card.highlighted { border-color: #22c55e; background: #0f2d1a; }
+    .elem-card .ec-top { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; }
+    .elem-card .ec-text {
+      font-size: 13px; font-weight: 600; color: var(--text);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
+    }
+    .elem-card .ec-by {
+      font-size: 10px; padding: 1px 6px; border-radius: 4px; flex-shrink: 0;
+      font-weight: 600; letter-spacing: 0.5px;
+    }
+    .ec-by.text      { background: #1e3a5f; color: #60a5fa; }
+    .ec-by.resource-id { background: #2d1b4e; color: #c084fc; }
+    .ec-by.description { background: #1a3a2a; color: #4ade80; }
+    .elem-card .ec-rid { font-size: 11px; color: var(--text2); font-family: monospace; margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .elem-card .ec-meta { display: flex; gap: 8px; font-size: 10px; color: var(--gray); }
+    .elem-card .ec-bounds { font-family: monospace; }
+    .elem-card .ec-cls {}
+    .elem-card .ec-click { color: var(--green); }
+
+    /* ── JSON viewer ── */
+    .json-raw-wrap {
+      background: #0a0c14; border: 1px solid var(--border); border-radius: 8px;
+      padding: 10px 12px; font-family: monospace; font-size: 11px; line-height: 1.5;
+      overflow: auto; max-height: 300px; flex-shrink: 0;
+    }
+    .json-raw-wrap .jk { color: #60a5fa; }
+    .json-raw-wrap .jv { color: #a3e635; }
+    .json-raw-wrap .js { color: #fb923c; }
+    .json-raw-wrap .jn { color: #f87171; }
+    .json-raw-wrap .jb { color: #c084fc; }
+
+    /* ── Tap feedback overlay ── */
+    .tap-toast {
+      position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+      background: rgba(30,32,64,0.95); border: 1px solid var(--accent);
+      border-radius: 10px; padding: 8px 16px; font-size: 12px; color: var(--text);
+      display: none; z-index: 1000; font-family: monospace; max-width: 400px;
+      pointer-events: none;
+    }
+    .tap-toast .tt-label { color: var(--text2); font-size: 10px; margin-bottom: 2px; }
+    .tap-toast .tt-val { color: var(--accent2); font-weight: 600; }
 
     @media (max-width: 900px) {
       .main { grid-template-columns: 1fr; }
@@ -350,6 +336,13 @@
               <span>No frame yet</span>
             </div>
             <canvas id="screenCanvas" style="display:none;"></canvas>
+            <canvas id="overlayCanvas"></canvas>
+          </div>
+
+          <!-- Coordinate / element info bar -->
+          <div class="coord-bar" id="coordBar">
+            <span class="coord-xy" id="coordXY">x:— y:—</span>
+            <span class="coord-elem" id="coordElem">Hover to inspect</span>
           </div>
 
           <!-- Hardware keys -->
@@ -369,8 +362,10 @@
             <div class="tab active" onclick="switchTab('info')">Info</div>
             <div class="tab" onclick="switchTab('logs')">Logs</div>
             <div class="tab" onclick="switchTab('touch')">Touch</div>
+            <div class="tab" onclick="switchTab('inspect')">Inspect</div>
           </div>
 
+          <!-- Info Tab -->
           <div class="tab-content active" id="tab-info">
             <div class="info-grid">
               <div class="info-item"><label>Serial</label><div class="val" id="iSerial">—</div></div>
@@ -384,13 +379,15 @@
             </div>
           </div>
 
+          <!-- Logs Tab -->
           <div class="tab-content" id="tab-logs">
             <div class="log-box" id="logBox"></div>
           </div>
 
+          <!-- Touch Tab -->
           <div class="tab-content" id="tab-touch">
             <div class="swipe-form">
-              <label>Swipe (from → to)</label>
+              <span class="form-label">Swipe (from → to)</span>
               <div class="row">
                 <input type="number" id="sx1" placeholder="x1" value="200">
                 <input type="number" id="sy1" placeholder="y1" value="800">
@@ -400,12 +397,33 @@
               </div>
               <button class="btn-primary" onclick="doSwipe()">Swipe ↑</button>
 
-              <label style="margin-top:12px;">Tap (x, y)</label>
+              <span class="form-label" style="margin-top:12px;">Tap (x, y)</span>
               <div class="row">
                 <input type="number" id="tx" placeholder="x" value="540">
                 <input type="number" id="ty" placeholder="y" value="1158">
               </div>
               <button class="btn-primary" onclick="doTap()">Tap</button>
+            </div>
+          </div>
+
+          <!-- Inspect Tab -->
+          <div class="tab-content" id="tab-inspect">
+            <div class="inspect-toolbar">
+              <button class="btn-sm" id="btnDump" onclick="loadHierarchy()">⬇ Dump UI</button>
+              <button class="btn-sm" id="btnOverlay" onclick="toggleOverlay()">◻ Overlay</button>
+              <button class="btn-sm" id="btnRawJson" onclick="toggleRawJson()">{ } JSON</button>
+              <input type="text" id="elemFilter" placeholder="Filter text / id…" oninput="filterElements()" />
+              <span class="elem-stats" id="elemStats"></span>
+            </div>
+
+            <!-- Raw JSON view (hidden by default) -->
+            <div class="json-raw-wrap" id="jsonRaw" style="display:none;"></div>
+
+            <!-- Element list -->
+            <div class="elem-list" id="elemList">
+              <div style="color:var(--text2);font-size:13px;text-align:center;padding:24px 0;">
+                Click "Dump UI" to load elements from device
+              </div>
             </div>
           </div>
         </div>
@@ -414,15 +432,30 @@
   </section>
 </div>
 
+<!-- Tap feedback toast -->
+<div class="tap-toast" id="tapToast">
+  <div class="tt-label">Tapped element</div>
+  <div class="tt-val" id="tapToastVal">—</div>
+</div>
+
 <script>
   // ── State ──────────────────────────────────────────────────────────────────
   let ws = null;
   let activeSerial = null;
-  const devices = {};       // serial → status dict
-  const h264States = {};    // serial → { decoder, configured, codecString }
-
-  // Reused TextDecoder — avoid allocating a new one on every binary frame (~60/s)
+  const devices = {};
+  const h264States = {};
   const _textDecoder = new TextDecoder();
+
+  // Inspect state
+  let cachedElements  = [];   // [{text, resource_id, content_desc, bounds, clickable, selector_by, selector_value, class_name}, ...]
+  let filteredElems   = [];   // filtered subset shown in list
+  let hoveredElemIdx  = -1;   // index in cachedElements for overlay highlight
+  let overlayEnabled  = false;
+  let showRawJson     = false;
+  let lastTapRx       = -1;
+  let lastTapRy       = -1;
+  let tapToastTimer   = null;
+  let dumpLoading     = false;
 
   // ── WebSocket ──────────────────────────────────────────────────────────────
   function connect() {
@@ -433,49 +466,24 @@
       document.getElementById('wsDot').className = 'ws-dot connected';
       document.getElementById('wsLabel').textContent = 'Connected';
     };
-
     ws.onclose = () => {
       document.getElementById('wsDot').className = 'ws-dot error';
       document.getElementById('wsLabel').textContent = 'Reconnecting…';
       setTimeout(connect, 2000);
     };
-
-    ws.onerror = () => {
-      document.getElementById('wsDot').className = 'ws-dot error';
-    };
-
+    ws.onerror = () => { document.getElementById('wsDot').className = 'ws-dot error'; };
     ws.binaryType = 'arraybuffer';
     ws.onmessage = (ev) => {
-      // Binary frames: 0x01=JPEG, 0x10=H264 config, 0x11=H264 video
-      if (ev.data instanceof ArrayBuffer) {
-        handleBinaryFrame(ev.data);
-        return;
-      }
+      if (ev.data instanceof ArrayBuffer) { handleBinaryFrame(ev.data); return; }
       let msg;
       try { msg = JSON.parse(ev.data); } catch { return; }
-
-      if (msg.type === 'frame') {
-        handleFrame(msg);
-      } else if (msg.type === 'status') {
-        handleStatus(msg);
-      } else if (msg.type === 'log') {
-        handleLog(msg);
-      }
+      if (msg.type === 'frame')  handleFrame(msg);
+      else if (msg.type === 'status') handleStatus(msg);
+      else if (msg.type === 'log')    handleLog(msg);
     };
   }
 
-  // ── Handlers ──────────────────────────────────────────────────────────────
-  function handleStatus(msg) {
-    const serial = msg.serial;
-    if (!serial) return;
-    devices[serial] = msg;
-    renderSidebar();
-    // Auto-select first device that appears
-    if (!activeSerial) selectDevice(serial);
-    if (serial === activeSerial) updateDeviceView(msg);
-  }
-
-  // ── H.264 decoder helpers ─────────────────────────────────────────────────
+  // ── H.264 helpers ─────────────────────────────────────────────────────────
   function b64ToU8(b64) {
     const bin = atob(b64), out = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
@@ -484,116 +492,73 @@
 
   function getH264State(serial) {
     if (h264States[serial]) return h264States[serial];
-    const state = {
-      decoder:       null,
-      configured:    false,
-      codecString:   'avc1.42E01E',
-      waitingForIdr: false,   // true after SPS/PPS change — drop frames until IDR
-    };
-    h264States[serial] = state;
-    return state;
+    h264States[serial] = { decoder: null, configured: false, codecString: 'avc1.42E01E', waitingForIdr: false };
+    return h264States[serial];
   }
 
   function resetH264Decoder(serial) {
     const state = h264States[serial];
     if (!state) return;
     try { state.decoder && state.decoder.close(); } catch(e) {}
-    state.decoder       = null;
-    state.configured    = false;
-    state.waitingForIdr = false;
+    state.decoder = null; state.configured = false; state.waitingForIdr = false;
   }
 
   function ensureDecoder(state, codecString) {
     if (state.decoder && state.configured && state.codecString === codecString) return true;
-
-    // Close old decoder if codec changed
-    if (state.decoder) {
-      try { state.decoder.close(); } catch(e) {}
-      state.decoder = null;
-      state.configured = false;
-    }
-
-    if (!window.VideoDecoder) return false; // browser doesn't support WebCodecs
-
+    if (state.decoder) { try { state.decoder.close(); } catch(e) {} state.decoder = null; state.configured = false; }
+    if (!window.VideoDecoder) return false;
     const canvas = document.getElementById('screenCanvas');
-    // drawImage(VideoFrame) directly on 2D context — synchronous, no async
-    // microtask overhead. Faster than createImageBitmap().then(...) in practice.
     const ctx = canvas.getContext('2d');
-
     state.codecString = codecString;
     state.decoder = new VideoDecoder({
       output(frame) {
-        // Only resize when dimensions change — avoids clearing canvas every frame.
         if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
           canvas.width  = frame.displayWidth;
           canvas.height = frame.displayHeight;
+          // Resize overlay canvas to match
+          const ov = document.getElementById('overlayCanvas');
+          ov.width  = frame.displayWidth;
+          ov.height = frame.displayHeight;
+          redrawOverlay();
         }
         ctx.drawImage(frame, 0, 0);
         frame.close();
         canvas.style.display = 'block';
         document.getElementById('screenPlaceholder').style.display = 'none';
       },
-      error(e) {
-        console.warn('[H264] VideoDecoder error:', e.message);
-        state.configured = false; // will reconfigure on next keyframe
-      },
+      error(e) { console.warn('[H264] decoder error:', e.message); state.configured = false; },
     });
-
     try {
-      state.decoder.configure({
-        codec:                 codecString,
-        optimizeForLatency:    true,
-        hardwareAcceleration:  'prefer-hardware',  // GPU decode → lower CPU + latency
-      });
+      state.decoder.configure({ codec: codecString, optimizeForLatency: true, hardwareAcceleration: 'prefer-hardware' });
       state.configured = true;
       return true;
     } catch(e) {
-      console.warn('[H264] configure failed:', e.message, 'codec:', codecString);
-      state.configured = false;
-      return false;
+      console.warn('[H264] configure failed:', e.message); state.configured = false; return false;
     }
   }
 
-  // ── Binary frame parser (0x01 JPEG / 0x10 H264 config / 0x11 H264 video) ──
+  // ── Binary frame parser ────────────────────────────────────────────────────
   function handleBinaryFrame(buf) {
-    const u8  = new Uint8Array(buf);
+    const u8 = new Uint8Array(buf);
     if (u8.length < 6) return;
-
     const frameType = u8[0];
-    const slen      = u8[1];
+    const slen = u8[1];
     if (u8.length < 2 + slen + 4) return;
-
     const serial = _textDecoder.decode(u8.subarray(2, 2 + slen));
     if (serial !== activeSerial) return;
-
     const base = 2 + slen;
-    // w/h present in all frame types (not used for H264 — decoder reports actual size)
     let doff = base + 4;
 
-    // ── 0x10 H264 config (AVCDecoderConfigurationRecord) ──────────────────
     if (frameType === 0x10) {
       if (u8.length < doff + 1) return;
-      const flags         = u8[doff];
+      const flags = u8[doff];
       const configChanged = (flags & 0x01) !== 0;
-      const avccRecord    = u8.subarray(doff + 1);
-
+      const avccRecord = u8.subarray(doff + 1);
       const state = getH264State(serial);
-
       if (configChanged) {
-        // SPS/PPS changed (rotation / resolution / reconnect).
-        // Close current decoder — it was configured with old SPS/PPS.
-        // Do NOT create a new decoder yet; wait for IDR before decoding.
-        console.log('[H264] SPS/PPS changed — resetting decoder, waiting for IDR');
         try { state.decoder && state.decoder.close(); } catch(e) {}
-        state.decoder       = null;
-        state.configured    = false;
-        state.waitingForIdr = true;
+        state.decoder = null; state.configured = false; state.waitingForIdr = true;
       }
-
-      // Derive codec string from SPS bytes inside AVCC record.
-      // AVCDecoderConfigurationRecord layout:
-      //   [0x01][profile][compat][level][0xFF][0xE1][sps_len:2B][sps...]
-      // codec string = "avc1.PPCCLL" where PP=profile, CC=compat, LL=level (hex)
       let codecString = state.codecString;
       if (avccRecord.length >= 4 && avccRecord[0] === 0x01) {
         const p = avccRecord[1].toString(16).padStart(2, '0');
@@ -602,59 +567,47 @@
         codecString = `avc1.${p}${c}${l}`;
       }
       state.codecString = codecString;
-
-      // Always (re)configure decoder when we receive a config packet, UNLESS we
-      // just reset due to a change — in that case defer until the IDR arrives.
-      if (!configChanged) {
-        ensureDecoder(state, codecString);
-      }
+      if (!configChanged) ensureDecoder(state, codecString);
       return;
     }
 
-    // ── 0x11 H264 video frame (AVCC) ──────────────────────────────────────
     if (frameType === 0x11) {
       if (u8.length < doff + 9) return;
-      const isKey  = u8[doff] !== 0;
+      const isKey = u8[doff] !== 0;
       const avccData = u8.subarray(doff + 9);
-
       const state = getH264State(serial);
-
-      // IDR gate: after SPS/PPS change, drop frames until first IDR.
       if (state.waitingForIdr) {
-        if (!isKey) return;   // drop P-frame
-        // IDR arrived — configure decoder with stored codec string, then decode
+        if (!isKey) return;
         state.waitingForIdr = false;
         if (!ensureDecoder(state, state.codecString)) return;
       }
-
-      if (!isKey && !state.configured) return;  // startup: wait for first IDR
+      if (!isKey && !state.configured) return;
       if (!ensureDecoder(state, state.codecString)) return;
-
       try {
         state.decoder.decode(new EncodedVideoChunk({
-          type:      isKey ? 'key' : 'delta',
-          timestamp: performance.now() * 1000,
-          data:      avccData,
+          type: isKey ? 'key' : 'delta', timestamp: performance.now() * 1000, data: avccData,
         }));
       } catch(e) {
         console.warn('[H264] decode error:', e.message);
-        state.configured    = false;
-        state.waitingForIdr = true;   // wait for IDR before retrying
+        state.configured = false; state.waitingForIdr = true;
       }
       return;
     }
 
-    // ── 0x01 JPEG fallback ────────────────────────────────────────────────
     if (frameType === 0x01) {
       const jpegBytes = u8.subarray(doff);
       const blob = new Blob([jpegBytes], { type: 'image/jpeg' });
-      const url  = URL.createObjectURL(blob);
-      const img  = new Image();
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
       img.onload = () => {
         URL.revokeObjectURL(url);
         const canvas = document.getElementById('screenCanvas');
-        canvas.width  = img.naturalWidth;
-        canvas.height = img.naturalHeight;
+        if (canvas.width !== img.naturalWidth || canvas.height !== img.naturalHeight) {
+          canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
+          const ov = document.getElementById('overlayCanvas');
+          ov.width = img.naturalWidth; ov.height = img.naturalHeight;
+          redrawOverlay();
+        }
         canvas.getContext('2d').drawImage(img, 0, 0);
         canvas.style.display = 'block';
         document.getElementById('screenPlaceholder').style.display = 'none';
@@ -664,51 +617,31 @@
     }
   }
 
-  // ── Frame handler (JSON path — agent APK h264 / MJPEG) ───────────────────
   function handleFrame(msg) {
     if (msg.serial !== activeSerial) return;
-
-    // ── H.264 path (agent APK sends JSON frames) ─────────────────────────
     if (msg.codec === 'h264') {
-      const state       = getH264State(msg.serial);
+      const state = getH264State(msg.serial);
       const codecString = msg.codec_string || state.codecString;
-
-      // IDR gate applies to JSON path too
-      if (state.waitingForIdr) {
-        if (!msg.key) return;
-        state.waitingForIdr = false;
-      }
-
+      if (state.waitingForIdr) { if (!msg.key) return; state.waitingForIdr = false; }
       if (!msg.key && !state.configured) return;
       if (!ensureDecoder(state, codecString)) return;
-
       const data = b64ToU8(msg.data);
       try {
-        state.decoder.decode(new EncodedVideoChunk({
-          type:      msg.key ? 'key' : 'delta',
-          timestamp: performance.now() * 1000,
-          data,
-        }));
-      } catch(e) {
-        console.warn('[H264] decode error:', e.message);
-        state.configured    = false;
-        state.waitingForIdr = true;
-      }
+        state.decoder.decode(new EncodedVideoChunk({ type: msg.key ? 'key' : 'delta', timestamp: performance.now() * 1000, data }));
+      } catch(e) { console.warn('[H264] decode error:', e.message); state.configured = false; state.waitingForIdr = true; }
       return;
     }
-
-    // ── JPEG fallback (JSON) ──────────────────────────────────────────────
     const b64 = msg.jpeg_b64;
     if (!b64) return;
     const img = new Image();
     img.onload = () => {
       const canvas = document.getElementById('screenCanvas');
-      canvas.width  = img.naturalWidth;
-      canvas.height = img.naturalHeight;
+      canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
       canvas.getContext('2d').drawImage(img, 0, 0);
-      canvas.style.width = '300px';
-      canvas.style.display = 'block';
+      canvas.style.width = '320px'; canvas.style.display = 'block';
       document.getElementById('screenPlaceholder').style.display = 'none';
+      const ov = document.getElementById('overlayCanvas');
+      ov.width = img.naturalWidth; ov.height = img.naturalHeight;
     };
     img.src = 'data:image/jpeg;base64,' + b64;
   }
@@ -717,22 +650,28 @@
     if (msg.serial !== activeSerial) return;
     const box = document.getElementById('logBox');
     const line = document.createElement('div');
-    line.className = 'log-line ' + (
-      msg.line.includes('ERROR') ? 'error' :
-      msg.line.includes('WARN')  ? 'warn'  : 'info'
-    );
+    line.className = 'log-line ' + (msg.line.includes('ERROR') ? 'error' : msg.line.includes('WARN') ? 'warn' : 'info');
     line.textContent = msg.line;
     box.appendChild(line);
-    // Keep last 200 lines
     while (box.children.length > 200) box.removeChild(box.firstChild);
     box.scrollTop = box.scrollHeight;
+  }
+
+  // ── Status ─────────────────────────────────────────────────────────────────
+  function handleStatus(msg) {
+    const serial = msg.serial;
+    if (!serial) return;
+    devices[serial] = msg;
+    renderSidebar();
+    if (!activeSerial) selectDevice(serial);
+    if (serial === activeSerial) updateDeviceView(msg);
   }
 
   // ── Sidebar ────────────────────────────────────────────────────────────────
   function renderSidebar() {
     const list = document.getElementById('deviceList');
     const serials = Object.keys(devices);
-    if (serials.length === 0) {
+    if (!serials.length) {
       list.innerHTML = '<div class="no-devices"><div class="icon">📡</div>Waiting for devices…</div>';
       return;
     }
@@ -759,27 +698,26 @@
     });
   }
 
-  function stateColor(state) {
-    if (state === 'READY') return 'var(--green)';
-    if (state === 'CONNECTING') return 'var(--yellow)';
-    return 'var(--gray)';
+  function stateColor(s) {
+    return s === 'READY' ? 'var(--green)' : s === 'CONNECTING' ? 'var(--yellow)' : 'var(--gray)';
   }
 
   // ── Device View ───────────────────────────────────────────────────────────
   function selectDevice(serial) {
-    // Reset H.264 decoder for previous device
     if (activeSerial && activeSerial !== serial) resetH264Decoder(activeSerial);
     activeSerial = serial;
-    // Reset screen
+    cachedElements = []; filteredElems = []; hoveredElemIdx = -1;
+    lastTapRx = -1; lastTapRy = -1;
     document.getElementById('screenCanvas').style.display = 'none';
     document.getElementById('screenPlaceholder').style.display = 'flex';
     document.getElementById('logBox').innerHTML = '';
-
+    document.getElementById('elemList').innerHTML = '<div style="color:var(--text2);font-size:13px;text-align:center;padding:24px 0;">Click "Dump UI" to load elements from device</div>';
+    document.getElementById('elemStats').textContent = '';
     document.getElementById('emptyState').style.display = 'none';
     document.getElementById('deviceView').classList.add('visible');
-
     renderSidebar();
     updateDeviceView(devices[serial]);
+    redrawOverlay();
   }
 
   function updateDeviceView(d) {
@@ -789,7 +727,6 @@
     badge.textContent = state;
     badge.className = 'badge ' + state;
     document.getElementById('dvBattery').textContent = d.battery >= 0 ? `🔋 ${d.battery}%` : '';
-
     document.getElementById('iSerial').textContent  = d.serial || '—';
     document.getElementById('iModel').textContent   = d.model  || '—';
     document.getElementById('iBrand').textContent   = d.brand  || '—';
@@ -802,13 +739,9 @@
 
   // ── Tabs ──────────────────────────────────────────────────────────────────
   function switchTab(name) {
-    document.querySelectorAll('.tab').forEach((t, i) => {
-      const names = ['info', 'logs', 'touch'];
-      t.classList.toggle('active', names[i] === name);
-    });
-    document.querySelectorAll('.tab-content').forEach(c => {
-      c.classList.toggle('active', c.id === 'tab-' + name);
-    });
+    const names = ['info', 'logs', 'touch', 'inspect'];
+    document.querySelectorAll('.tab').forEach((t, i) => t.classList.toggle('active', names[i] === name));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.toggle('active', c.id === 'tab-' + name));
   }
 
   // ── Input ─────────────────────────────────────────────────────────────────
@@ -821,36 +754,425 @@
     if (!ws || !activeSerial) return;
     ws.send(JSON.stringify({
       type: 'swipe', serial: activeSerial,
-      x1: +document.getElementById('sx1').value,
-      y1: +document.getElementById('sy1').value,
-      x2: +document.getElementById('sx2').value,
-      y2: +document.getElementById('sy2').value,
+      x1: +document.getElementById('sx1').value, y1: +document.getElementById('sy1').value,
+      x2: +document.getElementById('sx2').value, y2: +document.getElementById('sy2').value,
       ms: +document.getElementById('sms').value,
     }));
   }
 
   function doTap() {
     if (!ws || !activeSerial) return;
-    ws.send(JSON.stringify({
-      type: 'tap', serial: activeSerial,
-      x: +document.getElementById('tx').value,
-      y: +document.getElementById('ty').value,
-    }));
+    ws.send(JSON.stringify({ type: 'tap', serial: activeSerial, x: +document.getElementById('tx').value, y: +document.getElementById('ty').value }));
   }
 
-  // ── Canvas click → tap ────────────────────────────────────────────────────
-  document.getElementById('screenCanvas').addEventListener('click', (e) => {
+  // ── Coordinate helpers ────────────────────────────────────────────────────
+  /**
+   * Compute robust device pixel coordinates from a CSS click position.
+   *
+   * Uses canvas.width/height (actual video resolution) as ground truth for aspect
+   * ratio. d.screen_width/height may be stale after rotation, so we detect
+   * orientation mismatch and swap dimensions when necessary.
+   */
+  function cssToDevice(cssX, cssY, rect) {
+    const canvas = document.getElementById('screenCanvas');
+    const d = devices[activeSerial] || {};
+    const cw = canvas.width  || 1;
+    const ch = canvas.height || 1;
+
+    // Device logical resolution from status message
+    let dw = d.screen_width  || cw;
+    let dh = d.screen_height || ch;
+
+    // Detect stale orientation: canvas aspect ratio doesn't match status aspect ratio
+    // (e.g. device just rotated but status hasn't updated yet).
+    // If canvas is landscape but status says portrait, swap dw/dh.
+    const canvasLandscape = cw > ch;
+    const statusLandscape = dw > dh;
+    if (canvasLandscape !== statusLandscape && dw > 0 && dh > 0) {
+      [dw, dh] = [dh, dw];
+    }
+
+    // Scale: CSS position → device pixel
+    // rect.width is the CSS display width (320px). Regardless of whether the video
+    // stream is downscaled, the ratio (dw / rect.width) correctly maps CSS → device.
+    const x = Math.round(cssX / rect.width  * dw);
+    const y = Math.round(cssY / rect.height * dh);
+    return { x: Math.max(0, x), y: Math.max(0, y), dw, dh };
+  }
+
+  function cssToRatio(cssX, cssY, rect) {
+    return { rx: cssX / rect.width, ry: cssY / rect.height };
+  }
+
+  /** Find the smallest element containing (rx, ry) in cachedElements. */
+  function findElemAt(rx, ry, dw, dh) {
+    const px = rx * dw, py = ry * dh;
+    let best = -1, bestArea = Infinity;
+    cachedElements.forEach((el, i) => {
+      if (!el.bounds) return;
+      const [x1, y1, x2, y2] = el.bounds;
+      if (px >= x1 && px <= x2 && py >= y1 && py <= y2) {
+        const area = (x2 - x1) * (y2 - y1);
+        if (area < bestArea) { bestArea = area; best = i; }
+      }
+    });
+    return best;
+  }
+
+  // ── Canvas interactions ────────────────────────────────────────────────────
+  const screenWrap = document.getElementById('screenWrap');
+
+  screenWrap.addEventListener('mousemove', (e) => {
+    if (!activeSerial) return;
+    const rect = screenWrap.getBoundingClientRect();
+    const cssX = e.clientX - rect.left;
+    const cssY = e.clientY - rect.top;
+    const { x, y, dw, dh } = cssToDevice(cssX, cssY, rect);
+    const { rx, ry } = cssToRatio(cssX, cssY, rect);
+
+    document.getElementById('coordXY').textContent = `x:${x}  y:${y}`;
+
+    const idx = findElemAt(rx, ry, dw, dh);
+    if (idx !== hoveredElemIdx) {
+      hoveredElemIdx = idx;
+      redrawOverlay();
+    }
+
+    if (idx >= 0) {
+      const el = cachedElements[idx];
+      const label = el.text || el.content_desc || el.resource_id || el.class_name || '?';
+      const byTag = el.selector_by || '';
+      document.getElementById('coordElem').innerHTML =
+        `<span class="coord-by">[${byTag}]</span> ${escHtml(label)}`;
+    } else {
+      document.getElementById('coordElem').textContent = '—';
+    }
+  });
+
+  screenWrap.addEventListener('mouseleave', () => {
+    hoveredElemIdx = -1;
+    document.getElementById('coordXY').textContent = 'x:— y:—';
+    document.getElementById('coordElem').textContent = 'Hover to inspect';
+    redrawOverlay();
+  });
+
+  // Left click: tap device + show which element was tapped
+  screenWrap.addEventListener('click', (e) => {
     if (!ws || !activeSerial) return;
     const d = devices[activeSerial];
     if (!d) return;
-    const canvas = e.currentTarget;
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = d.screen_width  / rect.width;
-    const scaleY = d.screen_height / rect.height;
-    const x = Math.round((e.clientX - rect.left) * scaleX);
-    const y = Math.round((e.clientY - rect.top)  * scaleY);
+    const rect = screenWrap.getBoundingClientRect();
+    const cssX = e.clientX - rect.left;
+    const cssY = e.clientY - rect.top;
+    const { x, y, dw, dh } = cssToDevice(cssX, cssY, rect);
+    const { rx, ry } = cssToRatio(cssX, cssY, rect);
+
     ws.send(JSON.stringify({ type: 'tap', serial: activeSerial, x, y }));
+
+    lastTapRx = rx; lastTapRy = ry;
+    redrawOverlay();
+
+    // Show element info in toast
+    const idx = findElemAt(rx, ry, dw, dh);
+    if (idx >= 0) {
+      const el = cachedElements[idx];
+      const label = el.text || el.content_desc || el.resource_id || el.class_name || '?';
+      showTapToast(`[${el.selector_by}] "${label}"  (${x}, ${y})`);
+    } else {
+      showTapToast(`(${x}, ${y}) — no element in cache`);
+    }
+
+    // Update touch tab inputs
+    document.getElementById('tx').value = x;
+    document.getElementById('ty').value = y;
   });
+
+  // Right-click: inspect without tapping
+  screenWrap.addEventListener('contextmenu', async (e) => {
+    e.preventDefault();
+    if (!activeSerial) return;
+    const rect = screenWrap.getBoundingClientRect();
+    const cssX = e.clientX - rect.left;
+    const cssY = e.clientY - rect.top;
+    const { rx, ry } = cssToRatio(cssX, cssY, rect);
+
+    // Try live hit_test from backend (fetches fresh XML)
+    try {
+      const res = await fetch(`/api/devices/${encodeURIComponent(activeSerial)}/hit_test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rx, ry, x: -1, y: -1 }),
+      });
+      const data = await res.json();
+      if (data.by) {
+        showTapToast(`[${data.by}] "${data.value}"`, 4000);
+        switchTab('inspect');
+        highlightElemBySelector(data.by, data.value);
+      } else {
+        showTapToast('No element found at this position', 2000);
+      }
+    } catch(err) {
+      console.warn('hit_test failed:', err);
+    }
+  });
+
+  // ── Tap toast ─────────────────────────────────────────────────────────────
+  function showTapToast(msg, ms = 2500) {
+    clearTimeout(tapToastTimer);
+    const toast = document.getElementById('tapToast');
+    document.getElementById('tapToastVal').textContent = msg;
+    toast.style.display = 'block';
+    tapToastTimer = setTimeout(() => { toast.style.display = 'none'; }, ms);
+  }
+
+  // ── Overlay drawing ────────────────────────────────────────────────────────
+  function toggleOverlay() {
+    overlayEnabled = !overlayEnabled;
+    const btn = document.getElementById('btnOverlay');
+    btn.classList.toggle('active', overlayEnabled);
+    btn.textContent = overlayEnabled ? '◼ Overlay' : '◻ Overlay';
+    redrawOverlay();
+  }
+
+  function redrawOverlay() {
+    const ov = document.getElementById('overlayCanvas');
+    const canvas = document.getElementById('screenCanvas');
+    if (!ov || !canvas || canvas.width === 0) return;
+
+    // Match overlay intrinsic size to video frame
+    ov.width  = canvas.width;
+    ov.height = canvas.height;
+    const ctx = ov.getContext('2d');
+    ctx.clearRect(0, 0, ov.width, ov.height);
+
+    const d = devices[activeSerial] || {};
+    let dw = d.screen_width  || canvas.width;
+    let dh = d.screen_height || canvas.height;
+    const canvasLandscape = canvas.width > canvas.height;
+    const statusLandscape = dw > dh;
+    if (canvasLandscape !== statusLandscape && dw > 0 && dh > 0) { [dw, dh] = [dh, dw]; }
+
+    const sw = ov.width, sh = ov.height;
+
+    // Draw element bounds
+    if (overlayEnabled && cachedElements.length > 0) {
+      cachedElements.forEach((el, idx) => {
+        if (!el.bounds) return;
+        const [x1, y1, x2, y2] = el.bounds;
+        const ox1 = x1 / dw * sw, oy1 = y1 / dh * sh;
+        const ow  = (x2 - x1) / dw * sw, oh  = (y2 - y1) / dh * sh;
+        const isHov = idx === hoveredElemIdx;
+        ctx.strokeStyle = isHov ? '#6366f1' : 'rgba(99,102,241,0.45)';
+        ctx.fillStyle   = isHov ? 'rgba(99,102,241,0.18)' : 'rgba(99,102,241,0.05)';
+        ctx.lineWidth   = isHov ? 2 : 1;
+        ctx.fillRect(ox1, oy1, ow, oh);
+        ctx.strokeRect(ox1, oy1, ow, oh);
+
+        // Label for hovered element
+        if (isHov) {
+          const label = el.text || el.content_desc || el.resource_id || el.class_name || '';
+          if (label) {
+            const fs = Math.max(9, Math.min(13, oh * 0.4));
+            ctx.font = `${fs}px monospace`;
+            ctx.fillStyle = '#c7d2fe';
+            ctx.fillText(label.substring(0, 30), ox1 + 3, oy1 + fs + 2);
+          }
+        }
+      });
+    }
+
+    // Draw last-tap indicator
+    if (lastTapRx >= 0) {
+      const tx = lastTapRx * sw, ty = lastTapRy * sh;
+      ctx.beginPath(); ctx.arc(tx, ty, 12, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(239,68,68,0.25)'; ctx.fill();
+      ctx.beginPath(); ctx.arc(tx, ty, 4, 0, Math.PI * 2);
+      ctx.fillStyle = '#ef4444'; ctx.fill();
+      // cross
+      ctx.strokeStyle = '#ef4444'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(tx - 8, ty); ctx.lineTo(tx + 8, ty); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(tx, ty - 8); ctx.lineTo(tx, ty + 8); ctx.stroke();
+    }
+  }
+
+  // ── Inspect: Hierarchy dump ───────────────────────────────────────────────
+  async function loadHierarchy() {
+    if (!activeSerial || dumpLoading) return;
+    dumpLoading = true;
+    const btn = document.getElementById('btnDump');
+    btn.textContent = '⌛ Loading…';
+    btn.disabled = true;
+
+    try {
+      const res = await fetch(`/api/devices/${encodeURIComponent(activeSerial)}/ui_elements?refresh=true`);
+      const data = await res.json();
+      if (data.error) {
+        showTapToast('Dump failed: ' + data.error, 4000);
+        return;
+      }
+      cachedElements = data.elements || [];
+      filteredElems  = [...cachedElements];
+
+      document.getElementById('elemStats').textContent =
+        `${cachedElements.length} elements${data.duplicates_hidden ? ` (+${data.duplicates_hidden} dupes)` : ''}`;
+
+      document.getElementById('elemFilter').value = '';
+      renderElemList(filteredElems);
+
+      if (showRawJson) renderRawJson(data);
+      if (overlayEnabled) redrawOverlay();
+    } catch(err) {
+      showTapToast('Dump error: ' + err.message, 4000);
+    } finally {
+      btn.textContent = '⬇ Dump UI';
+      btn.disabled = false;
+      dumpLoading = false;
+    }
+  }
+
+  function filterElements() {
+    const q = (document.getElementById('elemFilter').value || '').toLowerCase().trim();
+    if (!q) {
+      filteredElems = [...cachedElements];
+    } else {
+      filteredElems = cachedElements.filter(el => {
+        return (el.text         || '').toLowerCase().includes(q)
+            || (el.resource_id  || '').toLowerCase().includes(q)
+            || (el.content_desc || '').toLowerCase().includes(q)
+            || (el.class_name   || '').toLowerCase().includes(q);
+      });
+    }
+    document.getElementById('elemStats').textContent =
+      `${filteredElems.length} / ${cachedElements.length}`;
+    renderElemList(filteredElems);
+  }
+
+  function renderElemList(elems) {
+    const list = document.getElementById('elemList');
+    if (!elems.length) {
+      list.innerHTML = '<div style="color:var(--text2);font-size:13px;text-align:center;padding:24px 0;">No elements match</div>';
+      return;
+    }
+    list.innerHTML = '';
+    elems.forEach((el, i) => {
+      const realIdx = cachedElements.indexOf(el);
+      const card = document.createElement('div');
+      card.className = 'elem-card';
+      card.dataset.idx = realIdx;
+
+      const mainText = el.text || el.content_desc || '(no text)';
+      const by = el.selector_by || '';
+      const rid = el.resource_id || '';
+      const bounds = el.bounds ? `[${el.bounds.join(',')}]` : '';
+      const cls = el.class_name || '';
+
+      card.innerHTML = `
+        <div class="ec-top">
+          <span class="ec-text" title="${escHtml(mainText)}">${escHtml(mainText)}</span>
+          <span class="ec-by ${by}">${by}</span>
+        </div>
+        ${rid ? `<div class="ec-rid" title="${escHtml(rid)}">${escHtml(rid)}</div>` : ''}
+        <div class="ec-meta">
+          ${cls ? `<span class="ec-cls">${escHtml(cls)}</span>` : ''}
+          ${bounds ? `<span class="ec-bounds">${bounds}</span>` : ''}
+          ${el.clickable ? `<span class="ec-click">●clickable</span>` : ''}
+        </div>`;
+
+      card.onclick = () => tapElementByIndex(realIdx);
+      card.onmouseenter = () => {
+        hoveredElemIdx = realIdx;
+        redrawOverlay();
+        scrollElemIntoOverlayView(el);
+      };
+      card.onmouseleave = () => { hoveredElemIdx = -1; redrawOverlay(); };
+      list.appendChild(card);
+    });
+  }
+
+  function tapElementByIndex(idx) {
+    const el = cachedElements[idx];
+    if (!el || !el.selector_by || !el.selector_value) return;
+    fetch(`/api/tap_selector/${encodeURIComponent(activeSerial)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ by: el.selector_by, value: el.selector_value }),
+    }).then(r => r.json()).then(data => {
+      if (data.ok) {
+        showTapToast(`Tapped [${el.selector_by}] "${el.selector_value}"`);
+        // Mark center tap on overlay
+        if (el.bounds) {
+          const [x1,y1,x2,y2] = el.bounds;
+          const d = devices[activeSerial] || {};
+          const dw = d.screen_width || 1080, dh = d.screen_height || 1920;
+          lastTapRx = ((x1+x2)/2) / dw;
+          lastTapRy = ((y1+y2)/2) / dh;
+          redrawOverlay();
+        }
+      } else {
+        showTapToast('Tap failed: ' + (data.error || '?'), 3000);
+      }
+    }).catch(e => showTapToast('Error: ' + e.message, 3000));
+  }
+
+  function highlightElemBySelector(by, value) {
+    const idx = cachedElements.findIndex(el => el.selector_by === by && el.selector_value === value);
+    if (idx < 0) return;
+    hoveredElemIdx = idx;
+    redrawOverlay();
+
+    // Scroll the card into view in the list
+    const cards = document.querySelectorAll('.elem-card');
+    for (const card of cards) {
+      if (+card.dataset.idx === idx) {
+        card.classList.add('highlighted');
+        card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        setTimeout(() => card.classList.remove('highlighted'), 2000);
+        break;
+      }
+    }
+  }
+
+  function scrollElemIntoOverlayView(el) {
+    // No-op — overlay already highlights, no viewport scrolling needed
+  }
+
+  // ── Raw JSON toggle ────────────────────────────────────────────────────────
+  function toggleRawJson() {
+    showRawJson = !showRawJson;
+    const btn = document.getElementById('btnRawJson');
+    btn.classList.toggle('active', showRawJson);
+    const raw = document.getElementById('jsonRaw');
+    if (showRawJson) {
+      renderRawJson({ elements: cachedElements });
+      raw.style.display = 'block';
+    } else {
+      raw.style.display = 'none';
+    }
+  }
+
+  function renderRawJson(obj) {
+    const raw = document.getElementById('jsonRaw');
+    raw.innerHTML = syntaxHighlight(JSON.stringify(obj, null, 2));
+  }
+
+  function syntaxHighlight(json) {
+    return json
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(
+        /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,
+        match => {
+          let cls = 'jn';
+          if (/^"/.test(match)) cls = /:$/.test(match) ? 'jk' : 'js';
+          else if (/true|false/.test(match)) cls = 'jb';
+          return `<span class="${cls}">${match}</span>`;
+        }
+      );
+  }
+
+  // ── Utilities ──────────────────────────────────────────────────────────────
+  function escHtml(str) {
+    return (str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
 
   // ── Boot ──────────────────────────────────────────────────────────────────
   connect();

@@ -27,6 +27,13 @@ export type {
   WorkflowProgress
 } from '../types';
 
+export type StepActionResponse = {
+  action: string;
+  signalled: string[];
+  errors: string[];
+  total: number;
+};
+
 export const campaignsApi = {
   list: () => farmApi.get<CampaignOut[]>('/campaigns').then((r) => r.data),
   create: (data: CampaignCreate) =>
@@ -57,6 +64,13 @@ export const campaignsApi = {
         ...(options?.deviceContext && Object.keys(options.deviceContext).length
           ? { device_context: options.deviceContext }
           : {})
+      })
+      .then((r) => r.data),
+  stepAction: (id: string, action: 'retry' | 'skip', deviceSerial?: string) =>
+    farmApi
+      .post<StepActionResponse>(`/campaigns/${id}/step-action`, {
+        action,
+        ...(deviceSerial ? { device_serial: deviceSerial } : {}),
       })
       .then((r) => r.data),
   getDevices: (id: string) =>

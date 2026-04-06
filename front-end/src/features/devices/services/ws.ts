@@ -48,6 +48,17 @@ function buildDeviceFarmWsUrl(): string {
 }
 
 const listeners = new Set<(msg: WsMessage) => void>();
+const binaryListeners = new Set<(buf: ArrayBuffer) => void>();
+
+// Cache last H264 config frame (0x10) per serial so late-arriving binary listeners
+// (hooks that mount after the WS was already open) get the SPS/PPS immediately.
+const lastConfigBySerial = new Map<string, ArrayBuffer>();
+
+// Cache last H264 keyframe (0x11 is_key=1) per serial.
+// Without this, late subscribers (jmuxer hook mounting after WS bootstrap) must
+// wait up to 14 s for the next IDR before video appears. Caching the last IDR
+// lets us replay it immediately so jmuxer can initialise the SourceBuffer at once.
+const lastKeyBySerial = new Map<string, ArrayBuffer>();
 
 let sharedSocket: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -116,8 +127,10 @@ function connectShared() {
 
   ws.onclose = () => {
     sharedSocket = null;
+    lastConfigBySerial.clear();
+    lastKeyBySerial.clear(); // stale after disconnect — server will re-send bootstrap on reconnect
     broadcast({ type: 'ws_status', connected: false });
-    if (listeners.size > 0) {
+    if (listeners.size > 0 || binaryListeners.size > 0) {
       reconnectTimer = setTimeout(connectShared, 2000);
     }
   };
@@ -128,19 +141,47 @@ function connectShared() {
     lastMessageTime = Date.now();
     if (typeof evt.data === 'string') {
       handleTextMessage(evt.data);
+    } else if (evt.data instanceof ArrayBuffer) {
+      const buf = evt.data as ArrayBuffer;
+      // Always cache H264 config frames (0x10) for late-arriving binary listeners.
+      // The WS text listener connects first (for device status); the H264 hook
+      // mounts later. Without caching, the bootstrap config frame arrives when
+      // binaryListeners is empty and is silently dropped — decoder never initialises.
+      if (buf.byteLength >= 3) {
+        const view = new DataView(buf);
+        const ft = view.getUint8(0);
+        const slen = view.getUint8(1);
+        if (slen > 0 && buf.byteLength >= 2 + slen) {
+          const serial = new TextDecoder().decode(new Uint8Array(buf, 2, slen));
+          if (ft === 0x10) {
+            lastConfigBySerial.set(serial, buf);
+          } else if (ft === 0x11) {
+            // Cache keyframes so late-subscribing jmuxer hooks get an IDR immediately
+            // instead of waiting up to 14 s for the next one.
+            const doff = 2 + slen + 4; // skip serial + w/h
+            if (buf.byteLength > doff && view.getUint8(doff) !== 0) { // is_key=1
+              lastKeyBySerial.set(serial, buf);
+            }
+          }
+        }
+      }
+      if (binaryListeners.size > 0) {
+        binaryListeners.forEach((fn) => {
+          try { fn(buf); } catch { /* isolate */ }
+        });
+      }
     }
-    // Binary frames ignored — video is served via MJPEG HTTP endpoint
   };
 }
 
 function disconnectSharedIfIdle() {
-  if (listeners.size > 0) return;
+  if (listeners.size > 0 || binaryListeners.size > 0) return;
   // Debounce close: in dev/HMR/route transitions listeners can briefly drop to 0,
   // which would otherwise flap the WS connection and cause black-screen symptoms.
   if (idleCloseTimer !== undefined) return;
   idleCloseTimer = setTimeout(() => {
     idleCloseTimer = undefined;
-    if (listeners.size > 0) return;
+    if (listeners.size > 0 || binaryListeners.size > 0) return;
     if (reconnectTimer !== undefined) {
       clearTimeout(reconnectTimer);
       reconnectTimer = undefined;
@@ -148,6 +189,51 @@ function disconnectSharedIfIdle() {
     sharedSocket?.close();
     sharedSocket = null;
   }, 800);
+}
+
+/**
+ * Subscribe to raw binary frames from the server (H264 config 0x10 + video 0x11 + JPEG 0x01).
+ * Frame layout: [type:1B][slen:1B][serial:slen][w:2B BE][h:2B BE][payload...]
+ * Returns unsubscribe function.
+ */
+export function subscribeBinaryFrames(onBinary: (buf: ArrayBuffer) => void): () => void {
+  binaryListeners.add(onBinary);
+  // Replay cached config + keyframe so late-arriving hooks (common case: hook
+  // mounts after WS bootstrap) get both SPS/PPS and an IDR immediately.
+  // config must come before keyframe so the decoder can initialise.
+  if (lastConfigBySerial.size > 0 || lastKeyBySerial.size > 0) {
+    const serials = new Set([...Array.from(lastConfigBySerial.keys()), ...Array.from(lastKeyBySerial.keys())]);
+    const toReplay: ArrayBuffer[] = [];
+    serials.forEach((serial) => {
+      const cfg = lastConfigBySerial.get(serial);
+      const key = lastKeyBySerial.get(serial);
+      if (cfg) toReplay.push(cfg);
+      if (key) toReplay.push(key);
+    });
+    queueMicrotask(() => {
+      toReplay.forEach((frame) => { try { onBinary(frame); } catch {} });
+    });
+  }
+  if (listeners.size === 0 && binaryListeners.size === 1) {
+    connectShared();
+  }
+  return () => {
+    binaryListeners.delete(onBinary);
+    if (listeners.size === 0) disconnectSharedIfIdle();
+  };
+}
+
+/**
+ * Return the last cached H264 config frame (0x10) for a given device serial,
+ * or undefined if none has been received yet. Used by useH264Video to replay
+ * the cached config immediately after the worker is reset (e.g. serial change).
+ */
+export function getLastConfigFrame(serial: string): ArrayBuffer | undefined {
+  return lastConfigBySerial.get(serial) ?? undefined;
+}
+
+export function getLastKeyFrame(serial: string): ArrayBuffer | undefined {
+  return lastKeyBySerial.get(serial) ?? undefined;
 }
 
 /** One browser-wide socket; multiple React trees/components share it. */

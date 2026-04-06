@@ -50,6 +50,14 @@ export function DeviceTile({
     wsSend({ type: 'pinch', serial: device.serial, cx: Math.round(dw / 2), cy: Math.round(dh / 2), scale, ms: 400 });
   }, [wsSend, device.serial, device.screen_width, device.screen_height]);
 
+  const handleSwipeExt = useCallback((direction: 'up' | 'down' | 'left' | 'right') => {
+    wsSend({ type: 'swipe_ext', serial: device.serial, direction, scale: 0.4, ms: 500 });
+  }, [wsSend, device.serial]);
+
+  const handleScreenOn  = useCallback(() => wsSend({ type: 'screen_on',  serial: device.serial }), [wsSend, device.serial]);
+  const handleScreenOff = useCallback(() => wsSend({ type: 'screen_off', serial: device.serial }), [wsSend, device.serial]);
+  const handleUnlock    = useCallback(() => wsSend({ type: 'unlock',     serial: device.serial }), [wsSend, device.serial]);
+
   return (
     <Card
       id={`tile-${id}`}
@@ -112,6 +120,10 @@ export function DeviceTile({
           gestureMode={gestureMode}
           onGestureMode={setGestureMode}
           onPinch={handlePinch}
+          onSwipeExt={handleSwipeExt}
+          onScreenOn={handleScreenOn}
+          onScreenOff={handleScreenOff}
+          onUnlock={handleUnlock}
         />
         {isActive && <DeviceSTFPanel serial={device.serial} />}
       </CardContent>

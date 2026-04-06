@@ -10,15 +10,10 @@ buildscript {
     }
 }
 
-// AGP's `androidJdkImage` runs `jlink` while building. If the selected Java installation
-// is a JRE without `jlink`, the build fails. Force toolchains to use the full JDK
-// shipped with Android Studio (JBR).
-java {
-    toolchain {
-        // `androidJdkImage` needs a newer JDK for creating the runtime image.
-        languageVersion = JavaLanguageVersion.of(21)
-    }
-}
+// androidJdkImage (compile classpath) needs `jlink` from a full JDK. A Java *toolchain*
+// here can resolve to an IDE-bundled JRE (e.g. Red Hat Java in Cursor) that has no jlink.
+// Use the Gradle JVM instead: set org.gradle.java.home in gradle.properties to Android
+// Studio's JBR or another JDK 17+, and avoid JAVA_HOME pointing at that minimal JRE.
 
 android {
     compileSdk 36

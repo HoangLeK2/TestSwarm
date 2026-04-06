@@ -126,6 +126,9 @@ export async function fetchScreenshotB64(
  * ratioCrop values are in 0–1 relative to image dimensions.
  * Returns base64 JPEG of the cropped region, or undefined if crop is invalid.
  */
+/** Minimum crop dimension in pixels — smaller crops are too small for template matching. */
+const MIN_CROP_PX = 20;
+
 export async function cropBase64(
   b64: string,
   ratioCrop: { rx1: number; ry1: number; rx2: number; ry2: number }
@@ -141,15 +144,17 @@ export async function cropBase64(
       const y2 = Math.round(ratioCrop.ry2 * ih);
       const cw = x2 - x1;
       const ch = y2 - y1;
-      if (cw <= 0 || ch <= 0) { resolve(undefined); return; }
+      // Reject crops that are too small to be useful for template matching
+      if (cw < MIN_CROP_PX || ch < MIN_CROP_PX) { resolve(undefined); return; }
       const canvas = document.createElement('canvas');
       canvas.width = cw;
       canvas.height = ch;
       const ctx = canvas.getContext('2d');
       if (!ctx) { resolve(undefined); return; }
       ctx.drawImage(img, x1, y1, cw, ch, 0, 0, cw, ch);
-      // Strip "data:image/jpeg;base64," prefix
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      // Strip "data:image/jpeg;base64," prefix. Quality 0.80 is sufficient
+      // for image template matching and keeps file size reasonable.
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.80);
       resolve(dataUrl.split(',')[1]);
     };
     img.onerror = () => resolve(undefined);

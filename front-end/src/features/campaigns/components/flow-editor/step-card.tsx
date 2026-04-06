@@ -6,6 +6,20 @@ import type { FlowStep } from '../scenario-steps/types';
 import { STEP_COLORS, getStepTypeName, getStepDisplay, getStepCategory } from './constants';
 import { StepIcon } from './step-icon';
 
+/** Build an <img> src from a stored image value (base64, MinIO URL, or local /captures/ path). */
+function stepImageSrc(val: string): string {
+  if (!val) return '';
+  if (val.startsWith('http') || val.startsWith('/')) return val;
+  return `data:image/jpeg;base64,${val}`;
+}
+
+/** Get the best available image for a tap step (element crop preferred, full screenshot as fallback). */
+function getTapStepImage(step: FlowStep): string {
+  const screen = step.screen as { element_image?: string; screenshot?: string } | undefined;
+  const raw = screen?.element_image || screen?.screenshot || '';
+  return raw ? stepImageSrc(raw) : '';
+}
+
 interface Props {
   step: FlowStep;
   index: number;
@@ -99,6 +113,10 @@ export function StepCard({ step, selected, onClick, onRemove, onRun, runState = 
             </span>
           )}
         </div>
+
+        {(() => { const imgSrc = step.type === 'tap' ? getTapStepImage(step) : ''; return imgSrc ? (
+          <img src={imgSrc} alt="" className='h-12 w-8 shrink-0 rounded object-cover object-top border border-border/40' />
+        ) : null; })()}
 
         {onTogglePickSelector && (
           <button

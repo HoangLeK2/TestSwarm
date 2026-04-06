@@ -39,7 +39,8 @@ export const ROUTES = {
     ROOT: '/dashboard/accounts'
   },
   SCENARIO_TEMPLATES: {
-    ROOT: '/dashboard/scenario-templates'
+    ROOT: '/dashboard/scenario-templates',
+    FLOW: (id: string) => `/scenario-flow/${id}`,
   },
   SCHEDULES: {
     ROOT: '/dashboard/schedules'

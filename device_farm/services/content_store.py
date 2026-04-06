@@ -138,7 +138,25 @@ async def save_content_item(
 
 
 def _save_screenshot(data: bytes, content_hash: str) -> str:
-    """Save screenshot to disk. Returns relative path."""
+    """
+    Save screenshot bytes. Returns URL/path string stored in DB.
+
+    Tries MinIO first; falls back to local filesystem.
+    Skips blank/black frames (quality gate in minio_store).
+    """
+    from services import minio_store
+
+    if not minio_store.is_quality_ok(data):
+        log.debug("content_store: skipped blank/black screenshot %s", content_hash[:12])
+        return ""
+
+    object_name = f"content-screenshots/{content_hash[:16]}.jpg"
+    if minio_store.enabled():
+        url = minio_store.upload(data, object_name)
+        if url:
+            return url
+
+    # Local fallback
     base = os.path.join(os.path.dirname(os.path.dirname(__file__)), "screenshots")
     os.makedirs(base, exist_ok=True)
     filename = f"{content_hash[:16]}.jpg"

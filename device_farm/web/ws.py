@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import inspect
 import json
 import logging
 import struct
@@ -20,6 +21,12 @@ from db.database import AsyncSessionLocal
 from runtime.core import DeviceManager, DeviceState
 
 log = logging.getLogger(__name__)
+
+
+def _bind_pending_kw_only(meta: Dict[str, Any]) -> Dict[str, Any]:
+    """Only pass kwargs that bind_pending_device accepts (older images may lack adb_*)."""
+    params = inspect.signature(repo.bind_pending_device).parameters
+    return {k: v for k, v in meta.items() if k in params}
 
 
 def _parse_agent_binary_frame(buf: bytes) -> Dict[str, Any] | None:
@@ -141,10 +148,9 @@ class WebSocketManager:
     async def connect(self, ws: WebSocket, user_id: Optional[str] = None) -> None:
         await ws.accept()
         conn_id = str(uuid.uuid4())
-        # maxsize=2: hold at most 2 frames in queue.
-        # _safe_put drops the oldest when full → browser always gets latest frame.
-        # Larger values add buffering latency (N × frame_interval ms).
-        q: asyncio.Queue = asyncio.Queue(maxsize=2)
+        # maxsize=6: ~200ms burst buffer at 30fps — absorbs IDR spikes without
+        # dropping P-frames. Queue drains instantly on local/LAN connections.
+        q: asyncio.Queue = asyncio.Queue(maxsize=6)
         allowed_serials = await self._load_allowed_serials(user_id)
 
         async with self._lock:
@@ -232,10 +238,17 @@ class WebSocketManager:
                 pass
 
     async def _sender(self, ws: WebSocket, q: asyncio.Queue) -> None:
+        _sent_types: dict = {}
         while True:
             msg = await q.get()
             try:
                 if isinstance(msg, (bytes, bytearray)):
+                    # Log first few of each frame type so we can confirm 0x10 is sent
+                    ft = msg[0] if msg else 0
+                    cnt = _sent_types.get(ft, 0) + 1
+                    _sent_types[ft] = cnt
+                    if cnt <= 3:
+                        log.info("WS sender → browser: type=0x%02x len=%d (count=%d)", ft, len(msg), cnt)
                     await ws.send_bytes(msg)
                 else:
                     await ws.send_json(msg)
@@ -331,6 +344,31 @@ class WebSocketManager:
                     log.info(f"[INPUT] TAP_SELECTOR {serial} {by}={value!r}")
                     await loop.run_in_executor(None, device.tap_selector, by, value)
 
+            elif msg_type == "screen_on":
+                log.info(f"[INPUT] SCREEN_ON {serial}")
+                await loop.run_in_executor(None, device.screen_on)
+
+            elif msg_type == "screen_off":
+                log.info(f"[INPUT] SCREEN_OFF {serial}")
+                await loop.run_in_executor(None, device.screen_off)
+
+            elif msg_type == "unlock":
+                log.info(f"[INPUT] UNLOCK {serial}")
+                await loop.run_in_executor(None, device.unlock)
+
+            elif msg_type == "swipe_ext":
+                direction = data.get("direction", "up")
+                scale = float(data.get("scale", 0.8))
+                ms = int(data.get("ms", 500))
+                log.info(f"[INPUT] SWIPE_EXT {serial} dir={direction} scale={scale} ms={ms}")
+                await loop.run_in_executor(None, device.swipe_ext, direction, scale, ms)
+
+            elif msg_type == "install":
+                apk_source = data.get("url") or data.get("apk_url", "")
+                if apk_source:
+                    log.info(f"[INPUT] INSTALL {serial} source={apk_source!r}")
+                    await loop.run_in_executor(None, device.install, apk_source)
+
 
 class DeviceAgentSession:
     """
@@ -425,7 +463,19 @@ class DeviceAgentSession:
                 }
                 try:
                     async with AsyncSessionLocal() as db:
-                        bound = await repo.bind_pending_device(db, key, serial, **meta)
+                        kw = _bind_pending_kw_only(meta)
+                        try:
+                            bound = await repo.bind_pending_device(
+                                db, key, serial, **kw
+                            )
+                        except TypeError as te:
+                            if "unexpected keyword argument" not in str(te):
+                                raise
+                            for drop in ("adb_ip", "adb_port"):
+                                kw.pop(drop, None)
+                            bound = await repo.bind_pending_device(
+                                db, key, serial, **kw
+                            )
                         if not bound:
                             await ws.send_json(
                                 {
@@ -463,15 +513,32 @@ class DeviceAgentSession:
             # Set ADB serial for legacy ADB fallback.
             # WiFi devices: use "client_ip:5555" (Build.getSerial() != ADB WiFi serial).
             # USB devices: Build.getSerial() == ADB serial so self.serial already works.
+            _u2_always_tunnel = bool(
+                self._config
+                and getattr(self._config.device, "u2_always_tunnel", False)
+            )
             if client_ip and client_ip not in ("127.0.0.1", "::1", "localhost"):
                 device._adb_serial = f"{client_ip}:5555"
-                # atx-agent runs on device — connect directly to device_ip:7912
-                device._u2_host = client_ip
+                # Cloud/Docker: container cannot open TCP to device_ip:7912.
+                # u2_always_tunnel=True → keep _u2_host=None so WS tunnel is always used.
+                # Local/same-LAN: set _u2_host so atx-agent at device_ip:7912 is used directly.
+                device._u2_host = None if _u2_always_tunnel else client_ip
+                # Tell relay agents to `adb connect ip:5555` — one of them is near the phone
+                try:
+                    from runtime.transports.adb_relay_server import get_relay_manager
+                    _relay = get_relay_manager()
+                    if _relay:
+                        asyncio.create_task(
+                            _relay.broadcast_adb_connect(f"{client_ip}:5555")
+                        )
+                except Exception as _relay_exc:
+                    log.debug("relay adb_connect skipped: %s", _relay_exc)
             else:
                 device._adb_serial = serial  # USB: Build.getSerial() matches ADB serial
                 device._u2_host = None  # USB: no direct IP access; fall back to WS tunnel
 
             loop = asyncio.get_running_loop()
+            device.set_event_loop(loop)
 
             def _send(msg: Dict[str, Any]) -> None:
                 if loop.is_closed():
@@ -513,10 +580,13 @@ class DeviceAgentSession:
                 self._sessions[serial] = ws
 
             # Acknowledge — send tunnel ports + stream options (FPS for scrcpy/MediaProjection)
-            # WiFi devices use atx-agent at device_ip:7912 directly — don't send u2 tunnel
-            # port to APK so it won't create a u2 ServiceTunnel that reconnects endlessly.
+            # Local mode: WiFi devices use atx-agent at device_ip:7912 directly — omit u2
+            # tunnel port from ack so APK won't create a ServiceTunnel that reconnects endlessly.
+            # Cloud/Docker (u2_always_tunnel=True): keep u2 tunnel in ack — atx-agent at
+            # device_ip:7912 is unreachable from container; WS tunnel is the only path.
             tunnels_for_ack = dict(device._tunnel_ports)
-            if client_ip and client_ip not in ("127.0.0.1", "::1", "localhost"):
+            if (client_ip and client_ip not in ("127.0.0.1", "::1", "localhost")
+                    and not _u2_always_tunnel):
                 tunnels_for_ack.pop("u2", None)
             hello_ack_msg: Dict[str, Any] = {
                 "type": "hello_ack",
@@ -614,12 +684,34 @@ class DeviceAgentSession:
             # ── Auto-attach scrcpy for screen streaming (if device IP available) ──
             if client_ip and self._config and self._config.device.scrcpy_control:
                 try:
+                    # Yield any relay-only device's scrcpy session for the same IP.
+                    # A relay-only device (serial="ip:port") is created before the
+                    # APK WS connects.  If it's running scrcpy and we start a second
+                    # one, both fight for localabstract:scrcpy → rapid crash loop.
+                    # _clear_scrcpy_without_stop() hands over without sending stop,
+                    # so attach_scrcpy_stream below can inherit the running session.
+                    for _other in self._manager.all_devices():
+                        if _other.serial == serial:
+                            continue
+                        _other_ip = (
+                            _other.serial.rsplit(":", 1)[0]
+                            if ":" in _other.serial
+                            else _other.serial
+                        )
+                        if _other_ip == client_ip and getattr(_other, "_scrcpy_active", False):
+                            log.debug(
+                                "WS device %s yielding scrcpy from relay device %s",
+                                serial, _other.serial,
+                            )
+                            _other._clear_scrcpy_without_stop()
+                            break
+
                     loop.run_in_executor(
                         None,
                         device.attach_scrcpy_stream,
                         client_ip,
-                        5555,
-                        True,  # enable_control (keys only, touch via U2)
+                        # adb_port intentionally omitted — mDNS uses OS-assigned port,
+                        # not :5555. relay manager resolves actual serial by IP.
                     )
                     log.info("Auto-attaching scrcpy stream for %s (ip=%s)", serial, client_ip)
                 except Exception as exc:
@@ -680,8 +772,8 @@ class DeviceAgentSession:
                         continue
                     msg_type = msg.get("type")
 
-                    if msg_type == "ping":
-                        # Server-initiated keepalive — agent should reply with pong (ignored if not)
+                    if msg_type in ("ping", "pong"):
+                        # keepalive round-trip — no action needed
                         pass
 
                     elif msg_type == "frame":

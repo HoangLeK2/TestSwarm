@@ -7,6 +7,7 @@ No crawl job / DB / network code here.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import time
@@ -334,6 +335,11 @@ def _extract_post(cluster: List[Dict[str, Any]], source_index: int) -> Optional[
     if image_desc and post_type == "text":
         post_type = "photo"
 
+    # _pid: 16-char MD5 of author+body[:120], mirrors _compute_post_id_from_nodes.
+    # Used to cross-reference this feed post with its comment-view header in the executor.
+    _pid_raw = f"{author or ''}\x00{body[:120]}"
+    _pid = hashlib.md5(_pid_raw.encode()).hexdigest()[:16]
+
     return {
         "author":          author or "",
         "text":            body,
@@ -346,6 +352,7 @@ def _extract_post(cluster: List[Dict[str, Any]], source_index: int) -> Optional[
         "post_type":       post_type,
         "image_desc":      image_desc,
         "comment_preview": comment_preview,
+        "_pid":            _pid,
     }
 
 
@@ -503,6 +510,7 @@ def _cluster_into_comments(nodes: List[Dict[str, Any]]) -> List[List[Dict[str, A
 def _extract_comment(
     cluster: List[Dict[str, Any]],
     parent_post_id: Optional[str] = None,
+    cluster_min_x: int = 150,
 ) -> Optional[Dict[str, Any]]:
     """Extract one comment from a text-node cluster.
 
@@ -566,12 +574,20 @@ def _extract_comment(
     if not author and not text:
         return None
 
+    # indent_level: 0 = top-level comment, 1 = reply (indented x≥220), 2 = deeply nested (x≥280)
+    indent_level = 0
+    if cluster_min_x >= 280:
+        indent_level = 2
+    elif cluster_min_x >= 220:
+        indent_level = 1
+
     return {
         "author":         author or "",
         "text":           text,
         "timestamp":      timestamp,
         "likes":          likes,
         "parent_post_id": parent_post_id,
+        "indent_level":   indent_level,
     }
 
 
@@ -658,7 +674,8 @@ def parse_fb_comments_from_xml(
     for cluster in clusters:
         if len(result) >= max_items:
             break
-        comment = _extract_comment(cluster, parent_post_id)
+        cluster_min_x = min((n["bounds"][0] for n in cluster if n["bounds"]), default=150)
+        comment = _extract_comment(cluster, parent_post_id, cluster_min_x=cluster_min_x)
         if comment:
             result.append(comment)
 
@@ -690,12 +707,26 @@ def _post_id_from_ctx(ctx: Dict[str, Any], post_id_var: Optional[str]) -> Option
     return None
 
 
-def _expand_see_more(device, max_passes: int = 2) -> int:
-    """Tap all visible 'See more' / 'Xem thêm' buttons. Runs up to max_passes to catch
-    nested expansions (e.g. long posts with multiple truncated paragraphs).
+def _expand_see_more(
+    device,
+    max_passes: int = 2,
+    scroll_between: bool = False,
+    scroll_distance: float = 0.3,
+) -> int:
+    """Tap all visible 'See more' / 'Xem thêm' buttons.
+
+    Args:
+        max_passes: how many expand+redump cycles to attempt.
+        scroll_between: if True, do a small scroll down between passes so that
+            content pushed below the viewport is revealed and can also be expanded.
+            Useful for very long posts where the full article spans multiple screens.
+        scroll_distance: fraction of screen height to scroll between passes (0–1).
     Returns total count expanded."""
     total = 0
-    for _ in range(max_passes):
+    for pass_num in range(max_passes):
+        if pass_num > 0 and scroll_between:
+            device.scroll(direction="down", distance=scroll_distance)
+            time.sleep(0.5)
         xml = device.hierarchy_xml(force_refresh=True)
         if not xml:
             break

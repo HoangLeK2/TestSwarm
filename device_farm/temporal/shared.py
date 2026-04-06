@@ -42,6 +42,9 @@ class StepsInput:
     campaign_id: str | None = None
     run_id: str | None = None
     execution_id: str | None = None
+    # Accumulates step_results across continue_as_new boundaries so retry/history-reset
+    # workflows still return the full result set to the parent ScenarioWorkflow.
+    accumulated_results: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -128,6 +131,7 @@ class ConditionCheckInput:
 class WorkflowStatus(str, Enum):
     RUNNING = "running"
     PAUSED = "paused"
+    PAUSED_ON_ERROR = "paused_on_error"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"

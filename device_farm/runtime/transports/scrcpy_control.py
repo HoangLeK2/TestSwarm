@@ -22,6 +22,10 @@ MSG_INJECT_KEYCODE     = 0
 MSG_INJECT_TEXT        = 1
 MSG_INJECT_TOUCH       = 2
 MSG_INJECT_SCROLL      = 3
+# SC_CONTROL_MSG_TYPE_RESET_VIDEO (scrcpy v3.2+): 1-byte message that tells the
+# encoder to output an IDR (keyframe) immediately. Safe to send on older versions
+# — unknown type is silently ignored by the server.
+MSG_RESET_VIDEO        = 16
 
 # ── Android MotionEvent actions ───────────────────────────────────────────────
 ACTION_DOWN = 0
@@ -91,6 +95,14 @@ class ScrcpyControl:
         self._connected = False
         try:
             self._sock.close()
+        except Exception:
+            pass
+
+    def request_idr(self) -> None:
+        """Send MSG_RESET_VIDEO (scrcpy v3.2+) to request an immediate IDR keyframe.
+        On older scrcpy versions the server ignores the unknown message type silently."""
+        try:
+            self._send(struct.pack(">B", MSG_RESET_VIDEO))
         except Exception:
             pass
 
@@ -231,3 +243,169 @@ class ScrcpyControl:
             except Exception as exc:
                 self._connected = False
                 self._logger.warning(f"control send failed: {exc}")
+
+
+# ─── Relay-mode control ───────────────────────────────────────────────────────
+
+class RelayScrcpyControl:
+    """
+    Identical API to ScrcpyControl, but routes binary packets through
+    AdbRelayManager.send_scrcpy_control() instead of a local socket.
+
+    DeviceClient uses this transparently when the relay is active.
+    """
+
+    def __init__(
+        self,
+        serial: str,
+        relay_manager: "Any",   # AdbRelayManager (avoid circular import)
+        loop: "Any",            # asyncio.AbstractEventLoop from DeviceClient
+        screen_width: int = 0,
+        screen_height: int = 0,
+    ) -> None:
+        self._serial = serial
+        self._relay = relay_manager
+        self._loop = loop
+        self._connected = True
+        self._lock = threading.Lock()
+        self.screen_width = screen_width
+        self.screen_height = screen_height
+        self.serial = serial
+        self._logger = logging.getLogger(f"relay_ctrl.{serial}")
+
+    @property
+    def is_connected(self) -> bool:
+        return self._connected
+
+    def disconnect(self) -> None:
+        self._connected = False
+
+    # ── Public API (mirrors ScrcpyControl) ────────────────────────────────────
+
+    def request_idr(self) -> None:
+        """Send MSG_RESET_VIDEO (scrcpy v3.2+) to request an immediate IDR keyframe."""
+        try:
+            self._send(struct.pack(">B", MSG_RESET_VIDEO))
+        except Exception:
+            pass
+
+    def tap(self, x: int, y: int, pressure: int = PRESSURE_MAX) -> None:
+        self._inject_touch(ACTION_DOWN, x, y, pressure)
+        self._inject_touch(ACTION_UP, x, y, PRESSURE_NONE)
+
+    def swipe(
+        self,
+        x1: int, y1: int,
+        x2: int, y2: int,
+        duration_ms: int = 300,
+        steps: int = 20,
+    ) -> None:
+        self._inject_touch(ACTION_DOWN, x1, y1, PRESSURE_MAX)
+        delay = duration_ms / 1000.0 / steps
+        for i in range(1, steps + 1):
+            t = i / steps
+            cx = int(x1 + (x2 - x1) * t)
+            cy = int(y1 + (y2 - y1) * t)
+            time.sleep(delay)
+            if not self._connected:
+                return
+            self._inject_touch(ACTION_MOVE, cx, cy, PRESSURE_MAX)
+        for _ in range(5):
+            self._inject_touch(ACTION_MOVE, x2, y2, PRESSURE_MAX)
+        self._inject_touch(ACTION_UP, x2, y2, PRESSURE_NONE)
+
+    def long_tap(self, x: int, y: int, duration_ms: int = 800) -> None:
+        self._inject_touch(ACTION_DOWN, x, y, PRESSURE_MAX)
+        time.sleep(duration_ms / 1000.0)
+        self._inject_touch(ACTION_UP, x, y, PRESSURE_NONE)
+
+    def double_tap(self, x: int, y: int) -> None:
+        self.tap(x, y)
+        time.sleep(0.05)
+        self.tap(x, y)
+
+    def key(self, key_name: str) -> None:
+        k = key_name.strip().lower()
+        keycode = KEYCODES.get(k)
+        if keycode is None:
+            raw = k
+            if raw.startswith("keycode_"):
+                raw = raw[8:]
+            try:
+                keycode = int(raw)
+            except (ValueError, TypeError):
+                self._logger.warning(f"Unknown key: {key_name}")
+                return
+        self._inject_keycode(KEY_ACTION_DOWN, keycode)
+        self._inject_keycode(KEY_ACTION_UP, keycode)
+
+    def input_text(self, text: str) -> None:
+        encoded = text.encode("utf-8")
+        msg = struct.pack(">BI", MSG_INJECT_TEXT, len(encoded)) + encoded
+        self._send(msg)
+
+    def scroll(self, x: int, y: int, hscroll: int = 0, vscroll: int = -1) -> None:
+        msg = struct.pack(
+            ">B" "ii" "HH" "ii" "I",
+            MSG_INJECT_SCROLL,
+            x, y,
+            self.screen_width, self.screen_height,
+            int(hscroll), int(vscroll),
+            0,
+        )
+        self._send(msg)
+
+    # ── Internal ─────────────────────────────────────────────────────────────
+
+    def _inject_touch(
+        self,
+        action: int,
+        x: int,
+        y: int,
+        pressure: int,
+        pointer_id: int = POINTER_ID_GENERIC_FINGER,
+        action_button: int = 0,
+        buttons: int = 0,
+    ) -> None:
+        msg = struct.pack(
+            ">BBQiiHHHII",
+            MSG_INJECT_TOUCH,
+            action,
+            pointer_id,
+            x, y,
+            self.screen_width, self.screen_height,
+            pressure,
+            action_button,
+            buttons,
+        )
+        self._send(msg)
+
+    def _inject_keycode(
+        self,
+        action: int,
+        keycode: int,
+        repeat: int = 0,
+        metastate: int = 0,
+    ) -> None:
+        msg = struct.pack(
+            ">BBIII",
+            MSG_INJECT_KEYCODE,
+            action,
+            keycode,
+            repeat,
+            metastate,
+        )
+        self._send(msg)
+
+    def _send(self, data: bytes) -> None:
+        if not self._connected:
+            return
+        with self._lock:
+            import asyncio
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    self._relay.send_scrcpy_control(self._serial, data),
+                    self._loop,
+                )
+            except Exception as exc:
+                self._logger.warning("relay control send failed: %s", exc)

@@ -24,6 +24,9 @@ dependencies:
   '@excalidraw/excalidraw':
     specifier: ^0.18.0
     version: 0.18.0(@types/react-dom@19.2.1)(@types/react@19.2.1)(react-dom@19.0.0)(react@19.0.0)
+  '@flowgram.ai/fixed-layout-editor':
+    specifier: ^1.0.10
+    version: 1.0.10(react-dom@19.0.0)(react@19.0.0)
   '@hello-pangea/dnd':
     specifier: ^18.0.1
     version: 18.0.1(@types/react@19.2.1)(react-dom@19.0.0)(react@19.0.0)
@@ -216,6 +219,9 @@ dependencies:
   input-otp:
     specifier: ^1.4.2
     version: 1.4.2(react-dom@19.0.0)(react@19.0.0)
+  jmuxer:
+    specifier: ^2.1.0
+    version: 2.1.0
   jwt-decode:
     specifier: ^4.0.0
     version: 4.0.0
@@ -315,6 +321,9 @@ dependencies:
   sort-by:
     specifier: ^1.2.0
     version: 1.2.0
+  stream-browserify:
+    specifier: ^3.0.0
+    version: 3.0.0
   swagger-typescript-api:
     specifier: ^13.2.16
     version: 13.2.16
@@ -814,6 +823,477 @@ packages:
 
   /@floating-ui/utils@0.2.11:
     resolution: {integrity: sha512-RiB/yIh78pcIxl6lLMG0CgBXAZ2Y0eVHqMPYugu+9U0AeT6YBeiJpf7lbdJNIugFP5SIjwNRgo4DhR1Qxi26Gg==}
+    dev: false
+
+  /@flowgram.ai/background-plugin@1.0.10(react-dom@19.0.0)(react@19.0.0):
+    resolution: {integrity: sha512-2RrVs79dnrXnsGwCmu/fyHoWbTDn1pZkhqBDWJDl90AsPPl9rCHlPh+tJONiWPJ/GWk9ToWBIE/GyUkYWs3e8Q==}
+    peerDependencies:
+      react: '>=16.8'
+      react-dom: '>=16.8'
+    dependencies:
+      '@flowgram.ai/core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/utils': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      inversify: 6.2.2(reflect-metadata@0.2.2)
+      react: 19.0.0
+      react-dom: 19.0.0(react@19.0.0)
+      reflect-metadata: 0.2.2
+    dev: false
+
+  /@flowgram.ai/command@1.0.10(react-dom@19.0.0)(react@19.0.0):
+    resolution: {integrity: sha512-Jh7M6JhdxNwHCrpnbJvTdLmn545EJh2SESWrgbWedQv/g04l4XZEeFk+G4/NVM3AvPMe8X/NAmBAfWSuGnW9VQ==}
+    peerDependencies:
+      react: '>=16.8'
+      react-dom: '>=16.8'
+    dependencies:
+      '@flowgram.ai/utils': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      inversify: 6.2.2(reflect-metadata@0.2.2)
+      react: 19.0.0
+      react-dom: 19.0.0(react@19.0.0)
+      reflect-metadata: 0.2.2
+    dev: false
+
+  /@flowgram.ai/core@1.0.10(react-dom@19.0.0)(react@19.0.0):
+    resolution: {integrity: sha512-bNL9+ixID/ato9idINP1QnhDGxhQuQvGYF5OMCH4ypDf593baQcqtBhz4PJOqA+chlATxATZqjC3+hg1H1U/+Q==}
+    peerDependencies:
+      react: '>=16.8'
+      react-dom: '>=16.8'
+    dependencies:
+      '@flowgram.ai/command': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/utils': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@phosphor/messaging': 1.3.0
+      '@tweenjs/tween.js': 18.6.4
+      inversify: 6.2.2(reflect-metadata@0.2.2)
+      lodash-es: 4.17.21
+      nanoid: 5.1.6
+      react: 19.0.0
+      react-dom: 19.0.0(react@19.0.0)
+      reflect-metadata: 0.2.2
+    dev: false
+
+  /@flowgram.ai/document@1.0.10(react-dom@19.0.0)(react@19.0.0):
+    resolution: {integrity: sha512-rC+8G2VHY2FeLw5biXNvpifSQCyWgg0JY9hjXUkX9KkOyDNUYBcM++6ZChS5CVqOARzL/vfpBPrUEctJCKAOfw==}
+    dependencies:
+      '@flowgram.ai/core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/utils': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      inversify: 6.2.2(reflect-metadata@0.2.2)
+      lodash-es: 4.17.21
+      nanoid: 5.1.6
+      reflect-metadata: 0.2.2
+    transitivePeerDependencies:
+      - react
+      - react-dom
+    dev: false
+
+  /@flowgram.ai/editor@1.0.10(react-dom@19.0.0)(react@19.0.0):
+    resolution: {integrity: sha512-fpVxyidZFsv6VO5t9Ta9B8PtgaAVAQUOuT3G2o+972hl3UAbBEEZlm7Ln9vYy5uc6AggbXqJuMTZo010C3oN7g==}
+    peerDependencies:
+      react: '>=16.8'
+      react-dom: '>=16.8'
+    dependencies:
+      '@flowgram.ai/core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/document': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/form': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/form-core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/history': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/history-node-plugin': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/i18n-plugin': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/materials-plugin': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/node': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/node-core-plugin': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/node-variable-plugin': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/playground-react': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/reactive': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/redux-devtool-plugin': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/renderer': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/shortcuts-plugin': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/utils': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/variable-plugin': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      inversify: 6.2.2(reflect-metadata@0.2.2)
+      react: 19.0.0
+      react-dom: 19.0.0(react@19.0.0)
+      reflect-metadata: 0.2.2
+    dev: false
+
+  /@flowgram.ai/fixed-drag-plugin@1.0.10(react-dom@19.0.0)(react@19.0.0):
+    resolution: {integrity: sha512-Ja/wqExUA3TchejCc3yWHXpJOMLwHxToc1JGniLK2gVuevtIe7+GV9EYXepYiBJ4r4YwpYVlbSC9BTJWUeKHAA==}
+    peerDependencies:
+      react: '>=16.8'
+      react-dom: '>=16.8'
+    dependencies:
+      '@flowgram.ai/core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/document': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/renderer': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/utils': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      inversify: 6.2.2(reflect-metadata@0.2.2)
+      react: 19.0.0
+      react-dom: 19.0.0(react@19.0.0)
+      reflect-metadata: 0.2.2
+    dev: false
+
+  /@flowgram.ai/fixed-history-plugin@1.0.10(react-dom@19.0.0)(react@19.0.0):
+    resolution: {integrity: sha512-7sGtgkR6MvpSHIN217pG15zxrXN80+Qil8zOPgolh3n0oHcSr+DupLmVR3MBq+/lqK83I3s3Ela77GTFoVx+Rg==}
+    dependencies:
+      '@flowgram.ai/core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/document': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/form-core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/history': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/utils': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      inversify: 6.2.2(reflect-metadata@0.2.2)
+      lodash-es: 4.17.21
+      reflect-metadata: 0.2.2
+    transitivePeerDependencies:
+      - react
+      - react-dom
+    dev: false
+
+  /@flowgram.ai/fixed-layout-core@1.0.10(react-dom@19.0.0)(react@19.0.0):
+    resolution: {integrity: sha512-9tRPxSB/k81skvtbniDyZUB/qbNuvTL4qChmYOIkPNFp6xdmOkNg9y09lguimMpPHGmL+su/1Os39LgpoBn+2Q==}
+    peerDependencies:
+      react: '>=16.8'
+      react-dom: '>=16.8'
+    dependencies:
+      '@flowgram.ai/core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/document': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/renderer': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/utils': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      inversify: 6.2.2(reflect-metadata@0.2.2)
+      lodash-es: 4.17.21
+      react: 19.0.0
+      react-dom: 19.0.0(react@19.0.0)
+      reflect-metadata: 0.2.2
+    dev: false
+
+  /@flowgram.ai/fixed-layout-editor@1.0.10(react-dom@19.0.0)(react@19.0.0):
+    resolution: {integrity: sha512-kHm+mk6OBjBX/2m5RYHR9Rnd5dFO9MdB7TPI3oWNgc0jP1akKd0OCN4RXhKgFIi72cz5q3Rvu7/5FEaqjbq/Qg==}
+    peerDependencies:
+      react: '>=16.8'
+      react-dom: '>=16.8'
+    dependencies:
+      '@flowgram.ai/core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/editor': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/fixed-drag-plugin': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/fixed-history-plugin': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/fixed-layout-core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/history': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/reactive': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/select-box-plugin': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/utils': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      inversify: 6.2.2(reflect-metadata@0.2.2)
+      react: 19.0.0
+      react-dom: 19.0.0(react@19.0.0)
+      reflect-metadata: 0.2.2
+    dev: false
+
+  /@flowgram.ai/form-core@1.0.10(react-dom@19.0.0)(react@19.0.0):
+    resolution: {integrity: sha512-c/fdUvn5Gl6npHmZGlXiLMS4zOsf7tq0bGpuTJTniPEbF5TaFRSFugAQIn3DPG0Bpnbht1qCUqywnzuAQdrqMg==}
+    peerDependencies:
+      react: '>=16.8'
+      react-dom: '>=16.8'
+    dependencies:
+      '@flowgram.ai/core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/document': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/utils': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      inversify: 6.2.2(reflect-metadata@0.2.2)
+      lodash-es: 4.17.21
+      react: 19.0.0
+      react-dom: 19.0.0(react@19.0.0)
+      reflect-metadata: 0.2.2
+    dev: false
+
+  /@flowgram.ai/form@1.0.10(react-dom@19.0.0)(react@19.0.0):
+    resolution: {integrity: sha512-q8ToJKDA22fnykuSBG2VGVljdyouINwJd56etp3+xb1Q0zFGLO8P6TbKgH8XIoFsVkNb9SSbVOlwRFbTWZ50wA==}
+    peerDependencies:
+      react: '>=16.8'
+      react-dom: '>=16.8'
+    dependencies:
+      '@flowgram.ai/reactive': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/utils': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      fast-equals: 2.0.4
+      lodash-es: 4.17.21
+      nanoid: 5.1.6
+      react: 19.0.0
+      react-dom: 19.0.0(react@19.0.0)
+    dev: false
+
+  /@flowgram.ai/free-layout-core@1.0.10(react-dom@19.0.0)(react@19.0.0):
+    resolution: {integrity: sha512-B/9Y/8zSX6t3LLS7zZ4FKx4CWR5bS7nh1L28Vit+4i76XRSoucFi+AvdWb499feXVurXukBo3svbsNvoZiix5g==}
+    peerDependencies:
+      react: '>=16.8'
+      react-dom: '>=16.8'
+    dependencies:
+      '@flowgram.ai/core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/document': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/form-core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/node': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/reactive': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/utils': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      inversify: 6.2.2(reflect-metadata@0.2.2)
+      lodash-es: 4.17.21
+      nanoid: 5.1.6
+      react: 19.0.0
+      react-dom: 19.0.0(react@19.0.0)
+      reflect-metadata: 0.2.2
+    dev: false
+
+  /@flowgram.ai/history-node-plugin@1.0.10(react-dom@19.0.0)(react@19.0.0):
+    resolution: {integrity: sha512-7Oja5aBT6npXMWebnR2k8y6V55yMWCS2e8/pjax4nlDmCp6kLWVw1bAvkPEL1wZCRSb4SCFuaEMt5D4RY/AGNA==}
+    peerDependencies:
+      react: '>=16.8'
+      react-dom: '>=16.8'
+    dependencies:
+      '@flowgram.ai/core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/document': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/form': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/form-core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/history': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/node': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      inversify: 6.2.2(reflect-metadata@0.2.2)
+      lodash-es: 4.17.21
+      react: 19.0.0
+      react-dom: 19.0.0(react@19.0.0)
+      reflect-metadata: 0.2.2
+    dev: false
+
+  /@flowgram.ai/history@1.0.10(react-dom@19.0.0)(react@19.0.0):
+    resolution: {integrity: sha512-A+kQxIT2s+TjqszY81dv/prcvfWIsk5Gow6oNb+gmHhrDRzsbumh9jmFaOKgvtKs+EpLnrQXGJxtLiY40NHHFQ==}
+    dependencies:
+      '@flowgram.ai/core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/utils': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      inversify: 6.2.2(reflect-metadata@0.2.2)
+      lodash-es: 4.17.21
+      nanoid: 5.1.6
+      reflect-metadata: 0.2.2
+    transitivePeerDependencies:
+      - react
+      - react-dom
+    dev: false
+
+  /@flowgram.ai/i18n-plugin@1.0.10(react-dom@19.0.0)(react@19.0.0):
+    resolution: {integrity: sha512-Dlq/10JYK6ckb1bkdJHfw34Ttz5errcxXIKhzV6Nj9r3GRXU3pm6FuC2kuwmYjGx6ooZyojM6uoP++cus76N4A==}
+    dependencies:
+      '@flowgram.ai/core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/i18n': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+    transitivePeerDependencies:
+      - react
+      - react-dom
+    dev: false
+
+  /@flowgram.ai/i18n@1.0.10(react-dom@19.0.0)(react@19.0.0):
+    resolution: {integrity: sha512-obeTbGMiHgG/FdYGJMchg+bH3Bh4yzBNEeGBnk8/Qf1fpd4qVyXgo8UfognO4xvfpG4pDEjyPrt8D713JrzJIQ==}
+    dependencies:
+      '@flowgram.ai/utils': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      i18n-js: 4.5.3
+    transitivePeerDependencies:
+      - react
+      - react-dom
+    dev: false
+
+  /@flowgram.ai/materials-plugin@1.0.10(react-dom@19.0.0)(react@19.0.0):
+    resolution: {integrity: sha512-6GgYKlilnSAcGlgFgpyjJxt7BTWBU3zZ7w/3hKZQ+8VcG0WTJyXBeL7IM3KKNLMQ6cafcWKSP1mRcRv/GyzDtQ==}
+    peerDependencies:
+      react: '>=16.8'
+      react-dom: '>=16.8'
+    dependencies:
+      '@flowgram.ai/core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/renderer': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      inversify: 6.2.2(reflect-metadata@0.2.2)
+      react: 19.0.0
+      react-dom: 19.0.0(react@19.0.0)
+      reflect-metadata: 0.2.2
+    dev: false
+
+  /@flowgram.ai/node-core-plugin@1.0.10(react-dom@19.0.0)(react@19.0.0):
+    resolution: {integrity: sha512-c+Dr9lav6/MIdPjyNG0E+dy/NIOHDyTHCk0JKzlohCLwdiklqS1kJQQZHinfjC6NZ+tIIV8k1aJN3MIeGmrLEw==}
+    peerDependencies:
+      react: '>=16.8'
+      react-dom: '>=16.8'
+    dependencies:
+      '@flowgram.ai/core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/document': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/form-core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/node': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      inversify: 6.2.2(reflect-metadata@0.2.2)
+      react: 19.0.0
+      react-dom: 19.0.0(react@19.0.0)
+      reflect-metadata: 0.2.2
+    dev: false
+
+  /@flowgram.ai/node-variable-plugin@1.0.10(react-dom@19.0.0)(react@19.0.0):
+    resolution: {integrity: sha512-950pDVHwEDnqCtSCXDpGOHdaU4+WnShP62UCS4VJuHLW9vVWf1IB3ZW4DanGQ2NRBBtGeVI1rYeDYDywI+Lyyg==}
+    peerDependencies:
+      react: '>=16.8'
+      react-dom: '>=16.8'
+    dependencies:
+      '@flowgram.ai/core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/document': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/form-core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/node': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/utils': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/variable-plugin': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      inversify: 6.2.2(reflect-metadata@0.2.2)
+      react: 19.0.0
+      react-dom: 19.0.0(react@19.0.0)
+      reflect-metadata: 0.2.2
+    dev: false
+
+  /@flowgram.ai/node@1.0.10(react-dom@19.0.0)(react@19.0.0):
+    resolution: {integrity: sha512-fcQNAsLdmeWYoo3YOrNDooS++rjMKp5WMvd79AvuB1+YQR7OYTKStkbpb2ZodF3T92Uklv8weypQBXjeEsrnRw==}
+    peerDependencies:
+      react: '>=16.8'
+      react-dom: '>=16.8'
+    dependencies:
+      '@flowgram.ai/core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/document': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/form': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/form-core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/utils': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      inversify: 6.2.2(reflect-metadata@0.2.2)
+      lodash-es: 4.17.21
+      nanoid: 5.1.6
+      react: 19.0.0
+      react-dom: 19.0.0(react@19.0.0)
+      reflect-metadata: 0.2.2
+    dev: false
+
+  /@flowgram.ai/playground-react@1.0.10(react-dom@19.0.0)(react@19.0.0):
+    resolution: {integrity: sha512-w5WuMMktQ0YKVWGh6uOf0MHPoD1Qg8E1cC5SiBmvftLey4xwCjLqCLx66ehZGpofVJOhOgjLcZ5m4eo8vyk5HA==}
+    peerDependencies:
+      react: '>=16.8'
+      react-dom: '>=16.8'
+    dependencies:
+      '@flowgram.ai/background-plugin': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/shortcuts-plugin': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/utils': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      inversify: 6.2.2(reflect-metadata@0.2.2)
+      react: 19.0.0
+      react-dom: 19.0.0(react@19.0.0)
+      reflect-metadata: 0.2.2
+    dev: false
+
+  /@flowgram.ai/reactive@1.0.10(react-dom@19.0.0)(react@19.0.0):
+    resolution: {integrity: sha512-Xbvidm/qTWoa52sXvVywVkpFeMqr7zOHXCzf0KQFS//HxCqpzPOeygY5f8yVRSTxrV6Ow7Y6dookvrFU2ATPrw==}
+    peerDependencies:
+      react: '>=16.8'
+      react-dom: '>=16.8'
+    dependencies:
+      '@flowgram.ai/utils': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      react: 19.0.0
+      react-dom: 19.0.0(react@19.0.0)
+    dev: false
+
+  /@flowgram.ai/redux-devtool-plugin@1.0.10(react-dom@19.0.0)(react@19.0.0):
+    resolution: {integrity: sha512-BVzJ2Z7hZjHZ3wcmbBdJWPyQtexRzlVQ21BcrhXsQ+zPJ++YN+nptO0VqQlf2H8EU9GzLkVZpgC7F9HD7hgw2w==}
+    dependencies:
+      '@flowgram.ai/core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/variable-core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      inversify: 6.2.2(reflect-metadata@0.2.2)
+      reflect-metadata: 0.2.2
+    transitivePeerDependencies:
+      - react
+      - react-dom
+    dev: false
+
+  /@flowgram.ai/renderer@1.0.10(react-dom@19.0.0)(react@19.0.0):
+    resolution: {integrity: sha512-61x7D+H5oiG4NP8vXoGI4ivN4Jry+Fxcb+fsU9kageUdT4XX85lb6R8lknlrQ272ywTlZ0UXZ2J6WmY4AoT6Ww==}
+    peerDependencies:
+      react: '>=16.8'
+      react-dom: '>=16.8'
+    dependencies:
+      '@flowgram.ai/core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/document': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/i18n': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/utils': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      inversify: 6.2.2(reflect-metadata@0.2.2)
+      lodash-es: 4.17.21
+      react: 19.0.0
+      react-dom: 19.0.0(react@19.0.0)
+      reflect-metadata: 0.2.2
+    dev: false
+
+  /@flowgram.ai/select-box-plugin@1.0.10(react-dom@19.0.0)(react@19.0.0):
+    resolution: {integrity: sha512-IzT58blCgvfg3bRnXmHHVMZCh8TwEMPxsyr2qnrv3YZRMPPVzu8RV7KgeuELRhJn1sLxP+F575MzqC6PZ/4OmA==}
+    peerDependencies:
+      react: '>=16.8'
+      react-dom: '>=16.8'
+    dependencies:
+      '@flowgram.ai/core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/renderer': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      inversify: 6.2.2(reflect-metadata@0.2.2)
+      react: 19.0.0
+      react-dom: 19.0.0(react@19.0.0)
+      reflect-metadata: 0.2.2
+    dev: false
+
+  /@flowgram.ai/shortcuts-plugin@1.0.10(react-dom@19.0.0)(react@19.0.0):
+    resolution: {integrity: sha512-LlehrpZn87R2PlBKay30ht+0vgeog2VNmgTjAI8nYK/hoCwMM9FqGZC7W+Qch4HOiE3+SupUimKEq9zMfhXzxg==}
+    dependencies:
+      '@flowgram.ai/core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      inversify: 6.2.2(reflect-metadata@0.2.2)
+      reflect-metadata: 0.2.2
+    transitivePeerDependencies:
+      - react
+      - react-dom
+    dev: false
+
+  /@flowgram.ai/utils@1.0.10(react-dom@19.0.0)(react@19.0.0):
+    resolution: {integrity: sha512-gtOfXvX41uTB5qDbGiFhsmtWs+nJ0XH54bK+Ka47BGCT3xU0Tvpo84ycFabq2nXkaNcVhQsoMzdegTqIxMibCg==}
+    peerDependencies:
+      react: '>=16.8'
+      react-dom: '>=16.8'
+    dependencies:
+      clsx: 1.1.1
+      inversify: 6.2.2(reflect-metadata@0.2.2)
+      nanoid: 5.1.6
+      react: 19.0.0
+      react-dom: 19.0.0(react@19.0.0)
+      reflect-metadata: 0.2.2
+    dev: false
+
+  /@flowgram.ai/variable-core@1.0.10(react-dom@19.0.0)(react@19.0.0):
+    resolution: {integrity: sha512-Y73nSobtqDDtimx5kQRFoTZCalGHF8GuY/j1uGDE4vQmj3Tw8pTA5nKyxheimhqaTSbShoUqsLZm26QpLQlR0A==}
+    peerDependencies:
+      react: '>=16.8'
+      react-dom: '>=16.8'
+    dependencies:
+      '@flowgram.ai/core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/utils': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      fast-equals: 2.0.4
+      inversify: 6.2.2(reflect-metadata@0.2.2)
+      lodash-es: 4.17.21
+      nanoid: 5.1.6
+      react: 19.0.0
+      react-dom: 19.0.0(react@19.0.0)
+      reflect-metadata: 0.2.2
+      rxjs: 7.8.2
+    dev: false
+
+  /@flowgram.ai/variable-layout@1.0.10(react-dom@19.0.0)(react@19.0.0):
+    resolution: {integrity: sha512-XhxsuucoGzFqoCB6Qf9OVHp/AbQkPDrqJg7McHRuUJ7G9Xoq9/e5D+fa09Zbkagnad6cNRTtU4G7SsjTFludpA==}
+    dependencies:
+      '@flowgram.ai/core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/document': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/free-layout-core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/variable-core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      inversify: 6.2.2(reflect-metadata@0.2.2)
+      reflect-metadata: 0.2.2
+    transitivePeerDependencies:
+      - react
+      - react-dom
+    dev: false
+
+  /@flowgram.ai/variable-plugin@1.0.10(react-dom@19.0.0)(react@19.0.0):
+    resolution: {integrity: sha512-fG6QI5j8JlatEsm6JHvg8Od/6Yzsu1e+2z2yBr0m4edHgmKsDiqlSxWCbkl28BsBOg5wqa+wmfLYqigtG50G3g==}
+    dependencies:
+      '@flowgram.ai/core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/document': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/variable-core': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      '@flowgram.ai/variable-layout': 1.0.10(react-dom@19.0.0)(react@19.0.0)
+      inversify: 6.2.2(reflect-metadata@0.2.2)
+      reflect-metadata: 0.2.2
+    transitivePeerDependencies:
+      - react
+      - react-dom
     dev: false
 
   /@formatjs/ecma402-abstract@3.1.1:
@@ -1316,6 +1796,27 @@ packages:
     requiresBuild: true
     dev: false
     optional: true
+
+  /@inversifyjs/common@1.4.0:
+    resolution: {integrity: sha512-qfRJ/3iOlCL/VfJq8+4o5X4oA14cZSBbpAmHsYj8EsIit1xDndoOl0xKOyglKtQD4u4gdNVxMHx4RWARk/I4QA==}
+    dev: false
+
+  /@inversifyjs/core@1.3.5(reflect-metadata@0.2.2):
+    resolution: {integrity: sha512-B4MFXabhNTAmrfgB+yeD6wd/GIvmvWC6IQ8Rh/j2C3Ix69kmqwz9pr8Jt3E+Nho9aEHOQCZaGmrALgtqRd+oEQ==}
+    dependencies:
+      '@inversifyjs/common': 1.4.0
+      '@inversifyjs/reflect-metadata-utils': 0.2.4(reflect-metadata@0.2.2)
+    transitivePeerDependencies:
+      - reflect-metadata
+    dev: false
+
+  /@inversifyjs/reflect-metadata-utils@0.2.4(reflect-metadata@0.2.2):
+    resolution: {integrity: sha512-u95rV3lKfG+NT2Uy/5vNzoDujos8vN8O18SSA5UyhxsGYd4GLQn/eUsGXfOsfa7m34eKrDelTKRUX1m/BcNX5w==}
+    peerDependencies:
+      reflect-metadata: 0.2.2
+    dependencies:
+      reflect-metadata: 0.2.2
+    dev: false
 
   /@jridgewell/gen-mapping@0.3.13:
     resolution: {integrity: sha512-2kkt/7niJ6MgEPxF0bYdQ6etZaA+fQvDcLKckhy1yIQOzaoKjBBjSj63/aLVjYE3qhRt5dvM+uUyfCg6UKCBbA==}
@@ -2108,6 +2609,23 @@ packages:
     dependencies:
       '@opentelemetry/api': 1.9.0
       '@opentelemetry/core': 1.30.1(@opentelemetry/api@1.9.0)
+    dev: false
+
+  /@phosphor/algorithm@1.2.0:
+    resolution: {integrity: sha512-C9+dnjXyU2QAkWCW6QVDGExk4hhwxzAKf5/FIuYlHAI9X5vFv99PYm0EREDxX1PbMuvfFBZhPNu0PvuSDQ7sFA==}
+    dev: false
+
+  /@phosphor/collections@1.2.0:
+    resolution: {integrity: sha512-T9/0EjSuY6+ga2LIFRZ0xupciOR3Qnyy8Q95lhGTC0FXZUFwC8fl9e8On6IcwasCszS+1n8dtZUWSIynfgdpzw==}
+    dependencies:
+      '@phosphor/algorithm': 1.2.0
+    dev: false
+
+  /@phosphor/messaging@1.3.0:
+    resolution: {integrity: sha512-k0JE+BTMKlkM335S2AmmJxoYYNRwOdW5jKBqLgjJdGRvUQkM0+2i60ahM45+J23atGJDv9esKUUBINiKHFhLew==}
+    dependencies:
+      '@phosphor/algorithm': 1.2.0
+      '@phosphor/collections': 1.2.0
     dev: false
 
   /@prisma/instrumentation@6.11.1(@opentelemetry/api@1.9.0):
@@ -4913,6 +5431,10 @@ packages:
     engines: {node: '>=12'}
     dev: false
 
+  /@tweenjs/tween.js@18.6.4:
+    resolution: {integrity: sha512-lB9lMjuqjtuJrx7/kOkqQBtllspPIN+96OvTCeJ2j5FEzinoAXTdAMFnDAQT1KVPRlnYfBrqxtqP66vDM40xxQ==}
+    dev: false
+
   /@tybys/wasm-util@0.10.1:
     resolution: {integrity: sha512-9tTaPJLSiejZKx+Bmog4uSubteqTvFrVrURwkmHixBo0G4seD0zUxp98E1DzUBJxLQ3NPwXrGKDiVjwx/DpPsg==}
     requiresBuild: true
@@ -5922,6 +6444,10 @@ packages:
     resolution: {integrity: sha512-lIyg0szRfYbiy67j9KN8IyeD7q7hcmqnJ1ddWmNt19ItGpNN64mnllmxUNFIOdOm6by97jlL6wfpTTJrmnjWAA==}
     engines: {node: '>=6.0.0'}
     hasBin: true
+
+  /bignumber.js@10.0.2:
+    resolution: {integrity: sha512-E8Wp9O06QA6lneJ4aRUXKYf/1GIomqUEmUMwtIOMtDxf1U52ffJY+y7JBk/8wRafA8qOIqLnXQGqonYXZdBnFQ==}
+    dev: false
 
   /binary-extensions@2.3.0:
     resolution: {integrity: sha512-Ceh+7ox5qe7LJuLHoY0feh3pHuUDHAcRUeyL2VYghZwfpkNIy/+8Ocg0a3UuSoYzavmylwuLWQOf3hl0jjMMIw==}
@@ -7926,6 +8452,14 @@ packages:
     resolution: {integrity: sha512-WDC/ui2VVRrz3jOVi+XtjqkDjiVjTtFaAGiW37k6b+ohyQ5wYDOGkvCZa8+H0nx3gyvv0+BST9xuOgIyGQ00gw==}
     dev: false
 
+  /i18n-js@4.5.3:
+    resolution: {integrity: sha512-5/tT6R9t9qlYqGhxGq9I9Ap3WKUaAMq5aRuO1gqAcUqm6xGbL0jwTAjSFjgbx935BAV8QbEzvQOzE796dUlEfA==}
+    dependencies:
+      bignumber.js: 10.0.2
+      lodash: 4.17.23
+      make-plural: 7.5.0
+    dev: false
+
   /iconv-lite@0.6.3:
     resolution: {integrity: sha512-4fCk79wshMdzMp2rH06qWrJE4iolqLhCUH+OiuIgU++RB0+94NlDL81atO7GX55uUKueo0txHNtvEyI6D7WdMw==}
     engines: {node: '>=0.10.0'}
@@ -8022,6 +8556,16 @@ packages:
       '@formatjs/fast-memoize': 3.1.0
       '@formatjs/icu-messageformat-parser': 3.5.1
       tslib: 2.8.1
+    dev: false
+
+  /inversify@6.2.2(reflect-metadata@0.2.2):
+    resolution: {integrity: sha512-KB836KHbZ9WrUnB8ax5MtadOwnqQYa+ZJO3KWbPFgcr4RIEnHM621VaqFZzOZd9+U7ln6upt9n0wJei7x2BNqw==}
+    peerDependencies:
+      reflect-metadata: ~0.2.2
+    dependencies:
+      '@inversifyjs/common': 1.4.0
+      '@inversifyjs/core': 1.3.5(reflect-metadata@0.2.2)
+      reflect-metadata: 0.2.2
     dev: false
 
   /is-array-buffer@3.0.5:
@@ -8293,6 +8837,10 @@ packages:
   /jiti@2.6.1:
     resolution: {integrity: sha512-ekilCSN1jwRvIbgeg/57YFh8qQDNbwDb9xT/qu2DAHbFFZUicIl4ygVaAvzveMhMVr3LnpSKTNnwt8PoOfmKhQ==}
     hasBin: true
+    dev: false
+
+  /jmuxer@2.1.0:
+    resolution: {integrity: sha512-iizwBTIV11RFKrOp0s/SKrb00yz2epwSOdWxdphSfV7gWlAi9ZXpDdNk/m67Dp0M3+4uGL0AcBQmhB2THxABpQ==}
     dev: false
 
   /jotai-scope@0.7.2(jotai@2.11.0)(react@19.0.0):
@@ -8583,6 +9131,10 @@ packages:
     engines: {node: '>=12'}
     dependencies:
       '@jridgewell/sourcemap-codec': 1.5.5
+    dev: false
+
+  /make-plural@7.5.0:
+    resolution: {integrity: sha512-0booA+aVYyVFoR67JBHdfVk0U08HmrBH2FrtmBqBa+NldlqXv/G2Z9VQuQq6Wgp2jDWdybEWGfBkk1cq5264WA==}
     dev: false
 
   /match-sorter@8.2.0:
@@ -10150,6 +10702,15 @@ packages:
       pify: 2.3.0
     dev: false
 
+  /readable-stream@3.6.2:
+    resolution: {integrity: sha512-9u/sniCrY3D5WdsERHzHE4G2YCXqoG5FTHUiCC4SIbr6XcLZBY05ya9EKjYek9O5xOAwjGq+1JdGBAS7Q9ScoA==}
+    engines: {node: '>= 6'}
+    dependencies:
+      inherits: 2.0.4
+      string_decoder: 1.3.0
+      util-deprecate: 1.0.2
+    dev: false
+
   /readdirp@3.6.0:
     resolution: {integrity: sha512-hOS089on8RduqdbhvQ5Z37A0ESjsqz6qnRcffsMU3495FuTdqSm+7bhJ29JvIOsBDEEnan5DPu9t3To9VRlMzA==}
     engines: {node: '>=8.10.0'}
@@ -10189,6 +10750,10 @@ packages:
 
   /redux@5.0.1:
     resolution: {integrity: sha512-M9/ELqF6fy8FwmkpnF0S3YKOqMyoWJ4+CS5Efg2ct3oY9daQvd/Pc71FpGZsVsbl3Cpb+IIcjBDUnnyBdQbq4w==}
+    dev: false
+
+  /reflect-metadata@0.2.2:
+    resolution: {integrity: sha512-urBwgfrvVP/eAyXx4hluJivBKzuEbSQs9rKWCrCkbSxNv8mxPcUZKeuoF3Uy4mJl3Lwprp6yy5/39VWigZ4K6Q==}
     dev: false
 
   /reflect.getprototypeof@1.0.10:
@@ -10374,6 +10939,12 @@ packages:
     resolution: {integrity: sha512-PdhdWy89SiZogBLaw42zdeqtRJ//zFd2PgQavcICDUgJT5oW10QCRKbJ6bg4r0/UY2M6BWd5tkxuGFRvCkgfHQ==}
     dev: false
 
+  /rxjs@7.8.2:
+    resolution: {integrity: sha512-dhKf903U/PQZY6boNNtAGdWbG85WAbjT/1xYoZIC7FAY0yWapOBQVsVrDl58W86//e1VpMNBtRV4MaXfdMySFA==}
+    dependencies:
+      tslib: 2.8.1
+    dev: false
+
   /sade@1.8.1:
     resolution: {integrity: sha512-xal3CZX1Xlo/k4ApwCFrHVACi9fBqJ7V+mwhBsuf/1IOKbBy098Fex+Wa/5QMubw09pSZ/u8EY8PWgevJsXp1A==}
     engines: {node: '>=6'}
@@ -10390,6 +10961,10 @@ packages:
       get-intrinsic: 1.3.0
       has-symbols: 1.1.0
       isarray: 2.0.5
+    dev: false
+
+  /safe-buffer@5.2.1:
+    resolution: {integrity: sha512-rp3So07KcdmmKbGvgaNxQSJr7bGVSVk5S9Eq1F+ppbRo70+YeaDxkw5Dd8NPN+GD6bjnYm2VuPuCXmpuYvmCXQ==}
     dev: false
 
   /safe-push-apply@1.0.0:
@@ -10741,6 +11316,13 @@ packages:
       internal-slot: 1.1.0
     dev: false
 
+  /stream-browserify@3.0.0:
+    resolution: {integrity: sha512-H73RAHsVBapbim0tU2JwwOiXUj+fikfiaoYAKHF3VJfA0pe2BCzkhAHBlLG6REzE+2WNZcxOXjK7lkso+9euLA==}
+    dependencies:
+      inherits: 2.0.4
+      readable-stream: 3.6.2
+    dev: false
+
   /string-argv@0.3.2:
     resolution: {integrity: sha512-aqD2Q0144Z+/RqG52NeHEkZauTAUWJO8c6yTftGJKO3Tja5tUgIfmIl6kExvhtxSDP7fXB6DvzkfMpCd/F3G+Q==}
     engines: {node: '>=0.6.19'}
@@ -10829,6 +11411,12 @@ packages:
       call-bind: 1.0.8
       define-properties: 1.2.1
       es-object-atoms: 1.1.1
+    dev: false
+
+  /string_decoder@1.3.0:
+    resolution: {integrity: sha512-hkRX8U1WjJFd8LsDJ2yQ/wWWxaopEsABU1XfkM8A+j0+85JAGppt16cr1Whg6KIbb4okU6Mql6BOj+uup/wKeA==}
+    dependencies:
+      safe-buffer: 5.2.1
     dev: false
 
   /strip-ansi@6.0.1:

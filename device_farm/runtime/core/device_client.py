@@ -28,6 +28,7 @@ import asyncio
 import base64
 import logging
 import os
+import socket
 import subprocess
 import struct
 import threading
@@ -107,6 +108,9 @@ class DeviceClient:
         # Scrcpy receiver for Mode A+scrcpy hybrid (agent touch + scrcpy screen)
         self._scrcpy_receiver:  Optional[ScrcpyReceiver] = None
         self._scrcpy_active:    bool = False  # suppress MediaProjection frames when True
+        # Stored args so scrcpy can be restarted on demand after auto-stop
+        self._scrcpy_params:    Optional[tuple] = None  # (device_ip, adb_port, enable_control)
+        self._scrcpy_stop_task: Optional[asyncio.Task] = None  # debounced auto-stop task
 
         # WebSocket send callback (set when agent connects)
         self._agent_send: Optional[Callable[[Dict[str, Any]], None]] = None
@@ -121,7 +125,6 @@ class DeviceClient:
 
         self._u2:          Optional[U2JsonRpcClient]  = None
         self._u2_lock      = threading.Lock()  # serializes reconnect + identity-safe nulling
-        self._u2_request_lock = threading.Lock()  # serializes ALL u2 HTTP requests (NanoHTTPD is single-threaded)
         self._hierarchy_lock = threading.Lock()  # only one dumpWindowHierarchy at a time
         self._stf_service: Optional[STFServiceClient] = None
 
@@ -135,6 +138,7 @@ class DeviceClient:
         self._frame_queues:   List[asyncio.Queue] = []
         self._frame_lock      = threading.Lock()
         self._last_key_frame: Optional[Union[Dict[str, Any], bytes]] = None  # last H.264 key frame for new subscribers
+        self._last_config_frame: Optional[bytes] = None  # last H.264 config (0x10) for new subscribers
         self._status_queues:  List[asyncio.Queue] = []
         self._status_lock     = threading.Lock()
 
@@ -150,8 +154,10 @@ class DeviceClient:
 
         # Reconnect tracking
         self.reconnect_attempts: int = 0
-        self._u2_reconnect_failed_at: float = 0.0  # monotonic time of last full-cycle failure
-        self._u2_last_ok_at: float = 0.0           # monotonic time of last confirmed-live ping
+        self._u2_reconnect_failed_at: float = 0.0    # monotonic time of last full-cycle failure
+        self._u2_last_ok_at: float = 0.0             # monotonic time of last confirmed-live ping
+        self._atx_restart_triggered_at: float = float("-inf") # dedup guard; -inf = never triggered
+        self._atx_grace_given_at: float = float("-inf")      # time first timeout was seen; -inf = no grace in progress
         # Periodic screenshot timer state
         self._periodic_ss_started: bool = False
         # Agent-reported capabilities (e.g. ["u2","stfservice","h264"])
@@ -284,14 +290,24 @@ class DeviceClient:
             return
         self._agent_send = None
         self._tunnels_ready_channels = set()
-        self._teardown_tools()
+        # Keep relay scrcpy alive across APK WS reconnects — relay session is
+        # independent of the APK WebSocket lifecycle.  detach_scrcpy_stream()
+        # sends scrcpy_stop, which would kill video for browser clients during
+        # the reconnect window (typically < 2s on WiFi instability).
+        self._teardown_tools(stop_scrcpy=False)
         if self._tunnels:
             self._tunnels.stop_all()
             self._tunnels = None
-        # Clear cached frame so frontend doesn't see stale preview
+        # Clear JPEG cache so frontend doesn't see stale preview.
+        # Keep H264 config/keyframe cache if relay scrcpy is still actively streaming —
+        # the relay session is independent of the APK WS connection and new browser
+        # subscribers need the cached frames to start decoding without waiting for the
+        # next keyframe (~1-5s).
         with self._latest_jpeg_lock:
             self._latest_jpeg = None
-        self._last_key_frame = None
+        if not self._scrcpy_active:
+            self._last_key_frame = None
+            self._last_config_frame = None
         if self.state != DeviceState.DEAD:
             self.state = DeviceState.DISCONNECTED
 
@@ -303,7 +319,10 @@ class DeviceClient:
 
     def on_agent_frame_b64(self, jpeg_b64: str) -> None:
         """Receive JPEG frame from agent (MediaProjection). Skipped when scrcpy is active."""
-        if self._scrcpy_active:
+        # Only suppress APK frames once scrcpy has actually delivered its first frame.
+        # During the ~2-10s scrcpy startup window, allow APK frames so the browser
+        # sees a live image instead of a black/loading screen.
+        if self._scrcpy_active and self._last_frame_time > 0:
             return
         jpeg = base64.b64decode(jpeg_b64)
         with self._latest_jpeg_lock:
@@ -345,7 +364,7 @@ class DeviceClient:
 
     def on_agent_frame_bytes(self, jpeg_bytes: bytes) -> None:
         """Receive raw JPEG bytes from agent (binary protocol). Skipped when scrcpy is active."""
-        if self._scrcpy_active:
+        if self._scrcpy_active and self._last_frame_time > 0:
             return
         with self._latest_jpeg_lock:
             self._latest_jpeg = jpeg_bytes
@@ -382,10 +401,25 @@ class DeviceClient:
             + bytes([flags])
             + avcc_record
         )
+        self._last_config_frame = msg
         with self._frame_lock:
             queues = list(self._frame_queues)
-        for q in queues:
-            asyncio.run_coroutine_threadsafe(_safe_put(q, msg), self._loop)
+        self._logger.info("h264 config queued → %d WS subscriber(s), avcc_len=%d",
+                          len(queues), len(avcc_record))
+        loop = self._loop
+        # In relay mode this is called from the asyncio WS receive loop — already on
+        # the event loop. call_soon_threadsafe from within the loop adds an extra
+        # iteration of latency. Detect context and use the fast path.
+        try:
+            _already_on_loop = asyncio.get_running_loop() is loop
+        except RuntimeError:
+            _already_on_loop = False
+        if _already_on_loop:
+            for q in queues:
+                _sync_put(q, msg)
+        else:
+            for q in queues:
+                loop.call_soon_threadsafe(_sync_put, q, msg)
 
     def on_agent_h264_video(self, avcc_data: bytes, is_key: bool, pts_us: int) -> None:
         """Relay H264 AVCC video frame to browser as binary 0x11 frame.
@@ -393,6 +427,10 @@ class DeviceClient:
         """
         if not self._loop:
             return
+        # Mark that scrcpy has started delivering — APK JPEG fallback will stop now.
+        first_frame = self._last_frame_time == 0
+        if first_frame:
+            self._last_frame_time = time.monotonic()
         serial_b = self.serial.encode()
         slen = len(serial_b)
         w = max(0, min(self.screen_width, 0xFFFF))
@@ -407,8 +445,35 @@ class DeviceClient:
             self._last_key_frame = msg
         with self._frame_lock:
             queues = list(self._frame_queues)
-        for q in queues:
-            asyncio.run_coroutine_threadsafe(_safe_put(q, msg), self._loop)
+        if first_frame or is_key:
+            self._logger.info("h264 video key=%s queued → %d WS subscriber(s), avcc_len=%d",
+                              is_key, len(queues), len(avcc_data))
+        # FPS counter — log relay throughput every 5s
+        if not hasattr(self, '_h264_fps_count'):
+            self._h264_fps_count = 0
+            self._h264_fps_t0 = time.monotonic()
+        self._h264_fps_count += 1
+        _now = time.monotonic()
+        if _now - self._h264_fps_t0 >= 5.0:
+            fps = self._h264_fps_count / (_now - self._h264_fps_t0)
+            self._logger.info("h264 relay FPS=%.1f frames=%d (5s window)", fps, self._h264_fps_count)
+            self._h264_fps_count = 0
+            self._h264_fps_t0 = _now
+        # NOTE: do NOT re-send config before every IDR. See on_agent_h264_config.
+        loop = self._loop
+        # In relay mode this is called directly from the asyncio WS receive loop.
+        # Calling call_soon_threadsafe from within the event loop defers the put to
+        # the NEXT iteration — adds ~1 ms per frame at 30fps. Use direct path instead.
+        try:
+            _already_on_loop = asyncio.get_running_loop() is loop
+        except RuntimeError:
+            _already_on_loop = False
+        if _already_on_loop:
+            for q in queues:
+                _sync_put(q, msg)
+        else:
+            for q in queues:
+                loop.call_soon_threadsafe(_sync_put, q, msg)
 
     def on_agent_status(self, payload: Dict[str, Any]) -> None:
         self.brand           = payload.get("brand",         self.brand)
@@ -467,6 +532,7 @@ class DeviceClient:
         with self._latest_jpeg_lock:
             self._latest_jpeg = None
         self._last_key_frame = None
+        self._last_config_frame = None
         # Don't close ADB transport here — reconnect_adb_device handles that
 
     def teardown(self) -> None:
@@ -558,13 +624,44 @@ class DeviceClient:
             except Exception as exc:
                 self._log(f"capture_screenshot adb error: {exc}", level=logging.DEBUG)
 
+        # Relay fallback: adb screencap via gRPC relay (relay mode, no direct ADB)
+        if jpeg is None and self._loop:
+            try:
+                from runtime.transports.adb_relay_server import get_relay_manager
+                relay = get_relay_manager()
+                actual_serial = self._adb_serial or self.serial
+                if relay and actual_serial:
+                    actual_serial = relay.resolve_serial(actual_serial)
+                if relay and relay.relay_for_serial(actual_serial):
+                    output = asyncio.run_coroutine_threadsafe(
+                        relay.adb_shell(actual_serial, "screencap -p | base64", timeout=12.0),
+                        self._loop,
+                    ).result(timeout=15.0)
+                    if output and len(output) > 200:
+                        import base64 as _b64, io
+                        from PIL import Image
+                        raw = _b64.b64decode(output.replace("\n", "").replace("\r", "").strip())
+                        img = Image.open(io.BytesIO(raw))
+                        if max_width > 0 and img.width > max_width:
+                            ratio = max_width / img.width
+                            img = img.resize(
+                                (max_width, int(img.height * ratio)), Image.LANCZOS
+                            )
+                        buf = io.BytesIO()
+                        img.save(buf, format="JPEG", quality=quality)
+                        jpeg = buf.getvalue()
+            except Exception as exc:
+                self._log(f"capture_screenshot relay error: {exc}", level=logging.DEBUG)
+
         # Fallback: cached frame
         if jpeg is None:
             with self._latest_jpeg_lock:
                 jpeg = self._latest_jpeg
 
-        # Update cache
-        if jpeg is not None:
+        # Update cache — only for ADB mode (u2 is primary source) or scrcpy frames.
+        # WS u2 fallback (allow_ws_u2_fallback=True) must NOT update cache, otherwise
+        # take_screenshot() returns the stale fallback frame and MJPEG freezes.
+        if jpeg is not None and (self.is_adb_mode or not allow_ws_u2_fallback):
             with self._latest_jpeg_lock:
                 self._latest_jpeg = jpeg
 
@@ -605,17 +702,7 @@ class DeviceClient:
                     break
         if not self.ensure_u2_healthy() or self._u2 is None:
             return False
-        # Serialize with all u2 operations (NanoHTTPD is single-threaded).
-        # 5 s timeout: if a prior request is frozen, fall back to agent_shell immediately
-        # rather than letting touch events queue up behind a stuck HTTP call.
-        acquired = self._u2_request_lock.acquire(timeout=5.0)
-        if not acquired:
-            self._log("u2_request_lock timeout — falling back to agent_shell", level=logging.DEBUG)
-            return False
-        try:
-            return self._try_u2_tap_impl(action)
-        finally:
-            self._u2_request_lock.release()
+        return self._try_u2_tap_impl(action)
 
     def _try_u2_tap_impl(self, action: "Callable[[], None]") -> bool:
         u2_snap = self._u2
@@ -670,11 +757,10 @@ class DeviceClient:
 
     def tap(self, x: int, y: int) -> None:
         """
-        Touch priority: U2 → scrcpy control → agent shell (SDK ≤ 33 only)
+        Touch priority: U2 → scrcpy control → agent shell (SDK ≤ 33) → agent WS (tap)
 
-        Android 14+ (SDK 34+) blocks `input tap` with a SecurityException
-        (INJECT_EVENTS required).  scrcpy uses kernel-level injection and works
-        on all SDK versions regardless.
+        Android 14+ (SDK 34+) blocks `input tap` via shell; WsAgent uses
+        TouchAccessibilityService or InputManager (SDK < 34) on the same path as drag.
         """
         if self._try_u2_tap(lambda: self._u2.click(x, y) if self._u2 else None):
             return
@@ -682,51 +768,61 @@ class DeviceClient:
         if ctrl is not None:
             try:
                 ctrl.tap(x, y)
-                return
             except Exception as exc:
                 self._log(f"tap via scrcpy failed: {exc}", level=logging.WARNING)
+            if ctrl.is_connected:
+                return
         if self._shell_input_ok():
             self._send_to_agent({"type": "shell", "cmd": f"input tap {int(x)} {int(y)}"})
             return
-        self._log("tap skipped (no touch method)", level=logging.WARNING)
+        self._send_to_agent({"type": "tap", "x": int(x), "y": int(y), "ms": 50})
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300) -> None:
-        """Touch priority: U2 → scrcpy control → agent shell (SDK ≤ 33 only)"""
+        """Touch priority: U2 → scrcpy control → agent shell (SDK ≤ 33) → agent WS (swipe)"""
         if self._try_u2_tap(lambda: self._u2.swipe(x1, y1, x2, y2, duration=duration_ms / 1000.0) if self._u2 else None):
             return
         ctrl = self._get_scrcpy_control()
         if ctrl is not None:
             try:
                 ctrl.swipe(x1, y1, x2, y2, duration_ms=duration_ms)
-                return
             except Exception as exc:
                 self._log(f"swipe via scrcpy failed: {exc}", level=logging.WARNING)
+            if ctrl.is_connected:
+                return
         if self._shell_input_ok():
             self._send_to_agent({
                 "type": "shell",
                 "cmd": f"input swipe {int(x1)} {int(y1)} {int(x2)} {int(y2)} {int(duration_ms)}",
             })
             return
-        self._log("swipe skipped (no touch method available)", level=logging.WARNING)
+        self._send_to_agent({
+            "type": "swipe",
+            "x1": int(x1),
+            "y1": int(y1),
+            "x2": int(x2),
+            "y2": int(y2),
+            "ms": int(duration_ms),
+        })
 
     def long_tap(self, x: int, y: int, duration_ms: int = 800) -> None:
-        """Touch priority: U2 → scrcpy control → agent shell (SDK ≤ 33 only)"""
+        """Touch priority: U2 → scrcpy control → agent shell (SDK ≤ 33) → agent WS (long_tap)"""
         if self._try_u2_tap(lambda: self._u2.long_click(x, y, duration=duration_ms / 1000.0) if self._u2 else None):
             return
         ctrl = self._get_scrcpy_control()
         if ctrl is not None:
             try:
                 ctrl.long_tap(x, y, duration_ms=duration_ms)
-                return
             except Exception as exc:
                 self._log(f"long_tap via scrcpy failed: {exc}", level=logging.WARNING)
+            if ctrl.is_connected:
+                return
         if self._shell_input_ok():
             self._send_to_agent({
                 "type": "shell",
                 "cmd": f"input swipe {int(x)} {int(y)} {int(x)} {int(y)} {int(duration_ms)}",
             })
             return
-        self._log("long_tap skipped (no touch method available)", level=logging.WARNING)
+        self._send_to_agent({"type": "long_tap", "x": int(x), "y": int(y), "ms": int(duration_ms)})
 
     def double_tap(self, x: int, y: int) -> None:
         """Double-tap at coordinates. U2 → WsAgent (TouchA11y) → shell fallback."""
@@ -930,49 +1026,51 @@ class DeviceClient:
 
         key_l = k.lower()
 
-        # Best path: scrcpy control (system-level injection).
+        # Navigation keys (home/back/recent/app_switch):
+        #   1. u2.press() via am instrument — has INJECT_EVENTS implicitly, works on all Android
+        #   2. APK {"type":"key"} — uses AccessibilityService.performGlobalAction (if a11y enabled)
+        # DO NOT use scrcpy for these: KEYCODE_HOME/BACK injection is silently swallowed on
+        # Android 12+ even with INJECT_EVENTS at shell level.
+        _NAV_KEYS = {"home", "back", "recent", "app_switch"}
+        if key_l in _NAV_KEYS:
+            with self._u2_lock:
+                u2_nav = self._u2
+            if u2_nav is not None:
+                try:
+                    u2_nav.press(key_l)  # type: ignore[attr-defined]
+                    return
+                except Exception as exc:
+                    self._log(f"key via U2 failed ({key_l}): {exc}", level=logging.WARNING)
+            if self._agent_send is not None:
+                self._send_to_agent({"type": "key", "key": key_l})
+                return
+
+        # Non-nav keys: scrcpy control → u2 → APK injectKey (InputManager reflection).
         ctrl = self._get_scrcpy_control()
         if ctrl is not None:
             try:
                 ctrl.key(key_l)
-                return
             except Exception as exc:
                 self._log(f"key via scrcpy control failed ({key_l}): {exc}", level=logging.WARNING)
+            if ctrl.is_connected:
+                return  # send succeeded
 
-        # Second: uiautomator2 instrumentation (does NOT require INJECT_EVENTS).
         with self._u2_lock:
             u2 = self._u2
         if u2 is not None:
             try:
-                u2.press(key_l)  # type: ignore[attr-defined]
+                # For enter: pressImeActionButton triggers Search/Go/Done imeOptions action,
+                # which is what most apps expect. Falls back to KEYCODE_ENTER internally.
+                if key_l == "enter":
+                    u2.press_ime()  # type: ignore[attr-defined]
+                else:
+                    u2.press(key_l)  # type: ignore[attr-defined]
                 return
             except Exception as exc:
                 self._log(f"key via U2 failed ({key_l}): {exc}", level=logging.WARNING)
 
-        # Prefer agent path when available.
-        #
-        # NOTE: Some agent builds don't implement {"type":"key"} reliably (observed: WS logs show
-        # INPUT KEY but device doesn't react). Shelling `input keyevent` is the most compatible
-        # path across Android versions/modes.
         if self._agent_send is not None:
-            keycode = {
-                "home": "KEYCODE_HOME",
-                "back": "KEYCODE_BACK",
-                "menu": "KEYCODE_MENU",
-                "power": "KEYCODE_POWER",
-                "enter": "KEYCODE_ENTER",
-                "volumeup": "KEYCODE_VOLUME_UP",
-                "volumedown": "KEYCODE_VOLUME_DOWN",
-                "recent": "KEYCODE_APP_SWITCH",
-                "app_switch": "KEYCODE_APP_SWITCH",
-                "del": "KEYCODE_DEL",
-                "delete": "KEYCODE_DEL",
-                "tab": "KEYCODE_TAB",
-            }.get(key_l)
-            if not keycode:
-                keycode = k if k.upper().startswith("KEYCODE_") else f"KEYCODE_{k.upper()}"
-            # Agent executes on-device shell.
-            self._send_to_agent({"type": "shell", "cmd": f"input keyevent {keycode}"})
+            self._send_to_agent({"type": "key", "key": key_l})
             return
 
         # Fallback for ADB mode (or anytime an adb transport is present).
@@ -1154,20 +1252,8 @@ class DeviceClient:
         return t in ("<hierarchy />", "<?xml version=\"1.0\" encoding=\"UTF-8\"?><hierarchy />") or t.endswith("<hierarchy />")
 
     def _hierarchy_xml_via_u2(self, now: float) -> Optional[str]:
-        """Fallback: hierarchy via u2 tunnel.
-
-        Uses a 2 s acquire timeout so that an in-flight touch operation is never
-        blocked by a slower hierarchy dump, and vice-versa (NanoHTTPD is single-threaded).
-        Returns None immediately when the lock cannot be acquired; the caller falls
-        back to the a11y path or the cached hierarchy.
-        """
-        acquired = self._u2_request_lock.acquire(timeout=2.0)
-        if not acquired:
-            return None
-        try:
-            return self._hierarchy_xml_u2_impl(now)
-        finally:
-            self._u2_request_lock.release()
+        """Fallback: hierarchy via u2 (atx-agent or WS tunnel)."""
+        return self._hierarchy_xml_u2_impl(now)
 
     # Hierarchy dump via u2: use compressed layout (skip invisible nodes).
     # compressed=True cuts dump time from 3-10 s to 1-3 s on complex Samsung screens
@@ -1287,53 +1373,77 @@ class DeviceClient:
         """
         Attach scrcpy screen streaming + control to a WS-Agent device (Mode A hybrid).
 
-        When enable_control=True (default), scrcpy also provides touch/key input
-        via its control channel — smoother than raw U2 injection.
+        Routing:
+          - Cloud deployment (relay available): frames travel device → agent-boot → gRPC → cloud.
+            No local adb binary needed.
+          - Local / single-machine (no relay): ScrcpyReceiver uses local adb directly (fallback).
 
-        Args:
-            device_ip:       Device IP address (e.g. "192.168.1.100")
-            adb_port:        ADB TCP port on device (default 5555)
-            enable_control:  Also enable scrcpy control channel for touch/key input
+        When enable_control=True, scrcpy also provides touch/key input.
         """
-        # Stop any existing scrcpy receiver
-        self.detach_scrcpy_stream()
+        # Store params so subscribe_frames can restart scrcpy after an auto-stop
+        self._scrcpy_params = (device_ip, adb_port, enable_control)
 
-        serial = f"{device_ip}:{adb_port}"
-        adb_bin = os.environ.get("SCRCPY_ADB_BIN", "adb").strip() or "adb"
-        # Unique port per device slot to avoid collision when multiple devices are attached
-        scrcpy_port = 27183 + self.index
-
-        try:
-            # adb connect (ensure device is reachable)
-            subprocess.run([adb_bin, "connect", serial], capture_output=True, timeout=10)
-            # NOTE: adb forward is handled internally by ScrcpyReceiver._connect_and_stream()
-            scrcpy_jar = AdbDeviceBootstrap._resolve_scrcpy_jar()
-            # Get real screen resolution via adb (scrcpy downscales, we need real for touch coords)
-            if not self.screen_width or not self.screen_height:
+        # If relay scrcpy is already streaming for the same device IP, don't tear it down.
+        # APK WS reconnects frequently (WiFi instability, atx-agent restarts) and each
+        # reconnect calls attach_scrcpy_stream — killing + restarting scrcpy every time
+        # causes video freeze for 2-5s per reconnect.
+        # The relay scrcpy session is independent of the APK WS lifecycle — keep it alive.
+        if self._scrcpy_active and self._scrcpy_receiver is not None:
+            # RelayScrcpyReceiver.serial is "ip:port"; extract IP for comparison
+            existing_serial = getattr(self._scrcpy_receiver, "serial", "") or ""
+            existing_ip = existing_serial.rsplit(":", 1)[0] if ":" in existing_serial else existing_serial
+            if existing_ip == device_ip:
+                # Also check if the relay session is still alive.  When gRPC reconnects,
+                # stop_all_sessions() kills scrcpy on agent-boot and clears _scrcpy_running.
+                # Detect this by asking the relay manager — if the session is gone,
+                # fall through to restart WITHOUT clearing _scrcpy_active (which would
+                # cause on_agent_disconnect to wipe _last_config_frame and lose bootstrap).
+                _session_alive = True
                 try:
-                    wm = subprocess.run(
-                        [adb_bin, "-s", serial, "shell", "wm", "size"],
-                        capture_output=True, text=True, timeout=5,
+                    from runtime.transports.adb_relay_server import get_relay_manager as _grm
+                    _relay_check = _grm()
+                    if _relay_check and not _relay_check.is_scrcpy_running(existing_serial):
+                        _session_alive = False
+                except Exception:
+                    pass
+                if _session_alive:
+                    self._log(
+                        f"scrcpy already streaming for {device_ip} — skipping reattach",
+                        level=logging.DEBUG,
                     )
-                    # Parse "Physical size: 1080x2316"
-                    for line in wm.stdout.strip().splitlines():
-                        if line.strip().startswith("Physical size") and "x" in line:
-                            parts = line.split(":")[-1].strip().split("x")
-                            self.screen_width = int(parts[0])
-                            self.screen_height = int(parts[1])
-                            self._log(f"Real screen resolution from adb: {self.screen_width}x{self.screen_height}")
-                            break
-                except Exception as exc2:
-                    self._log(f"Failed to get screen size via adb: {exc2}", level=logging.WARNING)
-        except Exception as exc:
-            self._log(f"attach_scrcpy_stream setup failed: {exc}", level=logging.ERROR)
-            return
+                    return
+                # Relay session lost — stop the dead receiver (no scrcpy_stop sent,
+                # agent already stopped it) and fall through to restart.
+                # _scrcpy_active stays True so on_agent_disconnect won't clear
+                # _last_config_frame (existing browser subscribers keep their bootstrap).
+                self._log(
+                    f"relay session lost for {existing_ip} — restarting scrcpy",
+                    level=logging.INFO,
+                )
+                try:
+                    self._scrcpy_receiver.stop_receiver()
+                except Exception:
+                    pass
+                self._scrcpy_receiver = None
+                # fall through to re-create receiver and re-issue scrcpy_start
+                # NOTE: do NOT call detach_scrcpy_stream() here — it sets _scrcpy_active=False
+                # which would allow on_agent_disconnected() to clear _last_config_frame.
+                # We only need the normal detach path for the case where we start fresh.
+                self._scrcpy_active = True  # explicitly keep True for on_agent_disconnect guard
+                _skip_detach = True
 
+        if not locals().get("_skip_detach"):
+            self.detach_scrcpy_stream()
+
+        # Use IP-only as the lookup key for relay mode — mDNS port is OS-assigned
+        # and not known here.  resolve_serial() finds the device by IP in the relay
+        # manager's serial index.  adb_port is kept as fallback for local-adb path.
+        serial = device_ip if (adb_port is None or adb_port == 5555) else f"{device_ip}:{adb_port}"
+        scrcpy_port = 27183 + self.index
+        _relay_mode = self.config.streaming.mode != "periodic"
+
+        # ── Shared callbacks (same for both relay and local paths) ──────────────
         def _on_scrcpy_frame(jpeg: bytes) -> None:
-            # Called for keyframes (relay mode) or every frame (JPEG-only mode).
-            # Ensures take_screenshot() always has a recent JPEG available.
-            # ScrcpyControl coordinate fix: scrcpy may downscale video (e.g. 376x800)
-            # but touch coords use real resolution (e.g. 1080x2316).
             ctrl = receiver.control
             if ctrl is not None and self.screen_width and ctrl.screen_width != self.screen_width:
                 ctrl.screen_width = self.screen_width
@@ -1342,56 +1452,248 @@ class DeviceClient:
             with self._latest_jpeg_lock:
                 self._latest_jpeg = jpeg
                 self._last_frame_time = time.monotonic()
-            # In relay mode: subscribers receive H264 directly — skip JPEG publish.
-            # In periodic mode: MJPEG frontend polls /stream/{serial} over HTTP —
-            # no need to also push JPEG over WS (wastes 20fps × N devices of CPU).
-            if _relay_mode:
-                pass  # H264 path handles delivery
-            # periodic mode: cache-only, MJPEG endpoint serves it
 
         def _on_scrcpy_h264_config(avcc_record: bytes, w: int, h: int, changed: bool = False) -> None:
-            """Relay SPS/PPS AVCDecoderConfigurationRecord to browser subscribers.
-            changed=True triggers browser VideoDecoder reset (rotation/resolution/reconnect).
-            """
             self.on_agent_h264_config(
                 avcc_record, w or self.screen_width, h or self.screen_height, changed
             )
 
         def _on_scrcpy_h264_packet(avcc_data: bytes, is_key: bool, pts_us: int) -> None:
-            """Relay raw AVCC video frame to browser (WebCodecs path, no server decode)."""
             self.on_agent_h264_video(avcc_data, is_key, pts_us)
 
-        # Use WebCodecs relay when streaming mode allows continuous video.
-        _relay_mode = self.config.streaming.mode != "periodic"
+        # ── Try relay path first (cloud deployment) ─────────────────────────────
+        try:
+            import time as _time
+            from runtime.transports.adb_relay_server import get_relay_manager
+            from runtime.transports.scrcpy_receiver import RelayScrcpyReceiver
+            from runtime.transports.scrcpy_control import RelayScrcpyControl
 
-        receiver = ScrcpyReceiver(
-            serial=serial,
-            adb_path=adb_bin,
-            port=scrcpy_port,
-            server_jar=scrcpy_jar,
-            max_fps=self.config.device.scrcpy_max_fps,
-            max_width=self.config.device.scrcpy_max_width,
-            reconnect_delay=2.0,
-            enable_control=enable_control,
-            on_frame=_on_scrcpy_frame,
-            on_h264_config=_on_scrcpy_h264_config if _relay_mode else None,
-            on_h264_packet=_on_scrcpy_h264_packet if _relay_mode else None,
+            relay = get_relay_manager()
+
+            # Resolve actual serial first: farm constructs "ip:5555" but mDNS devices
+            # use a random port (e.g. "ip:46311") chosen by the OS — not 5555.
+            # resolve_serial() finds the device by IP even if port differs.
+            actual_serial = relay.resolve_serial(serial) if relay else serial
+
+            # If device still not known to any relay agent, wait up to 4 s for
+            # agent-boot's next heartbeat.  Do NOT broadcast `adb connect ip:5555` —
+            # mDNS devices are already connected at an OS-assigned port; connecting to
+            # :5555 will always fail with "Connection refused".
+            if relay and not relay.relay_for_serial(actual_serial):
+                for _ in range(16):         # poll 16 × 0.25 s = up to 4 s
+                    _time.sleep(0.25)
+                    actual_serial = relay.resolve_serial(serial)
+                    if relay.relay_for_serial(actual_serial):
+                        break
+
+            if relay and relay.relay_for_serial(actual_serial) and self._loop:
+                # Populate device metadata from relay capabilities (if not already set)
+                caps = relay.get_capabilities(actual_serial)
+                if caps:
+                    self.brand           = self.brand or caps.get("brand", "")
+                    self.model           = self.model or caps.get("model", "")
+                    self.android_version = self.android_version or caps.get("android_version", "")
+                    self.sdk_version     = self.sdk_version or int(caps.get("sdk") or 0)
+                    self.screen_width    = self.screen_width or int(caps.get("screen_width") or 0)
+                    self.screen_height   = self.screen_height or int(caps.get("screen_height") or 0)
+                    self.name = self.name or f"{caps.get('brand','')} {caps.get('model','')}".strip()
+
+                receiver = RelayScrcpyReceiver(
+                    serial=actual_serial,
+                    on_frame=_on_scrcpy_frame,
+                    on_h264_config=_on_scrcpy_h264_config if _relay_mode else None,
+                    on_h264_packet=_on_scrcpy_h264_packet if _relay_mode else None,
+                )
+
+                if enable_control:
+                    receiver.control = RelayScrcpyControl(
+                        serial=actual_serial,
+                        relay_manager=relay,
+                        loop=self._loop,
+                        screen_width=self.screen_width or 0,
+                        screen_height=self.screen_height or 0,
+                    )
+
+                # Register under actual_serial — frames from agent arrive with this serial
+                relay.register_scrcpy_receiver(actual_serial, receiver)
+                receiver.start_receiver()
+
+                # Only send scrcpy_start if no session is currently running.
+                # If a relay-only device already started scrcpy for this serial,
+                # we inherit the running session without restarting it — avoids
+                # the 3-5s scrcpy restart gap and prevents two scrcpy processes
+                # competing for localabstract:scrcpy on the same device.
+                import asyncio
+                if relay.is_scrcpy_running(actual_serial):
+                    self._log(
+                        f"scrcpy already running for {actual_serial} — inheriting session",
+                        level=logging.DEBUG,
+                    )
+                else:
+                    # low_latency (KEY_LATENCY=0): saves ~66-133ms of encoder buffer
+                    # but crashes MediaCodec on Android 14+ (API 34+). Safe on API ≤ 33.
+                    _sdk = int(self.sdk_version or 0)
+                    _low_latency = 0 < _sdk < 34
+                    asyncio.run_coroutine_threadsafe(
+                        relay.start_scrcpy(
+                            serial=actual_serial,
+                            max_fps=self.config.device.scrcpy_max_fps,
+                            max_width=self.config.device.scrcpy_max_width,
+                            enable_control=enable_control,
+                            port=scrcpy_port,
+                            bitrate=self.config.device.scrcpy_relay_bitrate,
+                            low_latency=_low_latency,
+                        ),
+                        self._loop,
+                    )
+
+                # Fetch screen resolution via relay shell (non-blocking, best-effort)
+                if not self.screen_width or not self.screen_height:
+                    asyncio.run_coroutine_threadsafe(
+                        self._fetch_screen_size_via_relay(relay, actual_serial),
+                        self._loop,
+                    )
+
+                self._scrcpy_receiver = receiver
+                self._scrcpy_active = True
+                # Mark device as READY so the frontend shows it and plays video
+                if self.state == DeviceState.DISCONNECTED:
+                    self.state = DeviceState.READY
+                ctrl_status = "control=ON (relay)" if enable_control else "video-only (relay)"
+                self._log(f"scrcpy stream attached via relay ({actual_serial}) — {ctrl_status}")
+                return
+        except Exception as exc:
+            self._log(f"relay scrcpy unavailable, falling back to local adb: {exc}", level=logging.DEBUG)
+
+        # If relay server is running but no relay agent connected for this device,
+        # register a pending callback so scrcpy starts automatically once agent-boot
+        # connects and reports the device serial via heartbeat.
+        try:
+            from runtime.transports.adb_relay_server import get_relay_manager
+            _relay = get_relay_manager()
+            if _relay is not None:
+                device_ip = device_ip  # captured in closure below
+                _enable_control = enable_control
+                _loop = self._loop
+
+                def _on_relay_serial(actual_serial: str) -> None:
+                    self._log(
+                        f"[scrcpy] relay agent now has {actual_serial} — re-attaching scrcpy",
+                        level=logging.INFO,
+                    )
+                    import concurrent.futures as _cf
+                    _cf.ThreadPoolExecutor(max_workers=1).submit(
+                        self.attach_scrcpy_stream, device_ip, 5555, _enable_control
+                    )
+
+                _relay.register_pending_scrcpy(device_ip, _on_relay_serial)
+                self._log(
+                    f"[scrcpy] relay agent not yet connected for {device_ip!r} — "
+                    f"registered pending callback (will auto-start when agent-boot connects). "
+                    f"Connected relay agents: {_relay.registered_relays()}",
+                    level=logging.WARNING,
+                )
+
+                # Also schedule a retry in 30 s — in case the relay connects but
+                # the RegisterMsg doesn't include this device (e.g. device joined adb
+                # after the relay's initial heartbeat).
+                if _loop:
+                    async def _delayed_retry() -> None:
+                        import asyncio as _asyncio
+                        await _asyncio.sleep(30)
+                        # Only retry if scrcpy still not active
+                        if not self._scrcpy_active and self.state not in (
+                            DeviceState.DISCONNECTED, DeviceState.DEAD
+                        ):
+                            self._log(
+                                f"[scrcpy] 30s retry: re-attempting attach_scrcpy_stream for {device_ip!r}",
+                                level=logging.INFO,
+                            )
+                            import concurrent.futures as _cf2
+                            _cf2.ThreadPoolExecutor(max_workers=1).submit(
+                                self.attach_scrcpy_stream, device_ip, 5555, _enable_control
+                            )
+                    _loop.call_soon_threadsafe(
+                        lambda: _loop.create_task(_delayed_retry())
+                    )
+                return
+        except Exception:
+            pass
+
+        self._log(
+            f"attach_scrcpy_stream: no relay agent connected for {device_ip!r}. "
+            "Scrcpy requires agent-boot to be running and connected.",
+            level=logging.WARNING,
         )
-        receiver.start_receiver()
 
-        self._scrcpy_receiver = receiver
-        self._scrcpy_active = True
-        ctrl_status = "control=ON" if enable_control else "video-only"
-        self._log(f"scrcpy stream attached ({serial}) — {ctrl_status}, MediaProjection suppressed")
+    async def _fetch_screen_size_via_relay(self, relay: Any, serial: str) -> None:
+        """Best-effort: read wm size from device via relay shell and store on self."""
+        try:
+            output = await relay.adb_shell(serial, "wm size", timeout=10.0)
+            if not output:
+                return
+            for line in output.strip().splitlines():
+                if line.strip().startswith("Physical size") and "x" in line:
+                    parts = line.split(":")[-1].strip().split("x")
+                    self.screen_width = int(parts[0])
+                    self.screen_height = int(parts[1])
+                    self._log(f"Screen resolution via relay: {self.screen_width}x{self.screen_height}")
+                    # Propagate to relay control if already created
+                    recv = self._scrcpy_receiver
+                    if recv is not None and recv.control is not None:
+                        recv.control.screen_width = self.screen_width
+                        recv.control.screen_height = self.screen_height
+                    break
+        except Exception as exc:
+            self._log(f"relay wm size failed: {exc}", level=logging.DEBUG)
 
-    def detach_scrcpy_stream(self) -> None:
-        """Stop scrcpy receiver (+ control) and resume MediaProjection frames.
-        adb forward cleanup is handled internally by ScrcpyReceiver."""
+    def _clear_scrcpy_without_stop(self) -> None:
+        """Yield the relay scrcpy session to another DeviceClient without stopping it.
+
+        Called when a WS APK device takes over scrcpy for the same physical device.
+        We clear our local state so auto-stop timers don't fire and kill the session
+        that the new owner will use.  No scrcpy_stop is sent to the relay.
+        """
         if self._scrcpy_receiver is not None:
             try:
                 self._scrcpy_receiver.stop_receiver()
             except Exception:
                 pass
+            self._scrcpy_receiver = None
+        self._scrcpy_active = False
+        self._last_frame_time = 0.0
+        self._scrcpy_params = None   # prevent demand-restart on subscribe_frames
+        # Cancel pending auto-stop so it doesn't call detach_scrcpy_stream
+        if self._scrcpy_stop_task is not None:
+            try:
+                self._scrcpy_stop_task.cancel()
+            except Exception:
+                pass
+            self._scrcpy_stop_task = None
+
+    def detach_scrcpy_stream(self) -> None:
+        """Stop scrcpy receiver (+ control) and resume MediaProjection frames.
+        For relay receivers, also sends SCRCPY_STOP to the relay agent."""
+        if self._scrcpy_receiver is not None:
+            serial = getattr(self._scrcpy_receiver, "serial", None)
+            try:
+                self._scrcpy_receiver.stop_receiver()
+            except Exception:
+                pass
+            # Clean up relay state if this was a relay-mode receiver
+            if serial and self._loop:
+                try:
+                    from runtime.transports.adb_relay_server import get_relay_manager
+                    from runtime.transports.scrcpy_receiver import RelayScrcpyReceiver
+                    import asyncio
+                    if isinstance(self._scrcpy_receiver, RelayScrcpyReceiver):
+                        relay = get_relay_manager()
+                        if relay:
+                            asyncio.run_coroutine_threadsafe(
+                                relay.stop_scrcpy(serial), self._loop
+                            )
+                except Exception:
+                    pass
             self._scrcpy_receiver = None
         self._scrcpy_active = False
 
@@ -1507,16 +1809,7 @@ class DeviceClient:
         if not self.ensure_u2_healthy() or self._u2 is None:
             self._log("tap_selector skipped (U2 not available)", level=logging.WARNING)
             return
-        # Serialize with all u2 operations (NanoHTTPD is single-threaded).
-        # 5 s timeout prevents blocking indefinitely when u2 is frozen.
-        acquired = self._u2_request_lock.acquire(timeout=5.0)
-        if not acquired:
-            self._log("tap_selector: lock timeout — u2 busy", level=logging.WARNING)
-            return
-        try:
-            self._tap_selector_impl(by, value)
-        finally:
-            self._u2_request_lock.release()
+        self._tap_selector_impl(by, value)
 
     def _tap_selector_impl(self, by: str, value: str) -> None:
         u2_snap = self._u2
@@ -1551,6 +1844,103 @@ class DeviceClient:
                 if self._u2 is not None:
                     self._u2 = None
 
+    def screen_on(self) -> None:
+        """Wake the device screen via U2 (screenOn RPC) or key('power') fallback."""
+        with self._u2_lock:
+            u2 = self._u2
+        if u2 is not None:
+            try:
+                u2.screen_on()
+                return
+            except Exception as exc:
+                self._log(f"screen_on via U2 failed: {exc}", level=logging.WARNING)
+        self.key("power")
+
+    def screen_off(self) -> None:
+        """Put the device screen to sleep via U2 (screenOff RPC) or key('power') fallback."""
+        with self._u2_lock:
+            u2 = self._u2
+        if u2 is not None:
+            try:
+                u2.screen_off()
+                return
+            except Exception as exc:
+                self._log(f"screen_off via U2 failed: {exc}", level=logging.WARNING)
+        self.key("power")
+
+    def unlock(self) -> None:
+        """Unlock device via U2 (unlock RPC) or power+swipe-up fallback."""
+        with self._u2_lock:
+            u2 = self._u2
+        if u2 is not None:
+            try:
+                u2.unlock()
+                return
+            except Exception as exc:
+                self._log(f"unlock via U2 failed: {exc}", level=logging.WARNING)
+        # Fallback: power press to wake, then swipe-up
+        self.key("power")
+        time.sleep(0.3)
+        self.swipe(540, 1600, 540, 800, 400)
+
+    def swipe_ext(self, direction: str, scale: float = 0.8, duration_ms: int = 500) -> None:
+        """Directional screen-relative swipe (up/down/left/right).
+
+        Prefers U2's swipe_ext (reads device info for exact screen size);
+        falls back to raw swipe() using screen_width / screen_height from DeviceClient.
+        """
+        with self._u2_lock:
+            u2 = self._u2
+        if u2 is not None:
+            try:
+                u2.swipe_ext(direction, scale=scale, duration=duration_ms / 1000.0)
+                return
+            except Exception as exc:
+                self._log(f"swipe_ext via U2 failed ({direction}): {exc}", level=logging.WARNING)
+        # Fallback using cached screen dimensions
+        w = self.screen_width or 1080
+        h = self.screen_height or 1920
+        cx, cy = w // 2, h // 2
+        hw = int(w * scale / 2)
+        hh = int(h * scale / 2)
+        d = direction.lower()
+        if d == "up":
+            self.swipe(cx, cy + hh, cx, cy - hh, duration_ms)
+        elif d == "down":
+            self.swipe(cx, cy - hh, cx, cy + hh, duration_ms)
+        elif d == "left":
+            self.swipe(cx + hw, cy, cx - hw, cy, duration_ms)
+        elif d == "right":
+            self.swipe(cx - hw, cy, cx + hw, cy, duration_ms)
+        else:
+            self._log(f"swipe_ext: unknown direction {direction!r}", level=logging.WARNING)
+
+    def install(self, apk_source: str, timeout: float = 90.0) -> None:
+        """Install APK via atx-agent /install endpoint (URL or local path).
+
+        Requires atx-agent to be running on the device (port 7912).
+        Falls back to ADB install for ADB-mode devices.
+        """
+        with self._u2_lock:
+            u2 = self._u2
+        if u2 is not None:
+            try:
+                u2.install(apk_source, timeout=timeout)
+                self._log(f"install via atx-agent: {apk_source}")
+                return
+            except Exception as exc:
+                self._log(f"install via atx-agent failed: {exc}", level=logging.WARNING)
+        # ADB mode fallback
+        adb = self._adb_transport
+        if adb is not None and adb.connected and not apk_source.startswith(("http://", "https://")):
+            try:
+                adb.shell(f"pm install -r {apk_source}", timeout=timeout)
+                self._log(f"install via ADB: {apk_source}")
+            except Exception as exc:
+                self._log(f"install via ADB failed: {exc}", level=logging.WARNING)
+        else:
+            self._log("install: no suitable transport available", level=logging.WARNING)
+
     # ── uiautomator2 passthrough ──────────────────────────────────────────────
 
     @property
@@ -1571,8 +1961,16 @@ class DeviceClient:
 
         u2 = self._u2
         if u2 is None:
-            # atx-agent mode: connect directly to device_ip:7912, no tunnel needed
+            # atx-agent direct mode: device_ip:7912 reachable (local/same-LAN, u2_always_tunnel=False).
+            # Cloud/Docker: _u2_host is None (u2_always_tunnel=True) → falls through to WS tunnel.
             if self._u2_host:
+                # Respect backoff even for direct callers (tap/swipe/hierarchy/WS-reconnect).
+                # Without this check, concurrent callers bypass the keepalive's backoff guard
+                # and hammer _reconnect_u2_atx every few ms → death loop of restart→timeout.
+                if self._u2_reconnect_failed_at > 0:
+                    since_fail = time.monotonic() - self._u2_reconnect_failed_at
+                    if since_fail < self._U2_ATX_RECONNECT_BACKOFF:
+                        return False  # still in backoff — caller should skip or retry later
                 return self._reconnect_u2()
             # Legacy WS tunnel mode: need tunnel port
             ports = self._tunnel_ports or {}
@@ -1585,7 +1983,7 @@ class DeviceClient:
         # until the next HTTP request times out (up to 15 s), stalling touch events.
         now = time.monotonic()
         if now - self._u2_last_ok_at > self._U2_STALE_CHECK_INTERVAL:
-            if not u2.ping(timeout=min(ping_timeout, 4.0)):  # NanoHTTPD can be slow; 1.5s was too tight
+            if not u2.ping(timeout=min(ping_timeout, 4.0)):
                 self._log("u2 stale-ping failed — server likely crashed", level=logging.WARNING)
                 with self._u2_lock:
                     if self._u2 is u2:
@@ -1656,11 +2054,27 @@ class DeviceClient:
         self._log(f"u2 did not recover within {timeout:.0f}s", level=logging.ERROR)
         return False
 
-    _U2_RECONNECT_ATTEMPTS = 3
-    _U2_RECONNECT_DELAY = 0.5        # APK reconnects in ~50ms; short delay is enough
-    _U2_RECONNECT_PROBE_TIMEOUT = 2.0  # fail fast: APK already reconnected, if still no response → dead
+    _U2_RECONNECT_ATTEMPTS = 8
+    _U2_RECONNECT_DELAY = 1.5        # u2 instrumentation may need 5-10s to start; use longer delay
+    _U2_RECONNECT_PROBE_TIMEOUT = 3.0  # give u2 a bit more time to respond on first connect
     _U2_RECONNECT_BACKOFF = 10.0
     _U2_RECOVERY_COOLDOWN = 30.0  # min seconds between recovery attempts (start_services + ADB)
+
+    # atx-agent specific tuning.
+    #
+    # "Read timed out" on port 7912 can mean two different things:
+    #   A) atx-agent is alive but waiting for u2 to restart (normal, 3-8s)
+    #   B) atx-agent goroutine is genuinely frozen (needs kill+restart)
+    #
+    # We give it ONE second chance (6s wait + retry) to distinguish A from B.
+    # Only on the second consecutive timeout do we trigger an atx restart.
+    # This prevents killing a healthy atx-agent that is in the middle of
+    # restarting u2 — the most common cause of unnecessary "deaths".
+    _U2_ATX_RECONNECT_ATTEMPTS = 4    # max retries for "Connection refused" (atx starting up)
+    _U2_ATX_RECONNECT_DELAY    = 1.5
+    _U2_ATX_PROBE_TIMEOUT      = 1.5  # quick probe; timeout triggers second-chance logic
+    _U2_ATX_TIMEOUT_GRACE      = 6.0  # wait after first timeout — covers u2 restart (3-8s)
+    _U2_ATX_RECONNECT_BACKOFF  = 30.0 # backoff after triggering atx restart
 
     def _recover_u2_ws_mode(self) -> None:
         """
@@ -1676,9 +2090,12 @@ class DeviceClient:
           process is dead, restart am instrument via ADB.
         """
         if self._u2_host:
-            # atx-agent handles restart on-device — nothing to do here.
-            self._log("u2 recovery: atx-agent will restart u2 on device", level=logging.DEBUG)
-            self._u2_reconnect_failed_at = 0.0  # allow keepalive to retry immediately
+            # atx-agent path: just tell the APK to restart u2 instrumentation.
+            # atx-agent manages u2 death automatically — no need to kill the binary.
+            # Binary restart only happens when atx-agent is frozen (read timeout),
+            # which is detected and handled in _connect_u2_via_atx_agent.
+            self._log("u2 recovery: sending start_services to APK (atx-agent path)", level=logging.DEBUG)
+            self._send_to_agent({"type": "start_services", "services": ["u2"]})
             return
 
         # ── Legacy: no atx-agent — ADB restart ───────────────────────────────
@@ -1695,6 +2112,36 @@ class DeviceClient:
             self._u2_adb_restart_at = now
         self._send_to_agent({"type": "start_services", "services": ["u2"]})
         self._log("u2 recovery: sent start_services to APK")
+
+        # ── Try gRPC relay first (works in cloud, no local adb needed) ──────────
+        try:
+            from runtime.transports.adb_relay_server import get_relay_manager
+            relay = get_relay_manager()
+            if relay and relay.relay_for_serial(self._adb_serial or self.serial):
+                serial = self._adb_serial or self.serial
+                self._log("u2 recovery: triggering restart_u2 via gRPC relay")
+                if self._loop:
+                    fut = asyncio.run_coroutine_threadsafe(
+                        relay.restart_u2(serial, timeout=60.0),
+                        self._loop,
+                    )
+
+                    def _on_relay_done(f: "concurrent.futures.Future") -> None:
+                        try:
+                            ok = f.result()
+                            if ok:
+                                self._u2_reconnect_failed_at = 0.0
+                                self._log("u2 recovery: relay restart_u2 succeeded")
+                            else:
+                                self._log("u2 recovery: relay restart_u2 returned not-ok")
+                        except Exception as exc2:
+                            self._log(f"u2 recovery: relay restart_u2 error: {exc2}")
+
+                    fut.add_done_callback(_on_relay_done)
+                return
+        except Exception as exc:
+            self._log(f"u2 recovery: relay unavailable ({exc}), falling back to local ADB",
+                      level=logging.DEBUG)
 
         adb_bin = shutil.which("adb")
         if adb_bin is None:
@@ -1743,9 +2190,11 @@ class DeviceClient:
                             capture_output=True, text=True, timeout=5,
                         )
                         if r2.stdout.strip():
-                            self._log("u2 recovery: :9008 ready — resetting backoff")
+                            self._log("u2 recovery: :9008 ready — reconnecting now")
                             self._u2_reconnect_failed_at = 0.0
                             self._send_to_agent({"type": "start_services", "services": ["u2"]})
+                            # Reconnect immediately instead of waiting for next keepalive cycle
+                            self._reconnect_u2()
                             return
                     except Exception:
                         pass
@@ -1808,11 +2257,6 @@ class DeviceClient:
         self._u2_reconnect_failed_at = time.monotonic()
         return False
 
-    # atx-agent typically needs 3–8s to restart u2 instrumentation.
-    # Use more attempts with longer delay than the WS tunnel path.
-    _U2_ATX_RECONNECT_ATTEMPTS = 8
-    _U2_ATX_RECONNECT_DELAY    = 1.5
-
     def _reconnect_u2_atx(self) -> bool:
         """Connect to atx-agent HTTP proxy at device_ip:7912.
 
@@ -1832,6 +2276,10 @@ class DeviceClient:
         port = 7912
         cfg = self.config.u2
 
+        # Second-chance flag: first "Read timed out" waits for u2 restart instead of
+        # immediately killing atx.  The most common "death" scenario is:
+        #   u2 crash → _recover_u2_ws_mode() sends start_services → atx starts restarting u2
+        #   (3-8s) → we immediately call verify(1.5s) → timeout → wrongly kill healthy atx.
         for attempt in range(1, self._U2_ATX_RECONNECT_ATTEMPTS + 1):
             # Always check under lock first — another thread may have connected.
             with self._u2_lock:
@@ -1840,7 +2288,6 @@ class DeviceClient:
 
             if attempt > 1:
                 time.sleep(self._U2_ATX_RECONNECT_DELAY)
-                # Re-check after sleep; device may have disconnected meanwhile.
                 if not self._u2_host:
                     return False
                 with self._u2_lock:
@@ -1851,24 +2298,145 @@ class DeviceClient:
             d_rpc.implicitly_wait(cfg.implicitly_wait)
             d_rpc.settings["wait_timeout"] = cfg.wait_timeout
             try:
-                d_rpc.verify(timeout=self._U2_RECONNECT_PROBE_TIMEOUT)
+                d_rpc.verify(timeout=self._U2_ATX_PROBE_TIMEOUT)
                 with self._u2_lock:
-                    if self._u2 is None:  # double-check under lock before writing
+                    if self._u2 is None:
                         self._u2 = d_rpc
                     else:
-                        d_rpc._session.close()  # another thread beat us; discard
+                        d_rpc._session.close()
+                self._u2_reconnect_failed_at = 0.0   # clear backoff on success
+                self._atx_grace_given_at = float("-inf")  # reset grace window
                 self._log(f"uiautomator2 connected via atx-agent ({host}:{port})")
                 return True
             except Exception as exc:
                 d_rpc._session.close()
+                exc_str = str(exc)
                 self._log(
                     f"atx-agent connect attempt {attempt}/{self._U2_ATX_RECONNECT_ATTEMPTS}"
                     f" ({host}:{port}): {exc}",
                     level=logging.WARNING,
                 )
 
+                if "timed out" in exc_str.lower():
+                    now = time.monotonic()
+                    grace_age = now - self._atx_grace_given_at
+                    if grace_age >= self._U2_ATX_TIMEOUT_GRACE + 2.0:
+                        # First timeout seen (or previous grace expired long ago).
+                        # atx-agent may be busy restarting u2 (3-8s) — do NOT block
+                        # the thread pool worker. Record the grace timestamp and return
+                        # with a short backoff; the keepalive will call us again after
+                        # _U2_ATX_TIMEOUT_GRACE seconds have passed.
+                        self._atx_grace_given_at = now
+                        grace_backoff = self._U2_ATX_TIMEOUT_GRACE + 1.0
+                        self._u2_reconnect_failed_at = now - (self._U2_ATX_RECONNECT_BACKOFF - grace_backoff)
+                        self._log(
+                            f"atx-agent slow (may be restarting u2) — "
+                            f"backing off {grace_backoff:.0f}s, will retry",
+                            level=logging.WARNING,
+                        )
+                        return False
+                    else:
+                        # Second timeout within grace window: atx is genuinely frozen.
+                        self._atx_grace_given_at = float("-inf")  # reset for next cycle
+                        self._log("atx-agent frozen (2nd timeout) — triggering relay restart",
+                                  level=logging.WARNING)
+                        self._trigger_atx_restart_async(host)
+                        self._u2_reconnect_failed_at = time.monotonic()
+                        return False  # keepalive will retry after backoff + recovery poll
+
+                # "Connection refused" or other: continue retrying (atx may be starting up)
+
         self._u2_reconnect_failed_at = time.monotonic()
         return False
+
+    def _trigger_atx_restart_async(self, host: str) -> None:
+        """Kill and restart the atx-agent binary on device via gRPC relay ADB shell.
+
+        Also kills the uiautomator2 instrumentation process — the #1 reason atx-agent
+        freezes is u2 getting stuck and blocking atx's HTTP handler.  Restarting atx
+        alone leaves the zombie u2 process alive so atx refreezes immediately.
+
+        After sending the restart command, spins up _poll_atx_recovery() which clears
+        the backoff as soon as port 7912 accepts a TCP connection (~5-8s), instead of
+        waiting the full _U2_ATX_RECONNECT_BACKOFF.
+        """
+        # Dedup: if a restart was already triggered within 15s, skip.
+        # Both _reconnect_u2_atx (on freeze) and watchdog can call this concurrently.
+        now = time.monotonic()
+        if now - self._atx_restart_triggered_at < 15.0:
+            self._log("atx-agent restart skipped — another restart triggered recently", level=logging.DEBUG)
+            return
+        self._atx_restart_triggered_at = now
+
+        hint_serial = self._adb_serial or f"{host}:5555"
+        loop = self._loop
+        if not loop:
+            return
+        try:
+            from runtime.transports.adb_relay_server import get_relay_manager
+            relay = get_relay_manager()
+            if not relay or not relay.relay_for_serial(hint_serial):
+                return
+            actual_serial = relay.resolve_serial(hint_serial)
+
+            async def _do_restart() -> None:
+                try:
+                    # Kill uiautomator2 instrumentation first — if u2 is stuck it blocks
+                    # atx-agent's HTTP handler.  Wrap in a subshell so the '; sleep 1; ...'
+                    # commands continue even if pkill kills a shell parented by atx-agent.
+                    kill_cmd = (
+                        "sh -c '"
+                        "pkill -9 -f 'uiautomator' 2>/dev/null; "
+                        "pkill -9 atx-agent 2>/dev/null; "
+                        "sleep 1; "
+                        "/data/local/tmp/atx-agent server -d "
+                        ">/data/local/tmp/atx-agent.log 2>&1 &"
+                        "'"
+                    )
+                    out = await relay.adb_shell(actual_serial, kill_cmd, timeout=15.0)
+                    self._log(
+                        f"atx-agent + u2 restarted via relay for {actual_serial}"
+                        + (f": {out.strip()}" if out and out.strip() else "")
+                    )
+                    # Start background TCP poll — clears backoff as soon as port 7912 is live
+                    # so recovery completes in ~5-8s instead of the full 30s flat wait.
+                    threading.Thread(
+                        target=self._poll_atx_recovery,
+                        args=(host,),
+                        daemon=True,
+                        name=f"atx-recovery-{self.serial}",
+                    ).start()
+                except Exception as exc2:
+                    self._log(f"atx-agent restart error for {actual_serial}: {exc2}", level=logging.WARNING)
+
+            asyncio.run_coroutine_threadsafe(_do_restart(), loop)
+        except Exception as exc:
+            self._log(f"_trigger_atx_restart_async: {exc}", level=logging.DEBUG)
+
+    def _poll_atx_recovery(self, host: str, poll_interval: float = 3.0, max_wait: float = 25.0) -> None:
+        """Background thread: poll port 7912 after restart, clear backoff when alive.
+
+        Uses a cheap TCP connect (no HTTP) to detect when atx-agent is ready.
+        Once the port accepts a connection, resets _u2_reconnect_failed_at so the
+        next ensure_u2_healthy() call immediately attempts reconnect instead of
+        waiting the remaining flat backoff.
+        """
+        deadline = time.monotonic() + max_wait
+        while time.monotonic() < deadline:
+            time.sleep(poll_interval)
+            if not self._u2_host:
+                return  # device disconnected
+            try:
+                with socket.create_connection((host, 7912), timeout=2.0):
+                    pass
+                # Port accepted — atx-agent is alive, clear the backoff.
+                self._u2_reconnect_failed_at = 0.0
+                self._atx_grace_given_at = float("-inf")
+                self._log(f"atx-agent recovery: port 7912 live on {host} — backoff cleared")
+                return
+            except Exception:
+                pass
+        self._log(f"atx-agent recovery: port 7912 still unreachable on {host} after {max_wait:.0f}s", level=logging.WARNING)
 
     # ── Frame / Status Broadcasting ───────────────────────────────────────────
 
@@ -1882,16 +2450,73 @@ class DeviceClient:
             self.publish_frame(jpeg)
 
     def subscribe_frames(self, queue: asyncio.Queue) -> None:
+        _had_key = False
         with self._frame_lock:
+            was_empty = len(self._frame_queues) == 0
             if queue not in self._frame_queues:
+                # Bootstrap UNDER THE LOCK: inject config+key before appending queue
+                # to _frame_queues.  No live frame can target this queue yet (gRPC
+                # thread checks _frame_queues under the same lock).  Using put_nowait
+                # guarantees config arrives as the FIRST item the browser sees, without
+                # racing against call_soon_threadsafe callbacks from the video thread.
+                if self._last_config_frame is not None:
+                    try:
+                        queue.put_nowait(self._last_config_frame)
+                    except Exception:
+                        pass
+                if self._last_key_frame is not None:
+                    _had_key = True
+                    try:
+                        queue.put_nowait(self._last_key_frame)
+                    except Exception:
+                        pass
                 self._frame_queues.append(queue)
-        # Send last key frame to late-joining subscriber (works for both bytes and dict)
-        if self._loop and self._last_key_frame is not None:
-            asyncio.run_coroutine_threadsafe(_safe_put(queue, self._last_key_frame), self._loop)
+
+        # No cached IDR → request one immediately via scrcpy RESET_VIDEO (MSG_RESET_VIDEO=16).
+        # This eliminates the wait for the encoder's natural IDR interval (up to 14s default).
+        # request_idr() is a no-op on older scrcpy that doesn't support RESET_VIDEO.
+        if not _had_key:
+            recv = self._scrcpy_receiver
+            ctrl = getattr(recv, 'control', None) if recv is not None else None
+            if ctrl is not None and hasattr(ctrl, 'request_idr'):
+                try:
+                    ctrl.request_idr()
+                except Exception:
+                    pass
+
+        if self._loop:
+            # Cancel any pending auto-stop — viewer is back
+            if self._scrcpy_stop_task and not self._scrcpy_stop_task.done():
+                self._loop.call_soon_threadsafe(self._scrcpy_stop_task.cancel)
+                self._scrcpy_stop_task = None
+
+            # Demand-start: restart scrcpy if it was auto-stopped and params are known
+            if was_empty and self._scrcpy_receiver is None and self._scrcpy_params:
+                params = self._scrcpy_params
+
+                def _start() -> None:
+                    self.attach_scrcpy_stream(*params)
+
+                self._loop.run_in_executor(None, _start)
 
     def unsubscribe_frames(self, queue: asyncio.Queue) -> None:
         with self._frame_lock:
             self._frame_queues = [q for q in self._frame_queues if q is not queue]
+            is_empty = len(self._frame_queues) == 0
+
+        # Auto-stop scrcpy after debounce when no viewers remain — saves device CPU + bandwidth.
+        # 30s debounce avoids restart churn on page refresh.
+        if is_empty and self._scrcpy_receiver is not None and self._loop:
+            async def _debounced_stop() -> None:
+                await asyncio.sleep(30)
+                with self._frame_lock:
+                    if len(self._frame_queues) == 0:
+                        self.detach_scrcpy_stream()
+                        self._logger.info("scrcpy auto-stopped (no viewers for 30s)")
+
+            task = asyncio.run_coroutine_threadsafe(_debounced_stop(), self._loop)
+            # Store as a cancellable Future (not asyncio.Task, but cancel() works the same)
+            self._scrcpy_stop_task = task  # type: ignore[assignment]
 
     def subscribe_status(self, queue: asyncio.Queue) -> None:
         with self._status_lock:
@@ -2039,11 +2664,10 @@ class DeviceClient:
                       level=logging.WARNING)
 
         self.state = DeviceState.READY
-        ctrl = self._get_scrcpy_control()
-        if ctrl is not None:
-            touch_status = "scrcpy_control"
-        elif self._u2 is not None:
+        if self._u2 is not None:
             touch_status = "u2"
+        elif self._get_scrcpy_control() is not None:
+            touch_status = "scrcpy_control"
         else:
             touch_status = "agent_shell"
         self._log("Device READY (touch=%s u2=%s stfservice=%s)" % (
@@ -2066,7 +2690,7 @@ class DeviceClient:
           - In WS mode: sends start_services to ask agent to (re)start u2 on device.
         """
         _INTERVAL = max(3.0, float(os.environ.get("U2_KEEPALIVE_INTERVAL", "5.0")))
-        _PING_TIMEOUT = 6.0   # NanoHTTPD is single-threaded; give it extra time under load
+        _PING_TIMEOUT = 3.0   # atx-agent (Go HTTP) responds fast; 3s is enough
         _MAX_MISSES = 4  # ~20 s of misses before declaring dead (was 2/~10 s)
         misses = 0
 
@@ -2090,12 +2714,14 @@ class DeviceClient:
                 if self.state == DeviceState.READY:
                     now = time.monotonic()
                     since_fail = now - self._u2_reconnect_failed_at
-                    if since_fail < self._U2_RECONNECT_BACKOFF:
+                    # atx-agent path uses a longer backoff (relay restart takes ~5-10s)
+                    backoff = self._U2_ATX_RECONNECT_BACKOFF if self._u2_host else self._U2_RECONNECT_BACKOFF
+                    if since_fail < backoff:
                         # Back off: avoid hammering u2 reconnect every 5s after a
                         # full failed cycle.  The agent may need time to restart
                         # the am-instrument process on device.
                         self._log(
-                            f"u2 keepalive: backoff {self._U2_RECONNECT_BACKOFF - since_fail:.0f}s remaining",
+                            f"u2 keepalive: backoff {backoff - since_fail:.0f}s remaining",
                             level=logging.DEBUG,
                         )
                     else:
@@ -2130,13 +2756,14 @@ class DeviceClient:
                         self._recover_u2_ws_mode()
                     self.ensure_u2_healthy()
 
-    def _teardown_tools(self) -> None:
+    def _teardown_tools(self, stop_scrcpy: bool = True) -> None:
         if self._stf_service:
             try: self._stf_service.stop_client()
             except Exception: pass
             self._stf_service = None
         self._u2 = None
-        self.detach_scrcpy_stream()
+        if stop_scrcpy:
+            self.detach_scrcpy_stream()
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
@@ -2166,22 +2793,47 @@ class DeviceClient:
                 asyncio.run_coroutine_threadsafe(_safe_put(q, log_msg), self._loop)
 
 
-async def _safe_put(queue: asyncio.Queue, item: Any) -> None:
+def _is_droppable_frame(item: Any) -> bool:
+    """Return True if item is a P-frame (not config, not keyframe) — safe to drop."""
+    if not isinstance(item, (bytes, bytearray)):
+        return False
+    if len(item) < 2:
+        return False
+    ft = item[0]
+    if ft == 0x10:
+        return False  # SPS/PPS config — never drop
+    if ft == 0x11:
+        slen = item[1]
+        key_off = 2 + slen + 4  # [type][slen][serial:slen][w:2][h:2] then is_key byte
+        if len(item) > key_off:
+            return item[key_off] == 0  # is_key == 0 → P-frame → droppable
+        return False
+    return False  # JPEG (0x01) or unknown — keep
+
+
+def _sync_put(queue: asyncio.Queue, item: Any) -> None:
+    """Keyframe-aware queue put — must be called from the event loop thread.
+
+    Priority:
+      - SPS/PPS config (0x10) and IDR keyframes (0x11 is_key=1): always deliver;
+        evict oldest item if queue is full.
+      - P-frames (0x11 is_key=0): drop silently when queue is full. A dropped
+        P-frame is undecodable without a preceding IDR anyway — jmuxer will stall
+        until the next keyframe, which is the correct recovery path.
+      - JSON status/log: evict oldest to make room.
+    """
     try:
         queue.put_nowait(item)
     except asyncio.QueueFull:
-        # For video frames (bytes = binary frame protocol, or dict frame type),
-        # drop the oldest entry to make room for the latest frame so clients
-        # never see stale video when network is slow.
-        is_video = isinstance(item, (bytes, bytearray)) or (
-            isinstance(item, dict) and item.get("type") == "frame"
-        )
-        is_status = isinstance(item, dict) and item.get("type") == "status"
-        if is_video or is_status:
-            # Status messages must NOT be dropped — they carry state changes
-            # (DISCONNECTED, DEAD) that the frontend needs immediately.
-            try:
-                queue.get_nowait()
-                queue.put_nowait(item)
-            except (asyncio.QueueEmpty, asyncio.QueueFull):
-                pass
+        if _is_droppable_frame(item):
+            return  # silently drop P-frame — wait for next IDR
+        # Config, keyframe, or JSON: evict oldest to make room
+        try:
+            queue.get_nowait()
+            queue.put_nowait(item)
+        except (asyncio.QueueEmpty, asyncio.QueueFull):
+            pass
+
+
+async def _safe_put(queue: asyncio.Queue, item: Any) -> None:
+    _sync_put(queue, item)

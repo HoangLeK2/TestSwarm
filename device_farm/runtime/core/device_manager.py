@@ -67,6 +67,12 @@ class DeviceManager:
         with self._lock:
             return self._registry.get(serial)
 
+    @property
+    def devices(self) -> Dict[str, DeviceClient]:
+        """Shallow copy of the registry (legacy: ``len(manager.devices)``)."""
+        with self._lock:
+            return dict(self._registry)
+
     def all_devices(self) -> List[DeviceClient]:
         with self._lock:
             return list(self._registry.values())
@@ -248,6 +254,9 @@ class DeviceManager:
     def _save_index_map(self) -> None:
         path = self.config.device.index_file
         try:
+            parent = os.path.dirname(path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
             with open(path, "w") as f:
                 json.dump(self._index_map, f, indent=2)
         except Exception as exc:

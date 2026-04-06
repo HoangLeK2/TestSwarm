@@ -228,8 +228,22 @@ export function useControlRecord(initialSerial?: string | null, initialCampaignI
 
   const sendAndRecord = useCallback(
     (msg: object) => {
+      const m0 = msg as { type?: string; serial?: string };
+
+      // Pre-fetch screenshot BEFORE sending the tap so we capture the screen
+      // state at tap-time (before any UI transition the tap triggers).
+      // `device.take_screenshot()` on the backend returns the last cached frame,
+      // so fetching before the tap gives us the exact screen the user saw.
+      const preTapScreenshotPromise =
+        !skipTapRecordingWhilePickRef.current &&
+        recordingRef.current &&
+        selectedDevice &&
+        m0.type === 'tap' &&
+        m0.serial === selectedDevice.serial
+          ? fetchScreenshotB64(selectedDevice.serial)
+          : undefined;
+
       wsSend(msg);
-      const m0 = msg as { type?: string };
       if (skipTapRecordingWhilePickRef.current && m0.type === 'tap') {
         return;
       }
@@ -271,12 +285,25 @@ export function useControlRecord(initialSerial?: string | null, initialCampaignI
           const ratioCrop = elemBounds?.rx2 != null && elemBounds.rx2 > elemBounds.rx1 && elemBounds.ry2 > elemBounds.ry1
             ? { rx1: elemBounds.rx1, ry1: elemBounds.ry1, rx2: elemBounds.rx2, ry2: elemBounds.ry2 }
             : undefined;
+
+          // screen.screenshot is used ONLY for SSIM visual-anchoring during
+          // playback (scenario_task.py: `if not has_real_selector`).
+          // has_real_selector is True for ANY selector type (resource-id, text,
+          // xpath, description, class name) — so SSIM is NEVER used when any
+          // selector is present. Storing the full screenshot for selector steps
+          // wastes ~150-300 KB per tap with zero benefit.
+          // Only save full screenshot when sel === null (pure ratio fallback).
+          const needFullScreenshot = !sel;
+
+          // Skip network round-trip when we have a selector AND no crop bounds.
+          // (In practice bounds are always present when sel is set.)
+          if (!needFullScreenshot && !ratioCrop) return;
+
           trackScreenshotTask(
-            fetchScreenshotB64(stepSerial).then(async (imgData) => {
+            (preTapScreenshotPromise ?? fetchScreenshotB64(stepSerial)).then(async (imgData) => {
               if (!recordingRef.current) return;
-              // Crop element_image client-side from the same screenshot —
-              // avoids a second round-trip and ensures template matches the
-              // exact frame stored in screen.screenshot.
+              // Crop element_image client-side — avoids a second round-trip and
+              // guarantees the crop matches the exact frame in screen.screenshot.
               const elementImage = ratioCrop
                 ? await cropBase64(imgData.screenshot, ratioCrop)
                 : undefined;
@@ -286,7 +313,8 @@ export function useControlRecord(initialSerial?: string | null, initialCampaignI
                 const updated = [...prev];
                 const s = { ...updated[idxById] };
                 const sc = { ...(s as Record<string, unknown>).screen as Record<string, unknown> };
-                sc.screenshot = imgData.screenshot;
+                // Only store full screenshot when needed for SSIM visual-anchoring
+                if (needFullScreenshot) sc.screenshot = imgData.screenshot;
                 if (elementImage) sc.element_image = elementImage;
                 (s as Record<string, unknown>).screen = sc;
                 updated[idxById] = s as StepWithId;
@@ -552,6 +580,7 @@ export function useControlRecord(initialSerial?: string | null, initialCampaignI
       toggleRecording,
       pollingXml,
       sendAndRecord,
+      wsSend,
       setSkipTapRecordingWhilePick,
       handleToggleMode,
       handleRestart,

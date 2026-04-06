@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { DeviceTile } from './device-tile';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import {
   Select,
   SelectContent,
@@ -32,7 +33,18 @@ import {
   Timer,
   Keyboard,
   CheckSquare,
+  PackagePlus,
+  Code2,
+  GitBranch,
+  List,
 } from 'lucide-react';
+import dynamic from 'next/dynamic';
+
+// Dynamic import để tránh lỗi InversifyJS "Ambiguous FlowRendererRegistry" khi SSR
+const FlowgramCanvas = dynamic(
+  () => import('@/features/scenario-templates/components/scenario-flow-editor/canvas').then((m) => m.FlowgramCanvas),
+  { ssr: false, loading: () => <div className='flex flex-1 items-center justify-center text-xs text-muted-foreground'>Đang tải canvas…</div> },
+);
 import { VariableEditor } from '@/components/variable-editor';
 import {
   DropdownMenu,
@@ -71,6 +83,24 @@ import { parseHierarchyTree, findNodeIdAtRatio } from '../utils/hierarchy-tree';
 import { previewScenarioStream } from '../services/api';
 import { useTranslations } from 'next-intl';
 
+/**
+ * Template variables are stored as metadata dicts:
+ *   {"GROUP_NAME": {"type": "string", "default": "foo", "description": "..."}}
+ * Flatten them to plain values so they can be used at runtime:
+ *   {"GROUP_NAME": "foo"}
+ */
+function flattenVarDefs(vars: Record<string, any>): Record<string, any> {
+  const out: Record<string, any> = {};
+  for (const [k, v] of Object.entries(vars)) {
+    if (v !== null && typeof v === 'object' && !Array.isArray(v) && 'type' in v && 'default' in v) {
+      out[k] = v.default;
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
 type Props = { initialSerial?: string | null; initialCampaignId?: string | null; initialScenarioId?: string | null };
 
 export function ControlRecordView({ initialSerial, initialCampaignId, initialScenarioId }: Props = {}) {
@@ -83,7 +113,13 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
   const [playerMode, setPlayerMode] = useState(false);
   const [selectorPickTarget, setSelectorPickTarget] = useState<SelectorPickTarget | null>(null);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
+  const [flowMode, setFlowMode] = useState(false);
+  // Track steps updated from the flowgram canvas (used for saving in flow mode)
+  const flowStepsRef = useRef<typeof steps.items>(steps.items);
   const [varDialogOpen, setVarDialogOpen] = useState(false);
+  const [installDialogOpen, setInstallDialogOpen] = useState(false);
+  const [installUrl, setInstallUrl] = useState('');
+  const [jsonDialogOpen, setJsonDialogOpen] = useState(false);
 
   // Inline step runner (step-by-step without entering player mode)
   const [stepRunStates, setStepRunStates] = useState<Record<number, 'idle' | 'running' | 'ok' | 'error'>>({});
@@ -91,11 +127,11 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
 
   // Variables for step execution (synced from loaded scenario, editable inline)
   const [scenarioVariables, setScenarioVariables] = useState<Record<string, any>>(
-    () => save.editingContext?.variables ?? {}
+    () => flattenVarDefs(save.editingContext?.variables ?? {})
   );
   useEffect(() => {
     if (save.editingContext?.variables) {
-      setScenarioVariables(save.editingContext.variables);
+      setScenarioVariables(flattenVarDefs(save.editingContext.variables));
     }
   }, [save.editingContext]);
 
@@ -293,10 +329,82 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           <span className={cn('size-1.5 rounded-full', device.wsConnected ? 'bg-green-500' : 'bg-red-500')} />
           {device.wsConnected ? 'Online' : 'Offline'}
         </span>
+
+        <div className='h-5 w-px bg-border' />
+
+        {/* Flow / List mode toggle */}
+        <Button
+          size='sm'
+          variant={flowMode ? 'default' : 'outline'}
+          className='h-8 gap-1.5 shrink-0 text-xs'
+          onClick={() => {
+            if (!flowMode) {
+              // Entering flow mode — sync current steps into ref
+              flowStepsRef.current = steps.items;
+            } else {
+              // Leaving flow mode — write canvas steps back to list
+              steps.setItems(flowStepsRef.current);
+            }
+            setFlowMode((v) => !v);
+          }}
+          title={flowMode ? 'Chuyển về danh sách bước' : 'Chuyển sang Flow Editor trực quan'}
+        >
+          {flowMode ? <List className='size-3.5' /> : <GitBranch className='size-3.5' />}
+          {flowMode ? 'Danh sách' : 'Flow'}
+        </Button>
       </div>
 
-      {/* ── 3-column main layout ────────────────────────────────────────── */}
-      <div className='flex flex-1 overflow-hidden'>
+      {/* ── Flow Mode: Left=canvas, Right=phone ─────────────────────────── */}
+      {flowMode && (
+        <div className='flex flex-1 overflow-hidden'>
+          {/* Canvas — needs `relative` so flowgram layers (position:absolute) are clipped */}
+          <div className='relative flex flex-1 flex-col overflow-hidden border-r border-border/60'>
+            <FlowgramCanvas
+              key={`flow-${steps.items.length > 0 ? 'has-steps' : 'empty'}`}
+              steps={steps.items as any}
+              onStepsChange={(newSteps) => {
+                flowStepsRef.current = newSteps as any;
+              }}
+            />
+          </div>
+          {/* Phone */}
+          <div className='flex w-[320px] shrink-0 flex-col items-center bg-muted/20 overflow-y-auto'>
+            {selectedDevice ? (
+              <>
+                <div className='flex w-full shrink-0 items-center gap-2 border-b border-border/40 bg-background/60 px-3 py-1.5'>
+                  <span className={cn('size-2 rounded-full shrink-0', device.wsConnected ? 'bg-green-500' : 'bg-muted-foreground/40')} />
+                  <span className='truncate text-[11px] font-medium'>
+                    {selectedDevice.brand} {selectedDevice.model}
+                  </span>
+                  <span className='ml-auto font-mono text-[10px] text-muted-foreground'>
+                    {selectedDevice.serial.slice(0, 10)}
+                  </span>
+                </div>
+                <div className='p-3 w-full'>
+                  <DeviceTile
+                    device={selectedDevice}
+                    logLines={device.logs[selectedDevice.serial] ?? []}
+                    mode={device.mode}
+                    wsSend={record.sendAndRecord}
+                    onToggleMode={record.handleToggleMode}
+                    onRestart={record.handleRestart}
+                    onTap={handleScreenTap}
+                    highlightBounds={highlightBounds}
+                  />
+                </div>
+              </>
+            ) : (
+              <div className='flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center'>
+                <Video className='size-8 text-muted-foreground/30' strokeWidth={1.25} />
+                <p className='text-xs text-muted-foreground'>Chọn thiết bị từ thanh trên</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── 3-column main layout (list mode) ────────────────────────────── */}
+      {!flowMode && <div className='flex flex-1 overflow-hidden'>
 
         {/* ── COL 1: UI Hierarchy tree ──────────────────────────────────── */}
         <div className={cn(
@@ -467,7 +575,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                 onPlayingChange={hierarchy.setPaused}
                 preloadedSteps={steps.items.length > 0 ? (steps.items as any[]) : undefined}
                 preloadedName={save.editingContext?.name}
-                preloadedVariables={save.editingContext?.variables}
+                preloadedVariables={scenarioVariables}
               />
             </div>
           ) : (
@@ -688,6 +796,23 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
 
               {/* Action bar */}
               <div className='flex shrink-0 items-center gap-1.5 border-t border-border/60 bg-background/80 px-3 py-2.5'>
+                {/* Install APK */}
+                <Tooltip delayDuration={300}>
+                  <TooltipTrigger asChild>
+                    <Button
+                      size='sm'
+                      variant='outline'
+                      className='h-7 gap-1 text-xs'
+                      onClick={() => setInstallDialogOpen(true)}
+                      disabled={!selectedDevice}
+                    >
+                      <PackagePlus className='size-3' />
+                      Cài APK
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side='top' className='text-xs'>Cài APK từ URL lên thiết bị</TooltipContent>
+                </Tooltip>
+
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button size='sm' variant='outline' className='h-7 gap-1 text-xs'>
@@ -732,6 +857,14 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                 <div className='ml-auto flex items-center gap-1.5'>
                   <Tooltip delayDuration={300}>
                     <TooltipTrigger asChild>
+                      <Button size='sm' variant='ghost' className='h-7 w-7 p-0' onClick={() => setJsonDialogOpen(true)} disabled={steps.items.length === 0}>
+                        <Code2 className='size-3.5' />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side='top' className='text-xs'>Xem JSON</TooltipContent>
+                  </Tooltip>
+                  <Tooltip delayDuration={300}>
+                    <TooltipTrigger asChild>
                       <Button size='sm' variant='ghost' className='h-7 w-7 p-0' onClick={steps.copyJson} disabled={steps.items.length === 0}>
                         <Copy className='size-3.5' />
                       </Button>
@@ -753,7 +886,44 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
             </>
           )}
         </div>
-      </div>
+      </div>}
+
+      {/* ── Install APK dialog ──────────────────────────────────────────────── */}
+      <Dialog open={installDialogOpen} onOpenChange={setInstallDialogOpen}>
+        <DialogContent className='max-w-md'>
+          <DialogHeader>
+            <DialogTitle className='flex items-center gap-2 text-base'>
+              <PackagePlus className='size-4' />
+              Cài APK từ URL
+            </DialogTitle>
+          </DialogHeader>
+          <p className='text-[12px] text-muted-foreground -mt-1'>
+            Nhập URL APK công khai. atx-agent trên thiết bị sẽ tải và cài đặt tự động.
+          </p>
+          <div className='flex gap-2'>
+            <Input
+              placeholder='https://example.com/app.apk'
+              value={installUrl}
+              onChange={(e) => setInstallUrl(e.target.value)}
+              className='h-8 text-xs font-mono'
+            />
+            <Button
+              size='sm'
+              className='h-8 shrink-0'
+              disabled={!installUrl.trim() || !selectedDevice}
+              onClick={() => {
+                if (!selectedDevice || !installUrl.trim()) return;
+                record.wsSend({ type: 'install', serial: selectedDevice.serial, url: installUrl.trim() });
+                toast.info(`Đang cài APK lên ${selectedDevice.serial}…`);
+                setInstallDialogOpen(false);
+                setInstallUrl('');
+              }}
+            >
+              Cài
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* ── Variables dialog ────────────────────────────────────────────────── */}
       <Dialog open={varDialogOpen} onOpenChange={setVarDialogOpen}>
@@ -772,6 +942,44 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
             variables={scenarioVariables}
             onChange={setScenarioVariables}
           />
+        </DialogContent>
+      </Dialog>
+
+      {/* ── JSON viewer dialog ──────────────────────────────────────────────── */}
+      <Dialog open={jsonDialogOpen} onOpenChange={setJsonDialogOpen}>
+        <DialogContent className='max-w-2xl'>
+          <DialogHeader>
+            <DialogTitle className='flex items-center gap-2 text-base'>
+              <Code2 className='size-4' />
+              JSON kịch bản
+              {steps.items.length > 0 && (
+                <span className='rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary'>
+                  {steps.items.length} bước
+                </span>
+              )}
+            </DialogTitle>
+          </DialogHeader>
+          <div className='relative'>
+            <Button
+              size='sm'
+              variant='outline'
+              className='absolute right-2 top-2 z-10 h-6 gap-1 px-2 text-[10px]'
+              onClick={steps.copyJson}
+            >
+              <Copy className='size-3' /> Copy
+            </Button>
+            <pre className='max-h-[60vh] overflow-auto rounded-md border border-border bg-muted/40 p-3 text-[11px] font-mono leading-relaxed'>
+              {JSON.stringify(
+                steps.items.map((s: any) => {
+                  const { _id, ...rest } = s;
+                  void _id;
+                  return rest;
+                }),
+                null,
+                2,
+              )}
+            </pre>
+          </div>
         </DialogContent>
       </Dialog>
 

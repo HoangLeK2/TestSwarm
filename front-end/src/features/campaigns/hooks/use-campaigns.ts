@@ -302,6 +302,18 @@ export function useWorkflowCancel() {
   });
 }
 
+export function useStepAction(campaignId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ action, deviceSerial }: { action: 'retry' | 'skip'; deviceSerial?: string }) =>
+      campaignsApi.stepAction(campaignId, action, deviceSerial),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['workflow-progress'] });
+      qc.invalidateQueries({ queryKey: ['campaign-workflows', campaignId] });
+    },
+  });
+}
+
 // ── Fleet run ─────────────────────────────────────────────────────────────────
 
 /** Fleet run: dispatch campaign scenario to ALL READY devices. */

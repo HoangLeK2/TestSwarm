@@ -1,6 +1,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import io
 import logging
 import socket
@@ -178,9 +180,22 @@ class ScrcpyReceiver(threading.Thread):
 
     # ── Internal ────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _clean_env() -> dict:
+        """Return os.environ without macOS MallocStackLogging keys."""
+        import os as _os
+        env = _os.environ.copy()
+        env.pop("MallocStackLogging", None)
+        env.pop("MallocStackLoggingDirectory", None)
+        return env
+
     def run(self) -> None:
         while self._running:
             try:
+                # For TCP/WiFi serials, re-establish adb connection before every
+                # push attempt — the connection drops between reconnect cycles.
+                if ":" in self.serial:
+                    self._adb_connect()
                 self._push_server()
                 self._connect_and_stream()
             except Exception as exc:
@@ -191,15 +206,27 @@ class ScrcpyReceiver(threading.Thread):
                     )
                     time.sleep(self.reconnect_delay)
 
+    def _adb_connect(self) -> None:
+        """Run `adb connect ip:port` — idempotent, suppresses macOS noise."""
+        result = subprocess.run(
+            [self.adb_path, "connect", self.serial],
+            capture_output=True, timeout=10, env=self._clean_env(),
+        )
+        out = (result.stdout + result.stderr).decode("utf-8", errors="replace").strip()
+        if "connected" not in out.lower() and "already connected" not in out.lower():
+            raise RuntimeError(f"adb connect {self.serial} failed: {out}")
+        self._logger.debug("[%s] adb connected: %s", self.serial, out)
+
     def _push_server(self) -> None:
         """Push scrcpy-server JAR to device (idempotent)."""
         result = subprocess.run(
             [self.adb_path, "-s", self.serial, "push",
              self.server_jar, SCRCPY_SERVER_PATH_ON_DEVICE],
-            capture_output=True, text=True, timeout=15
+            capture_output=True, timeout=15, env=self._clean_env(),
         )
+        out = (result.stdout + result.stderr).decode("utf-8", errors="replace").strip()
         if result.returncode != 0:
-            raise RuntimeError(f"Failed to push scrcpy-server: {result.stderr}")
+            raise RuntimeError(f"Failed to push scrcpy-server: {out}")
         self._logger.debug(f"[{self.serial}] scrcpy-server pushed")
 
     def _setup_adb_forward(self) -> None:
@@ -208,11 +235,46 @@ class ScrcpyReceiver(threading.Thread):
         result = subprocess.run(
             [self.adb_path, "-s", self.serial, "forward",
              f"tcp:{self.port}", "localabstract:scrcpy"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, timeout=10, env=self._clean_env(),
         )
         if result.returncode != 0:
-            raise RuntimeError(f"adb forward failed: {result.stderr.strip()}")
+            err = (result.stdout + result.stderr).decode("utf-8", errors="replace").strip()
+            raise RuntimeError(f"adb forward failed: {err}")
         self._logger.debug(f"[{self.serial}] adb forward tcp:{self.port} localabstract:scrcpy")
+
+    def _poll_scrcpy_socket(self, timeout: float = 5.0) -> socket.socket:
+        """Connect to the adb-forwarded scrcpy video socket, retrying every 150 ms.
+
+        adb forward accepts TCP connections immediately even when scrcpy has not yet
+        bound localabstract:scrcpy — in that case the connection is dropped and
+        MSG_PEEK returns b'' (EOF).  Retry until scrcpy is ready or timeout expires.
+        """
+        deadline = time.monotonic() + timeout
+        last_exc: Exception = ConnectionRefusedError("never tried")
+        while time.monotonic() < deadline:
+            _s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            _s.settimeout(0.15)
+            try:
+                _s.connect(("127.0.0.1", self.port))
+                try:
+                    peek = _s.recv(1, socket.MSG_PEEK)
+                    if not peek:
+                        raise ConnectionError("adb forward EOF — scrcpy not ready")
+                    _s.settimeout(None)
+                    return _s  # data already available
+                except socket.timeout:
+                    _s.settimeout(None)
+                    return _s  # connection open, no data yet — scrcpy starting
+            except Exception as exc:
+                last_exc = exc
+                try:
+                    _s.close()
+                except Exception:
+                    pass
+            time.sleep(0.15)
+        raise RuntimeError(
+            f"scrcpy-server not ready on 127.0.0.1:{self.port} after {timeout}s — {last_exc}"
+        )
 
     def _remove_adb_forward(self) -> None:
         """Remove adb forward rule."""
@@ -220,7 +282,7 @@ class ScrcpyReceiver(threading.Thread):
             subprocess.run(
                 [self.adb_path, "-s", self.serial, "forward",
                  "--remove", f"tcp:{self.port}"],
-                capture_output=True, timeout=5,
+                capture_output=True, timeout=5, env=self._clean_env(),
             )
         except Exception:
             pass
@@ -243,7 +305,7 @@ class ScrcpyReceiver(threading.Thread):
             f"video_codec=h264 "
             f"max_fps={self.max_fps} "
             f"max_size={self.max_width} "
-            f"video_bit_rate=8000000 "       # 8 Mbps for smooth video
+            f"video_bit_rate=2000000 "       # 2 Mbps — lower bitrate → smaller frames → less TCP burst
             # Android MediaCodec H264 options (values = MediaCodecInfo constants,
             # NOT H264 spec profile_idc):
             #   profile=1     AVCProfileBaseline  → no B-frames, no CABAC.
@@ -253,7 +315,9 @@ class ScrcpyReceiver(threading.Thread):
             #   latency=0     KEY_LATENCY=0       → encoder outputs frame
             #                 immediately; default buffers 2-4 frames (~66-133ms
             #                 at 30fps) before first output.
-            f"video_codec_options=profile:int=1,level:int=4096,latency:int=0 "
+            #   i-frame-interval=2  IDR every 2s (less frequent than 1s reduces burst frequency
+            #                       while still giving reasonable recovery time)
+            f"video_codec_options=profile:int=1,latency:int=0,i-frame-interval:int=2 "
             f"send_device_meta=true "
             f"send_frame_meta=true "
             f"raw_video_stream=false"
@@ -263,28 +327,27 @@ class ScrcpyReceiver(threading.Thread):
         # blocks on any log write — including from the control thread, which makes
         # touch/key injection hang silently.
         self._server_proc = subprocess.Popen(
-            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            env=self._clean_env(),
         )
-        time.sleep(1.2)  # Give server time to bind abstract socket
-
         if self._server_proc.poll() is not None:
             raise RuntimeError("scrcpy-server exited immediately")
 
-        # Set up adb forward AFTER server has bound localabstract:scrcpy
+        # Set up adb forward right away — the rule persists even before scrcpy binds.
         self._setup_adb_forward()
 
+        # Poll until scrcpy-server binds localabstract:scrcpy (typically 200-600 ms).
+        # Replaces the old flat 1.2 s sleep — saves ~0.6-1.0 s on every reconnect.
+        #
         # scrcpy v3.x with tunnel_forward=true and control=true:
         # Server accepts sockets in order: video, (audio), control.
         # It sends the dummy byte on video socket ONLY AFTER all sockets are connected.
         # So we must connect ALL sockets first, then read handshake.
 
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(5.0)
+        sock = self._poll_scrcpy_socket(timeout=5.0)
         ctrl_sock: Optional[socket.socket] = None
         try:
-            # 1. Connect video socket (first accept on server)
-            sock.connect(("127.0.0.1", self.port))
-            sock.settimeout(None)
+            # 1. Video socket already connected by _poll_scrcpy_socket
             self._logger.info(f"[{self.serial}] scrcpy video socket connected on port {self.port}")
 
             # 2. Connect control socket BEFORE reading handshake (second accept on server)
@@ -563,3 +626,237 @@ class ScrcpyReceiver(threading.Thread):
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=quality)
         return buf.getvalue()
+
+
+# ─── Relay-mode receiver ──────────────────────────────────────────────────────
+
+class RelayScrcpyReceiver:
+    """
+    Cloud-side scrcpy sink when streaming via gRPC relay (no local ADB).
+
+    Instead of owning a socket, frames are pushed in by AdbRelayManager
+    via push_frame() — called directly from the gRPC read loop (asyncio thread).
+
+    Mirrors the ScrcpyReceiver callback interface so DeviceClient is agnostic.
+    """
+
+    PTS_CONFIG_MASK = PTS_CONFIG_MASK  # re-export for convenience
+
+    def __init__(
+        self,
+        serial: str,
+        on_frame: Optional[Callable[[bytes], None]] = None,
+        on_h264_config: Optional[Callable[[bytes, int, int, bool], None]] = None,
+        on_h264_packet: Optional[Callable[[bytes, bool, int], None]] = None,
+    ) -> None:
+        self.serial = serial
+        self.on_frame = on_frame
+        self.on_h264_config = on_h264_config
+        self.on_h264_packet = on_h264_packet
+
+        # ScrcpyControl equivalent — set by DeviceClient after construction
+        self.control: Optional[object] = None
+        self._ctrl_lock = threading.Lock()
+
+        # Screen dims from handshake (filled by first push_frame with width/height)
+        self.device_width: int = 0
+        self.device_height: int = 0
+
+        # PyAV state for keyframe JPEG decode (screenshot API)
+        self._codec_ctx: Optional[av.CodecContext] = None
+        self._last_config: bytes = b""
+        self._wait_for_idr: bool = False
+
+        # One-worker executor: serialises JPEG decodes for this device so we never
+        # block the asyncio event loop with 5-15 ms PyAV CPU work.
+        # max_workers=1 also ensures av.CodecContext is never used concurrently.
+        self._jpeg_executor: concurrent.futures.ThreadPoolExecutor = (
+            concurrent.futures.ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix=f"scrcpy-dec-{serial[:12]}",
+            )
+        )
+        # Captured on first push_frame() call (always from event loop thread).
+        self._event_loop: Optional[asyncio.AbstractEventLoop] = None
+        # Throttle MJPEG JPEG decode to max 3fps to avoid executor queue buildup.
+        # Without throttling, submitting P-frames at 20fps to the executor queues
+        # up ~100ms of work, causing MJPEG latency to grow unboundedly.
+        self._last_jpeg_t: float = 0.0
+
+        self._logger = logging.getLogger(f"relay_scrcpy.{serial}")
+
+    # ── Public API (matches ScrcpyReceiver) ──────────────────────────────────
+
+    def start_receiver(self) -> None:
+        """No-op — relay receiver is driven by push_frame()."""
+
+    def stop_receiver(self) -> None:
+        self._jpeg_executor.shutdown(wait=False, cancel_futures=True)
+        self._codec_ctx = None
+        if self.control is not None:
+            try:
+                self.control.disconnect()  # type: ignore[union-attr]
+            except Exception:
+                pass
+            self.control = None
+
+    def get_latest_frame(self) -> Optional[bytes]:
+        return None  # screenshot is handled via on_frame callback
+
+    # ── Frame intake (called by AdbRelayManager) ──────────────────────────────
+
+    def push_frame(
+        self,
+        data: bytes,
+        pts_raw: int,
+        width: int,
+        height: int,
+        is_config: bool = False,
+        is_keyframe: bool = False,
+        pts: int = 0,
+    ) -> None:
+        """Process one scrcpy packet received from relay agent.
+
+        Called directly from the gRPC asyncio read loop — must stay fast.
+        Heavy work (JPEG decode) is offloaded to _jpeg_executor.
+
+        v2 agents fill is_config/is_keyframe/pts; v1 agents leave them as defaults
+        and we fall back to pts_raw bit-parsing.
+        """
+        # Capture the running event loop once so executor threads can call back.
+        if self._event_loop is None:
+            try:
+                self._event_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                pass
+
+        # Backward compat: derive from pts_raw if v2 fields not filled by agent
+        if not is_config and not is_keyframe and pts == 0 and pts_raw:
+            is_config = bool(pts_raw & PTS_CONFIG_MASK)
+            pts = int(pts_raw & ~PTS_CONFIG_MASK)
+
+        if is_config:
+            self._handle_config(data, width, height)
+        else:
+            self._handle_video(data, pts, hint_is_key=is_keyframe)
+
+    # ── Internal ─────────────────────────────────────────────────────────────
+
+    def _handle_config(self, data: bytes, width: int, height: int) -> None:
+        if width:
+            self.device_width = width
+        if height:
+            self.device_height = height
+
+        avcc_record = annexb_to_avcc_record_maybe(data)
+        changed = avcc_record != self._last_config
+        self._last_config = avcc_record
+
+        self._logger.info(
+            "[%s] h264_config: data_len=%d avcc_len=%d w=%d h=%d changed=%s has_cb=%s",
+            self.serial, len(data), len(avcc_record),
+            self.device_width, self.device_height, changed, self.on_h264_config is not None,
+        )
+
+        if changed:
+            self._wait_for_idr = True
+            self._codec_ctx = None  # reset decoder on resolution/rotation change
+
+        if self.on_h264_config:
+            self.on_h264_config(
+                avcc_record,
+                self.device_width,
+                self.device_height,
+                changed,
+            )
+
+    def _handle_video(self, data: bytes, pts_us: int, hint_is_key: bool = False) -> None:
+        # Relay agents convert Annex-B → AVCC in their relay thread before sending,
+        # so annexb_to_avcc_maybe is a fast O(1) no-op for relay-sourced frames
+        # (data doesn't start with Annex-B start code → returns unchanged immediately).
+        # For local ADB path (ScrcpyReceiver), the data is still Annex-B → converted here.
+        avcc_data = annexb_to_avcc_maybe(data)
+        # Trust agent's pre-computed keyframe flag — avoids redundant IDR scan.
+        is_key = hint_is_key
+
+        if self._wait_for_idr:
+            if not is_key:
+                return  # gate until next IDR after config change
+            self._wait_for_idr = False
+
+        if self.on_h264_packet:
+            self.on_h264_packet(avcc_data, is_key, pts_us)
+
+        # Submit ALL frames to the JPEG executor to maintain H264 decoder state
+        # (P-frames require all preceding frames since the last IDR to be decoded).
+        # _decode_and_emit_throttled handles the JPEG emission rate limit (≤3fps).
+        # At 20fps input × 15ms/frame, the single-worker executor runs at ~30% load —
+        # no queue buildup, no event-loop stalls.
+        if self.on_frame and self._last_config:
+            loop = self._event_loop
+            if loop is not None:
+                loop.run_in_executor(
+                    self._jpeg_executor, self._decode_and_emit_throttled, avcc_data
+                )
+            else:
+                jpeg = self._decode_frame_to_jpeg(avcc_data)
+                if jpeg:
+                    self.on_frame(jpeg)
+
+    def _decode_and_emit_throttled(self, avcc_data: bytes) -> None:
+        """Run in _jpeg_executor thread — decode every frame (to maintain decoder state)
+        but only emit JPEG to the event loop at most every 333ms (≈3fps).
+
+        All frames must be fed to _codec_ctx in order so the reference frame buffer
+        is correct for P-frame decoding.  The JPEG encode + emit is the expensive part
+        (~5-10ms) and is skipped when not needed.
+        _last_jpeg_t is a plain float; CPython GIL makes the read-modify-write safe
+        in practice (simple float assignment is atomic in CPython).
+        """
+        try:
+            if self._codec_ctx is None:
+                self._codec_ctx = av.CodecContext.create("h264", "r")
+                if self._last_config:
+                    self._codec_ctx.extradata = self._last_config
+
+            pkt = av.Packet(avcc_data)
+            pkt.pts = pkt.dts = 0
+            frames = self._codec_ctx.decode(pkt)
+            if not frames:
+                return
+
+            now = time.monotonic()
+            if now - self._last_jpeg_t < 0.333:
+                return  # maintain state, skip JPEG encode
+
+            self._last_jpeg_t = now
+            jpeg = ScrcpyReceiver._frame_to_jpeg(frames[0])
+            cb = self.on_frame
+            loop = self._event_loop
+            if jpeg and cb and loop:
+                loop.call_soon_threadsafe(cb, jpeg)
+        except Exception as exc:
+            self._logger.debug("H264→JPEG throttled decode failed: %s", exc)
+
+    def _decode_frame_to_jpeg(self, avcc_data: bytes) -> Optional[bytes]:
+        """Decode any H264 frame (IDR or P-frame) to JPEG.
+
+        Called from _jpeg_executor (single-worker) so _codec_ctx is accessed
+        by at most one thread at a time and state is maintained across frames.
+        """
+        try:
+            if self._codec_ctx is None:
+                self._codec_ctx = av.CodecContext.create("h264", "r")
+                if self._last_config:
+                    # Set AVCDecoderConfigurationRecord as extradata so the codec
+                    # knows SPS/PPS before decoding the first frame.
+                    self._codec_ctx.extradata = self._last_config
+
+            pkt = av.Packet(avcc_data)
+            pkt.pts = pkt.dts = 0
+            frames = self._codec_ctx.decode(pkt)
+            if frames:
+                return ScrcpyReceiver._frame_to_jpeg(frames[0])
+        except Exception as exc:
+            self._logger.debug("H264→JPEG decode failed: %s", exc)
+        return None

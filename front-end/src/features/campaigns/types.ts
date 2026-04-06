@@ -71,7 +71,7 @@ export type TaskOut = {
 
 // ── Temporal Workflow types ──────────────────────────────────────────────────
 
-export type WorkflowStatus = 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED' | 'PAUSED' | 'TERMINATED';
+export type WorkflowStatus = 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED' | 'PAUSED' | 'paused_on_error' | 'TERMINATED';
 
 export type WorkflowInfo = {
   workflow_id: string;
@@ -96,6 +96,7 @@ export type WorkflowProgress = {
   loop_iteration: number | null;
   message: string;
   device_serial: string;
+  error_message?: string | null;
 };
 
 export type StepLogEntry = {

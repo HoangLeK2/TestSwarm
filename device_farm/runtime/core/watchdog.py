@@ -3,6 +3,7 @@ watchdog.py — WatchdogThread: health monitoring for both WS-agent and ADB devi
 
 Health checks:
   - WS Agent mode: agent WebSocket alive + state READY → healthy
+    - atx-agent sub-check: TCP probe port 7912 every interval; 2 misses → restart
   - ADB mode: periodic `adb shell echo ok` ping → healthy
   - If device unhealthy too long → mark DEAD
   - ADB devices: trigger auto-reconnect on transport failure
@@ -10,8 +11,10 @@ Health checks:
 from __future__ import annotations
 
 import logging
+import socket
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from core.config import Config
 from runtime.core.device_client import DeviceClient, DeviceState
@@ -28,6 +31,12 @@ _ADB_MAX_MISS = 3
 # Cooldown between ADB reconnect attempts (seconds)
 _ADB_RECONNECT_COOLDOWN = 60
 
+# atx-agent TCP probe: consecutive TCP-connect failures before triggering restart
+_ATX_MAX_MISS = 2
+
+# Cooldown between atx-agent restart triggers (seconds)
+_ATX_RESTART_COOLDOWN = 20
+
 
 class WatchdogThread(threading.Thread):
     """Daemon thread that monitors device health for both agent and ADB modes."""
@@ -43,6 +52,10 @@ class WatchdogThread(threading.Thread):
         self._adb_miss_count: dict[str, int] = {}
         # Last ADB reconnect attempt time per serial (for cooldown)
         self._adb_last_reconnect: dict[str, float] = {}
+        # atx-agent TCP probe: consecutive miss count per serial
+        self._atx_miss_count: dict[str, int] = {}
+        # Last atx-agent restart trigger time per serial (for cooldown)
+        self._atx_last_restart: dict[str, float] = {}
 
     def start_watchdog(self) -> None:
         self._running = True
@@ -52,22 +65,35 @@ class WatchdogThread(threading.Thread):
     def stop_watchdog(self) -> None:
         self._running = False
 
+    # Max parallel TCP probes — keeps system FD usage bounded even for 1000+ devices.
+    # Each probe holds one socket for up to 0.5s; 64 concurrent = ~32s worst-case fan-out
+    # across 1000 unreachable devices instead of 500s sequential.
+    _PROBE_WORKERS = 64
+
     def run(self) -> None:
         interval = self.config.watchdog.interval
         log.info(f"Watchdog started (interval={interval}s)")
 
-        while self._running:
-            time.sleep(interval)
-            if not self._running:
-                break
+        with ThreadPoolExecutor(max_workers=self._PROBE_WORKERS, thread_name_prefix="wd-probe") as pool:
+            while self._running:
+                time.sleep(interval)
+                if not self._running:
+                    break
 
-            for device in self.manager.all_devices():
-                if device.state == DeviceState.DEAD:
+                devices = [d for d in self.manager.all_devices() if d.state != DeviceState.DEAD]
+                if not devices:
                     continue
-                try:
-                    self._check_device(device)
-                except Exception as exc:
-                    log.error(f"[{device.serial}] Watchdog error: {exc}")
+
+                futures = {
+                    pool.submit(self._check_device, device): device
+                    for device in devices
+                }
+                for fut in as_completed(futures):
+                    device = futures[fut]
+                    try:
+                        fut.result()
+                    except Exception as exc:
+                        log.error(f"[{device.serial}] Watchdog error: {exc}")
 
     def _check_device(self, device: DeviceClient) -> None:
         serial = device.serial
@@ -77,11 +103,32 @@ class WatchdogThread(threading.Thread):
             self._check_adb_device(device)
             return
 
+        # ── Relay-only device: no ADB access from server — check frame liveness ──
+        is_relay_device = device._agent_send is None and getattr(device, "_scrcpy_active", False)
+        if is_relay_device:
+            last_frame = getattr(device, "_last_frame_time", 0.0)
+            frame_age = time.monotonic() - last_frame if last_frame > 0 else float("inf")
+            # Allow 30s grace on startup (last_frame==0), then require frames within 30s
+            frame_ok = last_frame == 0.0 or frame_age < 30.0
+            if device.state in (DeviceState.READY, DeviceState.BUSY) and frame_ok:
+                self._bad_since.pop(serial, None)
+                device.reconnect_attempts = 0
+            else:
+                self._track_bad_state(device)
+            return
+
         # ── WS Agent mode: passive check (agent alive + state) ──
         agent_alive = device._agent_send is not None
         if agent_alive and device.state == DeviceState.READY:
             self._bad_since.pop(serial, None)
             device.reconnect_attempts = 0
+            # ── atx-agent sub-check: TCP probe port 7912 ──────────────────────
+            # Detects frozen atx-agent before the next u2 RPC times out.
+            # Only probe when u2 is currently connected (_u2_host set, _u2 live).
+            atx_host = getattr(device, "_u2_host", None)
+            u2_live   = getattr(device, "_u2", None) is not None
+            if atx_host and u2_live:
+                self._check_atx_agent(device, atx_host)
             return
 
         # Agent disconnected or stuck in a bad state
@@ -155,6 +202,48 @@ class WatchdogThread(threading.Thread):
             device.state = DeviceState.DEAD
             self._bad_since.pop(serial, None)
 
+    def _check_atx_agent(self, device: DeviceClient, host: str) -> None:
+        """TCP probe port 7912 — detect frozen atx-agent before u2 RPCs time out.
+
+        A frozen atx-agent keeps the port open (connect succeeds) but never responds
+        to HTTP — that's caught by the u2 stale-ping in device_client.  This probe
+        specifically catches the case where atx-agent has crashed and the port is
+        fully closed (Connection refused).  Two consecutive misses trigger a restart.
+        """
+        serial = device.serial
+        try:
+            with socket.create_connection((host, 7912), timeout=0.5):
+                pass
+            # Port alive — clear miss counter
+            self._atx_miss_count.pop(serial, None)
+        except Exception:
+            miss = self._atx_miss_count.get(serial, 0) + 1
+            self._atx_miss_count[serial] = miss
+            log.warning("[%s] atx-agent TCP probe failed (%d/%d)", serial, miss, _ATX_MAX_MISS)
+            if miss >= _ATX_MAX_MISS:
+                self._atx_miss_count.pop(serial, None)
+                now = time.monotonic()
+                last = self._atx_last_restart.get(serial, 0.0)
+                if now - last >= _ATX_RESTART_COOLDOWN:
+                    self._atx_last_restart[serial] = now
+                    log.warning("[%s] atx-agent unresponsive — triggering restart", serial)
+                    # Only null u2 and set backoff if no restart is already in-flight.
+                    # If _trigger_atx_restart_async was recently called (< 15s), a
+                    # _poll_atx_recovery thread is already running and will clear the
+                    # backoff when port 7912 comes back.  Resetting backoff here would
+                    # undo that and add 30s downtime on top of a recovery already underway.
+                    restart_in_flight = (
+                        now - getattr(device, "_atx_restart_triggered_at", float("-inf")) < 15.0
+                    )
+                    if not restart_in_flight:
+                        with device._u2_lock:
+                            device._u2 = None
+                        device._u2_reconnect_failed_at = time.monotonic()
+                    device._trigger_atx_restart_async(host)
+                else:
+                    remaining = _ATX_RESTART_COOLDOWN - (now - last)
+                    log.info("[%s] atx restart cooldown %.0fs remaining", serial, remaining)
+
     def _track_bad_state(self, device: DeviceClient) -> None:
         """Track how long a device has been in a bad state; mark DEAD if too long."""
         serial = device.serial
@@ -174,3 +263,5 @@ class WatchdogThread(threading.Thread):
             device.state = DeviceState.DEAD
             self._bad_since.pop(serial, None)
             self._adb_miss_count.pop(serial, None)
+            self._atx_miss_count.pop(serial, None)
+            self._atx_last_restart.pop(serial, None)

@@ -8,7 +8,9 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu';
-import { Copy, MoreHorizontal, Trash2 } from 'lucide-react';
+import { Copy, MoreHorizontal, Trash2, GitBranch } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { ROUTES } from '@/config/routes';
 import type { ColumnDef } from '@tanstack/react-table';
 import type { ScenarioTemplateOut } from '../../services/api';
 import { EditTemplateDialog } from '../edit-template-dialog';
@@ -104,10 +106,21 @@ export function getTemplateColumns(
       header: '',
       cell: ({ row }) => {
         const tpl = row.original;
+        // eslint-disable-next-line react-hooks/rules-of-hooks
+        const router = useRouter();
         return (
           <div className='flex items-center gap-1'>
             <UseTemplateDialog template={tpl} />
             {!tpl.is_builtin && <EditTemplateDialog template={tpl} />}
+            <Button
+              size='icon'
+              variant='ghost'
+              className='size-8'
+              title='Mở trong Flow Editor'
+              onClick={() => router.push(ROUTES.SCENARIO_TEMPLATES.FLOW(tpl.id))}
+            >
+              <GitBranch size={14} />
+            </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button size='icon' variant='ghost' className='size-8'>

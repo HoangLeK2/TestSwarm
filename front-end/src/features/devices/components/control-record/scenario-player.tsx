@@ -10,6 +10,18 @@ import type { ScenarioOut } from '@/features/campaigns/types';
 import { getStepTypeName, getStepSummary } from '@/features/campaigns/components/flow-editor/constants';
 import type { FlowStep } from '@/features/campaigns/components/scenario-steps/types';
 
+function flattenVarDefs(vars: Record<string, any>): Record<string, any> {
+  const out: Record<string, any> = {};
+  for (const [k, v] of Object.entries(vars)) {
+    if (v !== null && typeof v === 'object' && !Array.isArray(v) && 'type' in v && 'default' in v) {
+      out[k] = v.default;
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
 interface ScenarioPlayerProps {
   serial: string;
   onClose: () => void;
@@ -39,7 +51,9 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedStep
   const [stepCursor, setStepCursor] = useState(0); // next step to run
 
   const activeSteps = preloadedSteps ?? (selectedScenario?.steps as Array<Record<string, any>> | undefined);
-  const activeVariables: Record<string, any> = preloadedVariables ?? (selectedScenario?.variables as Record<string, any> | undefined) ?? {};
+  const activeVariables: Record<string, any> = flattenVarDefs(
+    preloadedVariables ?? (selectedScenario?.variables as Record<string, any> | undefined) ?? {}
+  );
 
   const handlePlay = useCallback(async () => {
     if (!activeSteps?.length || !serial) return;

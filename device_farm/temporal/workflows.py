@@ -89,6 +89,30 @@ _CONTROL_FLOW_TYPES = frozenset({
 })
 
 
+def _error_policy(step: dict, cfg: dict) -> str:
+    """Return error handling policy: 'pause' | 'continue' | 'stop'.
+
+    Priority: step-level on_error → step-level ignore_error → scenario-level on_error
+    → scenario-level continue_on_error → default 'stop'.
+
+    Usage in scenario JSON:
+        Step-level:     {"type": "tap", ..., "on_error": "pause"}
+        Scenario-level: {"continue_on_error": true, "steps": [...]}
+        Pause all:      {"on_error": "pause", "steps": [...]}
+    """
+    step_policy = step.get("on_error", "")
+    if step_policy in ("pause", "continue", "stop"):
+        return step_policy
+    if step.get("ignore_error"):
+        return "continue"
+    cfg_policy = cfg.get("on_error", "")
+    if cfg_policy in ("pause", "continue", "stop"):
+        return cfg_policy
+    if cfg.get("continue_on_error"):
+        return "continue"
+    return "stop"
+
+
 # ── ScenarioWorkflow ─────────────────────────────────────────────────────────
 
 
@@ -229,6 +253,24 @@ class ScenarioWorkflow:
         self._cancelled = True
         self._progress.status = WorkflowStatus.CANCELLED.value
 
+    @workflow.signal
+    async def retry_step(self) -> None:
+        """Forward retry_step to the child ScenarioStepsWorkflow."""
+        child_id = f"{workflow.info().workflow_id}:steps"
+        try:
+            await workflow.get_external_workflow_handle(child_id).signal("retry_step")
+        except Exception:
+            pass
+
+    @workflow.signal
+    async def skip_step(self) -> None:
+        """Forward skip_step to the child ScenarioStepsWorkflow."""
+        child_id = f"{workflow.info().workflow_id}:steps"
+        try:
+            await workflow.get_external_workflow_handle(child_id).signal("skip_step")
+        except Exception:
+            pass
+
     @workflow.query
     def get_progress(self) -> WorkflowProgress:
         """Query current execution progress."""
@@ -280,6 +322,9 @@ class ScenarioStepsWorkflow:
     def __init__(self) -> None:
         self._step_log: list[dict] = []
         self._paused = False
+        self._paused_on_error = False
+        self._error_action = ""   # "retry" | "skip"
+        self._error_message = ""  # last error message while paused_on_error
 
     @workflow.signal
     async def pause(self) -> None:
@@ -289,9 +334,95 @@ class ScenarioStepsWorkflow:
     async def resume(self) -> None:
         self._paused = False
 
+    @workflow.signal
+    async def retry_step(self) -> None:
+        """Resume from a paused_on_error state by re-executing the failed step."""
+        self._error_action = "retry"
+        self._paused_on_error = False
+
+    @workflow.signal
+    async def skip_step(self) -> None:
+        """Resume from a paused_on_error state by skipping the failed step."""
+        self._error_action = "skip"
+        self._paused_on_error = False
+
+    @workflow.query
+    def get_error_info(self) -> dict:
+        return {
+            "paused_on_error": self._paused_on_error,
+            "error_action": self._error_action,
+            "error_message": self._error_message,
+        }
+
     async def _wait_if_paused(self) -> None:
         if self._paused:
             await workflow.wait_condition(lambda: not self._paused)
+
+    async def _apply_error_policy(
+        self,
+        step: dict,
+        step_idx: int,
+        msg: str,
+        inp: "StepsInput",
+        runtime_vars: dict,
+        runtime_context: dict,
+        steps_executed: int,
+        step_results: list,
+    ) -> tuple[str, "StepsResult | None"]:
+        """Apply error policy for a failed step.
+
+        Returns ('continue', None) — skip step and proceed
+             or ('stop', StepsResult) — stop workflow with failure result.
+
+        When policy == 'pause': workflow pauses with status PAUSED_ON_ERROR and
+        waits for retry_step or skip_step signal.
+          - retry_step: trigger continue_as_new from step_idx (never returns)
+          - skip_step: return ('continue', None)
+        """
+        policy = _error_policy(step, inp.scenario_config or {})
+        # Only top-level workflows can pause-on-error; nested child workflows (depth > 0)
+        # fall through to "stop" so the parent loop handles the error instead.
+        if inp.depth > 0 and policy == "pause":
+            policy = "stop"
+        if policy == "continue":
+            return "continue", None
+        if policy == "pause":
+            self._error_message = msg
+            self._paused_on_error = True
+            self._error_action = ""
+            await workflow.wait_condition(lambda: not self._paused_on_error)
+            self._error_message = ""
+            if self._error_action == "retry":
+                # Restart from the failed step — continue_as_new resets history
+                # while preserving all runtime state. The parent ScenarioWorkflow
+                # transparently follows the continuation.
+                await workflow.continue_as_new(
+                    StepsInput(
+                        device_serial=inp.device_serial,
+                        steps=inp.steps[step_idx:],
+                        variables=inp.variables,
+                        campaign_vars=inp.campaign_vars,
+                        scenario_registry=inp.scenario_registry,
+                        depth=inp.depth,
+                        parent_runtime_vars=dict(runtime_vars),
+                        scenario_config=inp.scenario_config,
+                        context=dict(runtime_context),
+                        campaign_id=inp.campaign_id,
+                        run_id=inp.run_id,
+                        execution_id=inp.execution_id,
+                        accumulated_results=list(step_results),
+                    ),
+                )
+            # skip_step or unrecognised action → skip failed step
+            return "continue", None
+        return "stop", StepsResult(
+            success=False,
+            steps_executed=steps_executed,
+            step_results=step_results,
+            runtime_vars=runtime_vars,
+            failed_message=msg,
+            context=runtime_context,
+        )
 
     @workflow.query
     def get_step_log(self) -> list[dict]:
@@ -315,8 +446,10 @@ class ScenarioStepsWorkflow:
         runtime_vars: dict[str, Any] = dict(inp.parent_runtime_vars)
         # Shared execution context: posts, text_nodes, _no_new_streak, vars (legacy ctx)
         runtime_context: dict[str, Any] = dict(inp.context)
-        step_results: list[dict[str, Any]] = []
-        steps_executed = 0
+        # Seed from accumulated_results so retry/history-reset continue_as_new calls
+        # preserve the results of already-completed steps.
+        step_results: list[dict[str, Any]] = list(inp.accumulated_results)
+        steps_executed = len(step_results)
         break_requested = False
 
         def _append(entry: dict) -> None:
@@ -331,11 +464,15 @@ class ScenarioStepsWorkflow:
         _pending_steps: list[dict] = []
         _pending_indices: list[int] = []
 
-        async def _flush_batch() -> tuple[bool, str]:
-            """Dispatch accumulated leaf steps as one batch activity. Returns (ok, err_msg)."""
+        async def _flush_batch() -> tuple[bool, str, int]:
+            """Dispatch accumulated leaf steps as one batch activity.
+
+            Returns (ok, err_msg, failed_orig_idx) where failed_orig_idx is the
+            original index in inp.steps of the first failed step (-1 if all ok).
+            """
             nonlocal steps_executed
             if not _pending_steps:
-                return True, ""
+                return True, "", -1
             n = len(_pending_steps)
             batch_result: DeviceActionBatchResult = await workflow.execute_activity(
                 "execute_device_action_batch",
@@ -354,6 +491,7 @@ class ScenarioStepsWorkflow:
                 retry_policy=_ACTIVITY_RETRY,
                 heartbeat_timeout=timedelta(seconds=30),
             )
+            orig_indices = list(_pending_indices)  # snapshot before clear
             _pending_steps.clear()
             _pending_indices.clear()
             for r in batch_result.results:
@@ -361,8 +499,9 @@ class ScenarioStepsWorkflow:
                 steps_executed += 1
             if batch_result.first_failure_index >= 0:
                 failed = batch_result.results[batch_result.first_failure_index]
-                return False, failed.get("message", "batch step failed")
-            return True, ""
+                failed_orig_idx = orig_indices[batch_result.first_failure_index]
+                return False, failed.get("message", "batch step failed"), failed_orig_idx
+            return True, "", -1
 
         for idx, raw_step in enumerate(inp.steps):
             # ── continue_as_new guard (top-level loop only) ──────────────────
@@ -387,6 +526,7 @@ class ScenarioStepsWorkflow:
                             campaign_id=inp.campaign_id,
                             run_id=inp.run_id,
                             execution_id=inp.execution_id,
+                            accumulated_results=list(step_results),
                         ),
                     )
             await self._wait_if_paused()
@@ -398,13 +538,15 @@ class ScenarioStepsWorkflow:
             # Leaf steps accumulate in _pending_steps; control-flow types force
             # a flush so results are appended in execution order.
             if step_type in _CONTROL_FLOW_TYPES:
-                ok, msg = await _flush_batch()
+                ok, msg, failed_idx = await _flush_batch()
                 if not ok:
-                    return StepsResult(
-                        success=False, steps_executed=steps_executed,
-                        step_results=step_results, runtime_vars=runtime_vars,
-                        failed_message=msg, context=runtime_context,
+                    failed_step = inp.steps[failed_idx] if 0 <= failed_idx < len(inp.steps) else {}
+                    action, early = await self._apply_error_policy(
+                        failed_step, failed_idx, msg, inp, runtime_vars, runtime_context,
+                        steps_executed, step_results,
                     )
+                    if action == "stop":
+                        return early
 
             # ── set_variable (no activity needed) ────────────────────────────
             if step_type == "set_variable":
@@ -477,13 +619,13 @@ class ScenarioStepsWorkflow:
                 })
                 steps_executed += 1
                 if not ok:
-                    if step.get("ignore_error"):
-                        continue
-                    return StepsResult(
-                        success=False, steps_executed=steps_executed,
-                        step_results=step_results, runtime_vars=runtime_vars,
-                        failed_message=msg, context=runtime_context,
+                    action, early = await self._apply_error_policy(
+                        step, idx, msg, inp, runtime_vars, runtime_context,
+                        steps_executed, step_results,
                     )
+                    if action == "stop":
+                        return early
+                    continue
                 continue
 
             # ── if (generic condition) ────────────────────────────────────────
@@ -496,13 +638,13 @@ class ScenarioStepsWorkflow:
                 if child_break:
                     break_requested = True
                 if not ok:
-                    if step.get("ignore_error"):
-                        continue
-                    return StepsResult(
-                        success=False, steps_executed=steps_executed,
-                        step_results=step_results, runtime_vars=runtime_vars,
-                        failed_message=msg, context=runtime_context,
+                    action, early = await self._apply_error_policy(
+                        step, idx, msg, inp, runtime_vars, runtime_context,
+                        steps_executed, step_results,
                     )
+                    if action == "stop":
+                        return early
+                    continue
                 if break_requested:
                     break
                 continue
@@ -518,13 +660,13 @@ class ScenarioStepsWorkflow:
                 })
                 steps_executed += 1
                 if not ok:
-                    if step.get("ignore_error"):
-                        continue
-                    return StepsResult(
-                        success=False, steps_executed=steps_executed,
-                        step_results=step_results, runtime_vars=runtime_vars,
-                        failed_message=msg, context=runtime_context,
+                    action, early = await self._apply_error_policy(
+                        step, idx, msg, inp, runtime_vars, runtime_context,
+                        steps_executed, step_results,
                     )
+                    if action == "stop":
+                        return early
+                    continue
                 continue
 
             # ── repeat_until ─────────────────────────────────────────────────
@@ -535,13 +677,13 @@ class ScenarioStepsWorkflow:
                 _append({"index": idx, "type": "repeat_until", "ok": ok, "message": msg})
                 steps_executed += 1
                 if not ok:
-                    if step.get("ignore_error"):
-                        continue
-                    return StepsResult(
-                        success=False, steps_executed=steps_executed,
-                        step_results=step_results, runtime_vars=runtime_vars,
-                        failed_message=msg, context=runtime_context,
+                    action, early = await self._apply_error_policy(
+                        step, idx, msg, inp, runtime_vars, runtime_context,
+                        steps_executed, step_results,
                     )
+                    if action == "stop":
+                        return early
+                    continue
                 continue
 
             # ── if_element ───────────────────────────────────────────────────
@@ -554,13 +696,13 @@ class ScenarioStepsWorkflow:
                 if child_break:
                     break_requested = True
                 if not ok:
-                    if step.get("ignore_error"):
-                        continue
-                    return StepsResult(
-                        success=False, steps_executed=steps_executed,
-                        step_results=step_results, runtime_vars=runtime_vars,
-                        failed_message=msg, context=runtime_context,
+                    action, early = await self._apply_error_policy(
+                        step, idx, msg, inp, runtime_vars, runtime_context,
+                        steps_executed, step_results,
                     )
+                    if action == "stop":
+                        return early
+                    continue
                 if break_requested:
                     break
                 continue
@@ -575,13 +717,13 @@ class ScenarioStepsWorkflow:
                 if child_break:
                     break_requested = True
                 if not ok:
-                    if step.get("ignore_error"):
-                        continue
-                    return StepsResult(
-                        success=False, steps_executed=steps_executed,
-                        step_results=step_results, runtime_vars=runtime_vars,
-                        failed_message=msg, context=runtime_context,
+                    action, early = await self._apply_error_policy(
+                        step, idx, msg, inp, runtime_vars, runtime_context,
+                        steps_executed, step_results,
                     )
+                    if action == "stop":
+                        return early
+                    continue
                 if break_requested:
                     break
                 continue
@@ -596,13 +738,13 @@ class ScenarioStepsWorkflow:
                 if child_break:
                     break_requested = True
                 if not ok:
-                    if step.get("ignore_error"):
-                        continue
-                    return StepsResult(
-                        success=False, steps_executed=steps_executed,
-                        step_results=step_results, runtime_vars=runtime_vars,
-                        failed_message=msg, context=runtime_context,
+                    action, early = await self._apply_error_policy(
+                        step, idx, msg, inp, runtime_vars, runtime_context,
+                        steps_executed, step_results,
                     )
+                    if action == "stop":
+                        return early
+                    continue
                 if break_requested:
                     break
                 continue
@@ -635,13 +777,13 @@ class ScenarioStepsWorkflow:
                     break_requested = True
                     break
                 if not extract_result.ok:
-                    if step.get("ignore_error"):
-                        continue
-                    return StepsResult(
-                        success=False, steps_executed=steps_executed,
-                        step_results=step_results, runtime_vars=runtime_vars,
-                        failed_message=extract_result.message, context=runtime_context,
+                    action, early = await self._apply_error_policy(
+                        step, idx, extract_result.message or "", inp, runtime_vars, runtime_context,
+                        steps_executed, step_results,
                     )
+                    if action == "stop":
+                        return early
+                    continue
                 continue
 
             # ── save_extraction ──────────────────────────────────────────────
@@ -674,13 +816,13 @@ class ScenarioStepsWorkflow:
                 })
                 steps_executed += 1
                 if not save_result.ok:
-                    if step.get("ignore_error"):
-                        continue
-                    return StepsResult(
-                        success=False, steps_executed=steps_executed,
-                        step_results=step_results, runtime_vars=runtime_vars,
-                        failed_message=save_result.message or "", context=runtime_context,
+                    action, early = await self._apply_error_policy(
+                        step, idx, save_result.message or "", inp, runtime_vars, runtime_context,
+                        steps_executed, step_results,
                     )
+                    if action == "stop":
+                        return early
+                    continue
                 continue
 
             # ── Default: accumulate leaf step for batch dispatch ─────────────
@@ -690,22 +832,26 @@ class ScenarioStepsWorkflow:
             _pending_steps.append(step)
             _pending_indices.append(idx)
             if len(_pending_steps) >= _batch_size:
-                ok, msg = await _flush_batch()
+                ok, msg, failed_idx = await _flush_batch()
                 if not ok:
-                    return StepsResult(
-                        success=False, steps_executed=steps_executed,
-                        step_results=step_results, runtime_vars=runtime_vars,
-                        failed_message=msg, context=runtime_context,
+                    failed_step = inp.steps[failed_idx] if 0 <= failed_idx < len(inp.steps) else {}
+                    action, early = await self._apply_error_policy(
+                        failed_step, failed_idx, msg, inp, runtime_vars, runtime_context,
+                        steps_executed, step_results,
                     )
+                    if action == "stop":
+                        return early
 
         # Flush any remaining leaf steps accumulated after the last control-flow step.
-        ok, msg = await _flush_batch()
+        ok, msg, failed_idx = await _flush_batch()
         if not ok:
-            return StepsResult(
-                success=False, steps_executed=steps_executed,
-                step_results=step_results, runtime_vars=runtime_vars,
-                failed_message=msg, context=runtime_context,
+            failed_step = inp.steps[failed_idx] if 0 <= failed_idx < len(inp.steps) else {}
+            action, early = await self._apply_error_policy(
+                failed_step, failed_idx, msg, inp, runtime_vars, runtime_context,
+                steps_executed, step_results,
             )
+            if action == "stop":
+                return early
 
         return StepsResult(
             success=True,

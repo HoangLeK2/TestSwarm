@@ -63,6 +63,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import android.view.accessibility.AccessibilityNodeInfo;
 import jp.co.cyberagent.stf.compat.InputManagerWrapper;
 
 /**
@@ -756,6 +757,14 @@ public class WsAgentService extends android.app.Service {
                         executor.submit(() -> setupServiceTunnels(ports));
                     }
                     break;
+                case "ping":
+                    // Server keepalive ping — reply with pong so server detects dead connections
+                    try {
+                        JSONObject pong = new JSONObject();
+                        pong.put("type", "pong");
+                        wsManager.send(pong.toString());
+                    } catch (Exception ignored) {}
+                    break;
                 case "tunnel_data":
                     // Server → Agent: forward data đến device service
                     String ch = msg.optString("channel");
@@ -864,6 +873,66 @@ public class WsAgentService extends android.app.Service {
                 case "type":
                     executor.submit(() -> injectText(msg.optString("text", "")));
                     break;
+                case "paste": {
+                    final String pasteText = msg.optString("text", "");
+                    executor.submit(() -> {
+                        boolean done = false;
+                        // Step 1: ACTION_SET_TEXT via accessibility — most reliable, no clipboard needed
+                        if (TouchAccessibilityService.isAvailable()) {
+                            try {
+                                android.view.accessibility.AccessibilityNodeInfo node =
+                                    TouchAccessibilityService.instance.getRootInActiveWindow()
+                                        .findFocus(android.view.accessibility.AccessibilityNodeInfo.FOCUS_INPUT);
+                                if (node != null && node.isEditable()) {
+                                    android.os.Bundle args = new android.os.Bundle();
+                                    args.putCharSequence(
+                                        android.view.accessibility.AccessibilityNodeInfo
+                                            .ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, pasteText);
+                                    done = node.performAction(
+                                        android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+                                    sendLog("paste: ACTION_SET_TEXT: " + done);
+                                } else {
+                                    sendLog("paste: a11y no focused editable node");
+                                }
+                            } catch (Exception e) {
+                                sendLog("paste: ACTION_SET_TEXT error: " + e.getMessage());
+                            }
+                        } else {
+                            sendLog("paste: a11y not available");
+                        }
+                        if (done) return;
+                        // Step 2: set clipboard then ACTION_PASTE via a11y
+                        try {
+                            android.content.ClipboardManager cm =
+                                (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                            cm.setPrimaryClip(android.content.ClipData.newPlainText("", pasteText));
+                            sendLog("paste: clipboard set (" + pasteText.length() + " chars)");
+                        } catch (Exception e) {
+                            sendLog("paste: clipboard error: " + e.getMessage());
+                        }
+                        try { Thread.sleep(150); } catch (InterruptedException ignored) {}
+                        if (TouchAccessibilityService.isAvailable()) {
+                            try {
+                                android.view.accessibility.AccessibilityNodeInfo node =
+                                    TouchAccessibilityService.instance.getRootInActiveWindow()
+                                        .findFocus(android.view.accessibility.AccessibilityNodeInfo.FOCUS_INPUT);
+                                if (node != null) {
+                                    done = node.performAction(
+                                        android.view.accessibility.AccessibilityNodeInfo.ACTION_PASTE);
+                                    sendLog("paste: ACTION_PASTE: " + done);
+                                }
+                            } catch (Exception e) {
+                                sendLog("paste: ACTION_PASTE error: " + e.getMessage());
+                            }
+                        }
+                        // Step 3: fallback — KEYCODE_PASTE
+                        if (!done) {
+                            runShell("input keyevent 279");
+                            sendLog("paste: keyevent 279 fallback");
+                        }
+                    });
+                    break;
+                }
                 case "shell":
                     executor.submit(() -> runShell(msg.optString("cmd", "")));
                     break;
@@ -1340,17 +1409,17 @@ public class WsAgentService extends android.app.Service {
             sendLog("type via a11y: " + text.length() + " chars");
             return;
         }
-        // Fallback: paste via clipboard
-        mainHandler.post(() -> {
-            try {
-                android.content.ClipboardManager cm =
-                        (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-                cm.setPrimaryClip(android.content.ClipData.newPlainText("", text));
-                sendLog("type: text copied to clipboard (a11y not available — paste manually)");
-            } catch (Exception e) {
-                sendLog("type error: " + e.getMessage());
-            }
-        });
+        // Fallback: set clipboard then send KEYCODE_PASTE
+        try {
+            android.content.ClipboardManager cm =
+                    (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("", text));
+            sendLog("type: clipboard set, sending paste keyevent");
+        } catch (Exception e) {
+            sendLog("type error: " + e.getMessage());
+        }
+        try { Thread.sleep(150); } catch (InterruptedException ignored) {}
+        runShell("input keyevent 279");
     }
 
     /** Run a shell command (am, pm, input, etc.). */
@@ -1425,7 +1494,20 @@ public class WsAgentService extends android.app.Service {
                 return;
             }
         }
-        // other keys (enter, menu, power, volume...) or a11y not available: inject via InputManager
+        // enter: trigger IME action (Search/Go/Done/Next) on focused editable node (API 30+).
+        // This is more reliable than KEYCODE_ENTER injection — handles imeOptions correctly.
+        if ("enter".equals(k) && TouchAccessibilityService.isAvailable()
+                && Build.VERSION.SDK_INT >= 30) {
+            AccessibilityNodeInfo focused = TouchAccessibilityService.instance
+                    .findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
+            if (focused != null) {
+                focused.performAction(AccessibilityNodeInfo.ACTION_IME_ENTER);
+                focused.recycle();
+                return;
+            }
+        }
+
+        // other keys (enter fallback, menu, power, volume...) or a11y not available: inject via InputManager
         if (inputManager == null)
             return;
         int keycode = resolveKeycode(key);

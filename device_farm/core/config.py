@@ -52,14 +52,16 @@ class AdbConfig:
 
 @dataclass
 class DeviceConfig:
-    index_file: str = "device_index.json"
+    index_file: str = "data/device_index.json"
     stf_package: str = "jp.co.cyberagent.stf"
     stf_apk_path: str = ""
     scrcpy_jar: str = "/opt/homebrew/share/scrcpy/scrcpy-server"
     scrcpy_max_fps: int = 30
     scrcpy_max_width: int = 800
-    scrcpy_bitrate: int = 8_000_000  # H.264 bitrate bps (8 Mbps)
-    scrcpy_control: bool = True      # Enable scrcpy control channel for touch/key/text
+    scrcpy_bitrate: int = 8_000_000       # H.264 bitrate bps for local ADB path (8 Mbps)
+    scrcpy_relay_bitrate: int = 2_000_000 # H.264 bitrate for WiFi ADB relay path (keep ≤4Mbps to avoid IDR transfer lag)
+    scrcpy_control: bool = True           # Enable scrcpy control channel for touch/key/text
+    u2_always_tunnel: bool = False        # Cloud/Docker: force WS tunnel for U2, never direct TCP to device_ip:7912
 
 
 @dataclass
@@ -131,6 +133,27 @@ class DatabaseConfig:
 
 
 @dataclass
+class MinioConfig:
+    """MinIO / S3-compatible object storage for screenshots and captured images.
+
+    Set enabled: true and fill endpoint/keys to activate.
+    Falls back to local filesystem when disabled (default).
+    """
+    enabled: bool = False
+    endpoint: str = "localhost:9000"
+    access_key: str = "minioadmin"
+    secret_key: str = "minioadmin"
+    bucket: str = "device-farm"
+    secure: bool = False
+    # If set, URLs returned as "<public_base_url>/<bucket>/<object>".
+    # Leave blank to use presigned URLs (1-week TTL).
+    public_base_url: str = ""
+    # Minimum JPEG size in bytes below which images are rejected as blank/black.
+    # Blank frames compressed by minicap are typically < 2 KB.
+    min_image_bytes: int = 3072
+
+
+@dataclass
 class TemporalConfig:
     """Temporal workflow engine config (DF-002).
 
@@ -154,6 +177,14 @@ class TemporalConfig:
 
 
 @dataclass
+class RelayConfig:
+    """gRPC ADB relay server (agent-boot/relay.py connects here)."""
+    enabled: bool = False
+    port: int = 50051
+    api_key: str = ""   # set via RELAY_API_KEY env var or config.yaml
+
+
+@dataclass
 class Config:
     web: WebConfig = field(default_factory=WebConfig)
     ports: PortsConfig = field(default_factory=PortsConfig)
@@ -168,6 +199,8 @@ class Config:
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     streaming: StreamingConfig = field(default_factory=StreamingConfig)
     temporal: TemporalConfig = field(default_factory=TemporalConfig)
+    minio: MinioConfig = field(default_factory=MinioConfig)
+    relay: RelayConfig = field(default_factory=RelayConfig)
     target_app: str = ""
     force_u2_mode: bool = False
 
@@ -193,6 +226,54 @@ def _build_temporal_config(raw: dict) -> TemporalConfig:
             cfg.worker_count = max(1, int(env_wc))
         except ValueError:
             pass
+    return cfg
+
+
+def _build_minio_config(raw: dict) -> MinioConfig:
+    """Build MinioConfig from YAML + env var overrides for Docker Compose."""
+    cfg = MinioConfig(
+        **{k: v for k, v in raw.items() if k in MinioConfig.__dataclass_fields__}
+    )
+    # Env overrides — set automatically when farm service runs inside Docker Compose
+    if os.environ.get("MINIO_ENDPOINT"):
+        cfg.endpoint = os.environ["MINIO_ENDPOINT"]
+        cfg.enabled = True  # auto-enable when endpoint is set via env
+    if os.environ.get("MINIO_ACCESS_KEY"):
+        cfg.access_key = os.environ["MINIO_ACCESS_KEY"]
+    if os.environ.get("MINIO_SECRET_KEY"):
+        cfg.secret_key = os.environ["MINIO_SECRET_KEY"]
+    if os.environ.get("MINIO_BUCKET"):
+        cfg.bucket = os.environ["MINIO_BUCKET"]
+    if os.environ.get("MINIO_PUBLIC_BASE_URL"):
+        cfg.public_base_url = os.environ["MINIO_PUBLIC_BASE_URL"]
+    return cfg
+
+
+def _build_relay_config(raw: dict) -> RelayConfig:
+    """Build RelayConfig from YAML + env var overrides."""
+    cfg = RelayConfig(
+        **{k: v for k, v in raw.items() if k in RelayConfig.__dataclass_fields__}
+    )
+    if os.environ.get("RELAY_API_KEY"):
+        cfg.api_key = os.environ["RELAY_API_KEY"]
+    # Accept both RELAY_PORT (preferred) and RELAY_GRPC_PORT (legacy docker-compose name)
+    _relay_port_env = os.environ.get("RELAY_PORT") or os.environ.get("RELAY_GRPC_PORT")
+    if _relay_port_env:
+        try:
+            cfg.port = int(_relay_port_env)
+        except ValueError:
+            pass
+    return cfg
+
+
+def _build_database_config(raw: dict) -> DatabaseConfig:
+    """YAML database section + ``DATABASE_URL`` env (Docker Compose sets this)."""
+    cfg = DatabaseConfig(
+        **{k: v for k, v in raw.items() if k in DatabaseConfig.__dataclass_fields__}
+    )
+    env_url = (os.environ.get("DATABASE_URL") or "").strip()
+    if env_url:
+        cfg.url = env_url
     return cfg
 
 
@@ -242,14 +323,19 @@ def load_config(path: str = "config.yaml") -> Config:
             enabled=_get(adb_raw, "enabled", True),
         ),
         device=DeviceConfig(
-            index_file=_get(device_raw, "index_file", "device_index.json"),
+            index_file=_get(device_raw, "index_file", "data/device_index.json"),
             stf_package=_get(device_raw, "stf_package", "jp.co.cyberagent.stf"),
             stf_apk_path=_get(device_raw, "stf_apk_path", ""),
             scrcpy_jar=_get(device_raw, "scrcpy_jar", "/opt/homebrew/share/scrcpy/scrcpy-server"),
             scrcpy_max_fps=_get(device_raw, "scrcpy_max_fps", 30),
             scrcpy_max_width=_get(device_raw, "scrcpy_max_width", 800),
             scrcpy_bitrate=_get(device_raw, "scrcpy_bitrate", 8_000_000),
+            scrcpy_relay_bitrate=_get(device_raw, "scrcpy_relay_bitrate", 2_000_000),
             scrcpy_control=bool(_get(device_raw, "scrcpy_control", True)),
+            u2_always_tunnel=bool(
+                _get(device_raw, "u2_always_tunnel", False)
+                or os.environ.get("DEVICE_FARM_U2_ALWAYS_TUNNEL", "")
+            ),
         ),
         watchdog=WatchdogConfig(
             interval=_get(watchdog_raw, "interval", 10),
@@ -281,15 +367,14 @@ def load_config(path: str = "config.yaml") -> Config:
             enabled=_get(wd_raw, "enabled", False),
             url=_get(wd_raw, "url", "http://localhost:3000"),
         ),
-        database=DatabaseConfig(
-            **{k: v for k, v in raw.get("database", {}).items()
-               if k in DatabaseConfig.__dataclass_fields__}
-        ),
+        database=_build_database_config(raw.get("database", {})),
         streaming=StreamingConfig(
             mode=_get(streaming_raw, "mode", "periodic"),
             dashboard_interval=float(_get(streaming_raw, "dashboard_interval", 3.0)),
         ),
         temporal=_build_temporal_config(raw.get("temporal", {})),
+        minio=_build_minio_config(raw.get("minio", {})),
+        relay=_build_relay_config(raw.get("relay", {})),
         target_app=raw.get("target_app", ""),
         force_u2_mode=bool(raw.get("force_u2_mode", False)),
     )

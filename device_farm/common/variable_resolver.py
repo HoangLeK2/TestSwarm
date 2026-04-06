@@ -31,6 +31,27 @@ _BUILTIN_NAMES: frozenset[str] = frozenset({
 })
 
 
+def _normalize_vars(raw: dict[str, Any]) -> dict[str, Any]:
+    """
+    Normalize a variables dict.
+
+    When variables come from a ScenarioTemplate they are stored as metadata dicts:
+        {"GROUP_NAME": {"type": "string", "default": "foo", "description": "..."}}
+    When they come from a plain scenario they are already plain values:
+        {"GROUP_NAME": "foo"}
+
+    This function extracts the 'default' key from any metadata dict so the
+    variable resolver always works with plain values.
+    """
+    result: dict[str, Any] = {}
+    for k, v in raw.items():
+        if isinstance(v, dict) and "default" in v and "type" in v:
+            result[k] = v["default"]
+        else:
+            result[k] = v
+    return result
+
+
 class VariableContext:
     """
     Manage variable scopes for one scenario execution.
@@ -61,8 +82,8 @@ class VariableContext:
         env_whitelist: frozenset[str] | None = None,
     ) -> None:
         self._runtime_vars: dict[str, Any] = {}
-        self._scenario_vars: dict[str, Any] = dict(scenario_vars or {})
-        self._campaign_vars: dict[str, Any] = dict(campaign_vars or {})
+        self._scenario_vars: dict[str, Any] = _normalize_vars(scenario_vars or {})
+        self._campaign_vars: dict[str, Any] = _normalize_vars(campaign_vars or {})
         self._counters: dict[str, int] = {}
         self._device_serial = device_serial
         self._device_model = device_model

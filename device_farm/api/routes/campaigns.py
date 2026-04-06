@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import re as _re
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel
+
+_SERIAL_RE = _re.compile(r"^[\w.:_\-]{1,128}$")
 
 from api.deps import CurrentUser, DB
 from api.schemas.campaign import (
@@ -18,6 +21,11 @@ router = APIRouter(prefix="/campaigns", tags=["campaigns"])
 
 class StatusUpdate(BaseModel):
     status: str  # draft | running | paused | completed
+
+
+class StepActionBody(BaseModel):
+    action: str           # "retry" | "skip"
+    device_serial: str | None = None  # None = apply to all paused-on-error workflows
 
 
 class AddDeviceBody(BaseModel):
@@ -181,6 +189,66 @@ async def update_status(campaign_id: str, body: StatusUpdate, db: DB, user: Curr
     await repo.update_campaign_status(db, campaign_id, db_status)
     await db.commit()
     return {"id": campaign_id, "status": db_status, "tasks_cancelled": cancelled_count}
+
+
+@router.post("/{campaign_id}/step-action")
+async def step_action(campaign_id: str, body: StepActionBody, db: DB, user: CurrentUser, request: Request):
+    """Send retry_step or skip_step signal to workflows paused on error.
+
+    When a step fails and its on_error policy is "pause", the workflow blocks
+    waiting for this signal.
+      - action="retry": re-execute the failed step from the beginning
+      - action="skip":  skip the failed step and continue with the next one
+
+    device_serial: if provided, only signal the workflow for that device.
+                   if None, signal all paused-on-error workflows for this campaign.
+    """
+    await _get_campaign_or_404(campaign_id, user.id, db)
+    if body.action not in ("retry", "skip"):
+        raise HTTPException(status_code=400, detail="action must be 'retry' or 'skip'")
+    if body.device_serial and not _SERIAL_RE.match(body.device_serial):
+        raise HTTPException(status_code=400, detail="Invalid device_serial format")
+
+    config = getattr(request.app.state, "config", None)
+    if config is None or not getattr(config, "temporal", None) or not config.temporal.enabled:
+        raise HTTPException(status_code=400, detail="Temporal is not enabled")
+
+    from temporal.worker import get_temporal_client
+    from temporal.workflows import ScenarioStepsWorkflow
+
+    signal_name = "retry_step" if body.action == "retry" else "skip_step"
+    t_client = await get_temporal_client(config.temporal)
+
+    # Build query: all running workflows for this campaign (optionally filtered by device)
+    wf_query = f'WorkflowId STARTS_WITH "campaign:{campaign_id}:" AND ExecutionStatus="Running"'
+    if body.device_serial:
+        wf_query = (
+            f'WorkflowId STARTS_WITH "campaign:{campaign_id}:device:{body.device_serial}:" '
+            f'AND ExecutionStatus="Running"'
+        )
+
+    import logging
+    log = logging.getLogger(__name__)
+    signalled: list[str] = []
+    errors: list[str] = []
+
+    async for wf in t_client.list_workflows(wf_query):
+        # Signal the child ScenarioStepsWorkflow (the one that manages step execution)
+        child_id = f"{wf.id}:steps"
+        try:
+            handle = t_client.get_workflow_handle(child_id)
+            await handle.signal(signal_name)
+            signalled.append(child_id)
+        except Exception as exc:
+            log.warning("Failed to signal %s: %s", child_id, exc)
+            errors.append(child_id)
+
+    return {
+        "action": body.action,
+        "signalled": signalled,
+        "errors": errors,
+        "total": len(signalled),
+    }
 
 
 @router.get("/{campaign_id}/devices", response_model=list[CampaignDeviceOut])

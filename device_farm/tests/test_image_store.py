@@ -7,20 +7,28 @@ from __future__ import annotations
 
 import base64
 import importlib
+from unittest.mock import patch
 
 import pytest
 
 import services.image_store as image_store
+from services import minio_store
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 @pytest.fixture(autouse=True)
 def reset_module(tmp_path):
-    """Each test gets a fresh captures dir and a clean module state."""
+    """Each test gets a fresh captures dir and a clean module state.
+
+    The quality gate (minio_store.is_quality_ok) is bypassed here so that the
+    minimal 1×1 JPEG test fixture passes through — tests cover save logic, not
+    quality validation.
+    """
     image_store._CAPTURES_DIR = None
     image_store.init(tmp_path)
-    yield
+    with patch.object(minio_store, "is_quality_ok", return_value=True):
+        yield
     image_store._CAPTURES_DIR = None
 
 

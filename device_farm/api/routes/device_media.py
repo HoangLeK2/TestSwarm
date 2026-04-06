@@ -28,8 +28,17 @@ def build_device_media_router(manager: DeviceManager) -> APIRouter:
                 interval = 1.0 / max(0.1, min(fps, 30))
             else:
                 interval = 1.0 if low_bw_mode else 0.033
+            loop = asyncio.get_event_loop()
             while True:
+                # take_screenshot() returns cached scrcpy frame (fast path).
+                # If no scrcpy frame, capture_screenshot fetches fresh u2/relay screenshot.
+                # allow_ws_u2_fallback=True + no cache update ensures each call gets
+                # a fresh frame when scrcpy is not producing.
                 frame = device.take_screenshot()
+                if not frame:
+                    frame = await loop.run_in_executor(
+                        None, device.capture_screenshot, 70, 800, True
+                    )
                 if frame:
                     yield (
                         b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"

@@ -215,22 +215,43 @@ def build_campaign_fleet_router(
 
     @router.get("/workflows/{workflow_id}/progress")
     async def api_workflow_progress(workflow_id: str):
-        """Query real-time progress of a Temporal scenario workflow."""
+        """Query real-time progress of a Temporal scenario workflow.
+
+        When the child ScenarioStepsWorkflow is paused on error, status is
+        overridden to 'paused_on_error' and error_message is populated.
+        """
         try:
-            from temporal.workflows import ScenarioWorkflow
+            from temporal.workflows import ScenarioWorkflow, ScenarioStepsWorkflow
 
             client = await get_temporal_client(config.temporal)
             handle = client.get_workflow_handle(workflow_id)
             progress = await handle.query(ScenarioWorkflow.get_progress)
+
+            status = progress.status
+            error_message: str | None = None
+
+            # When parent shows RUNNING, check if child is paused on error
+            if status == "running":
+                child_id = f"{workflow_id}:steps"
+                try:
+                    child_handle = client.get_workflow_handle(child_id)
+                    error_info = await child_handle.query(ScenarioStepsWorkflow.get_error_info)
+                    if error_info.get("paused_on_error"):
+                        status = "paused_on_error"
+                        error_message = error_info.get("error_message") or None
+                except Exception:
+                    pass  # child not started yet or not queryable
+
             return {
                 "workflow_id": workflow_id,
-                "status": progress.status,
+                "status": status,
                 "current_step": progress.current_step,
                 "total_steps": progress.total_steps,
                 "current_step_type": progress.current_step_type,
                 "loop_iteration": progress.loop_iteration,
-                "message": progress.message,
+                "message": error_message or progress.message,
                 "device_serial": progress.device_serial,
+                "error_message": error_message,
             }
         except Exception as exc:
             return JSONResponse(

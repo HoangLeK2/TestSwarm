@@ -107,8 +107,8 @@ class ScrollDownStep(StepBase):
     type: Literal["scroll_down"]
     repeats: int
     start_x_ratio: float = 0.5
-    start_y_ratio: float = 0.72
-    end_y_ratio: float = 0.38
+    start_y_ratio: float = 0.65
+    end_y_ratio: float = 0.47
     duration_ms: int = 520
     pause_seconds: float = 0.6
 
@@ -842,16 +842,17 @@ def _capture_step_screenshot(
         f.write(jpeg)
     result: Dict[str, Any] = {"full": full_path}
 
-    # Save XML hierarchy (cached, near-instant)
-    try:
-        xml = device.hierarchy_xml(force_refresh=False)
-        if xml:
-            xml_path = os.path.join(capture_dir, f"{prefix}_hierarchy.xml")
-            with open(xml_path, "w", encoding="utf-8") as f:
-                f.write(xml)
-            result["hierarchy"] = xml_path
-    except Exception:
-        pass
+    # Save XML hierarchy only when CAPTURE_XML=1 (large files, rarely useful)
+    if os.environ.get("CAPTURE_XML", "").lower() in {"1", "true", "yes"}:
+        try:
+            xml = device.hierarchy_xml(force_refresh=False)
+            if xml:
+                xml_path = os.path.join(capture_dir, f"{prefix}_hierarchy.xml")
+                with open(xml_path, "w", encoding="utf-8") as f:
+                    f.write(xml)
+                result["hierarchy"] = xml_path
+        except Exception:
+            pass
 
     # Save selector info
     if selector:
@@ -1587,53 +1588,61 @@ def run_scenario_task(
                 log.warning(f"[{serial}] {msg}")
                 step_result["ok"] = False
                 step_result["message"] = msg
-            elif via == "u2":
-                d = device.u2  # per-step: dùng client mới sau reconnect
+            elif via in ("u2", "a11y_key"):
+                d = device.u2
                 if d is None:
                     device.ensure_u2_healthy()
                     d = device.u2
-                if d is None:
-                    msg = "input_text via=u2 but u2 client not available"
-                    log.warning(f"[{serial}] {msg}")
-                    step_result["ok"] = False
-                    step_result["message"] = msg
-                else:
+
+                typed = False
+
+                # Strategy 1: u2 setFastInputText — atx-agent IME injection.
+                if d is not None:
                     try:
-                        d.send_keys(text)  # type: ignore[union-attr]
-                    except Exception as exc:
-                        # Fallback 1: tap vùng search rồi thử send_keys lại
-                        log.warning(f"[{serial}] u2 send_keys failed: {exc}, trying tap_ratio + retry")
-                        u2_ok = False
+                        d._rpc("setFastInputText", text)  # type: ignore[union-attr]
+                        typed = True
+                        step_result["message"] = "input_text via u2 setFastInputText"
+                        log.info(f"[{serial}] input_text: strategy 1 (setFastInputText) OK")
+                    except Exception as fast_exc:
+                        log.info(f"[{serial}] input_text: strategy 1 failed: {fast_exc}")
+
+                # Strategy 3: agent paste (clipboard + ACTION_SET_TEXT/PASTE).
+                # Works on all Android versions including 12+ where adb shell input text
+                # is blocked (SecurityException: INJECT_EVENTS).
+                if not typed and getattr(device, "_agent_send", None) is not None:
+                    log.info(f"[{serial}] input_text: trying strategy 3 (agent paste)")
+                    device._send_to_agent({"type": "paste", "text": text})  # type: ignore[attr-defined]
+                    time.sleep(0.7)
+                    typed = True
+                    step_result["message"] = "input_text via agent paste"
+
+                # Strategy 4: adb shell input text — ASCII fallback when no agent.
+                # Not available on Android 12+ (SecurityException: INJECT_EVENTS).
+                if not typed:
+                    is_ascii = all(ord(c) < 128 for c in text)
+                    if is_ascii:
+                        escaped = (
+                            text
+                            .replace("\\", "\\\\")
+                            .replace('"', '\\"')
+                            .replace(" ", "%s")
+                            .replace("\n", "%n")
+                        )
                         try:
-                            tx = max(0, min(w - 1, int(0.5 * w)))
-                            ty = max(0, min(h - 1, int(0.2 * h)))
-                            device.tap(tx, ty)
-                            time.sleep(1.0)
-                            d2 = device.u2
-                            if d2 is not None:
-                                d2.send_keys(text)  # type: ignore[union-attr]
-                                u2_ok = True
-                        except Exception as retry_exc:
-                            log.warning(f"[{serial}] u2 send_keys retry failed: {retry_exc}")
-                        if not u2_ok:
-                            # Fallback 2: adb input text (gửi keyevent vào focus — hoạt động với WebView/Chrome)
-                            try:
-                                escaped = text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
-                                device.shell(f'input text "{escaped}"')
-                                time.sleep(0.3)
-                                step_result["ok"] = True
-                                step_result["message"] = "input_text via shell (u2 NPE fallback)"
-                            except Exception as shell_exc:
-                                msg = f"u2 send_keys({text!r}) failed, shell fallback failed: {shell_exc}"
-                                log.warning(f"[{serial}] {msg}")
-                                step_result["ok"] = False
-                                step_result["message"] = msg
-            elif via == "a11y_key":
-                # Chỗ này tuỳ bạn sau này nối vào IME riêng / input text khác.
-                msg = "input_text via=a11y_key not implemented"
-                log.warning(f"[{serial}] {msg}")
-                step_result["ok"] = False
-                step_result["message"] = msg
+                            device.shell(f"input text {escaped}")
+                            time.sleep(0.3)
+                            typed = True
+                            step_result["message"] = "input_text via adb shell input text"
+                            log.info(f"[{serial}] input_text: strategy 4 (adb shell) OK")
+                        except Exception as shell_exc:
+                            log.info(f"[{serial}] input_text: strategy 4 failed: {shell_exc}")
+
+                if not typed:
+                    log.warning(f"[{serial}] input_text: all strategies failed for {text!r}")
+
+                if not typed:
+                    step_result["ok"] = False
+                    step_result["message"] = f"input_text: all strategies failed for {text!r}"
             else:
                 msg = f"input_text: unknown via={via!r}"
                 log.warning(f"[{serial}] {msg}")
@@ -1764,13 +1773,13 @@ def run_scenario_task(
             except Exception:
                 repeats = 1
             try:
-                start_y_ratio = float(step.get("start_y_ratio", 0.72))
+                start_y_ratio = float(step.get("start_y_ratio", 0.65))
             except Exception:
-                start_y_ratio = 0.72
+                start_y_ratio = 0.65
             try:
-                end_y_ratio = float(step.get("end_y_ratio", 0.38))
+                end_y_ratio = float(step.get("end_y_ratio", 0.47))
             except Exception:
-                end_y_ratio = 0.38
+                end_y_ratio = 0.47
             try:
                 duration_ms = int(step.get("duration_ms", 520) or 520)
             except Exception:
@@ -1875,13 +1884,31 @@ def run_scenario_task(
             no_new_threshold = int(step.get("no_new_threshold", 3))
             expand_see_more = bool(step.get("expand_see_more", True))
 
+            _em_passes = int(step.get("expand_see_more_max_passes", 2))
+            _em_scroll = bool(step.get("expand_see_more_scroll", False))
+            _em_scroll_dist = float(step.get("expand_see_more_scroll_distance", 0.3))
+
             if strategy == "fb_posts" and expand_see_more:
                 try:
                     from tasks.fb_extract import _expand_see_more
-                    expanded = _expand_see_more(device)
+                    expanded = _expand_see_more(
+                        device,
+                        max_passes=_em_passes,
+                        scroll_between=_em_scroll,
+                        scroll_distance=_em_scroll_dist,
+                    )
                     if expanded:
                         # Let UI settle after expanding truncated content.
                         time.sleep(0.5)
+                except Exception:
+                    pass
+
+            if strategy == "fb_comments" and expand_see_more:
+                # Expand truncated long comments before parsing
+                try:
+                    from tasks.fb_extract import _expand_see_more
+                    _expand_see_more(device, max_passes=_em_passes)
+                    time.sleep(0.3)
                 except Exception:
                     pass
 
@@ -1910,6 +1937,12 @@ def run_scenario_task(
                         ctx["_first_new_post_hash"] = compute_content_hash(
                             new_posts[0], dedupe_field="text"
                         )
+                        # Build _pid → content_hash map so fb_comments can reliably
+                        # link post_stats to the correct post regardless of scroll position.
+                        pid_map = ctx.setdefault("_post_id_map", {})
+                        for _p in new_posts:
+                            if _p.get("_pid"):
+                                pid_map[_p["_pid"]] = compute_content_hash(_p, dedupe_field="text")
                     # Track no-new streak for auto-break
                     if stop_if_no_new:
                         if added == 0:
@@ -1949,10 +1982,16 @@ def run_scenario_task(
                     post_stats = next((x for x in raw_items if x.get("_type") == "post_stats"), None)
                     new_comments = [x for x in raw_items if x.get("_type") != "post_stats"]
 
-                    # If comment view exposes better reaction/share counts, update parent post
+                    # If comment view exposes better reaction/share counts, update parent post.
+                    # Prefer _post_id_map lookup (reliable: MD5 from comment view header → SHA256)
+                    # over _first_new_post_hash (unreliable: assumes topmost feed post).
                     if post_stats:
                         ctx["_comment_view_stats"] = post_stats
-                        parent_hash = ctx.get("_first_new_post_hash")
+                        _pid_key = parent_post_id  # MD5 derived from comment view XML header
+                        parent_hash = (
+                            ctx.get("_post_id_map", {}).get(_pid_key)
+                            or ctx.get("_first_new_post_hash")
+                        )
                         if parent_hash:
                             try:
                                 import asyncio

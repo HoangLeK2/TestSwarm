@@ -28,3 +28,5 @@ Thumbs.db
 # Node (front-end)
 node_modules/
 .next/
+STFService.apk/java_pid*.hprof
+STFService.apk/java_pid*.hprof

@@ -11,6 +11,13 @@ import {
   ZoomOut,
   Hand,
   MousePointer2,
+  Sun,
+  Moon,
+  LockOpen,
+  ChevronsUp,
+  ChevronsDown,
+  ChevronsLeft,
+  ChevronsRight,
 } from 'lucide-react';
 import { serialToId } from '../helpers';
 import { Button } from '@/components/ui/button';
@@ -31,6 +38,10 @@ interface DeviceControlsProps {
   gestureMode?: 'tap' | 'swipe' | 'double_tap' | 'drag';
   onGestureMode?: (m: 'tap' | 'swipe' | 'double_tap' | 'drag') => void;
   onPinch?: (scale: number) => void;
+  onSwipeExt?: (direction: 'up' | 'down' | 'left' | 'right') => void;
+  onScreenOn?: () => void;
+  onScreenOff?: () => void;
+  onUnlock?: () => void;
 }
 
 export function DeviceControls({
@@ -43,6 +54,10 @@ export function DeviceControls({
   gestureMode,
   onGestureMode,
   onPinch,
+  onSwipeExt,
+  onScreenOn,
+  onScreenOff,
+  onUnlock,
 }: DeviceControlsProps) {
   const t = useTranslations('devicesControlRecord.controls');
   const id = serialToId(serial);
@@ -173,6 +188,83 @@ export function DeviceControls({
           {t('restartTitle')}
         </TooltipContent>
       </Tooltip>
+
+      {/* Screen on / off / unlock */}
+      {onScreenOn && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button size='sm' variant='outline' className={btn} onClick={onScreenOn}>
+              <Sun className={icon} aria-hidden />
+              {!compact && 'Bật màn hình'}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side='top' className='text-xs'>Bật màn hình (screen on)</TooltipContent>
+        </Tooltip>
+      )}
+      {onScreenOff && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button size='sm' variant='outline' className={btn} onClick={onScreenOff}>
+              <Moon className={icon} aria-hidden />
+              {!compact && 'Tắt màn hình'}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side='top' className='text-xs'>Tắt màn hình (screen off)</TooltipContent>
+        </Tooltip>
+      )}
+      {onUnlock && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button size='sm' variant='outline' className={btn} onClick={onUnlock}>
+              <LockOpen className={icon} aria-hidden />
+              {!compact && 'Mở khoá'}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side='top' className='text-xs'>Mở khoá màn hình (unlock)</TooltipContent>
+        </Tooltip>
+      )}
+
+      {/* Directional swipes */}
+      {onSwipeExt && (
+        <>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button size='sm' variant='outline' className={btn} onClick={() => onSwipeExt('up')}>
+                <ChevronsUp className={icon} aria-hidden />
+                {!compact && 'Lên'}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side='top' className='text-xs'>Vuốt lên (swipe up)</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button size='sm' variant='outline' className={btn} onClick={() => onSwipeExt('down')}>
+                <ChevronsDown className={icon} aria-hidden />
+                {!compact && 'Xuống'}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side='top' className='text-xs'>Vuốt xuống (swipe down)</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button size='sm' variant='outline' className={btn} onClick={() => onSwipeExt('left')}>
+                <ChevronsLeft className={icon} aria-hidden />
+                {!compact && 'Trái'}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side='top' className='text-xs'>Vuốt trái (swipe left)</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button size='sm' variant='outline' className={btn} onClick={() => onSwipeExt('right')}>
+                <ChevronsRight className={icon} aria-hidden />
+                {!compact && 'Phải'}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side='top' className='text-xs'>Vuốt phải (swipe right)</TooltipContent>
+          </Tooltip>
+        </>
+      )}
     </div>
   );
 }

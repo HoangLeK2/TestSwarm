@@ -306,23 +306,104 @@ class _WatcherContext:
 # ── Element proxy ─────────────────────────────────────────────────────────────
 
 class _U2JsonRpcElement:
-    def __init__(self, client: "U2JsonRpcClient", by: str, value: str) -> None:
+    """
+    Proxy for a UI element identified by a selector.
+
+    Supports single-condition selectors (by/value) and multi-condition selectors
+    (pre-built dict) created by U2JsonRpcClient.__call__(text="X", className="Y").
+    """
+
+    def __init__(self, client: "U2JsonRpcClient", by: str, value: str,
+                 selector: Optional[Dict[str, Any]] = None) -> None:
         self._client = client
         self._by = by
         self._value = value
+        # Pre-built multi-condition selector (None → use _build_selector on demand)
+        self._selector: Optional[Dict[str, Any]] = selector
+
+    def _get_selector(self) -> Dict[str, Any]:
+        """Return the JSON-RPC selector dict (single or multi-condition)."""
+        if self._selector is not None:
+            return self._selector
+        return self._client._build_selector(self._by, self._value)
+
+    # ── Introspection ──────────────────────────────────────────────────────────
+
+    @property
+    def exists(self) -> bool:
+        """Non-blocking check — True if element is currently on screen."""
+        if self._by == "xpath":
+            return self._client._find_element_xpath(self._value, 0) is not None
+        try:
+            info = self._client._rpc("objInfo", self._get_selector())
+            return bool(info)
+        except RuntimeError as exc:
+            msg = str(exc).lower()
+            if "json-rpc error" in msg or "uiobjectnotfound" in msg:
+                return False
+            raise
+
+    @property
+    def count(self) -> int:
+        """Number of matching elements currently visible."""
+        if self._by == "xpath":
+            xpath_query = U2JsonRpcClient._normalize_et_xpath(self._value)
+            try:
+                xml = self._client.page_source()
+                if not xml:
+                    return 0
+                root = parse_xml(xml)
+                return len(root.findall(xpath_query))
+            except Exception:
+                return 0
+        try:
+            result = self._client._rpc("count", self._get_selector())
+            return int(result or 0)
+        except Exception:
+            return 0
+
+    def __getitem__(self, index: int) -> "_U2JsonRpcElement":
+        """Return a proxy for the Nth matching element (0-based index)."""
+        if self._by == "xpath":
+            raise NotImplementedError("__getitem__ not supported for xpath elements")
+        sel = dict(self._get_selector())
+        sel["instance"] = index
+        sel["mask"] = sel.get("mask", 0) | _MASK_INSTANCE
+        return _U2JsonRpcElement(self._client, self._by, self._value, selector=sel)
+
+    # ── Actions ───────────────────────────────────────────────────────────────
 
     def click(self) -> None:
+        if self._selector is not None:
+            result = self._client._find_with_selector(self._selector)
+            if result is None:
+                raise RuntimeError(f"Element not found: {self._selector!r}")
+            bounds = result.get("bounds")
+            if not bounds:
+                raise RuntimeError(f"Element bounds unavailable: {self._selector!r}")
+            cx = (bounds["left"] + bounds["right"]) // 2
+            cy = (bounds["top"] + bounds["bottom"]) // 2
+            self._client._rpc("click", cx, cy, _timeout=self._client._touch_timeout)
+            return
         eid = self._client.find_element(self._by, self._value)
         if eid is None:
             raise RuntimeError(f"Element not found: {self._by}={self._value!r}")
         self._client.element_click(eid)
 
     def wait(self, timeout: float = 10.0) -> bool:
-        """Wait for element to appear using native waitForExists (server-side, no polling)."""
+        """Wait for element to appear (server-side waitForExists, no polling)."""
+        if self._selector is not None:
+            return self._client._wait_with_selector(
+                self._selector, "waitForExists", timeout
+            )
         return self._client._wait_for_exists(self._by, self._value, timeout)
 
     def wait_gone(self, timeout: float = 10.0) -> bool:
-        """Wait for element to disappear using native waitUntilGone (server-side, no polling)."""
+        """Wait for element to disappear (server-side waitUntilGone, no polling)."""
+        if self._selector is not None:
+            return self._client._wait_with_selector(
+                self._selector, "waitUntilGone", timeout
+            )
         return self._client._wait_until_gone(self._by, self._value, timeout)
 
     def drag_to(self, x: int, y: int, duration: float = 0.5) -> None:
@@ -330,7 +411,6 @@ class _U2JsonRpcElement:
         steps = max(1, int(duration * 20))
         t = self._client._touch_timeout + duration
         if self._by == "xpath":
-            # objDrag takes a native selector; xpath must be resolved to bounds first.
             result = self._client._find_element_xpath_with_bounds(self._value)
             if result is None or not result.get("bounds"):
                 raise RuntimeError(f"drag_to: xpath element not found: {self._value!r}")
@@ -339,32 +419,31 @@ class _U2JsonRpcElement:
             cy = (b["top"] + b["bottom"]) // 2
             self._client._rpc("drag", cx, cy, int(x), int(y), steps, _timeout=t)
         else:
-            selector = self._client._build_selector(self._by, self._value)
-            self._client._rpc("objDrag", selector, int(x), int(y), steps, _timeout=t)
+            self._client._rpc(
+                "objDrag", self._get_selector(), int(x), int(y), steps, _timeout=t
+            )
 
     def pinch_in(self, percent: int = 50, steps: int = 10) -> None:
-        """Pinch in on this element (zoom out). percent: how far to pinch (0-100)."""
+        """Pinch in (zoom out). percent: 0–100 = how far to collapse."""
         if self._by == "xpath":
             raise NotImplementedError(
                 "pinch_in() is not supported for xpath elements — "
                 "use a native selector (text, resource-id, description) instead."
             )
-        selector = self._client._build_selector(self._by, self._value)
         self._client._rpc(
-            "pinchIn", selector, percent, steps,
+            "pinchIn", self._get_selector(), percent, steps,
             _timeout=self._client._touch_timeout + steps * 0.05,
         )
 
     def pinch_out(self, percent: int = 50, steps: int = 10) -> None:
-        """Pinch out on this element (zoom in). percent: how far to stretch (0-100)."""
+        """Pinch out (zoom in). percent: 0–100 = how far to expand."""
         if self._by == "xpath":
             raise NotImplementedError(
                 "pinch_out() is not supported for xpath elements — "
                 "use a native selector (text, resource-id, description) instead."
             )
-        selector = self._client._build_selector(self._by, self._value)
         self._client._rpc(
-            "pinchOut", selector, percent, steps,
+            "pinchOut", self._get_selector(), percent, steps,
             _timeout=self._client._touch_timeout + steps * 0.05,
         )
 
@@ -510,6 +589,21 @@ class U2JsonRpcClient:
         "recent": 187, "app_switch": 187,
         "volumeup": 24, "volumedown": 25,
     }
+
+    def press_ime(self) -> None:
+        """Press the IME action button (Search/Go/Done/Next) on the active text field.
+
+        More reliable than KEYCODE_ENTER for search/form submission — triggers the
+        imeOptions action (actionSearch, actionGo, actionDone) rather than a raw newline.
+        Falls back to KEYCODE_ENTER if pressImeActionButton is not available.
+        """
+        for method in ("pressImeActionButton", "pressImeAction"):
+            try:
+                self._rpc(method)
+                return
+            except Exception:
+                pass
+        self.press("enter")
 
     def press(self, key: str) -> None:
         """
@@ -935,14 +1029,15 @@ class U2JsonRpcClient:
             pass
         self._rpc("clearTextField", None, 0, 9999)
 
-    def set_clipboard(self, text: str) -> None:
-        """Set device clipboard text via uiautomator2 server."""
+    def set_clipboard(self, text: str) -> bool:
+        """Set device clipboard text via uiautomator2 server. Returns True on success."""
         for method in ("setClipboard", "clipboardSet", "clipboard"):
             try:
                 self._rpc(method, text)
-                return
+                return True
             except Exception:
                 pass
+        return False
 
     def get_clipboard(self) -> Optional[str]:
         """Get device clipboard text via uiautomator2 server."""
@@ -978,24 +1073,28 @@ class U2JsonRpcClient:
                  textStartsWith: Optional[str] = None,
                  package: Optional[str] = None,
                  **kwargs: Any) -> _U2JsonRpcElement:
-        if text is not None:
-            return _U2JsonRpcElement(self, "text", text)
-        if resourceId is not None:
-            return _U2JsonRpcElement(self, "resource-id", resourceId)
-        if description is not None:
-            return _U2JsonRpcElement(self, "description", description)
-        if className is not None:
-            return _U2JsonRpcElement(self, "className", className)
-        if textContains is not None:
-            return _U2JsonRpcElement(self, "textContains", textContains)
-        if textStartsWith is not None:
-            return _U2JsonRpcElement(self, "textStartsWith", textStartsWith)
-        if package is not None:
-            return _U2JsonRpcElement(self, "package", package)
-        raise ValueError(
-            "Supported kwargs: text, resourceId, description, className, "
-            "textContains, textStartsWith, package"
-        )
+        # Collect all provided conditions with canonical by-names
+        conditions: Dict[str, str] = {}
+        if text is not None:             conditions["text"]          = text
+        if resourceId is not None:       conditions["resource-id"]   = resourceId
+        if description is not None:      conditions["description"]   = description
+        if className is not None:        conditions["className"]     = className
+        if textContains is not None:     conditions["textContains"]  = textContains
+        if textStartsWith is not None:   conditions["textStartsWith"] = textStartsWith
+        if package is not None:          conditions["package"]       = package
+
+        if not conditions:
+            raise ValueError(
+                "Supported kwargs: text, resourceId, description, className, "
+                "textContains, textStartsWith, package"
+            )
+        if len(conditions) == 1:
+            by, value = next(iter(conditions.items()))
+            return _U2JsonRpcElement(self, by, value)
+        # Multi-condition: build combined selector with OR'd mask bits
+        selector = self._build_multi_selector(conditions)
+        first_by, first_value = next(iter(conditions.items()))
+        return _U2JsonRpcElement(self, first_by, first_value, selector=selector)
 
     def wait_activity(self, activity: str, timeout: float = 10.0) -> bool:
         """Wait until the foreground package contains `activity`.
@@ -1067,3 +1166,187 @@ class U2JsonRpcClient:
         if by == "package":
             return {"mask": _MASK_PACKAGE_NAME, "packageName": value}
         return {"mask": _MASK_TEXT, "text": value}
+
+    @staticmethod
+    def _build_multi_selector(conditions: Dict[str, str]) -> Dict[str, Any]:
+        """Combine multiple by/value pairs into a single uiautomator2 selector.
+
+        Each condition's mask bit is OR'd together so the server treats them as
+        AND conditions (all must match simultaneously).
+        """
+        _FIELD_MAP: Dict[str, tuple] = {
+            "text":             ("text",        _MASK_TEXT),
+            "textContains":     ("textContains", _MASK_TEXT_CONTAINS),
+            "textStartsWith":   ("textStartsWith", _MASK_TEXT_STARTSWITH),
+            "resource-id":      ("resourceId",  _MASK_RESOURCE_ID),
+            "id":               ("resourceId",  _MASK_RESOURCE_ID),
+            "className":        ("className",   _MASK_CLASS_NAME),
+            "class name":       ("className",   _MASK_CLASS_NAME),
+            "description":      ("description", _MASK_DESCRIPTION),
+            "content-desc":     ("description", _MASK_DESCRIPTION),
+            "accessibility id": ("description", _MASK_DESCRIPTION),
+            "package":          ("packageName", _MASK_PACKAGE_NAME),
+        }
+        mask = 0
+        sel: Dict[str, Any] = {}
+        for by, value in conditions.items():
+            if by in _FIELD_MAP:
+                field, m = _FIELD_MAP[by]
+                sel[field] = value
+                mask |= m
+        sel["mask"] = mask
+        return sel
+
+    def _find_with_selector(self, selector: Dict[str, Any],
+                            timeout: Optional[float] = None) -> Optional[Dict[str, Any]]:
+        """Find element by pre-built selector dict; return info+bounds dict or None."""
+        wait_secs = timeout if timeout is not None else self._implicitly_wait
+        if wait_secs > 0:
+            wait_ms = int(wait_secs * 1000)
+            try:
+                found = self._rpc("waitForExists", selector, wait_ms,
+                                  _timeout=wait_secs + 5.0)
+                if not found:
+                    return None
+            except RuntimeError as exc:
+                msg = str(exc).lower()
+                if "uiobjectnotfound" in msg or "json-rpc error" in msg:
+                    return None
+                raise
+        try:
+            info = self._rpc("objInfo", selector)
+            if not info:
+                return None
+            raw_bounds = info.get("bounds") or info.get("visibleBounds")
+            bounds = self._parse_bounds(raw_bounds)
+            return {"bounds": bounds, "info": info}
+        except RuntimeError as exc:
+            msg = str(exc).lower()
+            if "uiobjectnotfound" in msg or "json-rpc error" in msg:
+                return None
+            raise
+
+    def _wait_with_selector(self, selector: Dict[str, Any],
+                            rpc_method: str, timeout: float) -> bool:
+        """waitForExists / waitUntilGone on a pre-built selector dict."""
+        wait_ms = int(timeout * 1000)
+        try:
+            result = self._rpc(rpc_method, selector, wait_ms,
+                               _timeout=timeout + 5.0)
+            return bool(result)
+        except Exception:
+            return False
+
+    # ── Screen / power ────────────────────────────────────────────────────────
+
+    def screen_on(self) -> None:
+        """Wake the device screen."""
+        try:
+            self._rpc("screenOn")
+        except Exception:
+            self.press("power")
+
+    def screen_off(self) -> None:
+        """Put the device screen to sleep."""
+        try:
+            self._rpc("screenOff")
+        except Exception:
+            self.press("power")
+
+    def unlock(self) -> None:
+        """Unlock the device (dismiss keyguard)."""
+        try:
+            self._rpc("unlock")
+        except Exception:
+            # Fallback: wake then swipe-up to reveal unlock UI
+            self.press("power")
+            time.sleep(0.3)
+            self.swipe_ext("up", scale=0.5, duration=0.4)
+
+    # ── Extended gestures ─────────────────────────────────────────────────────
+
+    def swipe_ext(self, direction: str, scale: float = 0.8,
+                  duration: float = 0.5) -> None:
+        """Swipe across the screen in a cardinal direction.
+
+        direction: "up" | "down" | "left" | "right"
+        scale:     fraction of the screen dimension to cover (default 0.8)
+        duration:  gesture time in seconds
+        """
+        info = self.device_info
+        w = info.get("displayWidth", 1080)
+        h = info.get("displayHeight", 1920)
+        cx, cy = w // 2, h // 2
+        hw = int(w * scale / 2)
+        hh = int(h * scale / 2)
+        d = direction.lower()
+        if d == "up":
+            x1, y1, x2, y2 = cx, cy + hh, cx, cy - hh
+        elif d == "down":
+            x1, y1, x2, y2 = cx, cy - hh, cx, cy + hh
+        elif d == "left":
+            x1, y1, x2, y2 = cx + hw, cy, cx - hw, cy
+        elif d == "right":
+            x1, y1, x2, y2 = cx - hw, cy, cx + hw, cy
+        else:
+            raise ValueError(
+                f"swipe_ext: unknown direction {direction!r}; use up/down/left/right"
+            )
+        self.swipe(x1, y1, x2, y2, duration)
+
+    def scroll_to(self, by: str, value: str, direction: str = "up",
+                  max_swipes: int = 10) -> bool:
+        """Scroll until element (by, value) is visible on screen.
+
+        Returns True if found within max_swipes, False otherwise.
+        direction: which way to scroll to bring content into view (default "up").
+        """
+        for _ in range(max_swipes):
+            if self.find_element(by, value, timeout=0) is not None:
+                return True
+            self.swipe_ext(direction, scale=0.6, duration=0.3)
+            time.sleep(0.3)
+        return self.find_element(by, value, timeout=0) is not None
+
+    # ── APK install ───────────────────────────────────────────────────────────
+
+    def install(self, apk_source: str, timeout: float = 90.0) -> None:
+        """Install an APK via atx-agent's /install endpoint.
+
+        apk_source: HTTP/HTTPS URL  → atx-agent downloads and installs it
+                    local file path → uploaded as multipart then installed
+        timeout:    total install timeout in seconds (default 90)
+
+        Raises RuntimeError on failure.
+        """
+        install_url = self._base.rstrip("/") + "/install"
+        if apk_source.startswith(("http://", "https://")):
+            r = self._session.post(
+                install_url,
+                json={"url": apk_source},
+                timeout=timeout,
+            )
+        else:
+            import os
+            with open(apk_source, "rb") as fh:
+                r = self._session.post(
+                    install_url,
+                    files={
+                        "file": (
+                            os.path.basename(apk_source),
+                            fh,
+                            "application/vnd.android.package-archive",
+                        )
+                    },
+                    timeout=timeout,
+                )
+        if not r.ok:
+            raise RuntimeError(
+                f"install: HTTP {r.status_code}: {r.text[:200]!r}"
+            )
+        try:
+            result = r.json()
+        except Exception:
+            return  # success with no JSON body
+        if result.get("error") or result.get("success") is False:
+            raise RuntimeError(f"install failed: {result.get('error') or result!r}")

@@ -221,7 +221,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                 ],
             },
             {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
-            {"type": "scroll_down", "repeats": 2},
+            {"type": "scroll_down", "repeats": 2, "start_y_ratio": 0.65, "end_y_ratio": 0.47},
             {"type": "wait_stable", "timeout": 3, "stable_duration": 0.4},
 
             # ── Phase 3: Crawl + engage loop ─────────────────────────────
@@ -316,7 +316,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
 
                     # Scroll + đọc tự nhiên
                     {"type": "set_variable", "name": "_S", "from_list": [1, 1, 2, 2, 3]},
-                    {"type": "scroll_down", "repeats": "${_S}"},
+                    {"type": "scroll_down", "repeats": "${_S}", "start_y_ratio": 0.65, "end_y_ratio": 0.47},
                     {"type": "set_variable", "name": "_READ", "from_list": [2, 2.5, 3, 4, 5]},
                     {"type": "wait", "seconds": "${_READ}"},
                     {"type": "dismiss_popup", "retries": 1},
@@ -435,7 +435,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
 
             # Cuộn qua phần header nhóm để vào feed bài viết
-            {"type": "scroll_down", "repeats": 2},
+            {"type": "scroll_down", "repeats": 2, "start_y_ratio": 0.65, "end_y_ratio": 0.47},
             {"type": "wait", "seconds": 3},
             {"type": "wait_stable", "timeout": 4, "stable_duration": 0.5},
 
@@ -501,7 +501,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                     },
                     # Scroll chậm: 1-2 lần để không bỏ sót bài
                     {"type": "set_variable", "name": "_S", "from_list": [1, 1, 1, 2, 2]},
-                    {"type": "scroll_down", "repeats": "${_S}"},
+                    {"type": "scroll_down", "repeats": "${_S}", "start_y_ratio": 0.65, "end_y_ratio": 0.47},
                     # Đọc lâu hơn để content mới load kịp
                     {"type": "set_variable", "name": "_READ", "from_list": [3, 4, 4, 5, 6]},
                     {"type": "wait", "seconds": "${_READ}"},
@@ -578,6 +578,8 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                 "type": "scroll_down",
                 "repeats": 2,
                 "start_x_ratio": "${SCROLL_X_RATIO}",
+                "start_y_ratio": 0.65,
+                "end_y_ratio": 0.47,
             },
             {"type": "wait", "seconds": 3},
             {"type": "wait_stable", "timeout": 4, "stable_duration": 0.5},
@@ -603,6 +605,8 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                         "type": "scroll_down",
                         "repeats": 1,
                         "start_x_ratio": "${SCROLL_X_RATIO}",
+                        "start_y_ratio": 0.65,
+                        "end_y_ratio": 0.47,
                     },
                     {"type": "wait", "seconds": 1},
                     {"type": "dismiss_popup", "retries": 2},
@@ -695,7 +699,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                 ],
             },
             {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
-            {"type": "scroll_down", "repeats": 2},
+            {"type": "scroll_down", "repeats": 2, "start_y_ratio": 0.65, "end_y_ratio": 0.47},
             {"type": "wait_stable", "timeout": 3, "stable_duration": 0.4},
             {
                 "type": "repeat", "count": "${SCROLLS_PER_GROUP}",
@@ -752,7 +756,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                         ],
                     },
                     {"type": "set_variable", "name": "_S", "from_list": [1, 1, 2, 2, 3]},
-                    {"type": "scroll_down", "repeats": "${_S}"},
+                    {"type": "scroll_down", "repeats": "${_S}", "start_y_ratio": 0.65, "end_y_ratio": 0.47},
                     {"type": "set_variable", "name": "_READ", "from_list": [2, 2.5, 3, 4, 5]},
                     {"type": "wait", "seconds": "${_READ}"},
                     {"type": "dismiss_popup", "retries": 1},
@@ -822,7 +826,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                 ],
             },
             {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
-            {"type": "scroll_down", "repeats": 2},
+            {"type": "scroll_down", "repeats": 2, "start_y_ratio": 0.65, "end_y_ratio": 0.47},
             {"type": "wait_stable", "timeout": 3, "stable_duration": 0.4},
             {
                 "type": "repeat", "count": "${SCROLLS_PER_GROUP}",
@@ -879,7 +883,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                         ],
                     },
                     {"type": "set_variable", "name": "_S", "from_list": [1, 1, 2, 2, 3]},
-                    {"type": "scroll_down", "repeats": "${_S}"},
+                    {"type": "scroll_down", "repeats": "${_S}", "start_y_ratio": 0.65, "end_y_ratio": 0.47},
                     {"type": "set_variable", "name": "_READ", "from_list": [2, 2.5, 3, 4, 5]},
                     {"type": "wait", "seconds": "${_READ}"},
                     {"type": "dismiss_popup", "retries": 1},
@@ -949,7 +953,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                 ],
             },
             {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
-            {"type": "scroll_down", "repeats": 2},
+            {"type": "scroll_down", "repeats": 2, "start_y_ratio": 0.65, "end_y_ratio": 0.47},
             {"type": "wait_stable", "timeout": 3, "stable_duration": 0.4},
             {
                 "type": "repeat", "count": "${SCROLLS_PER_GROUP}",
@@ -1006,7 +1010,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                         ],
                     },
                     {"type": "set_variable", "name": "_S", "from_list": [1, 1, 2, 2, 3]},
-                    {"type": "scroll_down", "repeats": "${_S}"},
+                    {"type": "scroll_down", "repeats": "${_S}", "start_y_ratio": 0.65, "end_y_ratio": 0.47},
                     {"type": "set_variable", "name": "_READ", "from_list": [2, 2.5, 3, 4, 5]},
                     {"type": "wait", "seconds": "${_READ}"},
                     {"type": "dismiss_popup", "retries": 1},
@@ -1076,7 +1080,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                 ],
             },
             {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
-            {"type": "scroll_down", "repeats": 2},
+            {"type": "scroll_down", "repeats": 2, "start_y_ratio": 0.65, "end_y_ratio": 0.47},
             {"type": "wait_stable", "timeout": 3, "stable_duration": 0.4},
             {
                 "type": "repeat", "count": "${SCROLLS_PER_GROUP}",
@@ -1133,7 +1137,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                         ],
                     },
                     {"type": "set_variable", "name": "_S", "from_list": [1, 1, 2, 2, 3]},
-                    {"type": "scroll_down", "repeats": "${_S}"},
+                    {"type": "scroll_down", "repeats": "${_S}", "start_y_ratio": 0.65, "end_y_ratio": 0.47},
                     {"type": "set_variable", "name": "_READ", "from_list": [2, 2.5, 3, 4, 5]},
                     {"type": "wait", "seconds": "${_READ}"},
                     {"type": "dismiss_popup", "retries": 1},
@@ -1208,7 +1212,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
 
             # Scroll qua header nhóm để vào feed bài viết
-            {"type": "scroll_down", "repeats": 2, "start_x_ratio": "${SCROLL_X_RATIO}"},
+            {"type": "scroll_down", "repeats": 2, "start_x_ratio": "${SCROLL_X_RATIO}", "start_y_ratio": 0.65, "end_y_ratio": 0.47},
             {"type": "wait", "seconds": 3},
             {"type": "wait_stable", "timeout": 4, "stable_duration": 0.5},
 
@@ -1242,6 +1246,8 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                         "type": "scroll_down",
                         "repeats": 1,
                         "start_x_ratio": "${SCROLL_X_RATIO}",
+                        "start_y_ratio": 0.65,
+                        "end_y_ratio": 0.47,
                     },
                     {"type": "wait", "seconds": 2},
 
@@ -1320,7 +1326,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             {"type": "tap_selector", "by": "xpath", "value": "${GROUP_XPATH}", "timeout": 6},
             {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
 
-            {"type": "scroll_down", "repeats": 2, "start_x_ratio": "${SCROLL_X_RATIO}"},
+            {"type": "scroll_down", "repeats": 2, "start_x_ratio": "${SCROLL_X_RATIO}", "start_y_ratio": 0.65, "end_y_ratio": 0.47},
             {"type": "wait", "seconds": 3},
             {"type": "wait_stable", "timeout": 4, "stable_duration": 0.5},
 
@@ -1379,7 +1385,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                                         "parent_id_var": "_first_new_post_hash",
                                         "item_level": 1,
                                     },
-                                    {"type": "scroll_down", "repeats": 1, "start_x_ratio": 0.5},
+                                    {"type": "scroll_down", "repeats": 1, "start_x_ratio": 0.5, "start_y_ratio": 0.65, "end_y_ratio": 0.47},
                                     {"type": "wait", "seconds": 1},
                                 ],
                             },
@@ -1390,7 +1396,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                     },
 
                     # Scroll neo trái 1 lần
-                    {"type": "scroll_down", "repeats": 1, "start_x_ratio": "${SCROLL_X_RATIO}"},
+                    {"type": "scroll_down", "repeats": 1, "start_x_ratio": "${SCROLL_X_RATIO}", "start_y_ratio": 0.65, "end_y_ratio": 0.47},
                     # Đọc tự nhiên 1–3 giây
                     {"type": "set_variable", "name": "_W", "from_list": [1, 1, 1.5, 2, 2, 3]},
                     {"type": "wait", "seconds": "${_W}"},

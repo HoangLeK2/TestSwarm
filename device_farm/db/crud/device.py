@@ -78,6 +78,8 @@ async def bind_pending_device(
     sdk_version: int = 0,
     screen_width: int = 0,
     screen_height: int = 0,
+    adb_ip: str | None = None,
+    adb_port: int = 5555,
 ) -> Optional[Device]:
     """
     Gắn thiết bị pending (tìm theo device_key) với serial thật từ điện thoại.
@@ -90,7 +92,12 @@ async def bind_pending_device(
     if device.serial.startswith(PENDING_SERIAL_PREFIX):
         existing = await get_device_by_serial(db, serial)
         if existing and existing.id != device.id:
-            return None  # serial đã thuộc thiết bị khác
+            if existing.user_id is not None:
+                return None  # serial đã thuộc thiết bị của user khác → reject
+            # Auto-created device (không có owner, do phone kết nối trước khi quét QR)
+            # → xóa để pending device lấy serial này
+            await db.execute(delete(Device).where(Device.id == existing.id))
+            await db.flush()
         await db.execute(
             update(Device)
             .where(Device.id == device.id)
@@ -102,6 +109,8 @@ async def bind_pending_device(
                 sdk_version=sdk_version,
                 screen_width=screen_width,
                 screen_height=screen_height,
+                adb_ip=adb_ip or None,
+                adb_port=adb_port,
                 last_seen=_now(),
             )
         )
@@ -121,6 +130,8 @@ async def bind_pending_device(
                 sdk_version=sdk_version,
                 screen_width=screen_width,
                 screen_height=screen_height,
+                adb_ip=adb_ip or None,
+                adb_port=adb_port,
                 last_seen=_now(),
             )
         )
@@ -132,6 +143,8 @@ async def bind_pending_device(
     device.sdk_version = sdk_version
     device.screen_width = screen_width
     device.screen_height = screen_height
+    device.adb_ip = adb_ip or None
+    device.adb_port = adb_port
     return device
 
 
@@ -145,19 +158,26 @@ async def update_device_metadata(
     sdk_version: int = 0,
     screen_width: int = 0,
     screen_height: int = 0,
+    adb_ip: str | None = None,
+    adb_port: int | None = None,
 ) -> None:
+    values: dict = {
+        "brand": brand,
+        "model": model,
+        "android_version": android_version,
+        "sdk_version": sdk_version,
+        "screen_width": screen_width,
+        "screen_height": screen_height,
+        "last_seen": _now(),
+    }
+    if adb_ip is not None:
+        values["adb_ip"] = adb_ip
+    if adb_port is not None:
+        values["adb_port"] = adb_port
     await db.execute(
         update(Device)
         .where(Device.serial == serial)
-        .values(
-            brand=brand,
-            model=model,
-            android_version=android_version,
-            sdk_version=sdk_version,
-            screen_width=screen_width,
-            screen_height=screen_height,
-            last_seen=_now(),
-        )
+        .values(**values)
     )
 
 

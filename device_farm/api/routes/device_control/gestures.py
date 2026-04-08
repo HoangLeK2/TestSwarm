@@ -8,10 +8,15 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from api.schemas.device_control import (
+    ClipboardSetRequest,
+    DragRequest,
+    DoubleTapRequest,
     InputTextRequest,
     KeyRequest,
+    LaunchAppRequest,
     LongTapRequest,
     OpenUrlRequest,
+    PinchRequest,
     ScrollRequest,
     SwipeRequest,
     TapRequest,
@@ -51,6 +56,15 @@ def build_gestures_router(manager: DeviceManager) -> APIRouter:
         await loop.run_in_executor(None, device.key, body.key)
         return {"ok": True}
 
+    @router.post("/launch_app/{serial}")
+    async def api_launch_app(serial: str, body: LaunchAppRequest):
+        device = manager.get_device(serial)
+        if not device:
+            return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, device.launch_app, body.package)
+        return {"ok": True}
+
     @router.post("/open_url/{serial}")
     async def api_open_url(serial: str, body: OpenUrlRequest):
         device = manager.get_device(serial)
@@ -88,5 +102,54 @@ def build_gestures_router(manager: DeviceManager) -> APIRouter:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, device.scroll, body.direction, body.distance)
         return {"ok": True}
+
+    @router.post("/devices/{serial}/double_tap")
+    async def api_double_tap(serial: str, body: DoubleTapRequest):
+        device = manager.get_device(serial)
+        if not device:
+            return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, device.double_tap, body.x, body.y)
+        return {"ok": True}
+
+    @router.post("/devices/{serial}/pinch")
+    async def api_pinch(serial: str, body: PinchRequest):
+        device = manager.get_device(serial)
+        if not device:
+            return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None, lambda: device.pinch(body.cx, body.cy, body.scale, body.duration_ms)
+        )
+        return {"ok": True}
+
+    @router.post("/devices/{serial}/drag")
+    async def api_drag(serial: str, body: DragRequest):
+        device = manager.get_device(serial)
+        if not device:
+            return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None, lambda: device.drag(body.x1, body.y1, body.x2, body.y2, body.duration_ms)
+        )
+        return {"ok": True}
+
+    @router.post("/devices/{serial}/clipboard")
+    async def api_set_clipboard(serial: str, body: ClipboardSetRequest):
+        device = manager.get_device(serial)
+        if not device:
+            return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, device.set_clipboard, body.text)
+        return {"ok": True}
+
+    @router.get("/devices/{serial}/clipboard")
+    async def api_get_clipboard(serial: str):
+        device = manager.get_device(serial)
+        if not device:
+            return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
+        loop = asyncio.get_running_loop()
+        text = await loop.run_in_executor(None, device.get_clipboard)
+        return {"text": text}
 
     return router

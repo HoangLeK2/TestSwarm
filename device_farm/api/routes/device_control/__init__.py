@@ -12,13 +12,12 @@ from runtime.core import DeviceManager, TaskQueue
 
 from .campaign_fleet import build_campaign_fleet_router
 from .connect import build_connect_router
-from .crawl_jobs import build_crawl_jobs_router
 from .device_ui import build_device_ui_router
-from .fb_crawl import build_fb_crawl_router
 from .gestures import build_gestures_router
 from .scenarios import build_scenarios_router
 from .scrcpy import build_scrcpy_router
 from .sessions import build_sessions_router
+from .stf_control import build_stf_control_router
 from .tasks_queue import build_tasks_queue_router
 
 
@@ -37,6 +36,5 @@ def build_device_control_router(
     router.include_router(build_tasks_queue_router(manager, queue))
     router.include_router(build_scenarios_router(manager, config, session_store))
     router.include_router(build_campaign_fleet_router(manager, queue, config))
-    router.include_router(build_fb_crawl_router(manager, queue))
-    router.include_router(build_crawl_jobs_router(manager, queue, config))
+    router.include_router(build_stf_control_router(manager))
     return router

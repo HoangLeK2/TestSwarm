@@ -10,7 +10,7 @@ import { useCreateScenario, useScenarios } from '../../hooks/use-campaigns';
 import type { CampaignOut } from '../../types';
 import { ScenarioRow } from './ScenarioRow';
 
-export function ScenarioListDialog({ campaign }: { campaign: CampaignOut }) {
+export function ScenarioListDialog({ campaign, children }: { campaign: CampaignOut; children?: React.ReactNode }) {
   const t = useTranslations('campaignsFeature.scenarioList');
   const [open, setOpen] = useState(false);
   const { data: scenarios = [], refetch } = useScenarios(campaign.id);
@@ -34,10 +34,12 @@ export function ScenarioListDialog({ campaign }: { campaign: CampaignOut }) {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button variant='outline' size='sm' className='w-full justify-start gap-1.5 text-xs'>
-          <FileText size={12} />
-          {t('trigger', { scenarios: scenarios.length, steps: totalSteps })}
-        </Button>
+        {children ?? (
+          <Button variant='outline' size='sm' className='w-full justify-start gap-1.5 text-xs'>
+            <FileText size={12} />
+            {t('trigger', { scenarios: scenarios.length, steps: totalSteps })}
+          </Button>
+        )}
       </DialogTrigger>
 
       <DialogContent className='max-h-[80vh] overflow-y-auto sm:max-w-lg'>

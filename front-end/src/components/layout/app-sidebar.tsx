@@ -278,7 +278,7 @@ export default function AppSidebar() {
       <SidebarFooter>
         {open && (
           <div className='flex !w-full items-center justify-center text-center text-[10px] text-muted-foreground'>
-            &copy; {new Date().getFullYear()} NDATrace - 1.0.0
+            &copy; {new Date().getFullYear()} Device Farm - 1.0.0
           </div>
         )}
       </SidebarFooter>

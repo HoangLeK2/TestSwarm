@@ -38,6 +38,11 @@ for %%i in ("%APP_HOME%") do set APP_HOME=%%~fi
 @rem Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
 set DEFAULT_JVM_OPTS="-Xmx64m" "-Xms64m"
 
+@rem IDE JREs often lack jlink; AGP androidJdkImage needs it. Drop JAVA_HOME so Gradle uses org.gradle.java.home.
+if defined JAVA_HOME (
+  if not exist "%JAVA_HOME%\bin\jlink.exe" set "JAVA_HOME="
+)
+
 @rem Find java.exe
 if defined JAVA_HOME goto findJavaFromJavaHome
 

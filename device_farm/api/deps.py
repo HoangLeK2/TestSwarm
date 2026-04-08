@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated, AsyncGenerator
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -67,3 +67,62 @@ async def _get_current_admin(user: User = Depends(_get_current_user)) -> User:
 
 CurrentUser = Annotated[User, Depends(_get_current_user)]
 AdminUser = Annotated[User, Depends(_get_current_admin)]
+
+
+def make_device_auth_dependency(db_enabled: bool):
+    """
+    Return a FastAPI dependency that enforces JWT authentication for device-control
+    routes when DB/multi-user mode is active.
+
+    In lab mode (db_enabled=False) the dependency is a no-op so existing setups
+    without a database continue to work unchanged.
+    """
+    if not db_enabled:
+        async def _no_auth() -> None:
+            return
+        return _no_auth
+
+    async def _require_auth(
+        request: Request,
+        credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    ) -> None:
+        raw_token: str | None = None
+        if credentials:
+            raw_token = credentials.credentials
+        else:
+            raw_token = request.query_params.get("token") or None
+
+        if not raw_token:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Not authenticated",
+            )
+        try:
+            payload = jwt.decode(raw_token, jwt_secret_key(), algorithms=[jwt_algorithm()])
+            user_id = str(payload.get("sub") or "").strip()
+            token_type = payload.get("type")
+            if not user_id or token_type == "refresh":
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid or expired token",
+                )
+        except JWTError:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Not authenticated",
+            )
+
+        # Serial ownership check: if the route has a {serial} path parameter,
+        # verify the authenticated user owns that device.
+        serial = request.path_params.get("serial")
+        if serial:
+            async with AsyncSessionLocal() as db:
+                db_devices = await repo.list_devices(db, user_id=user_id)
+                allowed = {d.serial for d in db_devices if d.serial}
+                if serial not in allowed:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Not authorized to control this device",
+                    )
+
+    return _require_auth

@@ -1,4 +1,9 @@
-export type CampaignStatus = 'draft' | 'running' | 'paused' | 'completed';
+export type CampaignStatus = 'idle' | 'running' | 'draft' | 'paused' | 'completed';
+
+/** Returns true when the campaign is in a non-running (ready) state */
+export function isIdleStatus(s: string): boolean {
+  return s === 'idle' || s === 'draft' || s === 'paused' || s === 'completed';
+}
 
 export type ScenarioOut = {
   id: string;
@@ -6,6 +11,7 @@ export type ScenarioOut = {
   name: string;
   instructions: string;
   steps: Record<string, any>[];
+  variables: Record<string, any>;
   order: number;
   created_at: string;
   updated_at: string;
@@ -15,6 +21,7 @@ export type ScenarioCreate = {
   name?: string;
   instructions?: string;
   steps?: Record<string, any>[];
+  variables?: Record<string, any>;
   order?: number;
 };
 
@@ -27,10 +34,12 @@ export type CampaignOut = {
   status: CampaignStatus;
   user_id: string;
   scenario?: Record<string, any> | null;
+  variables?: Record<string, any>;
   scenarios?: ScenarioOut[];
   created_at: string;
   updated_at: string;
   devices?: CampaignDeviceOut[];
+  target_group_id?: string | null;
 };
 
 export type CampaignDeviceOut = {
@@ -41,7 +50,14 @@ export type CampaignDeviceOut = {
   model?: string;
 };
 
-export type CampaignCreate = { name: string; description?: string };
+export type CampaignCreate = {
+  name: string;
+  description?: string;
+  scenario?: Record<string, any>;
+  variables?: Record<string, any>;
+  device_ids?: string[];
+  target_group_id?: string | null;
+};
 
 export type TaskOut = {
   id: string;
@@ -51,4 +67,70 @@ export type TaskOut = {
   result?: unknown;
   error?: string | null;
   finished_at: string | null;
+};
+
+// ── Temporal Workflow types ──────────────────────────────────────────────────
+
+export type WorkflowStatus = 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED' | 'PAUSED' | 'paused_on_error' | 'TERMINATED';
+
+export type WorkflowInfo = {
+  workflow_id: string;
+  run_id: string;
+  status: WorkflowStatus;
+  start_time: string;
+};
+
+export type CampaignWorkflowsResponse = {
+  campaign_id: string;
+  workflows: WorkflowInfo[];
+  execution_engine?: 'temporal' | 'task_queue';
+  temporal_available?: boolean;
+};
+
+export type WorkflowProgress = {
+  workflow_id: string;
+  status: string;
+  current_step: number;
+  total_steps: number;
+  current_step_type: string;
+  loop_iteration: number | null;
+  message: string;
+  device_serial: string;
+  error_message?: string | null;
+};
+
+export type StepLogEntry = {
+  index: number;
+  step_type: string;
+  ok: boolean;
+  message: string | null;
+  depth: number;
+};
+
+export type WorkflowStepLog = {
+  workflow_id: string;
+  status: string;
+  source: string;
+  steps_count: number;
+  steps: StepLogEntry[];
+};
+
+export type CampaignExecutionEngine = 'temporal' | 'task_queue';
+
+export type CampaignRunResponse = {
+  id: string;
+  status: string;
+  device_serials: string[];
+  /** Present when execution_engine is temporal */
+  workflow_ids?: string[];
+  scenarios_count: number;
+  /** Preferred: which runtime handled this run */
+  execution_engine?: CampaignExecutionEngine;
+  /** Alias of execution_engine (legacy) */
+  engine?: CampaignExecutionEngine;
+  /** True when Temporal was enabled but connection/start failed and TaskQueue was used */
+  temporal_fallback?: boolean;
+  temporal_fallback_reason?: string;
+  /** Present when execution_engine is task_queue */
+  task_ids?: string[];
 };

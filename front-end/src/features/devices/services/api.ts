@@ -1,4 +1,5 @@
 import { farmApi } from '@/lib/farm-api';
+import { tokenStorage } from '@/lib/token-storage';
 import type { Device, Task } from '../types';
 
 export type PreviewStepResult = {
@@ -112,6 +113,55 @@ export async function fetchHierarchy(serial: string, refresh = false): Promise<s
   }
 }
 
+/** Fetch full screenshot as base64 for visual anchoring. */
+export async function fetchScreenshotB64(
+  serial: string,
+): Promise<{ screenshot: string; width: number; height: number }> {
+  const { data } = await farmApi.get(`/screenshot-b64/${encodeURIComponent(serial)}`);
+  return data as { screenshot: string; width: number; height: number };
+}
+
+/**
+ * Crop a base64 JPEG image client-side using Canvas API.
+ * ratioCrop values are in 0–1 relative to image dimensions.
+ * Returns base64 JPEG of the cropped region, or undefined if crop is invalid.
+ */
+/** Minimum crop dimension in pixels — smaller crops are too small for template matching. */
+const MIN_CROP_PX = 20;
+
+export async function cropBase64(
+  b64: string,
+  ratioCrop: { rx1: number; ry1: number; rx2: number; ry2: number }
+): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const iw = img.naturalWidth;
+      const ih = img.naturalHeight;
+      const x1 = Math.round(ratioCrop.rx1 * iw);
+      const y1 = Math.round(ratioCrop.ry1 * ih);
+      const x2 = Math.round(ratioCrop.rx2 * iw);
+      const y2 = Math.round(ratioCrop.ry2 * ih);
+      const cw = x2 - x1;
+      const ch = y2 - y1;
+      // Reject crops that are too small to be useful for template matching
+      if (cw < MIN_CROP_PX || ch < MIN_CROP_PX) { resolve(undefined); return; }
+      const canvas = document.createElement('canvas');
+      canvas.width = cw;
+      canvas.height = ch;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) { resolve(undefined); return; }
+      ctx.drawImage(img, x1, y1, cw, ch, 0, 0, cw, ch);
+      // Strip "data:image/jpeg;base64," prefix. Quality 0.80 is sufficient
+      // for image template matching and keeps file size reasonable.
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.80);
+      resolve(dataUrl.split(',')[1]);
+    };
+    img.onerror = () => resolve(undefined);
+    img.src = `data:image/jpeg;base64,${b64}`;
+  });
+}
+
 /** Tap by selector (resource-id, text, xpath). Uses uiautomator2. */
 export async function tapSelector(
   serial: string,
@@ -140,6 +190,144 @@ export async function fetchConfig(): Promise<AppConfig> {
   return data;
 }
 
+export interface StfBattery {
+  level: number;
+  status: number;
+  health: number;
+  source: number;
+  temp: number;
+  voltage: number;
+}
+
+export interface StfConnectivity {
+  connected: boolean;
+  type: number;
+  subtype: number;
+  roaming: boolean;
+}
+
+export interface StfPhoneState {
+  state: number;
+  operator: string;
+}
+
+export interface StfStatus {
+  connected: boolean;
+  battery: StfBattery;
+  rotation: number;
+  connectivity: StfConnectivity;
+  airplane_mode: boolean;
+  phone_state: StfPhoneState;
+}
+
+export async function stfStatus(serial: string): Promise<StfStatus | null> {
+  try {
+    const { data } = await farmApi.get<StfStatus>(`/stf/status/${encodeURIComponent(serial)}`);
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+export async function stfGetClipboard(serial: string): Promise<string | null> {
+  try {
+    const { data } = await farmApi.get<{ text: string }>(`/stf/clipboard/${encodeURIComponent(serial)}`);
+    return data.text;
+  } catch {
+    return null;
+  }
+}
+
+export async function stfSetClipboard(serial: string, text: string): Promise<boolean> {
+  try {
+    const { data } = await farmApi.post<{ ok: boolean }>(`/stf/clipboard/${encodeURIComponent(serial)}`, { text });
+    return data.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function stfSetWifi(serial: string, enabled: boolean): Promise<boolean> {
+  try {
+    const { data } = await farmApi.post<{ ok: boolean }>(`/stf/wifi/${encodeURIComponent(serial)}`, { enabled });
+    return data.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function stfSetBluetooth(serial: string, enabled: boolean): Promise<boolean> {
+  try {
+    const { data } = await farmApi.post<{ ok: boolean }>(`/stf/bluetooth/${encodeURIComponent(serial)}`, { enabled });
+    return data.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function stfSetKeyguard(serial: string, enabled: boolean): Promise<boolean> {
+  try {
+    const { data } = await farmApi.post<{ ok: boolean }>(`/stf/keyguard/${encodeURIComponent(serial)}`, { enabled });
+    return data.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function stfSetWakeLock(serial: string, enabled: boolean): Promise<boolean> {
+  try {
+    const { data } = await farmApi.post<{ ok: boolean }>(`/stf/wakelock/${encodeURIComponent(serial)}`, { enabled });
+    return data.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function stfSetRinger(serial: string, mode: 'silent' | 'vibrate' | 'normal'): Promise<boolean> {
+  try {
+    const { data } = await farmApi.post<{ ok: boolean }>(`/stf/ringer/${encodeURIComponent(serial)}`, { mode });
+    return data.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function stfSetMute(serial: string, enabled: boolean): Promise<boolean> {
+  try {
+    const { data } = await farmApi.post<{ ok: boolean }>(`/stf/mute/${encodeURIComponent(serial)}`, { enabled });
+    return data.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function stfIdentify(serial: string): Promise<boolean> {
+  try {
+    const { data } = await farmApi.post<{ ok: boolean }>(`/stf/identify/${encodeURIComponent(serial)}`);
+    return data.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function stfGetDisplay(serial: string): Promise<Record<string, unknown> | null> {
+  try {
+    const { data } = await farmApi.get(`/stf/display/${encodeURIComponent(serial)}`);
+    return data as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+export async function stfGetProperties(serial: string): Promise<Record<string, unknown> | null> {
+  try {
+    const { data } = await farmApi.get(`/stf/properties/${encodeURIComponent(serial)}`);
+    return data as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
 export async function previewScenario(
   serial: string,
   steps: Array<Record<string, any>>
@@ -149,5 +337,58 @@ export async function previewScenario(
     { steps }
   );
   return data;
+}
+
+/**
+ * Stream scenario preview via SSE — emits step results in real-time as each step completes.
+ * Events: { event: 'start', total_steps }, { event: 'step_done', index, ok, ... }, { event: 'done', ... }
+ */
+export async function previewScenarioStream(
+  serial: string,
+  steps: Array<Record<string, any>>,
+  onEvent: (event: { event: string; [key: string]: any }) => void,
+  signal?: AbortSignal,
+  variables?: Record<string, any>,
+): Promise<void> {
+  // Use farmApi's baseURL for the SSE endpoint
+  const baseUrl = farmApi.defaults.baseURL || '';
+  const url = `${baseUrl}/devices/${encodeURIComponent(serial)}/scenario/preview-stream`;
+
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const rawToken = tokenStorage.getAuthToken();
+  if (rawToken) headers['Authorization'] = `Bearer ${rawToken}`;
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ steps, variables: variables ?? {} }),
+    signal,
+  });
+
+  if (!response.ok || !response.body) {
+    throw new Error(`SSE error: ${response.status}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    // Parse SSE lines
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        try {
+          const data = JSON.parse(line.slice(6));
+          onEvent(data);
+        } catch { /* skip malformed */ }
+      }
+    }
+  }
 }
 

@@ -3,23 +3,36 @@ import type {
   CampaignCreate,
   CampaignDeviceOut,
   CampaignOut,
+  CampaignRunResponse,
   CampaignStatus,
+  CampaignWorkflowsResponse,
   ScenarioCreate,
   ScenarioOut,
   ScenarioUpdate,
-  TaskOut
+  TaskOut,
+  WorkflowProgress
 } from '../types';
 
 export type {
   CampaignCreate,
   CampaignDeviceOut,
   CampaignOut,
+  CampaignRunResponse,
   CampaignStatus,
+  CampaignWorkflowsResponse,
   ScenarioCreate,
   ScenarioOut,
   ScenarioUpdate,
-  TaskOut
+  TaskOut,
+  WorkflowProgress
 } from '../types';
+
+export type StepActionResponse = {
+  action: string;
+  signalled: string[];
+  errors: string[];
+  total: number;
+};
 
 export const campaignsApi = {
   list: () => farmApi.get<CampaignOut[]>('/campaigns').then((r) => r.data),
@@ -30,12 +43,9 @@ export const campaignsApi = {
   delete: (id: string) => farmApi.delete(`/campaigns/${id}`).then((r) => r.data),
   updateStatus: (id: string, status: CampaignStatus) =>
     farmApi.patch<CampaignOut>(`/campaigns/${id}/status`, { status }).then((r) => r.data),
-  run: (id: string) =>
+  run: (id: string, deviceSerials?: string[]) =>
     farmApi
-      .post<{ id: string; status: string; device_serials: string[]; task_ids: string[] }>(
-        `/campaigns/${id}/run`,
-        {}
-      )
+      .post<CampaignRunResponse>(`/campaigns/${id}/run`, deviceSerials?.length ? { device_serials_override: deviceSerials } : {})
       .then((r) => r.data),
   compileScenario: (
     id: string,
@@ -54,6 +64,13 @@ export const campaignsApi = {
         ...(options?.deviceContext && Object.keys(options.deviceContext).length
           ? { device_context: options.deviceContext }
           : {})
+      })
+      .then((r) => r.data),
+  stepAction: (id: string, action: 'retry' | 'skip', deviceSerial?: string) =>
+    farmApi
+      .post<StepActionResponse>(`/campaigns/${id}/step-action`, {
+        action,
+        ...(deviceSerial ? { device_serial: deviceSerial } : {}),
       })
       .then((r) => r.data),
   getDevices: (id: string) =>
@@ -117,6 +134,33 @@ export const scenariosApi = {
         ...(options?.deviceContext ? { device_context: options.deviceContext } : {})
       })
       .then((r) => r.data)
+};
+
+export const workflowsApi = {
+  listForCampaign: (campaignId: string) =>
+    farmApi
+      .get<CampaignWorkflowsResponse>(`/campaigns/${campaignId}/workflows`)
+      .then((r) => r.data),
+  progress: (workflowId: string) =>
+    farmApi
+      .get<WorkflowProgress>(`/workflows/${workflowId}/progress`)
+      .then((r) => r.data),
+  pause: (workflowId: string) =>
+    farmApi.post(`/workflows/${workflowId}/pause`).then((r) => r.data),
+  resume: (workflowId: string) =>
+    farmApi.post(`/workflows/${workflowId}/resume`).then((r) => r.data),
+  cancel: (workflowId: string) =>
+    farmApi.post(`/workflows/${workflowId}/cancel`).then((r) => r.data),
+  listForDevice: (serial: string) =>
+    farmApi
+      .get<{ serial: string; workflows: import('../types').WorkflowInfo[]; temporal_available: boolean }>(
+        `/devices/${encodeURIComponent(serial)}/running-workflows`,
+      )
+      .then((r) => r.data),
+  steps: (workflowId: string) =>
+    farmApi
+      .get<import('../types').WorkflowStepLog>(`/workflows/${encodeURIComponent(workflowId)}/steps`)
+      .then((r) => r.data),
 };
 
 export const tasksApi = {

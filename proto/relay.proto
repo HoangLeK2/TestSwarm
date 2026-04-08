@@ -1,0 +1,35 @@
+syntax = "proto3";
+package devicefarm;
+
+// Sent by agent-boot → device_farm (replaces the 0x53 binary frame)
+message VideoFrame {
+  string serial    = 1;  // device serial (e.g. "192.168.1.10:5555")
+  bytes  data      = 2;  // H264 payload (AVCC format)
+  bool   is_config = 3;  // SPS/PPS config NAL (was flags bit0)
+  bool   is_key    = 4;  // IDR keyframe (was flags bit1)
+  int64  pts_us    = 5;  // presentation timestamp µs
+  uint32 width     = 6;  // screen width (only on is_config frames)
+  uint32 height    = 7;  // screen height (only on is_config frames)
+}
+
+// Sent by device_farm → agent-boot (scrcpy control bytes OR JSON commands)
+message ControlMsg {
+  string serial  = 1;  // target device serial
+  bytes  data    = 2;  // raw scrcpy control bytes OR JSON command bytes
+  bool   is_json = 3;  // true → data is JSON (scrcpy_start, command, ack, etc.)
+}
+
+// Sent by agent-boot → device_farm: video frame OR JSON control message
+// (register / heartbeat / result go as meta)
+message AgentMsg {
+  oneof payload {
+    VideoFrame video = 1;  // H264 frames (high-frequency, ~30fps per phone)
+    bytes      meta  = 2;  // JSON bytes: register / heartbeat / result (low-frequency)
+  }
+}
+
+service RelayService {
+  // Single bidirectional stream per agent-boot instance.
+  // Agent sends AgentMsgs (video + JSON); farm sends ControlMsgs (control + JSON commands).
+  rpc Stream(stream AgentMsg) returns (stream ControlMsg);
+}

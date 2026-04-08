@@ -1,13 +1,15 @@
 'use client';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { campaignsApi, scenariosApi, tasksApi } from '../services/api';
+import { campaignsApi, scenariosApi, tasksApi, workflowsApi } from '../services/api';
 import type {
   CampaignCreate,
   CampaignOut,
+  CampaignRunResponse,
   CampaignStatus,
   ScenarioCreate,
   ScenarioUpdate
 } from '../types';
+import { isIdleStatus } from '../types';
 import { fleetRun, fleetStatus, type FleetStatusResult } from '../../devices/services/api';
 
 const KEYS = {
@@ -24,7 +26,7 @@ export function useCampaigns() {
     refetchInterval: (query) => {
       const data = query.state.data as CampaignOut[] | undefined;
       return data && data.some((c: CampaignOut) => c.status === 'running') ? 3000 : false;
-    }
+    },
   });
 }
 
@@ -143,7 +145,13 @@ export function useCampaignProgress(campaignId: string, enabled: boolean) {
     queryKey: ['campaign-progress', campaignId],
     queryFn: () => tasksApi.listByPrefix(`campaign:${campaignId}:`),
     enabled,
-    refetchInterval: 2000,
+    refetchInterval: (query) => {
+      const tasks = query.state.data as any[] | undefined;
+      if (!tasks) return 2000;
+      // Stop polling when all tasks are in terminal state
+      if (tasks.length > 0 && tasks.every((t) => t.status === 'DONE' || t.status === 'FAILED')) return false;
+      return 2000;
+    },
     select: (tasks) => {
       const total = tasks.length;
       const done = tasks.filter((t) => t.status === 'DONE').length;
@@ -226,6 +234,86 @@ export function useCompileScenario() {
   });
 }
 
+// ── Temporal Workflow hooks ──────────────────────────────────────────────────
+
+export function useCampaignWorkflows(campaignId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['campaign-workflows', campaignId],
+    queryFn: () => workflowsApi.listForCampaign(campaignId),
+    enabled,
+    refetchInterval: 3000,
+  });
+}
+
+export function useDeviceRunningWorkflows(serial: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['device-running-workflows', serial],
+    queryFn: () => workflowsApi.listForDevice(serial),
+    enabled: enabled && !!serial,
+    refetchInterval: 3000,
+  });
+}
+
+export function useWorkflowSteps(workflowId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['workflow-steps', workflowId],
+    queryFn: () => workflowsApi.steps(workflowId),
+    enabled: enabled && !!workflowId,
+    refetchInterval: 2000,
+  });
+}
+
+export function useWorkflowProgress(workflowId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['workflow-progress', workflowId],
+    queryFn: () => workflowsApi.progress(workflowId),
+    enabled: enabled && !!workflowId,
+    refetchInterval: 2000,
+  });
+}
+
+export function useWorkflowPause() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (workflowId: string) => workflowsApi.pause(workflowId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['campaign-workflows'] });
+    },
+  });
+}
+
+export function useWorkflowResume() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (workflowId: string) => workflowsApi.resume(workflowId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['campaign-workflows'] });
+    },
+  });
+}
+
+export function useWorkflowCancel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (workflowId: string) => workflowsApi.cancel(workflowId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['campaign-workflows'] });
+    },
+  });
+}
+
+export function useStepAction(campaignId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ action, deviceSerial }: { action: 'retry' | 'skip'; deviceSerial?: string }) =>
+      campaignsApi.stepAction(campaignId, action, deviceSerial),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['workflow-progress'] });
+      qc.invalidateQueries({ queryKey: ['campaign-workflows', campaignId] });
+    },
+  });
+}
+
 // ── Fleet run ─────────────────────────────────────────────────────────────────
 
 /** Fleet run: dispatch campaign scenario to ALL READY devices. */
@@ -256,49 +344,78 @@ export function useFleetRunCampaign(onDone?: (result: FleetStatusResult) => void
   return mutation;
 }
 
-const TERMINAL_STATUSES = ['DONE', 'FAILED'];
+const TERMINAL_STATUSES = ['DONE', 'FAILED', 'COMPLETED', 'CANCELLED', 'TERMINATED'];
 const POLL_INTERVAL_MS = 2000;
-const POLL_TIMEOUT_MS = 5 * 60 * 1000;
+const POLL_TIMEOUT_MS = 10 * 60 * 1000;
 
-export function useRunCampaign(onAllTasksDone?: () => void) {
+const _engineStorageKey = (campaignId: string) => `df_campaign_engine:${campaignId}`;
+
+export type RunCampaignOptions = {
+  onTemporalFallback?: () => void;
+};
+
+export function useRunCampaign(onAllDone?: () => void, options?: RunCampaignOptions) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => campaignsApi.run(id),
-    onSuccess: (data, id) => {
+    mutationFn: ({ id, deviceSerials }: { id: string; deviceSerials?: string[] }) =>
+      campaignsApi.run(id, deviceSerials),
+    onSuccess: async (data: CampaignRunResponse, { id }) => {
       qc.invalidateQueries({ queryKey: KEYS.list });
       qc.invalidateQueries({ queryKey: KEYS.detail(id) });
-      const taskIds = data?.task_ids;
-      if (!taskIds?.length) {
-        onAllTasksDone?.();
+
+      const engine =
+        data.execution_engine ??
+        data.engine ??
+        (data.workflow_ids?.length ? 'temporal' : 'task_queue');
+      try {
+        sessionStorage.setItem(_engineStorageKey(id), engine);
+      } catch {
+        /* private mode */
+      }
+      if (data.temporal_fallback) {
+        options?.onTemporalFallback?.();
+      }
+
+      const resetToIdle = async () => {
+        try { await campaignsApi.updateStatus(id, 'idle'); } catch { /* ignore */ }
+        qc.invalidateQueries({ queryKey: KEYS.list });
+        qc.invalidateQueries({ queryKey: KEYS.detail(id) });
+        onAllDone?.();
+      };
+
+      // Temporal: poll workflow status
+      const workflowIds = data.workflow_ids;
+      if (engine === 'temporal' && workflowIds?.length) {
+        const deadline = Date.now() + POLL_TIMEOUT_MS;
+        const timer = setInterval(async () => {
+          if (Date.now() > deadline) { clearInterval(timer); await resetToIdle(); return; }
+          try {
+            const res = await workflowsApi.listForCampaign(id);
+            const allTerminal = res.workflows.length >= workflowIds.length &&
+              res.workflows.every((w) => TERMINAL_STATUSES.includes(w.status));
+            if (allTerminal) { clearInterval(timer); await resetToIdle(); }
+          } catch { /* ignore */ }
+        }, POLL_INTERVAL_MS);
         return;
       }
-      const deadline = Date.now() + POLL_TIMEOUT_MS;
-      const t = setInterval(async () => {
-        if (Date.now() > deadline) {
-          clearInterval(t);
-          onAllTasksDone?.();
-          return;
-        }
-        try {
-          const tasks = await tasksApi.list(taskIds);
-          const allTerminal = tasks.length >= taskIds.length && tasks.every(
-            (task) => TERMINAL_STATUSES.includes(task.status)
-          );
-          if (allTerminal) {
-            clearInterval(t);
-            // Không tự động đổi status sang completed — campaign có thể chạy lại nhiều lần.
-            qc.invalidateQueries({ queryKey: KEYS.list });
-            qc.invalidateQueries({ queryKey: KEYS.detail(id) });
-            await Promise.all([
-              qc.refetchQueries({ queryKey: KEYS.list }),
-              qc.refetchQueries({ queryKey: KEYS.detail(id) })
-            ]);
-            onAllTasksDone?.();
-          }
-        } catch {
-          // ignore poll errors
-        }
-      }, POLL_INTERVAL_MS);
+
+      // In-process TaskQueue: poll tasks
+      const taskIds = data.task_ids;
+      if (taskIds?.length) {
+        const deadline = Date.now() + POLL_TIMEOUT_MS;
+        const timer = setInterval(async () => {
+          if (Date.now() > deadline) { clearInterval(timer); await resetToIdle(); return; }
+          try {
+            const tasks = await tasksApi.list(taskIds);
+            const allTerminal = tasks.length >= taskIds.length &&
+              tasks.every((task) => TERMINAL_STATUSES.includes(task.status));
+            if (allTerminal) { clearInterval(timer); await resetToIdle(); }
+          } catch { /* ignore */ }
+        }, POLL_INTERVAL_MS);
+        return;
+      }
+
+      await resetToIdle();
     }
   });
 }

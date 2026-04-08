@@ -1,0 +1,259 @@
+{
+  "steps": [
+    {
+      "type": "tap_selector",
+      "by": "text",
+      "value": "Facebook"
+    },
+    {
+      "type": "if_element",
+      "by": "description",
+      "value": "Tìm kiếm",
+      "timeout": 5,
+      "then": [
+        {
+          "type": "tap_selector",
+          "by": "description",
+          "value": "Tìm kiếm",
+          "timeout": 4
+        }
+      ],
+      "else": [
+        {
+          "type": "tap_ratio",
+          "x": 0.87,
+          "y": 0.035
+        }
+      ]
+    },
+    {
+      "type": "wait_stable",
+      "timeout": 4,
+      "stable_duration": 0.4
+    },
+    {
+      "type": "input_text",
+      "text": "${GROUP_NAME}",
+      "via": "u2"
+    },
+    {
+      "type": "wait",
+      "seconds": 2
+    },
+    {
+      "type": "key",
+      "key": "enter"
+    },
+    {
+      "type": "wait_stable",
+      "timeout": 6,
+      "stable_duration": 0.5
+    },
+    {
+      "type": "if_element",
+      "by": "text",
+      "value": "Kết quả tìm kiếm trong tab Nhóm, 3 trong số 7",
+      "timeout": 5,
+      "then": [
+        {
+          "type": "tap_selector",
+          "by": "text",
+          "value": "Kết quả tìm kiếm trong tab Nhóm, 3 trong số 7",
+          "timeout": 4
+        }
+      ],
+      "else": [
+        {
+          "type": "tap_selector",
+          "by": "text",
+          "value": "${GROUP_NAME} · Tham gia"
+        }
+      ]
+    },
+    {
+      "type": "wait_stable",
+      "timeout": 1,
+      "stable_duration": 0.5
+    },
+    {
+      "type": "tap_selector",
+      "by": "text",
+      "value": "${GROUP_NAME} · Truy cập",
+      "timeout": 6
+    },
+    {
+      "type": "scroll_down",
+      "repeats": 1,
+      "start_x_ratio": "${SCROLL_X_RATIO}",
+      "start_y_ratio": 0.65,
+      "end_y_ratio": 0.47
+    },
+    {
+      "type": "wait",
+      "seconds": 3
+    },
+    {
+      "type": "loop",
+      "count": "${MAX_SCROLLS}",
+      "steps": [
+        {
+          "type": "wait",
+          "seconds": 1
+        },
+        {
+          "type": "extract",
+          "strategy": "fb_posts",
+          "expand_see_more": true,
+          "expand_see_more_max_passes": 4,
+          "expand_see_more_scroll": true,
+          "expand_see_more_scroll_distance": 0.25,
+          "stop_if_no_new": true,
+          "no_new_threshold": 3
+        },
+        {
+          "type": "save_extraction",
+          "data_var": "posts",
+          "collection": "${SAVE_COLLECTION}",
+          "platform": "facebook",
+          "content_type": "group_post",
+          "dedupe_field": "text",
+          "tags": "group,crawl,${GROUP_NAME}"
+        },
+        {
+          "type": "if_element",
+          "by": "text",
+          "value": "Bình luận",
+          "timeout": 1,
+          "ignore_error": true,
+          "then": [
+            {
+              "type": "tap_selector",
+              "by": "text",
+              "value": "Bình luận"
+            },
+            {
+              "type": "wait_stable",
+              "timeout": 6,
+              "stable_duration": 0.5
+            },
+            {
+              "type": "if_element",
+              "by": "xpath",
+              "value": "//*[contains(@text,'Phù hợp nhất') and contains(@text,'bình luận')]",
+              "timeout": 2,
+              "ignore_error": true,
+              "then": [
+                {
+                  "type": "tap_selector",
+                  "by": "xpath",
+                  "value": "//*[contains(@text,'Phù hợp nhất') and contains(@text,'bình luận')]",
+                  "timeout": 3,
+                  "ignore_error": true
+                },
+                {
+                  "type": "wait",
+                  "seconds": 1
+                },
+                {
+                  "type": "tap_selector",
+                  "by": "xpath",
+                  "value": "//*[contains(@text,'Tất cả') and contains(@text,'bình luận')] | //*[contains(@content-desc,'Tất cả bình luận')]",
+                  "timeout": 3,
+                  "ignore_error": true
+                },
+                {
+                  "type": "wait",
+                  "seconds": 1
+                }
+              ]
+            },
+            {
+              "type": "loop",
+              "count": "${MAX_COMMENT_SCROLLS}",
+              "steps": [
+                {
+                  "type": "extract",
+                  "strategy": "fb_comments",
+                  "expand_see_more": true,
+                  "stop_if_no_new": true,
+                  "no_new_threshold": 2
+                },
+                {
+                  "type": "save_extraction",
+                  "data_var": "comments",
+                  "collection": "${SAVE_COLLECTION}",
+                  "platform": "facebook",
+                  "content_type": "comment",
+                  "dedupe_field": "text",
+                  "tags": "group,comment,${GROUP_NAME}",
+                  "parent_id_var": "_first_new_post_hash"
+                },
+                {
+                  "type": "scroll_down",
+                  "repeats": 1,
+                  "start_x_ratio": 0.5,
+                  "start_y_ratio": 0.65,
+                  "end_y_ratio": 0.47
+                },
+                {
+                  "type": "wait",
+                  "seconds": 1
+                }
+              ]
+            },
+            {
+              "type": "key",
+              "key": "back"
+            },
+            {
+              "type": "wait_stable",
+              "timeout": 4,
+              "stable_duration": 0.5
+            }
+          ],
+          "else": []
+        },
+        {
+          "type": "scroll_down",
+          "repeats": 1,
+          "start_x_ratio": "${SCROLL_X_RATIO}",
+          "start_y_ratio": 0.65,
+          "end_y_ratio": 0.47
+        },
+        {
+          "type": "set_variable",
+          "name": "_W",
+          "from_list": [
+            1,
+            1,
+            1.5,
+            2,
+            2,
+            3
+          ]
+        },
+        {
+          "type": "wait",
+          "seconds": "${_W}"
+        },
+        {
+          "type": "dismiss_popup",
+          "retries": 2
+        }
+      ]
+    },
+    {
+      "type": "save_extraction",
+      "data_var": "posts",
+      "collection": "${SAVE_COLLECTION}",
+      "platform": "facebook",
+      "content_type": "group_post",
+      "dedupe_field": "text",
+      "tags": "group,crawl,${GROUP_NAME}"
+    },
+    {
+      "type": "key",
+      "key": "home"
+    }
+  ]
+}

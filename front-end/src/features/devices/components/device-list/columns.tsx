@@ -5,6 +5,7 @@ import type { ColumnDef } from '@tanstack/react-table';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { devicesApi, isPendingDevice, type DeviceOut } from '../../services/manage-api';
+import { TagsCell } from './TagsCell';
 
 export function getDeviceColumns({
   t,
@@ -86,6 +87,14 @@ export function getDeviceColumns({
             )}
           </div>
         );
+      }
+    },
+    {
+      id: 'tags',
+      header: t('columns.tags'),
+      cell: ({ row }) => {
+        const d = row.original;
+        return <TagsCell deviceId={d.id} tags={d.tags} />;
       }
     },
     {

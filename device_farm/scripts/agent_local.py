@@ -573,6 +573,27 @@ class LocalAgent:
                     if "u2" in services:
                         u2_port = await loop.run_in_executor(None, _ensure_u2_server)
                         log.info(f"start_services u2: port={u2_port or 'unavailable'}")
+                        # Reconnect the u2 AgentTunnel to the (possibly restarted) server.
+                        # Without this step the old TCP connection to the dead NanoHTTPD
+                        # stays in self._tunnels and the server-side _reconnect_u2() keeps
+                        # getting connection errors through the stale tunnel socket.
+                        if u2_port and self.enable_tunnels:
+                            old = self._tunnels.pop("u2", None)
+                            if old:
+                                old.close()
+                            new_u2 = AgentTunnel("u2")
+                            new_u2.set_sender(_send_sync)
+                            if new_u2.connect_tcp("127.0.0.1", u2_port):
+                                self._tunnels["u2"] = new_u2
+                                log.info("start_services: u2 tunnel reconnected")
+                            else:
+                                log.warning("start_services: u2 tunnel reconnect failed")
+                        connected = list(self._tunnels.keys())
+                        await ws.send(json.dumps({
+                            "type": "tunnels_ready",
+                            "connected": connected,
+                        }))
+                        log.info(f"start_services: tunnels_ready sent channels={connected}")
                     log.info(f"start_services done: {services}")
 
                 elif msg_type == "set_stream_options":

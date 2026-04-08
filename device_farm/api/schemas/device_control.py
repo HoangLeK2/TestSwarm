@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 class ScenarioPreviewRequest(BaseModel):
     steps: List[Dict[str, Any]]
+    variables: Dict[str, Any] = {}
 
 
 class TapRequest(BaseModel):
@@ -59,6 +60,34 @@ class OpenUrlRequest(BaseModel):
     package: Optional[str] = None
 
 
+class LaunchAppRequest(BaseModel):
+    package: str
+
+
+class DoubleTapRequest(BaseModel):
+    x: int
+    y: int
+
+
+class PinchRequest(BaseModel):
+    cx: int
+    cy: int
+    scale: float = 0.5  # <1 = zoom out, >1 = zoom in
+    duration_ms: int = 400
+
+
+class DragRequest(BaseModel):
+    x1: int
+    y1: int
+    x2: int
+    y2: int
+    duration_ms: int = 1000
+
+
+class ClipboardSetRequest(BaseModel):
+    text: str
+
+
 class AdbRegisterRequest(BaseModel):
     """Body for app-after-scan: phone sends its IP so backend can connect via ADB."""
 
@@ -83,11 +112,14 @@ class FleetRunRequest(BaseModel):
     priority: int = 5
     timeout: float = 300
     max_retries: int = 1
+    filter_group_id: Optional[str] = None
+    filter_tags: Optional[str] = None
 
 
 class ScrcpyAttachRequest(BaseModel):
-    device_ip: str
+    device_ip: str | None = None  # Auto-detected from DB if omitted
     adb_port: int = 5555
+    enable_control: bool = True  # Enable scrcpy control channel for touch/key input
 
 
 class StartSessionRequest(BaseModel):

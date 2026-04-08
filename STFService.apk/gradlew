@@ -114,7 +114,12 @@ case "$( uname )" in                #(
   NONSTOP* )        nonstop=true ;;
 esac
 
-
+# Cursor / Red Hat Java often sets JAVA_HOME to a JRE without jlink. AGP's androidJdkImage
+# step requires jlink; if we keep that JAVA_HOME, Java toolchain resolution picks it and
+# compile fails. Unset so Gradle falls back to org.gradle.java.home (see gradle.properties).
+if [ -n "${JAVA_HOME:-}" ] && [ ! -x "${JAVA_HOME}/bin/jlink" ]; then
+    unset JAVA_HOME
+fi
 
 # Determine the Java command to use to start the JVM.
 if [ -n "$JAVA_HOME" ] ; then

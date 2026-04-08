@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Runtime data
+captures/
+data/
+device_index.json
+*.log
+
+# Dev/IDE
+.git/
+.gitignore
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+tests/
+*.md
+!requirements.txt
+
+# Env (secrets — inject via docker-compose env/secrets)
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docs
+.docs/

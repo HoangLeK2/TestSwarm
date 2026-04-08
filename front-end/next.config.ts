@@ -9,6 +9,7 @@ const BACKEND = process.env.DEVICE_FARM_BACKEND_URL ?? 'http://localhost:8081';
 
 // Define the base Next.js configuration
 const baseConfig: NextConfig = {
+  reactStrictMode: false, // Disable to prevent InversifyJS double-registration in flowgram.ai
   output: 'standalone',
   // Cho phép truy cập dev từ IP nội bộ (vd. 172.16.0.86) tránh cảnh báo cross-origin _next/*
   allowedDevOrigins: [
@@ -42,7 +43,17 @@ const baseConfig: NextConfig = {
   compiler: {
     // removeConsole: process.env.NEXT_PUBLIC_ENVIRONMENT !== 'dev'
   },
-  transpilePackages: ['geist']
+  transpilePackages: ['geist'],
+  webpack(config, { isServer }) {
+    if (!isServer) {
+      // jmuxer uses Node.js stream module — polyfill for browser
+      config.resolve.fallback = {
+        ...(config.resolve.fallback ?? {}),
+        stream: require.resolve('stream-browserify'),
+      };
+    }
+    return config;
+  },
 };
 
 const configWithPlugins = baseConfig;

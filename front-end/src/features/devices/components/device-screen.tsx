@@ -4,234 +4,143 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useGesture } from '@use-gesture/react';
 import type { Device } from '../types';
 import { serialToId } from '../helpers';
-import { FrameDispatcher } from '../services/frame-dispatcher';
-import type { FrameEvent, H264ConfigFrame, H264VideoFrame } from '../services/frame-dispatcher';
+import { deviceFarmBackendBase } from '@/lib/farm-api';
+import { tokenStorage } from '@/lib/token-storage';
+import { useH264Video } from '../hooks/use-h264-canvas';
+
 
 interface DeviceScreenProps {
   device: Device;
   wsSend: (obj: object) => void;
   mode: 'tap' | 'swipe';
   onTap?: (rx: number, ry: number) => void;
+  apiBase?: string;
+  /** Highlight bounds overlay [x1, y1, x2, y2] in device pixels */
+  highlightBounds?: [number, number, number, number] | null;
+  /** Gesture mode: tap, swipe, double_tap, drag */
+  gestureMode?: 'tap' | 'swipe' | 'double_tap' | 'drag';
 }
 
-// ─── H264 WebCodecs decoder ──────────────────────────────────────────────────
-
-const WEBCODECS_SUPPORTED = typeof window !== 'undefined' && 'VideoDecoder' in window;
-
-class H264CanvasDecoder {
-  private dec: VideoDecoder | null = null;
-  private canvas: HTMLCanvasElement | null = null;
-  private ctx: CanvasRenderingContext2D | null = null;  // cached — avoid getContext per-frame
-  private configData: Uint8Array | null = null;
-  private onFirstFrame?: () => void;
-
-  attach(canvas: HTMLCanvasElement, onFirstFrame: () => void) {
-    this.canvas = canvas;
-    this.ctx = canvas.getContext('2d');
-    this.onFirstFrame = onFirstFrame;
-  }
-
-  detach() {
-    this.close();
-    this.canvas = null;
-    this.ctx = null;
-  }
-
-  handleConfig(evt: H264ConfigFrame) {
-    this.configData = evt.data;
-    this._initDecoder(evt.width, evt.height);
-  }
-
-  handleFrame(evt: H264VideoFrame) {
-    if (!this.dec || this.dec.state !== 'configured') {
-      // Can't decode without a configured decoder — drop until next key frame
-      return;
-    }
-    try {
-      this.dec.decode(new EncodedVideoChunk({
-        type:      evt.type === 'h264_key' ? 'key' : 'delta',
-        timestamp: evt.ptsUs,
-        data:      evt.data,
-      }));
-    } catch {
-      // Decoder error — reset and wait for next key frame
-      this.close();
-    }
-  }
-
-  close() {
-    try { this.dec?.close(); } catch {}
-    this.dec = null;
-  }
-
-  private _initDecoder(w: number, h: number) {
-    this.close();
-    if (!WEBCODECS_SUPPORTED) return;
-    const canvas = this.canvas;
-    if (!canvas) return;
-
-    const onFirstFrame = this.onFirstFrame;
-    let firstFrameSent = false;
-
-    const ctx = this.ctx;
-    this.dec = new VideoDecoder({
-      output: (frame) => {
-        if (ctx) ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
-        frame.close();
-        if (!firstFrameSent) { firstFrameSent = true; onFirstFrame?.(); }
-      },
-      error: () => { this.dec = null; }, // reset on decode error; next key frame will reinit
-    });
-
-    try {
-      // Build codec string from AVCDecoderConfigurationRecord if available:
-      //   byte[1]=profile, byte[2]=constraints, byte[3]=level
-      let codecStr = 'avc1.42E01E'; // H264 Baseline Level 3.0 fallback
-      if (this.configData && this.configData.byteLength >= 4) {
-        const p = this.configData[1].toString(16).padStart(2, '0');
-        const c = this.configData[2].toString(16).padStart(2, '0');
-        const l = this.configData[3].toString(16).padStart(2, '0');
-        codecStr = `avc1.${p}${c}${l}`;
-      }
-
-      this.dec.configure({
-        codec:       codecStr,
-        codedWidth:  w,
-        codedHeight: h,
-        description: this.configData ?? undefined,
-      });
-    } catch {
-      this.close();
-    }
-  }
-}
-
-// ─── Component ───────────────────────────────────────────────────────────────
-
-export function DeviceScreen({ device, wsSend, mode, onTap }: DeviceScreenProps) {
+export function DeviceScreen({ device, wsSend, mode, onTap, highlightBounds, gestureMode }: DeviceScreenProps) {
   const wrapRef    = useRef<HTMLDivElement>(null);
   const canvasRef  = useRef<HTMLCanvasElement>(null);
-  const overlayRef = useRef<HTMLDivElement>(null);
-  const fpsRef     = useRef<HTMLDivElement>(null);
-  const fpsTimesRef    = useRef<number[]>([]);
-  const draggedRef     = useRef(false);
-  const h264DecoderRef = useRef<H264CanvasDecoder | null>(null);
-  // JPEG "latest-only" decode state — prevents concurrent createImageBitmap calls
-  // and ensures we always render the most recent frame, not stale queued ones.
-  const pendingJpegRef = useRef<{ data: Uint8Array; w: number; h: number } | null>(null);
-  const decodingRef    = useRef(false);
-  const hasFrameRef    = useRef(false);
+  const draggedRef = useRef(false);
+  const dragStartRef = useRef<{ x: number; y: number } | null>(null);
   const [hasFrame, setHasFrame] = useState(false);
+  const [fps, setFps] = useState<number | null>(null);
+  const fpsTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const frameTsRef = useRef<number[]>([]);
+  const decodedFramesRef = useRef(0);
+  const prevDecodedFramesRef = useRef(0);
+  const [decodeQueueSize, setDecodeQueueSize] = useState(0);
+  const [droppedDelta, setDroppedDelta] = useState(0);
 
   const id = serialToId(device.serial);
   const dw = device.screen_width  || 1080;
   const dh = device.screen_height || 1920;
 
-  useEffect(() => {
-    if (device.state === 'DISCONNECTED' || device.state === 'DEAD') {
-      hasFrameRef.current = false;
-      setHasFrame(false);
-    }
-  }, [device.state]);
+  const isActive =
+    device.state && !['DISCONNECTED', 'DEAD'].includes(device.state.toUpperCase());
 
-  // ── Frame subscription ──────────────────────────────────────────────────
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+  // Track whether jmuxer has delivered at least one H264 frame
+  const [h264Active, setH264Active] = useState(false);
+  const h264TimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const h264StableTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [mjpegEnabled, setMjpegEnabled] = useState(true);
 
-    // Ensure canvas dimensions match device
-    canvas.width  = dw;
-    canvas.height = dh;
+  // Always show MJPEG as baseline — it's hidden (opacity-0) once H264 starts playing
+  const mjpegUrl = React.useMemo(() => {
+    if (!isActive || !mjpegEnabled) return null;
+    const base = `${deviceFarmBackendBase}/stream/${encodeURIComponent(device.serial)}?fps=30`;
+    const token = tokenStorage.getAuthToken();
+    return token ? `${base}&token=${encodeURIComponent(token)}` : base;
+  }, [isActive, mjpegEnabled, device.serial]);
 
-    // Lazy-init H264 decoder
-    if (!h264DecoderRef.current) h264DecoderRef.current = new H264CanvasDecoder();
-    const h264 = h264DecoderRef.current;
-    h264.attach(canvas, () => {
-      if (overlayRef.current) overlayRef.current.style.display = 'none';
-      setHasFrame(true);
-    });
-
-    // Decode the latest pending JPEG — only one decode in-flight at a time.
-    // If a newer frame arrives while decoding, it replaces pendingJpegRef and
-    // gets decoded immediately after, so we always render the most recent frame.
-    function drainJpeg() {
-      const pending = pendingJpegRef.current;
-      if (!pending || decodingRef.current) return;
-      pendingJpegRef.current = null;
-      decodingRef.current = true;
-
-      createImageBitmap(new Blob([pending.data], { type: 'image/jpeg' })).then((bmp) => {
-        decodingRef.current = false;
-        const cv = canvasRef.current;
-        if (!cv) { bmp.close(); return; }
-
-        // Only resize when dimensions actually change — resizing always clears the canvas.
-        if (cv.width !== pending.w || cv.height !== pending.h) {
-          cv.width  = pending.w;
-          cv.height = pending.h;
-        }
-
-        const ctx = cv.getContext('2d');
-        // Always scale the JPEG to the current canvas size.
-        // (Agent may downscale JPEG for performance, while the canvas keeps the full device aspect.)
-        if (ctx) ctx.drawImage(bmp, 0, 0, cv.width, cv.height);
-        bmp.close();
-
-        if (!hasFrameRef.current) {
-          hasFrameRef.current = true;
-          if (overlayRef.current) overlayRef.current.style.display = 'none';
-          setHasFrame(true);
-        }
-
-        // FPS counter — ring-buffer approach avoids a new array every frame
+  // Always pass real serial so binary frames are subscribed immediately on mount.
+  // jmuxer gracefully handles missing MSE via onError — MJPEG fallback stays visible.
+  useH264Video(
+    isActive ? device.serial : '',
+    canvasRef,
+    {
+      onFrame: useCallback(() => {
+        if (!hasFrame) setHasFrame(true);
+        if (!h264Active) setH264Active(true);
         const now = performance.now();
-        fpsTimesRef.current.push(now);
-        // Trim once per second worth of entries (keep only last-1000ms)
-        const cutoff = now - 1000;
-        let i = 0;
-        while (i < fpsTimesRef.current.length && fpsTimesRef.current[i] < cutoff) i++;
-        if (i > 0) fpsTimesRef.current.splice(0, i);
-        if (fpsRef.current) fpsRef.current.textContent = `${fpsTimesRef.current.length} FPS`;
-
-        // A newer frame may have arrived while we were decoding — process it now.
-        drainJpeg();
-      }).catch(() => { decodingRef.current = false; });
+        const arr = frameTsRef.current;
+        arr.push(now);
+        // Keep only last ~2s samples.
+        while (arr.length > 0 && now - arr[0] > 2000) arr.shift();
+        // Reset inactivity timer — fall back to MJPEG if H264 stops for 3s
+        if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
+        h264TimeoutRef.current = setTimeout(() => setH264Active(false), 8000);
+      }, [hasFrame, h264Active]),
+      onStats: useCallback((stats: { decodedFrames: number; decodeQueueSize: number; droppedDelta: number }) => {
+        // Worker emits cumulative decoded frame counter.
+        decodedFramesRef.current = stats.decodedFrames;
+        setDecodeQueueSize(stats.decodeQueueSize);
+        setDroppedDelta(stats.droppedDelta);
+      }, []),
     }
+  );
 
-    const handleFrame = (evt: FrameEvent) => {
-      if (evt.type === 'jpeg') {
-        // Store the latest frame; drainJpeg will pick it up.
-        // If a decode is already in-flight we just update the pending slot —
-        // the in-flight decode will call drainJpeg() on completion.
-        pendingJpegRef.current = {
-          data: evt.data,
-          // Keep canvas sizing stable for correct touch mapping.
-          w: dw,
-          h: dh,
-        };
-        drainJpeg();
-        return;
-      }
+  // Reset h264Active when device changes or goes offline
+  useEffect(() => {
+    setH264Active(false);
+    setMjpegEnabled(true);
+    if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
+    if (h264StableTimerRef.current) clearTimeout(h264StableTimerRef.current);
+  }, [device.serial, isActive]);
 
-      if (evt.type === 'h264_config') { h264.handleConfig(evt); return; }
-      if (evt.type === 'h264_key' || evt.type === 'h264_delta') {
-        h264.handleFrame(evt);
-        const now = performance.now();
-        fpsTimesRef.current.push(now);
-        const cutoff = now - 1000;
-        let i = 0;
-        while (i < fpsTimesRef.current.length && fpsTimesRef.current[i] < cutoff) i++;
-        if (i > 0) fpsTimesRef.current.splice(0, i);
-        if (fpsRef.current) fpsRef.current.textContent = `${fpsTimesRef.current.length} FPS`;
-      }
-    };
-
-    const unsub = FrameDispatcher.subscribe(device.serial, handleFrame);
+  // Once H264 stays healthy for a while, stop MJPEG network fetches entirely.
+  // If H264 drops, MJPEG is re-enabled immediately as fallback.
+  useEffect(() => {
+    if (!isActive) {
+      setMjpegEnabled(false);
+      return;
+    }
+    if (h264Active) {
+      if (h264StableTimerRef.current) clearTimeout(h264StableTimerRef.current);
+      h264StableTimerRef.current = setTimeout(() => {
+        setMjpegEnabled(false);
+      }, 5000);
+    } else {
+      if (h264StableTimerRef.current) clearTimeout(h264StableTimerRef.current);
+      setMjpegEnabled(true);
+    }
     return () => {
-      unsub();
-      h264.detach();
+      if (h264StableTimerRef.current) clearTimeout(h264StableTimerRef.current);
     };
-  }, [device.serial, dw, dh]);
+  }, [isActive, h264Active]);
+
+  // Whether to attempt H264 — MSE is available in all modern browsers; jmuxer handles gracefully if not
+  const useH264 = isActive;
+
+  useEffect(() => {
+    if (!isActive) { setFps(null); return; }
+    frameTsRef.current = [];
+    decodedFramesRef.current = 0;
+    prevDecodedFramesRef.current = 0;
+    fpsTimerRef.current = setInterval(() => {
+      const now = performance.now();
+      const samples = frameTsRef.current;
+      while (samples.length > 0 && now - samples[0] > 1000) samples.shift();
+      const rendered = samples.length;
+      const decodedDelta = Math.max(0, decodedFramesRef.current - prevDecodedFramesRef.current);
+      const next = Math.max(rendered, decodedDelta);
+      // Keep numeric FPS while device is active (avoid "-" flicker between samples).
+      if (next > 0) {
+        setFps(next);
+      } else if (isActive) {
+        setFps((prev) => (prev ?? 0));
+      } else {
+        setFps(null);
+      }
+      prevDecodedFramesRef.current = decodedFramesRef.current;
+    }, 1000);
+    return () => {
+      if (fpsTimerRef.current) clearInterval(fpsTimerRef.current);
+    };
+  }, [isActive, h264Active]);
 
   // ── Touch / gesture ──────────────────────────────────────────────────────
   const clientToDevice = useCallback(
@@ -259,8 +168,22 @@ export function DeviceScreen({ device, wsSend, mode, onTap }: DeviceScreenProps)
           if (!r) return;
           const p1 = clientToDevice(initial[0] - r.left, initial[1] - r.top, r.width, r.height);
           const p2 = clientToDevice(xy[0] - r.left, xy[1] - r.top, r.width, r.height);
-          wsSend({ type: 'swipe', serial: device.serial, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, ms: Math.min(elapsed, 1000) });
+          if (gestureMode === 'drag') {
+            wsSend({ type: 'drag', serial: device.serial, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, ms: 1000 });
+          } else {
+            const ms = Math.max(300, Math.min(elapsed, 1000));
+            wsSend({ type: 'swipe', serial: device.serial, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, ms });
+          }
         }
+      },
+      onPinch: (state) => {
+        if (!state.last) return;
+        const r = wrapRef.current?.getBoundingClientRect();
+        if (!r) return;
+        const origin = state.origin as [number, number];
+        const p = clientToDevice(origin[0] - r.left, origin[1] - r.top, r.width, r.height);
+        const scale = (state as { offset?: [number, number] }).offset?.[0] ?? 1;
+        wsSend({ type: 'pinch', serial: device.serial, cx: p.x, cy: p.y, scale, ms: 400 });
       },
     },
     { drag: { threshold: 5 }, pointer: { touch: true }, event: { passive: false } }
@@ -268,16 +191,46 @@ export function DeviceScreen({ device, wsSend, mode, onTap }: DeviceScreenProps)
 
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
-      if (mode !== 'tap' || draggedRef.current) { draggedRef.current = false; return; }
+      if (draggedRef.current) { draggedRef.current = false; return; }
       const el   = (e.target as HTMLElement) ?? e.currentTarget;
       const rect = el.getBoundingClientRect();
       const p    = clientToDevice(e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height);
+
+      if (gestureMode === 'double_tap') {
+        wsSend({ type: 'double_tap', serial: device.serial, x: p.x, y: p.y });
+        return;
+      }
+      if (mode !== 'tap') return;
       wsSend({ type: 'tap', serial: device.serial, x: p.x, y: p.y });
       if (onTap && rect.width > 0 && rect.height > 0) {
         onTap((e.clientX - rect.left) / rect.width, (e.clientY - rect.top) / rect.height);
       }
     },
-    [mode, clientToDevice, wsSend, device.serial, onTap]
+    [mode, gestureMode, clientToDevice, wsSend, device.serial, onTap]
+  );
+
+  const handleDoubleClick = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (mode !== 'tap' || gestureMode === 'double_tap') return; // double_tap mode uses single click
+      const el   = (e.target as HTMLElement) ?? e.currentTarget;
+      const rect = el.getBoundingClientRect();
+      const p    = clientToDevice(e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height);
+      wsSend({ type: 'double_tap', serial: device.serial, x: p.x, y: p.y });
+    },
+    [mode, gestureMode, clientToDevice, wsSend, device.serial]
+  );
+
+  const handleWheel = useCallback(
+    (e: React.WheelEvent<HTMLDivElement>) => {
+      if (!e.ctrlKey) return; // Ctrl+scroll = pinch
+      e.preventDefault();
+      const el   = (e.target as HTMLElement) ?? e.currentTarget;
+      const rect = el.getBoundingClientRect();
+      const p    = clientToDevice(e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height);
+      const scale = e.deltaY < 0 ? 2.0 : 0.5; // scroll up = zoom in, down = zoom out
+      wsSend({ type: 'pinch', serial: device.serial, cx: p.x, cy: p.y, scale, ms: 400 });
+    },
+    [clientToDevice, wsSend, device.serial]
   );
 
   return (
@@ -286,32 +239,62 @@ export function DeviceScreen({ device, wsSend, mode, onTap }: DeviceScreenProps)
         {...bind()}
         ref={wrapRef}
         onClick={handleClick}
+        onDoubleClick={handleDoubleClick}
+        onWheel={handleWheel}
         className={`relative w-full overflow-hidden rounded-md border border-border bg-black ${
+          gestureMode === 'double_tap' ? 'cursor-cell' :
+          gestureMode === 'drag' ? 'cursor-grab' :
           mode === 'swipe' ? 'cursor-crosshair' : 'cursor-pointer'
         }`}
         style={{ aspectRatio: `${dw}/${dh}` }}
         id={`wrap-${id}`}
       >
-        {/* Single canvas — no <img> tag double-render */}
+        {/* MJPEG baseline — always shown until H264 takes over */}
+        {mjpegUrl && (
+          <img
+            src={mjpegUrl}
+            alt={`${device.brand} ${device.model}`}
+            className={`absolute inset-0 h-full w-full object-contain transition-opacity duration-500 ${h264Active ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
+            onLoad={() => { setHasFrame(true); }}
+            draggable={false}
+          />
+        )}
+        {/* H264 live canvas — WebCodecs decode, zero MSE buffering latency */}
         <canvas
           ref={canvasRef}
-          className='absolute inset-0 h-full w-full'
-          width={dw}
-          height={dh}
-          style={{ imageRendering: 'auto' }}
+          className={`pointer-events-none absolute inset-0 h-full w-full object-contain transition-opacity duration-500 ${h264Active ? 'opacity-100' : 'opacity-0'}`}
         />
-        <div
-          ref={overlayRef}
-          className='absolute inset-0 flex items-center justify-center text-xs text-muted-foreground'
-          id={`overlay-${id}`}
-          style={{ pointerEvents: 'none', display: hasFrame ? 'none' : undefined }}
-        />
-        <div
-          ref={fpsRef}
-          className='pointer-events-none absolute right-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-mono text-white'
-          id={`fps-${id}`}
-        >
-          0 FPS
+
+        {/* Highlight bounds overlay for XML tree node selection */}
+        {highlightBounds && dw > 0 && dh > 0 && (
+          <div
+            className='pointer-events-none absolute border-2 border-red-500 bg-red-500/15 transition-all duration-150'
+            style={{
+              left:   `${(highlightBounds[0] / dw) * 100}%`,
+              top:    `${(highlightBounds[1] / dh) * 100}%`,
+              width:  `${((highlightBounds[2] - highlightBounds[0]) / dw) * 100}%`,
+              height: `${((highlightBounds[3] - highlightBounds[1]) / dh) * 100}%`,
+            }}
+          />
+        )}
+        {!hasFrame && isActive && (
+          <div
+            className='absolute inset-0 flex items-center justify-center text-xs text-muted-foreground'
+            style={{ pointerEvents: 'none' }}
+          >
+            Loading...
+          </div>
+        )}
+        {!isActive && (
+          <div className='absolute inset-0 flex items-center justify-center text-xs text-muted-foreground'>
+            Offline
+          </div>
+        )}
+        <div className='pointer-events-none absolute right-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-mono text-white'>
+          {fps !== null ? `${fps} FPS` : '— FPS'}
+        </div>
+        <div className='pointer-events-none absolute right-1 top-6 rounded bg-black/50 px-1.5 py-0.5 text-[9px] font-mono text-white/90'>
+          q:{decodeQueueSize} d:{droppedDelta}
         </div>
       </div>
       <div className='mt-1 flex items-center justify-between text-[10px] text-muted-foreground'>

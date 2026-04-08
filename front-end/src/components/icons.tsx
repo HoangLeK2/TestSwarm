@@ -46,7 +46,9 @@ import {
   IconMessageCircle,
   IconLink,
   IconDeviceMobile,
-  IconPlayerPlay
+  IconPlayerPlay,
+  IconFolder,
+  IconTemplate
 } from '@tabler/icons-react';
 
 export type Icon = React.ComponentType<IconProps>;
@@ -99,5 +101,7 @@ export const Icons = {
   link: IconLink,
   revoke: IconTrash,
   smartphone: IconDeviceMobile,
-  play: IconPlayerPlay
+  play: IconPlayerPlay,
+  folder: IconFolder,
+  template: IconTemplate
 };

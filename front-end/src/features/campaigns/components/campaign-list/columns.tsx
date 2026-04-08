@@ -18,14 +18,18 @@ export function getCampaignColumns(
       id: 'name',
       accessorKey: 'name',
       header: t('colName'),
+      size: 220,
+      meta: { cellClassName: 'align-top py-3' },
       cell: ({ row }) => {
         const c = row.original;
-        return <span className='truncate text-sm font-semibold'>{c.name}</span>;
+        return <span className='block max-w-[200px] truncate text-sm font-semibold'>{c.name}</span>;
       }
     },
     {
       id: 'status',
       header: t('colStatus'),
+      size: 110,
+      meta: { cellClassName: 'align-top py-3' },
       cell: ({ row }) => {
         const c = row.original;
         return (
@@ -38,6 +42,8 @@ export function getCampaignColumns(
     {
       id: 'createdAt',
       header: t('colTime'),
+      size: 130,
+      meta: { cellClassName: 'align-top py-3' },
       cell: ({ row }) => {
         const c = row.original;
         return (
@@ -53,14 +59,20 @@ export function getCampaignColumns(
     {
       id: 'devices',
       header: t('colDevices'),
+      size: 160,
+      meta: { cellClassName: 'align-top py-3' },
       cell: ({ row }) => {
         const c = row.original;
-        return <CampaignDevicesSummary campaignId={c.id} />;
+        return <CampaignDevicesSummary campaignId={c.id} targetGroupId={c.target_group_id} />;
       }
     },
     {
       id: 'actions',
       header: '',
+      size: 360,
+      meta: {
+        cellClassName: 'align-top max-w-[min(100vw-2rem,400px)] whitespace-normal py-3',
+      },
       cell: ({ row }) => {
         const c = row.original;
         return <CampaignRowActions campaign={c} />;

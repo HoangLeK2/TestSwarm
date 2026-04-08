@@ -52,29 +52,31 @@ import java.io.OutputStream;
 import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import android.content.ComponentName;
+import android.content.pm.ActivityInfo;
+import android.content.pm.ResolveInfo;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import android.view.accessibility.AccessibilityNodeInfo;
 import jp.co.cyberagent.stf.compat.InputManagerWrapper;
 
 /**
- * WsAgentService — Foreground service (foregroundServiceType=mediaProjection).
+ * WsAgentService — Foreground service.
  *
- * Android 14+ (SDK 34) bắt buộc MediaProjection phải chạy trong foreground
- * service có đúng type. Activity không thể gọi createVirtualDisplay() trực
- * tiếp.
- *
- * Flow:
- * 1. IdentityActivity xin quyền screen capture → nhận MediaProjection token
- * 2. Start WsAgentService với token + ws url
- * 3. Service kết nối WebSocket, bắt đầu capture, gửi frames
- * 4. Server gửi tap/swipe/key → Service inject qua InputManagerWrapper
+ * Set {@link #USE_MEDIA_PROJECTION} = false để tắt MJPEG trong app và dùng stream
+ * ngoài (vd. scrcpy qua ADB). Khi bật lại: manifest FGS type + permission
+ * FOREGROUND_SERVICE_MEDIA_PROJECTION và flow IdentityActivity như cũ.
  */
 public class WsAgentService extends android.app.Service {
+
+    /** false = không xin MediaProjection, không gửi MJPEG qua WS (dùng scrcpy / nguồn khác). */
+    public static final boolean USE_MEDIA_PROJECTION = false;
 
     public static final String ACTION_START = "jp.co.cyberagent.stf.ws.START";
     public static final String ACTION_STOP = "jp.co.cyberagent.stf.ws.STOP";
@@ -95,7 +97,7 @@ public class WsAgentService extends android.app.Service {
     private static final String CHANNEL_ID = "ws_agent";
     private static final int NOTIF_ID = 0x2;
     private static final int CAPTURE_WIDTH       = 1080; // max width; scales down if screen smaller
-    private static final int TARGET_FPS          = 20;   // MJPEG target frame rate
+    private static final int TARGET_FPS          = 10;   // MJPEG target frame rate (low for perf)
     private static final int JPEG_QUALITY        = 75;   // JPEG compression (0-100)
 
     /**
@@ -238,48 +240,50 @@ public class WsAgentService extends android.app.Service {
                     + " projData=" + (projData != null ? "OK" : "NULL"));
 
             startForeground();
+            requestBatteryOptimizationExemption();
 
-            // Get MediaProjection token — reuse static if already valid (avoids dialog).
-            if (sSharedProjection != null) {
-                mediaProjection = sSharedProjection;
-                diagProjection = "reused-sSharedProjection";
-                Log.i(TAG, diagProjection);
-            } else {
-                MediaProjectionManager mpm = (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
-                // NOTE: Activity.RESULT_OK == -1 on Android, so the old check
-                // `projCode <= 0` was ALWAYS true and always skipped MediaProjection!
-                // Correct check: projCode != Activity.RESULT_OK
-                if (projData == null || projCode != Activity.RESULT_OK) {
-                    diagProjection = "SKIP: projData=" + (projData != null ? "OK" : "NULL")
-                            + " projCode=" + projCode + " (RESULT_OK=" + Activity.RESULT_OK + ")";
-                    Log.w(TAG, diagProjection);
-                } else if (mpm == null) {
-                    diagProjection = "SKIP: MediaProjectionManager is null";
-                    Log.w(TAG, diagProjection);
+            if (USE_MEDIA_PROJECTION) {
+                // Get MediaProjection token — reuse static if already valid (avoids dialog).
+                if (sSharedProjection != null) {
+                    mediaProjection = sSharedProjection;
+                    diagProjection = "reused-sSharedProjection";
+                    Log.i(TAG, diagProjection);
                 } else {
-                    try {
-                        mediaProjection = mpm.getMediaProjection(projCode, projData);
-                        if (mediaProjection != null) {
-                            sSharedProjection = mediaProjection;
-                            // Register callback so we know when the OS revokes the token.
-                            mediaProjection.registerCallback(new MediaProjection.Callback() {
-                                @Override
-                                public void onStop() {
-                                    Log.w(TAG, "MediaProjection.onStop() — token revoked by OS");
-                                    sSharedProjection = null;
-                                    mediaProjection   = null;
-                                    LocalBroadcastManager.getInstance(WsAgentService.this)
-                                            .sendBroadcast(new Intent(ACTION_NEED_REAUTH));
-                                }
-                            }, mainHandler);
+                    MediaProjectionManager mpm = (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
+                    if (projData == null || projCode != Activity.RESULT_OK) {
+                        diagProjection = "SKIP: projData=" + (projData != null ? "OK" : "NULL")
+                                + " projCode=" + projCode + " (RESULT_OK=" + Activity.RESULT_OK + ")";
+                        Log.w(TAG, diagProjection);
+                    } else if (mpm == null) {
+                        diagProjection = "SKIP: MediaProjectionManager is null";
+                        Log.w(TAG, diagProjection);
+                    } else {
+                        try {
+                            mediaProjection = mpm.getMediaProjection(projCode, projData);
+                            if (mediaProjection != null) {
+                                sSharedProjection = mediaProjection;
+                                mediaProjection.registerCallback(new MediaProjection.Callback() {
+                                    @Override
+                                    public void onStop() {
+                                        Log.w(TAG, "MediaProjection.onStop() — token revoked by OS");
+                                        sSharedProjection = null;
+                                        mediaProjection   = null;
+                                        LocalBroadcastManager.getInstance(WsAgentService.this)
+                                                .sendBroadcast(new Intent(ACTION_NEED_REAUTH));
+                                    }
+                                }, mainHandler);
+                            }
+                            diagProjection = "getMediaProjection=" + (mediaProjection != null ? "OK" : "returned-null");
+                            Log.i(TAG, diagProjection);
+                        } catch (Exception e) {
+                            diagProjection = "getMediaProjection EXCEPTION: " + e.getMessage();
+                            Log.e(TAG, diagProjection, e);
                         }
-                        diagProjection = "getMediaProjection=" + (mediaProjection != null ? "OK" : "returned-null");
-                        Log.i(TAG, diagProjection);
-                    } catch (Exception e) {
-                        diagProjection = "getMediaProjection EXCEPTION: " + e.getMessage();
-                        Log.e(TAG, diagProjection, e);
                     }
                 }
+            } else {
+                diagProjection = "OFF: USE_MEDIA_PROJECTION=false (external video e.g. scrcpy)";
+                Log.i(TAG, diagProjection);
             }
 
             if (wsUrl != null && !wsUrl.isEmpty()) {
@@ -288,7 +292,7 @@ public class WsAgentService extends android.app.Service {
             }
         }
 
-        return START_NOT_STICKY;
+        return START_STICKY;  // Ensure OS restarts service if killed
     }
 
     @Override
@@ -328,14 +332,42 @@ public class WsAgentService extends android.app.Service {
         Notification notif = new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.ic_menu_share)
                 .setContentTitle("Device Farm Agent")
-                .setContentText("Streaming screen to server…")
+                .setContentText(USE_MEDIA_PROJECTION
+                        ? "Streaming screen to server…"
+                        : "Connected to server (screen: external / scrcpy)…")
                 .setOngoing(true)
                 .build();
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) { // API 29+
-            startForeground(NOTIF_ID, notif,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            int fgsType = USE_MEDIA_PROJECTION
+                    ? ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                    : ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
+            startForeground(NOTIF_ID, notif, fgsType);
         } else {
             startForeground(NOTIF_ID, notif);
+        }
+    }
+
+    /**
+     * Request battery optimization exemption so Doze mode doesn't kill our WS connection.
+     * Shows system dialog on first call; no-op if already exempted.
+     */
+    private void requestBatteryOptimizationExemption() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
+            if (pm != null && !pm.isIgnoringBatteryOptimizations(getPackageName())) {
+                try {
+                    android.content.Intent intent = new android.content.Intent(
+                            android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                    intent.setData(android.net.Uri.parse("package:" + getPackageName()));
+                    intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(intent);
+                    Log.i(TAG, "Requested battery optimization exemption");
+                } catch (Exception e) {
+                    Log.w(TAG, "Could not request battery optimization exemption: " + e.getMessage());
+                }
+            } else {
+                Log.i(TAG, "Already exempt from battery optimizations");
+            }
         }
     }
 
@@ -386,27 +418,29 @@ public class WsAgentService extends android.app.Service {
                 sendHello();
                 sendStatus();
                 sendLog("SDK=" + Build.VERSION.SDK_INT
-                        + " mediaProjection=" + (mediaProjection != null ? "OK" : "NULL")
+                        + " mediaProjection=" + (USE_MEDIA_PROJECTION
+                                ? (mediaProjection != null ? "OK" : "NULL") : "disabled")
                         + " diag=" + diagProjection
                         + " capturing=" + capturing.get()
                         + " touch=" + (TouchAccessibilityService.isAvailable() ? "a11y"
                                 : inputManager != null ? "inputMgr" : "NONE"));
-                if (mediaProjection != null && !capturing.get()) {
-                    sendLog("startCapture() called");
-                    startCapture();
-                } else if (mediaProjection == null) {
-                    sendLog("ERROR: mediaProjection is null — requesting re-auth from IdentityActivity");
-                    // Ask IdentityActivity to re-request the MediaProjection permission
-                    LocalBroadcastManager.getInstance(WsAgentService.this)
-                            .sendBroadcast(new Intent(ACTION_NEED_REAUTH));
+                if (USE_MEDIA_PROJECTION) {
+                    if (mediaProjection != null && !capturing.get()) {
+                        sendLog("startCapture() called");
+                        startCapture();
+                    } else if (mediaProjection == null) {
+                        sendLog("ERROR: mediaProjection is null — requesting re-auth from IdentityActivity");
+                        LocalBroadcastManager.getInstance(WsAgentService.this)
+                                .sendBroadcast(new Intent(ACTION_NEED_REAUTH));
+                    }
+                } else {
+                    sendLog("MJPEG capture skipped — use scrcpy (or similar) for display");
                 }
-                // Auto-enable accessibility if not yet available
-                // Disabled: we now rely on minitouch / InputManager only and do
-                // not auto-toggle the TouchAccessibilityService anymore.
-                // if (!TouchAccessibilityService.isAvailable()) {
-                //     sendLog("a11y not available — attempting auto-enable…");
-                //     mainHandler.post(() -> autoEnableAccessibility());
-                // }
+                // Auto-enable accessibility for hierarchy dump + gesture injection
+                if (!TouchAccessibilityService.isAvailable()) {
+                    sendLog("a11y not available — attempting auto-enable…");
+                    mainHandler.post(() -> autoEnableAccessibility());
+                }
             }
 
             @Override
@@ -451,11 +485,13 @@ public class WsAgentService extends android.app.Service {
             JSONObject m = new JSONObject();
             m.put("type", "hello");
             m.put("serial", serial);
-            // STFService: u2, stfservice, mjpeg, minitouch (in-app MinitouchAgent = no ADB)
+            // STFService: u2, stfservice, optional mjpeg, minitouch
             JSONArray caps = new JSONArray();
             caps.put("u2");
             caps.put("stfservice");
-            caps.put("mjpeg");
+            if (USE_MEDIA_PROJECTION) {
+                caps.put("mjpeg");
+            }
             caps.put("minitouch");
             m.put("capabilities", caps);
             // Server needs touch_mode in hello so it can create MinitouchWsClient before tunnels_ready
@@ -498,6 +534,10 @@ public class WsAgentService extends android.app.Service {
     // ──────────────────────────────────────────────────────────────────────
 
     private void startCapture() {
+        if (!USE_MEDIA_PROJECTION) {
+            Log.d(TAG, "startCapture: skipped (USE_MEDIA_PROJECTION=false)");
+            return;
+        }
         if (mediaProjection == null) {
             Log.w(TAG, "startCapture: no MediaProjection token");
             return;
@@ -680,12 +720,13 @@ public class WsAgentService extends android.app.Service {
         sSharedImageHandler = null;
         imageHandlerThread = null;
         imageHandler = null;
-        // Stop MediaProjection
-        if (mediaProjection != null) {
-            mediaProjection.stop();
-            mediaProjection = null;
+        if (USE_MEDIA_PROJECTION) {
+            if (mediaProjection != null) {
+                mediaProjection.stop();
+                mediaProjection = null;
+            }
+            sSharedProjection = null;
         }
-        sSharedProjection = null;  // force re-request on next service start
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -715,6 +756,14 @@ public class WsAgentService extends android.app.Service {
                         final JSONObject ports = tunnels;
                         executor.submit(() -> setupServiceTunnels(ports));
                     }
+                    break;
+                case "ping":
+                    // Server keepalive ping — reply with pong so server detects dead connections
+                    try {
+                        JSONObject pong = new JSONObject();
+                        pong.put("type", "pong");
+                        wsManager.send(pong.toString());
+                    } catch (Exception ignored) {}
                     break;
                 case "tunnel_data":
                     // Server → Agent: forward data đến device service
@@ -765,6 +814,51 @@ public class WsAgentService extends android.app.Service {
                     }
                     break;
                 }
+                case "double_tap": {
+                    final int dtx = msg.optInt("x", 0);
+                    final int dty = msg.optInt("y", 0);
+                    if (TouchAccessibilityService.isAvailable()) {
+                        mainHandler.post(() -> {
+                            TouchAccessibilityService svc = TouchAccessibilityService.instance;
+                            if (svc != null) svc.doDoubleTap(dtx, dty);
+                        });
+                    } else if (Build.VERSION.SDK_INT < 34 && inputManager != null) {
+                        // Fallback: two injected taps 100ms apart
+                        executor.submit(() -> {
+                            injectTouchEvent(dtx, dty);
+                            try { Thread.sleep(100); } catch (InterruptedException ignored) {}
+                            injectTouchEvent(dtx, dty);
+                        });
+                    }
+                    break;
+                }
+                case "pinch": {
+                    final int pcx = msg.optInt("cx", 0);
+                    final int pcy = msg.optInt("cy", 0);
+                    final float pscale = (float) msg.optDouble("scale", 0.5);
+                    final int pdur = Math.max(msg.optInt("ms", 400), 100);
+                    if (TouchAccessibilityService.isAvailable()) {
+                        mainHandler.post(() -> {
+                            TouchAccessibilityService svc = TouchAccessibilityService.instance;
+                            if (svc != null) svc.doPinch(pcx, pcy, pscale, pdur);
+                        });
+                    }
+                    break;
+                }
+                case "drag": {
+                    final int drx1 = msg.optInt("x1", 0), dry1 = msg.optInt("y1", 0);
+                    final int drx2 = msg.optInt("x2", 0), dry2 = msg.optInt("y2", 0);
+                    final int drdur = Math.max(msg.optInt("ms", 1000), 500);
+                    if (TouchAccessibilityService.isAvailable()) {
+                        mainHandler.post(() -> {
+                            TouchAccessibilityService svc = TouchAccessibilityService.instance;
+                            if (svc != null) svc.doDrag(drx1, dry1, drx2, dry2, drdur);
+                        });
+                    } else if (Build.VERSION.SDK_INT < 34 && inputManager != null) {
+                        executor.submit(() -> injectSwipeEvent(drx1, dry1, drx2, dry2, drdur));
+                    }
+                    break;
+                }
                 case "key":
                     executor.submit(() -> injectKey(msg.optString("key", "home")));
                     break;
@@ -779,6 +873,66 @@ public class WsAgentService extends android.app.Service {
                 case "type":
                     executor.submit(() -> injectText(msg.optString("text", "")));
                     break;
+                case "paste": {
+                    final String pasteText = msg.optString("text", "");
+                    executor.submit(() -> {
+                        boolean done = false;
+                        // Step 1: ACTION_SET_TEXT via accessibility — most reliable, no clipboard needed
+                        if (TouchAccessibilityService.isAvailable()) {
+                            try {
+                                android.view.accessibility.AccessibilityNodeInfo node =
+                                    TouchAccessibilityService.instance.getRootInActiveWindow()
+                                        .findFocus(android.view.accessibility.AccessibilityNodeInfo.FOCUS_INPUT);
+                                if (node != null && node.isEditable()) {
+                                    android.os.Bundle args = new android.os.Bundle();
+                                    args.putCharSequence(
+                                        android.view.accessibility.AccessibilityNodeInfo
+                                            .ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, pasteText);
+                                    done = node.performAction(
+                                        android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+                                    sendLog("paste: ACTION_SET_TEXT: " + done);
+                                } else {
+                                    sendLog("paste: a11y no focused editable node");
+                                }
+                            } catch (Exception e) {
+                                sendLog("paste: ACTION_SET_TEXT error: " + e.getMessage());
+                            }
+                        } else {
+                            sendLog("paste: a11y not available");
+                        }
+                        if (done) return;
+                        // Step 2: set clipboard then ACTION_PASTE via a11y
+                        try {
+                            android.content.ClipboardManager cm =
+                                (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                            cm.setPrimaryClip(android.content.ClipData.newPlainText("", pasteText));
+                            sendLog("paste: clipboard set (" + pasteText.length() + " chars)");
+                        } catch (Exception e) {
+                            sendLog("paste: clipboard error: " + e.getMessage());
+                        }
+                        try { Thread.sleep(150); } catch (InterruptedException ignored) {}
+                        if (TouchAccessibilityService.isAvailable()) {
+                            try {
+                                android.view.accessibility.AccessibilityNodeInfo node =
+                                    TouchAccessibilityService.instance.getRootInActiveWindow()
+                                        .findFocus(android.view.accessibility.AccessibilityNodeInfo.FOCUS_INPUT);
+                                if (node != null) {
+                                    done = node.performAction(
+                                        android.view.accessibility.AccessibilityNodeInfo.ACTION_PASTE);
+                                    sendLog("paste: ACTION_PASTE: " + done);
+                                }
+                            } catch (Exception e) {
+                                sendLog("paste: ACTION_PASTE error: " + e.getMessage());
+                            }
+                        }
+                        // Step 3: fallback — KEYCODE_PASTE
+                        if (!done) {
+                            runShell("input keyevent 279");
+                            sendLog("paste: keyevent 279 fallback");
+                        }
+                    });
+                    break;
+                }
                 case "shell":
                     executor.submit(() -> runShell(msg.optString("cmd", "")));
                     break;
@@ -792,10 +946,29 @@ public class WsAgentService extends android.app.Service {
                         try {
                             Intent i = getPackageManager().getLaunchIntentForPackage(pkg);
                             if (i == null) {
+                                // Fallback: query all LAUNCHER activities for the package.
+                                // Some apps (e.g. Facebook) do not expose a standard launch
+                                // intent via getLaunchIntentForPackage on certain OEMs.
+                                Intent query = new Intent(Intent.ACTION_MAIN);
+                                query.addCategory(Intent.CATEGORY_LAUNCHER);
+                                query.setPackage(pkg);
+                                List<ResolveInfo> resolved = getPackageManager()
+                                        .queryIntentActivities(query, 0);
+                                if (!resolved.isEmpty()) {
+                                    ActivityInfo ai = resolved.get(0).activityInfo;
+                                    i = new Intent(Intent.ACTION_MAIN);
+                                    i.addCategory(Intent.CATEGORY_LAUNCHER);
+                                    i.setComponent(new ComponentName(ai.packageName, ai.name));
+                                    sendLog("launch_app: resolved via queryIntentActivities → " + ai.name);
+                                }
+                            }
+                            if (i == null) {
                                 sendLog("launch_app: no launch intent for " + pkg);
                                 return;
                             }
-                            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                                    | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
+                                    | Intent.FLAG_ACTIVITY_CLEAR_TASK);
                             startActivity(i);
                             sendLog("launch_app: started " + pkg);
                         } catch (Exception e) {
@@ -900,6 +1073,25 @@ public class WsAgentService extends android.app.Service {
                         capturing.set(false);
                         executor.submit(this::startCapture);
                     }
+                    break;
+
+                case "dump_hierarchy":
+                    // Fast UI hierarchy dump via AccessibilityService (~100-500ms)
+                    executor.submit(() -> {
+                        try {
+                            String xml = TouchAccessibilityService.dumpHierarchyIfAvailable();
+                            JSONObject resp = new JSONObject();
+                            resp.put("type", "hierarchy");
+                            if (xml != null) {
+                                resp.put("xml", xml);
+                            } else {
+                                resp.put("error", "accessibility_not_available");
+                            }
+                            if (wsManager != null) wsManager.send(resp.toString());
+                        } catch (Exception e) {
+                            Log.w(TAG, "dump_hierarchy error: " + e);
+                        }
+                    });
                     break;
             }
         } catch (Exception e) {
@@ -1115,6 +1307,31 @@ public class WsAgentService extends android.app.Service {
             sendLog("✓ uiautomator2 running on :9008");
             return;
         } catch (Exception ignored) {}
+
+        // u2 not running — try to start it via am instrument (needs shell context,
+        // may fail from app context but worth trying)
+        sendLog("uiautomator2 NOT running — attempting restart...");
+        try {
+            ProcessBuilder pb = new ProcessBuilder("sh", "-c",
+                "am instrument -w -e debug false " +
+                "com.github.uiautomator.test/androidx.test.runner.AndroidJUnitRunner " +
+                ">/dev/null 2>&1 &");
+            pb.redirectErrorStream(true);
+            pb.start();
+            // Wait briefly for it to start
+            Thread.sleep(3000);
+            // Re-check
+            try (java.net.Socket s2 = new java.net.Socket()) {
+                s2.connect(new java.net.InetSocketAddress("127.0.0.1", 9008), 400);
+                sendLog("✓ uiautomator2 restarted successfully on :9008");
+                return;
+            } catch (Exception e2) {
+                sendLog("uiautomator2 restart failed — still not on :9008");
+            }
+        } catch (Exception e) {
+            sendLog("uiautomator2 restart error: " + e.getMessage());
+        }
+
         sendLog("uiautomator2 NOT running on :9008. Run agent-boot first:\n"
               + "  cd agent-boot && uv run main.py --serial <device>");
     }
@@ -1152,7 +1369,21 @@ public class WsAgentService extends android.app.Service {
             android.content.ContentResolver cr = getContentResolver();
             String current = Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
             if (current != null && current.contains(service)) {
-                sendLog("a11y service already listed in secure settings — waiting for bind");
+                if (TouchAccessibilityService.isAvailable()) {
+                    sendLog("✓ a11y service already bound and available");
+                    return;
+                }
+                // Listed but not bound — force rebind by toggling off/on
+                sendLog("a11y listed but not bound — force rebind...");
+                try {
+                    String without = current.replace(service, "").replace("::", ":").replaceAll("^:|:$", "");
+                    Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, without);
+                    Thread.sleep(500);
+                    Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, current);
+                    sendLog("a11y force-rebind toggled");
+                } catch (Exception rebindErr) {
+                    sendLog("a11y rebind toggle failed: " + rebindErr.getMessage());
+                }
                 return;
             }
             String newList = (current == null || current.isEmpty()) ? service : current + ":" + service;
@@ -1178,17 +1409,17 @@ public class WsAgentService extends android.app.Service {
             sendLog("type via a11y: " + text.length() + " chars");
             return;
         }
-        // Fallback: paste via clipboard
-        mainHandler.post(() -> {
-            try {
-                android.content.ClipboardManager cm =
-                        (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-                cm.setPrimaryClip(android.content.ClipData.newPlainText("", text));
-                sendLog("type: text copied to clipboard (a11y not available — paste manually)");
-            } catch (Exception e) {
-                sendLog("type error: " + e.getMessage());
-            }
-        });
+        // Fallback: set clipboard then send KEYCODE_PASTE
+        try {
+            android.content.ClipboardManager cm =
+                    (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("", text));
+            sendLog("type: clipboard set, sending paste keyevent");
+        } catch (Exception e) {
+            sendLog("type error: " + e.getMessage());
+        }
+        try { Thread.sleep(150); } catch (InterruptedException ignored) {}
+        runShell("input keyevent 279");
     }
 
     /** Run a shell command (am, pm, input, etc.). */
@@ -1263,7 +1494,20 @@ public class WsAgentService extends android.app.Service {
                 return;
             }
         }
-        // other keys (enter, menu, power, volume...) or a11y not available: inject via InputManager
+        // enter: trigger IME action (Search/Go/Done/Next) on focused editable node (API 30+).
+        // This is more reliable than KEYCODE_ENTER injection — handles imeOptions correctly.
+        if ("enter".equals(k) && TouchAccessibilityService.isAvailable()
+                && Build.VERSION.SDK_INT >= 30) {
+            AccessibilityNodeInfo focused = TouchAccessibilityService.instance
+                    .findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
+            if (focused != null) {
+                focused.performAction(AccessibilityNodeInfo.ACTION_IME_ENTER);
+                focused.recycle();
+                return;
+            }
+        }
+
+        // other keys (enter fallback, menu, power, volume...) or a11y not available: inject via InputManager
         if (inputManager == null)
             return;
         int keycode = resolveKeycode(key);

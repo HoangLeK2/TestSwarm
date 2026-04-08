@@ -47,6 +47,7 @@ class Task:
     created_at: datetime = field(default_factory=datetime.utcnow)
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
+    cancel_event: threading.Event = field(default_factory=threading.Event)
 
     def __lt__(self, other: "Task") -> bool:
         return (self.priority, self.created_at) < (other.priority, other.created_at)
@@ -184,13 +185,32 @@ class TaskQueue:
         self.put(task)
 
     def cancel(self, task_id: str) -> bool:
-        """Mark task as CANCELLED. It will be skipped when next popped. O(1)."""
+        """Cancel a task (PENDING or RUNNING). Sets cancel_event for graceful abort."""
         with self._lock:
             task = self._all.get(task_id)
-            if task and task.status == TaskStatus.PENDING:
+            if not task:
+                return False
+            if task.status == TaskStatus.PENDING:
                 task.status = TaskStatus.CANCELLED
+                task.cancel_event.set()
+                return True
+            if task.status == TaskStatus.RUNNING:
+                # Signal running task to stop at next checkpoint
+                task.cancel_event.set()
                 return True
         return False
+
+    def cancel_by_name_prefix(self, prefix: str) -> int:
+        """Cancel all tasks whose name starts with prefix. Returns count cancelled."""
+        count = 0
+        with self._lock:
+            for task in self._all.values():
+                if task.name.startswith(prefix) and task.status in (TaskStatus.PENDING, TaskStatus.RUNNING):
+                    task.cancel_event.set()
+                    if task.status == TaskStatus.PENDING:
+                        task.status = TaskStatus.CANCELLED
+                    count += 1
+        return count
 
     def get_task(self, task_id: str) -> Optional[Task]:
         with self._lock:

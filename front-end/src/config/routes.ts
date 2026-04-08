@@ -20,14 +20,35 @@ export const ROUTES = {
     CONTROL_RECORD: '/dashboard/device-farm/control',
     /** Điều khiển thiết bị với serial đã chọn (để vào đúng màn hình rồi lấy XML). */
     CONTROL_RECORD_WITH_SERIAL: (serial: string) =>
-      `/dashboard/device-farm/control?serial=${encodeURIComponent(serial)}`
+      `/dashboard/device-farm/control?serial=${encodeURIComponent(serial)}`,
+    /** Mở trang điều khiển để chỉnh sửa một scenario cụ thể của campaign. */
+    CONTROL_RECORD_EDIT_SCENARIO: (campaignId: string, scenarioId: string, serial?: string) => {
+      const params = new URLSearchParams({ campaignId, scenarioId });
+      if (serial) params.set('serial', serial);
+      return `/dashboard/device-farm/control?${params.toString()}`;
+    }
   },
   CAMPAIGNS: {
     ROOT: '/dashboard/campaigns',
     DETAIL: (id: string) => `/dashboard/campaigns/${id}`
   },
-  CRAWL_JOBS: {
-    ROOT: '/dashboard/crawl-jobs'
+  DEVICE_GROUPS: {
+    ROOT: '/dashboard/device-groups'
+  },
+  ACCOUNTS: {
+    ROOT: '/dashboard/accounts'
+  },
+  SCENARIO_TEMPLATES: {
+    ROOT: '/dashboard/scenario-templates',
+    FLOW: (id: string) => `/scenario-flow/${id}`,
+  },
+  SCHEDULES: {
+    ROOT: '/dashboard/schedules'
+  },
+  CONTENT: {
+    ROOT: '/dashboard/content',
+    /** Jump to content page pre-filtered by campaign */
+    BY_CAMPAIGN: (campaignId: string) => `/dashboard/content?campaign_id=${encodeURIComponent(campaignId)}`,
   },
   DASHBOARD: {
     ROOT: '/dashboard',

@@ -14,12 +14,16 @@ async def create_campaign(
     user_id: str,
     description: str = "",
     scenario: dict | None = None,
+    variables: dict | None = None,
+    target_group_id: str | None = None,
 ) -> Campaign:
     campaign = Campaign(
         name=name,
         user_id=user_id,
         description=description,
         scenario=scenario or {},
+        variables=variables or {},
+        target_group_id=target_group_id,
     )
     db.add(campaign)
     await db.flush()
@@ -82,6 +86,7 @@ async def create_scenario(
     name: str = "Scenario",
     instructions: str = "",
     steps: list | None = None,
+    variables: dict | None = None,
     order: int = 0,
 ) -> Scenario:
     s = Scenario(
@@ -89,6 +94,7 @@ async def create_scenario(
         name=name,
         instructions=instructions,
         steps=steps or [],
+        variables=variables or {},
         order=order,
     )
     db.add(s)

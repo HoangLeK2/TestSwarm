@@ -4,17 +4,22 @@ db/database.py — Async SQLAlchemy engine + session factory.
 Usage in FastAPI:
     async with get_db() as db:
         result = await db.execute(...)
+
+Usage in Temporal activities (separate thread/loop):
+    async with activity_session() as db:
+        result = await db.execute(...)
 """
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy import text
+from sqlalchemy.pool import NullPool
 from sqlalchemy.orm import DeclarativeBase
 
 from core.config import load_config
@@ -42,6 +47,7 @@ def _build_url() -> str:
 
 DATABASE_URL = _build_url()
 
+# Main engine — pooled, used by FastAPI (single event loop).
 engine = create_async_engine(
     DATABASE_URL,
     echo=False,
@@ -55,6 +61,32 @@ AsyncSessionLocal = async_sessionmaker(
     class_=AsyncSession,
     expire_on_commit=False,
 )
+
+
+@asynccontextmanager
+async def activity_session() -> AsyncGenerator[AsyncSession, None]:
+    """
+    Session factory for Temporal activities (or any code running in a
+    separate thread/event loop from the main FastAPI process).
+
+    Uses NullPool so each connection is created fresh in the caller's event
+    loop — avoids the "Future attached to a different loop" error that occurs
+    when the pooled engine's connections are borrowed across loop boundaries.
+    """
+    act_engine = create_async_engine(DATABASE_URL, echo=False, poolclass=NullPool)
+    act_session_factory = async_sessionmaker(
+        act_engine, class_=AsyncSession, expire_on_commit=False
+    )
+    try:
+        async with act_session_factory() as session:
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+    finally:
+        await act_engine.dispose()
 
 
 class Base(DeclarativeBase):
@@ -73,38 +105,15 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def init_db() -> None:
-    """Create all tables in Postgres on startup (idempotent — safe to call every run)."""
+    """Create all tables then run incremental migrations on startup."""
     from db import models  # noqa: F401 — ensure models are registered
+    from db.migrations import run_migrations
+
     async with engine.begin() as conn:
         await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn))
-        # Lightweight compatibility migration for existing databases that
-        # already have crawl_jobs without the new campaign_id column.
-        await conn.execute(
-            text(
-                """
-                ALTER TABLE crawl_jobs
-                ADD COLUMN IF NOT EXISTS campaign_id VARCHAR(36) NULL
-                """
-            )
-        )
-        await conn.execute(
-            text(
-                """
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1
-                        FROM pg_constraint
-                        WHERE conname = 'fk_crawl_jobs_campaign_id'
-                    ) THEN
-                        ALTER TABLE crawl_jobs
-                        ADD CONSTRAINT fk_crawl_jobs_campaign_id
-                        FOREIGN KEY (campaign_id)
-                        REFERENCES campaigns(id)
-                        ON DELETE SET NULL;
-                    END IF;
-                END
-                $$;
-                """
-            )
-        )
+        await run_migrations(conn)
+
+    # Seed builtin scenario templates (idempotent)
+    async with AsyncSessionLocal() as seed_db:
+        from db.seeds.scenario_templates import seed_builtin_templates
+        await seed_builtin_templates(seed_db)

@@ -12,19 +12,17 @@
     <uses-permission android:name="android.permission.BLUETOOTH"/>
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"/>
+    <!-- MediaProjection FGS — chỉ cần khi WsAgentService.USE_MEDIA_PROJECTION = true -->
+    <!-- <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"/> -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
     <uses-permission android:name="android.permission.CAMERA"/>
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
-    
-  <queries>
-    <package android:name="com.github.uiautomator" />
-    <package android:name="com.github.uiautomator.test" />
-    <intent>
-      <action android:name="android.intent.action.VIEW" />
-      <data android:scheme="http" />
-    </intent>
-  </queries>
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+    <!-- Needed to query/launch ANY installed app (e.g. com.facebook.katana) on Android 11+.
+         Without this, getLaunchIntentForPackage and queryIntentActivities return null
+         for apps not explicitly listed in <queries>. -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
 
     <!-- persistent removed: triggers Play Protect; only system apps use it and it is ignored for non-system -->
     <application android:allowBackup="true"
@@ -36,13 +34,11 @@
         <meta-data android:name="android.max_aspect"
             android:value="3.0"/>
 
-        <!-- WebSocket agent + MediaProjection screen capture (foreground, Android 14+) -->
+        <!-- WsAgent: WebSocket agent; MJPEG qua MediaProjection hoặc video ngoài (scrcpy) — xem USE_MEDIA_PROJECTION -->
         <service android:name=".WsAgentService"
             android:exported="false"
-            android:foregroundServiceType="mediaProjection" />
-
-        <!-- Touch injection via AccessibilityService (no INJECT_EVENTS required) -->
-        <!-- <service android:name=".TouchAccessibilityService"
+            android:foregroundServiceType="dataSync" />
+        <service android:name=".TouchAccessibilityService"
             android:exported="false"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
@@ -51,7 +47,7 @@
             <meta-data
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config"/>
-        </service> -->
+        </service>
 
         <service android:name=".Service"
             android:exported="true">

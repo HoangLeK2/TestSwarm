@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, List
+import json
+import queue
+import threading
+from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import APIRouter
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from api.schemas.device_control import ScenarioPreviewRequest
 from common.session_lock import SessionLockStore
@@ -17,7 +20,9 @@ from runtime.core import DeviceManager
 
 
 def run_scenario_on_device(
-    manager: DeviceManager, serial: str, steps: List[Dict[str, Any]]
+    manager: DeviceManager, serial: str, steps: List[Dict[str, Any]],
+    on_step_done: Optional[Callable[[Dict[str, Any]], None]] = None,
+    variables: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     from tasks.scenario_task import run_scenario_task
 
@@ -26,8 +31,8 @@ def run_scenario_on_device(
         return {"error": f"Device {serial} not found"}
     if not steps:
         return {"error": "steps must be a non-empty array"}
-    scenario: Dict[str, Any] = {"instructions": "", "steps": steps}
-    return run_scenario_task(device, scenario)
+    scenario: Dict[str, Any] = {"instructions": "", "steps": steps, "variables": variables or {}}
+    return run_scenario_task(device, scenario, on_step_done=on_step_done)
 
 
 async def _execute_scenario_body(
@@ -39,7 +44,9 @@ async def _execute_scenario_body(
             status_code=400,
         )
     loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(None, run_scenario_on_device, manager, serial, body.steps)
+    import functools
+    fn = functools.partial(run_scenario_on_device, manager, serial, body.steps, None, body.variables)
+    result = await loop.run_in_executor(None, fn)
     if "error" in result:
         return JSONResponse(result, status_code=400)
     return result
@@ -58,6 +65,60 @@ def build_scenarios_router(
         if not device:
             return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
         return await _execute_scenario_body(manager, serial, body)
+
+    @router.post("/devices/{serial}/scenario/preview-stream")
+    async def api_scenario_preview_stream(serial: str, body: ScenarioPreviewRequest):
+        """
+        SSE endpoint: streams step results as they complete.
+        Each event is a JSON object with the step result.
+        Final event has type "done" with full summary.
+        """
+        device = manager.get_device(serial)
+        if not device:
+            return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
+        if not body.steps:
+            return JSONResponse({"error": "steps must be a non-empty array"}, status_code=400)
+
+        # Queue for thread→async communication
+        q: queue.Queue[Dict[str, Any] | None] = queue.Queue()
+
+        def on_step_done(result: Dict[str, Any]) -> None:
+            q.put(result)
+
+        def run_in_thread() -> None:
+            try:
+                final = run_scenario_on_device(manager, serial, body.steps, on_step_done=on_step_done, variables=body.variables)
+                q.put({"_event": "done", **final})
+            except Exception as exc:
+                q.put({"_event": "error", "error": str(exc)})
+            finally:
+                q.put(None)  # sentinel
+
+        # Start execution in background thread
+        threading.Thread(target=run_in_thread, daemon=True).start()
+
+        async def event_generator():
+            total_steps = len(body.steps)
+            yield f"data: {json.dumps({'event': 'start', 'total_steps': total_steps})}\n\n"
+            while True:
+                # Poll queue with small sleep to avoid blocking event loop
+                try:
+                    item = await asyncio.get_event_loop().run_in_executor(None, q.get, True, 0.1)
+                except queue.Empty:
+                    continue
+                if item is None:
+                    break
+                if "_event" in item:
+                    evt_type = item.pop("_event")
+                    yield f"data: {json.dumps({'event': evt_type, **item})}\n\n"
+                else:
+                    yield f"data: {json.dumps({'event': 'step_done', **item})}\n\n"
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @router.post("/devices/{serial}/scenario/run")
     async def api_scenario_run(serial: str, body: ScenarioPreviewRequest):
@@ -82,9 +143,9 @@ def build_scenarios_router(
                 status_code=400,
             )
         loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            None, run_scenario_on_device, manager, device_id, body.steps
-        )
+        import functools
+        fn = functools.partial(run_scenario_on_device, manager, device_id, body.steps, None, body.variables)
+        result = await loop.run_in_executor(None, fn)
         if "error" in result:
             return JSONResponse(result, status_code=400)
         return {"session_id": session_id, "device_id": device_id, **result}

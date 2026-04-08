@@ -9,10 +9,10 @@ import android.util.Log;
 /**
  * BootReceiver — auto-starts WsAgentService after device boot.
  *
- * If a WebSocket URL was saved from a previous session, the service is restarted
- * automatically. MediaProjection cannot be re-acquired silently after boot, so the
- * service starts in "no-projection" mode and requests re-auth via IdentityActivity
- * when the screen is next unlocked.
+ * If a WebSocket URL was saved, restarts {@link WsAgentService}. When
+ * {@link WsAgentService#USE_MEDIA_PROJECTION} is true, projection cannot be obtained
+ * silently after boot — opens {@link IdentityActivity} for re-auth. When false, starts
+ * the service directly (external video e.g. scrcpy).
  */
 public class BootReceiver extends BroadcastReceiver {
 
@@ -36,10 +36,14 @@ public class BootReceiver extends BroadcastReceiver {
             return;
         }
 
-        Log.i(TAG, "Boot complete — launching IdentityActivity for re-auth (savedUrl present)");
+        if (!WsAgentService.USE_MEDIA_PROJECTION) {
+            Log.i(TAG, "Boot complete — starting WsAgentService (no MediaProjection)");
+            WsAgentService.start(context.getApplicationContext(), savedUrl, 0, null);
+            return;
+        }
 
-        // Launch IdentityActivity so it can re-request MediaProjection permission
-        // and restart the service. We cannot obtain MediaProjection silently on boot.
+        Log.i(TAG, "Boot complete — launching IdentityActivity for MediaProjection re-auth");
+
         Intent ui = new IdentityActivity.IntentBuilder().build(context);
         ui.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         context.startActivity(ui);

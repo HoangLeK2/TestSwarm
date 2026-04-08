@@ -1,10 +1,11 @@
 'use client';
 
+import Link from 'next/link';
 import { ChevronRight, FileText, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
-import { ScenarioDialog } from '../scenario-dialog';
+import { ROUTES } from '@/config/routes';
 import type { CampaignOut, ScenarioOut } from '../../types';
 import { useDeleteScenario } from '../../hooks/use-campaigns';
 
@@ -45,11 +46,11 @@ export function ScenarioRow({
         <div className='text-[11px] text-muted-foreground'>{t('stepsCount', { count: scenario.steps.length })}</div>
       </div>
 
-      <ScenarioDialog campaign={campaign} scenario={scenario}>
-        <Button size='icon' variant='ghost' className='size-7 shrink-0' title={t('editTitle')}>
+      <Button size='icon' variant='ghost' className='size-7 shrink-0' title={t('editTitle')} asChild>
+        <Link href={ROUTES.DEVICES.CONTROL_RECORD_EDIT_SCENARIO(campaign.id, scenario.id)}>
           <ChevronRight size={14} />
-        </Button>
-      </ScenarioDialog>
+        </Link>
+      </Button>
 
       <Button
         size='icon'

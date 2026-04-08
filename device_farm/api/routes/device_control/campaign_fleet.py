@@ -1,17 +1,34 @@
-"""Campaign run (DB) and fleet-wide scenario dispatch."""
+"""Campaign run via Temporal workflows + fleet-wide scenario dispatch."""
 
 from __future__ import annotations
 
-from typing import Optional
+import logging
+import re
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Body
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
-from api.schemas.device_control import FleetRunRequest
 from core.config import Config
 from runtime.core import DeviceManager, TaskQueue
-from services.campaign_dispatch import enqueue_campaign_run
-from services.fleet_dispatch import enqueue_fleet_scenario, fleet_run_status
+from services.campaign_dispatch import enqueue_campaign_run_temporal
+from temporal.worker import get_temporal_client
+
+
+class CampaignRunBody(BaseModel):
+   
+    filter_state: str = "READY"          # e.g. READY, BUSY
+    filter_model: str | None = None      # substring match on device.model
+    filter_tags: str | None = None       # comma-separated, AND logic
+    max_devices: int | None = None       # cap number of devices
+
+log = logging.getLogger(__name__)
+
+# Compiled once at import time — matches top-level ScenarioWorkflow IDs:
+#   campaign:<id>:device:<serial>:scenario:<scen_id>
+# Device serial may contain colons (WiFi ADB: 192.168.1.1:5555) so we cannot
+# count colons; instead we use a greedy .+ for the serial segment.
+_TOP_LEVEL_WF_RE = re.compile(r"^campaign:[^:]+:device:.+:scenario:[^:]+$")
 
 
 def build_campaign_fleet_router(
@@ -21,37 +38,357 @@ def build_campaign_fleet_router(
 ) -> APIRouter:
     router = APIRouter()
 
+    # ── Campaign → Temporal workflow ─────────────────────────────────
+
     @router.post("/campaigns/{campaign_id}/run")
-    async def api_run_campaign(campaign_id: str):
+    async def api_run_campaign(
+        campaign_id: str,
+        body: CampaignRunBody = Body(default_factory=CampaignRunBody),
+    ):
         if not config.database.enabled:
             return JSONResponse(
                 {"error": "Database is disabled; campaigns are not available"},
                 status_code=503,
             )
-        payload, status = await enqueue_campaign_run(campaign_id, queue)
-        if status != 200:
-            return JSONResponse(payload, status_code=status)
-        return payload
+        if not config.temporal.enabled:
+            return JSONResponse(
+                {"error": "Temporal is required for campaign execution"},
+                status_code=503,
+            )
+        try:
+            # Resolve live-device filter if any filter param was explicitly set.
+            device_serials_override: list[str] | None = None
+            use_live_filter = (
+                body.filter_state != "READY"
+                or body.filter_model is not None
+                or body.filter_tags is not None
+                or body.max_devices is not None
+            )
+            if use_live_filter:
+                from services.fleet_dispatch import _device_has_all_tags
 
-    @router.post("/fleet/run")
-    async def api_fleet_run(body: FleetRunRequest):
-        payload, status = enqueue_fleet_scenario(
-            manager,
-            queue,
-            steps=body.steps,
-            filter_state=body.filter_state,
-            filter_model=body.filter_model,
-            max_devices=body.max_devices,
-            priority=body.priority,
-            timeout=body.timeout,
-            max_retries=body.max_retries,
-        )
-        if status != 200:
-            return JSONResponse(payload, status_code=status)
-        return payload
+                _state = body.filter_state.strip().upper() or "READY"
+                live = [d for d in manager.all_devices() if d.state.name.upper() == _state]
 
-    @router.get("/fleet/status")
-    async def api_fleet_status(run_id: Optional[str] = None):
-        return fleet_run_status(queue, run_id)
+                if body.filter_model:
+                    needle = body.filter_model.lower()
+                    live = [d for d in live if needle in (d.model or "").lower()]
+
+                if body.filter_tags:
+                    from db.database import AsyncSessionLocal
+                    from db.crud.device_group import get_all_device_serial_tags
+
+                    filter_tags_list = [
+                        t.strip().lower() for t in body.filter_tags.split(",") if t.strip()
+                    ]
+                    async with AsyncSessionLocal() as db:
+                        serial_tags = await get_all_device_serial_tags(db)
+                    live = [
+                        d for d in live
+                        if _device_has_all_tags(d.serial, serial_tags, filter_tags_list)
+                    ]
+
+                if body.max_devices is not None:
+                    live = live[: body.max_devices]
+
+                if not live:
+                    return JSONResponse(
+                        {"error": f"No live devices match the filter (state={body.filter_state!r})"},
+                        status_code=400,
+                    )
+                device_serials_override = [d.serial for d in live]
+
+            temporal_client = await get_temporal_client(config.temporal)
+            payload, status = await enqueue_campaign_run_temporal(
+                campaign_id,
+                temporal_client,
+                config.temporal,
+                device_serials_override=device_serials_override,
+            )
+            if status != 200:
+                return JSONResponse(payload, status_code=status)
+            log.info("Campaign %s dispatched via Temporal", campaign_id)
+            return payload
+        except Exception as exc:
+            log.exception("Campaign dispatch failed")
+            return JSONResponse(
+                {"error": f"Campaign dispatch failed: {exc}"},
+                status_code=500,
+            )
+
+    @router.get("/execution/runtime")
+    async def api_execution_runtime():
+        """How campaign runs are executed — for UI/docs."""
+        return {
+            "temporal": {
+                "enabled": config.temporal.enabled,
+                "server_url": config.temporal.server_url,
+                "namespace": config.temporal.namespace,
+                "task_queue": config.temporal.task_queue,
+            },
+            "campaign_run": {
+                "engine": "temporal",
+                "note": (
+                    "All campaign executions use Temporal workflows. "
+                    "POST /api/campaigns/{id}/run returns 503 if Temporal is disabled or unreachable."
+                ),
+            },
+        }
+
+    # ── Workflow monitoring & control ────────────────────────────────
+
+    @router.get("/campaigns/{campaign_id}/workflows")
+    async def api_list_campaign_workflows(campaign_id: str):
+        """List top-level Temporal workflow runs for a campaign.
+
+        Only returns ScenarioWorkflow entries (one per device×scenario).
+        Child workflows (ScenarioStepsWorkflow) are excluded — they are an
+        implementation detail and would flood the list.
+        """
+        if not config.temporal.enabled:
+            return {
+                "campaign_id": campaign_id,
+                "workflows": [],
+                "execution_engine": "task_queue",
+                "temporal_available": False,
+            }
+        try:
+            client = await get_temporal_client(config.temporal)
+            workflows = []
+            # Top-level IDs have pattern: campaign:{id}:device:{serial}:scenario:{scen_id}
+            # Child IDs have extra suffixes like :steps, :repeat:…, :if_element:…
+            # We match exactly 5 colon-separated segments to exclude children.
+            # Sanitize campaign_id before embedding in Temporal query string to
+            # prevent injection through double-quote characters.
+            safe_campaign_id = campaign_id.replace('"', "").replace("\\", "")
+            prefix = f"campaign:{safe_campaign_id}:"
+            async for wf in client.list_workflows(
+                f'WorkflowId STARTS_WITH "{prefix}"'
+            ):
+                if not _TOP_LEVEL_WF_RE.match(wf.id):
+                    continue
+                workflows.append({
+                    "workflow_id": wf.id,
+                    "run_id": wf.run_id,
+                    "status": wf.status.name if wf.status else "UNKNOWN",
+                    "start_time": wf.start_time.isoformat() if wf.start_time else None,
+                })
+            return {
+                "campaign_id": campaign_id,
+                "workflows": workflows,
+                "execution_engine": "temporal",
+                "temporal_available": True,
+            }
+        except Exception as exc:
+            return JSONResponse(
+                {"error": f"Failed to list workflows: {exc}"}, status_code=500,
+            )
+
+    @router.get("/devices/{serial}/running-workflows")
+    async def api_device_running_workflows(serial: str):
+        """List RUNNING/PAUSED top-level scenario workflows for a specific device serial."""
+        if not config.temporal.enabled:
+            return {"serial": serial, "workflows": [], "temporal_available": False}
+        try:
+            client = await get_temporal_client(config.temporal)
+            # Temporal query language has no CONTAINS operator — fetch all
+            # running workflows and filter by serial client-side.
+            safe_serial = serial.replace('"', "").replace("\\", "")
+            needle = f":device:{safe_serial}:"
+            workflows = []
+            async for wf in client.list_workflows('ExecutionStatus = "Running"'):
+                if needle not in wf.id:
+                    continue
+                if not _TOP_LEVEL_WF_RE.match(wf.id):
+                    continue
+                workflows.append({
+                    "workflow_id": wf.id,
+                    "run_id": wf.run_id,
+                    "status": wf.status.name if wf.status else "UNKNOWN",
+                    "start_time": wf.start_time.isoformat() if wf.start_time else None,
+                })
+            return {"serial": serial, "workflows": workflows, "temporal_available": True}
+        except Exception as exc:
+            return JSONResponse(
+                {"error": f"Failed to list device workflows: {exc}"}, status_code=500,
+            )
+
+    @router.get("/workflows/{workflow_id}/progress")
+    async def api_workflow_progress(workflow_id: str):
+        """Query real-time progress of a Temporal scenario workflow.
+
+        When the child ScenarioStepsWorkflow is paused on error, status is
+        overridden to 'paused_on_error' and error_message is populated.
+        """
+        try:
+            from temporal.workflows import ScenarioWorkflow, ScenarioStepsWorkflow
+
+            client = await get_temporal_client(config.temporal)
+            handle = client.get_workflow_handle(workflow_id)
+            progress = await handle.query(ScenarioWorkflow.get_progress)
+
+            status = progress.status
+            error_message: str | None = None
+
+            # When parent shows RUNNING, check if child is paused on error
+            if status == "running":
+                child_id = f"{workflow_id}:steps"
+                try:
+                    child_handle = client.get_workflow_handle(child_id)
+                    error_info = await child_handle.query(ScenarioStepsWorkflow.get_error_info)
+                    if error_info.get("paused_on_error"):
+                        status = "paused_on_error"
+                        error_message = error_info.get("error_message") or None
+                except Exception:
+                    pass  # child not started yet or not queryable
+
+            return {
+                "workflow_id": workflow_id,
+                "status": status,
+                "current_step": progress.current_step,
+                "total_steps": progress.total_steps,
+                "current_step_type": progress.current_step_type,
+                "loop_iteration": progress.loop_iteration,
+                "message": error_message or progress.message,
+                "device_serial": progress.device_serial,
+                "error_message": error_message,
+            }
+        except Exception as exc:
+            return JSONResponse(
+                {"error": f"Failed to query progress: {exc}"}, status_code=500,
+            )
+
+    @router.get("/workflows/{workflow_id}/steps")
+    async def api_workflow_steps(workflow_id: str):
+        """Query step-by-step execution log for a scenario workflow.
+
+        - While RUNNING: queries the child steps workflow (live, real-time).
+        - After COMPLETED/FAILED: reads the final result from the parent workflow.
+
+        Returns a flat list of step entries with index, type, ok, message, depth.
+        """
+        if not config.temporal.enabled:
+            return JSONResponse({"error": "Temporal is not enabled"}, status_code=503)
+        try:
+            from temporal.workflows import ScenarioStepsWorkflow, ScenarioWorkflow
+            from temporalio.service import RPCError
+
+            client = await get_temporal_client(config.temporal)
+            parent_handle = client.get_workflow_handle(workflow_id)
+
+            # Determine current workflow status
+            try:
+                desc = await parent_handle.describe()
+                wf_status = desc.status.name if desc.status else "UNKNOWN"
+            except Exception:
+                wf_status = "UNKNOWN"
+
+            steps: list[dict] = []
+            source = "unknown"
+
+            if wf_status == "RUNNING":
+                # Query the child steps workflow (id: {workflow_id}:steps)
+                child_id = f"{workflow_id}:steps"
+                child_handle = client.get_workflow_handle(child_id)
+                try:
+                    steps = await child_handle.query(ScenarioStepsWorkflow.get_step_log)
+                    source = "live_query"
+                except RPCError:
+                    # Child may not have started yet
+                    steps = []
+                    source = "pending"
+            else:
+                # Completed/failed: get full step_results from the workflow result
+                try:
+                    result = await parent_handle.result(follow_runs=False)
+                    steps = result.step_results or []
+                    source = "final_result"
+                except Exception:
+                    # Result not available (e.g. cancelled before completion)
+                    # Fall back to querying the child workflow anyway
+                    child_id = f"{workflow_id}:steps"
+                    child_handle = client.get_workflow_handle(child_id)
+                    try:
+                        steps = await child_handle.query(ScenarioStepsWorkflow.get_step_log)
+                        source = "child_query_fallback"
+                    except Exception:
+                        steps = []
+                        source = "unavailable"
+
+            return {
+                "workflow_id": workflow_id,
+                "status": wf_status,
+                "source": source,
+                "steps_count": len(steps),
+                "steps": steps,
+            }
+        except Exception as exc:
+            return JSONResponse(
+                {"error": f"Failed to query steps: {exc}"}, status_code=500,
+            )
+
+    @router.post("/workflows/{workflow_id}/pause")
+    async def api_workflow_pause(workflow_id: str):
+        """Pause a running scenario workflow at the next step boundary.
+
+        SECURITY NOTE: workflow_id is caller-supplied and not validated for
+        ownership. Any authenticated caller can pause any workflow whose ID they
+        know. Add campaign-ownership middleware before exposing this to untrusted
+        users.
+        """
+        try:
+            from temporal.workflows import ScenarioStepsWorkflow, ScenarioWorkflow
+
+            client = await get_temporal_client(config.temporal)
+            for wf_id, signal in [
+                (workflow_id, ScenarioWorkflow.pause),
+                (f"{workflow_id}:steps", ScenarioStepsWorkflow.pause),
+            ]:
+                try:
+                    await client.get_workflow_handle(wf_id).signal(signal)
+                except Exception:
+                    pass
+            return {"workflow_id": workflow_id, "action": "paused"}
+        except Exception as exc:
+            return JSONResponse(
+                {"error": f"Failed to pause: {exc}"}, status_code=500,
+            )
+
+    @router.post("/workflows/{workflow_id}/resume")
+    async def api_workflow_resume(workflow_id: str):
+        """Resume a paused scenario workflow."""
+        try:
+            from temporal.workflows import ScenarioStepsWorkflow, ScenarioWorkflow
+
+            client = await get_temporal_client(config.temporal)
+            for wf_id, signal in [
+                (workflow_id, ScenarioWorkflow.resume),
+                (f"{workflow_id}:steps", ScenarioStepsWorkflow.resume),
+            ]:
+                try:
+                    await client.get_workflow_handle(wf_id).signal(signal)
+                except Exception:
+                    pass
+            return {"workflow_id": workflow_id, "action": "resumed"}
+        except Exception as exc:
+            return JSONResponse(
+                {"error": f"Failed to resume: {exc}"}, status_code=500,
+            )
+
+    @router.post("/workflows/{workflow_id}/cancel")
+    async def api_workflow_cancel(workflow_id: str):
+        """Cancel a scenario workflow — cancels both parent and child steps workflow."""
+        try:
+            client = await get_temporal_client(config.temporal)
+            for wf_id in [workflow_id, f"{workflow_id}:steps"]:
+                try:
+                    await client.get_workflow_handle(wf_id).cancel()
+                except Exception:
+                    pass
+            return {"workflow_id": workflow_id, "action": "cancelled"}
+        except Exception as exc:
+            return JSONResponse(
+                {"error": f"Failed to cancel: {exc}"}, status_code=500,
+            )
 
     return router

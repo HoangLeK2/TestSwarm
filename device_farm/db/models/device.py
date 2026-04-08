@@ -37,6 +37,8 @@ class Device(Base):
     adb_ip: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, default=None)
     adb_port: Mapped[int] = mapped_column(Integer, nullable=False, default=5555)
 
+    tags: Mapped[str] = mapped_column(String(500), default="")
+
     last_seen: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 

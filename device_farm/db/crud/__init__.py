@@ -13,5 +13,10 @@ from .device import *  # noqa: F401,F403
 from .session import *  # noqa: F401,F403
 from .campaign import *  # noqa: F401,F403
 from .mcp_session import *  # noqa: F401,F403
-from .crawl import *  # noqa: F401,F403
+from .scenario_template import *  # noqa: F401,F403
+from .device_group import *  # noqa: F401,F403
+from .content import *  # noqa: F401,F403
+from .schedule import *  # noqa: F401,F403
+from .campaign_run import *  # noqa: F401,F403
+from .execution import *  # noqa: F401,F403
 

@@ -17,6 +17,26 @@ from db.database import AsyncSessionLocal
 from runtime.core import DeviceManager, TaskQueue
 
 
+def _verify_token_only(request: Request) -> None:
+    """Verify JWT is present and valid. Always enforced regardless of db_enabled.
+    Does NOT query the DB — use for endpoints where identity is needed but no
+    per-resource ownership check is required."""
+    auth = request.headers.get("authorization", "")
+    if not auth.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    token = auth[7:].strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        payload = jwt.decode(token, jwt_secret_key(), algorithms=[jwt_algorithm()])
+        user_id = str(payload.get("sub") or "").strip()
+        token_type = payload.get("type")
+        if not user_id or token_type == "refresh":
+            raise HTTPException(status_code=401, detail="Invalid or expired token")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+
 async def _get_live_allowed_serials(request: Request, db_enabled: bool) -> Optional[set[str]]:
     if not db_enabled:
         return None
@@ -92,8 +112,23 @@ def build_public_router(
         return out
 
     @api.get("/tasks")
-    async def api_tasks(ids: Optional[str] = None, name_prefix: Optional[str] = None):
+    async def api_tasks(
+        request: Request,
+        ids: Optional[str] = None,
+        name_prefix: Optional[str] = None,
+    ):
+        # Always require a valid JWT — task list is never public.
+        _verify_token_only(request)
         all_tasks = queue.all_tasks()
+        # In DB mode, restrict to tasks targeting the user's own devices.
+        # Tasks with target=None (any-device / fleet) are visible to all authed users.
+        if db_enabled:
+            allowed_serials = await _get_live_allowed_serials(request, db_enabled)
+            if allowed_serials is not None:
+                all_tasks = [
+                    t for t in all_tasks
+                    if t.target is None or t.target in allowed_serials
+                ]
         if ids:
             want = {x.strip() for x in ids.split(",") if x.strip()}
             all_tasks = [t for t in all_tasks if t.id in want]

@@ -27,15 +27,31 @@ export function useDeviceFarm() {
       .catch(() => {});
   }, []);
 
-  // Fetch initial live device list (filtered by registered serials once we have them)
-  useEffect(() => {
+  // Fetch live device list on mount AND on page focus/visibility change
+  const refreshDevices = useCallback(() => {
     fetchLiveDevices()
-      .then((live) => {
-        // Will be filtered below when registeredSerials updates
-        setDevices(live);
-      })
-      .catch((e) => setError(String(e)));
+      .then((live) => setDevices(live))
+      .catch(() => {});
+    devicesApi.list()
+      .then((list) => setRegisteredSerials(new Set(list.map((d) => d.serial))))
+      .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    refreshDevices();
+  }, [refreshDevices]);
+
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') refreshDevices();
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', refreshDevices);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', refreshDevices);
+    };
+  }, [refreshDevices]);
 
   useEffect(() => {
     fetchConfig()

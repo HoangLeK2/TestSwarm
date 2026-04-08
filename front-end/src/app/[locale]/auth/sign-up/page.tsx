@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Link } from '@/i18n/navigation';
 import { ROUTES } from '@/config/routes';
+import { formatFarmApiError } from '@/lib/format-farm-api-error';
 
 const schema = z.object({
   name: z.string().min(2, 'Tên tối thiểu 2 ký tự'),
@@ -51,7 +52,7 @@ export default function SignUpPage() {
 
           {error && (
             <p className='text-xs text-destructive'>
-              {(error as any)?.response?.data?.detail ?? 'Đăng ký thất bại'}
+              {formatFarmApiError(error, 'Đăng ký thất bại')}
             </p>
           )}
 

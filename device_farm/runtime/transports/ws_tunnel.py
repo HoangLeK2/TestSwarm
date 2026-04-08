@@ -1,21 +1,18 @@
 """
 ws_tunnel.py — TCP-over-WebSocket tunnel (server side).
 
-Replaces `adb forward tcp:PORT localabstract:minitouch` with a WebSocket tunnel.
-
 Architecture:
-  Tool (MinitouchSender / u2 / STFServiceClient)
+  Tool (u2 client / STFServiceClient)
     ↕ TCP (localhost:random_port)
   TcpWsTunnel  ←→  websocket  ←→  Agent on Android
-    channel = "minitouch" | "u2" | "stfservice"
+    channel = "u2" | "stfservice"
 
 The Agent maintains a corresponding bridge:
-  - minitouch channel: reads/writes minitouch unix socket
   - u2 channel: proxies HTTP to 127.0.0.1:9008 (uiautomator2 am instrument)
   - stfservice channel: reads/writes localabstract:stfservice socket
 
 Message format (JSON over WebSocket):
-  {"type": "tunnel_data", "channel": "minitouch", "data": "<base64>"}
+  {"type": "tunnel_data", "channel": "u2", "data": "<base64>"}
 """
 from __future__ import annotations
 
@@ -23,7 +20,6 @@ import base64
 import logging
 import socket
 import threading
-import time
 from typing import Callable, Dict, Optional
 
 log = logging.getLogger(__name__)
@@ -31,10 +27,10 @@ log = logging.getLogger(__name__)
 
 class TcpWsTunnel:
     """
-    One TCP-over-WebSocket tunnel for a named channel (minitouch / u2 / stfservice).
+    One TCP-over-WebSocket tunnel for a named channel (u2 / stfservice).
 
     - Starts a local TCP server on a random port.
-    - Waits for exactly one tool to connect (MinitouchSender / u2 / STFServiceClient).
+    - Waits for exactly one tool to connect (U2 HTTP client / STFServiceClient).
     - Forwards: TCP → base64 → WS  and  WS → base64-decode → TCP.
     """
 
@@ -58,6 +54,10 @@ class TcpWsTunnel:
         # Buffer data received from agent before a tool has connected
         self._pre_connect_buf: bytes = b""
         self._pre_connect_lock = threading.Lock()
+        # Generation counter for U2: prevents stale response from old TCP connection
+        # being written to a new TCP connection (NanoHTTPD closes after each response)
+        self._conn_gen: int = 0    # incremented when new tool TCP connection accepted
+        self._active_gen: int = 0  # set to _conn_gen when tool sends first data (request)
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
@@ -104,13 +104,18 @@ class TcpWsTunnel:
         """
         Called when a tunnel_data message arrives from the agent.
         Decode and write to the local TCP tool socket.
-        If no tool is connected yet, buffer the data so it's flushed on connect.
         """
         data = base64.b64decode(b64_data)
         with self._client_lock:
             conn = self._client_sock
+            # U2 generation gating: drop stale response from previous request cycle
+            if self.channel == "u2":
+                if conn is None:
+                    return  # no tool connected → stale data, drop silently
+                if self._active_gen != self._conn_gen:
+                    return  # tool connected but hasn't sent request → stale data
         if conn is None:
-            # No tool connected yet — buffer (e.g. minitouch banner arrives before MinitouchSender connects)
+            # Non-U2 channels: buffer for banner flush
             with self._pre_connect_lock:
                 self._pre_connect_buf += data
             return
@@ -145,42 +150,28 @@ class TcpWsTunnel:
                     if self.channel != "u2":
                         try: self._client_sock.close()
                         except Exception: pass
-                # Flush buffer BEFORE setting _client_sock so banner is sent first
-            with self._pre_connect_lock:
-                buffered = self._pre_connect_buf
-                self._pre_connect_buf = b""
-            if buffered:
-                self._logger.info(f"Tunnel [{self.channel}] flushing {len(buffered)}b pre-connect buffer")
-                try:
-                    conn.sendall(buffered)
-                except OSError:
-                    pass
-            with self._pre_connect_lock:
-                more = self._pre_connect_buf
-                self._pre_connect_buf = b""
-            if more:
-                try:
-                    conn.sendall(more)
-                except OSError:
-                    pass
-
-            if self.channel == "minitouch" and not buffered and not more:
-                # Banner not arrived yet; wait 2.5s for tunnel_data then set client and flush
-                def _delayed_flush() -> None:
-                    time.sleep(2.5)
-                    with self._pre_connect_lock:
-                        late = self._pre_connect_buf
-                        self._pre_connect_buf = b""
-                    with self._client_lock:
-                        self._client_sock = conn
-                    if late:
-                        self._logger.info(f"Tunnel [minitouch] delayed flush {len(late)}b")
-                        try:
-                            conn.sendall(late)
-                        except OSError:
-                            pass
-                threading.Thread(target=_delayed_flush, daemon=True, name=f"tunnel-delayed-{self._serial}-minitouch").start()
-            else:
+            if self.channel == "u2":
+                # U2: clear stale buffer, increment generation, set client
+                with self._pre_connect_lock:
+                    stale = len(self._pre_connect_buf)
+                    self._pre_connect_buf = b""
+                if stale:
+                    self._logger.debug(f"Tunnel [u2] discarded {stale}b stale buffer on new connection")
+                with self._client_lock:
+                    self._client_sock = conn
+                    self._conn_gen += 1
+                # _active_gen stays at old value until _read_loop reads first data
+            if self.channel != "u2":
+                # stfservice and other channels: set client + flush
+                with self._pre_connect_lock:
+                    buffered = self._pre_connect_buf
+                    self._pre_connect_buf = b""
+                if buffered:
+                    self._logger.info(f"Tunnel [{self.channel}] flushing {len(buffered)}b pre-connect buffer")
+                    try:
+                        conn.sendall(buffered)
+                    except OSError:
+                        pass
                 with self._client_lock:
                     self._client_sock = conn
 
@@ -200,6 +191,10 @@ class TcpWsTunnel:
                 data = conn.recv(8192)
                 if not data:
                     break
+                # U2: mark this connection as having sent a request → response data now valid
+                if self.channel == "u2":
+                    with self._client_lock:
+                        self._active_gen = self._conn_gen
                 b64 = base64.b64encode(data).decode("ascii")
                 self._send_ws({
                     "type":    "tunnel_data",
@@ -212,6 +207,13 @@ class TcpWsTunnel:
             with self._client_lock:
                 if self._client_sock is conn:
                     self._client_sock = None
+            # Clear stale pre-connect buffer — data from old connection must not
+            # be flushed to the next connection (causes BadStatusLine / corruption)
+            with self._pre_connect_lock:
+                stale = len(self._pre_connect_buf)
+                self._pre_connect_buf = b""
+            if stale:
+                self._logger.debug(f"Tunnel [{self.channel}] cleared {stale}b stale buffer on disconnect")
             self._logger.info(f"Tunnel [{self.channel}] tool disconnected")
 
 
@@ -219,16 +221,9 @@ class TunnelSet:
     """
     Manages all tunnels for one device session.
     Created when an agent connects, destroyed when it disconnects.
-
-    minitouch channel: No longer uses TcpWsTunnel. MinitouchWsClient sends
-    commands directly as tunnel_data WS messages (no TCP socket needed).
-    We still include "minitouch" key in start_all() ports (value=0) so that
-    the agent creates its ServiceTunnel for abstract:minitouchagent, which is
-    needed for the server→agent command path.  Banner bytes from agent are
-    drained silently (we don't need them).
     """
 
-    CHANNELS = ("u2", "stfservice")  # minitouch uses direct WS, not TCP tunnel
+    CHANNELS = ("u2", "stfservice")
 
     def __init__(self, send_ws: Callable[[Dict], None], serial: str) -> None:
         self._tunnels: Dict[str, TcpWsTunnel] = {}
@@ -237,10 +232,7 @@ class TunnelSet:
 
     def start_all(self) -> Dict[str, int]:
         """Start all tunnels, return {channel: port} mapping."""
-        ports = {ch: t.start() for ch, t in self._tunnels.items()}
-        # port=0: agent only checks presence of "minitouch" key (not the port value)
-        ports["minitouch"] = 0
-        return ports
+        return {ch: t.start() for ch, t in self._tunnels.items()}
 
     def stop_all(self) -> None:
         for t in self._tunnels.values():
@@ -248,10 +240,6 @@ class TunnelSet:
 
     def route(self, channel: str, b64_data: str) -> None:
         """Route incoming tunnel_data from agent to the correct tunnel."""
-        if channel == "minitouch":
-            # Banner bytes from MinitouchAgent — drain silently.
-            # Commands flow in the opposite direction (MinitouchWsClient → WS → agent).
-            return
         tunnel = self._tunnels.get(channel)
         if tunnel:
             tunnel.write_from_agent(b64_data)

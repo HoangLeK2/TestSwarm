@@ -50,6 +50,32 @@ def ngrok_authtoken() -> str:
     return os.environ.get("NGROK_AUTHTOKEN", "").strip()
 
 
+def healing_enabled() -> bool:
+    """Self-healing selectors: try alternative u2 selectors when primary fails.
+    Env: DEVICE_FARM_HEALING_ENABLED=1 (default off)."""
+    return _truthy("DEVICE_FARM_HEALING_ENABLED")
+
+
+def device_farm_cv_concurrency() -> int:
+    """
+    Max concurrent OpenCV / Airtest CV ops (SSIM, template match).
+    Env: DEVICE_FARM_CV_CONCURRENCY (default 4). Invalid or <1 → 1.
+    """
+    raw = (os.environ.get("DEVICE_FARM_CV_CONCURRENCY") or "").strip()
+    if not raw:
+        return 4
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 4
+
+
+def capture_pre_step_enabled() -> bool:
+    """Enable pre-step screenshot capture in scenario runner.
+    Env: CAPTURE_PRE_STEP=1 (default off)."""
+    return _truthy("CAPTURE_PRE_STEP")
+
+
 # ── JWT / auth (core/security, api/routes/auth) ──────────────────────────────
 
 

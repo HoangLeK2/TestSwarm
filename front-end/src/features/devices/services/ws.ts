@@ -48,7 +48,8 @@ function buildDeviceFarmWsUrl(): string {
 }
 
 const listeners = new Set<(msg: WsMessage) => void>();
-const binaryListeners = new Set<(buf: ArrayBuffer) => void>();
+type BinaryListener = { fn: (buf: ArrayBuffer) => void; serial?: string };
+const binaryListeners = new Set<BinaryListener>();
 
 // Cache last H264 config frame (0x10) per serial so late-arriving binary listeners
 // (hooks that mount after the WS was already open) get the SPS/PPS immediately.
@@ -170,8 +171,21 @@ function connectShared() {
         }
       }
       if (binaryListeners.size > 0) {
-        binaryListeners.forEach((fn) => {
-          try { fn(buf); } catch { /* isolate */ }
+        let parsedSerial: string | null = null;
+        if (buf.byteLength >= 3) {
+          const view = new DataView(buf);
+          const slen = view.getUint8(1);
+          if (slen > 0 && buf.byteLength >= 2 + slen) {
+            parsedSerial = new TextDecoder().decode(new Uint8Array(buf, 2, slen));
+          }
+        }
+        binaryListeners.forEach(({ fn, serial }) => {
+          try {
+            if (serial && parsedSerial && serial !== parsedSerial) return;
+            fn(buf);
+          } catch {
+            // isolate subscriber errors
+          }
         });
       }
     }
@@ -193,12 +207,33 @@ function disconnectSharedIfIdle() {
  * Frame layout: [type:1B][slen:1B][serial:slen][w:2B BE][h:2B BE][payload...]
  * Returns unsubscribe function.
  */
-export function subscribeBinaryFrames(onBinary: (buf: ArrayBuffer) => void): () => void {
-  binaryListeners.add(onBinary);
+export function subscribeBinaryFrames(
+  onBinary: (buf: ArrayBuffer) => void,
+  serial?: string
+): () => void {
+  const listener: BinaryListener = { fn: onBinary, serial };
+  binaryListeners.add(listener);
   // Replay cached config + keyframe so late-arriving hooks (common case: hook
   // mounts after WS bootstrap) get both SPS/PPS and an IDR immediately.
   // config must come before keyframe so the decoder can initialise.
-  if (lastConfigBySerial.size > 0 || lastKeyBySerial.size > 0) {
+  if (serial) {
+    const cfg = lastConfigBySerial.get(serial);
+    const key = lastKeyBySerial.get(serial);
+    const toReplay: ArrayBuffer[] = [];
+    if (cfg) toReplay.push(cfg);
+    if (key) toReplay.push(key);
+    if (toReplay.length > 0) {
+      queueMicrotask(() => {
+        toReplay.forEach((frame) => {
+          try {
+            onBinary(frame.slice(0));
+          } catch {
+            // isolate subscriber errors
+          }
+        });
+      });
+    }
+  } else if (lastConfigBySerial.size > 0 || lastKeyBySerial.size > 0) {
     const serials = new Set([...Array.from(lastConfigBySerial.keys()), ...Array.from(lastKeyBySerial.keys())]);
     const toReplay: ArrayBuffer[] = [];
     serials.forEach((serial) => {
@@ -222,7 +257,7 @@ export function subscribeBinaryFrames(onBinary: (buf: ArrayBuffer) => void): () 
     connectShared();
   }
   return () => {
-    binaryListeners.delete(onBinary);
+    binaryListeners.delete(listener);
     if (listeners.size === 0) disconnectSharedIfIdle();
   };
 }

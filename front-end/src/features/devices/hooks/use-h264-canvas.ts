@@ -124,32 +124,25 @@ export function useH264Video(
       const frameType = view.getUint8(0);
       if (frameType !== 0x10 && frameType !== 0x11) return;
 
-      const cur = serialRef.current;
-      if (!cur) return;
-
       const slen = view.getUint8(1);
       if (buf.byteLength < 2 + slen + 4) return;
-      if (slen !== cur.length) return;
-      const serialBytes = new Uint8Array(buf, 2, slen);
-      for (let i = 0; i < slen; i++) {
-        if (serialBytes[i] !== cur.charCodeAt(i)) return;
-      }
-
       const doff = 2 + slen + 4; // skip serial + w/h
 
       if (frameType === 0x10) {
         if (buf.byteLength < doff + 2) return;
-        // Zero-copy path: transfer the raw WS frame to worker for parsing.
-        w.postMessage({ type: 'binary', frameType: 0x10, buf }, [buf]);
+        // Clone before transfer because multiple device hooks share one WS frame.
+        const frame = buf.slice(0);
+        w.postMessage({ type: 'binary', frameType: 0x10, buf: frame }, [frame]);
         return;
       }
 
       if (frameType === 0x11) {
         if (buf.byteLength < doff + 9) return;
-        // Zero-copy path: transfer the raw WS frame to worker for parsing.
-        w.postMessage({ type: 'binary', frameType: 0x11, buf }, [buf]);
+        // Clone before transfer because multiple device hooks share one WS frame.
+        const frame = buf.slice(0);
+        w.postMessage({ type: 'binary', frameType: 0x11, buf: frame }, [frame]);
       }
-    });
+    }, serial);
 
     return () => {
       unsubscribe();

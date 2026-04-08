@@ -9,15 +9,10 @@ MODE A — WebSocket Agent (existing):
   Touch   : U2JsonRpcClient via TcpWsTunnel (9008), or WS tap/swipe/key fallback to agent
   Events  : STFServiceClient via TcpWsTunnel
 
-MODE B — ADB Transport:
-  Farm Server ─── adb TCP ──► device:5555  (shell, push)
-  Farm Server ◄── scrcpy (H264→JPEG)       (screen frames)
-  Farm Server ◄── TCP:9008   u2-server (touch / UI)
-  Farm Server ─── poll via shell ── battery / rotation
-  No STFService needed, no WS agent needed, no port forwarding.
-
-  Activated via: device.attach_adb_transport(transport)
-  Requires Android 11+ Wireless Debugging (or adb tcpip 5555 once via USB).
+MODE B — Relay (agent-boot):
+  agent-boot connects outbound via gRPC/WebSocket and proxies all ADB ops.
+  Screen: scrcpy via relay. Touch: u2 via relay HTTP proxy (port 7912).
+  No direct ADB from farm — everything through AdbRelayManager.
 
 Touch: uiautomator2 (U2) over WS tunnel, or agent shell / scrcpy control. No a11y.
 State: DISCONNECTED → CONNECTING → READY → BUSY → ERROR → DEAD
@@ -26,6 +21,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import concurrent.futures
+import json
 import logging
 import os
 import socket
@@ -33,6 +30,7 @@ import subprocess
 import struct
 import threading
 import time
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import re
@@ -40,8 +38,6 @@ import xml.etree.ElementTree as ET
 from runtime.xml_utils import parse_xml, trim_hierarchy_xml as _trim_xml, XML_PARSE_ERRORS
 
 from core.config import Config
-from runtime.transports.adb_device_bootstrap import AdbDeviceBootstrap
-from runtime.transports.adb_transport import AdbTransport
 from runtime.transports.scrcpy_control import ScrcpyControl
 from runtime.transports.scrcpy_receiver import ScrcpyReceiver
 from runtime.transports.stf_client import (
@@ -63,6 +59,7 @@ class DeviceState(str, Enum):
 
 LOW_BW_MODE = os.environ.get("LOW_BW_MODE", "").lower() in {"1", "true", "yes"}
 LOW_BW_FRAME_SKIP = max(1, int(os.environ.get("LOW_BW_FRAME_SKIP", "10")))
+U2_FORCE_RELAY = os.environ.get("U2_FORCE_RELAY", "").lower() in {"1", "true", "yes"}
 
 
 class DeviceClient:
@@ -78,9 +75,21 @@ class DeviceClient:
         self.index   = index
         self.config  = config
 
-        self._logger = logging.getLogger(f"device.{serial}")
-        self._lock   = threading.Lock()
-        self._state  = DeviceState.DISCONNECTED
+        self._logger    = logging.getLogger(f"device.{serial}")
+        self._lock      = threading.Lock()
+        self._state     = DeviceState.DISCONNECTED
+        self._serial_b  = serial.encode()   # cached bytes — used in every H264 frame
+        # Pre-computed prefix for 0x11 video frames: [0x11][slen][serial]
+        # The w/h part changes on rotation so it's built per-frame, but this prefix never changes.
+        _slen = len(self._serial_b)
+        self._h264_video_prefix: bytes = bytes([0x11, _slen]) + self._serial_b
+        # Pre-computed prefix for 0x10 config frames: [0x10][slen][serial]
+        self._h264_config_prefix: bytes = bytes([0x10, _slen]) + self._serial_b
+
+        # H264 relay FPS counter — initialized here so on_agent_h264_video avoids
+        # hasattr() check on every frame at 30fps.
+        self._h264_fps_count: int   = 0
+        self._h264_fps_t0:    float = 0.0  # set to monotonic() on first frame
 
         # Device metadata
         self.name:            str = ""
@@ -108,6 +117,8 @@ class DeviceClient:
         # Scrcpy receiver for Mode A+scrcpy hybrid (agent touch + scrcpy screen)
         self._scrcpy_receiver:  Optional[ScrcpyReceiver] = None
         self._scrcpy_active:    bool = False  # suppress MediaProjection frames when True
+        # Debounce relay scrcpy restarts on gRPC flaps / false negatives.
+        self._scrcpy_last_restart_at: float = 0.0
         # Stored args so scrcpy can be restarted on demand after auto-stop
         self._scrcpy_params:    Optional[tuple] = None  # (device_ip, adb_port, enable_control)
         self._scrcpy_stop_task: Optional[asyncio.Task] = None  # debounced auto-stop task
@@ -124,14 +135,10 @@ class DeviceClient:
         self._tunnels_ready_channels: set = set()  # channels device actually set up (from tunnels_ready)
 
         self._u2:          Optional[U2JsonRpcClient]  = None
-        self._u2_lock      = threading.Lock()  # serializes reconnect + identity-safe nulling
+        self._u2_lock      = threading.Lock()  # identity-safe reads/writes of self._u2
+        self._u2_batch:    Any = None  # _BatchRelaySession (when u2 batch enabled)
         self._hierarchy_lock = threading.Lock()  # only one dumpWindowHierarchy at a time
         self._stf_service: Optional[STFServiceClient] = None
-
-        # ADB mode (Mode B) state
-        self._adb_transport: Optional[AdbTransport] = None
-        self._adb_bootstrap: Optional[AdbDeviceBootstrap] = None
-        self.is_adb_mode: bool = False
 
         # asyncio event loop + subscriber queues
         self._loop:           Optional[asyncio.AbstractEventLoop] = None
@@ -158,6 +165,8 @@ class DeviceClient:
         self._u2_last_ok_at: float = 0.0             # monotonic time of last confirmed-live ping
         self._atx_restart_triggered_at: float = float("-inf") # dedup guard; -inf = never triggered
         self._atx_grace_given_at: float = float("-inf")      # time first timeout was seen; -inf = no grace in progress
+        self._recovery_started_at: float = 0.0
+        self._recovery_reason: str = ""
         # Periodic screenshot timer state
         self._periodic_ss_started: bool = False
         # Agent-reported capabilities (e.g. ["u2","stfservice","h264"])
@@ -178,6 +187,85 @@ class DeviceClient:
         self._ws_hierarchy_xml: Optional[str] = None
         self._ws_hierarchy_error: Optional[str] = None
         self._ws_hierarchy_a11y_available: bool = True  # optimistic, disabled on first "accessibility_not_available"
+        self._recovery_logger = self._setup_recovery_logger()
+
+    @staticmethod
+    def _setup_recovery_logger() -> logging.Logger:
+        logger = logging.getLogger("u2_atx_recovery")
+        if logger.handlers:
+            return logger
+        log_dir = os.path.join(os.getcwd(), "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        handler = logging.FileHandler(
+            os.path.join(log_dir, "u2_atx_recovery.jsonl"),
+            encoding="utf-8",
+        )
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+        return logger
+
+    def _recovery_log(self, event: str, **fields: Any) -> None:
+        payload = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "serial": self.serial,
+            "event": event,
+            **fields,
+        }
+        self._recovery_logger.info(json.dumps(payload, ensure_ascii=True))
+        self._recovery_log_to_db(payload)
+
+    def _recovery_log_to_db(self, payload: dict[str, Any]) -> None:
+        """Best-effort async DB sink; never blocks caller path."""
+        if self._loop is None:
+            return
+        try:
+            from db.database import AsyncSessionLocal
+            from db.models import U2RecoveryEvent
+        except Exception:
+            return
+
+        metadata = {
+            k: v for k, v in payload.items()
+            if k not in {"ts", "serial", "event", "reason", "outcome", "duration_ms", "host", "port"}
+        }
+
+        async def _write() -> None:
+            async with AsyncSessionLocal() as db:
+                db.add(U2RecoveryEvent(
+                    serial=str(payload.get("serial", "")),
+                    event=str(payload.get("event", "")),
+                    reason=payload.get("reason"),
+                    outcome=payload.get("outcome"),
+                    duration_ms=payload.get("duration_ms"),
+                    host=payload.get("host"),
+                    port=payload.get("port"),
+                    extra_data=metadata,
+                ))
+                await db.commit()
+
+        fut = asyncio.run_coroutine_threadsafe(_write(), self._loop)
+        fut.add_done_callback(lambda f: None)
+
+    def _mark_recovery_start(self, reason: str) -> None:
+        if self._recovery_started_at <= 0.0:
+            self._recovery_started_at = time.monotonic()
+            self._recovery_reason = reason
+            self._recovery_log("recovery_start", reason=reason)
+
+    def _mark_recovery_end(self, outcome: str, **extra: Any) -> None:
+        if self._recovery_started_at > 0.0:
+            duration_ms = int((time.monotonic() - self._recovery_started_at) * 1000)
+            self._recovery_log(
+                "recovery_end",
+                outcome=outcome,
+                reason=self._recovery_reason,
+                duration_ms=duration_ms,
+                **extra,
+            )
+            self._recovery_started_at = 0.0
+            self._recovery_reason = ""
 
     def set_agent_capabilities(self, caps: List[str]) -> None:
         """Set capabilities from agent hello (informational)."""
@@ -390,13 +478,11 @@ class DeviceClient:
             return
         if not self._loop:
             return
-        serial_b = self.serial.encode()
-        slen = len(serial_b)
         width = max(0, min(w or self.screen_width, 0xFFFF))
         height = max(0, min(h or self.screen_height, 0xFFFF))
         flags = 0x01 if changed else 0x00
         msg: bytes = (
-            bytes([0x10, slen]) + serial_b
+            self._h264_config_prefix
             + struct.pack(">HH", width, height)
             + bytes([flags])
             + avcc_record
@@ -431,15 +517,17 @@ class DeviceClient:
         first_frame = self._last_frame_time == 0
         if first_frame:
             self._last_frame_time = time.monotonic()
-        serial_b = self.serial.encode()
-        slen = len(serial_b)
         w = max(0, min(self.screen_width, 0xFFFF))
         h = max(0, min(self.screen_height, 0xFFFF))
         pts_hi = (pts_us >> 32) & 0xFFFFFFFF
         pts_lo = pts_us & 0xFFFFFFFF
-        header = bytes([0x11, slen]) + serial_b + struct.pack(">HH", w, h)
-        meta = bytes([1 if is_key else 0]) + struct.pack(">II", pts_hi, pts_lo)
-        msg = header + meta + avcc_data
+        msg = (
+            self._h264_video_prefix
+            + struct.pack(">HH", w, h)
+            + (b'\x01' if is_key else b'\x00')
+            + struct.pack(">II", pts_hi, pts_lo)
+            + avcc_data
+        )
         if is_key:
             # Store for late-joining subscribers (replaces _last_key_frame dict)
             self._last_key_frame = msg
@@ -449,8 +537,7 @@ class DeviceClient:
             self._logger.info("h264 video key=%s queued → %d WS subscriber(s), avcc_len=%d",
                               is_key, len(queues), len(avcc_data))
         # FPS counter — log relay throughput every 5s
-        if not hasattr(self, '_h264_fps_count'):
-            self._h264_fps_count = 0
+        if self._h264_fps_t0 == 0.0:
             self._h264_fps_t0 = time.monotonic()
         self._h264_fps_count += 1
         _now = time.monotonic()
@@ -522,18 +609,11 @@ class DeviceClient:
             except Exception:
                 pass
             self._tunnels = None
-        if self._adb_bootstrap is not None:
-            try:
-                self._adb_bootstrap.stop()
-            except Exception:
-                pass
-            self._adb_bootstrap = None
         # Clear stale frame cache
         with self._latest_jpeg_lock:
             self._latest_jpeg = None
         self._last_key_frame = None
         self._last_config_frame = None
-        # Don't close ADB transport here — reconnect_adb_device handles that
 
     def teardown(self) -> None:
         # Agent (WS) teardown
@@ -542,21 +622,6 @@ class DeviceClient:
         if self._tunnels:
             self._tunnels.stop_all()
             self._tunnels = None
-
-        # ADB mode teardown
-        if self._adb_bootstrap is not None:
-            try:
-                self._adb_bootstrap.stop()
-            except Exception:
-                pass
-            self._adb_bootstrap = None
-        if self._adb_transport is not None:
-            try:
-                self._adb_transport.close()
-            except Exception:
-                pass
-            self._adb_transport = None
-        self.is_adb_mode = False
 
         self.state = DeviceState.DISCONNECTED
 
@@ -588,15 +653,14 @@ class DeviceClient:
         # When scrcpy is active OR WS agent mode: always use cached frame.
         # U2 screenshot through WS tunnel causes massive tunnel thrashing that
         # kills scrcpy FPS (drops from 30fps to 1fps).
-        if self._scrcpy_active or not self.is_adb_mode:
+        if self._scrcpy_active or self._agent_send is not None:
             with self._latest_jpeg_lock:
                 jpeg = self._latest_jpeg
             if jpeg is not None:
                 return jpeg
 
-        # ADB mode: always try U2 screenshot.
-        # WS mode: only try when explicitly allowed (for infrequent snapshot APIs).
-        use_u2 = self.is_adb_mode or allow_ws_u2_fallback
+        # Only try U2 screenshot when explicitly allowed (for infrequent snapshot APIs).
+        use_u2 = allow_ws_u2_fallback
         if use_u2:
             with self._u2_lock:
                 u2 = self._u2
@@ -606,25 +670,7 @@ class DeviceClient:
                 except Exception as exc:
                     self._log(f"capture_screenshot u2 error: {exc}", level=logging.DEBUG)
 
-        # Fallback: ADB shell screencap
-        if jpeg is None and self._adb_transport is not None and self._adb_transport.connected:
-            try:
-                png_data = self._adb_transport.shell("screencap -p", timeout=10.0)
-                if png_data:
-                    from PIL import Image
-                    import io
-                    img = Image.open(io.BytesIO(png_data.encode("latin-1") if isinstance(png_data, str) else png_data))
-                    w, h = img.size
-                    if max_width > 0 and w > max_width:
-                        ratio = max_width / w
-                        img = img.resize((max_width, int(h * ratio)), Image.LANCZOS)
-                    buf = io.BytesIO()
-                    img.save(buf, format="JPEG", quality=quality)
-                    jpeg = buf.getvalue()
-            except Exception as exc:
-                self._log(f"capture_screenshot adb error: {exc}", level=logging.DEBUG)
-
-        # Relay fallback: adb screencap via gRPC relay (relay mode, no direct ADB)
+        # Relay fallback: screencap via agent-boot relay
         if jpeg is None and self._loop:
             try:
                 from runtime.transports.adb_relay_server import get_relay_manager
@@ -633,21 +679,18 @@ class DeviceClient:
                 if relay and actual_serial:
                     actual_serial = relay.resolve_serial(actual_serial)
                 if relay and relay.relay_for_serial(actual_serial):
-                    output = asyncio.run_coroutine_threadsafe(
-                        relay.adb_shell(actual_serial, "screencap -p | base64", timeout=12.0),
+                    raw = asyncio.run_coroutine_threadsafe(
+                        relay.screencap(actual_serial, timeout=12.0),
                         self._loop,
                     ).result(timeout=15.0)
-                    if output and len(output) > 200:
-                        import base64 as _b64, io
+                    if raw:
                         from PIL import Image
-                        raw = _b64.b64decode(output.replace("\n", "").replace("\r", "").strip())
-                        img = Image.open(io.BytesIO(raw))
+                        import io as _io
+                        img = Image.open(_io.BytesIO(raw))
                         if max_width > 0 and img.width > max_width:
                             ratio = max_width / img.width
-                            img = img.resize(
-                                (max_width, int(img.height * ratio)), Image.LANCZOS
-                            )
-                        buf = io.BytesIO()
+                            img = img.resize((max_width, int(img.height * ratio)), Image.LANCZOS)
+                        buf = _io.BytesIO()
                         img.save(buf, format="JPEG", quality=quality)
                         jpeg = buf.getvalue()
             except Exception as exc:
@@ -661,7 +704,7 @@ class DeviceClient:
         # Update cache — only for ADB mode (u2 is primary source) or scrcpy frames.
         # WS u2 fallback (allow_ws_u2_fallback=True) must NOT update cache, otherwise
         # take_screenshot() returns the stale fallback frame and MJPEG freezes.
-        if jpeg is not None and (self.is_adb_mode or not allow_ws_u2_fallback):
+        if jpeg is not None and not allow_ws_u2_fallback:
             with self._latest_jpeg_lock:
                 self._latest_jpeg = jpeg
 
@@ -694,12 +737,9 @@ class DeviceClient:
 
     def _try_u2_tap(self, action: "Callable[[], None]") -> bool:
         """Run touch action via u2. On failure: null _u2, reconnect once, retry."""
-        # If u2 not ready yet, wait briefly (tunnels may still be setting up)
-        if self._u2 is None and self.state in (DeviceState.READY, DeviceState.CONNECTING):
-            for _ in range(5):
-                time.sleep(0.5)
-                if self._u2 is not None:
-                    break
+        # Do NOT wait for U2 if it isn't ready — fall through to scrcpy immediately.
+        # The old 5×500ms wait (2.5s blocking) caused the first tap after connect to
+        # freeze the receiver for 2.5s. Scrcpy is a faster fallback when U2 is initializing.
         if not self.ensure_u2_healthy() or self._u2 is None:
             return False
         return self._try_u2_tap_impl(action)
@@ -716,11 +756,7 @@ class DeviceClient:
                     self._u2 = None
         # Reconnect u2 and retry once — mirrors uiautomator2 jsonrpc_call pattern:
         # stop_uiautomator() + start_uiautomator() + retry in the same call.
-        reconnected = (
-            self._wait_for_u2_restart(timeout=25.0)
-            if self.is_adb_mode
-            else self._reconnect_u2()
-        )
+        reconnected = self._reconnect_u2()
         if not reconnected or self._u2 is None:
             return False
         try:
@@ -754,6 +790,29 @@ class DeviceClient:
             self._agent_send is not None
             and (self.sdk_version == 0 or self.sdk_version <= self._SHELL_INPUT_MAX_SDK)
         )
+
+    def input_route_hint(self) -> str:
+        """
+        Best-effort route hint for tap/swipe/key style inputs.
+        This mirrors the runtime priority order and is used for logging only.
+        """
+        if self._u2 is not None:
+            try:
+                from runtime.transports.u2_jsonrpc import _RelaySession
+                session = getattr(self._u2, "_session", None)
+                if isinstance(session, _RelaySession):
+                    return "agent_boot_u2_proxy"
+            except Exception:
+                pass
+            return "device_farm_u2_local"
+        ctrl = self._get_scrcpy_control()
+        if ctrl is not None and ctrl.is_connected:
+            return "agent_boot_scrcpy_control"
+        if self._shell_input_ok():
+            return "device_agent_shell"
+        if self._agent_send is not None:
+            return "device_agent_ws"
+        return "none"
 
     def tap(self, x: int, y: int) -> None:
         """
@@ -867,11 +926,6 @@ class DeviceClient:
                 return
             except Exception as exc:
                 self._log(f"set_clipboard via u2 failed: {exc}", level=logging.WARNING)
-        if self.is_adb_mode and self._adb_transport is not None and self._adb_transport.connected:
-            safe = text.replace("'", r"'\''")
-            self._adb_transport.shell_safe(
-                f"am broadcast -a clipper.set -e text '{safe}'", timeout=5.0
-            )
 
     def get_clipboard(self) -> Optional[str]:
         """Get device clipboard text. STFService → U2."""
@@ -1073,32 +1127,7 @@ class DeviceClient:
             self._send_to_agent({"type": "key", "key": key_l})
             return
 
-        # Fallback for ADB mode (or anytime an adb transport is present).
-        adb = self._adb_transport
-        if adb is not None and adb.connected:
-            keycode = {
-                "home": "KEYCODE_HOME",
-                "back": "KEYCODE_BACK",
-                "menu": "KEYCODE_MENU",
-                "power": "KEYCODE_POWER",
-                "enter": "KEYCODE_ENTER",
-                "volumeup": "KEYCODE_VOLUME_UP",
-                "volumedown": "KEYCODE_VOLUME_DOWN",
-                "recent": "KEYCODE_APP_SWITCH",
-                "app_switch": "KEYCODE_APP_SWITCH",
-                "del": "KEYCODE_DEL",
-                "delete": "KEYCODE_DEL",
-                "tab": "KEYCODE_TAB",
-            }.get(key_l)
-            if not keycode:
-                keycode = k if k.upper().startswith("KEYCODE_") else f"KEYCODE_{k.upper()}"
-            try:
-                adb.shell(f"input keyevent {keycode}", timeout=5.0)
-                return
-            except Exception as exc:
-                self._log(f"key via ADB failed ({keycode}): {exc}", level=logging.WARNING)
-
-        self._log(f"key skipped ({k}): no agent and no adb", level=logging.WARNING)
+        self._log(f"key skipped ({k}): no agent and no scrcpy control", level=logging.WARNING)
 
     def pinch(self, cx: int, cy: int, scale: float, duration_ms: int = 400) -> None:
         """Pinch/zoom via TouchAccessibilityService. scale>1=zoom in, scale<1=zoom out."""
@@ -1118,31 +1147,6 @@ class DeviceClient:
         """Ask agent to start an app by package name via Intent."""
         if not package:
             return
-        # ADB mode: use am start (works on all Android versions including 12+)
-        # monkey is blocked on many OEMs; am start via resolve-activity is more reliable.
-        if self.is_adb_mode and self._adb_transport is not None and self._adb_transport.connected:
-            try:
-                # Resolve the launcher activity component, then start it directly.
-                resolve = (
-                    f"cmd package resolve-activity --brief"
-                    f" -c android.intent.category.LAUNCHER"
-                    f" -a android.intent.action.MAIN"
-                    f" {package} 2>/dev/null | grep '/' | head -1"
-                )
-                component = (self._adb_transport.shell(resolve, timeout=5.0) or "").strip()
-                if component and "/" in component:
-                    cmd = f"am start -n {component}"
-                else:
-                    # Fallback: generic intent launch (works if app has a MAIN/LAUNCHER activity)
-                    cmd = (
-                        f"am start -a android.intent.action.MAIN"
-                        f" -c android.intent.category.LAUNCHER"
-                        f" -p {package}"
-                    )
-                self._adb_transport.shell(cmd, timeout=10.0)
-            except Exception as exc:
-                self._log(f"launch_app via ADB failed: {exc}", level=logging.WARNING)
-            return
         # WsAgent mode: use the Java intent approach (getLaunchIntentForPackage +
         # queryIntentActivities fallback).  Do NOT use am start via shell here —
         # Runtime.exec() from app UID (non-shell) is blocked by assertPackageMatchesCallingUid
@@ -1155,15 +1159,6 @@ class DeviceClient:
         MCP/scenario decides; agent only applies payload.
         """
         if not url:
-            return
-        # ADB mode: launch via am start VIEW intent (package not supported here; use agent for that)
-        if self.is_adb_mode and self._adb_transport is not None and self._adb_transport.connected:
-            escaped = url.replace('"', r"\\\"")
-            cmd = f'am start -a android.intent.action.VIEW -d "{escaped}"'
-            try:
-                self._adb_transport.shell(cmd, timeout=15.0)
-            except Exception as exc:
-                self._log(f"open_url via ADB failed: {exc}", level=logging.WARNING)
             return
         # WS agent mode: send command and wait for agent to confirm success/failure
         payload: Dict[str, Any] = {"type": "open_url", "url": url}
@@ -1400,6 +1395,7 @@ class DeviceClient:
                 # cause on_agent_disconnect to wipe _last_config_frame and lose bootstrap).
                 _session_alive = True
                 try:
+                    import time as _time
                     from runtime.transports.adb_relay_server import get_relay_manager as _grm
                     _relay_check = _grm()
                     if _relay_check and not _relay_check.is_scrcpy_running(existing_serial):
@@ -1412,6 +1408,24 @@ class DeviceClient:
                         level=logging.DEBUG,
                     )
                     return
+                # If we are still receiving frames recently, treat this as a transient
+                # relay flap / false negative and do not restart immediately.
+                now = _time.monotonic()
+                if self._last_frame_time > 0 and (now - self._last_frame_time) < 1.5:
+                    self._log(
+                        f"relay session check says dead but frames are fresh "
+                        f"({now - self._last_frame_time:.2f}s) — skipping restart",
+                        level=logging.INFO,
+                    )
+                    return
+                # Restart cooldown: avoid repeated stop/restart loops on unstable gRPC.
+                if self._scrcpy_last_restart_at > 0 and (now - self._scrcpy_last_restart_at) < 5.0:
+                    self._log(
+                        f"relay session lost for {existing_ip} but restart cooldown active "
+                        f"({now - self._scrcpy_last_restart_at:.1f}s) — skipping restart",
+                        level=logging.WARNING,
+                    )
+                    return
                 # Relay session lost — stop the dead receiver (no scrcpy_stop sent,
                 # agent already stopped it) and fall through to restart.
                 # _scrcpy_active stays True so on_agent_disconnect won't clear
@@ -1420,6 +1434,7 @@ class DeviceClient:
                     f"relay session lost for {existing_ip} — restarting scrcpy",
                     level=logging.INFO,
                 )
+                self._scrcpy_last_restart_at = _time.monotonic()
                 try:
                     self._scrcpy_receiver.stop_receiver()
                 except Exception:
@@ -1529,6 +1544,15 @@ class DeviceClient:
                         f"scrcpy already running for {actual_serial} — inheriting session",
                         level=logging.DEBUG,
                     )
+                    # Force scrcpy to resend SPS/PPS config + IDR so this new receiver
+                    # gets a fresh keyframe immediately.  Without this, the browser H264
+                    # decoder never receives a config frame for this device's serial and
+                    # the stream appears frozen until the next natural codec reset.
+                    if enable_control and receiver.control is not None:
+                        try:
+                            receiver.control.request_idr()
+                        except Exception:
+                            pass
                 else:
                     # low_latency (KEY_LATENCY=0): saves ~66-133ms of encoder buffer
                     # but crashes MediaCodec on Android 14+ (API 34+). Safe on API ≤ 33.
@@ -1697,93 +1721,28 @@ class DeviceClient:
             self._scrcpy_receiver = None
         self._scrcpy_active = False
 
-    # ── ADB Mode (Mode B) ─────────────────────────────────────────────────────
+    _BY_MAP = {
+        "xpath":       "xpath",
+        "resourceId":  "resourceId",
+        "text":        "text",
+        "description": "description",
+        "className":   "className",
+    }
 
-    def attach_adb_transport(self, transport: AdbTransport) -> None:
-        """
-        Attach an AdbTransport and start AdbDeviceBootstrap in ADB mode.
+    def _batch_enabled(self) -> bool:
+        return self._u2_batch is not None
 
-        - Screen: scrcpy (in AdbDeviceBootstrap) → self.publish_frame(...)
-        - Touch/UI: openatx android-uiautomator-server on TCP :9008
-        - Battery/rotation: update local fields for status panel.
-        """
-        # If we already had an ADB transport, close it.
-        if self._adb_bootstrap is not None:
-            try:
-                self._adb_bootstrap.stop()
-            except Exception:
-                pass
-            self._adb_bootstrap = None
-        if self._adb_transport is not None:
-            try:
-                self._adb_transport.close()
-            except Exception:
-                pass
-            self._adb_transport = None
+    def _selector_dict(self, by: str, value: str) -> dict:
+        key = self._BY_MAP.get(by)
+        if key is None:
+            return {"text": value}
+        return {key: value}
 
-        self._adb_transport = transport
-        self.is_adb_mode = True
-
-        def _on_frame(jpeg: bytes) -> None:
-            # Called from AdbDeviceBootstrap thread (scrcpy).
-            with self._latest_jpeg_lock:
-                self._latest_jpeg = jpeg
-            self.publish_frame(jpeg)
-
-        def _on_battery(level: int) -> None:
-            try:
-                self.battery_level = int(level)
-            except Exception:
-                self.battery_level = -1
-            # If STFService is connected, get rich battery info
-            svc = self._stf_service
-            if svc and svc.connected:
-                info = svc.get_battery_info()
-                self.battery_status = info.status
-                self.battery_source = info.source
-                self.battery_temp = info.temp
-            self._publish_status()
-
-        def _on_rotation(degrees: int) -> None:
-            self._log(f"Rotation (ADB): {degrees}°")
-
-        def _on_u2_ready(client: U2JsonRpcClient) -> None:
-            # Wire AdbDeviceBootstrap's U2JsonRpcClient into this DeviceClient
-            with self._u2_lock:
-                self._u2 = client
-            self._publish_status()
-            self._log(f"uiautomator2 ready on {client._base}")
-
-        def _on_stf_ready(svc: STFServiceClient) -> None:
-            self._stf_service = svc
-            self._publish_status()
-            self._log("STFService connected (ADB mode — push events)")
-
-        def _on_metadata(meta: Dict[str, Any]) -> None:
-            # Update basic device metadata from AdbDeviceBootstrap; mark READY so frontend shows frame
-            self.brand           = meta.get("brand", self.brand)
-            self.model           = meta.get("model", self.model)
-            self.android_version = meta.get("android", self.android_version)
-            self.sdk_version     = int(meta.get("sdk", self.sdk_version) or 0)
-            self.screen_width    = int(meta.get("screen_width", self.screen_width) or 0)
-            self.screen_height   = int(meta.get("screen_height", self.screen_height) or 0)
-            self.state = DeviceState.READY
-            self._publish_status()
-
-        skip_scrcpy = self.config.streaming.mode == "periodic"
-        self._adb_bootstrap = AdbDeviceBootstrap(
-            transport=self._adb_transport,
-            on_frame=_on_frame,
-            on_battery=_on_battery,
-            on_rotation=_on_rotation,
-            on_u2_ready=_on_u2_ready,
-            on_metadata=_on_metadata,
-            on_stf_ready=_on_stf_ready,
-            skip_scrcpy=skip_scrcpy,
-        )
-        self._adb_bootstrap.start()
-        mode_label = "periodic screenshots" if skip_scrcpy else "scrcpy + u2 over TCP"
-        self._log(f"ADB bootstrap started ({mode_label})")
+    def u2_batch(self, actions: list, timeout: float = 30.0) -> list:
+        """Pipeline N primitive u2 ops in a single RPC. Raises if not enabled."""
+        if not self._batch_enabled():
+            raise RuntimeError("u2 batch not available for this device")
+        return self._u2_batch.batch(actions, timeout=timeout)
 
     def tap_selector(self, by: str, value: str) -> None:
         """
@@ -1809,9 +1768,36 @@ class DeviceClient:
         if not self.ensure_u2_healthy() or self._u2 is None:
             self._log("tap_selector skipped (U2 not available)", level=logging.WARNING)
             return
-        self._tap_selector_impl(by, value)
 
-    def _tap_selector_impl(self, by: str, value: str) -> None:
+        if self._batch_enabled():
+            self._log(
+                f"tap_selector route=agent_boot_batch_flow by={by} value={value!r}",
+                level=logging.INFO,
+            )
+            try:
+                result = self._u2_batch.flow(
+                    "find_click_wait",
+                    {
+                        "selector": self._selector_dict(by, value),
+                        "click_timeout": 10.0,
+                        "gone_timeout": 2.0,
+                    },
+                    timeout=15.0,
+                )
+                if result.get("found"):
+                    self.hierarchy_invalidate_cache()
+                    return
+                self._log(f"tap_selector: not found via flow {by}={value!r}", level=logging.DEBUG)
+            except Exception as exc:
+                self._log(f"tap_selector flow error: {exc} — falling back", level=logging.WARNING)
+
+        self._log(
+            f"tap_selector route=device_farm_u2_wrapper by={by} value={value!r}",
+            level=logging.INFO,
+        )
+        self._tap_selector_legacy(by, value)
+
+    def _tap_selector_legacy(self, by: str, value: str) -> None:
         u2_snap = self._u2
         if u2_snap is None:
             return
@@ -1930,14 +1916,6 @@ class DeviceClient:
                 return
             except Exception as exc:
                 self._log(f"install via atx-agent failed: {exc}", level=logging.WARNING)
-        # ADB mode fallback
-        adb = self._adb_transport
-        if adb is not None and adb.connected and not apk_source.startswith(("http://", "https://")):
-            try:
-                adb.shell(f"pm install -r {apk_source}", timeout=timeout)
-                self._log(f"install via ADB: {apk_source}")
-            except Exception as exc:
-                self._log(f"install via ADB failed: {exc}", level=logging.WARNING)
         else:
             self._log("install: no suitable transport available", level=logging.WARNING)
 
@@ -1947,7 +1925,6 @@ class DeviceClient:
     def u2_device(self) -> Optional[U2JsonRpcClient]:
         return self._u2
 
-    # Backwards-compatible alias used by tasks (example_task, etc.)
     @property
     def u2(self) -> Optional[U2JsonRpcClient]:
         return self._u2
@@ -1956,9 +1933,6 @@ class DeviceClient:
     _U2_STALE_CHECK_INTERVAL = 10.0  # seconds between lazy pings in WS mode
 
     def ensure_u2_healthy(self, ping_timeout: float = 3.0) -> bool:
-        if self.is_adb_mode:
-            return self._ensure_u2_healthy_adb(ping_timeout)
-
         u2 = self._u2
         if u2 is None:
             # atx-agent direct mode: device_ip:7912 reachable (local/same-LAN, u2_always_tunnel=False).
@@ -1985,74 +1959,16 @@ class DeviceClient:
         if now - self._u2_last_ok_at > self._U2_STALE_CHECK_INTERVAL:
             if not u2.ping(timeout=min(ping_timeout, 4.0)):
                 self._log("u2 stale-ping failed — server likely crashed", level=logging.WARNING)
+                self._mark_recovery_start("u2_stale_ping_failed")
                 with self._u2_lock:
                     if self._u2 is u2:
                         self._u2 = None
-                if not self.is_adb_mode and self._agent_send is not None:
+                if self._agent_send is not None:
                     self._recover_u2_ws_mode()
                 return self._reconnect_u2()
             self._u2_last_ok_at = now
 
         return True
-
-    def _ensure_u2_healthy_adb(self, ping_timeout: float = 3.0) -> bool:
-        """
-        Health check for ADB mode.
-
-        Pings the u2 HTTP server. If dead, nulls _u2 so subsequent calls
-        return False immediately while the watchdog thread (started by
-        AdbDeviceBootstrap._start_u2_watchdog) detects the failure and
-        restarts atx-agent automatically in the background.
-
-        Returns True only when /ping responds HTTP 200.
-        """
-        u2_snap = self._u2
-        if u2_snap is None:
-            return False
-
-        if u2_snap.ping(timeout=ping_timeout):
-            return True
-
-        # Ping failed — null out stale client so callers fall back gracefully.
-        # The watchdog thread will detect the failure on its next tick and
-        # call restart_u2_server() without us needing to spawn anything here.
-        self._log("u2 ping failed — waiting for watchdog to restart atx-agent", level=logging.WARNING)
-        with self._u2_lock:
-            if self._u2 is u2_snap:
-                self._u2 = None
-        return False
-
-    def _wait_for_u2_restart(self, timeout: float = 25.0) -> bool:
-        """
-        ADB mode: wait for the watchdog to bring u2 back up.
-
-        Mirrors the uiautomator2 library pattern: after a failed RPC call,
-        block briefly so the inline retry can succeed (watchdog is already
-        restarting in the background).
-
-        Polls _u2 every 1s until it becomes non-None and passes /ping.
-        """
-        deadline = time.monotonic() + timeout
-        serial = self.serial
-        # Trigger an eager restart if watchdog hasn't noticed yet
-        bootstrap = self._adb_bootstrap
-        if bootstrap is not None:
-            t = threading.Thread(
-                target=bootstrap.restart_u2_server,
-                kwargs={"debounce": 0.0},
-                daemon=True,
-                name=f"u2-inline-restart-{serial}",
-            )
-            t.start()
-
-        while time.monotonic() < deadline:
-            time.sleep(1.0)
-            u2 = self._u2
-            if u2 is not None and u2.ping(timeout=2.0):
-                self._log("u2 back online after inline restart")
-                return True
-        self._log(f"u2 did not recover within {timeout:.0f}s", level=logging.ERROR)
-        return False
 
     _U2_RECONNECT_ATTEMPTS = 8
     _U2_RECONNECT_DELAY = 1.5        # u2 instrumentation may need 5-10s to start; use longer delay
@@ -2213,14 +2129,12 @@ class DeviceClient:
           atx-agent auto-manages u2 lifecycle — no tunnel port needed.
 
         WS mode legacy (USB / no atx-agent): connect via WS tunnel port.
-
-        Serialised by _u2_lock so concurrent callers don't open multiple connections.
         """
         with self._u2_lock:
             if self._u2 is not None:
                 return True
 
-        if not self.is_adb_mode and self._u2_host:
+        if self._u2_host:
             return self._reconnect_u2_atx()
 
         # Legacy WS tunnel path
@@ -2297,6 +2211,38 @@ class DeviceClient:
             d_rpc: Any = U2JsonRpcClient(host, port, timeout=cfg.wait_timeout)
             d_rpc.implicitly_wait(cfg.implicitly_wait)
             d_rpc.settings["wait_timeout"] = cfg.wait_timeout
+
+            # In relay mode the farm server cannot reach device_ip:7912 directly.
+            # Swap the requests.Session for a _RelaySession that proxies calls
+            # through the gRPC relay stream (agent-boot → device_ip:7912 locally).
+            relay_attached = False
+            if self._loop is not None:
+                try:
+                    from runtime.transports.adb_relay_server import get_relay_manager
+                    from runtime.transports.u2_jsonrpc import _RelaySession
+                    _rm = get_relay_manager()
+                    _relay_serial = self._adb_serial or host
+                    if _rm is not None and _rm.relay_for_serial(_relay_serial):
+                        _actual = _rm.resolve_serial(_relay_serial)
+                        _rs = _RelaySession(_actual, _rm, self._loop)
+                        d_rpc._session = _rs
+                        d_rpc.watchers.set_session(_rs)
+                        relay_attached = True
+                        self._log(f"u2 ATX: using relay session for {_actual}")
+                except Exception as _e:
+                    self._log(f"u2 ATX relay session setup failed: {_e}", level=logging.DEBUG)
+
+            # Force mode: only allow u2 over agent-boot relay.
+            # If relay is not attached, skip local direct-HTTP u2 path.
+            if U2_FORCE_RELAY and not relay_attached:
+                self._log(
+                    "u2 ATX: relay-only mode enabled, skipping local u2 session (no relay attached)",
+                    level=logging.WARNING,
+                )
+                d_rpc._session.close()
+                self._u2_reconnect_failed_at = time.monotonic()
+                return False
+
             try:
                 d_rpc.verify(timeout=self._U2_ATX_PROBE_TIMEOUT)
                 with self._u2_lock:
@@ -2307,6 +2253,33 @@ class DeviceClient:
                 self._u2_reconnect_failed_at = 0.0   # clear backoff on success
                 self._atx_grace_given_at = float("-inf")  # reset grace window
                 self._log(f"uiautomator2 connected via atx-agent ({host}:{port})")
+                self._recovery_log(
+                    "u2_started",
+                    source="atx_connect",
+                    host=host,
+                    port=port,
+                )
+                self._mark_recovery_end("u2_connected_via_atx", host=host, port=port)
+                # Set up batch relay session if enabled
+                try:
+                    from runtime.transports.adb_relay_server import get_relay_manager
+                    from runtime.transports.u2_jsonrpc import _BatchRelaySession
+                    _rm = get_relay_manager()
+                    _relay_serial = self._adb_serial or host
+                    if (
+                        self._loop is not None
+                        and _rm is not None
+                        and _rm.relay_for_serial(_relay_serial)
+                        and os.getenv("U2_BATCH_ENABLED", "").lower() in ("1", "true")
+                    ):
+                        _actual = _rm.resolve_serial(_relay_serial)
+                        self._u2_batch = _BatchRelaySession(_rm, _actual, self._loop)
+                        self._log(f"u2 batch/flow session active for {_actual}")
+                    else:
+                        self._u2_batch = None
+                except Exception as _be:
+                    self._u2_batch = None
+                    self._log(f"u2 batch session setup skipped: {_be}", level=logging.DEBUG)
                 return True
             except Exception as exc:
                 d_rpc._session.close()
@@ -2316,6 +2289,7 @@ class DeviceClient:
                     f" ({host}:{port}): {exc}",
                     level=logging.WARNING,
                 )
+                self._mark_recovery_start("atx_connect_failed")
 
                 if "timed out" in exc_str.lower():
                     now = time.monotonic()
@@ -2346,6 +2320,10 @@ class DeviceClient:
 
                 # "Connection refused" or other: continue retrying (atx may be starting up)
 
+        # All retries exhausted — atx-agent is completely dead (not just frozen).
+        # Trigger an async restart via relay so it comes back without manual intervention.
+        # _trigger_atx_restart_async has its own 15s dedup guard so calling it here is safe.
+        self._trigger_atx_restart_async(host)
         self._u2_reconnect_failed_at = time.monotonic()
         return False
 
@@ -2381,31 +2359,34 @@ class DeviceClient:
 
             async def _do_restart() -> None:
                 try:
-                    # Kill uiautomator2 instrumentation first — if u2 is stuck it blocks
-                    # atx-agent's HTTP handler.  Wrap in a subshell so the '; sleep 1; ...'
-                    # commands continue even if pkill kills a shell parented by atx-agent.
-                    kill_cmd = (
-                        "sh -c '"
-                        "pkill -9 -f 'uiautomator' 2>/dev/null; "
-                        "pkill -9 atx-agent 2>/dev/null; "
-                        "sleep 1; "
-                        "/data/local/tmp/atx-agent server -d "
-                        ">/data/local/tmp/atx-agent.log 2>&1 &"
-                        "'"
-                    )
-                    out = await relay.adb_shell(actual_serial, kill_cmd, timeout=15.0)
-                    self._log(
-                        f"atx-agent + u2 restarted via relay for {actual_serial}"
-                        + (f": {out.strip()}" if out and out.strip() else "")
-                    )
-                    # Start background TCP poll — clears backoff as soon as port 7912 is live
-                    # so recovery completes in ~5-8s instead of the full 30s flat wait.
-                    threading.Thread(
-                        target=self._poll_atx_recovery,
-                        args=(host,),
-                        daemon=True,
-                        name=f"atx-recovery-{self.serial}",
-                    ).start()
+                    # Delegate restart entirely to agent-boot: it runs _restart_atx()
+                    # locally via ADB (same LAN as device) — polls port 7912, returns
+                    # ok=True only when atx is ready.  No raw shell strings on farm side.
+                    ok = await relay.restart_atx(actual_serial, timeout=30.0)
+                    if ok:
+                        self._log(f"atx-agent restarted via agent-boot for {actual_serial}")
+                        self._u2_reconnect_failed_at = 0.0
+                        self._atx_grace_given_at = float("-inf")
+                        self._recovery_log(
+                            "atx_started",
+                            source="relay_restart",
+                            relay_serial=actual_serial,
+                            host=host,
+                            port=7912,
+                        )
+                        self._mark_recovery_end("atx_restarted_via_agent_boot", relay_serial=actual_serial)
+                    else:
+                        self._log(
+                            f"atx-agent restart via agent-boot failed for {actual_serial} "
+                            f"— starting recovery poll",
+                            level=logging.WARNING,
+                        )
+                        threading.Thread(
+                            target=self._poll_atx_recovery,
+                            args=(host,),
+                            daemon=True,
+                            name=f"atx-recovery-{self.serial}",
+                        ).start()
                 except Exception as exc2:
                     self._log(f"atx-agent restart error for {actual_serial}: {exc2}", level=logging.WARNING)
 
@@ -2421,21 +2402,50 @@ class DeviceClient:
         next ensure_u2_healthy() call immediately attempts reconnect instead of
         waiting the remaining flat backoff.
         """
+        # Prefer relay probe in cloud mode (farm cannot reach device_ip:7912 directly).
+        # Falls back to direct TCP for LAN/local deployments.
+        def _probe_alive() -> bool:
+            loop = self._loop
+            if loop:
+                try:
+                    from runtime.transports.adb_relay_server import get_relay_manager
+                    _rm = get_relay_manager()
+                    serial = self._adb_serial or f"{host}:5555"
+                    if _rm and _rm.relay_for_serial(serial):
+                        actual = _rm.resolve_serial(serial)
+                        fut = asyncio.run_coroutine_threadsafe(
+                            _rm.u2_http(actual, "GET", "/ping", timeout=3.0),
+                            loop,
+                        )
+                        result = fut.result(timeout=8.0)
+                        return result.get("ok", False)
+                except Exception:
+                    pass
+            # LAN fallback: direct TCP connect
+            try:
+                with socket.create_connection((host, 7912), timeout=2.0):
+                    return True
+            except Exception:
+                return False
+
         deadline = time.monotonic() + max_wait
         while time.monotonic() < deadline:
             time.sleep(poll_interval)
             if not self._u2_host:
                 return  # device disconnected
-            try:
-                with socket.create_connection((host, 7912), timeout=2.0):
-                    pass
+            if _probe_alive():
                 # Port accepted — atx-agent is alive, clear the backoff.
                 self._u2_reconnect_failed_at = 0.0
                 self._atx_grace_given_at = float("-inf")
                 self._log(f"atx-agent recovery: port 7912 live on {host} — backoff cleared")
+                self._recovery_log(
+                    "atx_started",
+                    source="recovery_poll",
+                    host=host,
+                    port=7912,
+                )
+                self._mark_recovery_end("atx_port_recovered", host=host, port=7912)
                 return
-            except Exception:
-                pass
         self._log(f"atx-agent recovery: port 7912 still unreachable on {host} after {max_wait:.0f}s", level=logging.WARNING)
 
     # ── Frame / Status Broadcasting ───────────────────────────────────────────
@@ -2535,15 +2545,20 @@ class DeviceClient:
             if self._frame_seq % LOW_BW_FRAME_SKIP != 0:
                 return
         # Binary frame protocol: [0x01][serial_len:1B][serial:NB][w:2B BE][h:2B BE][jpeg]
-        serial_b = self.serial.encode()
-        slen = len(serial_b)
         w = max(0, min(self.screen_width, 0xFFFF))
         h = max(0, min(self.screen_height, 0xFFFF))
-        msg: bytes = bytes([0x01, slen]) + serial_b + struct.pack(">HH", w, h) + jpeg_bytes
+        msg: bytes = (
+            bytes([0x01, len(self._serial_b)]) + self._serial_b
+            + struct.pack(">HH", w, h)
+            + jpeg_bytes
+        )
         with self._frame_lock:
             queues = list(self._frame_queues)
+        loop = self._loop
         for q in queues:
-            asyncio.run_coroutine_threadsafe(_safe_put(q, msg), self._loop)
+            # call_soon_threadsafe is cheaper than run_coroutine_threadsafe:
+            # no Future/Task allocation, just schedules a callback directly.
+            loop.call_soon_threadsafe(_sync_put, q, msg)
 
     def _publish_status(self) -> None:
         if not self._loop:
@@ -2664,6 +2679,13 @@ class DeviceClient:
                       level=logging.WARNING)
 
         self.state = DeviceState.READY
+        # Prefer U2 as primary touch backend when available: proactively try to
+        # bring it up once at READY so the first tap after connect goes through U2
+        # instead of falling back to scrcpy control.
+        try:
+            self.ensure_u2_healthy()
+        except Exception:
+            pass
         if self._u2 is not None:
             touch_status = "u2"
         elif self._get_scrcpy_control() is not None:
@@ -2695,10 +2717,7 @@ class DeviceClient:
         misses = 0
 
         def _is_alive() -> bool:
-            # For ADB mode, keep running while transport is connected
-            if self.is_adb_mode:
-                return self.state not in (DeviceState.DEAD, DeviceState.DISCONNECTED)
-            return self._agent_send is not None
+            return self._agent_send is not None or self.state in (DeviceState.READY, DeviceState.BUSY)
 
         while _is_alive():
             time.sleep(_INTERVAL)
@@ -2725,7 +2744,7 @@ class DeviceClient:
                             level=logging.DEBUG,
                         )
                     else:
-                        if not self.is_adb_mode and self._agent_send is not None:
+                        if self._agent_send is not None:
                             self._recover_u2_ws_mode()
                         self.ensure_u2_healthy()
                 misses = 0
@@ -2752,7 +2771,7 @@ class DeviceClient:
                         if self._u2 is u2:
                             self._u2 = None
                     misses = 0
-                    if not self.is_adb_mode and self._agent_send is not None:
+                    if self._agent_send is not None:
                         self._recover_u2_ws_mode()
                     self.ensure_u2_healthy()
 

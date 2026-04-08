@@ -96,19 +96,32 @@ def create_app(
             scheduler_engine.start()
             log.info("SchedulerEngine (fallback) started")
 
-        # ── ADB relay WebSocket server ────────────────────────────────────
+        # ── ADB relay WebSocket + gRPC server ────────────────────────────────
         relay_manager = None
         if config.relay.enabled:
             try:
                 from runtime.transports.adb_relay_server import create_relay_manager, WsRelayAgentSession
                 relay_manager = create_relay_manager()
-                # WsRelayAgentSession is attached to the FastAPI app below (outside lifespan)
-                # Store on app.state so the /relay-agent endpoint can reach it
+                # WsRelayAgentSession kept as fallback for older agent-boot versions
                 _app.state.relay_agent_session = WsRelayAgentSession(
                     relay_manager,
                     api_key=config.relay.api_key or None,
                 )
                 log.info("ADB relay WebSocket server ready on /relay-agent (main port %d)", config.web.port)
+
+                # ── gRPC relay server (HTTP/2 multiplexing for 100+ phones) ──
+                try:
+                    from runtime.transports.grpc_relay_server import start_grpc_server
+                    grpc_port = getattr(config.relay, "port", 50051)
+                    grpc_server = await start_grpc_server(
+                        relay_manager,
+                        api_key=config.relay.api_key or None,
+                        port=grpc_port,
+                    )
+                    _app.state.grpc_server = grpc_server
+                    log.info("gRPC relay server ready on port %d", grpc_port)
+                except Exception as grpc_exc:
+                    log.warning("gRPC relay server failed to start (WS fallback active): %s", grpc_exc)
 
                 # Auto-attach scrcpy whenever a relay agent reports a new device.
                 _relay_mgr_ref = relay_manager
@@ -157,6 +170,14 @@ def create_app(
                         device.on_agent_status({"state": "READY"})
                     if is_new:
                         ws_manager.subscribe_device(device)
+                        # Bootstrap atx-agent + u2 on first connect so tap/swipe work
+                        # without requiring a manual POST /api/devices/adb-register.
+                        if _relay_mgr_ref is not None:
+                            loop = asyncio.get_event_loop()
+                            asyncio.run_coroutine_threadsafe(
+                                _relay_mgr_ref.bootstrap(serial), loop
+                            )
+                            log.info("relay device online → queued bootstrap: %s", serial)
                     import concurrent.futures as _cf
                     _cf.ThreadPoolExecutor(max_workers=1).submit(
                         device.attach_scrcpy_stream,
@@ -212,6 +233,9 @@ def create_app(
 
         # ── Shutdown ──
         log.info("Shutting down…")
+        grpc_server = getattr(_app.state, "grpc_server", None)
+        if grpc_server is not None:
+            await grpc_server.stop(grace=5)
         if scheduler_engine is not None:
             await scheduler_engine.stop()
         if ngrok_tunnel is not None:

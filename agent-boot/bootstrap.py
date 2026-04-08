@@ -56,6 +56,7 @@ _ATX_AGENT_VERSION  = "0.10.1"
 _ATX_AGENT_REMOTE   = "/data/local/tmp/atx-agent"
 _ATX_AGENT_PORT_HEX = "1EE8"   # 7912 decimal
 _ATX_BUNDLE_DIR     = _DEVICE_FARM / "bundle" / "atx-agent"
+_DEVICE_BUNDLE_TGZ  = _DEVICE_FARM / "bundle" / "device_bundle.tar.gz"
 
 TOTAL_STEPS = 7
 
@@ -124,6 +125,13 @@ def _get_sdk(serial: str) -> int:
 
 def _is_pkg_installed(pkg: str, serial: str) -> bool:
     return "package:" in _adb_shell(f"pm path {pkg}", serial=serial)
+
+def _is_atx_listening(serial: str) -> bool:
+    out = _adb_shell(
+        f"cat /proc/net/tcp6 /proc/net/tcp 2>/dev/null | grep -i ':{_ATX_AGENT_PORT_HEX}' | head -1 || true",
+        serial=serial,
+    ).strip()
+    return bool(out)
 
 
 def _adb_install(apk_path: Path, serial: str, label: str, extra_flags: list[str] | None = None) -> bool:
@@ -346,6 +354,11 @@ def step_push_atx_agent(serial: str, skip: bool) -> bool:
         console.print(f"    [red]✗[/red] {_U2_TEST_PKG} not installed — atx-agent needs it.")
         return False
 
+    # Fast path: already up (covers devices that were bootstrapped previously)
+    if _is_atx_listening(serial):
+        console.print("    [green]✓[/green] atx-agent already running on :7912 — skipping.")
+        return True
+
     abi    = _get_device_abi(serial)
     binary = _atx_agent_local(abi)
     if not (binary.is_file() and binary.stat().st_size > 0):
@@ -373,10 +386,7 @@ def step_push_atx_agent(serial: str, skip: bool) -> bool:
         task = progress.add_task("Waiting for atx-agent on :7912…", total=None)
         for _ in range(15):
             time.sleep(1)
-            if _adb_shell(
-                f"cat /proc/net/tcp6 /proc/net/tcp 2>/dev/null | grep -i ':{_ATX_AGENT_PORT_HEX}' | head -1 || true",
-                serial=serial,
-            ).strip():
+            if _is_atx_listening(serial):
                 console.print("    [green]✓[/green] atx-agent running on :7912")
                 return True
         _ = task  # silence unused warning
@@ -384,6 +394,52 @@ def step_push_atx_agent(serial: str, skip: bool) -> bool:
     console.print(f"    [yellow]⚠[/yellow] atx-agent not ready after 15s.")
     console.print(f"      Check: adb -s {serial} shell {_ATX_AGENT_REMOTE} server")
     return False
+
+
+def step_deploy_bundle_if_needed(serial: str, *, force: bool = False) -> bool:
+    """
+    Optional: deploy device_bundle.tar.gz and run launch.sh on device.
+    Used when a fresh phone doesn't have u2/atx-agent ready yet.
+    """
+    if not force:
+        u2_ok = _is_pkg_installed(_U2_PKG, serial) and _is_pkg_installed(_U2_TEST_PKG, serial)
+        if u2_ok and _is_atx_listening(serial):
+            return True
+
+    try:
+        if not _DEVICE_BUNDLE_TGZ.exists() or _DEVICE_BUNDLE_TGZ.stat().st_size == 0:
+            from pack_bundle import pack_bundle as _pack_bundle
+            result = _pack_bundle(force=False)
+            if result is None:
+                console.print("    [yellow]⚠[/yellow] Bundle pack skipped (missing assets). Falling back to normal bootstrap.")
+                return False
+
+        console.print("    [cyan]→[/cyan] Deploying device_bundle.tar.gz + launch.sh …")
+        r = _adb("push", str(_DEVICE_BUNDLE_TGZ), "/data/local/tmp/device_bundle.tar.gz",
+                 serial=serial, check=False, timeout=60)
+        if r.returncode != 0:
+            console.print(f"    [yellow]⚠[/yellow] adb push bundle failed: {(r.stdout + r.stderr).strip()[:200]}")
+            return False
+
+        # Clean then extract then launch (avoid bad symlink/old dirs)
+        _adb_shell(
+            "cd /data/local/tmp && rm -rf launch.sh apks atx-agent scrcpy-server "
+            "&& tar -xzf device_bundle.tar.gz && sh launch.sh",
+            serial=serial,
+            timeout=120,
+        )
+
+        # Verify atx-agent is up
+        for _ in range(10):
+            time.sleep(0.5)
+            if _is_atx_listening(serial):
+                console.print("    [green]✓[/green] bundle launch OK (atx-agent :7912)")
+                return True
+        console.print("    [yellow]⚠[/yellow] bundle launched but atx-agent not detected on :7912")
+        return False
+    except Exception as e:
+        console.print(f"    [yellow]⚠[/yellow] bundle deploy failed ({e})")
+        return False
 
 
 def step_install_stf(serial: str, apk_path: Path | None, skip: bool) -> bool:
@@ -443,6 +499,7 @@ def step_open_app(serial: str, skip: bool) -> None:
 
 def boot_device(serial: str, stf_apk: Path | None, *,
                 skip_tcpip: bool = False, tcpip_port: int = 5555,
+                use_bundle: bool = False,
                 skip_u2: bool = False, skip_atx: bool = False,
                 skip_stf: bool = False) -> bool:
     sdk   = _get_sdk(serial)
@@ -467,8 +524,17 @@ def boot_device(serial: str, stf_apk: Path | None, *,
             _step_header(1, f"Enable adb tcpip {tcpip_port}")
             console.print(f"    [dim]Skipped — already on WiFi ({serial})[/dim]")
         step_wireless_debugging(active, skip=skip_tcpip)
-        u2_ok  = step_install_u2(active, skip=skip_u2)
-        atx_ok = step_push_atx_agent(active, skip=skip_u2 or skip_atx)
+        # If requested, try the "single tar push" path only when needed.
+        if use_bundle and not skip_u2 and not skip_atx:
+            _step_header(3, "Install uiautomator2 APKs")
+            console.print("    [dim]Bundled mode (--use-bundle): handled by launch.sh[/dim]")
+            _step_header(4, "Push + start atx-agent (port 7912)")
+            bundle_ok = step_deploy_bundle_if_needed(active)
+            u2_ok = bundle_ok and _is_pkg_installed(_U2_PKG, active) and _is_pkg_installed(_U2_TEST_PKG, active)
+            atx_ok = bundle_ok and _is_atx_listening(active)
+        else:
+            u2_ok  = step_install_u2(active, skip=skip_u2)
+            atx_ok = step_push_atx_agent(active, skip=skip_u2 or skip_atx)
         step_install_stf(active, stf_apk, skip=skip_stf)
         step_grant_permissions(active, skip=skip_stf)
         step_open_app(active, skip=skip_stf)

@@ -9,14 +9,13 @@ dependencies = [
     "cryptography>=41.0.0",       # Fernet encryption (common/crypto.py)
     "zeroconf>=0.132.0",          # mDNS discovery for Android 11+ Wireless Debugging
     # ─────────────────────────────────
-
     "pillow>=10.0.0",
     "numpy>=1.24.0",
     "fastapi>=0.110.0",
     "uvicorn[standard]>=0.27.0",
     "websockets>=12.0",
     "aiohttp>=3.9.0",
-    "protobuf>=4.25.0",
+    "protobuf>=5.26.0",
     "pyyaml>=6.0.1",
     "jinja2>=3.1.3",
     "python-multipart>=0.0.9",
@@ -41,6 +40,10 @@ dependencies = [
     "croniter>=2.0.0",             # cron expression parsing + next_run_at computation
     "pytz>=2024.1",                # timezone-aware datetime for cron schedules
     # ADB relay uses WebSocket on /relay-agent (no gRPC dependency needed)
+    # ── Export ──
+    "openpyxl>=3.1.0",            # XLSX streaming export for content pipeline
+    "grpcio>=1.78.0",
+    "grpcio-tools>=1.71.2",
 ]
 
 [project.optional-dependencies]

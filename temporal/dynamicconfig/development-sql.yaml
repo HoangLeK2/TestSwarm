@@ -1,0 +1,9 @@
+# Raise Temporal history limits to "effectively unlimited" for local/dev usage.
+# Temporal does not provide a true "unlimited" toggle for these limits.
+limit.historySize.warn:
+  - value: 1073741824   # 1 GiB
+    constraints: {}
+
+limit.historySize.error:
+  - value: 2147483647   # ~2 GiB (max 32-bit signed int)
+    constraints: {}

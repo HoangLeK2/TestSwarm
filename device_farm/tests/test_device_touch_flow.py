@@ -210,7 +210,6 @@ class TestCaptureScreenshot:
 
     def test_returns_cached_when_ws_agent_mode(self):
         d = _make_device()
-        d.is_adb_mode = False
         d._latest_jpeg = b"cached"
         result = d.capture_screenshot()
         assert result == b"cached"

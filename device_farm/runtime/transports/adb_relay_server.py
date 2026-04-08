@@ -28,9 +28,13 @@ from typing import Any, Callable, Dict, Optional, Set
 logger = logging.getLogger(__name__)
 
 # CMD_TYPE constants (must match agent-boot relay/agent.py)
-CMD_SHELL       = 0
-CMD_RESTART_U2  = 1
-CMD_ADB_CONNECT = 2
+CMD_SHELL        = 0
+CMD_RESTART_U2   = 1
+CMD_ADB_CONNECT  = 2
+CMD_RESTART_ATX  = 3
+CMD_BOOTSTRAP    = 4  # push binaries + install APKs + start atx-agent + u2
+CMD_SCREENCAP    = 5  # screencap → base64 PNG in result["output"]
+CMD_PROBE_CAPS   = 6  # probe_capabilities() → JSON dict in result["output"]
 
 
 def _match_tags(caps: dict, filters: list) -> bool:
@@ -130,6 +134,66 @@ class RelayConnection:
         finally:
             self._pending.pop(msg_id, None)
 
+    async def send_u2_request(
+        self,
+        serial: str,
+        method: str,
+        path: str,
+        body: str = "",
+        content_type: str = "application/json",
+        timeout: float = 30.0,
+    ) -> dict:
+        """Send an HTTP proxy request to atx-agent on the remote device, await result."""
+        msg_id = str(uuid.uuid4())
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future = loop.create_future()
+        self._pending[msg_id] = future
+
+        msg = json.dumps({
+            "type":         "u2_request",
+            "msg_id":       msg_id,
+            "serial":       serial,
+            "method":       method,
+            "path":         path,
+            "body":         body,
+            "content_type": content_type,
+            "timeout":      max(1.0, float(timeout)),
+        })
+        await self._write_queue.put(msg)
+
+        try:
+            return await asyncio.wait_for(asyncio.shield(future), timeout=timeout + 10.0)
+        except asyncio.TimeoutError:
+            self._pending.pop(msg_id, None)
+            return {
+                "ok": False, "status": 0,
+                "body": f"u2 relay timeout ({timeout}s) serial={serial!r}",
+                "content_type": "",
+            }
+        finally:
+            self._pending.pop(msg_id, None)
+
+    async def send_json_request(
+        self,
+        msg: dict,
+        reply_id: str,
+        timeout: float = 30.0,
+    ) -> dict:
+        """Send a JSON message and await a matching reply by id."""
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future = loop.create_future()
+        self._pending[reply_id] = future
+
+        await self._write_queue.put(json.dumps(msg))
+
+        try:
+            return await asyncio.wait_for(asyncio.shield(future), timeout=timeout + 10.0)
+        except asyncio.TimeoutError:
+            self._pending.pop(reply_id, None)
+            return {"ok": False, "error": f"relay timeout ({timeout}s)"}
+        finally:
+            self._pending.pop(reply_id, None)
+
     def resolve(self, msg_id: str, result: dict) -> None:
         future = self._pending.pop(msg_id, None)
         if future and not future.done():
@@ -141,10 +205,23 @@ class RelayConnection:
             future.set_result({"ok": False, "exit_code": -1, "output": "", "error": error})
 
     def fail_all(self, error: str) -> None:
-        """Called on disconnect — resolve all pending futures with error."""
+        """Called on disconnect — resolve all pending futures with error.
+
+        Uses a superset schema that satisfies both ADB-command consumers
+        (ok/exit_code/output/error) and u2-request consumers (ok/status/body/content_type).
+        """
+        result = {
+            "ok":           False,
+            "exit_code":    -1,
+            "output":       "",
+            "error":        error,
+            "status":       0,
+            "body":         error,
+            "content_type": "",
+        }
         for future in list(self._pending.values()):
             if not future.done():
-                future.set_result({"ok": False, "exit_code": -1, "output": "", "error": error})
+                future.set_result(result)
         self._pending.clear()
 
 
@@ -176,6 +253,8 @@ class AdbRelayManager:
         self._on_device_online: Optional[Any] = None
         # Called with (serial, caps_dict) whenever capabilities are updated from heartbeat.
         self._on_capabilities_update: Optional[Any] = None
+        # agent_id → asyncio.Queue  (gRPC ctrl queues, one per connected agent-boot)
+        self._grpc_agents: Dict[str, "asyncio.Queue"] = {}
 
     def set_on_device_online(self, callback: Any) -> None:
         """Register a callback fired with (serial) when a new relay device appears."""
@@ -466,6 +545,58 @@ class AdbRelayManager:
     def is_available(self) -> bool:
         return True
 
+    # ── gRPC agent management ─────────────────────────────────────────────────
+
+    def register_grpc_agent(self, agent_id: str, ctrl_q: "asyncio.Queue") -> None:
+        """Register a gRPC agent's ctrl queue (device_farm → agent-boot direction)."""
+        self._grpc_agents[agent_id] = ctrl_q
+
+    def unregister_grpc_agent(self, agent_id: str) -> None:
+        """Remove gRPC agent and signal its ctrl sender to stop."""
+        q = self._grpc_agents.pop(agent_id, None)
+        if q:
+            try:
+                q.put_nowait(None)  # sentinel → stops _send_controls()
+            except Exception:
+                pass
+
+    def dispatch_grpc_video_frame(self, frame: Any) -> None:
+        """Route a VideoFrame proto received via gRPC to the appropriate RelayScrcpyReceiver."""
+        # Build pts_raw matching the existing dispatch_scrcpy_frame signature
+        pts_raw = int(frame.pts_us)
+        if frame.is_config:
+            pts_raw |= 0x8000_0000_0000_0000
+        self.dispatch_scrcpy_frame(
+            frame.serial,
+            bytes(frame.data),
+            pts_raw,
+            frame.width,
+            frame.height,
+            is_config=frame.is_config,
+            is_keyframe=frame.is_key,
+            pts=frame.pts_us,
+        )
+
+    async def send_grpc_control(self, serial: str, data: bytes) -> None:
+        """Send a raw scrcpy control packet to the agent-boot managing this serial via gRPC.
+
+        Finds the RelayConnection for the serial, then puts a ControlMsg onto the
+        gRPC ctrl queue. Falls back to WS send_scrcpy_control() if no gRPC agent found.
+        """
+        from .grpc_gen import relay_pb2
+
+        conn = self.relay_for_serial(serial)
+        if conn is None:
+            return
+
+        write_q = conn._write_queue
+        # _GrpcWriteQueue wraps the ctrl_q — put_nowait handles conversion
+        try:
+            frame = bytes([0x43, len(serial.encode())]) + serial.encode() + data
+            await write_q.put(frame)
+        except Exception as exc:
+            logger.debug("send_grpc_control error serial=%s: %s", serial, exc)
+
     # ── Public API (called from device_client.py) ──────────────────────────
 
     async def adb_shell(
@@ -486,6 +617,143 @@ class AdbRelayManager:
             return False
         result = await conn.send_command(serial, "", timeout, cmd_type=CMD_RESTART_U2)
         return result.get("ok", False)
+
+    async def restart_atx(self, serial: str, timeout: float = 30.0) -> bool:
+        """Ask agent-boot to kill + restart atx-agent on the device.
+
+        Agent-boot runs _restart_atx() locally via ADB (same machine as device),
+        polls port 7912 until atx is ready, then returns ok=True.
+        Returns False if no relay is connected for this serial.
+        """
+        conn = self.relay_for_serial(serial)
+        if conn is None:
+            logger.warning("restart_atx: no relay for serial=%s", serial)
+            return False
+        actual = self.resolve_serial(serial)
+        result = await conn.send_command(actual, "", timeout, cmd_type=CMD_RESTART_ATX)
+        return result.get("ok", False)
+
+    async def bootstrap(self, serial: str, timeout: float = 180.0) -> bool:
+        """Ask agent-boot to bootstrap the device (push binaries, install APKs, start services).
+
+        Returns True when atx-agent + u2 are confirmed running on the device.
+        Should be called once after a device first appears online via relay.
+        """
+        conn = self.relay_for_serial(serial)
+        if conn is None:
+            logger.warning("bootstrap: no relay for serial=%s", serial)
+            return False
+        actual = self.resolve_serial(serial)
+        result = await conn.send_command(actual, "", int(timeout), cmd_type=CMD_BOOTSTRAP)
+        ok = result.get("ok", False)
+        if not ok:
+            logger.warning("bootstrap failed for %s: %s",
+                           serial, result.get("error") or result.get("output"))
+        return ok
+
+    async def screencap(self, serial: str, timeout: float = 30.0) -> bytes:
+        """Capture a screenshot via relay → base64 PNG → decoded bytes.
+
+        Returns raw PNG bytes or empty bytes on failure.
+        Only used as fallback when scrcpy stream is unavailable.
+        """
+        import base64
+        conn = self.relay_for_serial(serial)
+        if conn is None:
+            return b""
+        actual = self.resolve_serial(serial)
+        result = await conn.send_command(actual, "", int(timeout), cmd_type=CMD_SCREENCAP)
+        if not result.get("ok"):
+            return b""
+        b64 = result.get("output", "")
+        if not b64:
+            return b""
+        try:
+            return base64.b64decode(b64)
+        except Exception as exc:
+            logger.warning("screencap base64 decode error serial=%s: %s", serial, exc)
+            return b""
+
+    async def probe_caps(self, serial: str, timeout: float = 30.0) -> dict:
+        """Ask agent-boot to probe device capabilities → dict with android_version, abi, etc."""
+        import json
+        conn = self.relay_for_serial(serial)
+        if conn is None:
+            return {}
+        actual = self.resolve_serial(serial)
+        result = await conn.send_command(actual, "", int(timeout), cmd_type=CMD_PROBE_CAPS)
+        if not result.get("ok"):
+            return {}
+        try:
+            return json.loads(result.get("output", "{}"))
+        except Exception:
+            return {}
+
+    async def u2_http(
+        self,
+        serial: str,
+        method: str,
+        path: str,
+        body: str = "",
+        content_type: str = "application/json",
+        timeout: float = 30.0,
+    ) -> dict:
+        """Proxy an HTTP request to atx-agent (port 7912) on a relay-managed device."""
+        conn = self.relay_for_serial(serial)
+        if conn is None:
+            return {
+                "ok": False, "status": 0,
+                "body": f"no relay for serial={serial!r}",
+                "content_type": "",
+            }
+        actual = self.resolve_serial(serial)
+        return await conn.send_u2_request(actual, method, path, body, content_type, timeout)
+
+    async def u2_batch(
+        self,
+        serial: str,
+        actions: list[dict],
+        early_exit: bool = True,
+        timeout: float = 30.0,
+    ) -> dict:
+        """Send a u2_batch request to agent-boot and await aggregated results."""
+        if not actions:
+            return {"ok": True, "stopped_at": None, "results": [], "error": None}
+        conn = self.relay_for_serial(serial)
+        if conn is None:
+            return {"ok": False, "stopped_at": 0, "results": [],
+                    "error": f"no relay for serial={serial!r}"}
+        actual = self.resolve_serial(serial)
+        req_id = f"batch-{uuid.uuid4().hex[:8]}"
+        return await conn.send_json_request(
+            msg={
+                "type": "u2_batch", "id": req_id, "serial": actual,
+                "schema": 1, "early_exit": early_exit, "actions": actions,
+            },
+            reply_id=req_id, timeout=timeout,
+        )
+
+    async def u2_flow(
+        self,
+        serial: str,
+        flow: str,
+        params: dict,
+        timeout: float = 30.0,
+    ) -> dict:
+        """Send a u2_flow request to agent-boot and await result."""
+        conn = self.relay_for_serial(serial)
+        if conn is None:
+            return {"ok": False, "value": None,
+                    "error": f"no relay for serial={serial!r}"}
+        actual = self.resolve_serial(serial)
+        req_id = f"flow-{uuid.uuid4().hex[:8]}"
+        return await conn.send_json_request(
+            msg={
+                "type": "u2_flow", "id": req_id, "serial": actual,
+                "flow": flow, "params": params,
+            },
+            reply_id=req_id, timeout=timeout,
+        )
 
     async def broadcast_adb_connect(self, ip_port: str, timeout: float = 15.0) -> None:
         async with self._lock:
@@ -647,6 +915,24 @@ class WsRelayAgentSession:
                             "error":    msg.get("error", ""),
                         },
                     )
+
+                elif mtype == "u2_result":
+                    if conn is None:
+                        continue
+                    conn.resolve(
+                        msg.get("msg_id", ""),
+                        {
+                            "ok":           msg.get("ok", False),
+                            "status":       msg.get("status", 0),
+                            "body":         msg.get("body", ""),
+                            "content_type": msg.get("content_type", ""),
+                        },
+                    )
+
+                elif mtype in ("u2_batch_result", "u2_flow_result"):
+                    if conn is None:
+                        continue
+                    conn.resolve(msg.get("id", ""), msg)
 
                 elif mtype == "heartbeat":
                     if conn is None:

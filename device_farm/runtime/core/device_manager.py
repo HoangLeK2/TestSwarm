@@ -1,14 +1,14 @@
 """
 device_manager.py — DeviceManager: device registry supporting two connection modes.
 
-Mode A — WebSocket Agent (existing):
+Mode A — WebSocket Agent:
   Devices connect automatically when Agent APK opens a WebSocket to /device-agent.
   ensure_device(serial) is called by DeviceAgentSession on connect.
 
-Mode B — ADB Transport (new, no `adb` binary):
-  Farm server discovers devices via mDNS (_adb-tls-connect._tcp) or explicit
-  HTTP registration (POST /api/devices/adb-register).
-  register_adb_device(host, port) connects via adb-shell library directly.
+Mode B — Relay (agent-boot):
+  Devices connect via agent-boot gRPC/WebSocket relay. ADB operations (bootstrap,
+  shell, screencap) are executed by agent-boot on the same LAN as the device.
+  register_relay_device(serial) is called when relay heartbeat reports a new device.
 """
 from __future__ import annotations
 
@@ -86,127 +86,64 @@ class DeviceManager:
         with self._lock:
             self._registry.pop(serial, None)
 
-    # ── ADB Mode Registration (Mode B) ───────────────────────────────────────
+    # ── Relay Device Registration (Mode B) ──────────────────────────────────
 
+    def register_relay_device(self, serial: str) -> DeviceClient:
+        """
+        Register (or reuse) a DeviceClient for a device that appeared via relay heartbeat.
+
+        The relay agent-boot already has ADB access. Bootstrap (push binaries,
+        start atx-agent + u2) is triggered separately via relay.bootstrap(serial).
+        This method only creates the DeviceClient registry entry — it does NOT
+        block waiting for bootstrap to complete.
+        """
+        with self._lock:
+            existing = self._registry.get(serial)
+            if existing is not None:
+                return existing
+            idx = self._get_or_assign_index(serial)
+            client = DeviceClient(serial, idx, self.config)
+            if self._event_loop is not None:
+                client.set_event_loop(self._event_loop)
+            self._registry[serial] = client
+            log.info(f"Registered relay device: {serial} → slot {idx}")
+            return client
+
+    # register_adb_device kept as compatibility shim — routes to relay bootstrap.
+    # POST /api/devices/adb-register passes host:port; we convert to serial and
+    # ask agent-boot to bootstrap via relay.
     def register_adb_device(
         self,
         host: str,
         port: int = 5555,
         serial_hint: Optional[str] = None,
     ) -> Optional[DeviceClient]:
-        """
-        Connect to a device via ADB over TCP (no `adb` binary).
+        """Compatibility shim: register device by IP via relay bootstrap."""
+        from runtime.transports.adb_relay_server import get_relay_manager
+        import asyncio
 
-        Steps:
-          1. Connect AdbTransport to device_ip:port
-          2. Read device serial via getprop
-          3. Create/get DeviceClient
-          4. Call device.attach_adb_transport() to start bootstrap
-
-        Returns the DeviceClient or None if connection fails.
-        Used by:
-          - POST /api/devices/adb-register (manual registration)
-          - AdbMdnsDiscovery callback (automatic via Android 11+ Wireless Debugging)
-        """
-        from runtime.transports.adb_transport import AdbTransport
-
-        tmp_serial = serial_hint or f"{host}:{port}"
-        log.info(f"Connecting ADB transport to {host}:{port}")
-
-        transport = AdbTransport(host, port)
-        if not transport.connect():
-            log.error(f"ADB connect failed: {host}:{port}")
+        serial = serial_hint or f"{host}:{port}"
+        rm = get_relay_manager()
+        if rm is None:
+            log.error("register_adb_device: relay manager not available — is relay enabled?")
             return None
 
-        # Get real serial from device
-        real_serial = transport.get_serial().strip()
-        if not real_serial or real_serial == f"{host}:{port}":
-            # Fallback: use IP:port as serial
-            real_serial = tmp_serial
-        log.info(f"ADB device serial: {real_serial}")
+        client = self.register_relay_device(serial)
 
-        with self._lock:
-            # If device already registered (via WS agent), reuse it
-            existing = self._registry.get(real_serial)
-            if existing and existing.is_adb_mode:
-                log.info(f"Device {real_serial} already in ADB mode")
-                transport.close()
-                return existing
-            if existing is None:
-                idx = self._get_or_assign_index(real_serial)
-                client = DeviceClient(real_serial, idx, self.config)
-                if self._event_loop is not None:
-                    client.set_event_loop(self._event_loop)
-                self._registry[real_serial] = client
-                log.info(f"Registered ADB device: {real_serial} → slot {idx}")
-            else:
-                client = existing
+        # Trigger bootstrap in background (non-blocking)
+        loop = self._event_loop
+        if loop is not None:
+            async def _bootstrap() -> None:
+                ok = await rm.bootstrap(serial)
+                if ok:
+                    log.info(f"[{serial}] relay bootstrap complete")
+                else:
+                    log.warning(f"[{serial}] relay bootstrap failed")
+            asyncio.run_coroutine_threadsafe(_bootstrap(), loop)
+        else:
+            log.warning(f"[{serial}] no event loop — bootstrap will run when relay connects")
 
-        # Start ADB bootstrap (non-blocking)
-        client.attach_adb_transport(transport)
         return client
-
-    def reconnect_adb_device(self, serial: str) -> Optional[DeviceClient]:
-        """
-        Tear down and re-bootstrap an ADB device.
-        Called by watchdog when ADB health check fails.
-        Only reconnects READY devices (not BUSY — avoid interrupting tasks).
-        """
-        device = self.get_device(serial)
-        if device is None:
-            log.warning(f"reconnect_adb_device: {serial} not found in registry")
-            return None
-        if not device.is_adb_mode or device._adb_transport is None:
-            log.warning(f"reconnect_adb_device: {serial} is not in ADB mode")
-            return None
-
-        host = device._adb_transport.host
-        port = device._adb_transport.port
-
-        log.info(f"[{serial}] Re-bootstrapping ADB device ({host}:{port})...")
-
-        # 1. Tear down existing transports (scrcpy, u2)
-        device.state = DeviceState.CONNECTING
-        device.detach_all_transports()
-
-        # 2. Reconnect ADB transport
-        transport = device._adb_transport
-        if not transport.reconnect(retries=3):
-            log.error(f"[{serial}] ADB reconnect failed — creating new transport")
-            try:
-                transport.close()
-            except Exception:
-                pass
-            # Create fresh transport
-            from runtime.transports.adb_transport import AdbTransport
-            transport = AdbTransport(host, port)
-            if not transport.connect():
-                log.error(f"[{serial}] New ADB transport also failed")
-                device.state = DeviceState.DEAD
-                return None
-
-        # 3. Re-attach and bootstrap
-        device.attach_adb_transport(transport)
-        log.info(f"[{serial}] ADB re-bootstrap initiated")
-        return device
-
-    def start_mdns_discovery(self) -> bool:
-        """
-        Start mDNS listener for Android 11+ Wireless Debugging.
-        When a device advertises _adb-tls-connect._tcp, automatically connects.
-        Returns True if zeroconf is available.
-        """
-        try:
-            from runtime.transports.adb_transport import AdbMdnsDiscovery
-        except ImportError:
-            return False
-
-        def _on_device(host: str, port: int, name: str) -> None:
-            log.info(f"mDNS: auto-connecting ADB device {name} at {host}:{port}")
-            self.register_adb_device(host, port)
-
-        self._mdns = AdbMdnsDiscovery(on_device=_on_device)
-        return self._mdns.start()
 
     # ── Event Loop ───────────────────────────────────────────────────────────
 

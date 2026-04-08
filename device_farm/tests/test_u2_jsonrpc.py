@@ -771,7 +771,7 @@ class TestGestures(unittest.TestCase):
         self.client.swipe(0, 500, 0, 100, duration=0.5)
         args = self.client._rpc.call_args[0]
         self.assertEqual(args[0], "swipe")
-        self.assertEqual(args[5], 10)  # steps = 0.5 * 20
+        self.assertEqual(args[5], 20)  # steps = 0.5 * 40
 
     def test_drag_calls_rpc(self):
         self.client.drag(0, 500, 0, 100, duration=0.5)

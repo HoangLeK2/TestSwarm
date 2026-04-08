@@ -1,4 +1,4 @@
-import { farmApi } from '@/lib/farm-api';
+import { farmApi, deviceFarmBackendBase } from '@/lib/farm-api';
 
 export interface ContentItem {
   id: string;
@@ -58,7 +58,29 @@ export interface ContentStats {
   latest_extraction: string | null;
 }
 
+export type ExportFormat = 'csv' | 'xlsx';
+
 export const contentApi = {
+  /**
+   * Trigger a streaming download of the current filtered content.
+   * Opens the URL directly so the browser handles the file download.
+   */
+  exportStream: (filters: ContentFilters, format: ExportFormat): void => {
+    const params = new URLSearchParams({ format });
+    if (filters.collection) params.set('collection', filters.collection);
+    if (filters.platform) params.set('platform', filters.platform);
+    if (filters.content_type) params.set('content_type', filters.content_type);
+    if (filters.search) params.set('search', filters.search);
+    if (filters.device_serial) params.set('device_serial', filters.device_serial);
+    if (filters.campaign_id) params.set('campaign_id', filters.campaign_id);
+    if (filters.run_id) params.set('run_id', filters.run_id);
+    const url = `${deviceFarmBackendBase}/api/content/export/stream?${params.toString()}`;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `content-export.${format}`;
+    a.click();
+  },
+
   list: async (filters?: ContentFilters): Promise<ContentListResponse> => {
     const params: Record<string, unknown> = {
       limit: filters?.limit ?? 50,

@@ -9,4 +9,8 @@ dependencies = [
     "zeroconf>=0.131.0",
     "rich>=13.0",
     # adb operations use subprocess (system adb binary) — no ppadb dependency
+    "grpcio>=1.80.0",
+    "grpcio-tools>=1.80.0",
+    "protobuf>=5.26.0",
+    "uiautomator2>=3.0",
 ]

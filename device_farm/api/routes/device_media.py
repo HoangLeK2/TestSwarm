@@ -31,13 +31,13 @@ def build_device_media_router(manager: DeviceManager) -> APIRouter:
             loop = asyncio.get_event_loop()
             while True:
                 # take_screenshot() returns cached scrcpy frame (fast path).
-                # If no scrcpy frame, capture_screenshot fetches fresh u2/relay screenshot.
-                # allow_ws_u2_fallback=True + no cache update ensures each call gets
-                # a fresh frame when scrcpy is not producing.
+                # If no cache exists, capture_screenshot uses relay screencap fallback.
+                # Do NOT enable WS u2 fallback here to avoid hammering /screenshot/0
+                # and flooding logs with U2 HTTP 500 when atx/u2 is unstable.
                 frame = device.take_screenshot()
                 if not frame:
                     frame = await loop.run_in_executor(
-                        None, device.capture_screenshot, 70, 800, True
+                        None, device.capture_screenshot, 70, 800, False
                     )
                 if frame:
                     yield (
@@ -78,7 +78,7 @@ def build_device_media_router(manager: DeviceManager) -> APIRouter:
 
         frame = device.take_screenshot()
         if not frame:
-            frame = device.capture_screenshot(allow_ws_u2_fallback=True)
+            frame = device.capture_screenshot(allow_ws_u2_fallback=False)
         if not frame:
             return JSONResponse({"error": "No frame available"}, status_code=503)
 

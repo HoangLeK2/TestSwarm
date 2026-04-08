@@ -35,6 +35,148 @@ _MASK_INDEX           = 0x800000
 _MASK_INSTANCE        = 0x1000000
 
 
+# ── Relay HTTP session (duck-type requests.Session) ──────────────────────────
+
+class _RelayResponse:
+    """Duck-type replacement for requests.Response, built from a u2_result dict."""
+
+    def __init__(self, result: dict) -> None:
+        self.status_code: int = result.get("status", 0)
+        self.ok: bool = result.get("ok", False) and 200 <= self.status_code < 300
+        self._text: str = result.get("body", "")
+
+    @property
+    def text(self) -> str:
+        return self._text
+
+    @property
+    def content(self) -> bytes:
+        return self._text.encode("utf-8") if isinstance(self._text, str) else self._text
+
+    def json(self) -> Any:
+        return json.loads(self._text)
+
+
+class _RelaySession:
+    """
+    Drop-in replacement for requests.Session that routes HTTP calls through
+    AdbRelayManager.u2_http() over the gRPC relay stream.
+
+    NOTE (routing):
+    - Any call that goes through this session is "u2 over agent-boot relay"
+      (route label: agent_boot_u2_proxy).
+    - This is still the legacy JSON-RPC wrapper path, not u2_batch/u2_flow.
+
+    U2JsonRpcClient uses this transparently when the device is managed remotely.
+    Assign to ``client._session`` after construction to activate relay mode.
+    """
+
+    def __init__(self, serial: str, relay_manager: Any, loop: Any) -> None:
+        self._serial = serial
+        self._relay = relay_manager
+        self._loop = loop
+        self.headers: Dict[str, str] = {"Accept-Encoding": ""}
+
+    def _call(
+        self,
+        method: str,
+        url: str,
+        timeout: Any = 30.0,
+        **kwargs: Any,
+    ) -> "_RelayResponse":
+        import asyncio
+        from urllib.parse import urlparse
+
+        if kwargs.get("files") is not None:
+            raise NotImplementedError(
+                "Multipart file upload (APK install) is not supported over the relay stream. "
+                "Use URL-based install: client.install('https://...')"
+            )
+
+        t = float(timeout) if not isinstance(timeout, tuple) else float(timeout[1])
+        body = ""
+        content_type = "application/json"
+
+        if kwargs.get("json") is not None:
+            body = json.dumps(kwargs["json"])
+        elif kwargs.get("data") is not None:
+            raw = kwargs["data"]
+            body = raw if isinstance(raw, str) else raw.decode("latin-1")
+
+        parsed = urlparse(url)
+        path = parsed.path
+        if parsed.query:
+            path = f"{path}?{parsed.query}"
+
+        future = asyncio.run_coroutine_threadsafe(
+            self._relay.u2_http(self._serial, method.upper(), path, body, content_type, t),
+            self._loop,
+        )
+        try:
+            result = future.result(timeout=t + 15.0)
+        except Exception as exc:
+            result = {"ok": False, "status": 0, "body": str(exc), "content_type": ""}
+        return _RelayResponse(result)
+
+    def request(self, method: str, url: str, **kwargs: Any) -> _RelayResponse:
+        """Generic request dispatcher (requests.Session-compatible)."""
+        timeout = kwargs.pop("timeout", 30.0)
+        return self._call(method.upper(), url, timeout, **kwargs)
+
+    def get(self, url: str, timeout: Any = 30.0, **kwargs: Any) -> _RelayResponse:
+        return self._call("GET", url, timeout, **kwargs)
+
+    def post(self, url: str, timeout: Any = 30.0, **kwargs: Any) -> _RelayResponse:
+        return self._call("POST", url, timeout, **kwargs)
+
+    def put(self, url: str, timeout: Any = 30.0, **kwargs: Any) -> _RelayResponse:
+        return self._call("PUT", url, timeout, **kwargs)
+
+    def delete(self, url: str, timeout: Any = 30.0, **kwargs: Any) -> _RelayResponse:
+        return self._call("DELETE", url, timeout, **kwargs)
+
+    def close(self) -> None:
+        pass  # no persistent connection to close
+
+
+class _BatchRelaySession:
+    """
+    Sync adapter for u2_batch / u2_flow over the relay.
+    Mirrors _RelaySession for the batch/flow surface only.
+
+    NOTE (routing):
+    - This is the dedicated "agent_boot_batch_flow" path.
+    - Used by DeviceClient.tap_selector when batch is enabled.
+    """
+
+    def __init__(self, mgr: Any, serial: str, loop: Any) -> None:
+        self._mgr = mgr
+        self._serial = serial
+        self._loop = loop
+
+    def batch(self, actions: list[dict], timeout: float = 30.0) -> list[dict]:
+        import asyncio
+        fut = asyncio.run_coroutine_threadsafe(
+            self._mgr.u2_batch(self._serial, actions, timeout=timeout),
+            self._loop,
+        )
+        res = fut.result(timeout=timeout + 15.0)
+        if not res.get("ok"):
+            raise RuntimeError(res.get("error") or "u2_batch failed")
+        return res.get("results") or []
+
+    def flow(self, name: str, params: dict, timeout: float = 30.0) -> dict:
+        import asyncio
+        fut = asyncio.run_coroutine_threadsafe(
+            self._mgr.u2_flow(self._serial, name, params, timeout=timeout),
+            self._loop,
+        )
+        res = fut.result(timeout=timeout + 15.0)
+        if not res.get("ok"):
+            raise RuntimeError(res.get("error") or f"u2_flow {name!r} failed")
+        return res.get("value") or {}
+
+
 # ── Watcher ───────────────────────────────────────────────────────────────────
 
 class _WatcherEntry:
@@ -121,6 +263,10 @@ class _WatcherContext:
 
     def __len__(self) -> int:
         return len(self._entries)
+
+    def set_session(self, session: Any) -> None:
+        """Replace the dedicated HTTP session (e.g. with a _RelaySession in relay mode)."""
+        self._session = session
 
     def start(self, interval: float = 2.0) -> None:
         """Start the watcher background thread."""
@@ -513,6 +659,10 @@ class U2JsonRpcClient:
         Capture screenshot via u2 HTTP API (GET /screenshot/0).
         Returns JPEG bytes, resized to max_width if needed.
         Returns None on failure.
+
+        NOTE (routing):
+        - If self._session is requests.Session: local u2 wrapper path.
+        - If self._session is _RelaySession: u2 wrapper via agent-boot relay.
         """
         try:
             r = self._session.get(self._base + "/screenshot/0", timeout=timeout)

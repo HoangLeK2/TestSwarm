@@ -73,8 +73,9 @@ if (typeof window !== 'undefined') {
       connectShared();
       return;
     }
-    // If no message received in 10s, connection is likely stale
-    if (Date.now() - lastMessageTime > 10_000) {
+    // Don't force-close too aggressively: low-FPS periods can legitimately exceed
+    // 10s without traffic and this creates reconnect churn (visible stutter).
+    if (Date.now() - lastMessageTime > 45_000) {
       sharedSocket.close(); // onclose handler triggers reconnect
     }
   });
@@ -154,13 +155,16 @@ function connectShared() {
         if (slen > 0 && buf.byteLength >= 2 + slen) {
           const serial = new TextDecoder().decode(new Uint8Array(buf, 2, slen));
           if (ft === 0x10) {
-            lastConfigBySerial.set(serial, buf);
+            // Keep cache ownership stable: listeners may transfer incoming buffers
+            // to workers, which detaches them.
+            lastConfigBySerial.set(serial, buf.slice(0));
           } else if (ft === 0x11) {
             // Cache keyframes so late-subscribing jmuxer hooks get an IDR immediately
             // instead of waiting up to 14 s for the next one.
             const doff = 2 + slen + 4; // skip serial + w/h
             if (buf.byteLength > doff && view.getUint8(doff) !== 0) { // is_key=1
-              lastKeyBySerial.set(serial, buf);
+              // Same ownership rule as config cache above.
+              lastKeyBySerial.set(serial, buf.slice(0));
             }
           }
         }
@@ -176,19 +180,12 @@ function connectShared() {
 
 function disconnectSharedIfIdle() {
   if (listeners.size > 0 || binaryListeners.size > 0) return;
-  // Debounce close: in dev/HMR/route transitions listeners can briefly drop to 0,
-  // which would otherwise flap the WS connection and cause black-screen symptoms.
-  if (idleCloseTimer !== undefined) return;
-  idleCloseTimer = setTimeout(() => {
-    idleCloseTimer = undefined;
-    if (listeners.size > 0 || binaryListeners.size > 0) return;
-    if (reconnectTimer !== undefined) {
-      clearTimeout(reconnectTimer);
-      reconnectTimer = undefined;
-    }
-    sharedSocket?.close();
-    sharedSocket = null;
-  }, 800);
+  // Keep socket warm to avoid rapid close/reopen flapping during React remounts,
+  // route transitions, and hook re-subscriptions.
+  if (reconnectTimer !== undefined) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = undefined;
+  }
 }
 
 /**
@@ -211,7 +208,14 @@ export function subscribeBinaryFrames(onBinary: (buf: ArrayBuffer) => void): () 
       if (key) toReplay.push(key);
     });
     queueMicrotask(() => {
-      toReplay.forEach((frame) => { try { onBinary(frame); } catch {} });
+      toReplay.forEach((frame) => {
+        try {
+          // Replay a fresh copy because subscribers may transfer ownership.
+          onBinary(frame.slice(0));
+        } catch {
+          // isolate subscriber errors
+        }
+      });
     });
   }
   if (listeners.size === 0 && binaryListeners.size === 1) {

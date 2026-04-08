@@ -36,16 +36,12 @@ def build_tasks_queue_router(manager: DeviceManager, queue: TaskQueue) -> APIRou
         cmd = body.get("cmd", "").strip()
         if not cmd:
             return JSONResponse({"error": "cmd is required"}, status_code=400)
-        if (
-            device.is_adb_mode
-            and device._adb_transport is not None
-            and device._adb_transport.connected
-        ):
-            loop = asyncio.get_running_loop()
+        from runtime.transports.adb_relay_server import get_relay_manager
+        relay = get_relay_manager()
+        if relay and relay.relay_for_serial(serial):
             try:
-                output = await loop.run_in_executor(
-                    None, lambda: device._adb_transport.shell(cmd, timeout=30.0)
-                )
+                actual = relay.resolve_serial(serial)
+                output = await relay.adb_shell(actual, cmd, timeout=30.0)
                 return {"ok": True, "cmd": cmd, "output": output or ""}
             except Exception as exc:
                 return JSONResponse({"error": str(exc)}, status_code=500)

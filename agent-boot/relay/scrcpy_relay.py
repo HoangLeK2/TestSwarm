@@ -41,24 +41,40 @@ _BUNDLED_JAR = Path(__file__).parent / "scrcpy-server"
 _BUNDLED_JAR_VERSION = "3.3.4"
 
 def _is_idr(data: bytes) -> bool:
-    """Return True if Annex-B H264 data contains an IDR (keyframe) NAL unit (type 5).
-    Scans only start codes — O(n) but terminates on first IDR hit, typically ≤ 5 bytes."""
+    """Return True if the first NAL unit in Annex-B data is an IDR (type 5).
+
+    scrcpy sends exactly one NAL unit per packet, so checking the first
+    start code is both sufficient and O(1) — no full-frame scan needed.
+    """
     n = len(data)
-    i = 0
-    while i < n - 3:
-        if data[i] == 0 and data[i+1] == 0:
-            if data[i+2] == 1:        # 3-byte start code
-                nal = i + 3
-            elif i + 3 < n and data[i+2] == 0 and data[i+3] == 1:  # 4-byte start code
-                nal = i + 4
-                i += 1
-            else:
-                i += 1
-                continue
-            if nal < n and (data[nal] & 0x1F) == 5:
-                return True
-        i += 1
+    if n < 5:
+        return False
+    # 4-byte start code: 0x00 0x00 0x00 0x01
+    if data[0] == 0 and data[1] == 0 and data[2] == 0 and data[3] == 1:
+        return (data[4] & 0x1F) == 5
+    # 3-byte start code: 0x00 0x00 0x01
+    if n >= 4 and data[0] == 0 and data[1] == 0 and data[2] == 1:
+        return (data[3] & 0x1F) == 5
     return False
+
+
+def _relay_enqueue(q: asyncio.Queue, frame: bytes, is_cfg: bool, is_key: bool) -> None:
+    """Module-level enqueue — avoids closure allocation per frame at 30fps.
+
+    Called via call_soon_threadsafe from the relay thread.
+    Drop-oldest strategy: P-frames silently dropped when queue full;
+    IDR/config frames evict the oldest entry to guarantee delivery.
+    """
+    try:
+        q.put_nowait(frame)
+    except asyncio.QueueFull:
+        if not is_cfg and not is_key:
+            return  # P-frame: drop silently, decoder resyncs on next IDR
+        try:
+            q.get_nowait()   # evict oldest to make room for IDR/config
+            q.put_nowait(frame)
+        except (asyncio.QueueEmpty, asyncio.QueueFull):
+            pass
 
 
 _MAX_RECONNECTS = 10
@@ -328,14 +344,16 @@ class ScrcpyRelaySession:
             f"tunnel_forward=true video=true audio=false control={ctrl_flag} "
             f"video_codec=h264 max_fps={self._max_fps} max_size={self._max_width} "
             f"video_bit_rate={self._bitrate} "
-            # i-frame-interval:int=1 → IDR every 1 second (fast reconnect/seek).
+            # i-frame-interval:int=4 → IDR every 4 seconds to reduce keyframe bursts
+            # when multiple devices stream concurrently over WiFi relay.
             # latency:int=0 (KEY_LATENCY): encoder outputs every frame immediately;
             #   no internal buffer → saves 66-133 ms. Only enabled on API ≤ 33 (farm
             #   sets low_latency=True); crashes MediaCodec on some API 34+ OEM builds.
             # NOTE: profile/level options omitted — crash MediaCodec on API 34+.
-            f"video_codec_options=i-frame-interval:int=1,max-bframes:int=0"
+            f"video_codec_options=i-frame-interval:int=4,max-bframes:int=0"
             + (",latency:int=0" if self._low_latency else "")
             + " "
+            f"stay_awake=true "
             f"send_device_meta=true send_frame_meta=true"
         )
 
@@ -380,6 +398,7 @@ class ScrcpyRelaySession:
         # 1. Connect video socket — poll until scrcpy binds localabstract:scrcpy.
         #    _connect_with_retry retries until scrcpy accepts OR timeout expires.
         video_sock = self._connect_with_retry("127.0.0.1", self._port, timeout=10.0)
+        video_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         video_sock.settimeout(None)
         self._video_sock = video_sock
 
@@ -387,6 +406,7 @@ class ScrcpyRelaySession:
         #    scrcpy sends the dummy byte only AFTER all expected sockets connect.
         if self._enable_control:
             ctrl_sock = self._connect_with_retry("127.0.0.1", self._port, timeout=5.0)
+            ctrl_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             ctrl_sock.settimeout(None)
             with self._ctrl_lock:
                 self._ctrl_sock = ctrl_sock
@@ -411,7 +431,9 @@ class ScrcpyRelaySession:
         logger.info("[%s] handshake OK — %dx%d", self._serial, self._device_width, self._device_height)
 
         # 4. Stream H264 packets → gRPC send_queue.
-        serial = self._serial
+        serial   = self._serial
+        serial_b = serial.encode()   # cached once — never changes for this session
+        slen     = len(serial_b)
         w, h = self._device_width, self._device_height
 
         while self._running:
@@ -433,10 +455,8 @@ class ScrcpyRelaySession:
 
             # Binary frame: [0x53][flags][slen][serial][w:2BE][h:2BE][pts_raw:8BE][data]
             # flags: bit0=is_config, bit1=is_keyframe
-            serial_b = serial.encode()
-            slen     = len(serial_b)
-            flags    = (0x01 if is_cfg else 0) | (0x02 if is_key else 0)
-            frame    = (
+            flags = (0x01 if is_cfg else 0) | (0x02 if is_key else 0)
+            frame = (
                 struct.pack(">BBB", 0x53, flags, slen)
                 + serial_b
                 + struct.pack(">HHQ",
@@ -446,23 +466,10 @@ class ScrcpyRelaySession:
                 + data
             )
 
-            # Drop-oldest strategy: P-frames silently dropped when queue full
-            # (decoder resyncs on next IDR). Config + IDR always delivered.
-            _q   = self._send_queue
-            _cfg = is_cfg
-            _key = is_key
-            def _enqueue(_q=_q, _frame=frame, _cfg=_cfg, _key=_key):
-                try:
-                    _q.put_nowait(_frame)
-                except asyncio.QueueFull:
-                    if not _cfg and not _key:
-                        return  # P-frame: drop, resync on next IDR
-                    try:
-                        _q.get_nowait()   # evict oldest to guarantee IDR/config
-                        _q.put_nowait(_frame)
-                    except (asyncio.QueueEmpty, asyncio.QueueFull):
-                        pass
-            self._loop.call_soon_threadsafe(_enqueue)
+            # Dispatch via module-level function (no closure allocation per frame).
+            self._loop.call_soon_threadsafe(
+                _relay_enqueue, self._send_queue, frame, is_cfg, is_key
+            )
 
     def _connect_with_retry(self, host: str, port: int, timeout: float) -> socket.socket:
         """

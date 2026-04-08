@@ -14,17 +14,32 @@
 
 import { useEffect, useRef } from 'react';
 import { subscribeBinaryFrames, getLastConfigFrame, getLastKeyFrame } from '../services/ws';
+import { WebGLRenderer } from '../lib/webgl-renderer';
 
 export function useH264Video(
   serial: string,
   canvasRef: React.RefObject<HTMLCanvasElement | null>,
-  opts?: { onFrame?: () => void }
+  opts?: {
+    onFrame?: () => void;
+    onStats?: (stats: {
+      decodeQueueSize: number;
+      droppedDelta: number;
+      decodedFrames: number;
+      accel: string;
+    }) => void;
+  }
 ) {
   const workerRef  = useRef<Worker | null>(null);
+  const rendererRef = useRef<WebGLRenderer | null>(null);
+  const rafRef     = useRef<number | null>(null);
+  const latestFrameRef = useRef<VideoFrame | null>(null);
+  const latestSizeRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
   const onFrameRef = useRef(opts?.onFrame);
+  const onStatsRef = useRef(opts?.onStats);
   const serialRef  = useRef(serial);
 
   onFrameRef.current = opts?.onFrame;
+  onStatsRef.current = opts?.onStats;
   serialRef.current  = serial;
 
   // ── Main lifecycle: spawn worker + subscribe to frames ───────────────────
@@ -35,25 +50,63 @@ export function useH264Video(
       return;
     }
 
-    const worker = new Worker('/h264-worker.js?v=10');
+    const worker = new Worker('/h264-worker.js?v=17');
     workerRef.current = worker;
 
+    const drawLatest = () => {
+      const canvas = canvasRef.current;
+      const frame = latestFrameRef.current;
+      if (canvas && frame) {
+        try {
+          let renderer = rendererRef.current;
+          if (!renderer) {
+            renderer = new WebGLRenderer(canvas);
+            rendererRef.current = renderer;
+          }
+          if (renderer) {
+            const { w, h } = latestSizeRef.current;
+            renderer.render(frame, w, h);
+            onFrameRef.current?.();
+          }
+        } finally {
+          if (typeof frame.close === 'function') frame.close();
+          latestFrameRef.current = null;
+          workerRef.current?.postMessage({ type: 'frame-consumed' });
+        }
+      }
+      // Hard-sync decode handoff with display loop: pull at most one frame per RAF tick.
+      workerRef.current?.postMessage({ type: 'pull-frame' });
+      rafRef.current = requestAnimationFrame(drawLatest);
+    };
+    rafRef.current = requestAnimationFrame(drawLatest);
+
     worker.onmessage = ({ data }) => {
-      if (data.type === 'fps') onFrameRef.current?.();
       if (data.type === 'error') console.error('[H264] worker reported error:', data.message);
+      if (data.type === 'frame' && data.frame) {
+        // Latest-frame-only mode: replace pending frame, close old one.
+        const prev = latestFrameRef.current;
+        if (prev && typeof prev.close === 'function') prev.close();
+        latestFrameRef.current = data.frame as VideoFrame;
+        latestSizeRef.current = { w: data.width as number, h: data.height as number };
+      }
+      if (data.type === 'stats') {
+        onStatsRef.current?.({
+          decodeQueueSize: Number(data.decodeQueueSize ?? 0),
+          droppedDelta: Number(data.droppedDelta ?? 0),
+          decodedFrames: Number(data.decodedFrames ?? 0),
+          accel: String(data.accel ?? ''),
+        });
+        // Useful for diagnosing browser decode bottlenecks in production logs.
+        console.debug(
+          '[H264] stats',
+          `q=${data.decodeQueueSize} dropped=${data.droppedDelta} decoded=${data.decodedFrames} accel=${data.accel}`
+        );
+      }
     };
     worker.onerror = (e) => console.error('[H264] worker load error:', e.message);
 
-    // Transfer canvas control to worker
-    const canvas = canvasRef.current;
-    if (canvas && typeof (canvas as HTMLCanvasElement).transferControlToOffscreen === 'function') {
-      try {
-        const offscreen = (canvas as HTMLCanvasElement).transferControlToOffscreen();
-        worker.postMessage({ type: 'init', canvas: offscreen }, [offscreen]);
-      } catch (e) {
-        console.warn('[H264] transferControlToOffscreen failed:', e);
-      }
-    }
+    // Worker only decodes and sends VideoFrame; drawing is done by main-thread RAF loop.
+    worker.postMessage({ type: 'init' });
 
     // Subscribe to binary frames synchronously.
     // ws.ts replays cached config + keyframe via queueMicrotask so they land
@@ -62,7 +115,12 @@ export function useH264Video(
       const w = workerRef.current;
       if (!w || buf.byteLength < 2) return;
 
-      const view      = new DataView(buf);
+      let view: DataView;
+      try {
+        view = new DataView(buf);
+      } catch {
+        return;
+      }
       const frameType = view.getUint8(0);
       if (frameType !== 0x10 && frameType !== 0x11) return;
 
@@ -81,24 +139,15 @@ export function useH264Video(
 
       if (frameType === 0x10) {
         if (buf.byteLength < doff + 2) return;
-        const avcc = new Uint8Array(buf, doff + 1).slice(); // skip flags byte; copy → transferable
-        if (avcc.length < 4) return;
-        w.postMessage({ type: 'config', avcc: avcc.buffer }, [avcc.buffer]);
+        // Zero-copy path: transfer the raw WS frame to worker for parsing.
+        w.postMessage({ type: 'binary', frameType: 0x10, buf }, [buf]);
         return;
       }
 
       if (frameType === 0x11) {
         if (buf.byteLength < doff + 9) return;
-        const isKey     = view.getUint8(doff) !== 0;
-        const ptsHi     = view.getUint32(doff + 1, false);
-        const ptsLo     = view.getUint32(doff + 5, false);
-        const ptsUs     = ptsHi * 4_294_967_296 + ptsLo;
-        const frameData = new Uint8Array(buf, doff + 9).slice(); // copy → transferable
-        if (frameData.length === 0) return;
-        w.postMessage(
-          { type: 'frame', isKey, ptsUs, frameData: frameData.buffer },
-          [frameData.buffer],
-        );
+        // Zero-copy path: transfer the raw WS frame to worker for parsing.
+        w.postMessage({ type: 'binary', frameType: 0x11, buf }, [buf]);
       }
     });
 
@@ -107,6 +156,17 @@ export function useH264Video(
       worker.postMessage({ type: 'reset' });
       worker.terminate();
       workerRef.current = null;
+      if (rendererRef.current) {
+        rendererRef.current.dispose();
+        rendererRef.current = null;
+      }
+      if (rafRef.current != null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      const pending = latestFrameRef.current;
+      if (pending && typeof pending.close === 'function') pending.close();
+      latestFrameRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -124,7 +184,12 @@ export function useH264Video(
     // Replay config (SPS/PPS)
     const cfgBuf = getLastConfigFrame(serial);
     if (cfgBuf) {
-      const view = new DataView(cfgBuf);
+      let view: DataView;
+      try {
+        view = new DataView(cfgBuf);
+      } catch {
+        return;
+      }
       const slen = view.getUint8(1);
       const doff = 2 + slen + 4;
       if (cfgBuf.byteLength >= doff + 2) {
@@ -138,14 +203,21 @@ export function useH264Video(
     // Replay last keyframe — live P-frames after this IDR remain valid refs
     const keyBuf = getLastKeyFrame(serial);
     if (keyBuf) {
-      const view = new DataView(keyBuf);
+      let view: DataView;
+      try {
+        view = new DataView(keyBuf);
+      } catch {
+        return;
+      }
       const slen = view.getUint8(1);
       const doff = 2 + slen + 4;
       if (keyBuf.byteLength >= doff + 9) {
         const isKey     = view.getUint8(doff) !== 0;
-        const ptsHi     = view.getUint32(doff + 1, false);
-        const ptsLo     = view.getUint32(doff + 5, false);
-        const ptsUs     = ptsHi * 4_294_967_296 + ptsLo;
+        const ptsHi = view.getUint32(doff + 1, false);
+        const ptsLo = view.getUint32(doff + 5, false);
+        // Safe-number bound for (hi << 32) | lo within JS Number precision:
+        // hi must be <= 2^21 - 1.
+        const ptsUs = ptsHi <= 0x1fffff ? (ptsHi * 4_294_967_296 + ptsLo) : 0;
         const frameData = new Uint8Array(keyBuf, doff + 9).slice();
         if (frameData.length > 0 && isKey) {
           w.postMessage(

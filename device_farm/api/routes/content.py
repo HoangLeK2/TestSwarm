@@ -1,11 +1,14 @@
 """DF-010: Content Pipeline — API endpoints for content CRUD, collections, exports, stats."""
 from __future__ import annotations
 
+import csv
+import io
 import logging
 import os
+from typing import AsyncGenerator
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from api.deps import CurrentUser, DB
 from api.schemas.content import (
@@ -17,6 +20,126 @@ from db.crud import content as content_crud
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/content", tags=["content"])
+
+# Fields written to CSV / XLSX exports
+_EXPORT_FIELDS = [
+    "id", "collection", "platform", "content_type", "author", "author_id",
+    "title", "body", "url",
+    "likes_count", "comments_count", "shares_count", "views_count",
+    "tags", "device_serial", "campaign_id", "run_id", "execution_id",
+    "scenario_name", "item_level", "parent_id",
+    "extracted_at", "content_date", "created_at",
+]
+
+_BATCH = 500  # rows per DB fetch batch
+
+
+def _item_row(item) -> list:
+    return [
+        item.id, item.collection, item.platform, item.content_type,
+        item.author, item.author_id, item.title, item.body, item.url,
+        item.likes_count, item.comments_count, item.shares_count, item.views_count,
+        item.tags, item.device_serial, item.campaign_id, item.run_id, item.execution_id,
+        item.scenario_name, item.item_level, item.parent_id,
+        item.extracted_at.isoformat() if item.extracted_at else None,
+        item.content_date.isoformat() if item.content_date else None,
+        item.created_at.isoformat() if item.created_at else None,
+    ]
+
+
+async def _csv_generator(db, filters: dict) -> AsyncGenerator[bytes, None]:
+    """Yield CSV bytes row-by-row without loading all data into memory."""
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    # Header
+    writer.writerow(_EXPORT_FIELDS)
+    yield buf.getvalue().encode()
+
+    offset = 0
+    while True:
+        items, _ = await content_crud.query_content(db, **filters, limit=_BATCH, offset=offset)
+        if not items:
+            break
+        for item in items:
+            buf = io.StringIO()
+            csv.writer(buf).writerow(_item_row(item))
+            yield buf.getvalue().encode()
+        if len(items) < _BATCH:
+            break
+        offset += _BATCH
+
+
+async def _xlsx_bytes(db, filters: dict) -> bytes:
+    """Build XLSX in-memory using openpyxl write-only mode (low memory)."""
+    import openpyxl
+    from openpyxl.utils import get_column_letter
+
+    wb = openpyxl.Workbook(write_only=True)
+    ws = wb.create_sheet("Content")
+    ws.append(_EXPORT_FIELDS)
+
+    offset = 0
+    while True:
+        items, _ = await content_crud.query_content(db, **filters, limit=_BATCH, offset=offset)
+        if not items:
+            break
+        for item in items:
+            ws.append(_item_row(item))
+        if len(items) < _BATCH:
+            break
+        offset += _BATCH
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+# ── Streaming Export ──────────────────────────────────────────────────────────
+
+
+@router.get("/export/stream")
+async def stream_export(
+    db: DB,
+    _: CurrentUser,
+    format: str = Query("csv", pattern="^(csv|xlsx)$"),
+    collection: str | None = None,
+    platform: str | None = None,
+    content_type: str | None = None,
+    search: str | None = None,
+    device_serial: str | None = None,
+    campaign_id: str | None = None,
+    run_id: str | None = None,
+):
+    """Stream content export directly to the client — no temp file, no job queue.
+
+    CSV streams row-by-row via chunked transfer encoding.
+    XLSX is built in-memory with openpyxl write-only mode then sent as a single response.
+    """
+    filters = {
+        k: v for k, v in {
+            "collection": collection, "platform": platform,
+            "content_type": content_type, "search": search,
+            "device_serial": device_serial, "campaign_id": campaign_id,
+            "run_id": run_id,
+        }.items() if v is not None
+    }
+
+    if format == "csv":
+        filename = "content-export.csv"
+        return StreamingResponse(
+            _csv_generator(db, filters),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    # xlsx — build in-memory then stream
+    data = await _xlsx_bytes(db, filters)
+    filename = "content-export.xlsx"
+    return StreamingResponse(
+        iter([data]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # ── Content Items ─────────────────────────────────────────────────────────────

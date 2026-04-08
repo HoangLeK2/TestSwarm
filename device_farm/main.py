@@ -14,6 +14,11 @@ sys.path.insert(0, str(_root))
 os.chdir(_root)
 load_dotenv(dotenv_path=_root / ".env", override=False)
 
+# Suppress gRPC C-core fork() handler warnings that appear when subprocess.Popen
+# is called (e.g. for adb shell / scrcpy restart) while gRPC threads are active.
+# These are harmless — gRPC safely skips its fork handlers in this scenario.
+os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
+
 import logging
 import shlex
 import shutil

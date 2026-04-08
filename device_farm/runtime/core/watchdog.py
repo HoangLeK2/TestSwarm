@@ -1,12 +1,11 @@
 """
-watchdog.py — WatchdogThread: health monitoring for both WS-agent and ADB devices.
+watchdog.py — WatchdogThread: health monitoring for WS-agent and relay devices.
 
 Health checks:
   - WS Agent mode: agent WebSocket alive + state READY → healthy
     - atx-agent sub-check: TCP probe port 7912 every interval; 2 misses → restart
-  - ADB mode: periodic `adb shell echo ok` ping → healthy
+  - Relay mode: frame liveness check (scrcpy stream)
   - If device unhealthy too long → mark DEAD
-  - ADB devices: trigger auto-reconnect on transport failure
 """
 from __future__ import annotations
 
@@ -25,12 +24,6 @@ log = logging.getLogger(__name__)
 # Seconds a device can stay DISCONNECTED/ERROR before being marked DEAD
 _MAX_DISCONNECTED_SECS = 120
 
-# ADB health check: consecutive failures before triggering reconnect
-_ADB_MAX_MISS = 3
-
-# Cooldown between ADB reconnect attempts (seconds)
-_ADB_RECONNECT_COOLDOWN = 60
-
 # atx-agent TCP probe: consecutive TCP-connect failures before triggering restart
 _ATX_MAX_MISS = 2
 
@@ -48,10 +41,6 @@ class WatchdogThread(threading.Thread):
         self._running = False
         # Track when each serial entered a non-READY state
         self._bad_since: dict[str, float] = {}
-        # ADB health: consecutive miss count per serial
-        self._adb_miss_count: dict[str, int] = {}
-        # Last ADB reconnect attempt time per serial (for cooldown)
-        self._adb_last_reconnect: dict[str, float] = {}
         # atx-agent TCP probe: consecutive miss count per serial
         self._atx_miss_count: dict[str, int] = {}
         # Last atx-agent restart trigger time per serial (for cooldown)
@@ -98,11 +87,6 @@ class WatchdogThread(threading.Thread):
     def _check_device(self, device: DeviceClient) -> None:
         serial = device.serial
 
-        # ── ADB mode: active health check via shell ping ──
-        if getattr(device, "is_adb_mode", False):
-            self._check_adb_device(device)
-            return
-
         # ── Relay-only device: no ADB access from server — check frame liveness ──
         is_relay_device = device._agent_send is None and getattr(device, "_scrcpy_active", False)
         if is_relay_device:
@@ -133,74 +117,6 @@ class WatchdogThread(threading.Thread):
 
         # Agent disconnected or stuck in a bad state
         self._track_bad_state(device)
-
-    def _check_adb_device(self, device: DeviceClient) -> None:
-        """Active health check for ADB-connected devices."""
-        serial = device.serial
-        transport = getattr(device, "_adb_transport", None)
-
-        # No transport → not really ADB mode, skip
-        if transport is None:
-            return
-
-        # Only check READY or BUSY devices (not CONNECTING or already ERROR)
-        if device.state not in (DeviceState.READY, DeviceState.BUSY):
-            self._track_bad_state(device)
-            return
-
-        # Don't ping devices that are BUSY running tasks — assume healthy
-        if device.state == DeviceState.BUSY:
-            self._adb_miss_count.pop(serial, None)
-            self._bad_since.pop(serial, None)
-            return
-
-        # Ping ADB transport
-        if transport.is_alive(timeout=5.0):
-            # Healthy
-            self._adb_miss_count.pop(serial, None)
-            self._bad_since.pop(serial, None)
-            device.reconnect_attempts = 0
-            return
-
-        # Ping failed
-        miss = self._adb_miss_count.get(serial, 0) + 1
-        self._adb_miss_count[serial] = miss
-        log.warning(f"[{serial}] ADB ping failed ({miss}/{_ADB_MAX_MISS})")
-
-        if miss >= _ADB_MAX_MISS:
-            self._adb_miss_count.pop(serial, None)
-            device.state = DeviceState.ERROR
-            self._schedule_adb_reconnect(device)
-
-    def _schedule_adb_reconnect(self, device: DeviceClient) -> None:
-        """Trigger ADB re-bootstrap in background, respecting cooldown."""
-        serial = device.serial
-        now = time.monotonic()
-        last = self._adb_last_reconnect.get(serial, 0)
-
-        if now - last < _ADB_RECONNECT_COOLDOWN:
-            remaining = _ADB_RECONNECT_COOLDOWN - (now - last)
-            log.info(f"[{serial}] ADB reconnect cooldown ({remaining:.0f}s remaining)")
-            return
-
-        self._adb_last_reconnect[serial] = now
-        log.info(f"[{serial}] Scheduling ADB re-bootstrap...")
-        threading.Thread(
-            target=self._do_adb_reconnect,
-            args=(device,),
-            daemon=True,
-            name=f"adb-reconnect-{serial}",
-        ).start()
-
-    def _do_adb_reconnect(self, device: DeviceClient) -> None:
-        """Background thread: attempt ADB reconnect + full re-bootstrap."""
-        serial = device.serial
-        try:
-            self.manager.reconnect_adb_device(serial)
-        except Exception as exc:
-            log.error(f"[{serial}] ADB reconnect failed: {exc}")
-            device.state = DeviceState.DEAD
-            self._bad_since.pop(serial, None)
 
     def _check_atx_agent(self, device: DeviceClient, host: str) -> None:
         """TCP probe port 7912 — detect frozen atx-agent before u2 RPCs time out.
@@ -262,6 +178,5 @@ class WatchdogThread(threading.Thread):
             )
             device.state = DeviceState.DEAD
             self._bad_since.pop(serial, None)
-            self._adb_miss_count.pop(serial, None)
             self._atx_miss_count.pop(serial, None)
             self._atx_last_restart.pop(serial, None)

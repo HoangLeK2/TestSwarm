@@ -14,8 +14,11 @@
 # agent-boot (local relay):
 #   Runs on the physical machine that has ADB access to devices.
 #   NOT a docker service — run manually:
-#     cd agent-boot && python main.py --server <host>:50051 --api-key <RELAY_API_KEY>
-#   It connects outbound to farm:50051 (gRPC bidi stream) and proxies ADB + scrcpy.
+#     # gRPC mode (recommended for ≥5 phones — HTTP/2 multiplexing):
+#     cd agent-boot && RELAY_MODE=grpc uv run main.py --relay-server <host>:50051 --relay-api-key <KEY>
+#     # WebSocket mode (legacy fallback):
+#     cd agent-boot && uv run main.py --relay-server ws://<host>:8081/relay-agent --relay-api-key <KEY>
+#   It connects outbound to farm and proxies ADB + scrcpy.
 
 services:
   postgres:
@@ -48,8 +51,11 @@ services:
       - POSTGRES_USER=postgres
       - POSTGRES_PWD=${DB_PASSWORD:-postgres}
       - POSTGRES_SEEDS=postgres
+      - DYNAMIC_CONFIG_FILE_PATH=/etc/temporal/config/dynamicconfig/development-sql.yaml
     ports:
       - "7233:7233"   # gRPC (worker + client)
+    volumes:
+      - ./temporal/dynamicconfig/development-sql.yaml:/etc/temporal/config/dynamicconfig/development-sql.yaml:ro
     healthcheck:
       test: ["CMD", "tctl", "--address", "temporal:7233", "cluster", "health"]
       interval: 10s
@@ -80,25 +86,18 @@ services:
         condition: service_healthy
       temporal:
         condition: service_healthy
-    # network_mode: "host"  # Linux only: eliminates Docker bridge NAT overhead (~2-5ms/packet).
-    #                         Uncomment when deploying on Linux cloud (removes ports mapping below).
-    #                         Do NOT use on macOS — Docker Desktop runs in a VM, host mode = VM's host.
     ports:
-      - "8081:8081"
-      # Legacy gRPC port (deprecated). agent-boot uses WebSocket: ws://<host>:8081/relay-agent
+      - "8081:8081"   # HTTP API + WebSocket (includes Temporal worker startup in same process)
+      # Optional: expose gRPC relay externally for local agent-boot.
+      # Keep disabled by default to avoid host port conflicts on 50051.
       - "50051:50051"
     environment:
-      # Database
       DATABASE_URL: postgresql://postgres:${DB_PASSWORD:-postgres}@postgres:5432/device_farm
-      # Temporal — point to temporal service, not localhost
       TEMPORAL_SERVER_URL: temporal:7233
-      # Auth
       SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
       ACCESS_EXPIRE_HOURS: ${ACCESS_EXPIRE_HOURS:-1}
-      # AI (optional)
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      # MinIO — screenshot / image storage
       MINIO_ENDPOINT: minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
@@ -106,7 +105,6 @@ services:
       MINIO_PUBLIC_BASE_URL: ${MINIO_PUBLIC_BASE_URL:-}
       RELAY_API_KEY: ${RELAY_API_KEY:-}
       RELAY_PORT: ${RELAY_PORT:-50051}
-      # Farm in container cannot open TCP to device_ip:7912; U2 must use WS tunnel.
       DEVICE_FARM_U2_ALWAYS_TUNNEL: ${DEVICE_FARM_U2_ALWAYS_TUNNEL:-1}
     volumes:
       - ./device_farm/config.yaml:/app/config.yaml:ro

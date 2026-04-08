@@ -6,13 +6,20 @@ import {
   Trash2, ExternalLink, Eye, Database, TrendingUp,
   Smartphone, FileText, MessageCircle, Newspaper,
   Heart, Share2, ThumbsUp, Clock, CornerDownRight,
+  Download, ChevronDown,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 import { useContent, useContentStats } from '../hooks/use-content';
-import type { ContentItem } from '../services/api';
+import { contentApi, type ContentItem, type ExportFormat } from '../services/api';
 import { ContentDetailDialog } from './content-detail-dialog';
 
 // ── Stats bar ────────────────────────────────────────────────────────────────
@@ -430,10 +437,21 @@ export function ContentViewer({ defaultCampaignId }: Props) {
   const [platform, setPlatform] = useState('');
   const [contentType, setContentType] = useState('');
   const [viewingItem, setViewingItem] = useState<ContentItem | null>(null);
+  const [exporting, setExporting] = useState(false);
 
-  const { items, total, page, totalPages, loading, error, applyFilters, setPage, deleteItem, reload } = useContent({
+  const { items, total, page, totalPages, loading, error, filters, applyFilters, setPage, deleteItem, reload } = useContent({
     campaign_id: defaultCampaignId || undefined,
   });
+
+  const handleExport = (format: ExportFormat) => {
+    setExporting(true);
+    try {
+      contentApi.exportStream(filters, format);
+    } finally {
+      // brief delay so spinner is visible
+      setTimeout(() => setExporting(false), 1200);
+    }
+  };
 
   const handleApply = (overrides?: { contentType?: string }) => {
     const ct = overrides?.contentType !== undefined ? overrides.contentType : contentType;
@@ -472,7 +490,30 @@ return (
               Tất cả nội dung được cào từ các lần chạy kịch bản
             </p>
           </div>
-          <Badge variant='secondary' className='text-xs'>{total.toLocaleString()} bản ghi</Badge>
+          <div className='flex items-center gap-2'>
+            <Badge variant='secondary' className='text-xs'>{total.toLocaleString()} bản ghi</Badge>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size='sm' variant='outline' className='h-7 gap-1.5 text-xs' disabled={exporting || total === 0}>
+                  {exporting
+                    ? <RefreshCw className='size-3 animate-spin' />
+                    : <Download className='size-3' />}
+                  Export
+                  <ChevronDown className='size-3' />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align='end'>
+                <DropdownMenuItem onClick={() => handleExport('csv')}>
+                  <FileText className='mr-2 size-3.5' />
+                  CSV (streaming)
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleExport('xlsx')}>
+                  <Database className='mr-2 size-3.5' />
+                  Excel (.xlsx)
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
 
         {/* Filters */}

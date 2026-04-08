@@ -16,6 +16,7 @@ import socket
 import struct
 import threading
 import time
+from typing import Any
 
 # ── scrcpy control message types ──────────────────────────────────────────────
 MSG_INJECT_KEYCODE     = 0
@@ -86,6 +87,15 @@ class ScrcpyControl:
         self.screen_height = screen_height
         self.serial = serial
         self._logger = logging.getLogger(f"scrcpy_ctrl.{serial}")
+        self._last_idr_request_at = 0.0
+        self._idr_min_interval_s = 1.0
+        # TCP_NODELAY: disable Nagle algorithm so each 32-byte touch event is sent
+        # immediately without waiting for a full segment or ACK. Without this,
+        # rapid tap/swipe sequences can be delayed up to 40ms per packet.
+        try:
+            control_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except Exception:
+            pass
 
     @property
     def is_connected(self) -> bool:
@@ -98,13 +108,22 @@ class ScrcpyControl:
         except Exception:
             pass
 
-    def request_idr(self) -> None:
+    def request_idr(self) -> bool:
         """Send MSG_RESET_VIDEO (scrcpy v3.2+) to request an immediate IDR keyframe.
         On older scrcpy versions the server ignores the unknown message type silently."""
         try:
             self._send(struct.pack(">B", MSG_RESET_VIDEO))
+            return True
         except Exception:
-            pass
+            return False
+
+    def _request_idr_throttled(self, min_interval_s: float | None = None) -> None:
+        interval = self._idr_min_interval_s if min_interval_s is None else float(min_interval_s)
+        now = time.monotonic()
+        if now - self._last_idr_request_at < interval:
+            return
+        if self.request_idr():
+            self._last_idr_request_at = now
 
     # ── Touch ─────────────────────────────────────────────────────────────────
 
@@ -118,7 +137,7 @@ class ScrcpyControl:
         x1: int, y1: int,
         x2: int, y2: int,
         duration_ms: int = 300,
-        steps: int = 20,
+        steps: int = 12,
     ) -> None:
         self._logger.debug(f"swipe({x1},{y1})→({x2},{y2}) ms={duration_ms}")
         self._inject_touch(ACTION_DOWN, x1, y1, PRESSURE_MAX)
@@ -272,6 +291,8 @@ class RelayScrcpyControl:
         self.screen_height = screen_height
         self.serial = serial
         self._logger = logging.getLogger(f"relay_ctrl.{serial}")
+        self._last_idr_request_at = 0.0
+        self._idr_min_interval_s = 1.0
 
     @property
     def is_connected(self) -> bool:
@@ -282,12 +303,21 @@ class RelayScrcpyControl:
 
     # ── Public API (mirrors ScrcpyControl) ────────────────────────────────────
 
-    def request_idr(self) -> None:
+    def request_idr(self) -> bool:
         """Send MSG_RESET_VIDEO (scrcpy v3.2+) to request an immediate IDR keyframe."""
         try:
             self._send(struct.pack(">B", MSG_RESET_VIDEO))
+            return True
         except Exception:
-            pass
+            return False
+
+    def _request_idr_throttled(self, min_interval_s: float | None = None) -> None:
+        interval = self._idr_min_interval_s if min_interval_s is None else float(min_interval_s)
+        now = time.monotonic()
+        if now - self._last_idr_request_at < interval:
+            return
+        if self.request_idr():
+            self._last_idr_request_at = now
 
     def tap(self, x: int, y: int, pressure: int = PRESSURE_MAX) -> None:
         self._inject_touch(ACTION_DOWN, x, y, pressure)
@@ -298,7 +328,7 @@ class RelayScrcpyControl:
         x1: int, y1: int,
         x2: int, y2: int,
         duration_ms: int = 300,
-        steps: int = 20,
+        steps: int = 12,
     ) -> None:
         self._inject_touch(ACTION_DOWN, x1, y1, PRESSURE_MAX)
         delay = duration_ms / 1000.0 / steps
@@ -403,9 +433,34 @@ class RelayScrcpyControl:
         with self._lock:
             import asyncio
             try:
-                asyncio.run_coroutine_threadsafe(
-                    self._relay.send_scrcpy_control(self._serial, data),
-                    self._loop,
-                )
+                from runtime.transports.grpc_relay_server import _GrpcWriteQueue
+                _grpc_queue_cls = _GrpcWriteQueue
+            except ImportError:
+                _grpc_queue_cls = None
+            try:
+                # Fast path: if the relay connection uses a _GrpcWriteQueue,
+                # put_nowait is called via call_soon_threadsafe to avoid the
+                # overhead of creating a coroutine Future for every tap/swipe.
+                conn = self._relay.relay_for_serial(self._serial)
+                write_q = getattr(conn, "_write_queue", None) if conn else None
+                if _grpc_queue_cls is not None and isinstance(write_q, _grpc_queue_cls):
+                    # _GrpcWriteQueue: build binary frame, convert via put_nowait
+                    serial_b = self._serial.encode()
+                    frame = bytes([0x43, len(serial_b)]) + serial_b + data
+                    def _enqueue_fast() -> None:
+                        try:
+                            write_q.put_nowait(frame)
+                        except Exception:
+                            asyncio.run_coroutine_threadsafe(
+                                self._relay.send_scrcpy_control(self._serial, data),
+                                self._loop,
+                            )
+                    self._loop.call_soon_threadsafe(_enqueue_fast)
+                else:
+                    # WebSocket path: schedule coroutine via run_coroutine_threadsafe
+                    asyncio.run_coroutine_threadsafe(
+                        self._relay.send_scrcpy_control(self._serial, data),
+                        self._loop,
+                    )
             except Exception as exc:
                 self._logger.warning("relay control send failed: %s", exc)

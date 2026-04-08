@@ -102,6 +102,7 @@ class ScrcpyReceiver(threading.Thread):
         on_frame: Optional[Callable[[bytes], None]] = None,
         on_h264_config: Optional[Callable[[bytes, int, int, bool], None]] = None,
         on_h264_packet: Optional[Callable[[bytes, bool, int], None]] = None,
+        sdk_version: int = 0,
     ) -> None:
         """
         on_frame(jpeg_bytes)                       — JPEG fallback (take_screenshot / periodic mode)
@@ -128,6 +129,7 @@ class ScrcpyReceiver(threading.Thread):
         self.reconnect_delay = reconnect_delay
         self.enable_control = enable_control
 
+        self.sdk_version = sdk_version
         self._logger = logging.getLogger(f"scrcpy.{serial}")
         self._lock = threading.Lock()
         self._ctrl_lock = threading.Lock()  # protects self.control reads/writes
@@ -315,9 +317,13 @@ class ScrcpyReceiver(threading.Thread):
             #   latency=0     KEY_LATENCY=0       → encoder outputs frame
             #                 immediately; default buffers 2-4 frames (~66-133ms
             #                 at 30fps) before first output.
-            #   i-frame-interval=2  IDR every 2s (less frequent than 1s reduces burst frequency
-            #                       while still giving reasonable recovery time)
-            f"video_codec_options=profile:int=1,latency:int=0,i-frame-interval:int=2 "
+            #                 CRASH on Android API 34+ OEM builds — only enable
+            #                 when sdk_version is known and < 34.
+            #   i-frame-interval=2  IDR every 2s (lower burst pressure than 1s)
+            f"video_codec_options=profile:int=1"
+            + (",latency:int=0" if 0 < self.sdk_version < 34 else "")
+            + ",i-frame-interval:int=2 "
+            f"stay_awake=true "
             f"send_device_meta=true "
             f"send_frame_meta=true "
             f"raw_video_stream=false"

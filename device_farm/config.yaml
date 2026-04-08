@@ -23,14 +23,16 @@ device:
   stf_apk_path: ""       
 
   scrcpy_jar: "/opt/homebrew/share/scrcpy/scrcpy-server"
-  scrcpy_max_fps: 30
-  scrcpy_max_width: 800   # downscale max dimension
+  # 2-phone stability profile: reduce pixel load and burst pressure.
+  scrcpy_max_fps: 12
+  scrcpy_max_width: 540
   scrcpy_bitrate: 8000000        # H.264 bitrate bps for local ADB path (8Mbps)
-  scrcpy_relay_bitrate: 2000000  # H.264 bitrate for WiFi ADB relay (keep ≤4Mbps — IDR frames at 8Mbps take 200ms+ over WiFi ADB, causing 1fps freeze)
-  scrcpy_control: true     # Enable scrcpy control channel for touch/key/text (smoothest input method)
-  u2_always_tunnel: true   # Docker/cloud: farm container cannot reach device_ip:7912 — always use WS tunnel
+  # Balanced quality/stability for 540p@12fps on WiFi ADB relay.
+  scrcpy_relay_bitrate: 900000
+  scrcpy_control: false     # Enable scrcpy control channel for touch/key/text (smoothest input method)
+  u2_always_tunnel: false  # Local/LAN: prefer direct atx-agent on device_ip:7912 (no WS u2 tunnel)
 
-force_u2_mode: true
+force_u2_mode: false
 
 # ADB relay — gRPC server for local agent-boot/relay.py
 # Enable when running device_farm in cloud (devices connect via relay agents)
@@ -38,6 +40,12 @@ relay:
   enabled: true
   port: 50051
   api_key: ""   # set via RELAY_API_KEY env var
+
+# ─── U2 Batch / Flow ──────────────────────────────────────────────────────────
+# Push multi-step uiautomator2 actions to agent-boot in one gRPC round-trip.
+# Requires agent-boot >= 2026-04-08 with U2_BATCH_ENABLED=true.
+u2_batch:
+  enabled: false           # Override via U2_BATCH_ENABLED env var
 
 # Leave empty to skip app monitoring in watchdog
 target_app: ""           # e.g., "com.example.mygame"

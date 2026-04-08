@@ -28,8 +28,12 @@ export function DeviceScreen({ device, wsSend, mode, onTap, highlightBounds, ges
   const dragStartRef = useRef<{ x: number; y: number } | null>(null);
   const [hasFrame, setHasFrame] = useState(false);
   const [fps, setFps] = useState<number | null>(null);
-  const frameCountRef = useRef(0);
   const fpsTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const frameTsRef = useRef<number[]>([]);
+  const decodedFramesRef = useRef(0);
+  const prevDecodedFramesRef = useRef(0);
+  const [decodeQueueSize, setDecodeQueueSize] = useState(0);
+  const [droppedDelta, setDroppedDelta] = useState(0);
 
   const id = serialToId(device.serial);
   const dw = device.screen_width  || 1080;
@@ -41,14 +45,16 @@ export function DeviceScreen({ device, wsSend, mode, onTap, highlightBounds, ges
   // Track whether jmuxer has delivered at least one H264 frame
   const [h264Active, setH264Active] = useState(false);
   const h264TimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const h264StableTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [mjpegEnabled, setMjpegEnabled] = useState(true);
 
   // Always show MJPEG as baseline — it's hidden (opacity-0) once H264 starts playing
   const mjpegUrl = React.useMemo(() => {
-    if (!isActive) return null;
+    if (!isActive || !mjpegEnabled) return null;
     const base = `${deviceFarmBackendBase}/stream/${encodeURIComponent(device.serial)}?fps=30`;
     const token = tokenStorage.getAuthToken();
     return token ? `${base}&token=${encodeURIComponent(token)}` : base;
-  }, [isActive, device.serial]);
+  }, [isActive, mjpegEnabled, device.serial]);
 
   // Always pass real serial so binary frames are subscribed immediately on mount.
   // jmuxer gracefully handles missing MSE via onError — MJPEG fallback stays visible.
@@ -59,34 +65,82 @@ export function DeviceScreen({ device, wsSend, mode, onTap, highlightBounds, ges
       onFrame: useCallback(() => {
         if (!hasFrame) setHasFrame(true);
         if (!h264Active) setH264Active(true);
-        frameCountRef.current += 1;
+        const now = performance.now();
+        const arr = frameTsRef.current;
+        arr.push(now);
+        // Keep only last ~2s samples.
+        while (arr.length > 0 && now - arr[0] > 2000) arr.shift();
         // Reset inactivity timer — fall back to MJPEG if H264 stops for 3s
         if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
         h264TimeoutRef.current = setTimeout(() => setH264Active(false), 8000);
       }, [hasFrame, h264Active]),
+      onStats: useCallback((stats: { decodedFrames: number; decodeQueueSize: number; droppedDelta: number }) => {
+        // Worker emits cumulative decoded frame counter.
+        decodedFramesRef.current = stats.decodedFrames;
+        setDecodeQueueSize(stats.decodeQueueSize);
+        setDroppedDelta(stats.droppedDelta);
+      }, []),
     }
   );
 
   // Reset h264Active when device changes or goes offline
   useEffect(() => {
     setH264Active(false);
+    setMjpegEnabled(true);
     if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
+    if (h264StableTimerRef.current) clearTimeout(h264StableTimerRef.current);
   }, [device.serial, isActive]);
+
+  // Once H264 stays healthy for a while, stop MJPEG network fetches entirely.
+  // If H264 drops, MJPEG is re-enabled immediately as fallback.
+  useEffect(() => {
+    if (!isActive) {
+      setMjpegEnabled(false);
+      return;
+    }
+    if (h264Active) {
+      if (h264StableTimerRef.current) clearTimeout(h264StableTimerRef.current);
+      h264StableTimerRef.current = setTimeout(() => {
+        setMjpegEnabled(false);
+      }, 5000);
+    } else {
+      if (h264StableTimerRef.current) clearTimeout(h264StableTimerRef.current);
+      setMjpegEnabled(true);
+    }
+    return () => {
+      if (h264StableTimerRef.current) clearTimeout(h264StableTimerRef.current);
+    };
+  }, [isActive, h264Active]);
 
   // Whether to attempt H264 — MSE is available in all modern browsers; jmuxer handles gracefully if not
   const useH264 = isActive;
 
   useEffect(() => {
     if (!isActive) { setFps(null); return; }
-    frameCountRef.current = 0;
+    frameTsRef.current = [];
+    decodedFramesRef.current = 0;
+    prevDecodedFramesRef.current = 0;
     fpsTimerRef.current = setInterval(() => {
-      setFps(frameCountRef.current);
-      frameCountRef.current = 0;
+      const now = performance.now();
+      const samples = frameTsRef.current;
+      while (samples.length > 0 && now - samples[0] > 1000) samples.shift();
+      const rendered = samples.length;
+      const decodedDelta = Math.max(0, decodedFramesRef.current - prevDecodedFramesRef.current);
+      const next = Math.max(rendered, decodedDelta);
+      // Keep numeric FPS while device is active (avoid "-" flicker between samples).
+      if (next > 0) {
+        setFps(next);
+      } else if (isActive) {
+        setFps((prev) => (prev ?? 0));
+      } else {
+        setFps(null);
+      }
+      prevDecodedFramesRef.current = decodedFramesRef.current;
     }, 1000);
     return () => {
       if (fpsTimerRef.current) clearInterval(fpsTimerRef.current);
     };
-  }, [isActive]);
+  }, [isActive, h264Active]);
 
   // ── Touch / gesture ──────────────────────────────────────────────────────
   const clientToDevice = useCallback(
@@ -201,7 +255,7 @@ export function DeviceScreen({ device, wsSend, mode, onTap, highlightBounds, ges
             src={mjpegUrl}
             alt={`${device.brand} ${device.model}`}
             className={`absolute inset-0 h-full w-full object-contain transition-opacity duration-500 ${h264Active ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
-            onLoad={() => { setHasFrame(true); if (!h264Active) frameCountRef.current += 1; }}
+            onLoad={() => { setHasFrame(true); }}
             draggable={false}
           />
         )}
@@ -238,6 +292,9 @@ export function DeviceScreen({ device, wsSend, mode, onTap, highlightBounds, ges
         )}
         <div className='pointer-events-none absolute right-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-mono text-white'>
           {fps !== null ? `${fps} FPS` : '— FPS'}
+        </div>
+        <div className='pointer-events-none absolute right-1 top-6 rounded bg-black/50 px-1.5 py-0.5 text-[9px] font-mono text-white/90'>
+          q:{decodeQueueSize} d:{droppedDelta}
         </div>
       </div>
       <div className='mt-1 flex items-center justify-between text-[10px] text-muted-foreground'>

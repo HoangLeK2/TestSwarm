@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import ipaddress
 import inspect
 import json
 import logging
+import os
 import struct
 import uuid
 from typing import Any, Dict, Optional
@@ -88,6 +90,36 @@ def _parse_agent_binary_frame(buf: bytes) -> Dict[str, Any] | None:
     return None
 
 
+def _is_droppable_frame(buf: bytes) -> bool:
+    """True for non-key H264 video frames (safe to drop when queue is stale)."""
+    if not buf or len(buf) < 2:
+        return False
+    # Only H264 video frames are droppable; config/JPEG must be kept.
+    if buf[0] != 0x11:
+        return False
+    slen = buf[1]
+    base = 2 + slen
+    # frame_type + slen + serial + w/h + is_key byte
+    if len(buf) < base + 5:
+        return False
+    is_key = buf[base + 4] != 0
+    return not is_key
+
+
+def _is_config_frame(buf: bytes) -> bool:
+    return bool(buf) and len(buf) >= 1 and buf[0] == 0x10
+
+
+def _frame_serial_bytes(buf: bytes) -> bytes:
+    """Extract raw serial bytes from wire frame; empty bytes if malformed."""
+    if not buf or len(buf) < 2:
+        return b""
+    slen = buf[1]
+    if len(buf) < 2 + slen:
+        return b""
+    return bytes(buf[2 : 2 + slen])
+
+
 async def heartbeat(manager: DeviceManager) -> None:
     """Broadcast device status to all frontends every 5 seconds."""
     while True:
@@ -121,7 +153,11 @@ class WebSocketManager:
     def __init__(self, manager: DeviceManager, db_enabled: bool = False) -> None:
         self.manager = manager
         self._connections: Dict[str, WebSocket] = {}
-        self._queues: Dict[str, asyncio.Queue] = {}
+        # Dual queues per connection — prevents 33KB IDR frames from blocking JSON acks.
+        # video_q: binary H264/JPEG frames (subscribe_frames)
+        # ctrl_q:  JSON status/control messages (subscribe_status)
+        self._video_queues: Dict[str, asyncio.Queue] = {}
+        self._ctrl_queues: Dict[str, asyncio.Queue] = {}
         self._user_ids: Dict[str, Optional[str]] = {}
         self._allowed_serials: Dict[str, Optional[set[str]]] = {}
         self._lock = asyncio.Lock()
@@ -148,14 +184,17 @@ class WebSocketManager:
     async def connect(self, ws: WebSocket, user_id: Optional[str] = None) -> None:
         await ws.accept()
         conn_id = str(uuid.uuid4())
-        # maxsize=6: ~200ms burst buffer at 30fps — absorbs IDR spikes without
-        # dropping P-frames. Queue drains instantly on local/LAN connections.
-        q: asyncio.Queue = asyncio.Queue(maxsize=6)
+        # video_q: keep very shallow for live-first behavior (lowest latency).
+        # For interactive control, stale frames are worse than dropped frames.
+        # ctrl_q:  JSON status/control — maxsize=16 (small msgs, generous headroom)
+        video_q: asyncio.Queue = asyncio.Queue(maxsize=3)
+        ctrl_q: asyncio.Queue = asyncio.Queue(maxsize=16)
         allowed_serials = await self._load_allowed_serials(user_id)
 
         async with self._lock:
             self._connections[conn_id] = ws
-            self._queues[conn_id] = q
+            self._video_queues[conn_id] = video_q
+            self._ctrl_queues[conn_id] = ctrl_q
             self._user_ids[conn_id] = user_id
             self._allowed_serials[conn_id] = allowed_serials
 
@@ -166,8 +205,8 @@ class WebSocketManager:
 
         # Subscribe only to devices visible to this user.
         for device in visible_devs:
-            device.subscribe_frames(q)
-            device.subscribe_status(q)
+            device.subscribe_frames(video_q)
+            device.subscribe_status(ctrl_q)
             # Push last frame immediately so browser shows something on open (binary format)
             # Skip for disconnected/dead devices — don't show stale preview
             frame = device.take_screenshot() if device.state in (DeviceState.READY, DeviceState.BUSY) else None
@@ -178,7 +217,7 @@ class WebSocketManager:
                 h = max(0, min(device.screen_height, 0xFFFF))
                 binary = bytes([0x01, slen]) + serial_b + struct.pack(">HH", w, h) + frame
                 try:
-                    q.put_nowait(binary)
+                    video_q.put_nowait(binary)
                 except Exception:
                     pass
 
@@ -194,12 +233,12 @@ class WebSocketManager:
             log.info(
                 f"WS {conn_id}: disconnected during handshake ({exc.__class__.__name__})"
             )
-            await self._cleanup(conn_id, q, visible_devs)
+            await self._cleanup(conn_id, video_q, ctrl_q, visible_devs)
             return
 
         log.info(f"Frontend WS connected: {conn_id}")
         try:
-            send_task = asyncio.create_task(self._sender(ws, q))
+            send_task = asyncio.create_task(self._sender(ws, video_q, ctrl_q))
             recv_task = asyncio.create_task(self._receiver(ws))
             done, pending = await asyncio.wait(
                 [send_task, recv_task], return_when=asyncio.FIRST_COMPLETED
@@ -209,51 +248,119 @@ class WebSocketManager:
         except Exception as exc:
             log.debug(f"WS {conn_id} error: {exc}")
         finally:
-            await self._cleanup(conn_id, q, self.manager.all_devices())
+            await self._cleanup(conn_id, video_q, ctrl_q, self.manager.all_devices())
             log.info(f"Frontend WS disconnected: {conn_id}")
 
-    async def _cleanup(self, conn_id: str, q: asyncio.Queue, devices) -> None:
+    async def _cleanup(self, conn_id: str, video_q: asyncio.Queue, ctrl_q: asyncio.Queue, devices) -> None:
         for device in devices:
-            device.unsubscribe_frames(q)
-            device.unsubscribe_status(q)
+            device.unsubscribe_frames(video_q)
+            device.unsubscribe_status(ctrl_q)
         async with self._lock:
             self._connections.pop(conn_id, None)
-            self._queues.pop(conn_id, None)
+            self._video_queues.pop(conn_id, None)
+            self._ctrl_queues.pop(conn_id, None)
             self._user_ids.pop(conn_id, None)
             self._allowed_serials.pop(conn_id, None)
 
     def subscribe_device(self, device) -> None:
         """Subscribe all active frontend connections to a newly-connected agent."""
-        items = list(self._queues.items())
-        log.info(f"subscribe_device({device.serial}): {len(items)} frontend connection(s)")
-        for conn_id, q in items:
+        conn_ids = list(self._video_queues.keys())
+        log.info(f"subscribe_device({device.serial}): {len(conn_ids)} frontend connection(s)")
+        for conn_id in conn_ids:
+            video_q = self._video_queues.get(conn_id)
+            ctrl_q = self._ctrl_queues.get(conn_id)
+            if not video_q or not ctrl_q:
+                continue
             allowed_serials = self._allowed_serials.get(conn_id)
             if allowed_serials is not None and device.serial not in allowed_serials:
                 continue
-            device.subscribe_frames(q)
-            device.subscribe_status(q)
+            device.subscribe_frames(video_q)
+            device.subscribe_status(ctrl_q)
             try:
-                q.put_nowait(device.status_dict())
+                ctrl_q.put_nowait(device.status_dict())
             except Exception:
                 pass
 
-    async def _sender(self, ws: WebSocket, q: asyncio.Queue) -> None:
+    async def _sender(self, ws: WebSocket, video_q: asyncio.Queue, ctrl_q: asyncio.Queue) -> None:
+        """Priority sender: flush all pending JSON ctrl messages before each video frame.
+
+        Prevents a 33KB IDR frame from blocking a 50-byte JSON status/ack in the TCP
+        send buffer — which would add up to 33KB/bandwidth latency to control responses.
+        At 30fps the video_q.get_nowait() path is taken ~99% of iterations (no task overhead).
+        The asyncio.wait_for fallback is only hit when the stream is truly idle.
+
+        Burst smoothing:
+        - Pace droppable (delta) frames to ~30fps on the wire to avoid "IDR + many P frames"
+          arriving in one scheduler burst at the browser.
+        - Never delay config/key frames (decoder continuity + fast recovery).
+        """
         _sent_types: dict = {}
         while True:
-            msg = await q.get()
-            try:
-                if isinstance(msg, (bytes, bytearray)):
-                    # Log first few of each frame type so we can confirm 0x10 is sent
-                    ft = msg[0] if msg else 0
-                    cnt = _sent_types.get(ft, 0) + 1
-                    _sent_types[ft] = cnt
-                    if cnt <= 3:
-                        log.info("WS sender → browser: type=0x%02x len=%d (count=%d)", ft, len(msg), cnt)
-                    await ws.send_bytes(msg)
-                else:
+            # 1) Drain all pending ctrl (JSON) messages first — priority path
+            while not ctrl_q.empty():
+                try:
+                    msg = ctrl_q.get_nowait()
                     await ws.send_json(msg)
+                except asyncio.QueueEmpty:
+                    break
+                except Exception:
+                    return
+
+            # 2) Send one video frame (non-blocking fast path at 30fps)
+            try:
+                msg = video_q.get_nowait()
+            except asyncio.QueueEmpty:
+                # Idle: wait for video, re-check ctrl every 50ms in case it arrives
+                try:
+                    msg = await asyncio.wait_for(video_q.get(), timeout=0.05)
+                except asyncio.TimeoutError:
+                    continue  # loop back to drain ctrl_q
+                except Exception:
+                    return
+
+            # 3) Live-first coalescing.
+            #    Prefer newest decodable frame while preserving config->key ordering.
+            while not video_q.empty():
+                try:
+                    candidate = video_q.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                if _frame_serial_bytes(candidate) != _frame_serial_bytes(msg):
+                    # Shared queue may contain frames from other devices.
+                    # Never coalesce across serials; put it back and stop coalescing.
+                    try:
+                        video_q.put_nowait(candidate)
+                    except asyncio.QueueFull:
+                        pass
+                    break
+                if _is_droppable_frame(msg):
+                    # current msg is a stale P-frame — replace with newer candidate
+                    msg = candidate
+                elif _is_droppable_frame(candidate):
+                    # candidate is a P-frame but current is IDR/config — discard candidate
+                    pass
+                else:
+                    # Both are non-droppable.
+                    if _is_config_frame(msg):
+                        # Keep config before key/data for decoder continuity.
+                        try:
+                            video_q.put_nowait(candidate)
+                        except asyncio.QueueFull:
+                            pass
+                        break
+                    # Prefer freshest non-droppable frame.
+                    msg = candidate
+
+            try:
+                ft = msg[0] if msg else 0
+                cnt = _sent_types.get(ft, 0) + 1
+                _sent_types[ft] = cnt
+                if cnt <= 3:
+                    log.info("WS sender → browser: type=0x%02x len=%d (count=%d)", ft, len(msg), cnt)
+
+                await ws.send_bytes(msg)
             except Exception:
-                break
+                return
 
     async def _receiver(self, ws: WebSocket) -> None:
         loop = asyncio.get_running_loop()
@@ -282,12 +389,18 @@ class WebSocketManager:
             if not device:
                 continue
 
+            # Fire-and-forget all input commands — don't await executor so the receiver
+            # immediately loops back to receive_json() for the next message.
+            # Commands execute in background threads; scrcpy socket lock serializes concurrent sends.
+            # Exceptions in executor tasks without await are silently dropped (OK for input).
+
             if msg_type == "tap":
                 x, y = int(data.get("x", 0)), int(data.get("y", 0))
                 log.info(
-                    f"[INPUT] TAP {serial} ({x},{y}) agent={device._agent_send is not None}"
+                    f"[INPUT] TAP {serial} ({x},{y}) route_hint={device.input_route_hint()} "
+                    f"agent={device._agent_send is not None}"
                 )
-                await loop.run_in_executor(None, device.tap, x, y)
+                loop.run_in_executor(None, device.tap, x, y)
 
             elif msg_type == "swipe":
                 x1 = int(data.get("x1", 0))
@@ -295,38 +408,33 @@ class WebSocketManager:
                 x2 = int(data.get("x2", 0))
                 y2 = int(data.get("y2", 0))
                 ms = int(data.get("ms", 300))
-                adb_conn = False
-                try:
-                    adb_conn = bool(getattr(device, "_adb_transport", None) and device._adb_transport.connected)  # type: ignore[attr-defined]
-                except Exception:
-                    adb_conn = False
                 log.info(
                     f"[INPUT] SWIPE {serial} ({x1},{y1})→({x2},{y2}) ms={ms} "
-                    f"adb_mode={getattr(device, 'is_adb_mode', False)} adb_conn={adb_conn}"
+                    f"route_hint={device.input_route_hint()}"
                 )
-                await loop.run_in_executor(None, device.swipe, x1, y1, x2, y2, ms)
+                loop.run_in_executor(None, device.swipe, x1, y1, x2, y2, ms)
 
             elif msg_type == "key":
                 key = data.get("key", "home")
-                log.info(f"[INPUT] KEY {serial} key={key}")
-                await loop.run_in_executor(None, device.key, key)
+                log.info(f"[INPUT] KEY {serial} key={key} route_hint={device.input_route_hint()}")
+                loop.run_in_executor(None, device.key, key)
 
             elif msg_type == "long_tap":
                 x, y = int(data.get("x", 0)), int(data.get("y", 0))
                 ms = int(data.get("ms", 800))
-                await loop.run_in_executor(None, device.long_tap, x, y, ms)
+                loop.run_in_executor(None, device.long_tap, x, y, ms)
 
             elif msg_type == "pinch":
                 cx = int(data.get("cx", 0))
                 cy = int(data.get("cy", 0))
                 scale = float(data.get("scale", 0.5))
                 duration_ms = int(data.get("ms", 400))
-                await loop.run_in_executor(None, device.pinch, cx, cy, scale, duration_ms)
+                loop.run_in_executor(None, device.pinch, cx, cy, scale, duration_ms)
 
             elif msg_type == "double_tap":
                 x, y = int(data.get("x", 0)), int(data.get("y", 0))
                 log.info(f"[INPUT] DOUBLE_TAP {serial} ({x},{y})")
-                await loop.run_in_executor(None, device.double_tap, x, y)
+                loop.run_in_executor(None, device.double_tap, x, y)
 
             elif msg_type == "drag":
                 x1 = int(data.get("x1", 0))
@@ -335,39 +443,42 @@ class WebSocketManager:
                 y2 = int(data.get("y2", 0))
                 ms = int(data.get("ms", 1000))
                 log.info(f"[INPUT] DRAG {serial} ({x1},{y1})→({x2},{y2}) ms={ms}")
-                await loop.run_in_executor(None, device.drag, x1, y1, x2, y2, ms)
+                loop.run_in_executor(None, device.drag, x1, y1, x2, y2, ms)
 
             elif msg_type == "tap_selector":
                 by = data.get("by", "text")
                 value = data.get("value", "")
                 if value:
-                    log.info(f"[INPUT] TAP_SELECTOR {serial} {by}={value!r}")
-                    await loop.run_in_executor(None, device.tap_selector, by, value)
+                    selector_route = "agent_boot_batch_flow" if device._batch_enabled() else "device_farm_u2_wrapper"
+                    log.info(
+                        f"[INPUT] TAP_SELECTOR {serial} {by}={value!r} route_hint={selector_route}"
+                    )
+                    loop.run_in_executor(None, device.tap_selector, by, value)
 
             elif msg_type == "screen_on":
                 log.info(f"[INPUT] SCREEN_ON {serial}")
-                await loop.run_in_executor(None, device.screen_on)
+                loop.run_in_executor(None, device.screen_on)
 
             elif msg_type == "screen_off":
                 log.info(f"[INPUT] SCREEN_OFF {serial}")
-                await loop.run_in_executor(None, device.screen_off)
+                loop.run_in_executor(None, device.screen_off)
 
             elif msg_type == "unlock":
                 log.info(f"[INPUT] UNLOCK {serial}")
-                await loop.run_in_executor(None, device.unlock)
+                loop.run_in_executor(None, device.unlock)
 
             elif msg_type == "swipe_ext":
                 direction = data.get("direction", "up")
                 scale = float(data.get("scale", 0.8))
                 ms = int(data.get("ms", 500))
                 log.info(f"[INPUT] SWIPE_EXT {serial} dir={direction} scale={scale} ms={ms}")
-                await loop.run_in_executor(None, device.swipe_ext, direction, scale, ms)
+                loop.run_in_executor(None, device.swipe_ext, direction, scale, ms)
 
             elif msg_type == "install":
                 apk_source = data.get("url") or data.get("apk_url", "")
                 if apk_source:
                     log.info(f"[INPUT] INSTALL {serial} source={apk_source!r}")
-                    await loop.run_in_executor(None, device.install, apk_source)
+                    loop.run_in_executor(None, device.install, apk_source)
 
 
 class DeviceAgentSession:
@@ -430,6 +541,25 @@ class DeviceAgentSession:
                 return
 
             serial = str(serial)
+
+            # ── Shared-secret auth (set AGENT_SECRET env var to enable) ────
+            _required_secret = os.environ.get("AGENT_SECRET", "").strip()
+            if _required_secret:
+                _provided = (
+                    hello.get("secret", "") or ws.query_params.get("secret", "")
+                ).strip()
+                if _provided != _required_secret:
+                    log.warning(
+                        "[DEVICE-WS] Agent %s from %s: rejected — invalid secret",
+                        serial, client_addr,
+                    )
+                    await ws.send_json({
+                        "type": "error",
+                        "message": "Invalid agent secret. Set AGENT_SECRET on device.",
+                    })
+                    await ws.close(code=4003)
+                    return
+                log.debug("[DEVICE-WS] Agent %s: secret OK", serial)
             log.info(
                 "[DEVICE-WS] Device connected: serial=%s brand=%s model=%s android=%s sdk=%s screen=%sx%s ip=%s",
                 serial,
@@ -518,18 +648,47 @@ class DeviceAgentSession:
                 and getattr(self._config.device, "u2_always_tunnel", False)
             )
             if client_ip and client_ip not in ("127.0.0.1", "::1", "localhost"):
-                device._adb_serial = f"{client_ip}:5555"
+                candidate = f"{client_ip}:5555"
+                resolved_serial = candidate
+                relay = None
+                try:
+                    from runtime.transports.adb_relay_server import get_relay_manager
+                    relay = get_relay_manager()
+                    if relay:
+                        resolved_serial = relay.resolve_serial(candidate)
+                        # Docker/cloud + NAT path: app WS client_ip may be a public/NAT IP
+                        # that relay agents never register. If there is exactly one relay
+                        # serial online, fall back to it so app-serial devices can still
+                        # attach scrcpy through local agent-boot.
+                        if resolved_serial == candidate:
+                            all_serials: list[str] = []
+                            for serials in relay.registered_relays().values():
+                                all_serials.extend(serials)
+                            uniq = sorted(set(all_serials))
+                            if len(uniq) == 1:
+                                try:
+                                    is_public = ipaddress.ip_address(client_ip).is_global
+                                except Exception:
+                                    is_public = False
+                                if is_public:
+                                    resolved_serial = uniq[0]
+                                    log.info(
+                                        "[DEVICE-WS] NAT fallback: using relay serial %s for client_ip=%s",
+                                        resolved_serial, client_ip,
+                                    )
+                except Exception as _relay_exc:
+                    log.debug("relay resolve_serial skipped: %s", _relay_exc)
+
+                device._adb_serial = resolved_serial
                 # Cloud/Docker: container cannot open TCP to device_ip:7912.
                 # u2_always_tunnel=True → keep _u2_host=None so WS tunnel is always used.
                 # Local/same-LAN: set _u2_host so atx-agent at device_ip:7912 is used directly.
                 device._u2_host = None if _u2_always_tunnel else client_ip
                 # Tell relay agents to `adb connect ip:5555` — one of them is near the phone
                 try:
-                    from runtime.transports.adb_relay_server import get_relay_manager
-                    _relay = get_relay_manager()
-                    if _relay:
+                    if relay:
                         asyncio.create_task(
-                            _relay.broadcast_adb_connect(f"{client_ip}:5555")
+                            relay.broadcast_adb_connect(candidate)
                         )
                 except Exception as _relay_exc:
                     log.debug("relay adb_connect skipped: %s", _relay_exc)
@@ -682,7 +841,10 @@ class DeviceAgentSession:
                 )
 
             # ── Auto-attach scrcpy for screen streaming (if device IP available) ──
-            if client_ip and self._config and self._config.device.scrcpy_control:
+            # Stream attach must not depend on scrcpy_control.
+            # scrcpy_control only toggles control channel (touch/key via scrcpy),
+            # not whether video stream should start.
+            if client_ip and self._config:
                 try:
                     # Yield any relay-only device's scrcpy session for the same IP.
                     # A relay-only device (serial="ip:port") is created before the
@@ -706,14 +868,18 @@ class DeviceAgentSession:
                             _other._clear_scrcpy_without_stop()
                             break
 
+                    scrcpy_target = getattr(device, "_adb_serial", None) or client_ip
                     loop.run_in_executor(
                         None,
                         device.attach_scrcpy_stream,
-                        client_ip,
+                        scrcpy_target,
                         # adb_port intentionally omitted — mDNS uses OS-assigned port,
                         # not :5555. relay manager resolves actual serial by IP.
                     )
-                    log.info("Auto-attaching scrcpy stream for %s (ip=%s)", serial, client_ip)
+                    log.info(
+                        "Auto-attaching scrcpy stream for %s (client_ip=%s target=%s)",
+                        serial, client_ip, scrcpy_target,
+                    )
                 except Exception as exc:
                     log.warning("Auto-attach scrcpy failed for %s: %s", serial, exc)
 

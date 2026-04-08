@@ -74,6 +74,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tcpip-port", type=int, default=5555, metavar="PORT",
                         help="Port for adb tcpip (default: 5555)")
     parser.add_argument("--skip-tcpip", action="store_true")
+    parser.add_argument("--use-bundle", action="store_true",
+                        help="If u2/atx-agent not ready, deploy device_bundle.tar.gz and run launch.sh on device")
     parser.add_argument("--skip-u2", action="store_true",
                         help="Skip uiautomator2 APKs + atx-agent")
     parser.add_argument("--skip-atx", action="store_true",
@@ -84,13 +86,17 @@ def _build_parser() -> argparse.ArgumentParser:
     # Relay options
     parser.add_argument("--relay-server", metavar="URL",
                         default=_env("RELAY_SERVER", "ws://localhost:8081/relay-agent"),
-                        help="WebSocket server URL (default: $RELAY_SERVER or ws://localhost:8080/relay-agent)")
+                        help="Server URL: ws://host:port/relay-agent (WS) or host:50051 (gRPC)")
     parser.add_argument("--relay-api-key", metavar="KEY",
                         default=_env("RELAY_API_KEY", ""),
                         help="API key (default: $RELAY_API_KEY)")
     parser.add_argument("--relay-id", metavar="ID",
-                        default=f"{socket.gethostname()}-{uuid.uuid4().hex[:6]}",
-                        help="Stable relay ID (default: hostname+uuid)")
+                        default=_env("RELAY_ID", f"{socket.gethostname()}-{uuid.uuid4().hex[:6]}"),
+                        help="Stable relay ID (default: $RELAY_ID or hostname+uuid)")
+    parser.add_argument("--relay-mode", metavar="MODE",
+                        default=_env("RELAY_MODE", "ws"),
+                        choices=["ws", "grpc"],
+                        help="Transport mode: 'ws' (WebSocket, default) or 'grpc' (HTTP/2 multiplexed)")
     parser.add_argument("--debug", action="store_true",
                         help="Enable debug logging")
 
@@ -156,6 +162,7 @@ def _run_bootstrap(args: argparse.Namespace) -> bool:
         serials, stf_apk,
         skip_tcpip=args.skip_tcpip,
         tcpip_port=args.tcpip_port,
+        use_bundle=args.use_bundle,
         skip_u2=args.skip_u2,
         skip_atx=args.skip_atx,
         skip_stf=args.skip_stf,
@@ -196,7 +203,8 @@ def _run_relay(args: argparse.Namespace) -> None:
         force=True,
     )
 
-    print(f"\n[agent-boot] Starting relay daemon", file=sys.stderr)
+    relay_mode = getattr(args, "relay_mode", "ws")
+    print(f"\n[agent-boot] Starting relay daemon ({relay_mode.upper()} mode)", file=sys.stderr)
     print(f"  Server : {args.relay_server}", file=sys.stderr)
     print(f"  Relay ID: {args.relay_id}", file=sys.stderr)
     print("  Ctrl+C to stop.\n", file=sys.stderr)
@@ -205,6 +213,7 @@ def _run_relay(args: argparse.Namespace) -> None:
         server_url=args.relay_server,
         api_key=args.relay_api_key or None,
         relay_id=args.relay_id,
+        relay_mode=relay_mode,
     )
     asyncio.run(agent.run())
 

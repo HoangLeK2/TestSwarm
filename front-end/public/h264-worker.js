@@ -1,19 +1,43 @@
 'use strict';
-console.log('[H264Worker] LOADED v10');
+console.log('[H264Worker] LOADED v16');
 /**
  * H264 VideoDecoder — Web Worker + OffscreenCanvas, zero-buffering.
  *
  * Strategy:
  *   1. Try hardware decode (prefer-hardware) — fast, low-latency.
  *   2. On async error → flag hardware as broken, reinit with software (no-preference).
- *   3. P-frames dropped if decodeQueueSize > 1 (keep at most 1 frame of latency).
+ *   3. Low-latency mode: drop delta frames only when queue/latency crosses thresholds.
+ *      This favors freshness over completeness (less "khung khung"/rubber-band lag).
  */
 
 let decoder       = null;
-let ctx           = null;
 let waitIdr       = true;
 let lastAvcc      = null;   // Uint8Array — last AVCDecoderConfigurationRecord
 let hwFailed      = false;  // once hardware decode fails, stay on software
+let droppedDelta  = 0;
+let decodedFrames = 0;
+let t0Us          = 0;      // local monotonic origin for chunk timestamps
+let lastTsUs      = 0;      // strictly increasing chunk timestamp guard
+let lastDecodeTsUs = 0;     // timestamp of last chunk accepted by decoder
+let pendingFrame = null;    // latest frame waiting to be sent
+let frameInFlight = false;  // one frame has been sent but not consumed by main
+const TARGET_FRAME_TIME_MS = 1000 / 30;
+let lastOutputMs = 0;
+let decodeFps = 30;
+let flushInFlight = false;
+let needKeyframe = false;
+const MAX_DRIFT_US = 500000;
+const MAX_SAFE_TS_US = Number.MAX_SAFE_INTEGER;
+
+function nextMonotonicTsUs() {
+  var nowUs = Math.floor(performance.now() * 1000);
+  if (t0Us === 0) t0Us = nowUs;
+  var ts = nowUs - t0Us;
+  // WebCodecs expects monotonically increasing timestamps.
+  if (ts <= lastTsUs) ts = lastTsUs + 1000; // +1ms safety step
+  lastTsUs = ts;
+  return ts;
+}
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -29,6 +53,56 @@ function closeDecoder() {
   if (decoder) { try { decoder.close(); } catch (_) {} }
   decoder = null;
   waitIdr = true;
+  lastDecodeTsUs = 0;
+  lastTsUs = 0;
+  t0Us = 0;
+  if (pendingFrame) {
+    try { pendingFrame.close(); } catch (_) {}
+    pendingFrame = null;
+  }
+  frameInFlight = false;
+  lastOutputMs = 0;
+  decodeFps = 30;
+  flushInFlight = false;
+  needKeyframe = false;
+}
+
+function tryPostPendingFrame() {
+  if (frameInFlight || !pendingFrame) return;
+  var frame = pendingFrame;
+  pendingFrame = null;
+  frameInFlight = true;
+  self.postMessage(
+    {
+      type: 'frame',
+      frame: frame,
+      width: frame.displayWidth,
+      height: frame.displayHeight,
+    },
+    [frame]
+  );
+}
+
+function normalizeChunkTimestampUs(ptsUs) {
+  var tsUs = 0;
+  if (
+    typeof ptsUs === 'number' &&
+    Number.isFinite(ptsUs) &&
+    ptsUs > 0 &&
+    ptsUs <= MAX_SAFE_TS_US
+  ) {
+    tsUs = Math.floor(ptsUs);
+    if (lastTsUs > 0 && (tsUs - lastTsUs) > MAX_DRIFT_US) {
+      tsUs = lastTsUs + 1000;
+    }
+    // Guard against non-monotonic source PTS.
+    if (tsUs <= lastTsUs) tsUs = lastTsUs + 1000;
+  } else {
+    tsUs = nextMonotonicTsUs();
+    if (tsUs <= lastTsUs) tsUs = lastTsUs + 1000;
+  }
+  lastTsUs = tsUs;
+  return tsUs;
 }
 
 /** Strip inline SPS/PPS NALs (type 7/8) from AVCC frame data. */
@@ -64,15 +138,55 @@ function initDecoder(avccRecord) {
 
   decoder = new VideoDecoder({
     output: function(frame) {
-      if (ctx) {
-        if (ctx.canvas.width !== frame.displayWidth || ctx.canvas.height !== frame.displayHeight) {
-          ctx.canvas.width  = frame.displayWidth;
-          ctx.canvas.height = frame.displayHeight;
+      var now = performance.now();
+      if (lastOutputMs > 0) {
+        var dt = now - lastOutputMs;
+        if (dt > 0) {
+          var instFps = 1000 / dt;
+          // Smooth decode throughput estimate to avoid noisy oscillations.
+          decodeFps = (decodeFps * 0.85) + (instFps * 0.15);
         }
-        ctx.drawImage(frame, 0, 0);
       }
-      frame.close();
-      self.postMessage({ type: 'fps' });
+      lastOutputMs = now;
+      decodedFrames++;
+      var queueDelayMs = (decoder ? decoder.decodeQueueSize : 0) * TARGET_FRAME_TIME_MS;
+      // Wider thresholds reduce "stutter by over-dropping" during touch gestures.
+      var dynamicThresholdMs = Math.max(180, 360 - decodeFps * 4);
+      var overload = decodeFps < (30 * 0.55);
+
+      // Output-stage dropping policy (after decode):
+      // keep decode pipeline intact, shed only presented frames when overloaded.
+      if (frameInFlight || queueDelayMs > dynamicThresholdMs || overload) {
+        // Avoid forcing keyframe resync on transient load spikes.
+        droppedDelta++;
+        try { frame.close(); } catch (_) {}
+        return;
+      }
+
+      // Keep latest decoded frame only.
+      if (pendingFrame) {
+        var prevTs = (typeof pendingFrame.timestamp === 'number') ? pendingFrame.timestamp : -1;
+        var nextTs = (typeof frame.timestamp === 'number') ? frame.timestamp : -1;
+        if (nextTs >= 0 && prevTs >= 0 && nextTs <= prevTs) {
+          try { frame.close(); } catch (_) {}
+          return;
+        }
+        try { pendingFrame.close(); } catch (_) {}
+      }
+      pendingFrame = frame;
+      // Pull-model: main thread requests frame on RAF; worker does not push eagerly.
+      if ((decodedFrames & 15) === 0) {
+        self.postMessage({ type: 'fps' });
+      }
+      if ((decodedFrames & 31) === 0 && decoder) {
+        self.postMessage({
+          type: 'stats',
+          decodeQueueSize: decoder.decodeQueueSize || 0,
+          droppedDelta,
+          decodedFrames,
+          accel: hwFailed ? 'software' : 'hardware',
+        });
+      }
     },
     error: function(e) {
       var msg = (e && e.message) ? e.message : String(e);
@@ -88,7 +202,16 @@ function initDecoder(avccRecord) {
   });
 
   try {
-    decoder.configure({ codec: codec, description: desc, hardwareAcceleration: accel });
+    // optimizeForLatency: true — instructs the decoder to output frames as soon as
+    // they are decoded (no internal reorder buffer). Critical for 1-in-1-out behavior
+    // with H264 Baseline profile streams from scrcpy. Without this, decoders may
+    // buffer 4 frames after each IDR before emitting the first VideoFrame.
+    decoder.configure({
+      codec: codec,
+      description: desc,
+      hardwareAcceleration: accel,
+      optimizeForLatency: true,
+    });
     console.log('[H264Worker] configured accel=' + accel + ' codec=' + codec);
   } catch (e) {
     console.error('[H264Worker] configure failed:', e && e.message);
@@ -111,8 +234,7 @@ self.onmessage = function(event) {
   switch (data.type) {
 
     case 'init':
-      ctx = data.canvas.getContext('2d');
-      console.log('[H264Worker] canvas ready');
+      console.log('[H264Worker] init');
       break;
 
     case 'config': {
@@ -138,26 +260,104 @@ self.onmessage = function(event) {
         waitIdr = false;
         console.log('[H264Worker] first IDR decoded');
       }
+      if (data.isKey) {
+        needKeyframe = false;
+      }
 
-      // Drop P-frames only when decoder queue is severely backed up (>6 frames ≈ 200ms at 30fps).
-      // A tight threshold (>3) caused near-continuous drops during brief backpressure spikes
-      // (hardware decode startup, post-IDR decode burst), freezing the screen until the next IDR.
-      // With relay bitrate lowered to 2Mbps, IDR frames are small (~33KB) and transfer quickly,
-      // so large queue buildups are rare — threshold 6 catches genuine overload without false positives.
-      if (!data.isKey && decoder.decodeQueueSize > 6) return;
-
-      var frameData = data.isKey ? stripParamNals(data.frameData) : data.frameData;
+      // Hybrid timestamping:
+      // - prefer source PTS when available
+      // - enforce strict monotonicity to avoid WebCodecs reorder glitches
+      var tsUs = normalizeChunkTimestampUs(data.ptsUs);
+      var frameData = data.frameData;
+      if (data.isKey) {
+        frameData = stripParamNals(data.frameData);
+      }
       if (frameData.byteLength === 0) return;
 
       try {
         decoder.decode(new EncodedVideoChunk({
           type     : data.isKey ? 'key' : 'delta',
-          timestamp: data.ptsUs,
+          // Use client monotonic clock to avoid remote PTS jitter/stalls.
+          timestamp: tsUs,
           data     : frameData,
         }));
+        lastDecodeTsUs = tsUs;
+        // Do not flush in live mode.
+        // flush() forces "next chunk must be keyframe", which creates
+        // decode errors under normal P-frame flow.
       } catch (e) {
         console.error('[H264Worker] decode threw:', e && e.message);
         closeDecoder();
+      }
+      break;
+    }
+
+    case 'binary': {
+      var buf = data.buf;
+      if (!(buf instanceof ArrayBuffer) || buf.byteLength < 2) return;
+      var frameType = data.frameType;
+      var view = new DataView(buf);
+      var slen = view.getUint8(1);
+      var doff = 2 + slen + 4; // skip serial + w/h
+
+      if (frameType === 0x10) {
+        if (buf.byteLength < doff + 2) return;
+        var avcc = new Uint8Array(buf, doff + 1); // skip flags byte
+        if (avcc.length < 4) return;
+        lastAvcc = new Uint8Array(avcc);
+        initDecoder(lastAvcc);
+        return;
+      }
+
+      if (frameType === 0x11) {
+        if (buf.byteLength < doff + 9) return;
+        if (!decoder) {
+          if (!lastAvcc) return;
+          initDecoder(lastAvcc);
+          if (!decoder) return;
+        }
+        if (decoder.state === 'closed') {
+          closeDecoder();
+          return;
+        }
+        var isKey = view.getUint8(doff) !== 0;
+        var ptsHi = view.getUint32(doff + 1, false);
+        var ptsLo = view.getUint32(doff + 5, false);
+        var ptsBig = (BigInt(ptsHi) << 32n) | BigInt(ptsLo);
+        var ptsUs = 0;
+        if (ptsBig > 0n && ptsBig <= BigInt(MAX_SAFE_TS_US)) {
+          ptsUs = Number(ptsBig);
+        }
+
+        if (waitIdr) {
+          if (!isKey) return;
+          waitIdr = false;
+        }
+        if (isKey) {
+          needKeyframe = false;
+        }
+
+        var tsUs = normalizeChunkTimestampUs(ptsUs);
+        var rawFrame = new Uint8Array(buf, doff + 9);
+        if (rawFrame.byteLength === 0) return;
+        var frameData = rawFrame;
+        if (isKey) {
+          frameData = new Uint8Array(stripParamNals(buf.slice(doff + 9)));
+        }
+        if (frameData.byteLength === 0) return;
+
+        try {
+          decoder.decode(new EncodedVideoChunk({
+            type: isKey ? 'key' : 'delta',
+            timestamp: tsUs,
+            data: frameData,
+          }));
+          lastDecodeTsUs = tsUs;
+          // Do not flush in live mode (see note above).
+        } catch (e) {
+          console.error('[H264Worker] decode threw:', e && e.message);
+          closeDecoder();
+        }
       }
       break;
     }
@@ -166,6 +366,15 @@ self.onmessage = function(event) {
       // Keep lastAvcc so the next keyframe can reinit the decoder immediately
       // without waiting for a new config frame (which may arrive seconds later).
       closeDecoder();
+      break;
+
+    case 'frame-consumed':
+      frameInFlight = false;
+      tryPostPendingFrame();
+      break;
+
+    case 'pull-frame':
+      tryPostPendingFrame();
       break;
   }
 };

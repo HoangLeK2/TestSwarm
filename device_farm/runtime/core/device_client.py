@@ -30,6 +30,7 @@ import subprocess
 import struct
 import threading
 import time
+import uuid
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -60,6 +61,87 @@ class DeviceState(str, Enum):
 LOW_BW_MODE = os.environ.get("LOW_BW_MODE", "").lower() in {"1", "true", "yes"}
 LOW_BW_FRAME_SKIP = max(1, int(os.environ.get("LOW_BW_FRAME_SKIP", "10")))
 U2_FORCE_RELAY = os.environ.get("U2_FORCE_RELAY", "").lower() in {"1", "true", "yes"}
+
+
+class LatestFrameStore:
+    """Latest-frame snapshot store with version/event signaling.
+
+    Writers may come from non-async threads. We protect snapshot updates with a
+    thread lock and signal async subscribers via loop.call_soon_threadsafe(event.set).
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._frame: Optional[bytes] = None
+        self._version: int = 0
+        self._ts_monotonic: float = 0.0
+        self._is_key: bool = False
+        self._last_config: Optional[bytes] = None
+        self._last_keyframe: Optional[bytes] = None
+        self._last_keyframe_ts: float = 0.0
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._event: Optional[asyncio.Event] = None
+
+    def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        if self._loop is loop and self._event is not None:
+            return
+        self._loop = loop
+        self._event = asyncio.Event()
+
+    def set_frame(self, frame: Union[bytes, bytearray, memoryview], *, is_key: bool = False) -> None:
+        if not isinstance(frame, bytes):
+            frame = bytes(frame)
+        now = time.monotonic()
+        with self._lock:
+            self._version += 1
+            self._frame = frame
+            self._ts_monotonic = now
+            self._is_key = is_key
+            if is_key:
+                self._last_keyframe = frame
+                self._last_keyframe_ts = now
+        self._notify_update()
+
+    def set_config(self, cfg_frame: Union[bytes, bytearray, memoryview]) -> None:
+        if not isinstance(cfg_frame, bytes):
+            cfg_frame = bytes(cfg_frame)
+        with self._lock:
+            self._last_config = cfg_frame
+
+    def get_snapshot(self) -> tuple[Optional[bytes], int, float, bool]:
+        with self._lock:
+            return self._frame, self._version, self._ts_monotonic, self._is_key
+
+    async def wait_for_update(self, last_version: int) -> None:
+        while True:
+            with self._lock:
+                if self._version != last_version:
+                    return
+                event = self._event
+            if event is None:
+                await asyncio.sleep(0.01)
+                continue
+            await event.wait()
+            event.clear()
+
+    def get_bootstrap(self, *, max_key_age_s: float = 2.0) -> tuple[Optional[bytes], Optional[bytes]]:
+        with self._lock:
+            cfg = self._last_config
+            key = self._last_keyframe
+            key_ts = self._last_keyframe_ts
+        if key is not None and max_key_age_s > 0 and (time.monotonic() - key_ts) > max_key_age_s:
+            key = None
+        return cfg, key
+
+    def _notify_update(self) -> None:
+        loop = self._loop
+        event = self._event
+        if loop is None or event is None:
+            return
+        try:
+            loop.call_soon_threadsafe(event.set)
+        except Exception:
+            pass
 
 
 class DeviceClient:
@@ -146,6 +228,7 @@ class DeviceClient:
         self._frame_lock      = threading.Lock()
         self._last_key_frame: Optional[Union[Dict[str, Any], bytes]] = None  # last H.264 key frame for new subscribers
         self._last_config_frame: Optional[bytes] = None  # last H.264 config (0x10) for new subscribers
+        self._latest_stream = LatestFrameStore()
         self._status_queues:  List[asyncio.Queue] = []
         self._status_lock     = threading.Lock()
 
@@ -188,6 +271,12 @@ class DeviceClient:
         self._ws_hierarchy_error: Optional[str] = None
         self._ws_hierarchy_a11y_available: bool = True  # optimistic, disabled on first "accessibility_not_available"
         self._recovery_logger = self._setup_recovery_logger()
+        # A11y gRPC routing controls (u2 path remains unchanged).
+        self._a11y_grpc_enabled: bool = os.getenv("A11Y_GRPC_ENABLED", "true").lower() in ("1", "true", "yes")
+        self._a11y_force_route: str = os.getenv("A11Y_FORCE_ROUTE", "auto").strip().lower()
+        self._a11y_fail_hard_count: int = 0
+        self._a11y_route_current: str = "u2"
+        self._a11y_session_id: str = uuid.uuid4().hex
 
     @staticmethod
     def _setup_recovery_logger() -> logging.Logger:
@@ -488,6 +577,7 @@ class DeviceClient:
             + avcc_record
         )
         self._last_config_frame = msg
+        self._latest_stream.set_config(msg)
         with self._frame_lock:
             queues = list(self._frame_queues)
         self._logger.info("h264 config queued → %d WS subscriber(s), avcc_len=%d",
@@ -528,6 +618,7 @@ class DeviceClient:
             + struct.pack(">II", pts_hi, pts_lo)
             + avcc_data
         )
+        self._latest_stream.set_frame(msg, is_key=is_key)
         if is_key:
             # Store for late-joining subscribers (replaces _last_key_frame dict)
             self._last_key_frame = msg
@@ -791,6 +882,96 @@ class DeviceClient:
             and (self.sdk_version == 0 or self.sdk_version <= self._SHELL_INPUT_MAX_SDK)
         )
 
+    def _a11y_fail_hard(self, error: str) -> None:
+        """Route hysteresis for fail-hard conditions only."""
+        s = (error or "").lower()
+        hard = (
+            "connection refused" in s
+            or "protocol" in s
+            or "timeout" in s
+            or "queue_overflow" in s
+        )
+        if hard:
+            self._a11y_fail_hard_count += 1
+            if self._a11y_fail_hard_count >= 3:
+                self._a11y_route_current = "grpc"
+        else:
+            self._a11y_fail_hard_count = 0
+
+    async def _a11y_mutate_async(self, action: str, payload: dict, timeout: float = 5.0) -> dict:
+        from runtime.transports.adb_relay_server import get_relay_manager
+        relay = get_relay_manager()
+        if relay is None:
+            return {"ok": False, "error": "no_relay_manager"}
+        serial = self._adb_serial or self.serial
+        return await relay.a11y_mutate(
+            serial=serial,
+            action=action,
+            payload=payload,
+            session_id=self._a11y_session_id,
+            timeout=timeout,
+        )
+
+    async def _a11y_query_async(self, action: str, payload: dict, timeout: float = 5.0) -> dict:
+        from runtime.transports.adb_relay_server import get_relay_manager
+        relay = get_relay_manager()
+        if relay is None:
+            return {"ok": False, "error": "no_relay_manager"}
+        serial = self._adb_serial or self.serial
+        return await relay.a11y_query(
+            serial=serial,
+            action=action,
+            payload=payload,
+            session_id=self._a11y_session_id,
+            timeout=timeout,
+        )
+
+    def _a11y_mutate(self, action: str, payload: dict, timeout: float = 5.0) -> bool:
+        """Synchronous wrapper for a11y mutate ack path."""
+        if not self._a11y_grpc_enabled:
+            return False
+        if self._a11y_force_route == "u2":
+            return False
+        if self._loop is None:
+            return False
+        try:
+            fut = asyncio.run_coroutine_threadsafe(
+                self._a11y_mutate_async(action, payload, timeout=timeout), self._loop
+            )
+            res = fut.result(timeout=timeout + 1.0)
+            ok = bool(res.get("ok") and res.get("accepted"))
+            if ok:
+                self._a11y_route_current = "grpc"
+                self._a11y_fail_hard_count = 0
+            else:
+                self._a11y_fail_hard(str(res.get("error", "")))
+            return ok
+        except Exception as exc:
+            self._a11y_fail_hard(str(exc))
+            return False
+
+    def _a11y_query(self, action: str, payload: dict, timeout: float = 5.0) -> dict:
+        if not self._a11y_grpc_enabled:
+            return {"ok": False, "error": "a11y_grpc_disabled"}
+        if self._a11y_force_route == "u2":
+            return {"ok": False, "error": "a11y_force_route_u2"}
+        if self._loop is None:
+            return {"ok": False, "error": "no_event_loop"}
+        try:
+            fut = asyncio.run_coroutine_threadsafe(
+                self._a11y_query_async(action, payload, timeout=timeout), self._loop
+            )
+            res = fut.result(timeout=timeout + 1.0)
+            if bool(res.get("ok")):
+                self._a11y_route_current = "grpc"
+                self._a11y_fail_hard_count = 0
+            else:
+                self._a11y_fail_hard(str(res.get("error", "")))
+            return res
+        except Exception as exc:
+            self._a11y_fail_hard(str(exc))
+            return {"ok": False, "error": str(exc)}
+
     def input_route_hint(self) -> str:
         """
         Best-effort route hint for tap/swipe/key style inputs.
@@ -805,9 +986,8 @@ class DeviceClient:
             except Exception:
                 pass
             return "device_farm_u2_local"
-        ctrl = self._get_scrcpy_control()
-        if ctrl is not None and ctrl.is_connected:
-            return "agent_boot_scrcpy_control"
+        if self._a11y_grpc_enabled and self._a11y_force_route != "u2":
+            return "agent_boot_a11y_grpc"
         if self._shell_input_ok():
             return "device_agent_shell"
         if self._agent_send is not None:
@@ -816,38 +996,30 @@ class DeviceClient:
 
     def tap(self, x: int, y: int) -> None:
         """
-        Touch priority: U2 → scrcpy control → agent shell (SDK ≤ 33) → agent WS (tap)
+        Touch priority: U2 → agent shell (SDK ≤ 33) → agent WS (tap)
 
         Android 14+ (SDK 34+) blocks `input tap` via shell; WsAgent uses
         TouchAccessibilityService or InputManager (SDK < 34) on the same path as drag.
         """
         if self._try_u2_tap(lambda: self._u2.click(x, y) if self._u2 else None):
             return
-        ctrl = self._get_scrcpy_control()
-        if ctrl is not None:
-            try:
-                ctrl.tap(x, y)
-            except Exception as exc:
-                self._log(f"tap via scrcpy failed: {exc}", level=logging.WARNING)
-            if ctrl.is_connected:
-                return
+        if self._a11y_mutate("tap", {"x": int(x), "y": int(y)}, timeout=4.0):
+            return
         if self._shell_input_ok():
             self._send_to_agent({"type": "shell", "cmd": f"input tap {int(x)} {int(y)}"})
             return
         self._send_to_agent({"type": "tap", "x": int(x), "y": int(y), "ms": 50})
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300) -> None:
-        """Touch priority: U2 → scrcpy control → agent shell (SDK ≤ 33) → agent WS (swipe)"""
+        """Touch priority: U2 → agent shell (SDK ≤ 33) → agent WS (swipe)"""
         if self._try_u2_tap(lambda: self._u2.swipe(x1, y1, x2, y2, duration=duration_ms / 1000.0) if self._u2 else None):
             return
-        ctrl = self._get_scrcpy_control()
-        if ctrl is not None:
-            try:
-                ctrl.swipe(x1, y1, x2, y2, duration_ms=duration_ms)
-            except Exception as exc:
-                self._log(f"swipe via scrcpy failed: {exc}", level=logging.WARNING)
-            if ctrl.is_connected:
-                return
+        if self._a11y_mutate(
+            "swipe",
+            {"x1": int(x1), "y1": int(y1), "x2": int(x2), "y2": int(y2), "ms": int(duration_ms)},
+            timeout=5.0,
+        ):
+            return
         if self._shell_input_ok():
             self._send_to_agent({
                 "type": "shell",
@@ -864,17 +1036,15 @@ class DeviceClient:
         })
 
     def long_tap(self, x: int, y: int, duration_ms: int = 800) -> None:
-        """Touch priority: U2 → scrcpy control → agent shell (SDK ≤ 33) → agent WS (long_tap)"""
+        """Touch priority: U2 → agent shell (SDK ≤ 33) → agent WS (long_tap)"""
         if self._try_u2_tap(lambda: self._u2.long_click(x, y, duration=duration_ms / 1000.0) if self._u2 else None):
             return
-        ctrl = self._get_scrcpy_control()
-        if ctrl is not None:
-            try:
-                ctrl.long_tap(x, y, duration_ms=duration_ms)
-            except Exception as exc:
-                self._log(f"long_tap via scrcpy failed: {exc}", level=logging.WARNING)
-            if ctrl.is_connected:
-                return
+        if self._a11y_mutate(
+            "long_tap",
+            {"x": int(x), "y": int(y), "ms": int(duration_ms)},
+            timeout=5.0,
+        ):
+            return
         if self._shell_input_ok():
             self._send_to_agent({
                 "type": "shell",
@@ -884,34 +1054,26 @@ class DeviceClient:
         self._send_to_agent({"type": "long_tap", "x": int(x), "y": int(y), "ms": int(duration_ms)})
 
     def double_tap(self, x: int, y: int) -> None:
-        """Double-tap at coordinates. U2 → WsAgent (TouchA11y) → shell fallback."""
+        """Double-tap at coordinates. U2 → WsAgent (TouchA11y)."""
         if self._try_u2_tap(lambda: self._u2.double_click(x, y) if self._u2 else None):
             return
-        ctrl = self._get_scrcpy_control()
-        if ctrl is not None:
-            try:
-                ctrl.tap(x, y)
-                import time as _t; _t.sleep(0.1)
-                ctrl.tap(x, y)
-                return
-            except Exception as exc:
-                self._log(f"double_tap via scrcpy failed: {exc}", level=logging.WARNING)
+        if self._a11y_mutate("double_tap", {"x": int(x), "y": int(y)}, timeout=4.0):
+            return
         # WsAgent with TouchAccessibilityService handles double_tap natively
         self._send_to_agent({"type": "double_tap", "x": x, "y": y})
 
     def drag(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 1000) -> None:
-        """Drag-and-drop (long-press + move). U2 → WsAgent (TouchA11y) → shell fallback."""
+        """Drag-and-drop (long-press + move). U2 → WsAgent (TouchA11y)."""
         if self._try_u2_tap(
             lambda: self._u2.drag(x1, y1, x2, y2, duration=duration_ms / 1000.0) if self._u2 else None
         ):
             return
-        ctrl = self._get_scrcpy_control()
-        if ctrl is not None:
-            try:
-                ctrl.swipe(x1, y1, x2, y2, duration_ms=duration_ms)
-                return
-            except Exception as exc:
-                self._log(f"drag via scrcpy failed: {exc}", level=logging.WARNING)
+        if self._a11y_mutate(
+            "drag",
+            {"x1": int(x1), "y1": int(y1), "x2": int(x2), "y2": int(y2), "ms": int(duration_ms)},
+            timeout=6.0,
+        ):
+            return
         self._send_to_agent({"type": "drag", "x1": x1, "y1": y1, "x2": x2, "y2": y2, "ms": duration_ms})
 
     def set_clipboard(self, text: str) -> None:
@@ -943,14 +1105,6 @@ class DeviceClient:
 
     def input_text(self, text: str) -> None:
         """Type text into currently focused element."""
-        # scrcpy control first: injects text at system level.
-        ctrl = self._get_scrcpy_control()
-        if ctrl is not None:
-            try:
-                ctrl.input_text(text)
-                return
-            except Exception as exc:
-                self._log(f"input_text via scrcpy control failed: {exc}", level=logging.WARNING)
         with self._u2_lock:
             u2 = self._u2
         if u2 is not None:
@@ -959,6 +1113,8 @@ class DeviceClient:
                 return
             except Exception as exc:
                 self._log(f"input_text via u2 failed: {exc}", level=logging.WARNING)
+        if self._a11y_mutate("type", {"text": text}, timeout=6.0):
+            return
         # Fallback: use APK "type" message which calls injectText() (handles special chars via a11y/clipboard)
         self._send_to_agent({"type": "type", "text": text})
 
@@ -1069,10 +1225,8 @@ class DeviceClient:
         Key press (home, back, power, enter).
 
         Priority:
-        1. scrcpy control (system-level, smoothest)
-        2. uiautomator2 (no INJECT_EVENTS needed)
-        3. Agent WS shell
-        4. ADB shell
+        1. uiautomator2 (no INJECT_EVENTS needed)
+        2. Agent WS key (TouchA11y/InputManager)
         """
         k = (key_name or "").strip()
         if not k:
@@ -1099,16 +1253,7 @@ class DeviceClient:
                 self._send_to_agent({"type": "key", "key": key_l})
                 return
 
-        # Non-nav keys: scrcpy control → u2 → APK injectKey (InputManager reflection).
-        ctrl = self._get_scrcpy_control()
-        if ctrl is not None:
-            try:
-                ctrl.key(key_l)
-            except Exception as exc:
-                self._log(f"key via scrcpy control failed ({key_l}): {exc}", level=logging.WARNING)
-            if ctrl.is_connected:
-                return  # send succeeded
-
+        # Non-nav keys: u2 → APK injectKey (InputManager reflection).
         with self._u2_lock:
             u2 = self._u2
         if u2 is not None:
@@ -1123,14 +1268,18 @@ class DeviceClient:
             except Exception as exc:
                 self._log(f"key via U2 failed ({key_l}): {exc}", level=logging.WARNING)
 
+        if self._a11y_mutate("key", {"key": key_l}, timeout=4.0):
+            return
+
         if self._agent_send is not None:
             self._send_to_agent({"type": "key", "key": key_l})
             return
 
-        self._log(f"key skipped ({k}): no agent and no scrcpy control", level=logging.WARNING)
+        self._log(f"key skipped ({k}): no agent and no u2", level=logging.WARNING)
 
     def pinch(self, cx: int, cy: int, scale: float, duration_ms: int = 400) -> None:
         """Pinch/zoom via TouchAccessibilityService. scale>1=zoom in, scale<1=zoom out."""
+        # Keep WS path for pinch until agent-boot gRPC lane supports it.
         self._send_to_agent({"type": "pinch", "cx": cx, "cy": cy, "scale": scale, "ms": duration_ms})
 
     # ── Shell (no-ADB; via WsAgentService) ─────────────────────────────────────
@@ -1143,15 +1292,121 @@ class DeviceClient:
         """
         self._send_to_agent({"type": "shell", "cmd": cmd})
 
-    def launch_app(self, package: str) -> None:
-        """Ask agent to start an app by package name via Intent."""
-        if not package:
+    def launch_app(self, package: str, component: str | None = None) -> None:
+        """Launch app reliably: prefer ADB relay, then U2, then agent intent."""
+        pkg = (package or "").strip()
+        comp = (component or "").strip()
+        if pkg and "/" in pkg and not comp:
+            # Legacy input: package field contains full component.
+            comp = pkg
+            pkg = pkg.split("/", 1)[0].strip()
+        if not pkg and not comp:
             return
+        # Path 1 (preferred): direct ADB shell via gRPC relay.
+        # This is deterministic and independent from APK process privileges.
+        try:
+            from runtime.transports.adb_relay_server import get_relay_manager
+            relay = get_relay_manager()
+            if relay and self._loop:
+                serial_candidates: List[str] = []
+                for s in (self._adb_serial, self.serial):
+                    ss = (s or "").strip()
+                    if ss and ss not in serial_candidates:
+                        serial_candidates.append(ss)
+                if not serial_candidates:
+                    serial_candidates = [self.serial]
+                launch_cmds: List[str] = []
+                if comp and "/" in comp:
+                    launch_cmds.append(f"am start -W -n {comp}")
+                elif pkg:
+                    launch_cmds.append(
+                        "am start -W"
+                        " -a android.intent.action.MAIN"
+                        " -c android.intent.category.LAUNCHER"
+                        f" -p {pkg}"
+                    )
+                    # Some OEM/build variants fail to resolve MAIN/LAUNCHER with -p.
+                    # monkey often succeeds at launching the default launcher activity.
+                    launch_cmds.append(
+                        "monkey"
+                        f" -p {pkg}"
+                        " -c android.intent.category.LAUNCHER"
+                        " 1"
+                    )
+
+                def _looks_failed(out: str | None) -> bool:
+                    text = (out or "").strip().lower()
+                    if not text:
+                        return False
+                    failure_markers = (
+                        "error:",
+                        "exception",
+                        "unable to resolve intent",
+                        "activity not started",
+                        "monkey aborted",
+                        "not available",
+                        "state=unknown",
+                    )
+                    return any(marker in text for marker in failure_markers)
+
+                total = len(serial_candidates) * len(launch_cmds)
+                attempt = 0
+                for target_serial in serial_candidates:
+                    if not relay.relay_for_serial(target_serial):
+                        continue
+                    for cmd in launch_cmds:
+                        attempt += 1
+                        fut = asyncio.run_coroutine_threadsafe(
+                            relay.adb_shell(target_serial, cmd, timeout=20.0),
+                            self._loop,
+                        )
+                        out = fut.result(timeout=25.0)
+                        if _looks_failed(out):
+                            self._log(
+                                (
+                                    f"launch_app via adb relay attempt {attempt}/{total} failed: "
+                                    f"serial={target_serial} pkg={pkg} component={comp or '-'} "
+                                    f"cmd={cmd} out={out or '-'}"
+                                ),
+                                level=logging.WARNING,
+                            )
+                            continue
+                        self._log(
+                            (
+                                f"launch_app via adb relay success: serial={target_serial} "
+                                f"pkg={pkg} component={comp or '-'} cmd={cmd}"
+                            )
+                        )
+                        return
+        except Exception as exc:
+            self._log(f"launch_app via adb relay failed: {exc}", level=logging.WARNING)
+        # Path 1 (preferred): launch via u2/adb because we can target explicit activity
+        # and verify foreground package deterministically.
+        with self._u2_lock:
+            u2 = self._u2
+        if u2 is not None and pkg:
+            try:
+                activity: str | None = None
+                if comp and "/" in comp:
+                    activity = comp.split("/", 1)[1].strip() or None
+                u2.app_start(pkg, activity=activity)
+                if not u2.app_wait(pkg, timeout=5.0):
+                    self._log(
+                        f"launch_app via u2 did not reach foreground: pkg={pkg} component={comp or '-'}",
+                        level=logging.WARNING,
+                    )
+                else:
+                    return
+            except Exception as exc:
+                self._log(f"launch_app via u2 failed: {exc}", level=logging.WARNING)
         # WsAgent mode: use the Java intent approach (getLaunchIntentForPackage +
         # queryIntentActivities fallback).  Do NOT use am start via shell here —
         # Runtime.exec() from app UID (non-shell) is blocked by assertPackageMatchesCallingUid
         # on Android 12+ (SecurityException: package=com.android.shell does not belong to uid).
-        self._send_to_agent({"type": "launch_app", "package": package})
+        payload: Dict[str, Any] = {"type": "launch_app", "package": pkg}
+        if comp:
+            payload["component"] = comp
+        self._send_to_agent(payload)
 
     def open_url(self, url: str, package: str | None = None) -> None:
         """
@@ -1186,7 +1441,14 @@ class DeviceClient:
         self._ws_hierarchy_event.set()
 
     def _hierarchy_via_ws(self, timeout: float = 5.0) -> Optional[str]:
-        """Request hierarchy dump via WS direct (AccessibilityService, ~100-500ms)."""
+        """Request hierarchy dump via gRPC a11y query, fallback to WS direct."""
+        # Prefer gRPC a11y control-plane (query lane) when enabled.
+        q = self._a11y_query("dump_hierarchy", {}, timeout=timeout)
+        if q.get("ok"):
+            data = q.get("data") or {}
+            xml = data.get("xml") if isinstance(data, dict) else None
+            if xml:
+                return str(xml)
         if self._agent_send is None:
             return None
         self._ws_hierarchy_xml = None
@@ -1211,8 +1473,8 @@ class DeviceClient:
         """
         Dump UI hierarchy XML. Cached 2s for polling.
 
-        Primary: WS direct via AccessibilityService (100-500ms, no tunnel needed).
-        Fallback: u2 JSON-RPC via tunnel (1-4s, for ADB mode or when a11y unavailable).
+        Primary: u2 JSON-RPC via tunnel/atx-agent.
+        Fallback: a11y path (gRPC query / WS direct) when u2 is unavailable.
         """
         now = time.time()
         if not force_refresh and self._hierarchy_cache is not None:
@@ -1226,18 +1488,23 @@ class DeviceClient:
                 if now - ts < self._hierarchy_cache_ttl and xml:
                     return xml
 
-            # Primary: WS direct via AccessibilityService (fast, no tunnel)
-            # Only try if a11y was previously successful (avoid spamming agent)
+            # Primary: u2 first (requested behavior)
+            xml = self._hierarchy_xml_via_u2(now)
+            if xml and not self._is_empty_hierarchy(xml):
+                self._log(f"hierarchy: route=u2 bytes={len(xml)}", level=logging.DEBUG)
+                return xml
+
+            # Fallback: a11y query / WS direct.
+            # Only try WS direct if a11y was previously healthy to avoid spam.
             if self._agent_send is not None and self._ws_hierarchy_a11y_available:
                 xml = self._hierarchy_via_ws(timeout=5.0)
                 if xml and not self._is_empty_hierarchy(xml):
-                    self._log(f"hierarchy: WS direct OK ({len(xml)} bytes)", level=logging.DEBUG)
+                    self._log(f"hierarchy: route=a11y bytes={len(xml)}", level=logging.DEBUG)
                     self._hierarchy_cache = (now, xml)
                     return xml
-                # a11y returned error/empty — stop trying until next reconnect
 
-            # Fallback: u2 tunnel (ADB mode or a11y not enabled)
-            return self._hierarchy_xml_via_u2(now)
+            self._log("hierarchy: route=u2->a11y failed", level=logging.WARNING)
+            return None
 
     @staticmethod
     def _is_empty_hierarchy(s: str) -> bool:
@@ -2151,7 +2418,12 @@ class DeviceClient:
                     if self._u2 is not None:
                         return True
 
-            d_rpc: Any = U2JsonRpcClient("127.0.0.1", port, timeout=cfg.wait_timeout)
+            d_rpc: Any = U2JsonRpcClient(
+                "127.0.0.1",
+                port,
+                timeout=cfg.wait_timeout,
+                adb_shell=lambda cmd: (self.shell(cmd) or ""),
+            )
             d_rpc.implicitly_wait(cfg.implicitly_wait)
             d_rpc.settings["wait_timeout"] = cfg.wait_timeout
             try:
@@ -2208,7 +2480,12 @@ class DeviceClient:
                     if self._u2 is not None:
                         return True
 
-            d_rpc: Any = U2JsonRpcClient(host, port, timeout=cfg.wait_timeout)
+            d_rpc: Any = U2JsonRpcClient(
+                host,
+                port,
+                timeout=cfg.wait_timeout,
+                adb_shell=lambda cmd: (self.shell(cmd) or ""),
+            )
             d_rpc.implicitly_wait(cfg.implicitly_wait)
             d_rpc.settings["wait_timeout"] = cfg.wait_timeout
 
@@ -2452,6 +2729,7 @@ class DeviceClient:
 
     def set_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
+        self._latest_stream.bind_loop(loop)
         # Push current state/frame so late-connecting frontends get data (e.g. after ADB bootstrap)
         self._publish_status()
         with self._latest_jpeg_lock:
@@ -2552,6 +2830,7 @@ class DeviceClient:
             + struct.pack(">HH", w, h)
             + jpeg_bytes
         )
+        self._latest_stream.set_frame(msg, is_key=False)
         with self._frame_lock:
             queues = list(self._frame_queues)
         loop = self._loop
@@ -2559,6 +2838,15 @@ class DeviceClient:
             # call_soon_threadsafe is cheaper than run_coroutine_threadsafe:
             # no Future/Task allocation, just schedules a callback directly.
             loop.call_soon_threadsafe(_sync_put, q, msg)
+
+    async def wait_for_stream_update(self, last_version: int) -> None:
+        await self._latest_stream.wait_for_update(last_version)
+
+    def get_stream_snapshot(self) -> tuple[Optional[bytes], int, float, bool]:
+        return self._latest_stream.get_snapshot()
+
+    def get_stream_bootstrap(self, *, max_key_age_s: float = 2.0) -> tuple[Optional[bytes], Optional[bytes]]:
+        return self._latest_stream.get_bootstrap(max_key_age_s=max_key_age_s)
 
     def _publish_status(self) -> None:
         if not self._loop:

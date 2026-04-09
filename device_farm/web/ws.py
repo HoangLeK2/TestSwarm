@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import struct
+import time
 import uuid
 from typing import Any, Dict, Optional
 
@@ -153,13 +154,14 @@ class WebSocketManager:
     def __init__(self, manager: DeviceManager, db_enabled: bool = False) -> None:
         self.manager = manager
         self._connections: Dict[str, WebSocket] = {}
-        # Dual queues per connection — prevents 33KB IDR frames from blocking JSON acks.
-        # video_q: binary H264/JPEG frames (subscribe_frames)
-        # ctrl_q:  JSON status/control messages (subscribe_status)
-        self._video_queues: Dict[str, asyncio.Queue] = {}
+        # ctrl_q: JSON status/control messages (subscribe_status)
         self._ctrl_queues: Dict[str, asyncio.Queue] = {}
+        self._conn_send_locks: Dict[str, asyncio.Lock] = {}
         self._user_ids: Dict[str, Optional[str]] = {}
         self._allowed_serials: Dict[str, Optional[set[str]]] = {}
+        self._conn_sender_groups: Dict[str, list[asyncio.Task]] = {}
+        self._session_to_conn: Dict[str, str] = {}
+        self._max_devices_per_ws: int = max(1, int(os.environ.get("MAX_DEVICES_PER_WS", "3")))
         self._lock = asyncio.Lock()
         self._db_enabled = db_enabled
 
@@ -184,42 +186,42 @@ class WebSocketManager:
     async def connect(self, ws: WebSocket, user_id: Optional[str] = None) -> None:
         await ws.accept()
         conn_id = str(uuid.uuid4())
-        # video_q: keep very shallow for live-first behavior (lowest latency).
-        # For interactive control, stale frames are worse than dropped frames.
-        # ctrl_q:  JSON status/control — maxsize=16 (small msgs, generous headroom)
-        video_q: asyncio.Queue = asyncio.Queue(maxsize=3)
+        # ctrl_q: JSON status/control — maxsize=16 (small msgs, generous headroom)
         ctrl_q: asyncio.Queue = asyncio.Queue(maxsize=16)
         allowed_serials = await self._load_allowed_serials(user_id)
+        session_id = (ws.query_params.get("session_id") or "").strip()
 
+        prev_ws_to_close = None
         async with self._lock:
+            # Replace stale connection for the same frontend logical session.
+            if session_id:
+                prev_conn_id = self._session_to_conn.get(session_id)
+                if prev_conn_id and prev_conn_id != conn_id:
+                    prev_ws_to_close = self._connections.get(prev_conn_id)
             self._connections[conn_id] = ws
-            self._video_queues[conn_id] = video_q
             self._ctrl_queues[conn_id] = ctrl_q
             self._user_ids[conn_id] = user_id
             self._allowed_serials[conn_id] = allowed_serials
+            self._conn_sender_groups[conn_id] = []
+            self._conn_send_locks[conn_id] = asyncio.Lock()
+            if session_id:
+                self._session_to_conn[session_id] = conn_id
+        if prev_ws_to_close is not None:
+            try:
+                await prev_ws_to_close.close(code=4001)
+            except Exception:
+                pass
 
         all_devs = self.manager.all_devices()
         visible_devs = all_devs
         if allowed_serials is not None:
             visible_devs = [d for d in all_devs if d.serial in allowed_serials]
+        if len(visible_devs) > self._max_devices_per_ws:
+            visible_devs = visible_devs[: self._max_devices_per_ws]
 
-        # Subscribe only to devices visible to this user.
+        # Subscribe status only; video path is latest-frame sender tasks.
         for device in visible_devs:
-            device.subscribe_frames(video_q)
             device.subscribe_status(ctrl_q)
-            # Push last frame immediately so browser shows something on open (binary format)
-            # Skip for disconnected/dead devices — don't show stale preview
-            frame = device.take_screenshot() if device.state in (DeviceState.READY, DeviceState.BUSY) else None
-            if frame:
-                serial_b = device.serial.encode()
-                slen = len(serial_b)
-                w = max(0, min(device.screen_width, 0xFFFF))
-                h = max(0, min(device.screen_height, 0xFFFF))
-                binary = bytes([0x01, slen]) + serial_b + struct.pack(">HH", w, h) + frame
-                try:
-                    video_q.put_nowait(binary)
-                except Exception:
-                    pass
 
         # Send current status/logs only for visible devices.
         try:
@@ -233,132 +235,266 @@ class WebSocketManager:
             log.info(
                 f"WS {conn_id}: disconnected during handshake ({exc.__class__.__name__})"
             )
-            await self._cleanup(conn_id, video_q, ctrl_q, visible_devs)
+            await self._cleanup(conn_id, ctrl_q, visible_devs, session_id=session_id)
             return
 
         log.info(f"Frontend WS connected: {conn_id}")
         try:
-            send_task = asyncio.create_task(self._sender(ws, video_q, ctrl_q))
+            ws_send_lock = self._conn_send_locks[conn_id]
+            sender_tasks = [
+                asyncio.create_task(
+                    self._device_sender(
+                        ws=ws,
+                        device=device,
+                        ws_send_lock=ws_send_lock,
+                    ),
+                    name=f"ws-device-sender-{conn_id}-{device.serial}",
+                )
+                for device in visible_devs
+            ]
+            for task, device in zip(sender_tasks, visible_devs):
+                setattr(task, "_device_serial", device.serial)
+            async with self._lock:
+                self._conn_sender_groups[conn_id] = sender_tasks
+            send_task = asyncio.create_task(self._sender_ctrl(ws, ctrl_q, ws_send_lock))
             recv_task = asyncio.create_task(self._receiver(ws))
             done, pending = await asyncio.wait(
                 [send_task, recv_task], return_when=asyncio.FIRST_COMPLETED
             )
+            # If any device sender dies early, keep connection alive and let others continue.
+            # Cleanup() in finally will cancel remaining sender tasks on disconnect.
+            for task in sender_tasks:
+                if task.done():
+                    try:
+                        exc = task.exception()
+                        if exc is not None:
+                            log.warning(
+                                "ws sender task ended for serial=%s: %s",
+                                getattr(task, "_device_serial", "unknown"),
+                                exc.__class__.__name__,
+                            )
+                    except Exception:
+                        pass
             for t in pending:
                 t.cancel()
+            for t in pending:
+                try:
+                    await t
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
         except Exception as exc:
             log.debug(f"WS {conn_id} error: {exc}")
         finally:
-            await self._cleanup(conn_id, video_q, ctrl_q, self.manager.all_devices())
+            await self._cleanup(conn_id, ctrl_q, self.manager.all_devices(), session_id=session_id)
             log.info(f"Frontend WS disconnected: {conn_id}")
 
-    async def _cleanup(self, conn_id: str, video_q: asyncio.Queue, ctrl_q: asyncio.Queue, devices) -> None:
+    async def _cleanup(
+        self,
+        conn_id: str,
+        ctrl_q: asyncio.Queue,
+        devices,
+        *,
+        session_id: str = "",
+    ) -> None:
+        async with self._lock:
+            sender_tasks = list(self._conn_sender_groups.get(conn_id, []))
+        for task in sender_tasks:
+            task.cancel()
+        for task in sender_tasks:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+
         for device in devices:
-            device.unsubscribe_frames(video_q)
             device.unsubscribe_status(ctrl_q)
         async with self._lock:
             self._connections.pop(conn_id, None)
-            self._video_queues.pop(conn_id, None)
             self._ctrl_queues.pop(conn_id, None)
             self._user_ids.pop(conn_id, None)
             self._allowed_serials.pop(conn_id, None)
+            self._conn_sender_groups.pop(conn_id, None)
+            self._conn_send_locks.pop(conn_id, None)
+            if session_id and self._session_to_conn.get(session_id) == conn_id:
+                self._session_to_conn.pop(session_id, None)
 
     def subscribe_device(self, device) -> None:
         """Subscribe all active frontend connections to a newly-connected agent."""
-        conn_ids = list(self._video_queues.keys())
+        conn_ids = list(self._connections.keys())
         log.info(f"subscribe_device({device.serial}): {len(conn_ids)} frontend connection(s)")
         for conn_id in conn_ids:
-            video_q = self._video_queues.get(conn_id)
             ctrl_q = self._ctrl_queues.get(conn_id)
-            if not video_q or not ctrl_q:
+            ws = self._connections.get(conn_id)
+            if not ws or not ctrl_q:
                 continue
             allowed_serials = self._allowed_serials.get(conn_id)
             if allowed_serials is not None and device.serial not in allowed_serials:
                 continue
-            device.subscribe_frames(video_q)
             device.subscribe_status(ctrl_q)
             try:
                 ctrl_q.put_nowait(device.status_dict())
             except Exception:
                 pass
+            # Start isolated sender for this new device on this connection.
+            async def _spawn_sender(
+                *,
+                target_conn_id=conn_id,
+                target_ws=ws,
+                target_device=device,
+            ) -> None:
+                async with self._lock:
+                    group = self._conn_sender_groups.get(target_conn_id, [])
+                    # One sender per device serial per connection.
+                    if any(
+                        getattr(t, "_device_serial", None) == target_device.serial and not t.done()
+                        for t in group
+                    ):
+                        return
+                    ws_send_lock = self._conn_send_locks.get(target_conn_id)
+                    if ws_send_lock is None:
+                        return
+                    task = asyncio.create_task(
+                        self._device_sender(ws=target_ws, device=target_device, ws_send_lock=ws_send_lock),
+                        name=f"ws-device-sender-{target_conn_id}-{target_device.serial}",
+                    )
+                    setattr(task, "_device_serial", target_device.serial)
+                    group.append(task)
+                    self._conn_sender_groups[target_conn_id] = group
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(_spawn_sender())
+            except RuntimeError:
+                pass
 
-    async def _sender(self, ws: WebSocket, video_q: asyncio.Queue, ctrl_q: asyncio.Queue) -> None:
-        """Priority sender: flush all pending JSON ctrl messages before each video frame.
-
-        Prevents a 33KB IDR frame from blocking a 50-byte JSON status/ack in the TCP
-        send buffer — which would add up to 33KB/bandwidth latency to control responses.
-        At 30fps the video_q.get_nowait() path is taken ~99% of iterations (no task overhead).
-        The asyncio.wait_for fallback is only hit when the stream is truly idle.
-
-        Burst smoothing:
-        - Pace droppable (delta) frames to ~30fps on the wire to avoid "IDR + many P frames"
-          arriving in one scheduler burst at the browser.
-        - Never delay config/key frames (decoder continuity + fast recovery).
-        """
-        _sent_types: dict = {}
+    async def _sender_ctrl(
+        self,
+        ws: WebSocket,
+        ctrl_q: asyncio.Queue,
+        ws_send_lock: asyncio.Lock,
+    ) -> None:
+        """Send JSON control/status messages for one websocket connection."""
         while True:
-            # 1) Drain all pending ctrl (JSON) messages first — priority path
-            while not ctrl_q.empty():
-                try:
-                    msg = ctrl_q.get_nowait()
+            try:
+                msg = await ctrl_q.get()
+                async with ws_send_lock:
                     await ws.send_json(msg)
-                except asyncio.QueueEmpty:
-                    break
-                except Exception:
-                    return
+            except Exception:
+                return
 
-            # 2) Send one video frame (non-blocking fast path at 30fps)
+    async def _device_sender(
+        self,
+        ws: WebSocket,
+        device,
+        ws_send_lock: asyncio.Lock,
+    ) -> None:
+        """Per-device event-driven sender, isolated per connection."""
+        last_version = -1
+        timeout_streak = 0
+        congestion = False
+        dropped_version_total = 0
+        sent_total = 0
+        lag_sum_ms = 0.0
+        last_stats_ts = time.monotonic()
+
+        # Freeze bootstrap refs and send under the same lock used by live sends.
+        cfg_ref, key_ref = device.get_stream_bootstrap(max_key_age_s=2.0)
+        try:
+            async with ws_send_lock:
+                if cfg_ref:
+                    await asyncio.wait_for(ws.send_bytes(cfg_ref), timeout=0.2)
+                if key_ref:
+                    await asyncio.wait_for(ws.send_bytes(key_ref), timeout=0.2)
+        except asyncio.TimeoutError:
+            # Do not kill sender on bootstrap timeout. Live frames will still
+            # carry fresh state and late keyframes can recover decoder.
+            pass
+        except Exception:
+            return
+
+        while True:
             try:
-                msg = video_q.get_nowait()
-            except asyncio.QueueEmpty:
-                # Idle: wait for video, re-check ctrl every 50ms in case it arrives
+                await device.wait_for_stream_update(last_version)
+                frame, version, frame_ts, is_key = device.get_stream_snapshot()
+                if frame is None:
+                    # No frame payload yet (e.g. only version bootstrap state).
+                    # Advance cursor to avoid hot-looping at 100% CPU.
+                    if version > last_version:
+                        last_version = version
+                    await asyncio.sleep(0.01)
+                    continue
+                if version == last_version:
+                    await asyncio.sleep(0)
+                    continue
+                if version < last_version:
+                    continue
+
+                version_gap = version - last_version - 1
+                if version_gap > 0:
+                    dropped_version_total += version_gap
+                lag_ms = max(0.0, (time.monotonic() - frame_ts) * 1000.0)
+                if not congestion and (lag_ms > 100.0 or version_gap > 3):
+                    congestion = True
+                elif congestion and lag_ms < 50.0:
+                    congestion = False
+
+                # In congestion, prefer skipping non-key deltas when version gaps are large.
+                if congestion and version_gap > 3 and not is_key:
+                    last_version = version
+                    continue
+
+                send_started = time.monotonic()
+                # Keep latency low under multi-device contention:
+                # if another sender currently owns the socket, drop this stale frame
+                # and wait for a fresher snapshot instead of blocking.
                 try:
-                    msg = await asyncio.wait_for(video_q.get(), timeout=0.05)
+                    await asyncio.wait_for(ws_send_lock.acquire(), timeout=0.03)
                 except asyncio.TimeoutError:
-                    continue  # loop back to drain ctrl_q
-                except Exception:
-                    return
-
-            # 3) Live-first coalescing.
-            #    Prefer newest decodable frame while preserving config->key ordering.
-            while not video_q.empty():
+                    last_version = version
+                    continue
                 try:
-                    candidate = video_q.get_nowait()
-                except asyncio.QueueEmpty:
-                    break
-                if _frame_serial_bytes(candidate) != _frame_serial_bytes(msg):
-                    # Shared queue may contain frames from other devices.
-                    # Never coalesce across serials; put it back and stop coalescing.
+                    await asyncio.wait_for(ws.send_bytes(frame), timeout=0.25)
+                finally:
+                    ws_send_lock.release()
+                send_elapsed_ms = (time.monotonic() - send_started) * 1000.0
+                timeout_streak = 0
+                last_version = version
+                sent_total += 1
+                lag_sum_ms += lag_ms
+
+                # Cooperative yield for fairness under multi-device load.
+                await asyncio.sleep(0)
+
+                now = time.monotonic()
+                if now - last_stats_ts >= 5.0 and sent_total > 0:
+                    avg_lag = lag_sum_ms / max(sent_total, 1)
+                    log.info(
+                        "[WS device sender] serial=%s sent=%d dropped=%d avg_lag_ms=%.1f send_ms=%.1f congestion=%s",
+                        getattr(device, "serial", "unknown"),
+                        sent_total,
+                        dropped_version_total,
+                        avg_lag,
+                        send_elapsed_ms,
+                        congestion,
+                    )
+                    sent_total = 0
+                    lag_sum_ms = 0.0
+                    dropped_version_total = 0
+                    last_stats_ts = now
+            except asyncio.TimeoutError:
+                timeout_streak += 1
+                await asyncio.sleep(min(0.5 * timeout_streak, 2.0))
+                if timeout_streak > 3:
                     try:
-                        video_q.put_nowait(candidate)
-                    except asyncio.QueueFull:
+                        await ws.close(code=1011)
+                    except Exception:
                         pass
-                    break
-                if _is_droppable_frame(msg):
-                    # current msg is a stale P-frame — replace with newer candidate
-                    msg = candidate
-                elif _is_droppable_frame(candidate):
-                    # candidate is a P-frame but current is IDR/config — discard candidate
-                    pass
-                else:
-                    # Both are non-droppable.
-                    if _is_config_frame(msg):
-                        # Keep config before key/data for decoder continuity.
-                        try:
-                            video_q.put_nowait(candidate)
-                        except asyncio.QueueFull:
-                            pass
-                        break
-                    # Prefer freshest non-droppable frame.
-                    msg = candidate
-
-            try:
-                ft = msg[0] if msg else 0
-                cnt = _sent_types.get(ft, 0) + 1
-                _sent_types[ft] = cnt
-                if cnt <= 3:
-                    log.info("WS sender → browser: type=0x%02x len=%d (count=%d)", ft, len(msg), cnt)
-
-                await ws.send_bytes(msg)
+                    return
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 return
 
@@ -704,6 +840,10 @@ class DeviceAgentSession:
                     log.debug("[DEVICE-WS] _send: loop closed, dropping %s", msg.get("type"))
                     return
                 async def _do_send():
+                    # Session guard: drop sends from stale closures after reconnect replacement.
+                    cur = self._sessions.get(serial)
+                    if cur is not ws:
+                        return
                     try:
                         await ws.send_json(msg)
                     except Exception as _exc:
@@ -869,6 +1009,27 @@ class DeviceAgentSession:
                             break
 
                     scrcpy_target = getattr(device, "_adb_serial", None) or client_ip
+                    # Re-resolve target at attach time: when device-agent connects
+                    # before relay registration, _adb_serial can remain a NAT/public
+                    # client_ip:5555 that no relay owns. Resolve again against current
+                    # relay registry and fall back to the single online relay serial.
+                    try:
+                        from runtime.transports.adb_relay_server import get_relay_manager
+
+                        relay_mgr = get_relay_manager()
+                        if relay_mgr:
+                            resolved = relay_mgr.resolve_serial(scrcpy_target)
+                            if resolved == scrcpy_target and ":" in str(scrcpy_target):
+                                all_serials: list[str] = []
+                                for serials in relay_mgr.registered_relays().values():
+                                    all_serials.extend(serials)
+                                uniq = sorted(set(all_serials))
+                                if len(uniq) == 1:
+                                    resolved = uniq[0]
+                            scrcpy_target = resolved
+                            device._adb_serial = scrcpy_target
+                    except Exception:
+                        pass
                     loop.run_in_executor(
                         None,
                         device.attach_scrcpy_stream,

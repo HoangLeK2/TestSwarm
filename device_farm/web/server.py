@@ -149,7 +149,7 @@ def create_app(
                         import concurrent.futures as _cf2
                         _cf2.ThreadPoolExecutor(max_workers=1).submit(
                             ws_device.attach_scrcpy_stream,
-                            device_ip,
+                            serial,
                             None,
                             _config_ref.device.scrcpy_control,
                         )
@@ -181,7 +181,7 @@ def create_app(
                     import concurrent.futures as _cf
                     _cf.ThreadPoolExecutor(max_workers=1).submit(
                         device.attach_scrcpy_stream,
-                        device_ip,
+                        serial,
                         None,
                         _config_ref.device.scrcpy_control,
                     )

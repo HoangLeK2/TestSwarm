@@ -676,6 +676,9 @@
   "devicesFarm": {
     "backendErrorTitle": "Cannot connect to backend.",
     "backendErrorHint": "Is backend running on port 8081?",
+    "streamConnecting": "Connecting screen...",
+    "streamWaitingFirstFrame": "Waiting for first frame...",
+    "streamOffline": "Offline",
     "noConnectedDevices": "No connected devices",
     "noConnectedDevicesHint": "Cloud server mode: devices actively connect to server. Open STFService app → paste link (or scan QR). Multiple devices can connect at once.",
     "connectDevice": "Connect device",

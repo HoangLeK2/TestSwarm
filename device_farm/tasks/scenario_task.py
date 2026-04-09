@@ -22,6 +22,7 @@ Executor này chỉ đọc từng step và gọi DeviceClient/u2 cho phù hợp.
 """
 
 import base64
+import asyncio
 import concurrent.futures
 import io
 import json
@@ -1129,15 +1130,50 @@ def run_scenario_task(
         step_start_t: float = time.monotonic()
 
         if t == "launch_app":
-            pkg = str(step.get("package") or "")
+            app_field = step.get("app")
+            app_pkg = ""
+            app_component = ""
+            if isinstance(app_field, dict):
+                app_pkg = str(app_field.get("package") or app_field.get("app_package") or "").strip()
+                app_component = str(app_field.get("component") or app_field.get("activity") or "").strip()
+            elif isinstance(app_field, str):
+                app_pkg = app_field.strip()
+
+            raw_pkg = str(
+                step.get("package")
+                or step.get("app_package")
+                or step.get("appPackage")
+                or app_pkg
+                or ""
+            ).strip()
+            raw_component = str(
+                step.get("component")
+                or step.get("activity")
+                or step.get("title")
+                or app_component
+                or ""
+            ).strip()
+            pkg = raw_pkg
+            component = ""
+            
+            if pkg and "/" in pkg:
+                component = pkg
+                pkg = pkg.split("/", 1)[0].strip()
+            if raw_component and "/" in raw_component:
+                component = raw_component
+                if not pkg:
+                    pkg = raw_component.split("/", 1)[0].strip()
+            elif raw_component and not pkg:
+                # Legacy payloads sometimes put package into "title"/"activity" directly.
+                pkg = raw_component
             if not pkg:
-                msg = "launch_app: empty package"
+                msg = "launch_app: empty package/component"
                 log.warning(f"[{serial}] {msg}")
                 step_result["ok"] = False
                 step_result["message"] = msg
             else:
                 try:
-                    device.launch_app(pkg)
+                    device.launch_app(pkg, component=component or None)
                     # Fixed wait — app startup is variable; scenario should include an
                     # explicit wait_element step after launch_app for reliable sync.
                     launch_wait = float(step.get("wait_after", 2.0) or 2.0)
@@ -1606,18 +1642,9 @@ def run_scenario_task(
                     except Exception as fast_exc:
                         log.info(f"[{serial}] input_text: strategy 1 failed: {fast_exc}")
 
-                # Strategy 3: agent paste (clipboard + ACTION_SET_TEXT/PASTE).
-                # Works on all Android versions including 12+ where adb shell input text
-                # is blocked (SecurityException: INJECT_EVENTS).
-                if not typed and getattr(device, "_agent_send", None) is not None:
-                    log.info(f"[{serial}] input_text: trying strategy 3 (agent paste)")
-                    device._send_to_agent({"type": "paste", "text": text})  # type: ignore[attr-defined]
-                    time.sleep(0.7)
-                    typed = True
-                    step_result["message"] = "input_text via agent paste"
-
-                # Strategy 4: adb shell input text — ASCII fallback when no agent.
-                # Not available on Android 12+ (SecurityException: INJECT_EVENTS).
+                # Strategy 3: adb shell input text via relay (agent-boot path).
+                # This executes as shell UID on the relay side, avoiding app-UID
+                # INJECT_EVENTS restrictions seen in WsAgentService shell fallback.
                 if not typed:
                     is_ascii = all(ord(c) < 128 for c in text)
                     if is_ascii:
@@ -1629,13 +1656,42 @@ def run_scenario_task(
                             .replace("\n", "%n")
                         )
                         try:
-                            device.shell(f"input text {escaped}")
-                            time.sleep(0.3)
-                            typed = True
-                            step_result["message"] = "input_text via adb shell input text"
-                            log.info(f"[{serial}] input_text: strategy 4 (adb shell) OK")
+                            from runtime.transports.adb_relay_server import get_relay_manager
+                            relay = get_relay_manager()
+                            loop = getattr(device, "_loop", None)
+                            target_serial = (
+                                getattr(device, "_adb_serial", None)
+                                or getattr(device, "serial", None)
+                                or serial
+                            )
+                            if relay and loop and target_serial and relay.relay_for_serial(target_serial):
+                                actual_serial = relay.resolve_serial(str(target_serial))
+                                fut = asyncio.run_coroutine_threadsafe(
+                                    relay.adb_shell(actual_serial, f'input text "{escaped}"', timeout=20.0),
+                                    loop,
+                                )
+                                out = fut.result(timeout=25.0) or ""
+                                low = out.lower()
+                                if any(m in low for m in ("error:", "exception", "securityexception")):
+                                    raise RuntimeError(out.strip() or "adb shell input text failed")
+                                typed = True
+                                step_result["message"] = "input_text via adb relay shell input text"
+                                log.info(
+                                    f"[{serial}] input_text: strategy 3 (adb relay shell) OK "
+                                    f"serial={actual_serial}"
+                                )
+                            else:
+                                log.info(f"[{serial}] input_text: strategy 3 skipped (no adb relay/loop)")
                         except Exception as shell_exc:
-                            log.info(f"[{serial}] input_text: strategy 4 failed: {shell_exc}")
+                            log.info(f"[{serial}] input_text: strategy 3 failed: {shell_exc}")
+
+                # Strategy 4: agent paste (clipboard + ACTION_SET_TEXT/PASTE).
+                if not typed and getattr(device, "_agent_send", None) is not None:
+                    log.info(f"[{serial}] input_text: trying strategy 4 (agent paste)")
+                    device._send_to_agent({"type": "paste", "text": text})  # type: ignore[attr-defined]
+                    time.sleep(0.7)
+                    typed = True
+                    step_result["message"] = "input_text via agent paste"
 
                 if not typed:
                     log.warning(f"[{serial}] input_text: all strategies failed for {text!r}")
@@ -1994,7 +2050,6 @@ def run_scenario_task(
                         )
                         if parent_hash:
                             try:
-                                import asyncio
                                 import concurrent.futures as _cf
                                 from db.database import activity_session
                                 from db.crud.content import update_content_stats
@@ -2201,7 +2256,6 @@ def run_scenario_task(
                 step_result["message"] = "save_extraction: missing data_var"
             else:
                 try:
-                    import asyncio
                     from services.content_store import save_content_item
                     data = _var_ctx._runtime_vars.get(data_var)
                     # Fallback to scenario context for extract strategies that store in ctx.

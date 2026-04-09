@@ -1,5 +1,6 @@
 'use client';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useRef } from 'react';
 import { campaignsApi, scenariosApi, tasksApi, workflowsApi } from '../services/api';
 import type {
   CampaignCreate,
@@ -9,7 +10,6 @@ import type {
   ScenarioCreate,
   ScenarioUpdate
 } from '../types';
-import { isIdleStatus } from '../types';
 import { fleetRun, fleetStatus, type FleetStatusResult } from '../../devices/services/api';
 
 const KEYS = {
@@ -147,10 +147,13 @@ export function useCampaignProgress(campaignId: string, enabled: boolean) {
     enabled,
     refetchInterval: (query) => {
       const tasks = query.state.data as any[] | undefined;
+      if (query.state.error) return false;
+      // Wait for the first fetch result; then only keep polling while there are
+      // active tasks. This prevents /api/tasks spam when no tasks exist.
       if (!tasks) return 2000;
-      // Stop polling when all tasks are in terminal state
-      if (tasks.length > 0 && tasks.every((t) => t.status === 'DONE' || t.status === 'FAILED')) return false;
-      return 2000;
+      if (tasks.length === 0) return false;
+      const hasActiveTask = tasks.some((t) => t.status !== 'DONE' && t.status !== 'FAILED');
+      return hasActiveTask ? 2000 : false;
     },
     select: (tasks) => {
       const total = tasks.length;
@@ -356,10 +359,22 @@ export type RunCampaignOptions = {
 
 export function useRunCampaign(onAllDone?: () => void, options?: RunCampaignOptions) {
   const qc = useQueryClient();
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const clearPollTimer = () => {
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+  };
+
+  useEffect(() => clearPollTimer, []);
+
   return useMutation({
     mutationFn: ({ id, deviceSerials }: { id: string; deviceSerials?: string[] }) =>
       campaignsApi.run(id, deviceSerials),
     onSuccess: async (data: CampaignRunResponse, { id }) => {
+      clearPollTimer();
       qc.invalidateQueries({ queryKey: KEYS.list });
       qc.invalidateQueries({ queryKey: KEYS.detail(id) });
 
@@ -387,13 +402,13 @@ export function useRunCampaign(onAllDone?: () => void, options?: RunCampaignOpti
       const workflowIds = data.workflow_ids;
       if (engine === 'temporal' && workflowIds?.length) {
         const deadline = Date.now() + POLL_TIMEOUT_MS;
-        const timer = setInterval(async () => {
-          if (Date.now() > deadline) { clearInterval(timer); await resetToIdle(); return; }
+        pollTimerRef.current = setInterval(async () => {
+          if (Date.now() > deadline) { clearPollTimer(); await resetToIdle(); return; }
           try {
             const res = await workflowsApi.listForCampaign(id);
             const allTerminal = res.workflows.length >= workflowIds.length &&
               res.workflows.every((w) => TERMINAL_STATUSES.includes(w.status));
-            if (allTerminal) { clearInterval(timer); await resetToIdle(); }
+            if (allTerminal) { clearPollTimer(); await resetToIdle(); }
           } catch { /* ignore */ }
         }, POLL_INTERVAL_MS);
         return;
@@ -403,13 +418,13 @@ export function useRunCampaign(onAllDone?: () => void, options?: RunCampaignOpti
       const taskIds = data.task_ids;
       if (taskIds?.length) {
         const deadline = Date.now() + POLL_TIMEOUT_MS;
-        const timer = setInterval(async () => {
-          if (Date.now() > deadline) { clearInterval(timer); await resetToIdle(); return; }
+        pollTimerRef.current = setInterval(async () => {
+          if (Date.now() > deadline) { clearPollTimer(); await resetToIdle(); return; }
           try {
             const tasks = await tasksApi.list(taskIds);
             const allTerminal = tasks.length >= taskIds.length &&
               tasks.every((task) => TERMINAL_STATUSES.includes(task.status));
-            if (allTerminal) { clearInterval(timer); await resetToIdle(); }
+            if (allTerminal) { clearPollTimer(); await resetToIdle(); }
           } catch { /* ignore */ }
         }, POLL_INTERVAL_MS);
         return;

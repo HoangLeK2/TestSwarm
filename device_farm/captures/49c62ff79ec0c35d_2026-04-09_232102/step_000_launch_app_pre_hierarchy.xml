@@ -1,0 +1,60 @@
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.bbk.launcher2" enabled="true" visible-to-user="true" bounds="[0,0][1260,2800]" drawing-order="0" hint="" display-id="0">
+    <node index="0" resource-id="com.bbk.launcher2:id/launcher_container_view" class="android.widget.FrameLayout" package="com.bbk.launcher2" enabled="true" visible-to-user="true" bounds="[0,0][1260,2800]" drawing-order="1" hint="" display-id="0">
+      <node index="0" resource-id="com.bbk.launcher2:id/floating_icon_parent" class="android.widget.FrameLayout" package="com.bbk.launcher2" enabled="true" visible-to-user="true" bounds="[0,0][1260,2800]" drawing-order="6" hint="" display-id="0"/>
+      <node index="1" resource-id="com.bbk.launcher2:id/drag_layer" class="android.widget.FrameLayout" package="com.bbk.launcher2" content-desc="null" enabled="true" visible-to-user="true" bounds="[0,0][1260,2800]" drawing-order="2" hint="" display-id="0">
+        <node index="0" class="android.view.ViewGroup" package="com.bbk.launcher2" content-desc="Home screen editing mode. Page 1" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[0,0][2,2800]" drawing-order="4" hint="" display-id="0"/>
+        <node index="1" class="android.view.ViewGroup" package="com.bbk.launcher2" content-desc="Home screen editing mode. Page 2" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[0,0][1260,2800]" drawing-order="5" hint="" display-id="0">
+          <node index="0" class="android.view.ViewGroup" package="com.bbk.launcher2" enabled="true" visible-to-user="true" bounds="[71,223][1189,2800]" drawing-order="1" hint="" display-id="0">
+            <node index="0" text="WiFiman" class="android.widget.TextView" package="com.bbk.launcher2" content-desc="WiFiman" clickable="true" enabled="true" focusable="true" long-clickable="true" visible-to-user="true" bounds="[71,223][323,524]" drawing-order="1" hint="" display-id="0"/>
+            <node index="1" text="Net Analyzer" class="android.widget.TextView" package="com.bbk.launcher2" content-desc="Net Analyzer" clickable="true" enabled="true" focusable="true" long-clickable="true" visible-to-user="true" bounds="[359,223][611,524]" drawing-order="2" hint="" display-id="0"/>
+            <node index="2" text="VIETMAP LIVE" class="android.widget.TextView" package="com.bbk.launcher2" content-desc="VIETMAP LIVE" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[647,223][899,524]" drawing-order="3" hint="" display-id="0"/>
+            <node index="3" text="Wyn" class="android.widget.TextView" package="com.bbk.launcher2" content-desc="Wyn" clickable="true" enabled="true" focusable="true" long-clickable="true" visible-to-user="true" bounds="[935,223][1187,524]" drawing-order="4" hint="" display-id="0"/>
+            <node index="4" text="AAAD" class="android.widget.TextView" package="com.bbk.launcher2" content-desc="AAAD" clickable="true" enabled="true" focusable="true" long-clickable="true" visible-to-user="true" bounds="[71,560][323,861]" drawing-order="5" hint="" display-id="0"/>
+            <node index="5" text="Fermata Auto" class="android.widget.TextView" package="com.bbk.launcher2" content-desc="Fermata Auto" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[359,560][611,861]" drawing-order="6" hint="" display-id="0"/>
+            <node index="6" text="Google" class="android.widget.TextView" package="com.bbk.launcher2" content-desc="Google" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[647,560][899,861]" drawing-order="7" hint="" display-id="0"/>
+            <node index="7" text="Maps" class="android.widget.TextView" package="com.bbk.launcher2" content-desc="Maps" clickable="true" enabled="true" focusable="true" long-clickable="true" visible-to-user="true" bounds="[935,560][1187,861]" drawing-order="8" hint="" display-id="0"/>
+            <node index="8" text="Brave" class="android.widget.TextView" package="com.bbk.launcher2" content-desc="Brave" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[71,897][323,1198]" drawing-order="9" hint="" display-id="0"/>
+            <node index="9" text="Facebook" class="android.widget.TextView" package="com.bbk.launcher2" content-desc="Facebook, 1 notification(s)" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[647,897][899,1198]" drawing-order="10" hint="" display-id="0"/>
+            <node index="10" text="ATX" class="android.widget.TextView" package="com.bbk.launcher2" content-desc="ATX" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[71,1234][323,1535]" drawing-order="11" hint="" display-id="0"/>
+            <node index="11" text="   Phone Ma…" class="android.widget.TextView" package="com.bbk.launcher2" content-desc="Phone Manager" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[359,1234][611,1535]" drawing-order="12" hint="" display-id="0"/>
+            <node index="12" text="STFService" class="android.widget.TextView" package="com.bbk.launcher2" content-desc="STFService" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[647,1234][899,1535]" drawing-order="13" hint="" display-id="0"/>
+            <node index="13" text="Gboard" class="android.widget.TextView" package="com.bbk.launcher2" content-desc="Gboard" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[935,1234][1187,1535]" drawing-order="14" hint="" display-id="0"/>
+          </node>
+        </node>
+        <node index="2" resource-id="com.bbk.launcher2:id/workspace_indicator" class="android.widget.SeekBar" package="com.bbk.launcher2" content-desc="Page 2 of 2,Page indicator,Swipe up or down to turn page. Double-tap and hold to drag to quickly turn page" enabled="true" focusable="true" visible-to-user="true" bounds="[0,2210][1260,2403]" drawing-order="12" hint="" display-id="0">
+          <node index="0" resource-id="com.bbk.launcher2:id/slider_anim_indicator" class="android.widget.RelativeLayout" package="com.bbk.launcher2" enabled="true" visible-to-user="true" bounds="[574,2305][686,2403]" drawing-order="3" hint="" display-id="0">
+            <node index="0" resource-id="com.bbk.launcher2:id/slider_count_indicator" class="android.widget.RelativeLayout" package="com.bbk.launcher2" enabled="true" visible-to-user="true" bounds="[574,2305][686,2403]" drawing-order="1" hint="" display-id="0">
+              <node index="0" resource-id="com.bbk.launcher2:id/analog_indicator_container" class="android.widget.LinearLayout" package="com.bbk.launcher2" enabled="true" visible-to-user="true" bounds="[574,2305][686,2403]" drawing-order="3" hint="" display-id="0">
+                <node index="0" class="android.widget.ImageView" package="com.bbk.launcher2" enabled="true" visible-to-user="true" bounds="[574,2329][630,2378]" drawing-order="1" hint="" display-id="0"/>
+                <node index="1" class="android.widget.ImageView" package="com.bbk.launcher2" enabled="true" visible-to-user="true" bounds="[630,2329][686,2378]" drawing-order="2" hint="" display-id="0"/>
+              </node>
+            </node>
+          </node>
+        </node>
+        <node index="3" resource-id="com.bbk.launcher2:id/layout" class="android.view.ViewGroup" package="com.bbk.launcher2" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[36,2479][1260,2780]" drawing-order="9" hint="" display-id="0">
+          <node index="0" class="android.view.ViewGroup" package="com.bbk.launcher2" enabled="true" visible-to-user="true" bounds="[36,2479][1260,2780]" drawing-order="1" hint="" display-id="0">
+            <node index="0" class="android.widget.TextView" package="com.bbk.launcher2" content-desc="Phone" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[72,2479][324,2780]" drawing-order="1" hint="" display-id="0"/>
+            <node index="1" class="android.widget.TextView" package="com.bbk.launcher2" content-desc="Chrome" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[360,2479][612,2780]" drawing-order="2" hint="" display-id="0"/>
+            <node index="2" class="android.widget.TextView" package="com.bbk.launcher2" content-desc="YouTube" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[648,2479][900,2780]" drawing-order="3" hint="" display-id="0"/>
+            <node index="3" class="android.widget.TextView" package="com.bbk.launcher2" content-desc="Camera" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[936,2479][1188,2780]" drawing-order="4" hint="" display-id="0"/>
+          </node>
+        </node>
+        <node index="4" resource-id="com.bbk.launcher2:id/hotseat_background" class="android.widget.FrameLayout" package="com.bbk.launcher2" enabled="true" visible-to-user="true" bounds="[63,2467][1197,2737]" drawing-order="8" hint="" display-id="0"/>
+      </node>
+    </node>
+  </node>
+  <node index="0" class="android.widget.FrameLayout" package="com.android.systemui" enabled="true" visible-to-user="true" bounds="[0,0][1260,133]" drawing-order="0" hint="" display-id="0">
+    <node index="0" resource-id="com.android.systemui:id/status_bar" class="android.widget.FrameLayout" package="com.android.systemui" enabled="true" visible-to-user="true" bounds="[0,0][1260,133]" drawing-order="1" hint="" display-id="0">
+      <node index="0" resource-id="com.android.systemui:id/status_bar_start_side_content" class="android.widget.FrameLayout" package="com.android.systemui" enabled="true" visible-to-user="true" bounds="[70,3][584,133]" drawing-order="1" hint="" display-id="0">
+        <node index="0" text="23:21" resource-id="com.android.systemui:id/clock" class="android.widget.TextView" package="com.android.systemui" content-desc="23:21" enabled="true" visible-to-user="true" bounds="[70,41][205,95]" drawing-order="2" hint="" display-id="0"/>
+        <node index="1" class="" package="com.android.systemui" content-desc="Android System notification: " enabled="true" visible-to-user="true" bounds="[205,38][246,98]" drawing-order="11" hint="" display-id="0"/>
+        <node index="2" class="" package="com.android.systemui" content-desc="vivoService notification: " enabled="true" visible-to-user="true" bounds="[260,38][301,98]" drawing-order="12" hint="" display-id="0"/>
+      </node>
+      <node index="1" resource-id="com.android.systemui:id/mobile_combo" class="android.widget.FrameLayout" package="com.android.systemui" content-desc="Emergency calls only, , No signal." enabled="true" visible-to-user="true" bounds="[989,22][1041,113]" drawing-order="10" hint="" display-id="0"/>
+      <node index="2" resource-id="com.android.systemui:id/wifi_signal" class="" package="com.android.systemui" content-desc="Wi-FiSignal strength: 4 bars of 4 bars" enabled="true" visible-to-user="true" bounds="[1052,47][1105,89]" drawing-order="12" hint="" display-id="0"/>
+      <node index="3" resource-id="com.android.systemui:id/battery" class="android.widget.LinearLayout" package="com.android.systemui" content-desc="Battery 40 percent." enabled="true" visible-to-user="true" bounds="[1116,3][1190,133]" drawing-order="14" hint="" display-id="0"/>
+    </node>
+  </node>
+  <node index="0" class="android.widget.FrameLayout" package="com.vivo.upslide" enabled="true" visible-to-user="true" bounds="[0,2737][1260,2800]" drawing-order="0" hint="" display-id="0"/>
+</hierarchy>

@@ -174,14 +174,14 @@ function TreeNode({ node, expanded, matchingIds, selectedNodeId, onToggle, onCli
 
   const label = node.className || node.tag;
   const resId = node.resourceId ? node.resourceId.split('/').pop() : '';
-  const rawText = node.text || node.contentDesc;
-  const textPreview = rawText ? (rawText.length > 30 ? rawText.slice(0, 30) + '...' : rawText) : '';
-  const isFromDesc = !node.text && !!node.contentDesc;
+  const textValue = node.text || '';
+  const contentDescValue = node.contentDesc || '';
+  const rawText = textValue || contentDescValue;
 
   return (
     <>
       <div
-        className={`flex cursor-pointer items-center gap-1 rounded px-1 py-0.5 hover:bg-accent/50 ${
+        className={`flex cursor-pointer items-center gap-1 whitespace-nowrap rounded px-1 py-0.5 hover:bg-accent/50 ${
           isSelected ? 'bg-primary/15 ring-1 ring-primary/30' : ''
         }`}
         style={{ paddingLeft: indent + 4 }}
@@ -208,20 +208,20 @@ function TreeNode({ node, expanded, matchingIds, selectedNodeId, onToggle, onCli
 
         {/* Resource ID */}
         {resId && (
-          <span className='truncate text-[10px] text-emerald-600 dark:text-emerald-400'>
+          <span className='shrink-0 text-[10px] text-emerald-600 dark:text-emerald-400' title={node.resourceId || resId}>
             {resId}
           </span>
         )}
 
-        {/* Text / content-desc preview */}
-        {textPreview && (
-          <span className={`truncate text-[10px] ${isFromDesc ? 'text-sky-600 dark:text-sky-400' : 'text-orange-600 dark:text-orange-400'}`}>
-            &quot;{textPreview}&quot;
+        {/* Always show full text/content-desc (no truncation) */}
+        {rawText && (
+          <span className='shrink-0 text-[10px] text-orange-600 dark:text-orange-400' title={rawText}>
+            &quot;{rawText}&quot;
           </span>
         )}
 
         {node.pkg && (
-          <span className='truncate text-[9px] text-violet-600/90 dark:text-violet-400/90' title={node.pkg}>
+          <span className='shrink-0 text-[9px] text-violet-600/90 dark:text-violet-400/90' title={node.pkg}>
             {node.pkg}
           </span>
         )}

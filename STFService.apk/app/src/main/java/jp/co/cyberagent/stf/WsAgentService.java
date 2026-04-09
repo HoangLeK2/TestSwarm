@@ -925,10 +925,19 @@ public class WsAgentService extends android.app.Service {
                                 sendLog("paste: ACTION_PASTE error: " + e.getMessage());
                             }
                         }
-                        // Step 3: fallback — KEYCODE_PASTE
+                        // Step 3: fallback — shell input text (often blocked in app UID on Android 14+)
                         if (!done) {
-                            runShell("input keyevent 279");
-                            sendLog("paste: keyevent 279 fallback");
+                            String safeText = toShellInputText(pasteText);
+                            if (!safeText.isEmpty()) {
+                                boolean ok = runShell("input text \"" + safeText + "\"");
+                                if (ok) {
+                                    sendLog("paste: input text fallback ok");
+                                } else {
+                                    sendLog("paste: input text fallback blocked (likely INJECT_EVENTS)");
+                                }
+                            } else {
+                                sendLog("paste: fallback skipped (empty text)");
+                            }
                         }
                     });
                     break;
@@ -938,13 +947,29 @@ public class WsAgentService extends android.app.Service {
                     break;
                 case "launch_app": {
                     final String pkg = msg.optString("package", "");
+                    final String component = msg.optString("component", "").trim();
                     mainHandler.post(() -> {
-                        if (pkg == null || pkg.isEmpty()) {
+                        if ((pkg == null || pkg.isEmpty()) && component.isEmpty()) {
                             sendLog("launch_app: empty package");
                             return;
                         }
                         try {
-                            Intent i = getPackageManager().getLaunchIntentForPackage(pkg);
+                            Intent i = null;
+                            if (!component.isEmpty() && component.contains("/")) {
+                                String[] parts = component.split("/", 2);
+                                String cpkg = parts[0].trim();
+                                String cls = parts[1].trim();
+                                if (!cpkg.isEmpty() && !cls.isEmpty()) {
+                                    if (cls.startsWith(".")) cls = cpkg + cls;
+                                    i = new Intent(Intent.ACTION_MAIN);
+                                    i.addCategory(Intent.CATEGORY_LAUNCHER);
+                                    i.setComponent(new ComponentName(cpkg, cls));
+                                    sendLog("launch_app: explicit component " + cpkg + "/" + cls);
+                                }
+                            }
+                            if (i == null) {
+                                i = getPackageManager().getLaunchIntentForPackage(pkg);
+                            }
                             if (i == null) {
                                 // Fallback: query all LAUNCHER activities for the package.
                                 // Some apps (e.g. Facebook) do not expose a standard launch
@@ -970,7 +995,7 @@ public class WsAgentService extends android.app.Service {
                                     | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
                                     | Intent.FLAG_ACTIVITY_CLEAR_TASK);
                             startActivity(i);
-                            sendLog("launch_app: started " + pkg);
+                            sendLog("launch_app: started " + (!component.isEmpty() ? component : pkg));
                         } catch (Exception e) {
                             sendLog("launch_app error: " + e.getMessage());
                         }
@@ -1409,22 +1434,29 @@ public class WsAgentService extends android.app.Service {
             sendLog("type via a11y: " + text.length() + " chars");
             return;
         }
-        // Fallback: set clipboard then send KEYCODE_PASTE
-        try {
-            android.content.ClipboardManager cm =
-                    (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-            cm.setPrimaryClip(android.content.ClipData.newPlainText("", text));
-            sendLog("type: clipboard set, sending paste keyevent");
-        } catch (Exception e) {
-            sendLog("type error: " + e.getMessage());
+        // Fallback: shell input text (avoid KEYCODE_PASTE which needs INJECT_EVENTS on some devices)
+        String safeText = toShellInputText(text);
+        if (safeText.isEmpty()) return;
+        boolean ok = runShell("input text \"" + safeText + "\"");
+        if (ok) {
+            sendLog("type via shell input text: " + text.length() + " chars");
+        } else {
+            sendLog("type via shell blocked (likely INJECT_EVENTS) — need a11y or adb relay typing");
         }
-        try { Thread.sleep(150); } catch (InterruptedException ignored) {}
-        runShell("input keyevent 279");
+    }
+
+    /** Escape text for `input text "..."` shell command. */
+    private String toShellInputText(String text) {
+        if (text == null || text.isEmpty()) return "";
+        return text
+                .replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace(" ", "%s");
     }
 
     /** Run a shell command (am, pm, input, etc.). */
-    private void runShell(String cmd) {
-        if (cmd.isEmpty()) return;
+    private boolean runShell(String cmd) {
+        if (cmd.isEmpty()) return false;
         try {
             Process p = Runtime.getRuntime().exec(new String[]{"sh", "-c", cmd});
             byte[] out = p.getInputStream().readAllBytes();
@@ -1436,8 +1468,10 @@ public class WsAgentService extends android.app.Service {
             if (!stdout.isEmpty()) result += "\n" + stdout;
             if (!stderr.isEmpty()) result += "\nSTDERR: " + stderr;
             sendLog(result);
+            return code == 0;
         } catch (Exception e) {
             sendLog("shell error: " + e.getMessage());
+            return false;
         }
     }
 
@@ -1501,7 +1535,8 @@ public class WsAgentService extends android.app.Service {
             AccessibilityNodeInfo focused = TouchAccessibilityService.instance
                     .findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
             if (focused != null) {
-                focused.performAction(AccessibilityNodeInfo.ACTION_IME_ENTER);
+                focused.performAction(
+                        AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.getId());
                 focused.recycle();
                 return;
             }

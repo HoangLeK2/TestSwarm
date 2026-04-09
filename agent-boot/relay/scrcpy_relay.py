@@ -344,13 +344,13 @@ class ScrcpyRelaySession:
             f"tunnel_forward=true video=true audio=false control={ctrl_flag} "
             f"video_codec=h264 max_fps={self._max_fps} max_size={self._max_width} "
             f"video_bit_rate={self._bitrate} "
-            # i-frame-interval:int=4 → IDR every 4 seconds to reduce keyframe bursts
+            # i-frame-interval:int=1 → faster decoder recovery after dropped deltas
             # when multiple devices stream concurrently over WiFi relay.
             # latency:int=0 (KEY_LATENCY): encoder outputs every frame immediately;
             #   no internal buffer → saves 66-133 ms. Only enabled on API ≤ 33 (farm
             #   sets low_latency=True); crashes MediaCodec on some API 34+ OEM builds.
             # NOTE: profile/level options omitted — crash MediaCodec on API 34+.
-            f"video_codec_options=i-frame-interval:int=4,max-bframes:int=0"
+            f"video_codec_options=i-frame-interval:int=1,max-bframes:int=0"
             + (",latency:int=0" if self._low_latency else "")
             + " "
             f"stay_awake=true "

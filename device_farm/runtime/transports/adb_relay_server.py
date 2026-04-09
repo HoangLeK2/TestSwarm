@@ -194,6 +194,10 @@ class RelayConnection:
         finally:
             self._pending.pop(reply_id, None)
 
+    async def send_json_message(self, msg: dict) -> None:
+        """Fire-and-forget JSON message (no correlated reply)."""
+        await self._write_queue.put(json.dumps(msg))
+
     def resolve(self, msg_id: str, result: dict) -> None:
         future = self._pending.pop(msg_id, None)
         if future and not future.done():
@@ -255,6 +259,8 @@ class AdbRelayManager:
         self._on_capabilities_update: Optional[Any] = None
         # agent_id → asyncio.Queue  (gRPC ctrl queues, one per connected agent-boot)
         self._grpc_agents: Dict[str, "asyncio.Queue"] = {}
+        # Per-device monotonic sequence for a11y_action
+        self._a11y_seq: Dict[str, int] = {}
 
     def set_on_device_online(self, callback: Any) -> None:
         """Register a callback fired with (serial) when a new relay device appears."""
@@ -755,6 +761,93 @@ class AdbRelayManager:
             reply_id=req_id, timeout=timeout,
         )
 
+    # ── A11y action relay (gRPC/WS meta JSON channel) ────────────────────────
+
+    def next_a11y_seq(self, serial: str) -> int:
+        """Return next per-device monotonic seq (never reset during process lifetime)."""
+        actual = self.resolve_serial(serial)
+        cur = int(self._a11y_seq.get(actual, 0))
+        nxt = cur + 1
+        self._a11y_seq[actual] = nxt
+        return nxt
+
+    async def a11y_mutate(
+        self,
+        serial: str,
+        action: str,
+        payload: dict,
+        session_id: str,
+        timeout: float = 5.0,
+    ) -> dict:
+        """
+        Mutating a11y action: wait for a11y_ack (accepted/queue position), not final result.
+        """
+        conn = self.relay_for_serial(serial)
+        if conn is None:
+            return {"ok": False, "accepted": False, "error": f"no relay for serial={serial!r}"}
+        actual = self.resolve_serial(serial)
+        req_id = f"a11y-{uuid.uuid4().hex[:12]}"
+        seq = self.next_a11y_seq(actual)
+        ack = await conn.send_json_request(
+            msg={
+                "type": "a11y_action",
+                "id": req_id,
+                "serial": actual,
+                "seq": seq,
+                "ts": int(asyncio.get_running_loop().time() * 1000),
+                "session_id": session_id,
+                "mode": "mutate",
+                "action": action,
+                "payload": payload or {},
+            },
+            reply_id=req_id,
+            timeout=timeout,
+        )
+        if ack.get("type") != "a11y_ack":
+            return {"ok": False, "accepted": False, "error": "invalid_ack"}
+        return {
+            "ok": bool(ack.get("accepted", False)),
+            "accepted": bool(ack.get("accepted", False)),
+            "queue_pos": int(ack.get("queue_pos", -1)),
+            "seq": int(ack.get("seq", seq)),
+            "id": req_id,
+            "error": ack.get("error", ""),
+        }
+
+    async def a11y_query(
+        self,
+        serial: str,
+        action: str,
+        payload: dict,
+        session_id: str,
+        timeout: float = 5.0,
+    ) -> dict:
+        """Query-style a11y action: await a11y_result."""
+        conn = self.relay_for_serial(serial)
+        if conn is None:
+            return {"ok": False, "error": f"no relay for serial={serial!r}"}
+        actual = self.resolve_serial(serial)
+        req_id = f"a11y-{uuid.uuid4().hex[:12]}"
+        seq = self.next_a11y_seq(actual)
+        result = await conn.send_json_request(
+            msg={
+                "type": "a11y_action",
+                "id": req_id,
+                "serial": actual,
+                "seq": seq,
+                "ts": int(asyncio.get_running_loop().time() * 1000),
+                "session_id": session_id,
+                "mode": "query",
+                "action": action,
+                "payload": payload or {},
+            },
+            reply_id=req_id,
+            timeout=timeout,
+        )
+        if result.get("type") != "a11y_result":
+            return {"ok": False, "error": "invalid_result"}
+        return result
+
     async def broadcast_adb_connect(self, ip_port: str, timeout: float = 15.0) -> None:
         async with self._lock:
             conns = list(self._relays.values())
@@ -930,6 +1023,16 @@ class WsRelayAgentSession:
                     )
 
                 elif mtype in ("u2_batch_result", "u2_flow_result"):
+                    if conn is None:
+                        continue
+                    conn.resolve(msg.get("id", ""), msg)
+
+                elif mtype == "a11y_ack":
+                    if conn is None:
+                        continue
+                    conn.resolve(msg.get("id", ""), msg)
+
+                elif mtype == "a11y_result":
                     if conn is None:
                         continue
                     conn.resolve(msg.get("id", ""), msg)

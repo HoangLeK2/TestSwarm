@@ -42,9 +42,22 @@ function buildDeviceFarmWsUrl(): string {
   const baseUrl = useEnv ? (normalizeWsUrl(envUrl, scheme) ?? fallbackUrl) : fallbackUrl;
 
   const authToken = tokenStorage.getAuthToken();
-  return authToken && typeof window !== 'undefined'
-    ? `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}token=${encodeURIComponent(authToken)}`
-    : baseUrl;
+  let url = baseUrl;
+  if (typeof window !== 'undefined') {
+    const key = 'devicefarm_ws_session_id';
+    let sessionId = window.sessionStorage.getItem(key);
+    if (!sessionId) {
+      sessionId = (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      window.sessionStorage.setItem(key, sessionId);
+    }
+    url += `${url.includes('?') ? '&' : '?'}session_id=${encodeURIComponent(sessionId)}`;
+  }
+  if (authToken && typeof window !== 'undefined') {
+    url += `${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(authToken)}`;
+  }
+  return url;
 }
 
 const listeners = new Set<(msg: WsMessage) => void>();

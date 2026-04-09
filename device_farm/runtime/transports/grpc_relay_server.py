@@ -176,6 +176,9 @@ class RelayServicer(relay_pb2_grpc.RelayServiceServicer):
         elif mtype in ("u2_batch_result", "u2_flow_result") and conn is not None:
             conn.resolve(msg.get("id", ""), msg)
 
+        elif mtype in ("a11y_ack", "a11y_result") and conn is not None:
+            conn.resolve(msg.get("id", ""), msg)
+
         return relay_id, conn
 
 

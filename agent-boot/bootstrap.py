@@ -354,10 +354,10 @@ def step_push_atx_agent(serial: str, skip: bool) -> bool:
         console.print(f"    [red]✗[/red] {_U2_TEST_PKG} not installed — atx-agent needs it.")
         return False
 
-    # Fast path: already up (covers devices that were bootstrapped previously)
+    # Do not skip just because port is open: stale/duplicated atx-agent processes
+    # are common and can make control path flaky. Always refresh the daemon.
     if _is_atx_listening(serial):
-        console.print("    [green]✓[/green] atx-agent already running on :7912 — skipping.")
-        return True
+        console.print("    [cyan]→[/cyan] atx-agent detected on :7912 — refreshing process")
 
     abi    = _get_device_abi(serial)
     binary = _atx_agent_local(abi)
@@ -373,7 +373,10 @@ def step_push_atx_agent(serial: str, skip: bool) -> bool:
     _adb_shell(f"chmod 755 {_ATX_AGENT_REMOTE}", serial=serial)
     console.print(f"    [green]✓[/green] Pushed {binary.name} → {_ATX_AGENT_REMOTE}")
 
-    _adb_shell(f"{_ATX_AGENT_REMOTE} server --stop 2>/dev/null; sleep 0.3", serial=serial)
+    _adb_shell(
+        f"pkill -f atx-agent 2>/dev/null || true; {_ATX_AGENT_REMOTE} server --stop 2>/dev/null; sleep 0.3",
+        serial=serial,
+    )
     _adb_shell(f"{_ATX_AGENT_REMOTE} server -d 2>/dev/null", serial=serial)
 
     with Progress(

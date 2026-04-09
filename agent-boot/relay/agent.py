@@ -18,6 +18,7 @@ import random
 import socket
 import struct
 import uuid
+import time
 from typing import Any, Optional
 
 from relay.adb           import (
@@ -107,6 +108,9 @@ class RelayAgent:
         self._u2_batch_enabled = os.getenv("U2_BATCH_ENABLED", "").lower() in ("1", "true")
         self._u2_pool: Optional[U2SessionPool] = None
         self._u2_executor: Optional[Any] = None
+        # A11y control-plane workers
+        self._a11y_max_queue = int(os.getenv("A11Y_MAX_QUEUE_PER_DEVICE", "100"))
+        self._a11y_state: dict[str, dict[str, Any]] = {}
 
     async def run(self) -> None:
         zc = start_mdns_discovery()
@@ -432,8 +436,255 @@ class RelayAgent:
         elif mtype == "u2_flow":
             asyncio.create_task(self._handle_u2_flow(msg, send_queue))
 
+        elif mtype == "a11y_action":
+            await self._handle_a11y_action(msg, send_queue, loop)
+
         elif mtype == "ping":
             pass  # WebSocket ping/pong handles keepalive at transport layer
+
+    async def _handle_a11y_action(
+        self, msg: dict, send_queue: asyncio.Queue, loop: asyncio.AbstractEventLoop
+    ) -> None:
+        """
+        Handle a11y_action control-plane message from farm.
+        - Mutating actions: immediate a11y_ack then async result (best-effort)
+        - Query actions: execute on query lane and return a11y_result
+        """
+        serial = str(msg.get("serial", "") or "")
+        req_id = str(msg.get("id", "") or "")
+        action = str(msg.get("action", "") or "")
+        mode = str(msg.get("mode", "mutate") or "mutate")
+        payload = msg.get("payload") or {}
+        seq = int(msg.get("seq", 0) or 0)
+        session_id = str(msg.get("session_id", "") or "")
+        ts = int(msg.get("ts", int(time.time() * 1000)) or int(time.time() * 1000))
+        if not serial or not req_id or not action:
+            return
+
+        supported_actions = {"tap", "swipe", "drag", "long_tap", "double_tap", "key", "type", "dump_hierarchy"}
+        if action not in supported_actions:
+            if mode == "query":
+                await send_queue.put(json.dumps({
+                    "type": "a11y_result",
+                    "id": req_id,
+                    "serial": serial,
+                    "seq": seq,
+                    "ok": False,
+                    "error": f"unsupported_action:{action}",
+                    "data": {},
+                }))
+            else:
+                await send_queue.put(json.dumps({
+                    "type": "a11y_ack",
+                    "id": req_id,
+                    "serial": serial,
+                    "seq": seq,
+                    "accepted": False,
+                    "queue_pos": -1,
+                    "error": f"unsupported_action:{action}",
+                }))
+            return
+
+        state = self._a11y_state.get(serial)
+        if state is None:
+            state = {
+                "session_id": session_id,
+                "last_seq": 0,
+                "queued_seqs": set(),
+                "mut_q": asyncio.Queue(maxsize=self._a11y_max_queue),
+                "qry_q": asyncio.Queue(maxsize=max(8, self._a11y_max_queue // 8)),
+                "mut_worker": None,
+                "qry_worker": None,
+            }
+            self._a11y_state[serial] = state
+        if not state.get("mut_worker") or state["mut_worker"].done():
+            state["mut_worker"] = asyncio.create_task(
+                self._a11y_worker(serial, state["mut_q"], send_queue, loop, query_lane=False),
+                name=f"a11y-mut-{serial}",
+            )
+        if not state.get("qry_worker") or state["qry_worker"].done():
+            state["qry_worker"] = asyncio.create_task(
+                self._a11y_worker(serial, state["qry_q"], send_queue, loop, query_lane=True),
+                name=f"a11y-qry-{serial}",
+            )
+
+        # Session switch: keep global seq monotonic; only update active session.
+        if session_id and state.get("session_id") != session_id:
+            state["session_id"] = session_id
+
+        # At-most-once / in-order guard on enqueue.
+        if seq > 0 and (
+            seq <= int(state.get("last_seq", 0) or 0)
+            or seq in state.get("queued_seqs", set())
+        ):
+            await send_queue.put(json.dumps({
+                "type": "a11y_ack",
+                "id": req_id,
+                "serial": serial,
+                "seq": seq,
+                "accepted": False,
+                "queue_pos": -1,
+                "error": "stale_seq",
+            }))
+            return
+
+        q = state["qry_q"] if mode == "query" else state["mut_q"]
+        item = {
+            "id": req_id,
+            "serial": serial,
+            "seq": seq,
+            "ts": ts,
+            "action": action,
+            "payload": payload,
+            "session_id": session_id,
+            "mode": mode,
+            "enqueued_at": time.time(),
+        }
+        try:
+            q.put_nowait(item)
+        except asyncio.QueueFull:
+            await send_queue.put(json.dumps({
+                "type": "a11y_ack",
+                "id": req_id,
+                "serial": serial,
+                "seq": seq,
+                "accepted": False,
+                "queue_pos": q.qsize(),
+                "error": "queue_overflow",
+            }))
+            return
+        if seq > 0:
+            state.setdefault("queued_seqs", set()).add(seq)
+
+        # Query mode returns only a11y_result to avoid ack/result race on same id.
+        if mode != "query":
+            await send_queue.put(json.dumps({
+                "type": "a11y_ack",
+                "id": req_id,
+                "serial": serial,
+                "seq": seq,
+                "accepted": True,
+                "queue_pos": q.qsize() - 1,
+            }))
+
+    async def _a11y_worker(
+        self,
+        serial: str,
+        q: asyncio.Queue,
+        send_queue: asyncio.Queue,
+        loop: asyncio.AbstractEventLoop,
+        query_lane: bool,
+    ) -> None:
+        while True:
+            item = await q.get()
+            if item is None:
+                return
+            state = self._a11y_state.get(serial)
+            if state is None:
+                continue
+            # Drop stale session items
+            sess = str(item.get("session_id") or "")
+            if sess and sess != str(state.get("session_id") or ""):
+                continue
+            seq = int(item.get("seq", 0) or 0)
+            if seq > 0 and seq <= int(state.get("last_seq", 0) or 0):
+                state.get("queued_seqs", set()).discard(seq)
+                continue
+
+            res = await loop.run_in_executor(None, self._execute_a11y_action, item)
+            if seq > 0:
+                state.get("queued_seqs", set()).discard(seq)
+                state["last_seq"] = max(int(state.get("last_seq", 0) or 0), seq)
+
+            # Mutating lane: best-effort emit result for observability (caller shouldn't block on it)
+            # Query lane: caller expects a11y_result.
+            if item.get("mode") != "query":
+                res["id"] = f"{res.get('id', '')}:result"
+            await send_queue.put(json.dumps(res))
+
+    def _execute_a11y_action(self, item: dict) -> dict:
+        serial = str(item.get("serial", "") or "")
+        req_id = str(item.get("id", "") or "")
+        action = str(item.get("action", "") or "")
+        payload = item.get("payload") or {}
+        seq = int(item.get("seq", 0) or 0)
+        try:
+            if action == "tap":
+                x = int(payload.get("x", 0)); y = int(payload.get("y", 0))
+                out, rc = _adb_shell(serial, f"input tap {x} {y}", timeout=5)
+                ok = rc == 0
+                err = "" if ok else out
+                data = {}
+            elif action in ("swipe", "drag"):
+                x1 = int(payload.get("x1", 0)); y1 = int(payload.get("y1", 0))
+                x2 = int(payload.get("x2", 0)); y2 = int(payload.get("y2", 0))
+                ms = int(payload.get("ms", 300))
+                out, rc = _adb_shell(serial, f"input swipe {x1} {y1} {x2} {y2} {ms}", timeout=8)
+                ok = rc == 0
+                err = "" if ok else out
+                data = {}
+            elif action == "long_tap":
+                x = int(payload.get("x", 0)); y = int(payload.get("y", 0)); ms = int(payload.get("ms", 800))
+                out, rc = _adb_shell(serial, f"input swipe {x} {y} {x} {y} {ms}", timeout=8)
+                ok = rc == 0
+                err = "" if ok else out
+                data = {}
+            elif action == "double_tap":
+                x = int(payload.get("x", 0)); y = int(payload.get("y", 0))
+                out1, rc1 = _adb_shell(serial, f"input tap {x} {y}", timeout=5)
+                if rc1 == 0:
+                    time.sleep(0.1)
+                    out2, rc2 = _adb_shell(serial, f"input tap {x} {y}", timeout=5)
+                    ok = rc2 == 0
+                    err = "" if ok else out2
+                else:
+                    ok = False
+                    err = out1
+                data = {}
+            elif action == "key":
+                key = str(payload.get("key", "") or "").lower()
+                key_map = {"home": "3", "back": "4", "recent": "187", "app_switch": "187", "enter": "66"}
+                code = key_map.get(key, key)
+                out, rc = _adb_shell(serial, f"input keyevent {code}", timeout=5)
+                ok = rc == 0
+                err = "" if ok else out
+                data = {}
+            elif action == "type":
+                text = str(payload.get("text", "") or "")
+                safe = text.replace(" ", "%s")
+                out, rc = _adb_shell(serial, f'input text "{safe}"', timeout=8)
+                ok = rc == 0
+                err = "" if ok else out
+                data = {}
+            elif action == "dump_hierarchy":
+                # Query lane only: use atx-agent dumpHierarchy endpoint.
+                r = self._do_u2_http(serial, "GET", "/dump/hierarchy", "", "application/json", 5.0)
+                ok = bool(r.get("ok"))
+                err = "" if ok else str(r.get("body", "") or r.get("error", ""))
+                data = {"xml": r.get("body", "") if ok else "", "content_type": r.get("content_type", "")}
+            else:
+                ok = False
+                err = f"unsupported_action:{action}"
+                data = {}
+            return {
+                "type": "a11y_result",
+                "id": req_id,
+                "serial": serial,
+                "seq": seq,
+                "ok": bool(ok),
+                "error": err,
+                "data": data,
+            }
+        except Exception as exc:
+            return {
+                "type": "a11y_result",
+                "id": req_id,
+                "serial": serial,
+                "seq": seq,
+                "ok": False,
+                "error": str(exc),
+                "data": {},
+            }
 
     async def _handle_u2_request(self, msg: dict, send_queue: asyncio.Queue) -> None:
         """Proxy an HTTP request to atx-agent (port 7912) on behalf of device_farm."""

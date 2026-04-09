@@ -649,6 +649,9 @@
   "devicesFarm": {
     "backendErrorTitle": "Không kết nối được backend.",
     "backendErrorHint": "Backend đang chạy trên port 8081?",
+    "streamConnecting": "Đang kết nối màn hình...",
+    "streamWaitingFirstFrame": "Đang chờ khung hình đầu tiên...",
+    "streamOffline": "Mất kết nối",
     "noConnectedDevices": "Chưa có thiết bị nào kết nối",
     "noConnectedDevicesHint": "Server trên cloud: thiết bị chủ động kết nối lên server. Mở app Chức năng thiết bị → dán link (hoặc quét QR). Nhiều thiết bị có thể kết nối cùng lúc.",
     "connectDevice": "Kết nối thiết bị",

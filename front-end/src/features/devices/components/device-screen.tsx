@@ -7,6 +7,8 @@ import { serialToId } from '../helpers';
 import { deviceFarmBackendBase } from '@/lib/farm-api';
 import { tokenStorage } from '@/lib/token-storage';
 import { useH264Video } from '../hooks/use-h264-canvas';
+import { subscribeDeviceFarm } from '../services/ws';
+import { useTranslations } from 'next-intl';
 
 
 interface DeviceScreenProps {
@@ -22,6 +24,7 @@ interface DeviceScreenProps {
 }
 
 export function DeviceScreen({ device, wsSend, mode, onTap, highlightBounds, gestureMode }: DeviceScreenProps) {
+  const t = useTranslations('devicesFarm');
   const wrapRef    = useRef<HTMLDivElement>(null);
   const canvasRef  = useRef<HTMLCanvasElement>(null);
   const draggedRef = useRef(false);
@@ -34,6 +37,8 @@ export function DeviceScreen({ device, wsSend, mode, onTap, highlightBounds, ges
   const prevDecodedFramesRef = useRef(0);
   const [decodeQueueSize, setDecodeQueueSize] = useState(0);
   const [droppedDelta, setDroppedDelta] = useState(0);
+  const [wsConnected, setWsConnected] = useState(false);
+  const [loadingElapsedSec, setLoadingElapsedSec] = useState(0);
 
   const id = serialToId(device.serial);
   const dw = device.screen_width  || 1080;
@@ -114,6 +119,29 @@ export function DeviceScreen({ device, wsSend, mode, onTap, highlightBounds, ges
 
   // Whether to attempt H264 — MSE is available in all modern browsers; jmuxer handles gracefully if not
   const useH264 = isActive;
+  void useH264;
+
+  // Track shared WS connectivity so loading UI can distinguish
+  // "socket not up yet" vs "stream waiting first frame".
+  useEffect(() => {
+    const unsub = subscribeDeviceFarm((msg) => {
+      if (msg.type === 'ws_status') setWsConnected(Boolean(msg.connected));
+    });
+    return () => unsub();
+  }, []);
+
+  // Loading elapsed timer while waiting first frame.
+  useEffect(() => {
+    if (!isActive || hasFrame) {
+      setLoadingElapsedSec(0);
+      return;
+    }
+    const startedAt = Date.now();
+    const t = setInterval(() => {
+      setLoadingElapsedSec(Math.floor((Date.now() - startedAt) / 1000));
+    }, 500);
+    return () => clearInterval(t);
+  }, [isActive, hasFrame, device.serial]);
 
   useEffect(() => {
     if (!isActive) { setFps(null); return; }
@@ -282,12 +310,20 @@ export function DeviceScreen({ device, wsSend, mode, onTap, highlightBounds, ges
             className='absolute inset-0 flex items-center justify-center text-xs text-muted-foreground'
             style={{ pointerEvents: 'none' }}
           >
-            Loading...
+            <div className='flex flex-col items-center gap-2 rounded-md bg-black/40 px-3 py-2 backdrop-blur-[1px]'>
+              <div className='h-4 w-4 animate-spin rounded-full border-2 border-zinc-400 border-t-transparent' />
+              <div className='text-[11px] text-zinc-200'>
+                {wsConnected ? t('streamWaitingFirstFrame') : t('streamConnecting')}
+              </div>
+              <div className='text-[10px] text-zinc-400'>
+                {loadingElapsedSec}s
+              </div>
+            </div>
           </div>
         )}
         {!isActive && (
           <div className='absolute inset-0 flex items-center justify-center text-xs text-muted-foreground'>
-            Offline
+            {t('streamOffline')}
           </div>
         )}
         <div className='pointer-events-none absolute right-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-mono text-white'>

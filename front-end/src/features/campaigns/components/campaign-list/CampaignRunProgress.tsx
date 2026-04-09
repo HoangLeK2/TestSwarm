@@ -20,8 +20,9 @@ export function CampaignRunProgress({
   const { data: wfData } = useCampaignWorkflows(campaignId, isRunning);
   const workflows = wfData?.workflows ?? [];
 
-  // Legacy task progress (fallback)
-  const { data: legacyProgress } = useCampaignProgress(campaignId, isRunning && workflows.length === 0);
+ 
+  const shouldUseLegacyFallback = isRunning && wfData !== undefined && workflows.length === 0;
+  const { data: legacyProgress } = useCampaignProgress(campaignId, shouldUseLegacyFallback);
 
   if (!isRunning) return null;
 

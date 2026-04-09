@@ -419,12 +419,27 @@ export function useControlRecord(initialSerial?: string | null, initialCampaignI
 
   useEffect(() => {
     if (!initialCampaignId || !initialScenarioId) return;
-    scenariosApi.get(initialCampaignId, initialScenarioId).then((sc) => {
+    Promise.all([
+      scenariosApi.get(initialCampaignId, initialScenarioId),
+      campaignsApi.get(initialCampaignId).catch(() => null),
+    ]).then(([sc, campaign]) => {
       const loaded = Array.isArray(sc.steps)
         ? sc.steps.map((s: any) => ({ ...s, _id: nextStepId() }) as StepWithId)
         : [];
       setSteps(loaded);
-      setEditingContext({ campaignId: initialCampaignId, scenarioId: initialScenarioId, name: sc.name, variables: sc.variables });
+      // Preview stream only receives `variables` from FE payload, so merge both
+      // scopes here to match campaign run behavior:
+      // campaign vars < scenario vars (scenario takes precedence).
+      const mergedVars = {
+        ...((campaign as { variables?: Record<string, any> } | null)?.variables ?? {}),
+        ...(sc.variables ?? {}),
+      };
+      setEditingContext({
+        campaignId: initialCampaignId,
+        scenarioId: initialScenarioId,
+        name: sc.name,
+        variables: mergedVars,
+      });
       if (loaded.length > 0) toast.info(t('toast.loadedScenario', { name: sc.name, count: loaded.length }));
     }).catch(() => toast.error(t('toast.loadScenarioFailed')));
   // intentionally runs once on mount

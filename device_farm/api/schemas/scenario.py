@@ -331,6 +331,11 @@ class ExtractStep(StepBase):
     stop_if_no_new: bool = False
     no_new_threshold: int = Field(3, ge=1, le=1000)
     expand_see_more: bool = True
+    # Progressive expansion (long post/comment hydration)
+    # support int/float or "${VAR}" strings resolved at runtime
+    expand_see_more_max_passes: Optional[IntOrVar] = None
+    expand_see_more_scroll: Optional[bool] = None
+    expand_see_more_scroll_distance: Optional[NumOrVar] = None
     # fb_comments-specific
     parent_post_id_var: Optional[str] = None  # ctx var holding parent post id
     # int or "${VAR}" string — resolved at runtime before use

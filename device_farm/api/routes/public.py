@@ -92,6 +92,17 @@ def build_public_router(
         for d in devices:
             serial = d.get("serial", "")
             d["usage_state"] = store.get_usage(serial) if store else "idle"
+        if db_enabled and devices:
+            serials = [str(d.get("serial") or "") for d in devices if d.get("serial")]
+            try:
+                async with AsyncSessionLocal() as db:
+                    pref_map = await repo.get_relay_scrcpy_enabled_map(db, serials)
+                for d in devices:
+                    s = str(d.get("serial") or "")
+                    d["relay_scrcpy_enabled"] = pref_map.get(s, True)
+            except Exception:
+                for d in devices:
+                    d["relay_scrcpy_enabled"] = True
         if state:
             devices = [d for d in devices if d.get("state", "").upper() == state.upper()]
         if model:
@@ -109,6 +120,21 @@ def build_public_router(
         wd = getattr(config, "wifi_densepose", None)
         if wd and getattr(wd, "enabled", False) and getattr(wd, "url", None):
             out["wifi_densepose_url"] = wd.url
+        st = getattr(config, "streaming", None)
+        if st is not None:
+            out["streaming_mode"] = getattr(st, "mode", "periodic")
+            out["streaming_auto_attach_scrcpy"] = bool(
+                getattr(st, "auto_attach_scrcpy_on_connect", True)
+            )
+            out["streaming_dashboard_preview_mjpeg"] = bool(
+                getattr(st, "dashboard_grid_preview_mjpeg", True)
+            )
+            out["streaming_auto_attach_scrcpy_on_relay_online"] = bool(
+                getattr(st, "auto_attach_scrcpy_on_relay_online", True)
+            )
+        dev = getattr(config, "device", None)
+        if dev is not None:
+            out["scrcpy_max_fps"] = getattr(dev, "scrcpy_max_fps", 30)
         return out
 
     @api.get("/tasks")

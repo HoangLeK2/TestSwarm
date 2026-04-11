@@ -1,19 +1,60 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ROUTES } from '@/config/routes';
-import { DeviceFarmHeader } from './header';
+import { DeviceFarmHeader, SAVE_BANDWIDTH_LS } from './header';
 import { DeviceTilePreview } from './device-tile-preview';
 import { ConnectDeviceDialog } from './connect-device-dialog';
 import { useDeviceFarm } from '../hooks/use-device-farm';
 import { Button } from '@/components/ui/button';
 import { Smartphone, Plus, QrCode } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { farmApi } from '@/lib/farm-api';
+import type { DeviceFarmStreamingConfig } from '../types';
 
 export function DeviceFarm() {
   const t = useTranslations('devicesFarm');
   const [connectDialogOpen, setConnectDialogOpen] = useState(false);
+  const [serverAllowPreviewMjpeg, setServerAllowPreviewMjpeg] = useState(true);
+  const [streamingConfig, setStreamingConfig] = useState<DeviceFarmStreamingConfig | null>(null);
+  const [saveBandwidth, setSaveBandwidth] = useState(false);
+
+  useEffect(() => {
+    try {
+      setSaveBandwidth(typeof window !== 'undefined' && localStorage.getItem(SAVE_BANDWIDTH_LS) === '1');
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    farmApi
+      .get<{
+        streaming_dashboard_preview_mjpeg?: boolean;
+        streaming_mode?: string;
+        streaming_auto_attach_scrcpy?: boolean;
+        streaming_auto_attach_scrcpy_on_relay_online?: boolean;
+      }>('/config')
+      .then((res) => {
+        const v = res.data?.streaming_dashboard_preview_mjpeg;
+        if (typeof v === 'boolean') setServerAllowPreviewMjpeg(v);
+        setStreamingConfig({
+          mode: String(res.data?.streaming_mode ?? 'periodic'),
+          autoAttachScrcpy: Boolean(res.data?.streaming_auto_attach_scrcpy ?? true),
+          autoAttachScrcpyOnRelayOnline: Boolean(
+            res.data?.streaming_auto_attach_scrcpy_on_relay_online ?? true
+          ),
+        });
+      })
+      .catch(() => {
+        setStreamingConfig({
+          mode: 'periodic',
+          autoAttachScrcpy: true,
+          autoAttachScrcpyOnRelayOnline: true,
+        });
+      });
+  }, []);
   const {
     devices,
     tasks,
@@ -40,6 +81,16 @@ export function DeviceFarm() {
         ).length}
         wsConnected={wsConnected}
         wifiDenseposeUrl={wifiDenseposeUrl}
+        saveBandwidth={saveBandwidth}
+        onSaveBandwidthChange={(v) => {
+          setSaveBandwidth(v);
+          try {
+            if (v) localStorage.setItem(SAVE_BANDWIDTH_LS, '1');
+            else localStorage.removeItem(SAVE_BANDWIDTH_LS);
+          } catch {
+            /* ignore */
+          }
+        }}
       />
 
       <main className='mx-auto flex max-w-7xl flex-col gap-4 px-4 pb-8 pt-4'>
@@ -75,6 +126,9 @@ export function DeviceFarm() {
               <DeviceTilePreview
                 key={device.serial}
                 device={device}
+                serverAllowPreviewMjpeg={serverAllowPreviewMjpeg}
+                saveBandwidth={saveBandwidth}
+                streamingConfig={streamingConfig}
               />
             ))}
           </section>

@@ -1,5 +1,5 @@
 'use strict';
-console.log('[H264Worker] LOADED v16');
+console.log('[H264Worker] LOADED v18');
 /**
  * H264 VideoDecoder — Web Worker + OffscreenCanvas, zero-buffering.
  *
@@ -21,9 +21,9 @@ let lastTsUs      = 0;      // strictly increasing chunk timestamp guard
 let lastDecodeTsUs = 0;     // timestamp of last chunk accepted by decoder
 let pendingFrame = null;    // latest frame waiting to be sent
 let frameInFlight = false;  // one frame has been sent but not consumed by main
-const TARGET_FRAME_TIME_MS = 1000 / 30;
 let lastOutputMs = 0;
-let decodeFps = 30;
+let decodeFps = 15;
+let targetFps = 15;  // default matches config.yaml scrcpy_max_fps; updated via 'set-target-fps'
 let flushInFlight = false;
 let needKeyframe = false;
 const MAX_DRIFT_US = 500000;
@@ -62,7 +62,7 @@ function closeDecoder() {
   }
   frameInFlight = false;
   lastOutputMs = 0;
-  decodeFps = 30;
+  decodeFps = targetFps;
   flushInFlight = false;
   needKeyframe = false;
 }
@@ -149,15 +149,17 @@ function initDecoder(avccRecord) {
       }
       lastOutputMs = now;
       decodedFrames++;
-      var queueDelayMs = (decoder ? decoder.decodeQueueSize : 0) * TARGET_FRAME_TIME_MS;
+      var targetFrameTimeMs = 1000 / Math.max(1, targetFps);
+      var queueDelayMs = (decoder ? decoder.decodeQueueSize : 0) * targetFrameTimeMs;
       // Wider thresholds reduce "stutter by over-dropping" during touch gestures.
-      var dynamicThresholdMs = Math.max(180, 360 - decodeFps * 4);
-      var overload = decodeFps < (30 * 0.55);
+      var dynamicThresholdMs = Math.max(targetFrameTimeMs * 3, 360 - decodeFps * 4);
+      // Use actual target FPS (not hardcoded 30) — at 15fps config, 30*0.55=16.5
+      // would ALWAYS trigger overload since decode rate ≈ 15fps.
+      var overload = decodeFps < (targetFps * 0.5);
 
       // Output-stage dropping policy (after decode):
       // keep decode pipeline intact, shed only presented frames when overloaded.
-      if (frameInFlight || queueDelayMs > dynamicThresholdMs || overload) {
-        // Avoid forcing keyframe resync on transient load spikes.
+      if (queueDelayMs > dynamicThresholdMs || overload) {
         droppedDelta++;
         try { frame.close(); } catch (_) {}
         return;
@@ -375,6 +377,12 @@ self.onmessage = function(event) {
 
     case 'pull-frame':
       tryPostPendingFrame();
+      break;
+
+    case 'set-target-fps':
+      if (typeof data.fps === 'number' && data.fps > 0) {
+        targetFps = data.fps;
+      }
       break;
   }
 };

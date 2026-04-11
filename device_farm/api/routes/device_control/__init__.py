@@ -29,7 +29,7 @@ def build_device_control_router(
 ) -> APIRouter:
     router = APIRouter(prefix="/api", tags=["device-control"])
     router.include_router(build_connect_router(manager, config))
-    router.include_router(build_scrcpy_router(manager))
+    router.include_router(build_scrcpy_router(manager, db_enabled=config.database.enabled))
     router.include_router(build_sessions_router(manager, config, session_store))
     router.include_router(build_gestures_router(manager))
     router.include_router(build_device_ui_router(manager))

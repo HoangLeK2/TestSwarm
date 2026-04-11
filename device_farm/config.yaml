@@ -23,13 +23,13 @@ device:
   stf_apk_path: ""       
 
   scrcpy_jar: "/opt/homebrew/share/scrcpy/scrcpy-server"
-  # 2-phone stability profile: reduce pixel load and burst pressure.
-  scrcpy_max_fps: 12
-  scrcpy_max_width: 540
-  scrcpy_bitrate: 8000000        # H.264 bitrate bps for local ADB path (8Mbps)
+  # Docker-optimized: lower bitrate reduces IDR keyframe burst (~50KB vs ~300KB).
+  scrcpy_max_fps: 15
+  scrcpy_max_width: 480
+  scrcpy_bitrate: 2000000        # H.264 bitrate bps for local ADB path (2Mbps; was 8Mbps)
   # Balanced quality/stability for 540p@12fps on WiFi ADB relay.
   scrcpy_relay_bitrate: 900000
-  scrcpy_control: false     # Enable scrcpy control channel for touch/key/text (smoothest input method)
+  scrcpy_control: true      # Touch/key via scrcpy — no WS tunnel overhead, critical for Docker
   u2_always_tunnel: false  # Local/LAN: prefer direct atx-agent on device_ip:7912 (no WS u2 tunnel)
 
 force_u2_mode: false
@@ -93,10 +93,17 @@ u2:
 
 # ─── Streaming ──────────────────────────────────────────────────────────────
 # mode: "periodic" = server captures screenshots on interval (low CPU/bandwidth)
-#        "continuous" = legacy 30FPS streaming via agent/scrcpy
+#        "continuous" = H.264 relay (scrcpy) + optional MJPEG preview
+# Relay H.264 default is ON: auto_attach_* true + DB relay_scrcpy_enabled default true.
+# auto_attach_scrcpy_on_connect: false = do not start scrcpy when APK connects (lower agent-boot load).
+# auto_attach_scrcpy_on_relay_online: false = do not re-start scrcpy when relay comes online.
+# dashboard_grid_preview_mjpeg: false = no MJPEG on device-farm grid (saves bandwidth).
 streaming:
   mode: "continuous"
   dashboard_interval: 0.1    # 10fps — scrcpy decode → JPEG cache → MJPEG endpoint
+  auto_attach_scrcpy_on_connect: true
+  auto_attach_scrcpy_on_relay_online: true
+  dashboard_grid_preview_mjpeg: true
 
 # Set enabled: true only when Temporal server is running.
 # When disabled, campaigns fall back to the in-process TaskQueue automatically.

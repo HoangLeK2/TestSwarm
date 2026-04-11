@@ -539,6 +539,89 @@ class TestExecuteExtractActivity:
         assert "existing text" in result.context["text_nodes"]
 
     @pytest.mark.asyncio
+    async def test_fb_posts_completion_retry_replaces_truncated_with_full(self):
+        truncated = [{"author": "A", "timestamp": "1 giờ", "text": "Nội dung preview … Xem thêm", "_pid": "p1", "post_key": "k1"}]
+        full = [{"author": "A", "timestamp": "1 giờ", "text": "Nội dung preview đã bung full không còn rút gọn", "_pid": "p1", "post_key": "k2"}]
+        inp = ExtractInput(
+            device_serial=_SERIAL,
+            step={
+                "type": "extract",
+                "strategy": "fb_posts",
+                "expand_see_more": True,
+                "expand_see_more_max_passes": 2,
+                "expand_see_more_scroll": True,
+                "expand_see_more_scroll_distance": 0.2,
+            },
+            context={"posts": []},
+        )
+        with (
+            patch("temporal.activities.activity.heartbeat"),
+            patch("tasks.fb_extract._expand_see_more", return_value=1),
+            patch("tasks.fb_extract.parse_fb_posts_from_xml", side_effect=[truncated, full]),
+            patch("tasks.fb_extract._dedup", side_effect=lambda lst: lst),
+        ):
+            result = await self.acts.execute_extract(inp)
+
+        assert result.ok is True
+        assert "Xem thêm" not in result.context["posts"][0]["text"]
+        diag = (result.details or {}).get("extract_diagnostics") or {}
+        assert diag.get("unresolved_before") == 1
+        assert diag.get("unresolved_after") == 0
+
+    @pytest.mark.asyncio
+    async def test_fb_posts_completion_retry_stops_on_plateau(self):
+        truncated = [{"author": "A", "timestamp": "1 giờ", "text": "Nội dung preview … Xem thêm", "_pid": "p1", "post_key": "k1"}]
+        inp = ExtractInput(
+            device_serial=_SERIAL,
+            step={
+                "type": "extract",
+                "strategy": "fb_posts",
+                "expand_see_more": True,
+                "expand_completion_retries": 4,
+            },
+            context={"posts": []},
+        )
+        with (
+            patch("temporal.activities.activity.heartbeat"),
+            patch("tasks.fb_extract._expand_see_more", return_value=1),
+            patch("tasks.fb_extract.parse_fb_posts_from_xml", side_effect=[truncated, truncated, truncated]),
+            patch("tasks.fb_extract._dedup", side_effect=lambda lst: lst),
+        ):
+            result = await self.acts.execute_extract(inp)
+
+        assert result.ok is True
+        diag = (result.details or {}).get("extract_diagnostics") or {}
+        assert diag.get("completion_retries", 0) >= 2
+        assert diag.get("plateau_count", 0) >= 1
+
+    @pytest.mark.asyncio
+    async def test_fb_posts_completion_retry_merges_when_viewport_drifts(self):
+        first = [{"author": "A", "timestamp": "1 giờ", "text": "Post A preview … Xem thêm", "_pid": "p1", "post_key": "k1"}]
+        second = [{"author": "B", "timestamp": "2 giờ", "text": "Post B full content", "_pid": "p2", "post_key": "k2"}]
+        inp = ExtractInput(
+            device_serial=_SERIAL,
+            step={
+                "type": "extract",
+                "strategy": "fb_posts",
+                "expand_see_more": True,
+                "expand_see_more_scroll": False,
+                "expand_completion_retries": 2,
+            },
+            context={"posts": []},
+        )
+        with (
+            patch("temporal.activities.activity.heartbeat"),
+            patch("tasks.fb_extract._expand_see_more", return_value=1),
+            patch("tasks.fb_extract.parse_fb_posts_from_xml", side_effect=[first, second]),
+        ):
+            result = await self.acts.execute_extract(inp)
+
+        assert result.ok is True
+        assert len(result.context["posts"]) == 2
+        assert any(p.get("_pid") == "p1" for p in result.context["posts"])
+        assert any(p.get("_pid") == "p2" for p in result.context["posts"])
+
+    @pytest.mark.asyncio
     async def test_unknown_strategy_returns_error(self):
         inp = ExtractInput(
             device_serial=_SERIAL,
@@ -608,7 +691,41 @@ class TestExecuteExtractActivity:
         ):
             await self.acts.execute_extract(inp)
 
-        mock_expand.assert_called_once_with(self.device)
+        mock_expand.assert_called_once_with(
+            self.device,
+            max_passes=2,
+            scroll_between=False,
+            scroll_distance=0.3,
+        )
+
+    @pytest.mark.asyncio
+    async def test_expand_see_more_uses_progressive_params_for_long_posts(self):
+        inp = ExtractInput(
+            device_serial=_SERIAL,
+            step={
+                "type": "extract",
+                "strategy": "fb_posts",
+                "expand_see_more": True,
+                "expand_see_more_max_passes": 6,
+                "expand_see_more_scroll": True,
+                "expand_see_more_scroll_distance": 0.22,
+            },
+            context={"posts": []},
+        )
+        with (
+            patch("temporal.activities.activity.heartbeat"),
+            patch("tasks.fb_extract.parse_fb_posts_from_xml", return_value=[]),
+            patch("tasks.fb_extract._dedup", side_effect=lambda lst: lst),
+            patch("tasks.fb_extract._expand_see_more", return_value=3) as mock_expand,
+        ):
+            await self.acts.execute_extract(inp)
+
+        mock_expand.assert_called_once_with(
+            self.device,
+            max_passes=6,
+            scroll_between=True,
+            scroll_distance=0.22,
+        )
 
     @pytest.mark.asyncio
     async def test_exception_returns_error_result(self):

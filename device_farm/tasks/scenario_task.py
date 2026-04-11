@@ -816,7 +816,9 @@ def _evaluate_condition(device: "DeviceClient", condition: Dict[str, Any], ctx: 
     elif ctype == "no_new_posts":
         # True if no_new_streak >= threshold
         threshold = int(condition.get("threshold", 3))
-        return ctx.get("_no_new_streak", 0) >= threshold
+        posts_streak = int(ctx.get("_no_new_posts_streak", 0) or 0)
+        legacy_streak = int(ctx.get("_no_new_streak", 0) or 0)
+        return max(posts_streak, legacy_streak) >= threshold
 
     return False
 
@@ -1939,12 +1941,18 @@ def run_scenario_task(
             stop_if_no_new = bool(step.get("stop_if_no_new", False))
             no_new_threshold = int(step.get("no_new_threshold", 3))
             expand_see_more = bool(step.get("expand_see_more", True))
+            completion_retries = max(0, int(step.get("expand_completion_retries", 3) or 3))
 
             _em_passes = int(step.get("expand_see_more_max_passes", 2))
             _em_scroll = bool(step.get("expand_see_more_scroll", False))
             _em_scroll_dist = float(step.get("expand_see_more_scroll_distance", 0.3))
 
-            if strategy == "fb_posts" and expand_see_more:
+            # Avoid duplicate expansion loops for posts:
+            # - pre-expand pass (here)
+            # - completion-aware retries (below)
+            # When completion_retries > 0, skip pre-expand and let retry loop decide
+            # based on unresolved truncation markers.
+            if strategy == "fb_posts" and expand_see_more and completion_retries <= 0:
                 try:
                     from tasks.fb_extract import _expand_see_more
                     expanded = _expand_see_more(
@@ -1963,7 +1971,12 @@ def run_scenario_task(
                 # Expand truncated long comments before parsing
                 try:
                     from tasks.fb_extract import _expand_see_more
-                    _expand_see_more(device, max_passes=_em_passes)
+                    _expand_see_more(
+                        device,
+                        max_passes=_em_passes,
+                        scroll_between=_em_scroll,
+                        scroll_distance=_em_scroll_dist,
+                    )
                     time.sleep(0.3)
                 except Exception:
                     pass
@@ -1978,12 +1991,79 @@ def run_scenario_task(
                     from services.content_store import compute_content_hash
                     scroll_idx = ctx.get("_loop_iter", 0)
                     new_posts = parse_fb_posts_from_xml(xml, source_index=scroll_idx)
+
+                    def _snapshot(posts: List[Dict[str, Any]]) -> Tuple[int, int]:
+                        unresolved = 0
+                        total_len = 0
+                        for _p in posts:
+                            _t = str(_p.get("text") or "")
+                            total_len += len(_t)
+                            _tl = _t.lower()
+                            if ("xem thêm" in _tl) or ("see more" in _tl) or ("view more" in _tl):
+                                unresolved += 1
+                        return unresolved, total_len
+
+                    unresolved_before, total_len_before = _snapshot(new_posts)
+                    retries_done = 0
+                    plateau = 0
+                    if expand_see_more and unresolved_before > 0:
+                        from tasks.fb_extract import _expand_see_more
+                        max_retries = max(1, min(4, completion_retries))
+                        prev_unresolved, prev_total_len = unresolved_before, total_len_before
+
+                        for _ in range(max_retries):
+                            retries_done += 1
+                            try:
+                                _expand_see_more(
+                                    device,
+                                    max_passes=max(_em_passes, 6),
+                                    scroll_between=_em_scroll,
+                                    scroll_distance=_em_scroll_dist,
+                                )
+                                time.sleep(0.6)
+                                xml_retry = device.hierarchy_xml(force_refresh=True)
+                                if not xml_retry:
+                                    break
+                                retry_posts = parse_fb_posts_from_xml(xml_retry, source_index=scroll_idx)
+                                # Merge instead of replacing so we do not lose posts if viewport
+                                # drifts during expansion/re-parse cycles.
+                                candidate_posts = _dedup(new_posts + (retry_posts or []))
+                                curr_unresolved, curr_total_len = _snapshot(candidate_posts)
+                                improved = (
+                                    (curr_unresolved < prev_unresolved)
+                                    or (curr_total_len > prev_total_len + 20)
+                                )
+                                new_posts = candidate_posts
+                                if improved:
+                                    plateau = 0
+                                else:
+                                    plateau += 1
+                                prev_unresolved, prev_total_len = curr_unresolved, curr_total_len
+                                if curr_unresolved == 0 or plateau >= 2:
+                                    break
+                            except Exception:
+                                break
+
+                    unresolved_after, total_len_after = _snapshot(new_posts)
+                    step_result["extract_diagnostics"] = {
+                        "unresolved_before": unresolved_before,
+                        "unresolved_after": unresolved_after,
+                        "total_len_before": total_len_before,
+                        "total_len_after": total_len_after,
+                        "completion_retries": retries_done,
+                        "plateau_count": plateau,
+                    }
                     prev_count = len(ctx["posts"])
                     ctx["posts"] = _dedup(ctx["posts"] + new_posts)
                     added = len(ctx["posts"]) - prev_count
                     step_result["extracted"] = added
                     step_result["total_posts"] = len(ctx["posts"])
                     step_result["message"] = f"extract fb_posts: +{added} new (total {len(ctx['posts'])})"
+                    log.info(
+                        f"[{serial}] extract fb_posts diagnostics: "
+                        f"unresolved {unresolved_before}->{unresolved_after}, "
+                        f"len {total_len_before}->{total_len_after}, retries={retries_done}, plateau={plateau}"
+                    )
                     log.info(f"[{serial}] {step_result['message']}")
                     # Track first VISIBLE post for comment linking.
                     # Uses new_posts[0] (topmost post on screen), NOT the first "new" post,
@@ -1991,22 +2071,30 @@ def run_scenario_task(
                     # Even if new_posts[0] is a duplicate, its content_hash exists in DB.
                     if new_posts:
                         ctx["_first_new_post_hash"] = compute_content_hash(
-                            new_posts[0], dedupe_field="text"
+                            new_posts[0], dedupe_field="post_key"
                         )
                         # Build _pid → content_hash map so fb_comments can reliably
                         # link post_stats to the correct post regardless of scroll position.
-                        pid_map = ctx.setdefault("_post_id_map", {})
+                        pid_map = {}
                         for _p in new_posts:
                             if _p.get("_pid"):
-                                pid_map[_p["_pid"]] = compute_content_hash(_p, dedupe_field="text")
+                                pid_map[_p["_pid"]] = compute_content_hash(_p, dedupe_field="post_key")
+                        # Keep only current viewport map to avoid stale collisions.
+                        ctx["_post_id_map"] = pid_map
                     # Track no-new streak for auto-break
                     if stop_if_no_new:
                         if added == 0:
-                            ctx["_no_new_streak"] = ctx.get("_no_new_streak", 0) + 1
-                            if ctx["_no_new_streak"] >= no_new_threshold:
+                            _base_streak = ctx.get("_no_new_posts_streak", ctx.get("_no_new_streak", 0))
+                            ctx["_no_new_posts_streak"] = _base_streak + 1
+                            # Backward compatibility for existing flows/conditions.
+                            ctx["_no_new_streak"] = ctx["_no_new_posts_streak"]
+                            if ctx["_no_new_posts_streak"] >= no_new_threshold:
                                 ctx["_break"] = True
-                                step_result["message"] += f" — breaking (no new for {ctx['_no_new_streak']} scrolls)"
+                                step_result["message"] += (
+                                    f" — breaking (no new for {ctx['_no_new_posts_streak']} scrolls)"
+                                )
                         else:
+                            ctx["_no_new_posts_streak"] = 0
                             ctx["_no_new_streak"] = 0
                 elif strategy == "text_nodes":
                     import xml.etree.ElementTree as ET
@@ -2028,6 +2116,8 @@ def run_scenario_task(
                     from tasks.fb_extract import (
                         parse_fb_comments_from_xml, _dedup_comments, _post_id_from_ctx,
                     )
+                    # Prevent stale linkage from previous comment screens.
+                    ctx["_active_comment_parent_hash"] = None
                     parent_post_id_var = step.get("parent_post_id_var")
                     max_items = int(step.get("max_items") or 50)
                     parent_post_id = _post_id_from_ctx(ctx, parent_post_id_var)
@@ -2048,6 +2138,9 @@ def run_scenario_task(
                             ctx.get("_post_id_map", {}).get(_pid_key)
                             or ctx.get("_first_new_post_hash")
                         )
+                        if parent_hash:
+                            # Persist resolved parent for downstream save_extraction(parent_id_var=...).
+                            ctx["_active_comment_parent_hash"] = parent_hash
                         if parent_hash:
                             try:
                                 import concurrent.futures as _cf
@@ -2079,6 +2172,15 @@ def run_scenario_task(
                                     _pool.submit(asyncio.run, _do_update_stats()).result(timeout=10)
                             except Exception as exc:
                                 log.warning(f"[{serial}] update_content_stats failed: {exc}")
+                    else:
+                        # Keep parent link stable even when header stats are not visible.
+                        _pid_key = parent_post_id
+                        parent_hash = (
+                            ctx.get("_post_id_map", {}).get(_pid_key)
+                            or ctx.get("_first_new_post_hash")
+                        )
+                        if parent_hash:
+                            ctx["_active_comment_parent_hash"] = parent_hash
 
                     ctx.setdefault("comments", [])
                     prev_count = len(ctx["comments"])
@@ -2092,6 +2194,19 @@ def run_scenario_task(
                         f"extract fb_comments: +{added} new "
                         f"(total {len(ctx['comments'])}, post={parent_post_id})"
                     )
+                    if stop_if_no_new:
+                        if added == 0:
+                            ctx["_no_new_comments_streak"] = ctx.get("_no_new_comments_streak", 0) + 1
+                            # Backward compatibility for flows still checking legacy key.
+                            ctx["_no_new_streak"] = ctx["_no_new_comments_streak"]
+                            if ctx["_no_new_comments_streak"] >= no_new_threshold:
+                                ctx["_break"] = True
+                                step_result["message"] += (
+                                    f" — breaking comments loop (no new for {ctx['_no_new_comments_streak']} scrolls)"
+                                )
+                        else:
+                            ctx["_no_new_comments_streak"] = 0
+                            ctx["_no_new_streak"] = 0
                     log.info(f"[{serial}] {step_result['message']}")
                 else:
                     step_result["ok"] = False

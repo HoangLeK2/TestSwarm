@@ -108,12 +108,20 @@ class TcpWsTunnel:
         data = base64.b64decode(b64_data)
         with self._client_lock:
             conn = self._client_sock
-            # U2 generation gating: drop stale response from previous request cycle
+            # U2 generation gating: drop stale response from previous request cycle.
+            # BUT if active_gen == conn_gen, the current connection has sent a request
+            # and this is a valid response — always deliver it.
             if self.channel == "u2":
                 if conn is None:
                     return  # no tool connected → stale data, drop silently
                 if self._active_gen != self._conn_gen:
-                    return  # tool connected but hasn't sent request → stale data
+                    # Buffer briefly — a new connection may have just been accepted
+                    # but _read_loop hasn't read the first request yet.
+                    # This prevents dropping responses during the accept→read race.
+                    with self._pre_connect_lock:
+                        if len(self._pre_connect_buf) < 65536:
+                            self._pre_connect_buf += data
+                    return
         if conn is None:
             # Non-U2 channels: buffer for banner flush
             with self._pre_connect_lock:
@@ -195,6 +203,15 @@ class TcpWsTunnel:
                 if self.channel == "u2":
                     with self._client_lock:
                         self._active_gen = self._conn_gen
+                    # Flush any agent data that arrived between accept and first request
+                    with self._pre_connect_lock:
+                        buffered = self._pre_connect_buf
+                        self._pre_connect_buf = b""
+                    if buffered:
+                        try:
+                            conn.sendall(buffered)
+                        except OSError:
+                            pass
                 b64 = base64.b64encode(data).decode("ascii")
                 self._send_ws({
                     "type":    "tunnel_data",

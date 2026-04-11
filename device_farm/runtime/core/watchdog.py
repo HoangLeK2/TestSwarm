@@ -90,6 +90,27 @@ class WatchdogThread(threading.Thread):
         # ── Relay-only device: no ADB access from server — check frame liveness ──
         is_relay_device = device._agent_send is None and getattr(device, "_scrcpy_active", False)
         if is_relay_device:
+            # Two DeviceClients can share one relay ADB serial (placeholder + WS NAT
+            # device). Only the one registered in _scrcpy_receivers receives frames;
+            # the other would look "stale" forever and trigger false unhealthy / churn.
+            try:
+                from runtime.transports.adb_relay_server import get_relay_manager
+
+                relay = get_relay_manager()
+                my_recv = getattr(device, "_scrcpy_receiver", None)
+                reg = relay.get_scrcpy_receiver(serial) if relay else None
+                if my_recv is not None and reg is not None and reg is not my_recv:
+                    try:
+                        my_recv.stop_receiver()
+                    except Exception:
+                        pass
+                    device._scrcpy_active = False
+                    device._scrcpy_receiver = None
+                    self._bad_since.pop(serial, None)
+                    return
+            except Exception:
+                pass
+
             last_frame = getattr(device, "_last_frame_time", 0.0)
             frame_age = time.monotonic() - last_frame if last_frame > 0 else float("inf")
             # Allow 30s grace on startup (last_frame==0), then require frames within 30s
@@ -114,6 +135,26 @@ class WatchdogThread(threading.Thread):
             if atx_host and u2_live:
                 self._check_atx_agent(device, atx_host)
             return
+
+        # Relay USB placeholder: no agent APK, scrcpy yielded to another DeviceClient
+        # (NAT WS path registered the same relay ADB serial). Ghost cleanup clears
+        # _scrcpy_active — without this branch the next tick hits "no agent" and
+        # falsely reports Not healthy for the placeholder serial.
+        if (
+            not agent_alive
+            and device.state in (DeviceState.READY, DeviceState.BUSY)
+            and not getattr(device, "_scrcpy_active", False)
+        ):
+            try:
+                from runtime.transports.adb_relay_server import get_relay_manager
+
+                r = get_relay_manager()
+                if r is not None and r.relay_for_serial(serial) is not None:
+                    if r.get_scrcpy_receiver(serial) is not None:
+                        self._bad_since.pop(serial, None)
+                        return
+            except Exception:
+                pass
 
         # Agent disconnected or stuck in a bad state
         self._track_bad_state(device)

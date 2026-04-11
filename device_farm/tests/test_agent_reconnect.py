@@ -10,11 +10,12 @@ Race scenario:
     - null _u2 (already pointing at new port)
     - set state → DISCONNECTED
 
-Two fixes applied:
+Fixes applied:
   1. on_agent_disconnected(sender=...) — skips teardown when _agent_send ≠ sender
-  2. attach_agent_sender() — resets _tunnels_ready_channels + nulls _u2 so that
-     on_agent_ready() correctly sees is_initial=True for the new session even when
-     on_agent_disconnected() was a no-op (stale-sender guard fired).
+  2. attach_agent_sender() — resets _tunnels_ready_channels + nulls _u2 + calls
+     stop_all() on the previous TunnelSet before starting a new one (stale disconnect
+     skips teardown, so attach must kill zombie listeners).
+  3. _reconnect_u2_impl (legacy tunnel) — re-reads _tunnel_ports["u2"] each retry.
 """
 from __future__ import annotations
 
@@ -132,6 +133,18 @@ class TestAttachAgentSenderReset:
         with patch("runtime.core.device_client.TunnelSet", return_value=mock_tunnels):
             d.attach_agent_sender(new_send)
         assert d._tunnel_ports["u2"] == 9100
+
+    def test_stops_previous_tunnels_before_new_attach(self):
+        d = _make_device()
+        _attach(d, u2_port=9000)
+        first_tunnels = d._tunnels
+        new_send = _make_send("new")
+        mock_tunnels2 = MagicMock()
+        mock_tunnels2.start_all.return_value = {"u2": 9100, "stfservice": 9101}
+        with patch("runtime.core.device_client.TunnelSet", return_value=mock_tunnels2):
+            d.attach_agent_sender(new_send)
+        first_tunnels.stop_all.assert_called_once()
+        assert d._tunnels is mock_tunnels2
 
     def test_on_agent_ready_is_initial_after_attach(self):
         """After attach_agent_sender resets _tunnels_ready_channels, on_agent_ready
@@ -603,3 +616,53 @@ class TestThreadSafety:
         t1.join(timeout=2.0); t2.join(timeout=2.0)
 
         assert not errors, f"Exceptions: {errors}"
+
+
+def test_detach_scrcpy_relay_stop_skipped_when_receiver_superseded():
+    """Ghost relay-only client must not SCRCPY_STOP when WS device owns the slot."""
+    import asyncio
+
+    from runtime.transports.scrcpy_receiver import RelayScrcpyReceiver
+
+    d = _make_device("usb-serial")
+    d._loop = MagicMock()
+
+    mine = RelayScrcpyReceiver("usb-serial")
+    other = RelayScrcpyReceiver("usb-serial")
+    relay = MagicMock()
+    relay.get_scrcpy_receiver = MagicMock(return_value=other)
+
+    d._scrcpy_receiver = mine
+    d._scrcpy_active = True
+    with patch("runtime.transports.adb_relay_server.get_relay_manager", return_value=relay), patch.object(
+        asyncio, "run_coroutine_threadsafe", MagicMock()
+    ) as rcts:
+        d.detach_scrcpy_stream()
+
+    rcts.assert_not_called()
+    assert d._scrcpy_receiver is None
+    assert d._scrcpy_active is False
+
+
+def test_detach_scrcpy_relay_stop_when_still_owner():
+    import asyncio
+
+    from runtime.transports.scrcpy_receiver import RelayScrcpyReceiver
+
+    d = _make_device("usb-serial")
+    d._loop = MagicMock()
+
+    mine = RelayScrcpyReceiver("usb-serial")
+    relay = MagicMock()
+    relay.get_scrcpy_receiver = MagicMock(return_value=mine)
+    relay.stop_scrcpy = MagicMock()
+
+    d._scrcpy_receiver = mine
+    d._scrcpy_active = True
+    with patch("runtime.transports.adb_relay_server.get_relay_manager", return_value=relay), patch.object(
+        asyncio, "run_coroutine_threadsafe", MagicMock()
+    ) as rcts:
+        d.detach_scrcpy_stream()
+
+    rcts.assert_called_once()
+    assert d._scrcpy_receiver is None

@@ -39,6 +39,8 @@ class Device(Base):
 
     tags: Mapped[str] = mapped_column(String(500), default="")
 
+    relay_scrcpy_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
     last_seen: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 

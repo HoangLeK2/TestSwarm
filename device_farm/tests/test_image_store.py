@@ -120,6 +120,26 @@ def test_saves_top_level_element_image(tmp_path):
     assert result[0]["element_image"] == "/captures/screenshots/scen4/step_0_element.jpg"
 
 
+def test_top_level_element_image_bypasses_quality_gate(tmp_path):
+    # element_image is an intentional crop and can be very small.
+    # It must still be saved even when quality gate would reject generic frames.
+    with patch.object(minio_store, "is_quality_ok", return_value=False):
+        steps = [{"type": "tap_selector", "element_image": _B64}]
+        result = image_store.save_step_images(steps, "scen4b")
+    path = tmp_path / "screenshots" / "scen4b" / "step_0_element.jpg"
+    assert path.exists()
+    assert result[0]["element_image"] == "/captures/screenshots/scen4b/step_0_element.jpg"
+
+
+def test_accepts_data_url_base64_payload(tmp_path):
+    data_url = f"data:image/jpeg;base64,{_B64}"
+    steps = [{"type": "tap", "screen": {"screenshot": data_url}}]
+    result = image_store.save_step_images(steps, "scen_data_url")
+    path = tmp_path / "screenshots" / "scen_data_url" / "step_0_screenshot.jpg"
+    assert path.exists()
+    assert result[0]["screen"]["screenshot"] == "/captures/screenshots/scen_data_url/step_0_screenshot.jpg"
+
+
 # ── save_step_images() — idempotency ─────────────────────────────────────────
 
 def test_already_saved_path_is_not_re_saved(tmp_path):

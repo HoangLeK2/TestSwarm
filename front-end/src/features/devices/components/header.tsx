@@ -2,22 +2,33 @@
 'use client';
 
 import { Badge } from '@/components/ui/badge';
+import { Switch } from '@/components/ui/switch';
 import { useTranslations } from 'next-intl';
+
+const SAVE_BANDWIDTH_LS = 'deviceFarm_save_bandwidth';
+
+export { SAVE_BANDWIDTH_LS };
 
 interface HeaderProps {
   total: number;
   tasks: number;
   wsConnected: boolean;
   wifiDenseposeUrl?: string | null;
+  /** Tiết kiệm băng thông: tắt MJPEG trên lưới thiết bị. */
+  saveBandwidth?: boolean;
+  onSaveBandwidthChange?: (value: boolean) => void;
 }
 
 export function DeviceFarmHeader({
   total,
   tasks,
   wsConnected,
-  wifiDenseposeUrl: _wifiDenseposeUrl
+  wifiDenseposeUrl: _wifiDenseposeUrl,
+  saveBandwidth,
+  onSaveBandwidthChange,
 }: HeaderProps) {
   const t = useTranslations('devicesFarm.header');
+  const tb = useTranslations('devicesFarm');
   return (
     <header className='border-b bg-background px-4 py-2.5'>
       <div className='mx-auto flex max-w-7xl items-center gap-3'>
@@ -27,7 +38,20 @@ export function DeviceFarmHeader({
           </span>
           <h1 className='text-sm font-semibold text-foreground'>{t('title')}</h1>
         </div>
-        <div className='ml-auto flex items-center gap-2 text-[11px] text-muted-foreground'>
+        <div className='ml-auto flex flex-wrap items-center justify-end gap-2 text-[11px] text-muted-foreground'>
+          {onSaveBandwidthChange != null && (
+            <label className='flex cursor-pointer items-center gap-1.5 rounded-md border border-border/60 bg-card/50 px-2 py-1'>
+              <Switch
+                checked={Boolean(saveBandwidth)}
+                onCheckedChange={onSaveBandwidthChange}
+                className='scale-90'
+                aria-label={tb('saveBandwidth')}
+              />
+              <span className='max-w-[140px] text-[10px] leading-tight' title={tb('saveBandwidthHint')}>
+                {tb('saveBandwidth')}
+              </span>
+            </label>
+          )}
           <span className='inline-flex items-center gap-1 rounded-full border border-border bg-card/70 px-2 py-0.5'>
             <span
               className={`inline-block h-2 w-2 rounded-full ${

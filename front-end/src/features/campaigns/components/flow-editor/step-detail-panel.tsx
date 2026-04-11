@@ -1,6 +1,7 @@
 'use client';
 
 import { Crosshair } from 'lucide-react';
+import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -16,7 +17,16 @@ interface Props {
   onRequestPickSelector?: () => void;
 }
 
-const SELECTOR_OPTIONS = ['text', 'resource-id', 'xpath', 'class name', 'description'] as const;
+const SELECTOR_OPTIONS = [
+  'text',
+  'resource-id',
+  'xpath',
+  'class name',
+  'description',
+  'descriptionContains',
+  'descriptionStartsWith',
+  'content-desc',
+] as const;
 
 function F({ label, children }: { label: string; children: React.ReactNode }) {
   return <div className='space-y-1'><Label className='text-[11px]'>{label}</Label>{children}</div>;
@@ -56,8 +66,24 @@ function SelectorFields({ step, onChange, onRequestPickSelector }: {
 }
 
 export function StepDetailPanel({ step, onChange, onClose: _onClose, onRequestPickSelector }: Props) {
+  const t = useTranslations('campaignsFeature.stepEditor');
   const typeName = getStepTypeName(step.type);
   const update = (fields: Partial<FlowStep>) => onChange({ ...step, ...fields });
+  const isVarRef = (v: string) => /^\$\{[^}]+\}$/.test(v);
+  const parseNumOrVar = (raw: string, fallback: number): number | string => {
+    const v = raw.trim();
+    if (!v) return fallback;
+    if (isVarRef(v)) return v;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : fallback;
+  };
+  const extractParentMode = step.parent_post_id_var ? 'custom' : 'auto';
+  const parentLinkMode =
+    step.parent_id_var === '_active_comment_parent_hash'
+      ? 'auto'
+      : step.parent_id_var
+        ? 'custom'
+        : 'none';
 
   return (
     <div className='flex flex-col bg-card'>
@@ -305,31 +331,98 @@ export function StepDetailPanel({ step, onChange, onClose: _onClose, onRequestPi
               <select className='w-full rounded border bg-background px-2 py-1.5 text-xs'
                 value={step.strategy ?? 'fb_posts'}
                 onChange={(e) => update({ strategy: e.target.value })}>
-                <option value='fb_posts'>fb_posts — bài đăng Facebook</option>
-                <option value='text_nodes'>text_nodes — tất cả văn bản</option>
+                <option value='fb_posts'>{t('extract.strategyFbPosts')}</option>
+                <option value='fb_comments'>{t('extract.strategyFbComments')}</option>
+                <option value='text_nodes'>{t('extract.strategyTextNodes')}</option>
               </select>
             </F>
             <div className='space-y-1.5 rounded-md border border-border/50 p-2.5'>
-              <span className='text-[11px] font-semibold'>Tuỳ chọn</span>
+              <span className='text-[11px] font-semibold'>{t('extract.optionsTitle')}</span>
               <label className='flex cursor-pointer items-center gap-2'>
                 <input type='checkbox' className='size-3.5 rounded' checked={step.expand_see_more ?? true}
                   onChange={(e) => update({ expand_see_more: e.target.checked })} />
-                <span className='text-[11px]'>expand_see_more — tự động mở rộng "Xem thêm"</span>
+                <span className='text-[11px]'>{t('extract.expandSeeMoreLabel')}</span>
               </label>
               <label className='flex cursor-pointer items-center gap-2'>
                 <input type='checkbox' className='size-3.5 rounded' checked={step.stop_if_no_new ?? true}
                   onChange={(e) => update({ stop_if_no_new: e.target.checked })} />
-                <span className='text-[11px]'>stop_if_no_new — dừng khi không có bài mới</span>
+                <span className='text-[11px]'>{t('extract.stopIfNoNewLabel')}</span>
               </label>
-              {step.stop_if_no_new && (
-                <F label='no_new_threshold (bài liên tiếp)'>
-                  <Input type='number' min={1} className='h-8 w-24 text-xs' value={step.no_new_threshold ?? 30}
-                    onChange={(e) => update({ no_new_threshold: Number(e.target.value) || 30 })} />
+              {step.expand_see_more && (
+                <div className='grid grid-cols-3 gap-2'>
+                  <F label={t('extract.maxPassesLabel')}>
+                    <Input className='h-8 text-xs font-mono' value={String(step.expand_see_more_max_passes ?? 2)}
+                      onChange={(e) => update({ expand_see_more_max_passes: parseNumOrVar(e.target.value, 2) })} />
+                    <p className='mt-1 text-[10px] text-muted-foreground'>{t('extract.maxPassesHint')}</p>
+                  </F>
+                  <F label={t('extract.scrollBetweenLabel')}>
+                    <select
+                      className='h-8 w-full rounded border bg-background px-2 py-1.5 text-xs'
+                      value={String(step.expand_see_more_scroll ?? false)}
+                      onChange={(e) => update({ expand_see_more_scroll: e.target.value === 'true' })}
+                    >
+                      <option value='false'>{t('extract.booleanFalse')}</option>
+                      <option value='true'>{t('extract.booleanTrue')}</option>
+                    </select>
+                    <p className='mt-1 text-[10px] text-muted-foreground'>{t('extract.scrollBetweenHint')}</p>
+                  </F>
+                  <F label={t('extract.scrollDistanceLabel')}>
+                    <Input className='h-8 text-xs font-mono' value={String(step.expand_see_more_scroll_distance ?? 0.3)}
+                      onChange={(e) => update({ expand_see_more_scroll_distance: parseNumOrVar(e.target.value, 0.3) })} />
+                    <p className='mt-1 text-[10px] text-muted-foreground'>{t('extract.scrollDistanceHint')}</p>
+                  </F>
+                </div>
+              )}
+              {step.expand_see_more && (
+                <F label={t('extract.completionRetriesLabel')}>
+                  <Input className='h-8 w-28 text-xs font-mono' value={String(step.expand_completion_retries ?? 1)}
+                    onChange={(e) => update({ expand_completion_retries: parseNumOrVar(e.target.value, 1) })} />
+                  <p className='mt-1 text-[10px] text-muted-foreground'>{t('extract.completionRetriesHint')}</p>
                 </F>
               )}
-              <F label='Lưu kết quả vào biến'>
+              {step.strategy === 'fb_comments' && (
+                <>
+                  <F label={t('extract.maxItemsLabel')}>
+                    <Input className='h-8 w-28 text-xs font-mono' value={String(step.max_items ?? 50)}
+                      onChange={(e) => update({ max_items: parseNumOrVar(e.target.value, 50) })} />
+                    <p className='mt-1 text-[10px] text-muted-foreground'>{t('extract.maxItemsHint')}</p>
+                  </F>
+                  <F label={t('extract.parentPostIdVarLabel')}>
+                    <select
+                      className='h-8 w-full rounded border bg-background px-2 py-1.5 text-xs'
+                      value={extractParentMode}
+                      onChange={(e) => {
+                        const mode = e.target.value;
+                        if (mode === 'auto') {
+                          update({ parent_post_id_var: undefined });
+                        } else {
+                          update({ parent_post_id_var: step.parent_post_id_var || '' });
+                        }
+                      }}
+                    >
+                      <option value='auto'>{t('extract.parentPostModeAuto')}</option>
+                      <option value='custom'>{t('extract.parentPostModeCustom')}</option>
+                    </select>
+                    {extractParentMode === 'custom' && (
+                      <Input className='mt-1 h-8 text-xs font-mono' placeholder='_active_comment_parent_hash'
+                        value={step.parent_post_id_var ?? ''}
+                        onChange={(e) => update({ parent_post_id_var: e.target.value || undefined })} />
+                    )}
+                    <p className='mt-1 text-[10px] text-muted-foreground'>{t('extract.parentPostIdVarHint')}</p>
+                  </F>
+                </>
+              )}
+              {step.stop_if_no_new && (
+                <F label={t('extract.noNewThresholdLabel')}>
+                  <Input type='number' min={1} className='h-8 w-24 text-xs' value={step.no_new_threshold ?? 30}
+                    onChange={(e) => update({ no_new_threshold: Number(e.target.value) || 30 })} />
+                  <p className='mt-1 text-[10px] text-muted-foreground'>{t('extract.noNewThresholdHint')}</p>
+                </F>
+              )}
+              <F label={t('extract.resultVarLabel')}>
                 <Input className='h-8 text-xs font-mono' placeholder='posts (mặc định)' value={step.result_var ?? ''}
                   onChange={(e) => update({ result_var: e.target.value || undefined })} />
+                <p className='mt-1 text-[10px] text-muted-foreground'>{t('extract.resultVarHint')}</p>
               </F>
             </div>
           </>
@@ -337,32 +430,74 @@ export function StepDetailPanel({ step, onChange, onClose: _onClose, onRequestPi
 
         {step.type === 'save_extraction' && (
           <>
-            <F label='Biến chứa dữ liệu (data_var)'>
-              <Input className='h-8 text-xs font-mono' placeholder='posts' value={step.data_var ?? ''}
+            <F label={t('saveExtraction.dataVarLabel')}>
+              <Input className='h-8 text-xs font-mono' placeholder='comments | posts | text_nodes' value={step.data_var ?? ''}
                 onChange={(e) => update({ data_var: e.target.value })} />
+              <p className='mt-1 text-[10px] text-muted-foreground'>{t('saveExtraction.dataVarHint')}</p>
             </F>
-            <F label='Collection'>
+            <F label={t('saveExtraction.collectionLabel')}>
               <Input className='h-8 text-xs font-mono' placeholder='default hoặc ${SAVE_COLLECTION}' value={step.collection ?? ''}
                 onChange={(e) => update({ collection: e.target.value })} />
             </F>
             <div className='grid grid-cols-2 gap-2'>
-              <F label='Platform'>
+              <F label={t('saveExtraction.platformLabel')}>
                 <Input className='h-8 text-xs' placeholder='facebook' value={step.platform ?? ''}
                   onChange={(e) => update({ platform: e.target.value || undefined })} />
               </F>
-              <F label='Content type'>
+              <F label={t('saveExtraction.contentTypeLabel')}>
                 <Input className='h-8 text-xs' placeholder='group_post' value={step.content_type ?? ''}
                   onChange={(e) => update({ content_type: e.target.value || undefined })} />
               </F>
             </div>
-            <F label='dedupe_field (trường loại trùng)'>
-              <Input className='h-8 text-xs font-mono' placeholder='text' value={step.dedupe_field ?? ''}
+            <F label={t('saveExtraction.dedupeFieldLabel')}>
+              <Input className='h-8 text-xs font-mono' placeholder='comment_key | post_key | text' value={step.dedupe_field ?? ''}
                 onChange={(e) => update({ dedupe_field: e.target.value || undefined })} />
+              <p className='mt-1 text-[10px] text-muted-foreground'>{t('saveExtraction.dedupeFieldHint')}</p>
             </F>
-            <F label='Tags (phẩy ngăn cách)'>
+            <F label={t('saveExtraction.tagsLabel')}>
               <Input className='h-8 text-xs' placeholder='group,crawl,${GROUP_NAME}' value={step.tags ?? ''}
                 onChange={(e) => update({ tags: e.target.value || undefined })} />
+              <p className='mt-1 text-[10px] text-muted-foreground'>{t('saveExtraction.tagsHint')}</p>
             </F>
+            <div className='grid grid-cols-2 gap-2'>
+              <F label={t('saveExtraction.parentIdVarLabel')}>
+                <select
+                  className='h-8 w-full rounded border bg-background px-2 py-1.5 text-xs'
+                  value={parentLinkMode}
+                  onChange={(e) => {
+                    const mode = e.target.value;
+                    if (mode === 'auto') {
+                      update({ parent_id_var: '_active_comment_parent_hash' });
+                    } else if (mode === 'none') {
+                      update({ parent_id_var: undefined });
+                    } else {
+                      update({ parent_id_var: step.parent_id_var || '' });
+                    }
+                  }}
+                >
+                  <option value='auto'>{t('saveExtraction.parentLinkModeAuto')}</option>
+                  <option value='custom'>{t('saveExtraction.parentLinkModeCustom')}</option>
+                  <option value='none'>{t('saveExtraction.parentLinkModeNone')}</option>
+                </select>
+                {parentLinkMode === 'custom' && (
+                  <Input className='mt-1 h-8 text-xs font-mono' placeholder='_active_comment_parent_hash'
+                    value={step.parent_id_var ?? ''}
+                    onChange={(e) => update({ parent_id_var: e.target.value || undefined })} />
+                )}
+                <p className='mt-1 text-[10px] text-muted-foreground'>{t('saveExtraction.parentIdVarHint')}</p>
+              </F>
+              <F label={t('saveExtraction.itemLevelLabel')}>
+                <select
+                  className='h-8 w-full rounded border bg-background px-2 py-1.5 text-xs'
+                  value={String(step.item_level ?? 0)}
+                  onChange={(e) => update({ item_level: Number(e.target.value) || 0 })}
+                >
+                  <option value='0'>{t('saveExtraction.itemLevelPost')}</option>
+                  <option value='1'>{t('saveExtraction.itemLevelComment')}</option>
+                  <option value='2'>{t('saveExtraction.itemLevelReply')}</option>
+                </select>
+              </F>
+            </div>
           </>
         )}
 

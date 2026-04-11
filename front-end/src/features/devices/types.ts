@@ -11,6 +11,7 @@ export interface Device {
   touch_method?: string;
   minitouch_ready?: boolean;
   u2_ready?: boolean;
+  relay_scrcpy_enabled?: boolean;
 }
 
 export interface Task {
@@ -58,3 +59,9 @@ export type WsMessage =
   | { type: 'log'; serial: string; line: string }
   | { type: 'ws_status'; connected: boolean };
 
+/** Subset of GET /api/config used by Device Farm grid tiles. */
+export type DeviceFarmStreamingConfig = {
+  mode: string;
+  autoAttachScrcpy: boolean;
+  autoAttachScrcpyOnRelayOnline: boolean;
+};

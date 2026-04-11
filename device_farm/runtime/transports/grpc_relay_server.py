@@ -247,6 +247,8 @@ async def start_grpc_server(
             ("grpc.http2.max_pings_without_data", 0),
             # Allow client keepalive pings (otherwise gRPC closes as "abuse")
             ("grpc.http2.min_ping_interval_without_data_ms", 5_000),
+            # Larger write buffer = fewer syscalls for video streaming
+            ("grpc.http2.write_buffer_size", 65536),
         ]
     )
     relay_pb2_grpc.add_RelayServiceServicer_to_server(

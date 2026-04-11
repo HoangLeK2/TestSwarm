@@ -47,6 +47,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         loop = asyncio.get_running_loop()
+        _app.state.main_loop = loop
         manager.register_event_loop(loop)
         log.info("Device Farm server started")
         asyncio.create_task(heartbeat(manager))
@@ -128,6 +129,38 @@ def create_app(
                 _manager_ref   = manager
                 _config_ref    = config
 
+                def _relay_db_allows_scrcpy(serial_check: str) -> bool:
+                    if not _config_ref.database.enabled:
+                        return True
+                    ml = getattr(_app.state, "main_loop", None)
+                    if ml is None:
+                        return True
+                    from db import crud as _repo
+                    from db.database import AsyncSessionLocal
+
+                    async def _q() -> bool:
+                        async with AsyncSessionLocal() as db:
+                            return await _repo.relay_scrcpy_auto_attach_allowed(db, serial_check)
+
+                    try:
+                        # Startup (Temporal, migrations) can stall the event loop; 5s was
+                        # too tight and caused spurious timeouts + duplicate attach churn.
+                        return asyncio.run_coroutine_threadsafe(_q(), ml).result(timeout=15.0)
+                    except TimeoutError as exc:
+                        log.warning(
+                            "relay_scrcpy DB pref lookup timed out (15s) for %s: %r",
+                            serial_check,
+                            exc,
+                        )
+                        return True
+                    except Exception as exc:
+                        log.warning(
+                            "relay_scrcpy DB pref lookup failed for %s: %r",
+                            serial_check,
+                            exc,
+                        )
+                        return True
+
                 def _on_relay_device_online(serial: str) -> None:
                     device_ip = serial.rsplit(":", 1)[0] if ":" in serial else serial
                     # Check if a WS-Agent device already exists for this IP.
@@ -139,24 +172,61 @@ def create_app(
                              # Cloud/Docker (u2_always_tunnel=True): _u2_host is None,
                              # match by _adb_serial which is set to "device_ip:5555".
                              getattr(d, "_adb_serial", "").startswith(device_ip + ":")
+                             # Exact match for USB ADB serials (no colon in serial).
+                             or getattr(d, "_adb_serial", "") == serial
                              # Local/LAN fallback: _u2_host == device_ip (legacy).
                              or getattr(d, "_u2_host", None) == device_ip
                          )),
                         None,
                     )
+                    # Relay often registers before NAT hello copies hardware serial onto
+                    # _adb_serial; tunnel mode leaves _u2_host=None — primary matcher misses.
+                    # Scrcpy would then attach only to a relay-slot client (wrong serial);
+                    # the dashboard shows the QR/logical device → black video.
+                    if ws_device is None:
+                        agents = [
+                            d for d in _manager_ref.all_devices()
+                            if d.serial != serial
+                            and getattr(d, "_agent_send", None) is not None
+                        ]
+                        if len(agents) == 1:
+                            ws_device = agents[0]
+                            log.info(
+                                "relay device online %s — lone WS-Agent match %s "
+                                "(pre-NAT _adb_serial / tunnel u2 host)",
+                                serial,
+                                ws_device.serial,
+                            )
                     if ws_device is not None:
                         ws_device.set_event_loop(asyncio.get_event_loop())
-                        import concurrent.futures as _cf2
-                        _cf2.ThreadPoolExecutor(max_workers=1).submit(
-                            ws_device.attach_scrcpy_stream,
-                            serial,
-                            None,
-                            _config_ref.device.scrcpy_control,
+                        _st = getattr(_config_ref, "streaming", None)
+                        _relay_auto = bool(
+                            getattr(_st, "auto_attach_scrcpy_on_relay_online", True)
                         )
-                        log.info(
-                            "relay device online %s — reattaching scrcpy for WS device %s",
-                            serial, ws_device.serial,
-                        )
+                        if _relay_auto and _relay_db_allows_scrcpy(ws_device.serial):
+                            import concurrent.futures as _cf2
+                            _cf2.ThreadPoolExecutor(max_workers=1).submit(
+                                ws_device.attach_scrcpy_stream,
+                                serial,
+                                None,
+                                _config_ref.device.scrcpy_control,
+                            )
+                            log.info(
+                                "relay device online %s — reattaching scrcpy for WS device %s",
+                                serial, ws_device.serial,
+                            )
+                        elif _relay_auto:
+                            log.info(
+                                "relay device online %s — skip scrcpy reattach "
+                                "(relay_scrcpy_enabled=false in DB for %s)",
+                                serial,
+                                ws_device.serial,
+                            )
+                        else:
+                            log.info(
+                                "relay device online %s — skip scrcpy reattach (auto_attach_scrcpy_on_relay_online=false)",
+                                serial,
+                            )
                         return
 
                     is_new = _manager_ref.get_device(serial) is None
@@ -178,14 +248,28 @@ def create_app(
                                 _relay_mgr_ref.bootstrap(serial), loop
                             )
                             log.info("relay device online → queued bootstrap: %s", serial)
-                    import concurrent.futures as _cf
-                    _cf.ThreadPoolExecutor(max_workers=1).submit(
-                        device.attach_scrcpy_stream,
-                        serial,
-                        None,
-                        _config_ref.device.scrcpy_control,
-                    )
-                    log.info("relay device online → auto-attach scrcpy: %s", serial)
+                    _st2 = getattr(_config_ref, "streaming", None)
+                    _relay_auto2 = bool(getattr(_st2, "auto_attach_scrcpy_on_relay_online", True))
+                    if _relay_auto2 and _relay_db_allows_scrcpy(serial):
+                        import concurrent.futures as _cf
+                        _cf.ThreadPoolExecutor(max_workers=1).submit(
+                            device.attach_scrcpy_stream,
+                            serial,
+                            None,
+                            _config_ref.device.scrcpy_control,
+                        )
+                        log.info("relay device online → auto-attach scrcpy: %s", serial)
+                    elif _relay_auto2:
+                        log.info(
+                            "relay device online → skip auto-attach scrcpy "
+                            "(relay_scrcpy_enabled=false in DB): %s",
+                            serial,
+                        )
+                    else:
+                        log.info(
+                            "relay device online → skip auto-attach scrcpy (%s, auto_attach_scrcpy_on_relay_online=false)",
+                            serial,
+                        )
 
                 def _on_relay_capabilities_update(serial: str, caps: dict) -> None:
                     """Propagate relay heartbeat capabilities to DeviceClient metadata."""

@@ -45,7 +45,8 @@ type SelectorBy =
   | 'class name'
   | 'description'
   | 'descriptionContains'
-  | 'descriptionStartsWith';
+  | 'descriptionStartsWith'
+  | 'content-desc';
 
 const ALLOWED_SELECTOR_BY: readonly SelectorBy[] = [
   'resource-id',
@@ -55,6 +56,7 @@ const ALLOWED_SELECTOR_BY: readonly SelectorBy[] = [
   'description',
   'descriptionContains',
   'descriptionStartsWith',
+  'content-desc',
 ];
 
 function normalizeSelectorBy(by: unknown, fallback: SelectorBy = 'text'): SelectorBy {
@@ -63,7 +65,10 @@ function normalizeSelectorBy(by: unknown, fallback: SelectorBy = 'text'): Select
   if (ALLOWED_SELECTOR_BY.includes(raw as SelectorBy)) return raw as SelectorBy;
 
   const lower = raw.toLowerCase().replace(/\s+/g, '');
-  if (lower === 'content-desc' || lower === 'contentdesc' || lower === 'description' || lower === 'accessibilityid') {
+  if (lower === 'content-desc' || lower === 'contentdesc' || lower === 'accessibilityid') {
+    return 'content-desc';
+  }
+  if (lower === 'description') {
     return 'description';
   }
   if (lower === 'content-desccontains' || lower === 'descriptioncontains') {
@@ -156,7 +161,20 @@ type Step =
   | { type: 'launch_app'; package: string }
   | { type: 'open_url'; url: string; package?: string }
   | { type: 'wait'; seconds: number }
-  | { type: 'tap_position'; pos: 'top_center' | 'middle_center' | 'bottom_center' | 'search_bar' }
+  | {
+      type: 'tap_position';
+      pos:
+        | 'top_left'
+        | 'top_center'
+        | 'top_right'
+        | 'middle_left'
+        | 'middle_center'
+        | 'middle_right'
+        | 'bottom_left'
+        | 'bottom_center'
+        | 'bottom_right'
+        | 'search_bar';
+    }
   | { type: 'tap'; selector?: { by?: SelectorBy; value?: string }; fallback?: { rx?: number; ry?: number }; timeout?: number }
   | { type: 'tap_ratio'; x: number; y: number }
   | { type: 'swipe_ratio'; x1: number; y1: number; x2: number; y2: number; duration_ms?: number }
@@ -199,7 +217,18 @@ function coerceSteps(raw: any[]): Step[] {
       case 'tap_position':
         return {
           type: 'tap_position',
-          pos: (s.pos === 'top_center' || s.pos === 'bottom_center' || s.pos === 'middle_center' || s.pos === 'search_bar')
+          pos: (
+            s.pos === 'top_left'
+            || s.pos === 'top_center'
+            || s.pos === 'top_right'
+            || s.pos === 'middle_left'
+            || s.pos === 'middle_center'
+            || s.pos === 'middle_right'
+            || s.pos === 'bottom_left'
+            || s.pos === 'bottom_center'
+            || s.pos === 'bottom_right'
+            || s.pos === 'search_bar'
+          )
             ? s.pos
             : 'middle_center'
         };
@@ -242,29 +271,30 @@ function coerceSteps(raw: any[]): Step[] {
       case 'tap_selector':
         return {
           type: 'tap_selector',
-          by: (['resource-id','text','xpath','class name'].includes(s.by) ? s.by : 'text') as SelectorBy,
+          by: normalizeSelectorBy(s.by, 'text'),
           value: String(s.value ?? ''),
           ...(s.fallback_rx != null ? { fallback_rx: Number(s.fallback_rx) } : {}),
           ...(s.fallback_ry != null ? { fallback_ry: Number(s.fallback_ry) } : {}),
+          ...(s.timeout != null ? { timeout: Number(s.timeout) } : {}),
         };
       case 'wait_element':
         return {
           type: 'wait_element',
-          by: (['resource-id','text','xpath','class name'].includes(s.by) ? s.by : 'text') as SelectorBy,
+          by: normalizeSelectorBy(s.by, 'text'),
           value: String(s.value ?? ''),
           timeout: Number(s.timeout ?? 10),
         };
       case 'assert_element':
         return {
           type: 'assert_element',
-          by: (['resource-id','text','xpath','class name'].includes(s.by) ? s.by : 'text') as SelectorBy,
+          by: normalizeSelectorBy(s.by, 'text'),
           value: String(s.value ?? ''),
           timeout: Number(s.timeout ?? 5),
         };
       case 'input_selector':
         return {
           type: 'input_selector',
-          by: (['resource-id','text','xpath','class name'].includes(s.by) ? s.by : 'resource-id') as SelectorBy,
+          by: normalizeSelectorBy(s.by, 'resource-id'),
           value: String(s.value ?? ''),
           text: String(s.text ?? ''),
           clear_first: s.clear_first !== false,
@@ -272,14 +302,14 @@ function coerceSteps(raw: any[]): Step[] {
       case 'long_tap_selector':
         return {
           type: 'long_tap_selector',
-          by: (['resource-id','text','xpath','class name'].includes(s.by) ? s.by : 'text') as SelectorBy,
+          by: normalizeSelectorBy(s.by, 'text'),
           value: String(s.value ?? ''),
           duration_ms: Number(s.duration_ms ?? 800),
         };
       case 'scroll_to':
         return {
           type: 'scroll_to',
-          by: (['resource-id','text','xpath','class name'].includes(s.by) ? s.by : 'text') as SelectorBy,
+          by: normalizeSelectorBy(s.by, 'text'),
           value: String(s.value ?? ''),
           direction: s.direction === 'up' ? 'up' : 'down',
           max_swipes: Number(s.max_swipes ?? 5),
@@ -486,7 +516,7 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
     setBrowserApp(currentBrowserApp);
     setDeviceNotes(currentDeviceNotes);
     setRawJson(
-      JSON.stringify({ instructions: currentInstructions, steps: currentSteps }, null, 2)
+      JSON.stringify({ instructions: currentInstructions, steps: currentSteps, variables: currentVariables }, null, 2)
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, campaign.scenario, scenarioProp]);
@@ -644,6 +674,9 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
       }
       const nextInstructions = String(sc.instructions ?? '');
       const nextSteps = coerceSteps(sc.steps);
+      const nextVariables = (sc.variables && typeof sc.variables === 'object')
+        ? sc.variables
+        : {};
       const ctx: any = sc.device_context ?? {};
       setDeviceModel(String(ctx.device_model ?? ''));
       setAndroidVersion(String(ctx.android_version ?? ''));
@@ -651,7 +684,16 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
       setDeviceNotes(String(ctx.notes ?? ''));
       setInstructions(nextInstructions);
       setSteps(nextSteps);
-      setRawJson(JSON.stringify({ instructions: nextInstructions, steps: nextSteps }, null, 2));
+      setVariables(nextVariables);
+      // Preserve raw JSON shape (including custom top-level keys) to avoid
+      // lossy round-trip when users paste advanced scenario objects.
+      const preserved = {
+        ...sc,
+        instructions: nextInstructions,
+        steps: nextSteps,
+        variables: nextVariables,
+      };
+      setRawJson(JSON.stringify(preserved, null, 2));
       toast.success('Đã áp dụng JSON vào kịch bản');
     } catch {
       toast.error('JSON không hợp lệ');

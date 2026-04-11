@@ -434,14 +434,29 @@ class DeviceActivities:
         stop_if_no_new = bool(step.get("stop_if_no_new", False))
         no_new_threshold = int(step.get("no_new_threshold", 3))
         expand_see_more = bool(step.get("expand_see_more", True))
+        completion_retries = max(0, int(step.get("expand_completion_retries", 3) or 3))
+        em_passes = int(step.get("expand_see_more_max_passes", 2))
+        em_scroll = bool(step.get("expand_see_more_scroll", False))
+        em_scroll_distance = float(step.get("expand_see_more_scroll_distance", 0.3))
         break_requested = False
         details: dict[str, Any] = {}
 
         try:
-            if strategy == "fb_posts" and expand_see_more:
+            # Avoid duplicate expansion loops for posts when completion retries are enabled.
+            do_pre_expand = (
+                expand_see_more
+                and (strategy == "fb_comments" or (strategy == "fb_posts" and completion_retries <= 0))
+            )
+            if do_pre_expand:
                 try:
                     from tasks.fb_extract import _expand_see_more
-                    expanded = await _to_thread_with_heartbeat(_expand_see_more, device)
+                    expanded = await _to_thread_with_heartbeat(
+                        _expand_see_more,
+                        device,
+                        max_passes=em_passes,
+                        scroll_between=em_scroll,
+                        scroll_distance=em_scroll_distance,
+                    )
                     if expanded:
                         await asyncio.sleep(0.5)
                 except Exception:
@@ -460,26 +475,106 @@ class DeviceActivities:
                 from services.content_store import compute_content_hash
                 scroll_idx = ctx.get("_loop_iter", 0)
                 new_posts = parse_fb_posts_from_xml(xml, source_index=scroll_idx)
+
+                def _snapshot(posts: list[dict[str, Any]]) -> tuple[int, int]:
+                    unresolved = 0
+                    total_len = 0
+                    for _p in posts:
+                        _t = str(_p.get("text") or "")
+                        total_len += len(_t)
+                        _tl = _t.lower()
+                        if ("xem thêm" in _tl) or ("see more" in _tl) or ("view more" in _tl):
+                            unresolved += 1
+                    return unresolved, total_len
+
+                unresolved_before, total_len_before = _snapshot(new_posts)
+                retries_done = 0
+                plateau = 0
+                if expand_see_more and unresolved_before > 0:
+                    from tasks.fb_extract import _expand_see_more
+                    max_retries = max(1, min(4, completion_retries))
+                    prev_unresolved, prev_total_len = unresolved_before, total_len_before
+                    for _ in range(max_retries):
+                        retries_done += 1
+                        try:
+                            await _to_thread_with_heartbeat(
+                                _expand_see_more,
+                                device,
+                                max_passes=max(em_passes, 6),
+                                scroll_between=em_scroll,
+                                scroll_distance=em_scroll_distance,
+                            )
+                            await asyncio.sleep(0.6)
+                            xml_retry = await _to_thread_with_heartbeat(device.hierarchy_xml, force_refresh=True)
+                            if not xml_retry:
+                                break
+                            retry_posts = parse_fb_posts_from_xml(xml_retry, source_index=scroll_idx)
+                            # Merge instead of replacing to prevent viewport-drift data loss.
+                            candidate_posts = _dedup(new_posts + (retry_posts or []))
+                            curr_unresolved, curr_total_len = _snapshot(candidate_posts)
+                            improved = (
+                                (curr_unresolved < prev_unresolved)
+                                or (curr_total_len > prev_total_len + 20)
+                            )
+                            new_posts = candidate_posts
+                            if improved:
+                                plateau = 0
+                            else:
+                                plateau += 1
+                            prev_unresolved, prev_total_len = curr_unresolved, curr_total_len
+                            if curr_unresolved == 0 or plateau >= 2:
+                                break
+                        except Exception:
+                            break
+
+                unresolved_after, total_len_after = _snapshot(new_posts)
                 prev_count = len(ctx["posts"])
                 ctx["posts"] = _dedup(ctx["posts"] + new_posts)
                 added = len(ctx["posts"]) - prev_count
                 details["extracted"] = added
                 details["total_posts"] = len(ctx["posts"])
+                details["extract_diagnostics"] = {
+                    "unresolved_before": unresolved_before,
+                    "unresolved_after": unresolved_after,
+                    "total_len_before": total_len_before,
+                    "total_len_after": total_len_after,
+                    "completion_retries": retries_done,
+                    "plateau_count": plateau,
+                }
                 msg = f"extract fb_posts: +{added} new (total {len(ctx['posts'])})"
+                log.info(
+                    "[%s] extract fb_posts diagnostics: unresolved %s->%s, len %s->%s, retries=%s, plateau=%s",
+                    inp.device_serial,
+                    unresolved_before,
+                    unresolved_after,
+                    total_len_before,
+                    total_len_after,
+                    retries_done,
+                    plateau,
+                )
                 # Track first VISIBLE post for comment linking.
                 # Uses new_posts[0] (topmost post on screen), NOT the first "new" post,
                 # because tap_selector("Bình luận") taps the topmost button on screen.
                 if new_posts:
                     ctx["_first_new_post_hash"] = compute_content_hash(
-                        new_posts[0], dedupe_field="text"
+                        new_posts[0], dedupe_field="post_key"
                     )
+                    pid_map = {}
+                    for _p in new_posts:
+                        if _p.get("_pid"):
+                            pid_map[_p["_pid"]] = compute_content_hash(_p, dedupe_field="post_key")
+                    ctx["_post_id_map"] = pid_map
                 if stop_if_no_new:
                     if added == 0:
-                        ctx["_no_new_streak"] = ctx.get("_no_new_streak", 0) + 1
-                        if ctx["_no_new_streak"] >= no_new_threshold:
+                        base_streak = ctx.get("_no_new_posts_streak", ctx.get("_no_new_streak", 0))
+                        ctx["_no_new_posts_streak"] = base_streak + 1
+                        # Backward compatibility for any condition using legacy key.
+                        ctx["_no_new_streak"] = ctx["_no_new_posts_streak"]
+                        if ctx["_no_new_posts_streak"] >= no_new_threshold:
                             break_requested = True
-                            msg += f" — breaking (no new for {ctx['_no_new_streak']} scrolls)"
+                            msg += f" — breaking (no new for {ctx['_no_new_posts_streak']} scrolls)"
                     else:
+                        ctx["_no_new_posts_streak"] = 0
                         ctx["_no_new_streak"] = 0
 
             elif strategy == "text_nodes":
@@ -500,6 +595,7 @@ class DeviceActivities:
                 from tasks.fb_extract import (
                     parse_fb_comments_from_xml, _dedup_comments, _post_id_from_ctx,
                 )
+                ctx["_active_comment_parent_hash"] = None
                 parent_post_id_var = inp.step.get("parent_post_id_var")
                 max_items = int(inp.step.get("max_items") or 50)
                 parent_post_id = _post_id_from_ctx(ctx, parent_post_id_var)
@@ -513,8 +609,13 @@ class DeviceActivities:
                 # Update parent post reaction/share counts with more accurate comment-view values
                 if post_stats:
                     ctx["_comment_view_stats"] = post_stats
-                    parent_hash = ctx.get("_first_new_post_hash")
+                    pid_key = parent_post_id
+                    parent_hash = (
+                        ctx.get("_post_id_map", {}).get(pid_key)
+                        or ctx.get("_first_new_post_hash")
+                    )
                     if parent_hash:
+                        ctx["_active_comment_parent_hash"] = parent_hash
                         try:
                             from db.database import activity_session
                             from db.crud.content import update_content_stats
@@ -530,6 +631,14 @@ class DeviceActivities:
                                     await _db.commit()
                         except Exception as exc:
                             log.warning(f"update_content_stats failed: {exc}")
+                else:
+                    pid_key = parent_post_id
+                    parent_hash = (
+                        ctx.get("_post_id_map", {}).get(pid_key)
+                        or ctx.get("_first_new_post_hash")
+                    )
+                    if parent_hash:
+                        ctx["_active_comment_parent_hash"] = parent_hash
 
                 ctx.setdefault("comments", [])
                 prev_count = len(ctx["comments"])
@@ -543,6 +652,19 @@ class DeviceActivities:
                     f"extract fb_comments: +{added} new "
                     f"(total {len(ctx['comments'])}, post={parent_post_id})"
                 )
+                if stop_if_no_new:
+                    if added == 0:
+                        ctx["_no_new_comments_streak"] = ctx.get("_no_new_comments_streak", 0) + 1
+                        # Backward compatibility for legacy condition key.
+                        ctx["_no_new_streak"] = ctx["_no_new_comments_streak"]
+                        if ctx["_no_new_comments_streak"] >= no_new_threshold:
+                            break_requested = True
+                            msg += (
+                                f" — breaking comments loop (no new for {ctx['_no_new_comments_streak']} scrolls)"
+                            )
+                    else:
+                        ctx["_no_new_comments_streak"] = 0
+                        ctx["_no_new_streak"] = 0
             else:
                 return ExtractResult(
                     ok=False,

@@ -24,7 +24,9 @@ from typing import Any, Optional
 from relay.adb           import (
     _list_serials, _adb_connect, _adb_shell,
     _restart_u2, _restart_atx, _probe_capabilities,
+    _resolve_device_lan_ip,
     _screencap, _bootstrap_device,
+    reconcile_usb_preferred_for_duplicate_devices,
 )
 from relay.mdns          import start_mdns_discovery
 from relay.device_state  import DeviceRegistry, DeviceState
@@ -111,6 +113,13 @@ class RelayAgent:
         # A11y control-plane workers
         self._a11y_max_queue = int(os.getenv("A11Y_MAX_QUEUE_PER_DEVICE", "100"))
         self._a11y_state: dict[str, dict[str, Any]] = {}
+        # TCP serial -> USB serial we kept; suppress auto-reconnect / farm adb connect
+        # while that USB is still online (avoids disconnect ↔ reconnect loop).
+        self._tcp_suppressed_for_usb: dict[str, str] = {}
+        # Farm may still send scrcpy/control with TCP serial — map to real ADB serial.
+        self._scrcpy_logical_to_adb: dict[str, str] = {}
+        # USB serial → LAN IP for atx-agent HTTP (u2 proxy); filled from TCP suppress map or adb probe.
+        self._atx_lan_host_cache: dict[str, str] = {}
 
     async def run(self) -> None:
         zc = start_mdns_discovery()
@@ -286,7 +295,10 @@ class RelayAgent:
                         logger.debug("gRPC JSON msg error: %s", exc)
                 else:
                     # Binary scrcpy control → route to session
-                    self._scrcpy_mgr.send_control(ctrl_msg.serial, ctrl_msg.data)
+                    self._scrcpy_mgr.send_control(
+                        self._scrcpy_device_serial(ctrl_msg.serial),
+                        ctrl_msg.data,
+                    )
 
         ctrl_task = asyncio.create_task(_consume_ctrl(), name="grpc-ctrl-consumer")
 
@@ -317,9 +329,46 @@ class RelayAgent:
                 return
             serial = data[2:2 + slen].decode("utf-8", errors="replace")
             ctrl_data = data[2 + slen:]
-            self._scrcpy_mgr.send_control(serial, ctrl_data)
+            self._scrcpy_mgr.send_control(
+                self._scrcpy_device_serial(serial),
+                ctrl_data,
+            )
 
     # ── Device event handling ─────────────────────────────────────────────────
+
+    def _clear_tcp_suppress_for_usb_anchor(self, usb_serial: str) -> None:
+        to_pop = [
+            t for t, u in self._tcp_suppressed_for_usb.items() if u == usb_serial
+        ]
+        for t in to_pop:
+            self._tcp_suppressed_for_usb.pop(t, None)
+            self._scrcpy_logical_to_adb.pop(t, None)
+            logger.debug(
+                "USB anchor %s not device — cleared TCP suppress %s",
+                usb_serial,
+                t,
+            )
+
+    def _adb_serial_prefer_usb_over_tcp(self, serial: str) -> str:
+        """When TCP was dropped for USB duplicate, farm may still use the IP:port serial."""
+        if not serial or ":" not in serial:
+            return serial
+        usb = self._tcp_suppressed_for_usb.get(serial)
+        if not usb:
+            return serial
+        uctx = self._registry.get(usb)
+        if uctx and uctx.is_available:
+            return usb
+        return serial
+
+    def _scrcpy_device_serial(self, server_serial: str) -> str:
+        """ADB serial to use for scrcpy session / control (after USB-preference remap)."""
+        if not server_serial:
+            return server_serial
+        mapped = self._scrcpy_logical_to_adb.get(server_serial)
+        if mapped:
+            return mapped
+        return self._adb_serial_prefer_usb_over_tcp(server_serial)
 
     async def _on_device_event(
         self, serial: str, adb_state: str, send_queue: asyncio.Queue
@@ -330,22 +379,53 @@ class RelayAgent:
 
         logger.info("device %s → %s (retries=%d)", serial, ctx.state.value, ctx.retry_count)
 
+        # USB disappeared — allow WiFi/TCP to be used again
+        if ":" not in serial and adb_state != "device":
+            self._clear_tcp_suppress_for_usb_anchor(serial)
+            self._atx_lan_host_cache.pop(serial, None)
+
         if ctx.state == DeviceState.OFFLINE and self._u2_pool:
             asyncio.create_task(self._u2_pool.evict(serial))
 
-        if ctx.state == DeviceState.ONLINE and not ctx.capabilities:
+        if ctx.state == DeviceState.ONLINE:
             loop = asyncio.get_running_loop()
-            caps = await loop.run_in_executor(None, _probe_capabilities, serial)
-            self._registry.set_capabilities(serial, caps)
-            logger.info("capabilities %s: %s", serial, caps)
+            if not ctx.capabilities:
+                caps = await loop.run_in_executor(None, _probe_capabilities, serial)
+                self._registry.set_capabilities(serial, caps)
+                logger.info("capabilities %s: %s", serial, caps)
+            pairs = await loop.run_in_executor(
+                None,
+                reconcile_usb_preferred_for_duplicate_devices,
+                self._registry,
+            )
+            for tcp_s, usb_s in pairs or []:
+                self._tcp_suppressed_for_usb[tcp_s] = usb_s
+                if ":" in tcp_s:
+                    self._atx_lan_host_cache[usb_s] = tcp_s.rsplit(":", 1)[0]
+            for tcp_s, _usb_s in pairs or []:
+                await self._scrcpy_mgr.stop_session(tcp_s)
 
         if ctx.state == DeviceState.RECONNECTING and ":" in serial:
-            loop = asyncio.get_running_loop()
-            output, rc = await loop.run_in_executor(None, _adb_connect, serial)
-            if rc == 0:
-                logger.info("auto-reconnected %s — %s", serial, output)
-            else:
-                logger.debug("reconnect failed %s — %s", serial, output)
+            usb_anchor = self._tcp_suppressed_for_usb.get(serial)
+            skip = False
+            if usb_anchor:
+                usb_ctx = self._registry.get(usb_anchor)
+                if usb_ctx and usb_ctx.is_available:
+                    skip = True
+                    logger.debug(
+                        "skip auto-reconnect %s (USB preferred: %s)",
+                        serial,
+                        usb_anchor,
+                    )
+                else:
+                    self._tcp_suppressed_for_usb.pop(serial, None)
+            if not skip:
+                loop = asyncio.get_running_loop()
+                output, rc = await loop.run_in_executor(None, _adb_connect, serial)
+                if rc == 0:
+                    logger.info("auto-reconnected %s — %s", serial, output)
+                else:
+                    logger.debug("reconnect failed %s — %s", serial, output)
 
         await self._send_heartbeat(send_queue)
 
@@ -412,8 +492,14 @@ class RelayAgent:
                 pass
 
         elif mtype == "scrcpy_start":
+            req = str(msg.get("serial", "") or "")
+            adb_s = self._adb_serial_prefer_usb_over_tcp(req)
+            if adb_s != req:
+                self._scrcpy_logical_to_adb[req] = adb_s
+                logger.info("scrcpy_start remap %s -> %s (USB preferred)", req, adb_s)
+            await self._scrcpy_mgr.stop_session(req)
             await self._scrcpy_mgr.start_session(
-                serial         = msg.get("serial", ""),
+                serial         = adb_s,
                 max_fps        = int(msg.get("max_fps") or 30),
                 max_width      = int(msg.get("max_width") or 800),
                 enable_control = bool(msg.get("control", True)),
@@ -425,7 +511,11 @@ class RelayAgent:
             )
 
         elif mtype == "scrcpy_stop":
-            await self._scrcpy_mgr.stop_session(msg.get("serial", ""))
+            req = str(msg.get("serial", "") or "")
+            adb_s = self._scrcpy_logical_to_adb.pop(req, req)
+            await self._scrcpy_mgr.stop_session(adb_s)
+            if adb_s != req:
+                await self._scrcpy_mgr.stop_session(req)
 
         elif mtype == "u2_request":
             asyncio.create_task(self._handle_u2_request(msg, send_queue))
@@ -706,6 +796,29 @@ class RelayAgent:
         # Scrcpy video frames use put_nowait (lossy); control results must not.
         await send_queue.put(json.dumps(result))
 
+    def _atx_http_host(self, serial: str) -> str:
+        """Host for http://HOST:7912 — must be an IPv4, not a USB ADB serial string."""
+        if not serial:
+            return ""
+        if ":" in serial:
+            return serial.rsplit(":", 1)[0]
+        for tcp_s, usb_s in self._tcp_suppressed_for_usb.items():
+            if usb_s == serial and ":" in tcp_s:
+                return tcp_s.rsplit(":", 1)[0]
+        cached = self._atx_lan_host_cache.get(serial)
+        if cached:
+            return cached
+        ip = _resolve_device_lan_ip(serial)
+        if ip:
+            self._atx_lan_host_cache[serial] = ip
+            logger.debug("u2 atx host: %s → %s (LAN probe)", serial, ip)
+            return ip
+        logger.warning(
+            "u2 atx host: cannot resolve LAN IP for USB serial %r — u2 HTTP will fail",
+            serial,
+        )
+        return serial
+
     def _do_u2_http(
         self,
         serial: str,
@@ -719,8 +832,7 @@ class RelayAgent:
         import urllib.request
         import urllib.error
 
-        # Derive device IP from serial (format: "ip:adb_port")
-        host = serial.rsplit(":", 1)[0] if ":" in serial else serial
+        host = self._atx_http_host(serial)
         url  = f"http://{host}:7912{path}"
 
         headers: dict = {}
@@ -812,6 +924,22 @@ class RelayAgent:
 
         try:
             if cmd_type == CMD_ADB_CONNECT:
+                anchor = self._tcp_suppressed_for_usb.get(serial)
+                if anchor:
+                    usb_ctx = self._registry.get(anchor)
+                    if usb_ctx and usb_ctx.is_available:
+                        return json.dumps({
+                            "type":      "result",
+                            "msg_id":    msg_id,
+                            "ok":        True,
+                            "exit_code": 0,
+                            "output":    (
+                                f"skipped adb connect {serial!r} "
+                                f"(USB preferred: {anchor})"
+                            ),
+                            "error":     "",
+                        })
+                    self._tcp_suppressed_for_usb.pop(serial, None)
                 output, rc = _adb_connect(serial, timeout=timeout)
             elif cmd_type == CMD_RESTART_U2:
                 output, rc = _restart_u2(serial, timeout=timeout)

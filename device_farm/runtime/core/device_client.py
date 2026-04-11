@@ -204,6 +204,9 @@ class DeviceClient:
         # Stored args so scrcpy can be restarted on demand after auto-stop
         self._scrcpy_params:    Optional[tuple] = None  # (device_ip, adb_port, enable_control)
         self._scrcpy_stop_task: Optional[asyncio.Task] = None  # debounced auto-stop task
+        # Pending relay attach: cancel on detach so 30s retry does not override user "stream off".
+        self._scrcpy_pending_registered_ip: Optional[str] = None
+        self._scrcpy_attach_retry_task: Optional[asyncio.Task] = None
 
         # WebSocket send callback (set when agent connects)
         self._agent_send: Optional[Callable[[Dict[str, Any]], None]] = None
@@ -218,6 +221,7 @@ class DeviceClient:
 
         self._u2:          Optional[U2JsonRpcClient]  = None
         self._u2_lock      = threading.Lock()  # identity-safe reads/writes of self._u2
+        self._u2_reconnect_lock = threading.Lock()  # serialize reconnect attempts (only 1 at a time)
         self._u2_batch:    Any = None  # _BatchRelaySession (when u2 batch enabled)
         self._hierarchy_lock = threading.Lock()  # only one dumpWindowHierarchy at a time
         self._stf_service: Optional[STFServiceClient] = None
@@ -403,6 +407,17 @@ class DeviceClient:
         # Discard stale u2 client — its tunnel port is dead after agent reconnect.
         with self._u2_lock:
             self._u2 = None
+        # Stop prior TunnelSet before binding a new one. On fast WS reconnect,
+        # on_agent_disconnected(sender=...) may skip teardown (new _agent_send
+        # already replaced) — leaving zombie accept threads that still hit the old
+        # port and corrupt JSON-RPC (BadStatusLine / pong / stale timeouts).
+        prev = self._tunnels
+        if prev is not None:
+            try:
+                prev.stop_all()
+            except Exception:
+                pass
+            self._tunnels = None
         tunnels = TunnelSet(send, self.serial)
         ports   = tunnels.start_all()
         self._tunnels      = tunnels
@@ -845,18 +860,11 @@ class DeviceClient:
             with self._u2_lock:
                 if self._u2 is u2_snap:
                     self._u2 = None
-        # Reconnect u2 and retry once — mirrors uiautomator2 jsonrpc_call pattern:
-        # stop_uiautomator() + start_uiautomator() + retry in the same call.
-        reconnected = self._reconnect_u2()
-        if not reconnected or self._u2 is None:
-            return False
-        try:
-            action()
-            return True
-        except Exception as exc:
-            self._log(f"u2 touch retry failed: {exc}", level=logging.WARNING)
-            self._u2 = None
-            return False
+        # Don't reconnect inline — let keepalive handle it in background.
+        # Inline reconnect blocks the touch caller for 3-12s (tunnel churn)
+        # and starves the event loop. Return False → caller falls through to
+        # scrcpy control (much faster, no tunnel overhead).
+        return False
 
     def _get_scrcpy_control(self) -> Optional[ScrcpyControl]:
         """Return active ScrcpyControl instance if available (thread-safe)."""
@@ -898,12 +906,41 @@ class DeviceClient:
         else:
             self._a11y_fail_hard_count = 0
 
+    def _resolve_relay_serial(self) -> str:
+        """Return the best adb serial for relay calls.
+
+        Priority: cached _adb_serial → resolve_serial(self.serial) → single-
+        device fallback (when only one device is online in the relay).
+        """
+        if self._adb_serial:
+            return self._adb_serial
+        from runtime.transports.adb_relay_server import get_relay_manager
+        relay = get_relay_manager()
+        if relay is None:
+            return self.serial
+        resolved = relay.resolve_serial(self.serial)
+        if relay.relay_for_serial(resolved):
+            self._adb_serial = resolved
+            return resolved
+        # Single-device fallback: if only one device online, use it
+        try:
+            all_serials: list[str] = []
+            for serials in relay.registered_relays().values():
+                all_serials.extend(serials)
+            uniq = sorted(set(all_serials))
+            if len(uniq) == 1:
+                self._adb_serial = uniq[0]
+                return uniq[0]
+        except Exception:
+            pass
+        return self.serial
+
     async def _a11y_mutate_async(self, action: str, payload: dict, timeout: float = 5.0) -> dict:
         from runtime.transports.adb_relay_server import get_relay_manager
         relay = get_relay_manager()
         if relay is None:
             return {"ok": False, "error": "no_relay_manager"}
-        serial = self._adb_serial or self.serial
+        serial = self._resolve_relay_serial()
         return await relay.a11y_mutate(
             serial=serial,
             action=action,
@@ -917,7 +954,7 @@ class DeviceClient:
         relay = get_relay_manager()
         if relay is None:
             return {"ok": False, "error": "no_relay_manager"}
-        serial = self._adb_serial or self.serial
+        serial = self._resolve_relay_serial()
         return await relay.a11y_query(
             serial=serial,
             action=action,
@@ -1625,6 +1662,32 @@ class DeviceClient:
 
         return best
 
+    def _cancel_scrcpy_pending_attach(self) -> None:
+        """Clear relay pending callback + 30s retry task (user detach must stop background re-attach)."""
+        ip = self._scrcpy_pending_registered_ip
+        if ip:
+            try:
+                from runtime.transports.adb_relay_server import get_relay_manager
+
+                _r = get_relay_manager()
+                if _r:
+                    _r.cancel_pending_scrcpy(ip)
+            except Exception:
+                pass
+            self._scrcpy_pending_registered_ip = None
+        t = self._scrcpy_attach_retry_task
+        self._scrcpy_attach_retry_task = None
+        if t is not None and not t.done() and self._loop:
+            _loop = self._loop
+
+            def _cancel() -> None:
+                if not t.done():
+                    t.cancel()
+
+            try:
+                _loop.call_soon_threadsafe(_cancel)
+            except Exception:
+                pass
 
     def attach_scrcpy_stream(
         self,
@@ -1716,6 +1779,9 @@ class DeviceClient:
 
         if not locals().get("_skip_detach"):
             self.detach_scrcpy_stream()
+        else:
+            # Restart path: still cancel stale pending/retry from a prior failed attach.
+            self._cancel_scrcpy_pending_attach()
 
         # Use IP-only as the lookup key for relay mode — mDNS port is OS-assigned
         # and not known here.  resolve_serial() finds the device by IP in the relay
@@ -1756,6 +1822,18 @@ class DeviceClient:
             # use a random port (e.g. "ip:46311") chosen by the OS — not 5555.
             # resolve_serial() finds the device by IP even if port differs.
             actual_serial = relay.resolve_serial(serial) if relay else serial
+            # USB-preferred agent-boot drops TCP serial from relay index; DB/API may still
+            # pass LAN IP only. Same fallback as web.ws auto-attach: single online serial.
+            if relay and relay.relay_for_serial(actual_serial) is None:
+                try:
+                    _all: list[str] = []
+                    for _serials in relay.registered_relays().values():
+                        _all.extend(_serials)
+                    _uniq = sorted(set(_all))
+                    if len(_uniq) == 1:
+                        actual_serial = _uniq[0]
+                except Exception:
+                    pass
 
             # If device still not known to any relay agent, wait up to 4 s for
             # agent-boot's next heartbeat.  Do NOT broadcast `adb connect ip:5555` —
@@ -1769,6 +1847,11 @@ class DeviceClient:
                         break
 
             if relay and relay.relay_for_serial(actual_serial) and self._loop:
+                # Cache resolved adb serial so a11y gRPC, u2 relay, etc. use
+                # the real adb serial instead of the web-registration ID.
+                if actual_serial != self.serial:
+                    self._adb_serial = actual_serial
+
                 # Populate device metadata from relay capabilities (if not already set)
                 caps = relay.get_capabilities(actual_serial)
                 if caps:
@@ -1852,6 +1935,7 @@ class DeviceClient:
                     self.state = DeviceState.READY
                 ctrl_status = "control=ON (relay)" if enable_control else "video-only (relay)"
                 self._log(f"scrcpy stream attached via relay ({actual_serial}) — {ctrl_status}")
+                self._scrcpy_pending_registered_ip = None
                 return
         except Exception as exc:
             self._log(f"relay scrcpy unavailable, falling back to local adb: {exc}", level=logging.DEBUG)
@@ -1878,6 +1962,7 @@ class DeviceClient:
                     )
 
                 _relay.register_pending_scrcpy(device_ip, _on_relay_serial)
+                self._scrcpy_pending_registered_ip = device_ip
                 self._log(
                     f"[scrcpy] relay agent not yet connected for {device_ip!r} — "
                     f"registered pending callback (will auto-start when agent-boot connects). "
@@ -1904,9 +1989,14 @@ class DeviceClient:
                             _cf2.ThreadPoolExecutor(max_workers=1).submit(
                                 self.attach_scrcpy_stream, device_ip, 5555, _enable_control
                             )
-                    _loop.call_soon_threadsafe(
-                        lambda: _loop.create_task(_delayed_retry())
-                    )
+
+                    def _arm_retry() -> None:
+                        old = self._scrcpy_attach_retry_task
+                        if old is not None and not old.done():
+                            old.cancel()
+                        self._scrcpy_attach_retry_task = _loop.create_task(_delayed_retry())
+
+                    _loop.call_soon_threadsafe(_arm_retry)
                 return
         except Exception:
             pass
@@ -1971,7 +2061,11 @@ class DeviceClient:
                 self._scrcpy_receiver.stop_receiver()
             except Exception:
                 pass
-            # Clean up relay state if this was a relay-mode receiver
+            # Clean up relay state if this was a relay-mode receiver.
+            # Only stop the relay stream if we still own the receiver slot — a WS
+            # device can overwrite register_scrcpy_receiver(actual_serial) after
+            # a relay-only placeholder attached first; detach on the ghost must not
+            # SCRCPY_STOP / unregister the live consumer.
             if serial and self._loop:
                 try:
                     from runtime.transports.adb_relay_server import get_relay_manager
@@ -1980,13 +2074,16 @@ class DeviceClient:
                     if isinstance(self._scrcpy_receiver, RelayScrcpyReceiver):
                         relay = get_relay_manager()
                         if relay:
-                            asyncio.run_coroutine_threadsafe(
-                                relay.stop_scrcpy(serial), self._loop
-                            )
+                            reg = relay.get_scrcpy_receiver(serial)
+                            if reg is self._scrcpy_receiver:
+                                asyncio.run_coroutine_threadsafe(
+                                    relay.stop_scrcpy(serial), self._loop
+                                )
                 except Exception:
                     pass
             self._scrcpy_receiver = None
         self._scrcpy_active = False
+        self._cancel_scrcpy_pending_attach()
 
     _BY_MAP = {
         "xpath":       "xpath",
@@ -2237,11 +2334,11 @@ class DeviceClient:
 
         return True
 
-    _U2_RECONNECT_ATTEMPTS = 8
-    _U2_RECONNECT_DELAY = 1.5        # u2 instrumentation may need 5-10s to start; use longer delay
+    _U2_RECONNECT_ATTEMPTS = 3        # was 8 — fewer attempts to reduce tunnel churn on event loop
+    _U2_RECONNECT_DELAY = 2.0        # was 1.5 — longer delay between attempts
     _U2_RECONNECT_PROBE_TIMEOUT = 3.0  # give u2 a bit more time to respond on first connect
-    _U2_RECONNECT_BACKOFF = 10.0
-    _U2_RECOVERY_COOLDOWN = 30.0  # min seconds between recovery attempts (start_services + ADB)
+    _U2_RECONNECT_BACKOFF = 15.0     # was 10 — longer backoff after full failure cycle
+    _U2_RECOVERY_COOLDOWN = 15.0  # min seconds between recovery attempts (atx restarts in ~3s)
 
     # atx-agent specific tuning.
     #
@@ -2257,7 +2354,7 @@ class DeviceClient:
     _U2_ATX_RECONNECT_DELAY    = 1.5
     _U2_ATX_PROBE_TIMEOUT      = 1.5  # quick probe; timeout triggers second-chance logic
     _U2_ATX_TIMEOUT_GRACE      = 6.0  # wait after first timeout — covers u2 restart (3-8s)
-    _U2_ATX_RECONNECT_BACKOFF  = 30.0 # backoff after triggering atx restart
+    _U2_ATX_RECONNECT_BACKOFF  = 15.0 # backoff after triggering atx restart (was 30s)
 
     def _recover_u2_ws_mode(self) -> None:
         """
@@ -2396,7 +2493,23 @@ class DeviceClient:
           atx-agent auto-manages u2 lifecycle — no tunnel port needed.
 
         WS mode legacy (USB / no atx-agent): connect via WS tunnel port.
+
+        Serialized: only one thread can attempt reconnect at a time. Multiple
+        concurrent callers (eager-connect, keepalive, touch-retry) would each
+        open a TCP connection to the u2 WS tunnel, but the tunnel only handles
+        one _client_sock — the second connection overwrites the first, causing
+        responses to be dropped and triggering a timeout death spiral.
         """
+        if not self._u2_reconnect_lock.acquire(blocking=False):
+            # Another thread is already reconnecting — wait for it
+            with self._u2_reconnect_lock:
+                return self._u2 is not None
+        try:
+            return self._reconnect_u2_impl()
+        finally:
+            self._u2_reconnect_lock.release()
+
+    def _reconnect_u2_impl(self) -> bool:
         with self._u2_lock:
             if self._u2 is not None:
                 return True
@@ -2404,11 +2517,8 @@ class DeviceClient:
         if self._u2_host:
             return self._reconnect_u2_atx()
 
-        # Legacy WS tunnel path
-        ports = self._tunnel_ports or {}
-        if "u2" not in ports:
-            return False
-        port = ports["u2"]
+        # Legacy WS tunnel path — re-read port each attempt: attach_agent_sender
+        # can rotate TunnelSet while this loop is sleeping / retrying.
         cfg = self.config.u2
 
         for attempt in range(1, self._U2_RECONNECT_ATTEMPTS + 1):
@@ -2417,6 +2527,11 @@ class DeviceClient:
                 with self._u2_lock:
                     if self._u2 is not None:
                         return True
+
+            ports = self._tunnel_ports or {}
+            if "u2" not in ports:
+                return False
+            port = ports["u2"]
 
             d_rpc: Any = U2JsonRpcClient(
                 "127.0.0.1",
@@ -2501,9 +2616,10 @@ class DeviceClient:
                     _relay_serial = self._adb_serial or host
                     if _rm is not None and _rm.relay_for_serial(_relay_serial):
                         _actual = _rm.resolve_serial(_relay_serial)
+                        if _actual != self.serial and not self._adb_serial:
+                            self._adb_serial = _actual
                         _rs = _RelaySession(_actual, _rm, self._loop)
                         d_rpc._session = _rs
-                        d_rpc.watchers.set_session(_rs)
                         relay_attached = True
                         self._log(f"u2 ATX: using relay session for {_actual}")
                 except Exception as _e:
@@ -2967,13 +3083,9 @@ class DeviceClient:
                       level=logging.WARNING)
 
         self.state = DeviceState.READY
-        # Prefer U2 as primary touch backend when available: proactively try to
-        # bring it up once at READY so the first tap after connect goes through U2
-        # instead of falling back to scrcpy control.
-        try:
-            self.ensure_u2_healthy()
-        except Exception:
-            pass
+        # U2 eager-connect thread (line ~2964) is already running — don't call
+        # ensure_u2_healthy() here too, as both would race to open TCP connections
+        # to the u2 WS tunnel simultaneously, causing the tunnel to drop responses.
         if self._u2 is not None:
             touch_status = "u2"
         elif self._get_scrcpy_control() is not None:
@@ -2999,9 +3111,9 @@ class DeviceClient:
           - Respects a 30s backoff after a full failed reconnect cycle.
           - In WS mode: sends start_services to ask agent to (re)start u2 on device.
         """
-        _INTERVAL = max(3.0, float(os.environ.get("U2_KEEPALIVE_INTERVAL", "5.0")))
+        _INTERVAL = max(5.0, float(os.environ.get("U2_KEEPALIVE_INTERVAL", "10.0")))
         _PING_TIMEOUT = 3.0   # atx-agent (Go HTTP) responds fast; 3s is enough
-        _MAX_MISSES = 4  # ~20 s of misses before declaring dead (was 2/~10 s)
+        _MAX_MISSES = 3  # ~30s of misses before declaring dead
         misses = 0
 
         def _is_alive() -> bool:

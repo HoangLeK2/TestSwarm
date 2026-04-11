@@ -11,6 +11,7 @@ import hashlib
 import logging
 import re
 import time
+import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
 
 from lxml import etree as _lxml
@@ -100,6 +101,12 @@ _NOISE_CONTAINS = (
     "thước phim",
     "trạng thái hoạt động",
     "đã chỉnh sửa",
+)
+
+_TRUNCATION_MARKERS = (
+    "xem thêm",
+    "see more",
+    "view more",
 )
 
 _AD_RESOURCE_IDS = frozenset({
@@ -340,6 +347,24 @@ def _extract_post(cluster: List[Dict[str, Any]], source_index: int) -> Optional[
     _pid_raw = f"{author or ''}\x00{body[:120]}"
     _pid = hashlib.md5(_pid_raw.encode()).hexdigest()[:16]
 
+    # Stable logical post identity for merge/dedup across preview → expanded versions.
+    # Keep it resilient to body growth by using normalized prefix, not full text.
+    _stable_prefix = unicodedata.normalize("NFC", re.sub(r"\s+", " ", body.lower()).strip())
+    _stable_prefix = _stable_prefix.replace("…", "").replace("...", "")
+    for _mk in _TRUNCATION_MARKERS:
+        _stable_prefix = _stable_prefix.replace(_mk, "")
+    _stable_prefix = _stable_prefix.strip()[:100]
+    # Do not include timestamp in stable id: timestamp labels can vary ("1 giờ", "59 phút")
+    # across captures for the same logical post and would split dedup keys.
+    _sid_author = unicodedata.normalize("NFC", (author or "").strip().lower())
+    _sid_img = unicodedata.normalize("NFC", (image_desc or "").strip().lower())[:40]
+    _sid_raw = f"{_sid_author}\x00{_stable_prefix}\x00{_sid_img}"
+    stable_post_id = hashlib.sha1(_sid_raw.encode("utf-8")).hexdigest()
+
+    # Stable key for dedupe/linking: stronger than text-only hash.
+    _pk_raw = f"{author or ''}\x00{body}\x00{image_desc or ''}\x00{comment_preview or ''}"
+    post_key = hashlib.sha1(_pk_raw.encode("utf-8")).hexdigest()
+
     return {
         "author":          author or "",
         "text":            body,
@@ -353,6 +378,8 @@ def _extract_post(cluster: List[Dict[str, Any]], source_index: int) -> Optional[
         "image_desc":      image_desc,
         "comment_preview": comment_preview,
         "_pid":            _pid,
+        "stable_post_id":  stable_post_id,
+        "post_key":        post_key,
     }
 
 
@@ -428,15 +455,72 @@ def parse_fb_posts_from_xml(xml: str, source_index: int = 0) -> List[Dict[str, A
 
 
 def _dedup(posts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Deduplicate: same author + timestamp + text[:60] = same post."""
-    seen: set = set()
-    out: List[Dict[str, Any]] = []
+    """Deduplicate feed posts while preferring the richer/fuller version.
+
+    Key keeps compatibility with historical behavior:
+    same author + timestamp + text-prefix[:60] is considered the same post.
+
+    Important: when both truncated and expanded versions appear, keep the one
+    with longer body and richer metadata (stats/image/comment preview).
+    """
+    by_key: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    order: List[Tuple[str, str]] = []
+
+    def _quality(post: Dict[str, Any]) -> Tuple[int, int, int]:
+        text = str(post.get("text") or "")
+        stats_count = sum(
+            1
+            for k in ("reactions", "comments", "shares", "views", "image_desc", "comment_preview")
+            if post.get(k)
+        )
+        unresolved = int(any(mk in text.lower() for mk in _TRUNCATION_MARKERS))
+        # Prefer resolved/non-truncated text first, then length, then richer metadata.
+        return (-unresolved, len(text), stats_count)
+
+    def _norm_text(value: str) -> str:
+        t = unicodedata.normalize("NFC", (value or "").lower())
+        t = re.sub(r"\s+", " ", t).strip()
+        for mk in _TRUNCATION_MARKERS:
+            t = t.replace(mk, "")
+        return re.sub(r"\s+", " ", t).strip()
+
+    def _likely_same_logical_post(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
+        ta = _norm_text(str(a.get("text") or ""))
+        tb = _norm_text(str(b.get("text") or ""))
+        if not ta or not tb:
+            return True
+        # Truncated/expanded variants usually keep one body as prefix of the other.
+        return ta.startswith(tb) or tb.startswith(ta)
+
     for p in posts:
-        key = (p["author"], p["timestamp"], p["text"][:60])
-        if key not in seen:
-            seen.add(key)
-            out.append(p)
-    return out
+        stable_post_id = str(p.get("stable_post_id") or "")
+        timestamp = str(p.get("timestamp") or "")
+        if stable_post_id:
+            key = ("sid", stable_post_id)
+        else:
+            # Backward compatibility fallback for old records without stable_post_id.
+            author = str(p.get("author") or "")
+            text = str(p.get("text") or "")
+            key = ("legacy", f"{author}\x00{timestamp}\x00{text[:60]}")
+
+        existing = by_key.get(key)
+        if existing is None:
+            by_key[key] = p
+            order.append(key)
+            continue
+
+        # Guard against stable-id collisions (same sid but clearly different bodies).
+        if key[0] == "sid" and not _likely_same_logical_post(existing, p):
+            collision_key = ("sid-collision", f"{stable_post_id}\x00{p.get('post_key') or p.get('_pid') or len(order)}")
+            if collision_key not in by_key:
+                by_key[collision_key] = p
+                order.append(collision_key)
+            continue
+
+        if _quality(p) > _quality(existing):
+            by_key[key] = p
+
+    return [by_key[k] for k in order]
 
 
 # ── Comment-like button patterns (from real UIAutomator XML) ─────────────────
@@ -574,6 +658,12 @@ def _extract_comment(
     if not author and not text:
         return None
 
+    # Stable key for dedup across retries/reruns while still separating by parent post.
+    norm_author = unicodedata.normalize("NFC", (author or "").strip().lower())
+    norm_text = unicodedata.normalize("NFC", text.strip().lower())
+    norm_parent = unicodedata.normalize("NFC", (parent_post_id or "").strip().lower())
+    comment_key = hashlib.sha1(f"{norm_parent}\x00{norm_author}\x00{norm_text}".encode("utf-8")).hexdigest()
+
     # indent_level: 0 = top-level comment, 1 = reply (indented x≥220), 2 = deeply nested (x≥280)
     indent_level = 0
     if cluster_min_x >= 280:
@@ -588,6 +678,7 @@ def _extract_comment(
         "likes":          likes,
         "parent_post_id": parent_post_id,
         "indent_level":   indent_level,
+        "comment_key":    comment_key,
     }
 
 
@@ -693,7 +784,7 @@ def _dedup_comments(comments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     seen: set = set()
     out: List[Dict[str, Any]] = []
     for c in comments:
-        key = (c["author"], c["text"][:60])
+        key = c.get("comment_key") or (c["author"], c["text"][:60])
         if key not in seen:
             seen.add(key)
             out.append(c)
@@ -712,6 +803,8 @@ def _expand_see_more(
     max_passes: int = 2,
     scroll_between: bool = False,
     scroll_distance: float = 0.3,
+    max_total_taps: int = 40,
+    no_change_threshold: int = 2,
 ) -> int:
     """Tap all visible 'See more' / 'Xem thêm' buttons.
 
@@ -723,10 +816,45 @@ def _expand_see_more(
         scroll_distance: fraction of screen height to scroll between passes (0–1).
     Returns total count expanded."""
     total = 0
+    no_change_streak = 0
+    target_phrases = (
+        "see more",
+        "xem thêm",
+        "view more comments",
+        "view more replies",
+        "xem thêm bình luận",
+        "xem thêm câu trả lời",
+    )
+
+    def _matches_target(node) -> bool:
+        txt = ((node.get("text") or "") + " " + (node.get("content-desc") or "")).strip().lower()
+        return bool(txt) and any(k in txt for k in target_phrases)
+
+    def _resolve_clickable_bounds(node) -> Optional[Tuple[int, int, int, int]]:
+        if (node.get("clickable") or "").lower() == "true":
+            b = _parse_bounds(node)
+            if b:
+                return b
+        # FB often puts the label on a non-clickable child.
+        cur = node
+        for _ in range(6):
+            cur = cur.getparent()
+            if cur is None:
+                break
+            if (cur.get("clickable") or "").lower() == "true":
+                b = _parse_bounds(cur)
+                if b:
+                    return b
+        return None
     for pass_num in range(max_passes):
+        if total >= max_total_taps:
+            break
+
         if pass_num > 0 and scroll_between:
+            # Progressive hydration: move viewport to trigger next text chunk render.
             device.scroll(direction="down", distance=scroll_distance)
-            time.sleep(0.5)
+            time.sleep(0.6)
+
         xml = device.hierarchy_xml(force_refresh=True)
         if not xml:
             break
@@ -735,15 +863,18 @@ def _expand_see_more(
             root = _parse_xml(xml)
             if root is None:
                 break
-            candidates = root.xpath(
-                '//node[@clickable="true" and ('
-                '@text="See more" or @text="Xem thêm" or '
-                '@text="see more" or @text="xem thêm"'
-                ')]'
-            )
-            for node in candidates:
-                b = _parse_bounds(node)
+            nodes = root.xpath('//node[@text or @content-desc]')
+            tapped_bounds: set[Tuple[int, int, int, int]] = set()
+            for node in nodes:
+                if not _matches_target(node):
+                    continue
+                if total + expanded >= max_total_taps:
+                    break
+                b = _resolve_clickable_bounds(node)
                 if b:
+                    if b in tapped_bounds:
+                        continue
+                    tapped_bounds.add(b)
                     device.tap((b[0] + b[2]) // 2, (b[1] + b[3]) // 2)
                     expanded += 1
                     time.sleep(0.4)
@@ -752,8 +883,16 @@ def _expand_see_more(
         if expanded:
             time.sleep(1.0)  # Allow content to fully expand before next pass
             total += expanded
+            no_change_streak = 0
         else:
-            break  # Nothing left to expand
+            no_change_streak += 1
+            if no_change_streak >= no_change_threshold:
+                break
+
+            # One extra viewport nudge can reveal another "Xem thêm" layer.
+            if scroll_between:
+                device.scroll(direction="down", distance=max(0.15, scroll_distance / 2))
+                time.sleep(0.5)
     return total
 
 

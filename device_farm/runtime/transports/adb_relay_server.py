@@ -234,7 +234,7 @@ class RelayConnection:
 class AdbRelayManager:
     """
     Singleton — holds all active RelayConnection objects.
-    device_client.py calls adb_shell() / restart_u2() here.
+    device_client.py calls adb_shell() / restart_atx() / restart_u2() (legacy) here.
     """
 
     def __init__(self) -> None:
@@ -436,6 +436,10 @@ class AdbRelayManager:
 
     def register_scrcpy_receiver(self, serial: str, receiver: Any) -> None:
         self._scrcpy_receivers[serial] = receiver
+
+    def get_scrcpy_receiver(self, serial: str) -> Any:
+        """Return the DeviceClient-owned receiver currently bound to this relay ADB serial."""
+        return self._scrcpy_receivers.get(serial)
 
     def unregister_scrcpy_receiver(self, serial: str) -> None:
         self._scrcpy_receivers.pop(serial, None)
@@ -642,7 +646,7 @@ class AdbRelayManager:
     async def bootstrap(self, serial: str, timeout: float = 180.0) -> bool:
         """Ask agent-boot to bootstrap the device (push binaries, install APKs, start services).
 
-        Returns True when atx-agent + u2 are confirmed running on the device.
+        Returns True when atx-agent is confirmed listening on port 7912.
         Should be called once after a device first appears online via relay.
         """
         conn = self.relay_for_serial(serial)

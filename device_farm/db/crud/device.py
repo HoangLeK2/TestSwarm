@@ -212,6 +212,32 @@ async def list_devices(db: AsyncSession, user_id: Optional[str] = None) -> list[
     return list(result.scalars().all())
 
 
+async def relay_scrcpy_auto_attach_allowed(db: AsyncSession, serial: str) -> bool:
+    """True if auto-attach is OK: unknown device in DB → allow (default on)."""
+    row = await get_device_by_serial(db, serial)
+    if row is None:
+        return True
+    return bool(row.relay_scrcpy_enabled)
+
+
+async def get_relay_scrcpy_enabled_map(
+    db: AsyncSession, serials: list[str]
+) -> dict[str, bool]:
+    if not serials:
+        return {}
+    result = await db.execute(
+        select(Device.serial, Device.relay_scrcpy_enabled).where(Device.serial.in_(serials))
+    )
+    return {str(r.serial): bool(r.relay_scrcpy_enabled) for r in result.all()}
+
+
+async def set_relay_scrcpy_enabled(db: AsyncSession, serial: str, enabled: bool) -> None:
+    await db.execute(
+        update(Device).where(Device.serial == serial).values(relay_scrcpy_enabled=enabled)
+    )
+    await db.commit()
+
+
 async def delete_device(db: AsyncSession, device_id: str) -> None:
     """
     Xoá device và mọi liên kết campaign-device của nó.

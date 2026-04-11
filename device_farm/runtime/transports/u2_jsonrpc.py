@@ -244,8 +244,9 @@ class _WatcherContext:
         ...
         client.watchers.stop()
 
-    Thread safety: uses a dedicated HTTP session separate from the main
-    client session so watcher polling never races with main-thread RPCs.
+    Thread safety: all HTTP uses the client's session under ``client._http_lock``
+    so watcher polling never overlaps another RPC on the same TCP tunnel / relay
+    stream (concurrent sessions caused mixed JSON bodies and duplicate tunnel reads).
     """
 
     def __init__(self, client: "U2JsonRpcClient") -> None:
@@ -254,19 +255,12 @@ class _WatcherContext:
         self._thread: Optional[threading.Thread] = None
         self._running = False
         self._interval = 2.0
-        # Dedicated session — never shared with the main client session.
-        self._session = requests.Session()
-        self._session.headers.update({"Accept-Encoding": ""})
 
     def __getitem__(self, name: str) -> _WatcherEntry:
         return self._entries[name]
 
     def __len__(self) -> int:
         return len(self._entries)
-
-    def set_session(self, session: Any) -> None:
-        """Replace the dedicated HTTP session (e.g. with a _RelaySession in relay mode)."""
-        self._session = session
 
     def start(self, interval: float = 2.0) -> None:
         """Start the watcher background thread."""
@@ -364,17 +358,18 @@ class _WatcherContext:
             "method": method,
             "params": list(args),
         }
-        r = self._session.post(
-            self._client._base + _RPC_PATH,
-            json=payload,
-            timeout=self._client._touch_timeout,
-        )
-        if not r.ok:
-            raise RuntimeError(f"watcher RPC HTTP {r.status_code}")
-        data = json.loads(r.text or "{}")
-        if "error" in data:
-            raise RuntimeError(f"watcher RPC error: {data['error']}")
-        return data.get("result")
+        with self._client._http_lock:
+            r = self._client._session.post(
+                self._client._base + _RPC_PATH,
+                json=payload,
+                timeout=self._client._touch_timeout,
+            )
+            if not r.ok:
+                raise RuntimeError(f"watcher RPC HTTP {r.status_code}")
+            data = json.loads(r.text or "{}")
+            if "error" in data:
+                raise RuntimeError(f"watcher RPC error: {data['error']}")
+            return data.get("result")
 
     def _find_node(self, root: Any, entry: _WatcherEntry) -> Optional[Any]:
         """Find the first XML node matching entry's condition."""
@@ -422,7 +417,7 @@ class _WatcherContext:
         return None
 
     def _fetch_page_source(self) -> str:
-        """Fetch UI hierarchy using the dedicated watcher session.
+        """Fetch UI hierarchy via the client's session (under ``_http_lock``).
 
         Uses compressed=True so dumpWindowHierarchy skips off-screen/invisible
         sub-trees — same as the main hierarchy path.  The original False caused
@@ -436,15 +431,16 @@ class _WatcherContext:
             "params": [True, 50],
         }
         try:
-            r = self._session.post(
-                self._client._base + _RPC_PATH,
-                json=payload,
-                timeout=10.0,
-            )
-            if not r.ok:
-                return ""
-            data = json.loads(r.text or "{}")
-            return str(data.get("result") or "")
+            with self._client._http_lock:
+                r = self._client._session.post(
+                    self._client._base + _RPC_PATH,
+                    json=payload,
+                    timeout=10.0,
+                )
+                if not r.ok:
+                    return ""
+                data = json.loads(r.text or "{}")
+                return str(data.get("result") or "")
         except Exception:
             return ""
 
@@ -614,6 +610,9 @@ class U2JsonRpcClient:
         # Disable gzip: NanoHTTPD has a known resource leak with gzip encoding.
         # https://github.com/NanoHttpd/nanohttpd/issues/492
         self._session.headers.update({"Accept-Encoding": ""})
+        # Serialize every HTTP transaction: Session is not thread-safe, and a
+        # second TCP to the local tunnel (e.g. from a parallel Session) breaks u2.
+        self._http_lock = threading.RLock()
         self._req_id = 0
         self.settings: Dict[str, Any] = {}
         self._implicitly_wait: float = 10.0
@@ -649,7 +648,8 @@ class U2JsonRpcClient:
         Returns True if server responds with any valid HTTP 200."""
         try:
             t = timeout if timeout is not None else self._timeout
-            r = self._session.get(self._base + "/ping", timeout=t)
+            with self._http_lock:
+                r = self._session.get(self._base + "/ping", timeout=t)
             return r.status_code == 200
         except Exception:
             return False
@@ -665,7 +665,8 @@ class U2JsonRpcClient:
         - If self._session is _RelaySession: u2 wrapper via agent-boot relay.
         """
         try:
-            r = self._session.get(self._base + "/screenshot/0", timeout=timeout)
+            with self._http_lock:
+                r = self._session.get(self._base + "/screenshot/0", timeout=timeout)
             if r.status_code != 200:
                 logger.warning("U2 screenshot failed: HTTP %d", r.status_code)
                 return None
@@ -1278,21 +1279,22 @@ class U2JsonRpcClient:
 
         t = _timeout if _timeout is not None else self._timeout
         url = self._base + _RPC_PATH
-        r = self._session.post(url, json=payload, timeout=t)
-        if not r.ok:
-            raise RuntimeError(
-                f"JSON-RPC HTTP {r.status_code} for method={method!r}: {r.text[:200]!r}"
-            )
-        raw = r.text or ""
-        if not raw.strip():
-            raise RuntimeError("JSON-RPC empty response (tunnel reconnect?)")
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError as e:
-            raise RuntimeError(f"JSON-RPC invalid response: {raw[:200]!r}") from e
-        if "error" in data:
-            raise RuntimeError(f"JSON-RPC error: {data['error']}")
-        return data.get("result")
+        with self._http_lock:
+            r = self._session.post(url, json=payload, timeout=t)
+            if not r.ok:
+                raise RuntimeError(
+                    f"JSON-RPC HTTP {r.status_code} for method={method!r}: {r.text[:200]!r}"
+                )
+            raw = r.text or ""
+            if not raw.strip():
+                raise RuntimeError("JSON-RPC empty response (tunnel reconnect?)")
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError as e:
+                raise RuntimeError(f"JSON-RPC invalid response: {raw[:200]!r}") from e
+            if "error" in data:
+                raise RuntimeError(f"JSON-RPC error: {data['error']}")
+            return data.get("result")
 
     def _build_selector(self, by: str, value: str) -> Dict[str, Any]:
         """Convert W3C/WebDriver selector to uiautomator2 JSON-RPC selector with mask.
@@ -1470,26 +1472,27 @@ class U2JsonRpcClient:
         Raises RuntimeError on failure.
         """
         install_url = self._base.rstrip("/") + "/install"
-        if apk_source.startswith(("http://", "https://")):
-            r = self._session.post(
-                install_url,
-                json={"url": apk_source},
-                timeout=timeout,
-            )
-        else:
-            import os
-            with open(apk_source, "rb") as fh:
+        with self._http_lock:
+            if apk_source.startswith(("http://", "https://")):
                 r = self._session.post(
                     install_url,
-                    files={
-                        "file": (
-                            os.path.basename(apk_source),
-                            fh,
-                            "application/vnd.android.package-archive",
-                        )
-                    },
+                    json={"url": apk_source},
                     timeout=timeout,
                 )
+            else:
+                import os
+                with open(apk_source, "rb") as fh:
+                    r = self._session.post(
+                        install_url,
+                        files={
+                            "file": (
+                                os.path.basename(apk_source),
+                                fh,
+                                "application/vnd.android.package-archive",
+                            )
+                        },
+                        timeout=timeout,
+                    )
         if not r.ok:
             raise RuntimeError(
                 f"install: HTTP {r.status_code}: {r.text[:200]!r}"

@@ -1,6 +1,5 @@
 import type { FlowStep } from '../scenario-steps/types';
 
-/** Color categories for step cards (Tailwind border-left color). */
 export const STEP_COLORS: Record<string, string> = {
   tap: 'border-l-blue-500', tap_ratio: 'border-l-blue-500', tap_position: 'border-l-blue-500',
   tap_selector: 'border-l-blue-500', long_tap_selector: 'border-l-blue-500', swipe_ratio: 'border-l-blue-500',
@@ -29,56 +28,93 @@ export const BRACKET_COLORS: Record<string, { border: string; bg: string; label:
   loop: { border: 'border-teal-400/60', bg: 'bg-teal-50/50 dark:bg-teal-950/20', label: 'text-teal-600 dark:text-teal-400' },
 };
 
-/** Insert menu — Vietnamese. Two top-level categories: Action vs Flow. */
+function localizeExtractStrategy(strategy?: string): string {
+  switch (strategy) {
+    case 'fb_posts':
+      return 'Bài viết Facebook';
+    case 'fb_comments':
+      return 'Bình luận Facebook';
+    case 'text_nodes':
+      return 'Văn bản hiển thị';
+    default:
+      return strategy ?? 'fb_posts';
+  }
+}
+
+function localizeDataVar(dataVar?: string): string {
+  switch (dataVar) {
+    case 'comments':
+      return 'bình luận';
+    case 'posts':
+      return 'bài viết';
+    case 'text_nodes':
+      return 'văn bản';
+    default:
+      return dataVar ?? 'posts';
+  }
+}
+
+function localizeCollection(collection?: string): string {
+  if (!collection) return 'default';
+  const trimmed = collection.trim();
+  if (/^\$\{SAVE_COLLECTION\}$/i.test(trimmed)) {
+    return 'bộ sưu tập đã cấu hình';
+  }
+  if (/^\$\{[^}]+\}$/.test(trimmed)) {
+    return 'bộ sưu tập theo biến';
+  }
+  return trimmed;
+}
+
 export const INSERT_MENU = [
   {
     group: 'Thu thập dữ liệu',
     description: 'Cào và lưu nội dung từ màn hình',
     items: [
-      { type: 'extract', label: 'Trích xuất (extract)', icon: '🔎' },
-      { type: 'save_extraction', label: 'Lưu dữ liệu (save_extraction)', icon: '💾' },
+      { type: 'extract', label: 'Trích xuất (extract)' },
+      { type: 'save_extraction', label: 'Lưu dữ liệu (save_extraction)' },
     ]
   },
   {
     group: 'Hành động',
     description: 'Thao tác trực tiếp lên màn hình',
     items: [
-      { type: 'tap_selector', label: 'Chạm phần tử', icon: '👆' },
-      { type: 'tap_ratio', label: 'Chạm tọa độ', icon: '👆' },
-      { type: 'tap_position', label: 'Chạm vị trí cố định', icon: '👆' },
-      { type: 'long_tap_selector', label: 'Nhấn giữ', icon: '👇' },
-      { type: 'swipe_ratio', label: 'Vuốt', icon: '👉' },
-      { type: 'input_text', label: 'Nhập văn bản', icon: '⌨️' },
-      { type: 'input_selector', label: 'Nhập vào phần tử', icon: '⌨️' },
-      { type: 'key', label: 'Nhấn phím', icon: '⌨️' },
-      { type: 'launch_app', label: 'Mở ứng dụng', icon: '📱' },
-      { type: 'open_url', label: 'Mở URL', icon: '🌐' },
-      { type: 'scroll_down', label: 'Cuộn xuống', icon: '⬇️' },
-      { type: 'scroll_to', label: 'Cuộn tới phần tử', icon: '⬇️' },
-      { type: 'assert_element', label: 'Kiểm tra phần tử', icon: '✅' },
-      { type: 'dismiss_popup', label: 'Đóng popup', icon: '❌' },
-      { type: 'double_tap', label: 'Chạm đúp', icon: '👆' },
-      { type: 'pinch', label: 'Phóng to/thu nhỏ', icon: '🤏' },
-      { type: 'drag', label: 'Kéo thả', icon: '✊' },
-      { type: 'take_screenshot', label: 'Chụp màn hình', icon: '📸' },
-      { type: 'set_clipboard', label: 'Ghi clipboard', icon: '📋' },
-      { type: 'set_variable', label: 'Gán biến', icon: '📝' },
+      { type: 'tap_selector', label: 'Chạm phần tử' },
+      { type: 'tap_ratio', label: 'Chạm tọa độ' },
+      { type: 'tap_position', label: 'Chạm vị trí cố định' },
+      { type: 'long_tap_selector', label: 'Nhấn giữ' },
+      { type: 'swipe_ratio', label: 'Vuốt' },
+      { type: 'input_text', label: 'Nhập văn bản' },
+      { type: 'input_selector', label: 'Nhập vào phần tử' },
+      { type: 'key', label: 'Nhấn phím' },
+      { type: 'launch_app', label: 'Mở ứng dụng' },
+      { type: 'open_url', label: 'Mở URL' },
+      { type: 'scroll_down', label: 'Cuộn xuống' },
+      { type: 'scroll_to', label: 'Cuộn tới phần tử' },
+      { type: 'assert_element', label: 'Kiểm tra phần tử' },
+      { type: 'dismiss_popup', label: 'Đóng popup' },
+      { type: 'double_tap', label: 'Chạm đúp' },
+      { type: 'pinch', label: 'Phóng to/thu nhỏ' },
+      { type: 'drag', label: 'Kéo thả' },
+      { type: 'take_screenshot', label: 'Chụp màn hình' },
+      { type: 'set_clipboard', label: 'Ghi clipboard' },
+      { type: 'set_variable', label: 'Gán biến' },
     ]
   },
   {
     group: 'Luồng',
     description: 'Điều kiện, lặp, chờ — kiểm soát luồng chạy',
     items: [
-      { type: 'wait', label: 'Chờ (giây)', icon: '⏱' },
-      { type: 'wait_element', label: 'Chờ phần tử xuất hiện', icon: '🔍' },
-      { type: 'wait_stable', label: 'Chờ màn hình ổn định', icon: '⏱' },
-      { type: 'if_element', label: 'Nếu phần tử tồn tại', icon: '🔀' },
-      { type: 'if_variable', label: 'Nếu biến thỏa điều kiện', icon: '🔀' },
-      { type: 'loop', label: 'Vòng lặp (hỗ trợ biến)', icon: '🔃' },
-      { type: 'repeat', label: 'Lặp N lần', icon: '🔄' },
-      { type: 'repeat_until', label: 'Lặp cho đến khi', icon: '🔁' },
-      { type: 'random_pick', label: 'Chọn ngẫu nhiên', icon: '🎲' },
-      { type: 'run_scenario', label: 'Chạy kịch bản con', icon: '📦' },
+      { type: 'wait', label: 'Chờ (giây)' },
+      { type: 'wait_element', label: 'Chờ phần tử xuất hiện' },
+      { type: 'wait_stable', label: 'Chờ màn hình ổn định' },
+      { type: 'if_element', label: 'Nếu phần tử tồn tại' },
+      { type: 'if_variable', label: 'Nếu biến thỏa điều kiện' },
+      { type: 'loop', label: 'Vòng lặp (hỗ trợ biến)' },
+      { type: 'repeat', label: 'Lặp N lần' },
+      { type: 'repeat_until', label: 'Lặp cho đến khi' },
+      { type: 'random_pick', label: 'Chọn ngẫu nhiên' },
+      { type: 'run_scenario', label: 'Chạy kịch bản con' },
     ]
   },
 ];
@@ -121,8 +157,8 @@ export function getStepSummary(step: FlowStep): string {
     case 'random_pick': return `${step.branches?.length ?? 0} nhánh`;
     case 'run_scenario': return step.scenario_name || step.scenario_id || '';
     case 'loop': return `×${step.count ?? '?'}`;
-    case 'extract': return step.strategy ?? 'fb_posts';
-    case 'save_extraction': return `${step.data_var ?? 'posts'} → ${step.collection ?? 'default'}`;
+    case 'extract': return localizeExtractStrategy(step.strategy);
+    case 'save_extraction': return `${localizeDataVar(step.data_var)} → ${localizeCollection(step.collection)}`;
     default: return '';
   }
 }
@@ -192,9 +228,9 @@ export function getStepDisplay(step: FlowStep): { target: string; selectorBadge?
     case 'loop':
       return { target: `×${step.count ?? '?'}` };
     case 'extract':
-      return { target: step.strategy ?? 'fb_posts' };
+      return { target: localizeExtractStrategy(step.strategy) };
     case 'save_extraction':
-      return { target: `${step.data_var ?? 'posts'} → ${step.collection ?? 'default'}` };
+      return { target: `${localizeDataVar(step.data_var)} → ${localizeCollection(step.collection)}` };
     default:
       return { target: getStepSummary(step) };
   }

@@ -184,8 +184,30 @@ export function createDefaultStep(type: string): FlowStep {
     case 'set_clipboard': return { type: 'set_clipboard', text: '' };
     case 'set_variable': return { type: 'set_variable', name: '', value: '' };
     case 'loop': return { type: 'loop', count: '10', steps: [] };
-    case 'extract': return { type: 'extract', strategy: 'fb_posts', expand_see_more: true, stop_if_no_new: true, no_new_threshold: 30 };
-    case 'save_extraction': return { type: 'save_extraction', data_var: 'posts', collection: 'default', platform: 'facebook', content_type: 'post', dedupe_field: 'text', tags: '' };
+    case 'extract':
+      return {
+        type: 'extract',
+        strategy: 'fb_posts',
+        expand_see_more: true,
+        expand_see_more_max_passes: 2,
+        expand_see_more_scroll: false,
+        expand_see_more_scroll_distance: 0.3,
+        expand_completion_retries: 1,
+        max_items: 50,
+        stop_if_no_new: true,
+        no_new_threshold: 30,
+      };
+    case 'save_extraction':
+      return {
+        type: 'save_extraction',
+        data_var: 'posts',
+        collection: 'default',
+        platform: 'facebook',
+        content_type: 'post',
+        dedupe_field: 'text',
+        tags: '',
+        item_level: 0,
+      };
     default: return { type };
   }
 }

@@ -83,6 +83,8 @@ def _adb_shell(cmd: str, serial: str, timeout: int = 30) -> str:
 
 
 def list_serials() -> list[str]:
+    from relay.adb import dedupe_adb_serials_prefer_usb
+
     result = _run(["adb", "devices"], check=False)
     lines = result.stdout.strip().splitlines()[1:]
     devices = [
@@ -97,23 +99,7 @@ def list_serials() -> list[str]:
             "    or connect via WiFi: adb connect <ip>:5555"
         )
 
-    seen_hosts: dict[str, str] = {}  # host → preferred serial
-    for serial in devices:
-        host = serial.split(":")[0] if ":" in serial else serial
-        existing = seen_hosts.get(host)
-        if existing is None:
-            seen_hosts[host] = serial
-        elif ":" not in existing:
-            # Prefer any WiFi serial over a USB serial (USB will need tcpip)
-            seen_hosts[host] = serial
-
-    # Disconnect duplicate WiFi connections for the same host (keep only the chosen one)
-    chosen = set(seen_hosts.values())
-    for serial in devices:
-        if ":" in serial and serial not in chosen:
-            _run(["adb", "disconnect", serial], check=False)
-
-    return sorted(seen_hosts.values())
+    return dedupe_adb_serials_prefer_usb(devices)
 
 
 def _get_sdk(serial: str) -> int:

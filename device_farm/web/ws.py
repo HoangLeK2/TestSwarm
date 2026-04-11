@@ -258,6 +258,8 @@ class WebSocketManager:
                 self._conn_sender_groups[conn_id] = sender_tasks
             send_task = asyncio.create_task(self._sender_ctrl(ws, ctrl_q, ws_send_lock))
             recv_task = asyncio.create_task(self._receiver(ws))
+            # Ping loop keeps TCP alive; excluded from wait so silent failures don't tear down connection.
+            ping_task = asyncio.create_task(self._ws_ping_loop(ws, ws_send_lock))
             done, pending = await asyncio.wait(
                 [send_task, recv_task], return_when=asyncio.FIRST_COMPLETED
             )
@@ -275,9 +277,10 @@ class WebSocketManager:
                             )
                     except Exception:
                         pass
+            ping_task.cancel()
             for t in pending:
                 t.cancel()
-            for t in pending:
+            for t in [*pending, ping_task]:
                 try:
                     await t
                 except asyncio.CancelledError:
@@ -385,6 +388,16 @@ class WebSocketManager:
             except Exception:
                 return
 
+    async def _ws_ping_loop(self, ws: WebSocket, ws_send_lock: asyncio.Lock, interval: float = 20.0) -> None:
+        """JSON-level ping to keep TCP alive (WS protocol ping is disabled due to uvicorn drain assertion)."""
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                async with ws_send_lock:
+                    await ws.send_json({"type": "ping", "ts": time.time()})
+        except Exception:
+            pass
+
     async def _device_sender(
         self,
         ws: WebSocket,
@@ -436,13 +449,13 @@ class WebSocketManager:
                 if version_gap > 0:
                     dropped_version_total += version_gap
                 lag_ms = max(0.0, (time.monotonic() - frame_ts) * 1000.0)
-                if not congestion and (lag_ms > 100.0 or version_gap > 3):
+                if not congestion and (lag_ms > 100.0 or version_gap > 4):
                     congestion = True
                 elif congestion and lag_ms < 50.0:
                     congestion = False
 
                 # In congestion, prefer skipping non-key deltas when version gaps are large.
-                if congestion and version_gap > 3 and not is_key:
+                if congestion and version_gap > 4 and not is_key:
                     last_version = version
                     continue
 
@@ -451,7 +464,7 @@ class WebSocketManager:
                 # if another sender currently owns the socket, drop this stale frame
                 # and wait for a fresher snapshot instead of blocking.
                 try:
-                    await asyncio.wait_for(ws_send_lock.acquire(), timeout=0.03)
+                    await asyncio.wait_for(ws_send_lock.acquire(), timeout=0.1)
                 except asyncio.TimeoutError:
                     last_version = version
                     continue
@@ -667,12 +680,33 @@ class DeviceAgentSession:
                 self._active_keys.add(key)
         try:
             # ── Handshake ────────────────────────────────────────────────────
-            hello = await asyncio.wait_for(ws.receive_json(), timeout=15.0)
+            # Reconnect races can deliver a heartbeat (e.g. pong) before hello.
+            import time as _hello_time
+
+            _hello_deadline = _hello_time.monotonic() + 15.0
+            hello: Optional[dict] = None
+            while True:
+                _rem = _hello_deadline - _hello_time.monotonic()
+                if _rem <= 0:
+                    log.warning("Agent WS: hello timeout (no valid hello in 15s)")
+                    await ws.close(code=4000)
+                    return
+                msg = await asyncio.wait_for(ws.receive_json(), timeout=_rem)
+                if msg.get("type") == "hello":
+                    hello = msg
+                    break
+                if msg.get("type") in ("pong", "ping"):
+                    log.debug("Agent WS: skipping %s before hello", msg.get("type"))
+                    continue
+                log.warning("Agent WS: invalid hello (expected hello): %s", msg)
+                await ws.close(code=4000)
+                return
+
             msg_type = hello.get("type")
             serial = hello.get("serial") or hello.get("device_key")
 
             if msg_type != "hello" or not serial:
-                log.warning(f"Agent WS: invalid hello: {hello}")
+                log.warning("Agent WS: invalid hello payload: %s", hello)
                 await ws.close(code=4000)
                 return
 
@@ -985,64 +1019,120 @@ class DeviceAgentSession:
             # scrcpy_control only toggles control channel (touch/key via scrcpy),
             # not whether video stream should start.
             if client_ip and self._config:
-                try:
-                    # Yield any relay-only device's scrcpy session for the same IP.
-                    # A relay-only device (serial="ip:port") is created before the
-                    # APK WS connects.  If it's running scrcpy and we start a second
-                    # one, both fight for localabstract:scrcpy → rapid crash loop.
-                    # _clear_scrcpy_without_stop() hands over without sending stop,
-                    # so attach_scrcpy_stream below can inherit the running session.
-                    for _other in self._manager.all_devices():
-                        if _other.serial == serial:
-                            continue
-                        _other_ip = (
-                            _other.serial.rsplit(":", 1)[0]
-                            if ":" in _other.serial
-                            else _other.serial
-                        )
-                        if _other_ip == client_ip and getattr(_other, "_scrcpy_active", False):
-                            log.debug(
-                                "WS device %s yielding scrcpy from relay device %s",
-                                serial, _other.serial,
+                _streaming = self._config.streaming
+                if (
+                    _streaming.mode == "continuous"
+                    and getattr(_streaming, "auto_attach_scrcpy_on_connect", True)
+                ):
+                    allow_attach = True
+                    if self._ws_manager._db_enabled:
+                        try:
+                            async with AsyncSessionLocal() as db:
+                                allow_attach = await repo.relay_scrcpy_auto_attach_allowed(db, serial)
+                        except Exception as exc:
+                            log.warning(
+                                "relay_scrcpy DB check failed for %s: %s",
+                                serial,
+                                exc,
                             )
-                            _other._clear_scrcpy_without_stop()
-                            break
+                            allow_attach = True
+                    if not allow_attach:
+                        log.info(
+                            "Skip auto-attach scrcpy (relay_scrcpy_enabled=false in DB): %s",
+                            serial,
+                        )
+                        # H264 binary frames embed the DeviceClient.serial that owns the
+                        # RelayScrcpyReceiver.  If relay-only slot (hardware serial) grabbed
+                        # scrcpy first, frames are tagged 10AE7S… while the dashboard decodes
+                        # only the agent serial (49c…).  When relay already streams for our
+                        # resolved _adb_serial, re-attach here so register_scrcpy_receiver
+                        # points at this agent's callbacks (correct prefix) — no second
+                        # scrcpy_start (inherit path in attach_scrcpy_stream).
+                        try:
+                            from runtime.transports.adb_relay_server import get_relay_manager
 
-                    scrcpy_target = getattr(device, "_adb_serial", None) or client_ip
-                    # Re-resolve target at attach time: when device-agent connects
-                    # before relay registration, _adb_serial can remain a NAT/public
-                    # client_ip:5555 that no relay owns. Resolve again against current
-                    # relay registry and fall back to the single online relay serial.
-                    try:
-                        from runtime.transports.adb_relay_server import get_relay_manager
+                            _rm = get_relay_manager()
+                            _adb = (getattr(device, "_adb_serial", None) or "").strip()
+                            if _rm and _adb:
+                                _tgt = _rm.resolve_serial(_adb)
+                                if _rm.is_scrcpy_running(_tgt):
+                                    loop.run_in_executor(
+                                        None,
+                                        device.attach_scrcpy_stream,
+                                        _tgt,
+                                        None,
+                                        self._config.device.scrcpy_control,
+                                    )
+                                    log.info(
+                                        "Inherited relay scrcpy for agent %s (DB relay_scrcpy off, target=%s)",
+                                        serial,
+                                        _tgt,
+                                    )
+                        except Exception as _inh_exc:
+                            log.debug(
+                                "scrcpy inherit-after-skip failed for %s: %s",
+                                serial,
+                                _inh_exc,
+                            )
+                    else:
+                        try:
+                            # Yield any relay-only device's scrcpy session for the same IP.
+                            # A relay-only device (serial="ip:port") is created before the
+                            # APK WS connects.  If it's running scrcpy and we start a second
+                            # one, both fight for localabstract:scrcpy → rapid crash loop.
+                            # _clear_scrcpy_without_stop() hands over without sending stop,
+                            # so attach_scrcpy_stream below can inherit the running session.
+                            for _other in self._manager.all_devices():
+                                if _other.serial == serial:
+                                    continue
+                                _other_ip = (
+                                    _other.serial.rsplit(":", 1)[0]
+                                    if ":" in _other.serial
+                                    else _other.serial
+                                )
+                                if _other_ip == client_ip and getattr(_other, "_scrcpy_active", False):
+                                    log.debug(
+                                        "WS device %s yielding scrcpy from relay device %s",
+                                        serial, _other.serial,
+                                    )
+                                    _other._clear_scrcpy_without_stop()
+                                    break
 
-                        relay_mgr = get_relay_manager()
-                        if relay_mgr:
-                            resolved = relay_mgr.resolve_serial(scrcpy_target)
-                            if resolved == scrcpy_target and ":" in str(scrcpy_target):
-                                all_serials: list[str] = []
-                                for serials in relay_mgr.registered_relays().values():
-                                    all_serials.extend(serials)
-                                uniq = sorted(set(all_serials))
-                                if len(uniq) == 1:
-                                    resolved = uniq[0]
-                            scrcpy_target = resolved
-                            device._adb_serial = scrcpy_target
-                    except Exception:
-                        pass
-                    loop.run_in_executor(
-                        None,
-                        device.attach_scrcpy_stream,
-                        scrcpy_target,
-                        # adb_port intentionally omitted — mDNS uses OS-assigned port,
-                        # not :5555. relay manager resolves actual serial by IP.
-                    )
-                    log.info(
-                        "Auto-attaching scrcpy stream for %s (client_ip=%s target=%s)",
-                        serial, client_ip, scrcpy_target,
-                    )
-                except Exception as exc:
-                    log.warning("Auto-attach scrcpy failed for %s: %s", serial, exc)
+                            scrcpy_target = getattr(device, "_adb_serial", None) or client_ip
+                            # Re-resolve target at attach time: when device-agent connects
+                            # before relay registration, _adb_serial can remain a NAT/public
+                            # client_ip:5555 that no relay owns. Resolve again against current
+                            # relay registry and fall back to the single online relay serial.
+                            try:
+                                from runtime.transports.adb_relay_server import get_relay_manager
+
+                                relay_mgr = get_relay_manager()
+                                if relay_mgr:
+                                    resolved = relay_mgr.resolve_serial(scrcpy_target)
+                                    if resolved == scrcpy_target and ":" in str(scrcpy_target):
+                                        all_serials: list[str] = []
+                                        for serials in relay_mgr.registered_relays().values():
+                                            all_serials.extend(serials)
+                                        uniq = sorted(set(all_serials))
+                                        if len(uniq) == 1:
+                                            resolved = uniq[0]
+                                    scrcpy_target = resolved
+                                    device._adb_serial = scrcpy_target
+                            except Exception:
+                                pass
+                            loop.run_in_executor(
+                                None,
+                                device.attach_scrcpy_stream,
+                                scrcpy_target,
+                                # adb_port intentionally omitted — mDNS uses OS-assigned port,
+                                # not :5555. relay manager resolves actual serial by IP.
+                            )
+                            log.info(
+                                "Auto-attaching scrcpy stream for %s (client_ip=%s target=%s)",
+                                serial, client_ip, scrcpy_target,
+                            )
+                        except Exception as exc:
+                            log.warning("Auto-attach scrcpy failed for %s: %s", serial, exc)
 
             # ── Message loop ─────────────────────────────────────────────────
             log.info("Agent %s: ready, streaming…", serial)

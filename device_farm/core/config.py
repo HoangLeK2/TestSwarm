@@ -118,6 +118,11 @@ class StreamingConfig:
     """
     mode: str = "periodic"             # "periodic" | "continuous"
     dashboard_interval: float = 3.0    # seconds between screenshots (periodic mode only)
+    auto_attach_scrcpy_on_connect: bool = True
+    # When False, relay gRPC "device online" does not call attach_scrcpy_stream — use grid/control toggle or POST attach.
+    auto_attach_scrcpy_on_relay_online: bool = True
+    # When False, device-farm grid does not load MJPEG preview tiles (saves bandwidth server↔browser).
+    dashboard_grid_preview_mjpeg: bool = True
 
 
 @dataclass
@@ -371,6 +376,19 @@ def load_config(path: str = "config.yaml") -> Config:
         streaming=StreamingConfig(
             mode=_get(streaming_raw, "mode", "periodic"),
             dashboard_interval=float(_get(streaming_raw, "dashboard_interval", 3.0)),
+            auto_attach_scrcpy_on_connect=bool(
+                _get(
+                    streaming_raw,
+                    "auto_attach_scrcpy_on_connect",
+                    _get(streaming_raw, "auto_attach_scrcpy", True),
+                )
+            ),
+            dashboard_grid_preview_mjpeg=bool(
+                _get(streaming_raw, "dashboard_grid_preview_mjpeg", True)
+            ),
+            auto_attach_scrcpy_on_relay_online=bool(
+                _get(streaming_raw, "auto_attach_scrcpy_on_relay_online", True)
+            ),
         ),
         temporal=_build_temporal_config(raw.get("temporal", {})),
         minio=_build_minio_config(raw.get("minio", {})),

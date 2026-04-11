@@ -352,20 +352,18 @@ class TestWatcherDedicatedSession:
         # Must not raise
         ctx._check_and_fire(root, entry)
 
-    def test_rpc_dedicated_uses_watcher_session_not_client_session(self):
-        """_rpc_dedicated posts through self._session, not self._client._session."""
+    def test_rpc_dedicated_uses_client_session_under_lock(self):
+        """_rpc_dedicated posts through client._session while holding _http_lock."""
         c, ctx = self._make_ctx()
-        ctx._session.post = Mock(return_value=_ok_response(result=None))
-        c._session.post = Mock()  # should NOT be called
+        c._session.post = Mock(return_value=_ok_response(result=None))
 
         ctx._rpc_dedicated("click", 50, 25)
 
-        ctx._session.post.assert_called_once()
-        c._session.post.assert_not_called()
+        c._session.post.assert_called_once()
 
     def test_rpc_dedicated_raises_on_http_error(self):
         c, ctx = self._make_ctx()
-        ctx._session.post = Mock(return_value=_err_response(500))
+        c._session.post = Mock(return_value=_err_response(500))
         with pytest.raises(RuntimeError, match="HTTP 500"):
             ctx._rpc_dedicated("click", 50, 25)
 
@@ -375,20 +373,20 @@ class TestWatcherDedicatedSession:
         resp.ok = True
         resp.status_code = 200
         resp.text = json.dumps({"jsonrpc": "2.0", "id": 0, "error": {"message": "UiObjectNotFound"}})
-        ctx._session.post = Mock(return_value=resp)
+        c._session.post = Mock(return_value=resp)
         with pytest.raises(RuntimeError, match="watcher RPC error"):
             ctx._rpc_dedicated("click", 50, 25)
 
     def test_rpc_dedicated_sends_correct_payload(self):
         c, ctx = self._make_ctx()
-        ctx._session.post = Mock(return_value=_ok_response(result=True))
+        c._session.post = Mock(return_value=_ok_response(result=True))
         ctx._rpc_dedicated("click", 100, 200)
 
-        _, kwargs = ctx._session.post.call_args
-        payload = kwargs.get("json") or ctx._session.post.call_args[0][1]
+        _, kwargs = c._session.post.call_args
+        payload = kwargs.get("json") or c._session.post.call_args[0][1]
         if payload is None:
             # positional
-            payload = ctx._session.post.call_args[0][1]
+            payload = c._session.post.call_args[0][1]
         assert payload["method"] == "click"
         assert payload["params"] == [100, 200]
 

@@ -14,11 +14,14 @@ from __future__ import annotations
 import base64
 import logging
 import os as _os
+import re
 import shutil
 import subprocess
 import time
 from pathlib import Path
 from typing import Optional
+
+from relay.device_state import DeviceRegistry
 
 logger = logging.getLogger("relay.adb")
 
@@ -91,6 +94,38 @@ def _run(
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+def dedupe_adb_serials_prefer_usb(serials: list[str]) -> list[str]:
+    """
+    Collapse duplicate routes to the same ADB host key, preferring USB (serial
+    without ':') over TCP (ip:port). Disconnects dropped TCP serials from the
+    local adb server.
+
+    Host key: part before first ':' for TCP; full serial for USB.
+    """
+    seen_hosts: dict[str, str] = {}
+    for serial in serials:
+        host = serial.split(":", 1)[0] if ":" in serial else serial
+        existing = seen_hosts.get(host)
+        if existing is None:
+            seen_hosts[host] = serial
+            continue
+        new_tcp = ":" in serial
+        old_tcp = ":" in existing
+        if old_tcp and not new_tcp:
+            seen_hosts[host] = serial
+        elif not old_tcp and new_tcp:
+            pass
+        else:
+            seen_hosts[host] = serial
+
+    chosen = set(seen_hosts.values())
+    for serial in serials:
+        if ":" in serial and serial not in chosen:
+            _run("disconnect", serial, timeout=15)
+
+    return sorted(seen_hosts.values())
+
+
 def _list_serials() -> list[str]:
     """Snapshot of currently connected serials (startup / fallback only).
     Real-time tracking is handled by AdbDeviceWatcher (adb track-devices)."""
@@ -100,7 +135,78 @@ def _list_serials() -> list[str]:
         parts = line.split("\t")
         if len(parts) == 2 and parts[1].strip() == "device":
             serials.append(parts[0].strip())
-    return serials
+    return dedupe_adb_serials_prefer_usb(serials)
+
+
+def reconcile_usb_preferred_for_duplicate_devices(
+    registry: DeviceRegistry,
+) -> list[tuple[str, str]]:
+    """
+    When the same physical device appears as both USB and TCP (same
+    hardware_serial in probed capabilities), disconnect TCP so ADB and the
+    farm see a single stable USB serial.
+
+    Returns [(tcp_serial, usb_serial), ...] for each TCP disconnected so the
+    relay can suppress auto-reconnect while the USB anchor stays online.
+    """
+    disconnected: list[tuple[str, str]] = []
+    by_hw: dict[str, list[str]] = {}
+    for s in registry.online_serials:
+        ctx = registry.get(s)
+        if ctx is None:
+            continue
+        hw = (ctx.capabilities or {}).get("hardware_serial", "")
+        if isinstance(hw, str):
+            hw = hw.strip()
+        if not hw:
+            continue
+        by_hw.setdefault(hw, []).append(s)
+
+    for _hw, group in by_hw.items():
+        usbs = [x for x in group if ":" not in x]
+        tcps = [x for x in group if ":" in x]
+        if not usbs or not tcps:
+            continue
+        usb_anchor = usbs[0]
+        for w in tcps:
+            out, rc = _run("disconnect", w, timeout=15)
+            logger.info(
+                "USB preferred: adb disconnect %s (rc=%s) %s",
+                w,
+                rc,
+                (out or "").strip()[:120],
+            )
+            disconnected.append((w, usb_anchor))
+    return disconnected
+
+
+_IPV4_RE = re.compile(
+    r"^(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)$"
+)
+
+
+def _looks_like_ipv4(s: str) -> bool:
+    return bool(s and _IPV4_RE.match(s.strip()))
+
+
+def _resolve_device_lan_ip(serial: str) -> str | None:
+    """LAN IPv4 to reach atx-agent :7912 when ADB serial is USB (not ip:port)."""
+    if not serial:
+        return None
+    for prop in ("dhcp.wlan0.ipaddress", "dhcp.wlan1.ipaddress"):
+        out, _ = _adb_shell(serial, f"getprop {prop}", timeout=4)
+        ip = out.strip()
+        if _looks_like_ipv4(ip):
+            return ip
+    out, _ = _adb_shell(
+        serial,
+        "ip -f inet route get 8.8.8.8 2>/dev/null || ip route get 8.8.8.8 2>/dev/null",
+        timeout=6,
+    )
+    m = re.search(r"\bsrc\s+(\d{1,3}(?:\.\d{1,3}){3})\b", out)
+    if m and _looks_like_ipv4(m.group(1)):
+        return m.group(1)
+    return None
 
 
 def _adb_shell(serial: str, cmd: str, timeout: int = 30) -> tuple[str, int]:
@@ -170,7 +276,7 @@ def _restart_atx(serial: str, timeout: int = 30) -> tuple[str, int]:
         timeout=5,
     )
     # Poll port 7912 until atx-agent is ready to accept connections.
-    _ATX_PORT_HEX = "1EF8"  # 7912 in hex
+    _ATX_PORT_HEX = "1EE8"  # 7912 decimal (0x1EE8)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         time.sleep(1.5)
@@ -246,6 +352,7 @@ def _probe_capabilities(serial: str) -> dict:
             return 0
 
     w, h = screen_dims()
+    hw_serial = shell("getprop ro.boot.serialno").strip() or shell("getprop ro.serialno").strip()
     return {
         "sdk":             shell("getprop ro.build.version.sdk"),
         "android_version": shell("getprop ro.build.version.release"),
@@ -259,6 +366,7 @@ def _probe_capabilities(serial: str) -> dict:
         "u2":              pkg_installed("com.github.uiautomator"),
         "stf":             pkg_installed("jp.co.cyberagent.stf"),
         "tags":            [],  # populated by user config / env vars
+        "hardware_serial": hw_serial,
     }
 
 
@@ -358,7 +466,7 @@ def _bootstrap_device(serial: str, timeout: int = 180) -> tuple[str, int]:
     2. Push atx-agent binary if missing
     3. Install u2 APKs if missing
     4. Start atx-agent (wait for port 7912)
-    5. Start u2 instrumentation (wait for port 9008)
+    5. Start atx-agent (wait for port 7912)
 
     Returns ("bootstrap complete", 0) on success, error string + -1 on failure.
     Designed to be idempotent — safe to call multiple times.

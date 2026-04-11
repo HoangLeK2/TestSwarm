@@ -50,7 +50,7 @@ export function useH264Video(
       return;
     }
 
-    const worker = new Worker('/h264-worker.js?v=17');
+    const worker = new Worker('/h264-worker.js?v=18');
     workerRef.current = worker;
 
     const drawLatest = () => {

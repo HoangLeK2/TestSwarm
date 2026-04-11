@@ -9,12 +9,14 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from api.schemas.device_control import ScrcpyAttachRequest
+from db import crud as repo
+from db.database import AsyncSessionLocal
 from runtime.core import DeviceManager
 
 log = logging.getLogger(__name__)
 
 
-def build_scrcpy_router(manager: DeviceManager) -> APIRouter:
+def build_scrcpy_router(manager: DeviceManager, *, db_enabled: bool) -> APIRouter:
     router = APIRouter()
 
     @router.post("/devices/{serial}/scrcpy/attach")
@@ -39,6 +41,12 @@ def build_scrcpy_router(manager: DeviceManager) -> APIRouter:
         await loop.run_in_executor(
             None, device.attach_scrcpy_stream, device_ip, adb_port, body.enable_control
         )
+        if db_enabled:
+            try:
+                async with AsyncSessionLocal() as db:
+                    await repo.set_relay_scrcpy_enabled(db, serial, True)
+            except Exception as exc:
+                log.warning("persist relay_scrcpy_enabled=True for %s: %s", serial, exc)
         return {
             "ok": True,
             "serial": serial,
@@ -52,6 +60,12 @@ def build_scrcpy_router(manager: DeviceManager) -> APIRouter:
         if not device:
             return JSONResponse({"error": "Device not found"}, status_code=404)
         device.detach_scrcpy_stream()
+        if db_enabled:
+            try:
+                async with AsyncSessionLocal() as db:
+                    await repo.set_relay_scrcpy_enabled(db, serial, False)
+            except Exception as exc:
+                log.warning("persist relay_scrcpy_enabled=False for %s: %s", serial, exc)
         return {"ok": True, "serial": serial}
 
     return router

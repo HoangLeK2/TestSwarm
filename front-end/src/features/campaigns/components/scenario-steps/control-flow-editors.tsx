@@ -10,7 +10,16 @@ type FieldProps = {
 const inputCls = 'border rounded px-1.5 py-0.5 bg-background text-[11px]';
 const labelCls = 'shrink-0 text-[11px] text-muted-foreground';
 
-const SELECTOR_OPTIONS = ['text', 'resource-id', 'xpath', 'class name', 'description'] as const;
+const SELECTOR_OPTIONS = [
+  'text',
+  'resource-id',
+  'xpath',
+  'class name',
+  'description',
+  'descriptionContains',
+  'descriptionStartsWith',
+  'content-desc',
+] as const;
 
 function SelectorSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (

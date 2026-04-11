@@ -108,18 +108,26 @@ streaming:
 # Set enabled: true only when Temporal server is running.
 # When disabled, campaigns fall back to the in-process TaskQueue automatically.
 # Start server: docker run -p 7233:7233 temporalio/auto-setup:latest
-# ─── MinIO Object Storage ─────────────────────────────────────────────────────
-# Save screenshots to MinIO instead of filesystem local.
-# Khi dùng Docker Compose, minio-init service tự tạo bucket.
-# Console: http://localhost:9001  (username/password = minioadmin/minioadmin)
-minio:
-  enabled: true
-  endpoint: "localhost:9000"
-  access_key: "minioadmin"
-  secret_key: "minioadmin"
+# ─── Object storage (Cloudflare R2 — S3 API) ─────────────────────────────────
+# Tạo bucket + API token (Object Read & Write) trong Cloudflare Dashboard → R2.
+# endpoint: <ACCOUNT_ID>.r2.cloudflarestorage.com  (không ghi https://)
+# public_base_url: URL public (custom domain hoặc *.r2.dev). Với r2.dev / domain gắn 1 bucket, đặt public_url_include_bucket: false
+# Docker MinIO cục bộ: docker compose --profile minio up -d rồi set env MINIO_* hoặc object_storage bên dưới (legacy key ``minio:`` vẫn đọc được).
+object_storage:
+  enabled: false
+  endpoint: ""                              # ví dụ: abc123def456.r2.cloudflarestorage.com
+  access_key: ""                             # R2 Access Key ID
+  secret_key: ""                             # R2 Secret Access Key
   bucket: "device-farm"
-  secure: false
-  public_base_url: "http://localhost:9000"   # URL screenshots returned as http://localhost:9000/device-farm/...
+  secure: true
+  public_base_url: ""                       # ví dụ: https://pub-xxxxx.r2.dev
+  public_url_include_bucket: false          # R2 public: thường false
+  region: ""                                # để trống → R2 tự dùng "auto"
+# Legacy (vẫn merge được nếu bạn chưa đổi file):
+# minio:
+#   enabled: true
+#   endpoint: "localhost:9000"
+#   ...
 
 temporal:
   enabled: true                        # Set true to use Temporal

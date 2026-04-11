@@ -142,7 +142,7 @@ def _save_screenshot(data: bytes, content_hash: str) -> str:
     Save screenshot bytes. Returns URL/path string stored in DB.
 
     Tries MinIO first; falls back to local filesystem.
-    Skips blank/black frames (quality gate in minio_store).
+    Skips blank/black frames (quality gate in object storage / minio_store).
     """
     from services import minio_store
 

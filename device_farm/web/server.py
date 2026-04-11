@@ -392,7 +392,7 @@ def create_app(
     _captures_dir = Path("captures")
     _captures_dir.mkdir(exist_ok=True)
     _init_image_store(_captures_dir)
-    minio_store.init(config.minio)
+    minio_store.init(config.object_storage)
     app.mount("/captures", StaticFiles(directory=str(_captures_dir)), name="captures")
 
     assets_dir = Path(front_end_dist) / "assets" if front_end_dist else None

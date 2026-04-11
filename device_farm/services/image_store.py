@@ -3,7 +3,7 @@ image_store.py — Save/load step screenshots and element images.
 
 Storage backends
 ~~~~~~~~~~~~~~~~
-* MinIO (preferred): when ``minio_store.enabled()`` is True, images are
+* Object storage / R2 (preferred): when ``minio_store.enabled()`` is True, images are
   uploaded to MinIO and URLs point to the MinIO object.
 * Local filesystem (fallback): images saved to
   ``<captures_dir>/screenshots/<scenario_id>/step_<idx>_<type>.jpg``

@@ -9,7 +9,7 @@
 #   frontend   — Next.js dashboard (port 3000)
 #   postgres   — PostgreSQL (host port 5433 → container 5432; avoid clash with local PG)
 #   temporal   — Temporal Server (port 7233, UI: 8233)
-#   minio      — Object storage for screenshots (API: 9000, Console: 9001)
+#   minio — đã comment; bật lại khi cần S3 local (kèm volume minio_data).
 #
 # agent-boot (local relay):
 #   Runs on the physical machine that has ADB access to devices.
@@ -86,10 +86,6 @@ services:
         condition: service_healthy
       temporal:
         condition: service_healthy
-      minio:
-        condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
     # Bridge network (default): works on Docker Desktop Mac/Windows. Agent-boot on the
     # host uses localhost:8081 and localhost:50051 via published ports below.
     # On Linux bare metal you can switch to network_mode: host + 127.0.0.1:* URLs if you want lower NAT overhead.
@@ -108,11 +104,21 @@ services:
       ACCESS_EXPIRE_HOURS: ${ACCESS_EXPIRE_HOURS:-1}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      MINIO_ENDPOINT: minio:9000
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
-      MINIO_BUCKET: ${MINIO_BUCKET:-device-farm}
-      MINIO_PUBLIC_BASE_URL: ${MINIO_PUBLIC_BASE_URL:-}
+      # Cloudflare R2 (ưu tiên). Để trống nếu chỉ lưu local / dùng presigned.
+      R2_ENDPOINT: ${R2_ENDPOINT:-}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
+      R2_BUCKET: ${R2_BUCKET:-device-farm}
+      R2_PUBLIC_BASE_URL: ${R2_PUBLIC_BASE_URL:-}
+      R2_SECURE: ${R2_SECURE:-}
+      R2_PUBLIC_URL_INCLUDE_BUCKET: ${R2_PUBLIC_URL_INCLUDE_BUCKET:-}
+      R2_REGION: ${R2_REGION:-}
+      # Legacy MinIO / S3 env (bật khi trỏ tới MinIO ngoài compose)
+      # MINIO_ENDPOINT: ${MINIO_ENDPOINT:-}
+      # MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-}
+      # MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-}
+      # MINIO_BUCKET: ${MINIO_BUCKET:-}
+      # MINIO_PUBLIC_BASE_URL: ${MINIO_PUBLIC_BASE_URL:-}
       RELAY_API_KEY: ${RELAY_API_KEY:-}
       RELAY_PORT: ${RELAY_PORT:-50051}
       DEVICE_FARM_U2_ALWAYS_TUNNEL: ${DEVICE_FARM_U2_ALWAYS_TUNNEL:-1}
@@ -141,43 +147,46 @@ services:
   #     NEXT_PUBLIC_API_URL: http://farm:8081
   #     NEXT_PUBLIC_WS_URL: ws://farm:8081
 
-  minio:
-    image: minio/minio:latest
-    restart: unless-stopped
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
-    ports:
-      - "9000:9000"   # S3 API
-      - "9001:9001"   # Web Console → http://localhost:9001
-    volumes:
-      - minio_data:/data
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-      start_period: 5s
-
-
-  # One-shot: tạo bucket device-farm ngay sau khi MinIO healthy
-  minio-init:
-    image: minio/mc:latest
-    depends_on:
-      minio:
-        condition: service_healthy
-    restart: "no"
-    entrypoint: >
-      /bin/sh -c "
-        mc alias set local http://minio:9000 ${MINIO_ACCESS_KEY:-minioadmin} ${MINIO_SECRET_KEY:-minioadmin} &&
-        mc mb --ignore-existing local/${MINIO_BUCKET:-device-farm} &&
-        mc anonymous set download local/${MINIO_BUCKET:-device-farm} &&
-        echo 'Bucket ${MINIO_BUCKET:-device-farm} ready.'
-      "
+  # ─── MinIO (local S3) — tắt mặc định; bỏ # để dùng lại + uncomment minio_data volume ───
+  # minio:
+  #   profiles:
+  #     - minio
+  #   image: minio/minio:latest
+  #   restart: unless-stopped
+  #   command: server /data --console-address ":9001"
+  #   environment:
+  #     MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+  #     MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+  #   ports:
+  #     - "9000:9000"   # S3 API
+  #     - "9001:9001"   # Web Console → http://localhost:9001
+  #   volumes:
+  #     - minio_data:/data
+  #   healthcheck:
+  #     test: ["CMD", "mc", "ready", "local"]
+  #     interval: 5s
+  #     timeout: 3s
+  #     retries: 10
+  #     start_period: 5s
+  #
+  # minio-init:
+  #   profiles:
+  #     - minio
+  #   image: minio/mc:latest
+  #   depends_on:
+  #     minio:
+  #       condition: service_healthy
+  #   restart: "no"
+  #   entrypoint: >
+  #     /bin/sh -c "
+  #       mc alias set local http://minio:9000 ${MINIO_ACCESS_KEY:-minioadmin} ${MINIO_SECRET_KEY:-minioadmin} &&
+  #       mc mb --ignore-existing local/${MINIO_BUCKET:-device-farm} &&
+  #       mc anonymous set download local/${MINIO_BUCKET:-device-farm} &&
+  #       echo 'Bucket ${MINIO_BUCKET:-device-farm} ready.'
+  #     "
 
 
 volumes:
   pgdata:
   farm_captures:
-  minio_data:
+  # minio_data:

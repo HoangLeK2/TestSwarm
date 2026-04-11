@@ -138,21 +138,32 @@ class DatabaseConfig:
 
 
 @dataclass
-class MinioConfig:
-    """MinIO / S3-compatible object storage for screenshots and captured images.
+class ObjectStorageConfig:
+    """S3-compatible object storage (Cloudflare R2, MinIO, AWS S3, …) for screenshots.
 
     Set enabled: true and fill endpoint/keys to activate.
     Falls back to local filesystem when disabled (default).
+
+    R2: endpoint = ``<ACCOUNT_ID>.r2.cloudflarestorage.com`` (no scheme), secure = true,
+    region left empty uses ``auto`` automatically for R2 hosts.
+    Public URLs: set public_base_url to your r2.dev URL or custom domain; set
+    public_url_include_bucket false when the domain is already bound to one bucket
+    (typical for R2 public access).
     """
     enabled: bool = False
-    endpoint: str = "localhost:9000"
-    access_key: str = "minioadmin"
-    secret_key: str = "minioadmin"
+    endpoint: str = ""
+    access_key: str = ""
+    secret_key: str = ""
     bucket: str = "device-farm"
-    secure: bool = False
-    # If set, URLs returned as "<public_base_url>/<bucket>/<object>".
+    secure: bool = True
+    # If set, URLs use public_base_url (see public_url_include_bucket).
     # Leave blank to use presigned URLs (1-week TTL).
     public_base_url: str = ""
+    # When true: "<public_base_url>/<bucket>/<object>". When false: "<public_base_url>/<object>"
+    # (use false for R2 r2.dev / custom domain at bucket root).
+    public_url_include_bucket: bool = True
+    # S3 region; empty string lets the client pick (R2 hosts use "auto" in minio_store).
+    region: str = ""
     # Minimum JPEG size in bytes below which images are rejected as blank/black.
     # Blank frames compressed by minicap are typically < 2 KB.
     min_image_bytes: int = 3072
@@ -204,7 +215,7 @@ class Config:
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     streaming: StreamingConfig = field(default_factory=StreamingConfig)
     temporal: TemporalConfig = field(default_factory=TemporalConfig)
-    minio: MinioConfig = field(default_factory=MinioConfig)
+    object_storage: ObjectStorageConfig = field(default_factory=ObjectStorageConfig)
     relay: RelayConfig = field(default_factory=RelayConfig)
     target_app: str = ""
     force_u2_mode: bool = False
@@ -234,23 +245,73 @@ def _build_temporal_config(raw: dict) -> TemporalConfig:
     return cfg
 
 
-def _build_minio_config(raw: dict) -> MinioConfig:
-    """Build MinioConfig from YAML + env var overrides for Docker Compose."""
-    cfg = MinioConfig(
-        **{k: v for k, v in raw.items() if k in MinioConfig.__dataclass_fields__}
+def _normalize_object_storage_endpoint(raw_endpoint: str) -> str:
+    ep = (raw_endpoint or "").strip()
+    for prefix in ("https://", "http://"):
+        if ep.lower().startswith(prefix):
+            ep = ep[len(prefix) :]
+    return ep.rstrip("/")
+
+
+def _build_object_storage_config(raw: dict) -> ObjectStorageConfig:
+    """Build ObjectStorageConfig from YAML ``object_storage`` / legacy ``minio`` + env."""
+    legacy = raw.get("minio") if isinstance(raw.get("minio"), dict) else {}
+    current = raw.get("object_storage") if isinstance(raw.get("object_storage"), dict) else {}
+    merged = {**legacy, **current}
+    cfg = ObjectStorageConfig(
+        **{k: v for k, v in merged.items() if k in ObjectStorageConfig.__dataclass_fields__}
     )
-    # Env overrides — set automatically when farm service runs inside Docker Compose
-    if os.environ.get("MINIO_ENDPOINT"):
-        cfg.endpoint = os.environ["MINIO_ENDPOINT"]
-        cfg.enabled = True  # auto-enable when endpoint is set via env
-    if os.environ.get("MINIO_ACCESS_KEY"):
-        cfg.access_key = os.environ["MINIO_ACCESS_KEY"]
-    if os.environ.get("MINIO_SECRET_KEY"):
-        cfg.secret_key = os.environ["MINIO_SECRET_KEY"]
-    if os.environ.get("MINIO_BUCKET"):
-        cfg.bucket = os.environ["MINIO_BUCKET"]
-    if os.environ.get("MINIO_PUBLIC_BASE_URL"):
-        cfg.public_base_url = os.environ["MINIO_PUBLIC_BASE_URL"]
+    if cfg.endpoint:
+        cfg.endpoint = _normalize_object_storage_endpoint(cfg.endpoint)
+
+    # R2 (preferred), then legacy MinIO env names
+    ep = (
+        os.environ.get("R2_ENDPOINT")
+        or os.environ.get("MINIO_ENDPOINT")
+        or ""
+    ).strip()
+    if ep:
+        cfg.endpoint = _normalize_object_storage_endpoint(ep)
+        cfg.enabled = True
+
+    access = (
+        os.environ.get("R2_ACCESS_KEY_ID")
+        or os.environ.get("R2_ACCESS_KEY")
+        or os.environ.get("MINIO_ACCESS_KEY")
+        or ""
+    ).strip()
+    if access:
+        cfg.access_key = access
+
+    secret = (
+        os.environ.get("R2_SECRET_ACCESS_KEY")
+        or os.environ.get("R2_SECRET_KEY")
+        or os.environ.get("MINIO_SECRET_KEY")
+        or ""
+    ).strip()
+    if secret:
+        cfg.secret_key = secret
+
+    bucket = (os.environ.get("R2_BUCKET") or os.environ.get("MINIO_BUCKET") or "").strip()
+    if bucket:
+        cfg.bucket = bucket
+
+    pub = (os.environ.get("R2_PUBLIC_BASE_URL") or os.environ.get("MINIO_PUBLIC_BASE_URL") or "").strip()
+    if pub:
+        cfg.public_base_url = pub.rstrip("/")
+
+    secure_raw = os.environ.get("R2_SECURE") or os.environ.get("MINIO_SECURE")
+    if secure_raw is not None and str(secure_raw).strip() != "":
+        cfg.secure = str(secure_raw).strip().lower() in ("1", "true", "yes", "on")
+
+    region = (os.environ.get("R2_REGION") or "").strip()
+    if region:
+        cfg.region = region
+
+    inc = os.environ.get("R2_PUBLIC_URL_INCLUDE_BUCKET")
+    if inc is not None and str(inc).strip() != "":
+        cfg.public_url_include_bucket = str(inc).strip().lower() in ("1", "true", "yes", "on")
+
     return cfg
 
 
@@ -391,7 +452,7 @@ def load_config(path: str = "config.yaml") -> Config:
             ),
         ),
         temporal=_build_temporal_config(raw.get("temporal", {})),
-        minio=_build_minio_config(raw.get("minio", {})),
+        object_storage=_build_object_storage_config(raw),
         relay=_build_relay_config(raw.get("relay", {})),
         target_app=raw.get("target_app", ""),
         force_u2_mode=bool(raw.get("force_u2_mode", False)),

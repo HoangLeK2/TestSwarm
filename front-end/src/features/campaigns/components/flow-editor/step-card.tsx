@@ -6,7 +6,7 @@ import type { FlowStep } from '../scenario-steps/types';
 import { STEP_COLORS, getStepTypeName, getStepDisplay, getStepCategory } from './constants';
 import { StepIcon } from './step-icon';
 
-/** Build an <img> src from a stored image value (base64, MinIO URL, or local /captures/ path). */
+/** Build an <img> src from a stored image value (base64, object-storage URL, or local /captures/ path). */
 function stepImageSrc(val: string): string {
   if (!val) return '';
   if (val.startsWith('http') || val.startsWith('/')) return val;

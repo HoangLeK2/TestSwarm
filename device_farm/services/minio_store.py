@@ -1,8 +1,8 @@
 """
-minio_store.py — Optional MinIO/S3 image storage with quality validation.
+minio_store.py — Optional S3-compatible image storage (Cloudflare R2, MinIO, …).
 
-When MinIO is disabled (default), upload() returns None and callers fall back
-to local filesystem storage — zero behaviour change.
+When object storage is disabled (default), upload() returns None and callers fall
+back to local filesystem storage — zero behaviour change.
 
 Quality gate
 ~~~~~~~~~~~~
@@ -16,14 +16,14 @@ Usage
 ~~~~~
     # In server startup:
     from services import minio_store
-    minio_store.init(cfg.minio)
+    minio_store.init(cfg.object_storage)
 
     # In services that save images:
     from services import minio_store
     if minio_store.is_quality_ok(jpeg_bytes):
         url = minio_store.upload(jpeg_bytes, "screenshots/abc/step_0.jpg")
         if url:
-            ...  # use MinIO URL
+            ...  # use object storage URL
         else:
             ...  # save locally
 """
@@ -38,31 +38,51 @@ log = logging.getLogger(__name__)
 _client = None
 _bucket: str = ""
 _public_base_url: str = ""
+_public_url_include_bucket: bool = True
 _enabled: bool = False
-_min_bytes: int = 3072  # updated by init() from MinioConfig
+_min_bytes: int = 3072  # updated by init() from ObjectStorageConfig
+
+
+def _endpoint_host(endpoint: str) -> str:
+    ep = (endpoint or "").strip()
+    for prefix in ("https://", "http://"):
+        if ep.lower().startswith(prefix):
+            ep = ep[len(prefix) :]
+    return ep.split("/")[0].rstrip("/")
 
 
 def init(config) -> None:
-    """Initialise MinIO client from MinioConfig. Safe to call when disabled."""
-    global _client, _bucket, _public_base_url, _enabled, _min_bytes
+    """Initialise S3 client from ObjectStorageConfig. Safe to call when disabled."""
+    global _client, _bucket, _public_base_url, _public_url_include_bucket, _enabled, _min_bytes
     _min_bytes = int(getattr(config, "min_image_bytes", 3072))
     if not config.enabled:
         return
+    endpoint = _endpoint_host(getattr(config, "endpoint", "") or "")
+    if not endpoint:
+        log.warning("minio_store: object storage enabled but endpoint is empty — disabled")
+        return
     try:
         from minio import Minio  # type: ignore[import]
-        _client = Minio(
-            config.endpoint,
+        region = (getattr(config, "region", "") or "").strip()
+        if not region and "r2.cloudflarestorage.com" in endpoint.lower():
+            region = "auto"
+        client_kwargs = dict(
+            endpoint=endpoint,
             access_key=config.access_key,
             secret_key=config.secret_key,
-            secure=config.secure,
+            secure=bool(config.secure),
         )
+        if region:
+            client_kwargs["region"] = region
+        _client = Minio(**client_kwargs)
         _bucket = config.bucket
         _public_base_url = (config.public_base_url or "").rstrip("/")
+        _public_url_include_bucket = bool(getattr(config, "public_url_include_bucket", True))
         if not _client.bucket_exists(_bucket):
             _client.make_bucket(_bucket)
             log.info("minio_store: created bucket %s", _bucket)
         _enabled = True
-        log.info("minio_store: connected to %s bucket=%s", config.endpoint, _bucket)
+        log.info("minio_store: connected to %s bucket=%s", endpoint, _bucket)
     except ImportError:
         log.warning(
             "minio_store: 'minio' package not installed — pip install minio"
@@ -73,7 +93,7 @@ def init(config) -> None:
 
 
 def enabled() -> bool:
-    """True when MinIO is configured and reachable."""
+    """True when S3-compatible storage is configured and reachable."""
     return _enabled
 
 
@@ -105,7 +125,7 @@ def is_quality_ok(data: bytes, min_bytes: Optional[int] = None) -> bool:
 
 def upload(data: bytes, object_name: str, content_type: str = "image/jpeg") -> Optional[str]:
     """
-    Upload bytes to MinIO. Returns the public/presigned URL on success, None on failure.
+    Upload bytes to the configured bucket. Returns public or presigned URL on success.
 
     Check ``enabled()`` first if you need a local fallback.
     """
@@ -120,7 +140,9 @@ def upload(data: bytes, object_name: str, content_type: str = "image/jpeg") -> O
             content_type=content_type,
         )
         if _public_base_url:
-            return f"{_public_base_url}/{_bucket}/{object_name}"
+            if _public_url_include_bucket:
+                return f"{_public_base_url}/{_bucket}/{object_name}"
+            return f"{_public_base_url}/{object_name}"
         from datetime import timedelta
         return _client.presigned_get_object(
             _bucket, object_name, expires=timedelta(weeks=1)
@@ -131,7 +153,7 @@ def upload(data: bytes, object_name: str, content_type: str = "image/jpeg") -> O
 
 
 def delete_prefix(prefix: str) -> None:
-    """Delete all MinIO objects whose name starts with *prefix* (e.g. on scenario delete)."""
+    """Delete all objects whose name starts with *prefix* (e.g. on scenario delete)."""
     if not _enabled or _client is None:
         return
     try:

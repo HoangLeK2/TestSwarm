@@ -57,7 +57,33 @@ export type WsMessage =
       u2_ready?: boolean;
     }
   | { type: 'log'; serial: string; line: string }
-  | { type: 'ws_status'; connected: boolean };
+  | { type: 'ws_status'; connected: boolean }
+  | {
+      type: 'device_event';
+      id: string;
+      serial: string;
+      event: string;
+      reason?: string;
+      old_state?: string;
+      new_state?: string;
+      device_model?: string;
+      device_brand?: string;
+      extra_data?: Record<string, unknown>;
+      created_at: string;
+    };
+
+export interface DeviceEvent {
+  id: string;
+  serial: string;
+  event: string;
+  reason?: string;
+  old_state?: string;
+  new_state?: string;
+  device_model?: string;
+  device_brand?: string;
+  extra_data?: Record<string, unknown>;
+  created_at: string;
+}
 
 /** Subset of GET /api/config used by Device Farm grid tiles. */
 export type DeviceFarmStreamingConfig = {

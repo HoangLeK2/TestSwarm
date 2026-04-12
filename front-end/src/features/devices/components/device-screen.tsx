@@ -76,37 +76,31 @@ export function DeviceScreen({ device, wsSend, mode, onTap, highlightBounds, ges
     };
   }, []);
 
-  /** Only apply server defaults once per device.serial — avoids resetting toggle when streamingFlags object identity changes. */
-  const screenStreamInitSerialRef = useRef<string | null>(null);
+  /** Sync from server (default on). Matches grid tile when UI toggle is hidden. */
   useLayoutEffect(() => {
     if (!streamingFlags) return;
-    if (screenStreamInitSerialRef.current === device.serial) return;
-    screenStreamInitSerialRef.current = device.serial;
-    if (streamingFlags.mode === 'continuous') {
-      setScreenStreamOn(streamingFlags.autoAttach);
-    } else {
+    if (streamingFlags.mode !== 'continuous') {
       setScreenStreamOn(true);
+      return;
     }
-  }, [streamingFlags, device.serial]);
+    const serverWants =
+      device.relay_scrcpy_enabled !== undefined && device.relay_scrcpy_enabled !== null
+        ? Boolean(device.relay_scrcpy_enabled)
+        : Boolean(streamingFlags.autoAttach ?? true);
+    setScreenStreamOn(serverWants);
+  }, [
+    streamingFlags?.mode,
+    streamingFlags?.autoAttach,
+    device.serial,
+    device.relay_scrcpy_enabled,
+  ]);
 
   // Until /api/config returns, assume non-continuous (fail-open: keep legacy full stream).
   const isContinuous =
     streamingFlags !== null && streamingFlags.mode === 'continuous';
-  const streamEnabled =
+  /** Subscribe relay H.264 + honor server detach; MJPEG below stays on so you always see picture. */
+  const relayH264Allowed =
     streamingFlags === null || !isContinuous || screenStreamOn;
-
-  const isContinuousRef = useRef(false);
-  const screenStreamOnRef = useRef(false);
-  isContinuousRef.current = isContinuous;
-  screenStreamOnRef.current = screenStreamOn;
-
-  useEffect(() => {
-    const serial = device.serial;
-    return () => {
-      if (!isContinuousRef.current || !screenStreamOnRef.current) return;
-      void farmApi.post(`/devices/${encodeURIComponent(serial)}/scrcpy/detach`, {}).catch(() => {});
-    };
-  }, [device.serial]);
 
   const onScreenStreamChange = useCallback(
     async (checked: boolean) => {
@@ -143,16 +137,16 @@ export function DeviceScreen({ device, wsSend, mode, onTap, highlightBounds, ges
 
   // Always show MJPEG as baseline — it's hidden (opacity-0) once H264 starts playing
   const mjpegUrl = React.useMemo(() => {
-    if (!isActive || !mjpegEnabled || !streamEnabled) return null;
+    if (!isActive || !mjpegEnabled) return null;
     const base = `${deviceFarmBackendBase}/stream/${encodeURIComponent(device.serial)}?fps=30`;
     const token = tokenStorage.getAuthToken();
     return token ? `${base}&token=${encodeURIComponent(token)}` : base;
-  }, [isActive, mjpegEnabled, streamEnabled, device.serial]);
+  }, [isActive, mjpegEnabled, device.serial]);
 
   // Always pass real serial so binary frames are subscribed immediately on mount.
   // jmuxer gracefully handles missing MSE via onError — MJPEG fallback stays visible.
   useH264Video(
-    isActive && streamEnabled ? device.serial : '',
+    isActive && relayH264Allowed ? device.serial : '',
     canvasRef,
     {
       onFrame: useCallback(() => {
@@ -170,13 +164,18 @@ export function DeviceScreen({ device, wsSend, mode, onTap, highlightBounds, ges
     setMjpegEnabled(true);
     if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
     if (h264StableTimerRef.current) clearTimeout(h264StableTimerRef.current);
-  }, [device.serial, isActive, streamEnabled]);
+  }, [device.serial, isActive, relayH264Allowed]);
 
   // Once H264 stays healthy for a while, stop MJPEG network fetches entirely.
   // If H264 drops, MJPEG is re-enabled immediately as fallback.
   useEffect(() => {
-    if (!isActive || !streamEnabled) {
+    if (!isActive) {
       setMjpegEnabled(false);
+      return;
+    }
+    if (!relayH264Allowed) {
+      if (h264StableTimerRef.current) clearTimeout(h264StableTimerRef.current);
+      setMjpegEnabled(true);
       return;
     }
     if (h264Active) {
@@ -191,7 +190,7 @@ export function DeviceScreen({ device, wsSend, mode, onTap, highlightBounds, ges
     return () => {
       if (h264StableTimerRef.current) clearTimeout(h264StableTimerRef.current);
     };
-  }, [isActive, h264Active, streamEnabled]);
+  }, [isActive, h264Active, relayH264Allowed]);
 
   // Track shared WS connectivity so loading UI can distinguish
   // "socket not up yet" vs "stream waiting first frame".
@@ -204,7 +203,7 @@ export function DeviceScreen({ device, wsSend, mode, onTap, highlightBounds, ges
 
   // Loading elapsed timer while waiting first frame.
   useEffect(() => {
-    if (!isActive || !streamEnabled || hasFrame) {
+    if (!isActive || hasFrame) {
       setLoadingElapsedSec(0);
       return;
     }
@@ -213,7 +212,7 @@ export function DeviceScreen({ device, wsSend, mode, onTap, highlightBounds, ges
       setLoadingElapsedSec(Math.floor((Date.now() - startedAt) / 1000));
     }, 500);
     return () => clearInterval(t);
-  }, [isActive, streamEnabled, hasFrame, device.serial]);
+  }, [isActive, hasFrame, device.serial]);
 
   // ── Touch / gesture ──────────────────────────────────────────────────────
   const clientToDevice = useCallback(
@@ -350,17 +349,7 @@ export function DeviceScreen({ device, wsSend, mode, onTap, highlightBounds, ges
             }}
           />
         )}
-        {isActive && !streamEnabled && isContinuous && (
-          <div
-            className='absolute inset-0 flex items-center justify-center text-xs text-muted-foreground'
-            style={{ pointerEvents: 'none' }}
-          >
-            <div className='rounded-md bg-black/50 px-3 py-2 text-center text-[11px] text-zinc-200'>
-              {t('screenStreamOffHint')}
-            </div>
-          </div>
-        )}
-        {!hasFrame && isActive && streamEnabled && (
+        {!hasFrame && isActive && (
           <div
             className='absolute inset-0 flex items-center justify-center text-xs text-muted-foreground'
             style={{ pointerEvents: 'none' }}

@@ -274,6 +274,7 @@ class DeviceClient:
         self._ws_hierarchy_xml: Optional[str] = None
         self._ws_hierarchy_error: Optional[str] = None
         self._ws_hierarchy_a11y_available: bool = True  # optimistic, disabled on first "accessibility_not_available"
+        self._event_recorder = None  # EventRecorder, injected by DeviceManager
         self._recovery_logger = self._setup_recovery_logger()
         # A11y gRPC routing controls (u2 path remains unchanged).
         self._a11y_grpc_enabled: bool = os.getenv("A11Y_GRPC_ENABLED", "true").lower() in ("1", "true", "yes")
@@ -384,6 +385,7 @@ class DeviceClient:
         if old != new:
             self._log(f"State: {old.value} → {new.value}")
             self._publish_status()
+            self._record_state_event(old, new)
             # Auto-start periodic screenshot timer when device becomes READY
             if new == DeviceState.READY and not self._periodic_ss_started:
                 if self.config.streaming.mode == "periodic":
@@ -469,7 +471,13 @@ class DeviceClient:
                 name=f"u2-retry-{self.serial}",
             ).start()
 
-    def on_agent_disconnected(self, sender: Optional[Callable] = None) -> None:
+    def on_agent_disconnected(
+        self,
+        sender: Optional[Callable] = None,
+        *,
+        reason: str = "unknown",
+        ws_code: Optional[int] = None,
+    ) -> None:
         """Called when the agent WebSocket disconnects.
 
         sender: the _send callable that was active for this session.  When a
@@ -480,6 +488,7 @@ class DeviceClient:
         if sender is not None and self._agent_send is not sender:
             # New session has already replaced this one — stale disconnect, skip teardown.
             return
+        old_state = self._state
         self._agent_send = None
         self._tunnels_ready_channels = set()
         # Keep relay scrcpy alive across APK WS reconnects — relay session is
@@ -501,6 +510,19 @@ class DeviceClient:
             self._last_key_frame = None
             self._last_config_frame = None
         if self.state != DeviceState.DEAD:
+            # Record disconnect event with reason before changing state
+            if self._event_recorder:
+                extra = {"ws_code": ws_code} if ws_code is not None else None
+                self._event_recorder.record(
+                    serial=self.serial,
+                    event="disconnected",
+                    reason=reason,
+                    old_state=old_state.value,
+                    new_state=DeviceState.DISCONNECTED.value,
+                    device_model=self.model,
+                    device_brand=self.brand,
+                    extra=extra,
+                )
             self.state = DeviceState.DISCONNECTED
 
     def route_tunnel_data(self, channel: str, b64_data: str) -> None:
@@ -3210,6 +3232,44 @@ class DeviceClient:
                 queues = list(self._status_queues)
             for q in queues:
                 asyncio.run_coroutine_threadsafe(_safe_put(q, log_msg), self._loop)
+
+    def _record_state_event(self, old: DeviceState, new: DeviceState) -> None:
+        """Record a state-change event via EventRecorder (if injected).
+
+        Only records events meaningful to the user:
+        - connected / reconnected / error
+        Skips:
+        - DISCONNECTED (handled by on_agent_disconnected with reason)
+        - DEAD (handled by watchdog with explicit reason — avoids duplicate)
+        - Internal transitions (DISCONNECTED→CONNECTING, etc.) — noise for users
+        """
+        if not self._event_recorder:
+            return
+        # on_agent_disconnected already records "disconnected" with reason
+        if new == DeviceState.DISCONNECTED:
+            return
+        # watchdog records "dead" with explicit reason (duration info)
+        if new == DeviceState.DEAD:
+            return
+
+        if new == DeviceState.READY and old in (DeviceState.DISCONNECTED, DeviceState.CONNECTING):
+            event_type = "connected"
+        elif new == DeviceState.READY and old in (DeviceState.ERROR, DeviceState.DEAD):
+            event_type = "reconnected"
+        elif new == DeviceState.ERROR:
+            event_type = "error"
+        else:
+            # Skip internal transitions (DISCONNECTED→CONNECTING, BUSY→READY, etc.)
+            return
+
+        self._event_recorder.record(
+            serial=self.serial,
+            event=event_type,
+            old_state=old.value,
+            new_state=new.value,
+            device_model=self.model,
+            device_brand=self.brand,
+        )
 
 
 def _is_droppable_frame(item: Any) -> bool:

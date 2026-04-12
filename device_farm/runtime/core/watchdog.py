@@ -217,6 +217,24 @@ class WatchdogThread(threading.Thread):
             log.error(
                 f"[{serial}] DEAD after {elapsed:.0f}s without recovery"
             )
+            # Record explicit dead event with reason before state change
+            recorder = getattr(device, "_event_recorder", None)
+            if recorder:
+                elapsed_min = int(elapsed // 60)
+                elapsed_sec = int(elapsed % 60)
+                if elapsed_min > 0:
+                    human_dur = f"{elapsed_min}m{elapsed_sec}s"
+                else:
+                    human_dur = f"{elapsed_sec}s"
+                recorder.record(
+                    serial=serial,
+                    event="dead",
+                    reason=f"No response for {human_dur}",
+                    old_state=device.state.value,
+                    new_state=DeviceState.DEAD.value,
+                    device_model=device.model,
+                    device_brand=device.brand,
+                )
             device.state = DeviceState.DEAD
             self._bad_since.pop(serial, None)
             self._atx_miss_count.pop(serial, None)

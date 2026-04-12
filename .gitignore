@@ -31,8 +31,4 @@ node_modules/
 STFService.apk/java_pid*.hprof
 STFService.apk/java_pid*.hprof
 
-# gRPC generated files — regenerate with scripts/gen_proto.sh
-device_farm/runtime/transports/grpc_gen/relay_pb2.py
-device_farm/runtime/transports/grpc_gen/relay_pb2_grpc.py
-agent-boot/relay/grpc_gen/relay_pb2.py
-agent-boot/relay/grpc_gen/relay_pb2_grpc.py
+# gRPC: relay_pb2*.py are tracked; re-run scripts/gen_proto.sh after editing proto/relay.proto

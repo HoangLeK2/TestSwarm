@@ -137,6 +137,68 @@ def build_public_router(
             out["scrcpy_max_fps"] = getattr(dev, "scrcpy_max_fps", 30)
         return out
 
+    @api.get("/events")
+    async def api_events(
+        request: Request,
+        serial: Optional[str] = None,
+        event: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ):
+        """Return device events — from DB if available, else in-memory buffer."""
+        _verify_token_only(request)
+
+        # Try DB first (persistent history)
+        if db_enabled:
+            try:
+                from db.models.device_event import DeviceEvent
+                from sqlalchemy import select, func, desc
+
+                async with AsyncSessionLocal() as db:
+                    q = select(DeviceEvent)
+                    count_q = select(func.count(DeviceEvent.id))
+                    if serial:
+                        q = q.where(DeviceEvent.serial == serial)
+                        count_q = count_q.where(DeviceEvent.serial == serial)
+                    if event:
+                        q = q.where(DeviceEvent.event == event)
+                        count_q = count_q.where(DeviceEvent.event == event)
+                    total = (await db.execute(count_q)).scalar() or 0
+                    rows = (
+                        await db.execute(
+                            q.order_by(desc(DeviceEvent.created_at))
+                            .offset(offset)
+                            .limit(limit)
+                        )
+                    ).scalars().all()
+                    events_out = [
+                        {
+                            "id": r.id,
+                            "serial": r.serial,
+                            "event": r.event,
+                            "reason": r.reason,
+                            "old_state": r.old_state,
+                            "new_state": r.new_state,
+                            "device_model": r.device_model,
+                            "device_brand": r.device_brand,
+                            "extra_data": r.extra_data,
+                            "created_at": r.created_at.isoformat() if r.created_at else None,
+                        }
+                        for r in rows
+                    ]
+                    return {"total": total, "offset": offset, "limit": limit, "events": events_out}
+            except Exception:
+                pass  # fallback to in-memory
+
+        # Fallback: in-memory buffer
+        recorder = getattr(request.app.state, "event_recorder", None)
+        if recorder is None:
+            return {"total": 0, "offset": offset, "limit": limit, "events": []}
+        events = recorder.get_recent(limit=limit + offset, serial=serial, event_type=event)
+        total = len(events)
+        events = events[offset : offset + limit]
+        return {"total": total, "offset": offset, "limit": limit, "events": events}
+
     @api.get("/tasks")
     async def api_tasks(
         request: Request,

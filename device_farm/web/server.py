@@ -43,14 +43,26 @@ def create_app(
     templates_dir: str,
     static_dir: str,
     front_end_dist: Optional[str] = None,
+    event_recorder=None,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         loop = asyncio.get_running_loop()
         _app.state.main_loop = loop
         manager.register_event_loop(loop)
+        if event_recorder is not None:
+            event_recorder.set_event_loop(loop)
+            _app.state.event_recorder = event_recorder
         log.info("Device Farm server started")
         asyncio.create_task(heartbeat(manager))
+        # Schedule daily event cleanup (keep 30 days)
+        if event_recorder is not None:
+            async def _event_cleanup_loop() -> None:
+                import asyncio as _aio
+                while True:
+                    await _aio.sleep(86400)  # 24h
+                    await event_recorder.cleanup_old_events(keep_days=30)
+            asyncio.create_task(_event_cleanup_loop())
         if config.database.enabled:
             try:
                 await init_db()
@@ -411,6 +423,8 @@ def create_app(
     )
 
     ws_manager = WebSocketManager(manager, db_enabled=db_enabled)
+    if event_recorder is not None:
+        ws_manager.bind_event_recorder(event_recorder)
     agent_session = DeviceAgentSession(manager, ws_manager, config)
 
     @app.websocket("/ws")

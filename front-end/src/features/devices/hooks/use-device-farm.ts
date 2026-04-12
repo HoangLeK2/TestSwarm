@@ -130,6 +130,7 @@ export function useDeviceFarm() {
           return { ...prev, [msg.serial]: arr };
         });
       }
+
     });
 
     return () => wsRef.current?.close();

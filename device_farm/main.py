@@ -32,7 +32,7 @@ from core.env import (
     farm_reload_enabled,
     resolve_farm_frontend_dist,
 )
-from runtime.core import DeviceManager, TaskQueue, Dispatcher, WatchdogThread
+from runtime.core import DeviceManager, TaskQueue, Dispatcher, WatchdogThread, EventRecorder
 from web.server import create_app
 
 
@@ -156,8 +156,13 @@ def main() -> None:
     log.info("=" * 60)
 
     # ── 2. Core components ────────────────────────────────────────────────────
+    db_enabled = bool(
+        getattr(config, "database", None)
+        and getattr(config.database, "enabled", False)
+    )
+    event_recorder = EventRecorder(db_enabled=db_enabled)
     task_queue = TaskQueue()
-    manager = DeviceManager(config)
+    manager = DeviceManager(config, event_recorder=event_recorder)
 
     log.info("Devices: app scans ws:// QR → connects via /device-agent WebSocket")
 
@@ -171,7 +176,7 @@ def main() -> None:
     elif front_end_dist:
         log.info("SPA static: %s", front_end_dist)
 
-    app = create_app(manager, task_queue, config, templates_dir, static_dir, front_end_dist)
+    app = create_app(manager, task_queue, config, templates_dir, static_dir, front_end_dist, event_recorder=event_recorder)
 
     # Attach lifecycle components — started/stopped by FastAPI lifespan
     app.state.watchdog = WatchdogThread(manager, config)

@@ -6,9 +6,19 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-PROTO_DIR="$ROOT_DIR/proto"
+PROTO_DIR="$ROOT_DIR/device_farm/proto"
 
 echo "Proto source: $PROTO_DIR/relay.proto"
+
+# Prefer project venvs (grpc_tools) via uv; override with PYTHON=python3 if needed.
+UV_RUN=(uv run python)
+if ! command -v uv &>/dev/null; then
+  UV_RUN=("${PYTHON:-python3}")
+  if ! command -v "${UV_RUN[0]}" &>/dev/null; then
+    echo "error: install uv, or set PYTHON to a python with grpcio-tools" >&2
+    exit 1
+  fi
+fi
 
 # ── device_farm ───────────────────────────────────────────────────────────────
 DF_OUT="$ROOT_DIR/device_farm/runtime/transports/grpc_gen"
@@ -16,11 +26,11 @@ mkdir -p "$DF_OUT"
 touch "$DF_OUT/__init__.py"
 
 cd "$ROOT_DIR/device_farm"
-python -m grpc_tools.protoc \
+"${UV_RUN[@]}" -m grpc_tools.protoc \
   --python_out="$DF_OUT" \
   --grpc_python_out="$DF_OUT" \
-  --proto_path="$PROTO_DIR" \
-  "$PROTO_DIR/relay.proto"
+  --proto_path=proto \
+  relay.proto
 
 # Fix relative imports in generated files (grpc_tools generates broken imports)
 sed -i '' 's/^import relay_pb2/from . import relay_pb2/' "$DF_OUT/relay_pb2_grpc.py" 2>/dev/null || \
@@ -34,7 +44,7 @@ mkdir -p "$AB_OUT"
 touch "$AB_OUT/__init__.py"
 
 cd "$ROOT_DIR/agent-boot"
-python -m grpc_tools.protoc \
+"${UV_RUN[@]}" -m grpc_tools.protoc \
   --python_out="$AB_OUT" \
   --grpc_python_out="$AB_OUT" \
   --proto_path="$PROTO_DIR" \

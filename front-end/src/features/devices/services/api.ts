@@ -1,6 +1,6 @@
 import { farmApi } from '@/lib/farm-api';
 import { tokenStorage } from '@/lib/token-storage';
-import type { Device, Task } from '../types';
+import type { Device, DeviceEvent, Task } from '../types';
 
 export type PreviewStepResult = {
   index: number;
@@ -183,6 +183,30 @@ export async function hitTestSelector(
   );
   if (!data || !data.by || !data.value) return null;
   return { by: data.by as 'resource-id' | 'text' | 'xpath' | 'class name', value: data.value };
+}
+
+export type FetchEventsResponse = {
+  total: number;
+  offset: number;
+  limit: number;
+  events: DeviceEvent[];
+};
+
+/** Fetch device events from DB (persistent history). */
+export async function fetchEvents(opts?: {
+  serial?: string;
+  event?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<FetchEventsResponse> {
+  const params = new URLSearchParams();
+  if (opts?.serial) params.set('serial', opts.serial);
+  if (opts?.event) params.set('event', opts.event);
+  if (opts?.limit != null) params.set('limit', String(opts.limit));
+  if (opts?.offset != null) params.set('offset', String(opts.offset));
+  const qs = params.toString() ? `?${params.toString()}` : '';
+  const { data } = await farmApi.get<FetchEventsResponse>(`/events${qs}`);
+  return data;
 }
 
 export async function fetchConfig(): Promise<AppConfig> {

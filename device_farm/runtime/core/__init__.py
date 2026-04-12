@@ -12,6 +12,7 @@ from runtime.core.device_manager import DeviceManager
 from runtime.core.task_queue import Task, TaskQueue, TaskStatus
 from runtime.core.dispatcher import Dispatcher
 from runtime.core.watchdog import WatchdogThread
+from runtime.core.event_recorder import EventRecorder
 
 __all__ = [
     "DeviceClient",
@@ -22,5 +23,6 @@ __all__ = [
     "TaskStatus",
     "Dispatcher",
     "WatchdogThread",
+    "EventRecorder",
 ]
 

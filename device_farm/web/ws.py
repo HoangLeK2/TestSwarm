@@ -165,6 +165,22 @@ class WebSocketManager:
         self._lock = asyncio.Lock()
         self._db_enabled = db_enabled
 
+    def bind_event_recorder(self, recorder) -> None:
+        """Subscribe to EventRecorder to broadcast device_event messages to all frontends."""
+        from runtime.core.event_recorder import EventRecorder
+        if not isinstance(recorder, EventRecorder):
+            return
+        recorder.add_listener(self._on_device_event)
+
+    def _on_device_event(self, event: dict) -> None:
+        """Broadcast a device event to all connected frontend WebSockets."""
+        msg = {"type": "device_event", **event}
+        for conn_id, ctrl_q in list(self._ctrl_queues.items()):
+            try:
+                ctrl_q.put_nowait(msg)
+            except Exception:
+                pass
+
     async def _load_allowed_serials(self, user_id: Optional[str]) -> Optional[set[str]]:
         """
         Per-connection serial allowlist.
@@ -667,6 +683,8 @@ class DeviceAgentSession:
         serial: Optional[str] = None
         db_session_id: Optional[str] = None
         _send = None  # set once the _send closure is created; used in finally for stale-reconnect guard
+        _disconnect_reason: str = "unknown"
+        _disconnect_ws_code: Optional[int] = None
 
         pair_id = ws.query_params.get("pair")
         key = ws.query_params.get("key")
@@ -1274,11 +1292,17 @@ class DeviceAgentSession:
                 _keepalive_task.cancel()
 
         except asyncio.TimeoutError:
+            _disconnect_reason = "hello_timeout"
+            _disconnect_ws_code = None
             log.warning("[DEVICE-WS] Agent %s: hello timeout (15s)", serial or "unknown")
         except (WebSocketDisconnect, StarletteWSDisconnect) as exc:
             code = getattr(exc, "code", None)
+            _disconnect_reason = f"ws_closed({code})"
+            _disconnect_ws_code = code
             log.info("[DEVICE-WS] Agent %s: WS closed (code=%s)", serial or "unknown", code)
         except Exception as exc:
+            _disconnect_reason = f"ws_error: {type(exc).__name__}"
+            _disconnect_ws_code = None
             log.warning("[DEVICE-WS] Agent %s: unhandled error: %s", serial or "unknown", exc, exc_info=True)
         finally:
             if key:
@@ -1292,7 +1316,11 @@ class DeviceAgentSession:
                 if device:
                     # Pass our _send so on_agent_disconnected() can detect when a
                     # faster reconnect has already replaced this session and skip teardown.
-                    device.on_agent_disconnected(sender=_send)
+                    device.on_agent_disconnected(
+                        sender=_send,
+                        reason=_disconnect_reason,
+                        ws_code=_disconnect_ws_code,
+                    )
                 async with self._lock:
                     self._sessions.pop(serial, None)
             if db_session_id:

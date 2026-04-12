@@ -20,6 +20,7 @@ from typing import Dict, List, Optional
 
 from core.config import Config
 from runtime.core.device_client import DeviceClient, DeviceState
+from runtime.core.event_recorder import EventRecorder
 
 
 log = logging.getLogger(__name__)
@@ -31,11 +32,12 @@ class DeviceManager:
     Thread-safe: all registry mutations use a lock.
     """
 
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, event_recorder: Optional[EventRecorder] = None) -> None:
         self.config = config
         self._lock: threading.Lock = threading.Lock()
         self._registry: Dict[str, DeviceClient] = {}
         self._event_loop = None
+        self.event_recorder = event_recorder
 
         # Serial → slot index (persisted so the same device gets the same slot)
         self._index_map: Dict[str, int] = {}
@@ -57,6 +59,7 @@ class DeviceManager:
                 return existing
             idx = self._get_or_assign_index(serial)
             client = DeviceClient(serial, idx, self.config)
+            client._event_recorder = self.event_recorder
             if self._event_loop is not None:
                 client.set_event_loop(self._event_loop)
             self._registry[serial] = client
@@ -103,6 +106,7 @@ class DeviceManager:
                 return existing
             idx = self._get_or_assign_index(serial)
             client = DeviceClient(serial, idx, self.config)
+            client._event_recorder = self.event_recorder
             if self._event_loop is not None:
                 client.set_event_loop(self._event_loop)
             self._registry[serial] = client

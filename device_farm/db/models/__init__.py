@@ -25,6 +25,7 @@ from .content import ContentItem, ContentCollection, ContentExport
 from .schedule import Schedule, ScheduleRun
 from .execution import Execution, ExecutionDevice, ExecutionResult
 from .u2_recovery import U2RecoveryEvent
+from .device_event import DeviceEvent
 
 __all__ = [
     "User",
@@ -51,5 +52,6 @@ __all__ = [
     "ExecutionDevice",
     "ExecutionResult",
     "U2RecoveryEvent",
+    "DeviceEvent",
 ]
 

@@ -9,9 +9,32 @@ type Props = {
   compact?: boolean;
   hideStepMonitor?: boolean;
   onTap?: (serial: string, rx: number, ry: number) => void;
+  onSwipe?: (
+    serial: string,
+    rx1: number,
+    ry1: number,
+    rx2: number,
+    ry2: number,
+    durationMs: number
+  ) => void;
+  onDragGesture?: (
+    serial: string,
+    rx1: number,
+    ry1: number,
+    rx2: number,
+    ry2: number,
+    durationMs: number
+  ) => void;
 };
 
-export function DeviceControlEmbed({ initialSerial, compact = true, hideStepMonitor = false, onTap }: Props) {
+export function DeviceControlEmbed({
+  initialSerial,
+  compact = true,
+  hideStepMonitor = false,
+  onTap,
+  onSwipe,
+  onDragGesture,
+}: Props) {
   const {
     devices,
     logs,
@@ -75,6 +98,16 @@ export function DeviceControlEmbed({ initialSerial, compact = true, hideStepMoni
         onToggleMode={handleToggleMode}
         onRestart={handleRestart}
         onTap={onTap ? (rx, ry) => onTap(selectedDevice.serial, rx, ry) : undefined}
+        onSwipe={
+          onSwipe
+            ? (rx1, ry1, rx2, ry2, ms) => onSwipe(selectedDevice.serial, rx1, ry1, rx2, ry2, ms)
+            : undefined
+        }
+        onDragGesture={
+          onDragGesture
+            ? (rx1, ry1, rx2, ry2, ms) => onDragGesture(selectedDevice.serial, rx1, ry1, rx2, ry2, ms)
+            : undefined
+        }
         compact={compact}
         hideStepMonitor={hideStepMonitor}
       />

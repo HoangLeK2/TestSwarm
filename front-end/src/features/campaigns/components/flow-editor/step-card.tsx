@@ -1,6 +1,6 @@
 'use client';
 
-import { Trash2, Play, Loader2, CheckCircle2, XCircle, Crosshair } from 'lucide-react';
+import { Trash2, Play, Loader2, CheckCircle2, XCircle, Crosshair, MousePointerClick, Move, Square } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { FlowStep } from '../scenario-steps/types';
 import { STEP_COLORS, getStepTypeName, getStepDisplay, getStepCategory } from './constants';
@@ -29,13 +29,32 @@ interface Props {
   /** Run this single step on the device. */
   onRun?: () => void;
   runState?: 'idle' | 'running' | 'ok' | 'error';
+  /** Abort inline preview while this step is running. */
+  onStopInlineRun?: () => void;
   /** True when this step is the current selector pick target. */
   isPickTarget?: boolean;
   /** When provided, shows a crosshair button to enter pick mode for this step. */
   onTogglePickSelector?: () => void;
+  /** Coordinate pick from mirror (tap_ratio / tap fallback / swipe_ratio). */
+  coordPickActive?: 'tap_point' | 'swipe_segment' | null;
+  onTogglePickTapCoords?: () => void;
+  onTogglePickSwipeCoords?: () => void;
 }
 
-export function StepCard({ step, selected, onClick, onRemove, onRun, runState = 'idle', isPickTarget, onTogglePickSelector }: Props) {
+export function StepCard({
+  step,
+  selected,
+  onClick,
+  onRemove,
+  onRun,
+  runState = 'idle',
+  onStopInlineRun,
+  isPickTarget,
+  onTogglePickSelector,
+  coordPickActive,
+  onTogglePickTapCoords,
+  onTogglePickSwipeCoords,
+}: Props) {
   const colorCls = STEP_COLORS[step.type] ?? 'border-l-gray-400';
   const typeName = getStepTypeName(step.type);
   const { target, selectorBadge } = getStepDisplay(step);
@@ -52,6 +71,7 @@ export function StepCard({ step, selected, onClick, onRemove, onRun, runState = 
         colorCls,
         selected && 'ring-2 ring-primary/40 bg-accent/30',
         isPickTarget && 'ring-2 ring-amber-500/80 shadow-[0_0_0_1px_rgba(245,158,11,0.35)]',
+        coordPickActive && 'ring-2 ring-sky-500/75 shadow-[0_0_0_1px_rgba(14,165,233,0.35)]',
       )}
       onClick={onClick}
     >
@@ -60,6 +80,22 @@ export function StepCard({ step, selected, onClick, onRemove, onRun, runState = 
           <Crosshair size={10} className='shrink-0 text-amber-600' />
           <span className='text-[10px] text-amber-800 dark:text-amber-300'>
             Chạm mirror hoặc chọn dòng trong cây UI phía trên để gán
+          </span>
+        </div>
+      )}
+      {coordPickActive === 'tap_point' && (
+        <div className='flex items-center gap-1.5 border-b border-sky-400/40 bg-sky-50/90 px-2.5 py-1 dark:bg-sky-950/25'>
+          <MousePointerClick size={10} className='shrink-0 text-sky-700 dark:text-sky-400' />
+          <span className='text-[10px] text-sky-900 dark:text-sky-200'>
+            Chạm một điểm trên mirror để lấy tọa độ (0–1)
+          </span>
+        </div>
+      )}
+      {coordPickActive === 'swipe_segment' && (
+        <div className='flex items-center gap-1.5 border-b border-sky-400/40 bg-sky-50/90 px-2.5 py-1 dark:bg-sky-950/25'>
+          <Move size={10} className='shrink-0 text-sky-700 dark:text-sky-400' />
+          <span className='text-[10px] text-sky-900 dark:text-sky-200'>
+            Vuốt trên mirror để lấy đoạn (điểm đầu → cuối)
           </span>
         </div>
       )}
@@ -118,6 +154,38 @@ export function StepCard({ step, selected, onClick, onRemove, onRun, runState = 
           <img src={imgSrc} alt="" className='h-12 w-8 shrink-0 rounded object-cover object-top border border-border/40' />
         ) : null; })()}
 
+        {onTogglePickTapCoords && (
+          <button
+            type='button'
+            className={cn(
+              'shrink-0 rounded p-0.5 transition-all',
+              coordPickActive === 'tap_point'
+                ? 'text-sky-800 bg-sky-500/25 dark:text-sky-300'
+                : 'opacity-0 group-hover:opacity-100 hover:bg-sky-500/15 hover:text-sky-800 dark:hover:text-sky-300',
+            )}
+            onClick={(e) => { e.stopPropagation(); onTogglePickTapCoords(); }}
+            aria-label='Lấy tọa độ chạm trên mirror'
+            title='Chạm trên mirror để điền tọa độ'
+          >
+            <MousePointerClick size={11} />
+          </button>
+        )}
+        {onTogglePickSwipeCoords && (
+          <button
+            type='button'
+            className={cn(
+              'shrink-0 rounded p-0.5 transition-all',
+              coordPickActive === 'swipe_segment'
+                ? 'text-sky-800 bg-sky-500/25 dark:text-sky-300'
+                : 'opacity-0 group-hover:opacity-100 hover:bg-sky-500/15 hover:text-sky-800 dark:hover:text-sky-300',
+            )}
+            onClick={(e) => { e.stopPropagation(); onTogglePickSwipeCoords(); }}
+            aria-label='Lấy tọa độ vuốt trên mirror'
+            title='Vuốt trên mirror để điền đoạn vuốt'
+          >
+            <Move size={11} />
+          </button>
+        )}
         {onTogglePickSelector && (
           <button
             type='button'
@@ -134,16 +202,26 @@ export function StepCard({ step, selected, onClick, onRemove, onRun, runState = 
             <Crosshair size={11} />
           </button>
         )}
-        {onRun && (
+        {onRun && runState !== 'running' && (
           <button
             type='button'
             className='shrink-0 rounded p-0.5 opacity-0 transition-opacity hover:bg-primary/10 hover:text-primary group-hover:opacity-100'
             onClick={(e) => { e.stopPropagation(); onRun(); }}
             aria-label='Chạy bước này'
-            disabled={runState === 'running'}
             title='Chạy bước này trên thiết bị'
           >
             <Play size={11} />
+          </button>
+        )}
+        {onStopInlineRun && runState === 'running' && (
+          <button
+            type='button'
+            className='shrink-0 rounded p-0.5 hover:bg-destructive/15 hover:text-destructive'
+            onClick={(e) => { e.stopPropagation(); onStopInlineRun(); }}
+            aria-label='Dừng chạy thử'
+            title='Dừng chạy thử'
+          >
+            <Square size={11} fill='currentColor' />
           </button>
         )}
         <button

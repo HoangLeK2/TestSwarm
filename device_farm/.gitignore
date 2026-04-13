@@ -40,6 +40,9 @@ coverage.xml
 *.log
 logs/
 
+# Local SQLite trace from pytest (DEVICE_FARM_TRACE_SQLITE=1)
+device_farm.db
+
 # -----------------------------
 # Local env / secrets
 # -----------------------------

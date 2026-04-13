@@ -55,6 +55,8 @@ def _scenario_to_out(s) -> ScenarioOut:
         steps=s.steps or [],
         variables=s.variables or {},
         order=s.order,
+        nodes=s.nodes or [],
+        edges=s.edges or [],
         created_at=s.created_at,
         updated_at=s.updated_at,
     )
@@ -117,7 +119,9 @@ async def create_campaign(body: CampaignCreate, db: DB, user: CurrentUser):
         )
         await db.flush()
         saved_steps = save_step_images(steps, scenario_row.id)
-        await repo.update_scenario(db, scenario_row.id, steps=saved_steps)
+        from common.graph_compiler import steps_to_graph
+        nodes, edges = steps_to_graph(saved_steps)
+        await repo.update_scenario(db, scenario_row.id, steps=saved_steps, nodes=nodes, edges=edges)
     await db.commit()
     scenarios = await repo.list_scenarios(db, campaign.id)
     return _to_out(campaign, scenarios)
@@ -184,8 +188,12 @@ async def update_status(campaign_id: str, body: StatusUpdate, db: DB, user: Curr
             import logging
             logging.getLogger(__name__).warning("Temporal signal failed: %s", exc)
 
-    # Normalise: all non-running statuses collapse to idle
-    db_status = "running" if body.status == "running" else "idle"
+    if body.status == "running":
+        db_status = "running"
+    elif body.status == "paused":
+        db_status = "paused"
+    else:
+        db_status = "idle"
     await repo.update_campaign_status(db, campaign_id, db_status)
     await db.commit()
     return {"id": campaign_id, "status": db_status, "tasks_cancelled": cancelled_count}
@@ -377,10 +385,15 @@ async def compile_scenario(
     if body.scenario_id:
         s = await repo.get_scenario(db, body.scenario_id)
         if s and s.campaign_id == campaign_id:
+            from common.graph_compiler import steps_to_graph
+            compiled_steps = scenario.get("steps", [])
+            nodes, edges = steps_to_graph(compiled_steps)
             await repo.update_scenario(
                 db, body.scenario_id,
-                steps=scenario.get("steps", []),
+                steps=compiled_steps,
                 instructions=instructions,
+                nodes=nodes,
+                edges=edges,
             )
     else:
         campaign.scenario = scenario
@@ -415,8 +428,11 @@ async def create_scenario(campaign_id: str, body: ScenarioCreate, db: DB, user: 
         order=order,
     )
     await db.flush()
+    from common.graph_compiler import ensure_step_ids, steps_to_graph
     saved_steps = save_step_images(body.steps or [], s.id)
-    await repo.update_scenario(db, s.id, steps=saved_steps)
+    saved_steps = ensure_step_ids(saved_steps)
+    nodes, edges = steps_to_graph(saved_steps)
+    await repo.update_scenario(db, s.id, steps=saved_steps, nodes=nodes, edges=edges)
     await db.commit()
     s = await repo.get_scenario(db, s.id)
     return _scenario_to_out(s)
@@ -439,9 +455,19 @@ async def update_scenario_route(
     s = await repo.get_scenario(db, scenario_id)
     if not s or s.campaign_id != campaign_id:
         raise HTTPException(status_code=404, detail="Scenario not found")
-    updates = {k: v for k, v in body.model_dump().items() if v is not None}
-    if "steps" in updates:
+    updates = {k: v for k, v in body.model_dump(exclude_unset=True).items()}
+
+    # Graph model: compile nodes+edges → steps for executor
+    if "nodes" in updates:
+        from common.graph_compiler import compile_graph_to_steps
+        # After model_dump(exclude_unset=True), nodes/edges are already plain dicts
+        updates["steps"] = compile_graph_to_steps(updates["nodes"], updates.get("edges", []))
+    elif "steps" in updates:
+        from common.graph_compiler import ensure_step_ids, steps_to_graph
         updates["steps"] = save_step_images(updates["steps"], scenario_id)
+        updates["steps"] = ensure_step_ids(updates["steps"])
+        updates["nodes"], updates["edges"] = steps_to_graph(updates["steps"])
+
     if updates:
         await repo.update_scenario(db, scenario_id, **updates)
     await db.commit()
@@ -505,10 +531,15 @@ async def compile_scenario_row(
     if errs:
         raise HTTPException(status_code=400, detail={"message": "Validation failed", "errors": errs})
 
+    from common.graph_compiler import steps_to_graph
+    compiled_steps = scenario.get("steps", [])
+    nodes, edges = steps_to_graph(compiled_steps)
     await repo.update_scenario(
         db, scenario_id,
-        steps=scenario.get("steps", []),
+        steps=compiled_steps,
         instructions=instructions,
+        nodes=nodes,
+        edges=edges,
     )
     await db.commit()
     s = await repo.get_scenario(db, scenario_id)

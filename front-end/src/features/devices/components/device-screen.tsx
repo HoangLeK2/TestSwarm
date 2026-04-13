@@ -19,6 +19,10 @@ interface DeviceScreenProps {
   wsSend: (obj: object) => void;
   mode: 'tap' | 'swipe';
   onTap?: (rx: number, ry: number) => void;
+  /** Normalized 0–1 coords + duration (ms), after a completed swipe drag (not drag mode). */
+  onSwipe?: (rx1: number, ry1: number, rx2: number, ry2: number, durationMs: number) => void;
+  /** Normalized 0–1 + duration when gesture mode is drag. */
+  onDragGesture?: (rx1: number, ry1: number, rx2: number, ry2: number, durationMs: number) => void;
   apiBase?: string;
   /** Highlight bounds overlay [x1, y1, x2, y2] in device pixels */
   highlightBounds?: [number, number, number, number] | null;
@@ -26,12 +30,16 @@ interface DeviceScreenProps {
   gestureMode?: 'tap' | 'swipe' | 'double_tap' | 'drag';
 }
 
-export function DeviceScreen({ device, wsSend, mode, onTap, highlightBounds, gestureMode }: DeviceScreenProps) {
+export function DeviceScreen({ device, wsSend, mode, onTap, onSwipe, onDragGesture, highlightBounds, gestureMode }: DeviceScreenProps) {
   const t = useTranslations('devicesFarm');
   const wrapRef    = useRef<HTMLDivElement>(null);
   const canvasRef  = useRef<HTMLCanvasElement>(null);
   const draggedRef = useRef(false);
   const dragStartRef = useRef<{ x: number; y: number } | null>(null);
+  const onSwipeRef = useRef(onSwipe);
+  const onDragGestureRef = useRef(onDragGesture);
+  onSwipeRef.current = onSwipe;
+  onDragGestureRef.current = onDragGesture;
   const [hasFrame, setHasFrame] = useState(false);
   const [wsConnected, setWsConnected] = useState(false);
   const [loadingElapsedSec, setLoadingElapsedSec] = useState(0);
@@ -240,11 +248,18 @@ export function DeviceScreen({ device, wsSend, mode, onTap, highlightBounds, ges
           if (!r) return;
           const p1 = clientToDevice(initial[0] - r.left, initial[1] - r.top, r.width, r.height);
           const p2 = clientToDevice(xy[0] - r.left, xy[1] - r.top, r.width, r.height);
+          const rx1 = parseFloat((p1.x / dw).toFixed(4));
+          const ry1 = parseFloat((p1.y / dh).toFixed(4));
+          const rx2 = parseFloat((p2.x / dw).toFixed(4));
+          const ry2 = parseFloat((p2.y / dh).toFixed(4));
           if (gestureMode === 'drag') {
-            wsSend({ type: 'drag', serial: device.serial, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, ms: 1000 });
+            const ms = 1000;
+            wsSend({ type: 'drag', serial: device.serial, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, ms });
+            onDragGestureRef.current?.(rx1, ry1, rx2, ry2, ms);
           } else {
             const ms = Math.max(300, Math.min(elapsed, 1000));
             wsSend({ type: 'swipe', serial: device.serial, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, ms });
+            onSwipeRef.current?.(rx1, ry1, rx2, ry2, ms);
           }
         }
       },
@@ -272,7 +287,9 @@ export function DeviceScreen({ device, wsSend, mode, onTap, highlightBounds, ges
         wsSend({ type: 'double_tap', serial: device.serial, x: p.x, y: p.y });
         return;
       }
-      if (mode !== 'tap') return;
+      // Recording (`onTap`): still perform tap + capture ratios even if tile mode is "swipe"
+      const allowTap = mode === 'tap' || !!onTap;
+      if (!allowTap) return;
       wsSend({ type: 'tap', serial: device.serial, x: p.x, y: p.y });
       if (onTap && rect.width > 0 && rect.height > 0) {
         onTap((e.clientX - rect.left) / rect.width, (e.clientY - rect.top) / rect.height);

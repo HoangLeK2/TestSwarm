@@ -540,8 +540,27 @@ class TestExecuteExtractActivity:
 
     @pytest.mark.asyncio
     async def test_fb_posts_completion_retry_replaces_truncated_with_full(self):
-        truncated = [{"author": "A", "timestamp": "1 giờ", "text": "Nội dung preview … Xem thêm", "_pid": "p1", "post_key": "k1"}]
-        full = [{"author": "A", "timestamp": "1 giờ", "text": "Nội dung preview đã bung full không còn rút gọn", "_pid": "p1", "post_key": "k2"}]
+        sid = "temporal-sid"
+        truncated = [
+            {
+                "author": "A",
+                "timestamp": "1 giờ",
+                "text": "Nội dung preview. Xem thêm",
+                "_pid": "p1",
+                "post_key": "k1",
+                "stable_post_id": sid,
+            }
+        ]
+        full = [
+            {
+                "author": "A",
+                "timestamp": "1 giờ",
+                "text": "Nội dung preview. Đã bung full không còn rút gọn",
+                "_pid": "p1",
+                "post_key": "k2",
+                "stable_post_id": sid,
+            }
+        ]
         inp = ExtractInput(
             device_serial=_SERIAL,
             step={
@@ -556,21 +575,31 @@ class TestExecuteExtractActivity:
         )
         with (
             patch("temporal.activities.activity.heartbeat"),
-            patch("tasks.fb_extract._expand_see_more", return_value=1),
+            patch("tasks.fb_extract.expand_see_more_with_lazy_hydration", return_value=1),
             patch("tasks.fb_extract.parse_fb_posts_from_xml", side_effect=[truncated, full]),
-            patch("tasks.fb_extract._dedup", side_effect=lambda lst: lst),
         ):
             result = await self.acts.execute_extract(inp)
 
         assert result.ok is True
-        assert "Xem thêm" not in result.context["posts"][0]["text"]
+        assert not any("Xem thêm" in str(p.get("text") or "") for p in result.context["posts"])
         diag = (result.details or {}).get("extract_diagnostics") or {}
-        assert diag.get("unresolved_before") == 1
+        assert diag.get("unresolved_first_parse") == 1
+        assert diag.get("unresolved_before") == 0
         assert diag.get("unresolved_after") == 0
 
     @pytest.mark.asyncio
     async def test_fb_posts_completion_retry_stops_on_plateau(self):
-        truncated = [{"author": "A", "timestamp": "1 giờ", "text": "Nội dung preview … Xem thêm", "_pid": "p1", "post_key": "k1"}]
+        sid = "temporal-plateau-sid"
+        truncated = [
+            {
+                "author": "A",
+                "timestamp": "1 giờ",
+                "text": "Nội dung preview. Xem thêm",
+                "_pid": "p1",
+                "post_key": "k1",
+                "stable_post_id": sid,
+            }
+        ]
         inp = ExtractInput(
             device_serial=_SERIAL,
             step={
@@ -583,9 +612,11 @@ class TestExecuteExtractActivity:
         )
         with (
             patch("temporal.activities.activity.heartbeat"),
-            patch("tasks.fb_extract._expand_see_more", return_value=1),
-            patch("tasks.fb_extract.parse_fb_posts_from_xml", side_effect=[truncated, truncated, truncated]),
-            patch("tasks.fb_extract._dedup", side_effect=lambda lst: lst),
+            patch("tasks.fb_extract.expand_see_more_with_lazy_hydration", return_value=1),
+            patch(
+                "tasks.fb_extract.parse_fb_posts_from_xml",
+                side_effect=[truncated, truncated, truncated, truncated, truncated, truncated],
+            ),
         ):
             result = await self.acts.execute_extract(inp)
 
@@ -611,7 +642,7 @@ class TestExecuteExtractActivity:
         )
         with (
             patch("temporal.activities.activity.heartbeat"),
-            patch("tasks.fb_extract._expand_see_more", return_value=1),
+            patch("tasks.fb_extract.expand_see_more_with_lazy_hydration", return_value=1),
             patch("tasks.fb_extract.parse_fb_posts_from_xml", side_effect=[first, second]),
         ):
             result = await self.acts.execute_extract(inp)
@@ -680,21 +711,28 @@ class TestExecuteExtractActivity:
     async def test_expand_see_more_called_when_true(self):
         inp = ExtractInput(
             device_serial=_SERIAL,
-            step={"type": "extract", "strategy": "fb_posts", "expand_see_more": True},
+            step={
+                "type": "extract",
+                "strategy": "fb_posts",
+                "expand_see_more": True,
+                # Pre-expand runs only when completion retries are disabled (see activities.py).
+                "expand_completion_retries": 0,
+            },
             context={"posts": []},
         )
         with (
             patch("temporal.activities.activity.heartbeat"),
             patch("tasks.fb_extract.parse_fb_posts_from_xml", return_value=[]),
             patch("tasks.fb_extract._dedup", side_effect=lambda lst: lst),
-            patch("tasks.fb_extract._expand_see_more", return_value=True) as mock_expand,
+            patch(
+                "tasks.fb_extract.expand_see_more_with_lazy_hydration", return_value=1
+            ) as mock_expand,
         ):
             await self.acts.execute_extract(inp)
 
         mock_expand.assert_called_once_with(
             self.device,
-            max_passes=2,
-            scroll_between=False,
+            max_rounds=6,
             scroll_distance=0.3,
         )
 
@@ -706,6 +744,7 @@ class TestExecuteExtractActivity:
                 "type": "extract",
                 "strategy": "fb_posts",
                 "expand_see_more": True,
+                "expand_completion_retries": 0,
                 "expand_see_more_max_passes": 6,
                 "expand_see_more_scroll": True,
                 "expand_see_more_scroll_distance": 0.22,
@@ -716,14 +755,15 @@ class TestExecuteExtractActivity:
             patch("temporal.activities.activity.heartbeat"),
             patch("tasks.fb_extract.parse_fb_posts_from_xml", return_value=[]),
             patch("tasks.fb_extract._dedup", side_effect=lambda lst: lst),
-            patch("tasks.fb_extract._expand_see_more", return_value=3) as mock_expand,
+            patch(
+                "tasks.fb_extract.expand_see_more_with_lazy_hydration", return_value=3
+            ) as mock_expand,
         ):
             await self.acts.execute_extract(inp)
 
         mock_expand.assert_called_once_with(
             self.device,
-            max_passes=6,
-            scroll_between=True,
+            max_rounds=6,
             scroll_distance=0.22,
         )
 

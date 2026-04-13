@@ -45,7 +45,7 @@ import {
   useWorkflowResume,
 } from '../../hooks/use-campaigns';
 import type { CampaignOut } from '../../types';
-import { isIdleStatus } from '../../types';
+import { isCampaignActiveExecution, isIdleStatus } from '../../types';
 
 export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
   const t = useTranslations('campaignsFeature.list');
@@ -57,7 +57,8 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
   const { data: devices = [] } = useCampaignDevices(campaign.id);
   const { data: scenarios = [] } = useScenarios(campaign.id);
 
-  const { isPending } = useUpdateCampaignStatus();
+  const { mutate: patchCampaignStatus, isPending: isPatchingCampaign } =
+    useUpdateCampaignStatus();
   const runMutation = useRunCampaign(
     () => toast.success(t('campaignDone')),
     { onTemporalFallback: () => toast.warning(t('temporalFallback')) }
@@ -65,7 +66,10 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
   const { mutate: runCampaign, isPending: isRunning } = runMutation;
   const { mutate: deleteCampaign, isPending: isDeleting } = useDeleteCampaign();
 
-  const { data: wfData } = useCampaignWorkflows(campaign.id, campaign.status === 'running');
+  const { data: wfData } = useCampaignWorkflows(
+    campaign.id,
+    isCampaignActiveExecution(campaign.status)
+  );
   const workflows = wfData?.workflows ?? [];
   const runningWorkflowIds = workflows.filter((w) => w.status === 'RUNNING').map((w) => w.workflow_id);
   const pausedWorkflowIds = workflows.filter((w) => w.status === 'PAUSED').map((w) => w.workflow_id);
@@ -95,6 +99,16 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
   };
 
   const handleResumeAll = () => {
+    if (campaign.status === 'paused') {
+      patchCampaignStatus(
+        { id: campaign.id, status: 'running' },
+        { onError: () => toast.error(t('runFailed')) }
+      );
+      toast.info(
+        t('resumingAll', { count: Math.max(1, pausedWorkflowIds.length) })
+      );
+      return;
+    }
     pausedWorkflowIds.forEach((id) =>
       resumeWf(id, { onError: () => toast.error(`Resume failed: ${id}`) })
     );
@@ -110,7 +124,7 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
     toast.info(t('cancellingAll', { count: allActive.length }));
   };
 
-  const running = campaign.status === 'running';
+  const running = isCampaignActiveExecution(campaign.status);
 
   return (
     <div
@@ -179,7 +193,7 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
                   size='sm'
                   variant={hasScenario ? 'default' : 'outline'}
                   className='h-7 gap-1.5 px-2.5 text-xs'
-                  disabled={isPending || isRunning}
+                  disabled={isPatchingCampaign || isRunning}
                   onClick={() => setRunDialogOpen(true)}
                 >
                   <Play size={13} />
@@ -234,7 +248,7 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
                 size='sm'
                 variant='outline'
                 className='h-7 gap-1.5 px-2.5 text-xs text-green-600 hover:text-green-600'
-                disabled={isResuming}
+                disabled={isResuming || isPatchingCampaign}
                 onClick={handleResumeAll}
               >
                 <Play size={13} />

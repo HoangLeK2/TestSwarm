@@ -437,7 +437,9 @@
         "noNewThresholdLabel": "Ngưỡng không có dữ liệu mới liên tiếp",
         "noNewThresholdHint": "Dừng sau N vòng liên tiếp không có item mới.",
         "resultVarLabel": "Lưu kết quả vào biến",
-        "resultVarHint": "Tuỳ chọn. Để trống để dùng biến mặc định trong context."
+        "resultVarHint": "Tuỳ chọn. Để trống để dùng biến mặc định trong context.",
+        "saveTitle": "Lưu dữ liệu",
+        "saveEnableLabel": "Tự động lưu sau khi trích xuất"
       },
       "saveExtraction": {
         "dataVarLabel": "Nguồn dữ liệu (data_var)",

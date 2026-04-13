@@ -1,7 +1,8 @@
 'use client';
 
-import { useCallback, useState } from 'react';
-import { ChevronDown, ChevronRight, Crosshair, Play, Trash2 } from 'lucide-react';
+import { useCallback, useMemo, useState } from 'react';
+import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { ChevronDown, ChevronRight, Crosshair, Loader2, Play, Square, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { isControlFlow, type FlowStep } from '../scenario-steps/types';
 import { BRACKET_COLORS, getStepTypeName, getStepSummary } from './constants';
@@ -25,6 +26,15 @@ import {
 } from '../scenario-steps/control-flow-editors';
 import type { SelectorPickTarget } from './selector-pick';
 import { selectorPickTargetEquals, isSelectorPickableStep } from './selector-pick';
+import type { CoordinatePickTarget } from './coordinate-pick';
+import {
+  coordinatePickTargetEquals,
+  isTapCoordinatePickableStep,
+  isSwipeCoordinatePickableStep,
+} from './coordinate-pick';
+import { encodeFlowListRef, stableStepDnDId } from './flow-dnd-ids';
+import { SortableFlowRow } from './sortable-flow-row';
+import { encodeScenarioInlineRunKey } from './inline-run-key';
 
 // ── Step mutation helpers ────────────────────────────────────────────────────
 
@@ -94,12 +104,19 @@ interface BracketBlockProps {
   nestedInDialog?: boolean;
   selectorPickTarget?: SelectorPickTarget | null;
   onTogglePickSelector?: (path: SelectorPickTarget) => void;
+  coordinatePickTarget?: CoordinatePickTarget | null;
+  onToggleCoordinatePick?: (path: CoordinatePickTarget) => void;
   /** Nesting depth — used for visual indentation cues. */
   depth?: number;
-  /** Run a child step on the device inline. */
-  onRunChild?: (step: FlowStep) => void;
+  /** Run a child step or nested block on the device inline (`runKey` for UI state). */
+  onRunChild?: (step: FlowStep, runKey: string) => void;
   /** Run the entire control-flow block (loop / if / repeat) on the device. */
   onRunSelf?: () => void;
+  /** Key for `stepRunStates` — this bracket’s header. */
+  selfRunKey?: string;
+  stepRunStates?: Record<string, 'idle' | 'running' | 'ok' | 'error'>;
+  /** Abort the current inline preview (same as global stop). */
+  onStopInlineRun?: () => void;
   /**
    * The index of this block in the ROOT steps array (not local).
    * Needed for correct SelectorPickTarget when blocks are nested.
@@ -144,12 +161,16 @@ interface ChildStepListProps {
   compact?: boolean;
   selectorPickTarget?: SelectorPickTarget | null;
   onTogglePickSelector?: (path: SelectorPickTarget) => void;
+  coordinatePickTarget?: CoordinatePickTarget | null;
+  onToggleCoordinatePick?: (path: CoordinatePickTarget) => void;
   depth?: number;
   onEditChild?: (listKey: string, ci: number) => void;
-  onRunChild?: (step: FlowStep) => void;
+  onRunChild?: (step: FlowStep, runKey: string) => void;
   rootStepIndex?: number;
   pathFromRoot?: Array<{ listKey: string; childIndex: number }>;
   nestedInDialog?: boolean;
+  stepRunStates?: Record<string, 'idle' | 'running' | 'ok' | 'error'>;
+  onStopInlineRun?: () => void;
 }
 
 function ChildStepList({
@@ -165,74 +186,154 @@ function ChildStepList({
   compact,
   selectorPickTarget,
   onTogglePickSelector,
+  coordinatePickTarget,
+  onToggleCoordinatePick,
   depth = 0,
   onEditChild,
   onRunChild,
   rootStepIndex,
   pathFromRoot,
   nestedInDialog,
+  stepRunStates = {},
+  onStopInlineRun,
 }: ChildStepListProps) {
+  const pathKey = JSON.stringify(pathFromRoot ?? []);
+  const sortableContainerId = useMemo(() => {
+    const path = (JSON.parse(pathKey) || []) as Array<{ listKey: string; childIndex: number }>;
+    return encodeFlowListRef({
+      kind: 'nested',
+      rootIndex: rootStepIndex ?? parentStepIndex,
+      pathToBracket: path,
+      listKey,
+    });
+  }, [rootStepIndex, parentStepIndex, listKey, pathKey]);
+
+  const childIds = useMemo(() => steps.map((s, i) => stableStepDnDId(s, i)), [steps]);
+
   return (
     <div className='space-y-0'>
       <InsertButton onInsert={(s) => onInsertChild(listKey, 0, s)} />
-      {steps.map((child, ci) => {
+      <SortableContext
+        id={sortableContainerId}
+        items={childIds}
+        strategy={verticalListSortingStrategy}
+      >
+        {steps.map((child, ci) => {
+          const rowId = childIds[ci]!;
         if (isControlFlow(child.type)) {
+          const nestedPath = [...(pathFromRoot ?? []), { listKey, childIndex: ci }];
+          const bracketRunKey = encodeScenarioInlineRunKey(rootStepIndex ?? parentStepIndex, nestedPath);
           return (
-            <div key={ci}>
-              <BracketBlock
-                step={child}
-                stepIndex={ci}
-                rootStepIndex={rootStepIndex}
-                pathFromRoot={[...(pathFromRoot ?? []), { listKey, childIndex: ci }]}
-                selected={false}
-                selectedChild={null}
-                onSelectSelf={() => onSelectChild(startIndex + ci)}
-                onSelectChild={() => {}}
-                onUpdate={(newChild) => onUpdateChild(listKey, ci, newChild)}
-                onRemove={() => onRemoveChild(listKey, ci)}
-                onRemoveChild={(nestedKey, nci) =>
-                  onUpdateChild(listKey, ci, removeFromStep(child, nestedKey, nci))
-                }
-                onInsertChild={(nestedKey, at, newStep) =>
-                  onUpdateChild(listKey, ci, insertIntoStep(child, nestedKey, at, newStep))
-                }
-                compact={compact}
-                nestedInDialog={nestedInDialog}
-                selectorPickTarget={selectorPickTarget}
-                onTogglePickSelector={onTogglePickSelector}
-                depth={depth + 1}
-                onRunChild={onRunChild}
-              />
+            <div key={rowId}>
+              <SortableFlowRow id={rowId}>
+                {(dragHandle, isDragging) => (
+                  <div className={`flex items-stretch ${isDragging ? 'opacity-60' : ''}`}>
+                    {dragHandle}
+                    <div className='min-w-0 flex-1'>
+                      <BracketBlock
+                        step={child}
+                        stepIndex={ci}
+                        rootStepIndex={rootStepIndex}
+                        pathFromRoot={nestedPath}
+                        selected={false}
+                        selectedChild={null}
+                        onSelectSelf={() => onSelectChild(startIndex + ci)}
+                        onSelectChild={() => {}}
+                        onUpdate={(newChild) => onUpdateChild(listKey, ci, newChild)}
+                        onRemove={() => onRemoveChild(listKey, ci)}
+                        onRemoveChild={(nestedKey, nci) =>
+                          onUpdateChild(listKey, ci, removeFromStep(child, nestedKey, nci))
+                        }
+                        onInsertChild={(nestedKey, at, newStep) =>
+                          onUpdateChild(listKey, ci, insertIntoStep(child, nestedKey, at, newStep))
+                        }
+                        compact={compact}
+                        nestedInDialog={nestedInDialog}
+                        selectorPickTarget={selectorPickTarget}
+                        onTogglePickSelector={onTogglePickSelector}
+                        coordinatePickTarget={coordinatePickTarget}
+                        onToggleCoordinatePick={onToggleCoordinatePick}
+                        depth={depth + 1}
+                        onRunChild={onRunChild}
+                        selfRunKey={bracketRunKey}
+                        stepRunStates={stepRunStates}
+                        onStopInlineRun={onStopInlineRun}
+                        onRunSelf={onRunChild ? () => onRunChild(child, bracketRunKey) : undefined}
+                      />
+                    </div>
+                  </div>
+                )}
+              </SortableFlowRow>
               <InsertButton onInsert={(s) => onInsertChild(listKey, ci + 1, s)} />
             </div>
           );
         }
 
+        const leafPath = [...(pathFromRoot ?? []), { listKey, childIndex: ci }];
+        const leafRunKey = encodeScenarioInlineRunKey(rootStepIndex ?? parentStepIndex, leafPath);
         const childPickPath: SelectorPickTarget = {
           rootIndex: rootStepIndex ?? parentStepIndex,
-          path: [...(pathFromRoot ?? []), { listKey, childIndex: ci }],
+          path: leafPath,
         };
         const isPickTarget = selectorPickTarget != null && selectorPickTargetEquals(selectorPickTarget, childPickPath);
+        const childTapCoord: CoordinatePickTarget = {
+          rootIndex: rootStepIndex ?? parentStepIndex,
+          path: [...(pathFromRoot ?? []), { listKey, childIndex: ci }],
+          mode: 'tap_point',
+        };
+        const childSwipeCoord: CoordinatePickTarget = {
+          ...childTapCoord,
+          mode: 'swipe_segment',
+        };
+        const coordPickActive =
+          coordinatePickTarget && coordinatePickTargetEquals(coordinatePickTarget, childTapCoord)
+            ? ('tap_point' as const)
+            : coordinatePickTarget && coordinatePickTargetEquals(coordinatePickTarget, childSwipeCoord)
+              ? ('swipe_segment' as const)
+              : null;
         return (
-          <div key={ci}>
-            <StepCard
-              step={child}
-              index={startIndex + ci}
-              selected={selectedChild === startIndex + ci}
-              onClick={() => onEditChild ? onEditChild(listKey, ci) : onSelectChild(startIndex + ci)}
-              onRemove={() => onRemoveChild(listKey, ci)}
-              onRun={onRunChild ? () => onRunChild(child) : undefined}
-              isPickTarget={isPickTarget}
-              onTogglePickSelector={
-                onTogglePickSelector && isSelectorPickableStep(child)
-                  ? () => onTogglePickSelector(childPickPath)
-                  : undefined
-              }
-            />
+          <div key={rowId}>
+            <SortableFlowRow id={rowId}>
+              {(dragHandle, isDragging) => (
+                <div className={`flex items-stretch ${isDragging ? 'opacity-60' : ''}`}>
+                  {dragHandle}
+                  <div className='min-w-0 flex-1'>
+                    <StepCard
+                      step={child}
+                      index={startIndex + ci}
+                      selected={selectedChild === startIndex + ci}
+                      onClick={() => onEditChild ? onEditChild(listKey, ci) : onSelectChild(startIndex + ci)}
+                      onRemove={() => onRemoveChild(listKey, ci)}
+                      onRun={onRunChild ? () => onRunChild(child, leafRunKey) : undefined}
+                      runState={stepRunStates[leafRunKey] ?? 'idle'}
+                      onStopInlineRun={onStopInlineRun}
+                      isPickTarget={isPickTarget}
+                      onTogglePickSelector={
+                        onTogglePickSelector && isSelectorPickableStep(child)
+                          ? () => onTogglePickSelector(childPickPath)
+                          : undefined
+                      }
+                      coordPickActive={coordPickActive}
+                      onTogglePickTapCoords={
+                        onToggleCoordinatePick && isTapCoordinatePickableStep(child)
+                          ? () => onToggleCoordinatePick(childTapCoord)
+                          : undefined
+                      }
+                      onTogglePickSwipeCoords={
+                        onToggleCoordinatePick && isSwipeCoordinatePickableStep(child)
+                          ? () => onToggleCoordinatePick(childSwipeCoord)
+                          : undefined
+                      }
+                    />
+                  </div>
+                </div>
+              )}
+            </SortableFlowRow>
             <InsertButton onInsert={(s) => onInsertChild(listKey, ci + 1, s)} />
           </div>
         );
       })}
+      </SortableContext>
       {steps.length === 0 && (
         <p className='py-1 text-center text-[10px] text-muted-foreground'>Trống</p>
       )}
@@ -257,9 +358,14 @@ export function BracketBlock({
   nestedInDialog = false,
   selectorPickTarget,
   onTogglePickSelector,
+  coordinatePickTarget,
+  onToggleCoordinatePick,
   depth = 0,
   onRunChild,
   onRunSelf,
+  selfRunKey,
+  stepRunStates = {},
+  onStopInlineRun,
   rootStepIndex,
   pathFromRoot,
 }: BracketBlockProps) {
@@ -289,6 +395,8 @@ export function BracketBlock({
     [step, onUpdate],
   );
 
+  const selfRunState = selfRunKey ? (stepRunStates[selfRunKey] ?? 'idle') : 'idle';
+
   const childListProps = {
     selectedChild,
     startIndex: 0,
@@ -300,12 +408,16 @@ export function BracketBlock({
     compact,
     selectorPickTarget,
     onTogglePickSelector,
+    coordinatePickTarget,
+    onToggleCoordinatePick,
     depth,
     onEditChild: (lk: string, ci: number) => setEditingChildPath({ listKey: lk, ci }),
     onRunChild,
     rootStepIndex: effectiveRootIndex,
     pathFromRoot: effectivePath,
     nestedInDialog,
+    stepRunStates,
+    onStopInlineRun,
   };
 
   return (
@@ -324,6 +436,32 @@ export function BracketBlock({
             setEditingChildPath(null);
             onTogglePickSelector(path);
           } : undefined}
+          onRequestPickTapCoords={
+            onToggleCoordinatePick &&
+            editingChildPath &&
+            (editingChild.type === 'tap_ratio' || editingChild.type === 'tap')
+              ? () => {
+                  const path = [
+                    ...effectivePath,
+                    { listKey: editingChildPath.listKey, childIndex: editingChildPath.ci },
+                  ];
+                  setEditingChildPath(null);
+                  onToggleCoordinatePick({ rootIndex: effectiveRootIndex, path, mode: 'tap_point' });
+                }
+              : undefined
+          }
+          onRequestPickSwipeCoords={
+            onToggleCoordinatePick && editingChildPath && editingChild.type === 'swipe_ratio'
+              ? () => {
+                  const path = [
+                    ...effectivePath,
+                    { listKey: editingChildPath.listKey, childIndex: editingChildPath.ci },
+                  ];
+                  setEditingChildPath(null);
+                  onToggleCoordinatePick({ rootIndex: effectiveRootIndex, path, mode: 'swipe_segment' });
+                }
+              : undefined
+          }
         />
       </StepEditOverlay>
     )}
@@ -350,6 +488,32 @@ export function BracketBlock({
               setEditingChildPath(null);
               onTogglePickSelector(path);
             } : undefined}
+            onRequestPickTapCoords={
+              onToggleCoordinatePick &&
+              editingChildPath &&
+              (editingChild.type === 'tap_ratio' || editingChild.type === 'tap')
+                ? () => {
+                    const path = [
+                      ...effectivePath,
+                      { listKey: editingChildPath.listKey, childIndex: editingChildPath.ci },
+                    ];
+                    setEditingChildPath(null);
+                    onToggleCoordinatePick({ rootIndex: effectiveRootIndex, path, mode: 'tap_point' });
+                  }
+                : undefined
+            }
+            onRequestPickSwipeCoords={
+              onToggleCoordinatePick && editingChildPath && editingChild.type === 'swipe_ratio'
+                ? () => {
+                    const path = [
+                      ...effectivePath,
+                      { listKey: editingChildPath.listKey, childIndex: editingChildPath.ci },
+                    ];
+                    setEditingChildPath(null);
+                    onToggleCoordinatePick({ rootIndex: effectiveRootIndex, path, mode: 'swipe_segment' });
+                  }
+                : undefined
+            }
           />
         )}
       </DialogContent>
@@ -401,7 +565,16 @@ export function BracketBlock({
             <Crosshair size={12} strokeWidth={2} />
           </button>
         )}
-        {onRunSelf && (
+        {selfRunState === 'running' && (
+          <Loader2 size={12} className='shrink-0 animate-spin text-primary' aria-hidden />
+        )}
+        {selfRunState === 'ok' && (
+          <span className='text-[10px] font-bold text-emerald-600' title='Xong'>✓</span>
+        )}
+        {selfRunState === 'error' && (
+          <span className='text-[10px] font-bold text-red-600' title='Lỗi'>✕</span>
+        )}
+        {onRunSelf && selfRunState !== 'running' && (
           <button
             type='button'
             className='shrink-0 rounded p-0.5 hover:bg-green-500/15 hover:text-green-600'
@@ -409,6 +582,16 @@ export function BracketBlock({
             onClick={(e) => { e.stopPropagation(); onRunSelf(); }}
           >
             <Play size={10} strokeWidth={2} />
+          </button>
+        )}
+        {onStopInlineRun && selfRunState === 'running' && (
+          <button
+            type='button'
+            className='shrink-0 rounded p-0.5 hover:bg-destructive/15 hover:text-destructive'
+            title='Dừng chạy thử'
+            onClick={(e) => { e.stopPropagation(); onStopInlineRun(); }}
+          >
+            <Square size={10} strokeWidth={2} fill='currentColor' />
           </button>
         )}
         <button

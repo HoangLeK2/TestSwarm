@@ -20,6 +20,41 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # ---------------------------------------------------------------------------
+# Graph node / edge models (Phase 3 — node-graph refactor)
+# ---------------------------------------------------------------------------
+
+class NodeScope(BaseModel):
+    parentId: str
+    branch: str = "steps"
+
+
+class FlowNodeModel(BaseModel):
+    """Single node in the scenario graph."""
+    model_config = {"extra": "allow"}
+
+    id: str = Field(min_length=1)
+    type: str = Field(min_length=1)
+    config: Dict[str, Any] = {}
+    order: str = Field(min_length=1)          # fractional index key
+    scope: Optional[NodeScope] = None         # None = root level
+    position: Optional[Dict[str, float]] = None  # {x, y} for future visual editor
+    title: Optional[str] = None
+    description: Optional[str] = None
+
+
+class FlowEdgeModel(BaseModel):
+    """Directed edge between two nodes."""
+    model_config = {"extra": "allow"}  # preserve any UI metadata (e.g. label, color)
+    id: str = Field(min_length=1)
+    source: str = Field(min_length=1)
+    target: str = Field(min_length=1)
+    sourceHandle: Optional[str] = None
+    targetHandle: Optional[str] = None
+    type: Literal["default", "conditional", "error", "fallback"] = "default"
+    condition: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
 # Shared types
 # ---------------------------------------------------------------------------
 
@@ -36,9 +71,12 @@ TagsOrStr = Union[List[str], str]  # tags: list OR comma-separated string
 
 
 class StepBase(BaseModel):
-  
-    title: Optional[str] = None        
-    description: Optional[str] = None  
+    # ── Node identity (Option B) ──
+    id: Optional[str] = None           # nanoid — auto-generated if missing
+    order: Optional[str] = None        # fractional index key — auto-generated if missing
+
+    title: Optional[str] = None
+    description: Optional[str] = None
 
 
 class ImplicitWaitDict(BaseModel):
@@ -336,10 +374,21 @@ class ExtractStep(StepBase):
     expand_see_more_max_passes: Optional[IntOrVar] = None
     expand_see_more_scroll: Optional[bool] = None
     expand_see_more_scroll_distance: Optional[NumOrVar] = None
+    expand_completion_retries: Optional[IntOrVar] = None
     # fb_comments-specific
     parent_post_id_var: Optional[str] = None  # ctx var holding parent post id
     # int or "${VAR}" string — resolved at runtime before use
     max_items: Optional[Union[int, str]] = None
+    # ── Inline save (merged extract+save) ──
+    # When collection is set, auto-save extracted data after extraction.
+    # Replaces the need for a separate save_extraction step.
+    collection: Optional[str] = None
+    platform: Optional[str] = None
+    content_type: Optional[str] = None
+    dedupe_field: Optional[str] = None
+    tags: Optional[TagsOrStr] = None
+    save_parent_id_var: Optional[str] = None
+    item_level: int = Field(0, ge=0, le=2)
 
 class ExtractTextHierarchyStep(StepBase):
     type: Literal["extract_text_hierarchy"]

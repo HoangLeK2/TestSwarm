@@ -18,6 +18,8 @@ interface DeviceTileProps {
   onToggleMode: (serial: string) => void;
   onRestart: (serial: string) => void;
   onTap?: (rx: number, ry: number) => void;
+  onSwipe?: (rx1: number, ry1: number, rx2: number, ry2: number, durationMs: number) => void;
+  onDragGesture?: (rx1: number, ry1: number, rx2: number, ry2: number, durationMs: number) => void;
   highlightBounds?: [number, number, number, number] | null;
   /** Thu nhỏ khung màn + nút — dùng trong dialog kịch bản */
   compact?: boolean;
@@ -33,6 +35,8 @@ export function DeviceTile({
   onToggleMode,
   onRestart,
   onTap,
+  onSwipe,
+  onDragGesture,
   highlightBounds,
   compact = false,
   hideStepMonitor = false,
@@ -98,6 +102,8 @@ export function DeviceTile({
                     wsSend={wsSend}
                     mode={mode}
                     onTap={onTap}
+                    onSwipe={onSwipe}
+                    onDragGesture={onDragGesture}
                     highlightBounds={highlightBounds}
                     gestureMode={gestureMode}
                   />

@@ -1177,7 +1177,7 @@ class DeviceClient:
         # Fallback: use APK "type" message which calls injectText() (handles special chars via a11y/clipboard)
         self._send_to_agent({"type": "type", "text": text})
 
-    def scroll(self, direction: str = "down", distance: float = 0.5) -> None:
+    def scroll(self, direction: str = "down", distance: float = 0.5, *, duration_ms: int = 400) -> None:
         """Scroll screen. direction: up|down|left|right. distance: 0.0-1.0 of screen size."""
         w = self.screen_width or 1080
         h = self.screen_height or 1920
@@ -1191,7 +1191,7 @@ class DeviceClient:
             x1, y1, x2, y2 = int(w * (0.5 + d / 2)), cy, int(w * (0.5 - d / 2)), cy
         else:  # right
             x1, y1, x2, y2 = int(w * (0.5 - d / 2)), cy, int(w * (0.5 + d / 2)), cy
-        self.swipe(x1, y1, x2, y2, duration_ms=400)
+        self.swipe(x1, y1, x2, y2, duration_ms=max(120, int(duration_ms)))
 
     # ── STFService Device Control ──────────────────────────────────────────────
 

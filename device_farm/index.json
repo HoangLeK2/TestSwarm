@@ -63,18 +63,17 @@
         { "_comment": "Chờ nội dung load xong (đặc biệt quan trọng cho bài viết dài)" },
         { "type": "wait", "seconds": 1 },
 
-        { "_comment": "Expand 'Xem thêm' (executor tự chạy 2 lần) rồi extract bài viết" },
+        { "_comment": "Expand 'Xem thêm' rồi extract bài viết + lưu collection (inline save)" },
         {
           "type": "extract",
           "strategy": "fb_posts",
           "expand_see_more": true,
-          "stop_if_no_new": false
-        },
-        {
-          "type": "save_extraction",
-          "data_var": "posts", "collection": "${SAVE_COLLECTION}",
-          "platform": "facebook", "content_type": "group_post",
-          "dedupe_field": "text", "tags": "group,crawl,${GROUP_NAME}"
+          "stop_if_no_new": false,
+          "collection": "${SAVE_COLLECTION}",
+          "platform": "facebook",
+          "content_type": "group_post",
+          "dedupe_field": "text",
+          "tags": "group,crawl,${GROUP_NAME}"
         },
 
         { "_comment": "Vào comment bài viết đầu tiên hiển thị → extract comment + lấy like count" },
@@ -85,28 +84,36 @@
             { "type": "tap_selector", "by": "text", "value": "Bình luận", "timeout": 3 },
             { "type": "wait_stable", "timeout": 6, "stable_duration": 0.5 },
 
-            { "_comment": "Lần 1: extract comment hiển thị đầu tiên + đồng thời capture like count từ header" },
-            { "type": "extract", "strategy": "fb_comments" },
+            { "_comment": "Lần 1: extract comment + lưu (parent từ _active_comment_parent_hash)" },
             {
-              "type": "save_extraction",
-              "data_var": "comments", "collection": "${SAVE_COLLECTION}",
-              "platform": "facebook", "content_type": "comment",
-              "dedupe_field": "text", "tags": "group,comment,${GROUP_NAME}",
-              "parent_id_var": "_first_new_post_hash", "item_level": 1
+              "type": "extract",
+              "strategy": "fb_comments",
+              "parent_post_id_var": "_fb_comment_parent_pid",
+              "collection": "${SAVE_COLLECTION}",
+              "platform": "facebook",
+              "content_type": "comment",
+              "dedupe_field": "text",
+              "tags": "group,comment,${GROUP_NAME}",
+              "save_parent_id_var": "_active_comment_parent_hash",
+              "item_level": 1
             },
 
-            { "_comment": "Cuộn xuống load thêm comment" },
-            { "type": "scroll_down", "repeats": 3, "start_x_ratio": 0.5 },
-            { "type": "wait", "seconds": 1 },
+            { "_comment": "Cuộn xuống load thêm comment (chậm hơn để RecyclerView kịp hydrate)" },
+            { "type": "scroll_down", "repeats": 2, "start_x_ratio": 0.5, "duration_ms": 900, "pause_seconds": 1.0 },
+            { "type": "wait", "seconds": 1.8 },
 
             { "_comment": "Lần 2: extract thêm comment sau khi scroll" },
-            { "type": "extract", "strategy": "fb_comments" },
             {
-              "type": "save_extraction",
-              "data_var": "comments", "collection": "${SAVE_COLLECTION}",
-              "platform": "facebook", "content_type": "comment",
-              "dedupe_field": "text", "tags": "group,comment,${GROUP_NAME}",
-              "parent_id_var": "_first_new_post_hash", "item_level": 1
+              "type": "extract",
+              "strategy": "fb_comments",
+              "parent_post_id_var": "_fb_comment_parent_pid",
+              "collection": "${SAVE_COLLECTION}",
+              "platform": "facebook",
+              "content_type": "comment",
+              "dedupe_field": "text",
+              "tags": "group,comment,${GROUP_NAME}",
+              "save_parent_id_var": "_active_comment_parent_hash",
+              "item_level": 1
             },
 
             { "type": "key", "key": "back" },
@@ -121,13 +128,6 @@
       ]
     },
 
-    { "_comment": "Final save" },
-    {
-      "type": "save_extraction",
-      "data_var": "posts", "collection": "${SAVE_COLLECTION}",
-      "platform": "facebook", "content_type": "group_post",
-      "dedupe_field": "text", "tags": "group,crawl,${GROUP_NAME}"
-    },
     { "type": "key", "key": "home" }
   ]
 }

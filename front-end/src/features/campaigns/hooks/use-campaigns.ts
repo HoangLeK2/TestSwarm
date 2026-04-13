@@ -10,6 +10,7 @@ import type {
   ScenarioCreate,
   ScenarioUpdate
 } from '../types';
+import { isCampaignActiveExecution } from '../types';
 import { fleetRun, fleetStatus, type FleetStatusResult } from '../../devices/services/api';
 
 const KEYS = {
@@ -25,7 +26,9 @@ export function useCampaigns() {
     queryFn: campaignsApi.list,
     refetchInterval: (query) => {
       const data = query.state.data as CampaignOut[] | undefined;
-      return data && data.some((c: CampaignOut) => c.status === 'running') ? 3000 : false;
+      return data && data.some((c: CampaignOut) => isCampaignActiveExecution(c.status))
+        ? 3000
+        : false;
     },
   });
 }

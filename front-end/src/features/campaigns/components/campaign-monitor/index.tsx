@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { MonitorContent } from './monitor-content';
 import type { CampaignOut } from '../../types';
+import { isCampaignActiveExecution } from '../../types';
 
 interface Props {
   campaign: CampaignOut;
@@ -19,7 +20,7 @@ interface Props {
 }
 
 export function CampaignMonitorDialog({ campaign, children }: Props) {
-  const isRunning = campaign.status === 'running';
+  const isRunning = isCampaignActiveExecution(campaign.status);
 
   return (
     <Dialog>

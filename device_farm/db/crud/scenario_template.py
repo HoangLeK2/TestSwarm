@@ -18,12 +18,16 @@ async def create_template(
     tags: str = "",
     is_builtin: bool = False,
     user_id: str | None = None,
+    nodes: list | None = None,
+    edges: list | None = None,
 ) -> ScenarioTemplate:
     tmpl = ScenarioTemplate(
         name=name,
         description=description,
         category=category,
         steps=steps or [],
+        nodes=nodes or [],
+        edges=edges or [],
         variables=variables or {},
         tags=tags,
         is_builtin=is_builtin,
@@ -113,4 +117,6 @@ async def duplicate_template(
         tags=src.tags,
         is_builtin=False,
         user_id=user_id,
+        nodes=list(src.nodes) if src.nodes else [],
+        edges=list(src.edges) if src.edges else [],
     )

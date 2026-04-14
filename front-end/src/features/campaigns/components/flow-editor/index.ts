@@ -6,3 +6,9 @@ export {
   selectorPickTargetEquals,
   type SelectorPickTarget,
 } from './selector-pick';
+export {
+  applyTapPointToSteps,
+  applySwipeSegmentToSteps,
+  coordinatePickTargetEquals,
+  type CoordinatePickTarget,
+} from './coordinate-pick';

@@ -7,13 +7,13 @@ Called once on startup (idempotent: skipped if builtins already exist).
 Templates use:
   - DF-001 variable interpolation  (${VAR})
   - DF-002 control flow            (repeat, repeat_until, if_element, if_variable, random_pick)
-  - DF-006 data extraction         (extract strategy=fb_posts, loop, break_if)
+  - DF-006 data extraction         (extract strategy=fb_posts/fb_comments; optional inline save via collection=…)
 
 Template step types used:
   launch_app, open_url, wait, wait_stable, wait_element, dismiss_popup, key,
   scroll_down, swipe_ratio, tap_selector, input_selector, input_text,
   set_variable, repeat, repeat_until, if_element, random_pick,
-  extract, loop, break_if
+  extract (optional collection → inline save), save_extraction (advanced), loop, break_if
 
 Design rules:
   - Use wait_stable / wait_element instead of fixed waits wherever possible
@@ -235,6 +235,11 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                         "type": "extract",
                         "strategy": "fb_posts",
                         "expand_see_more": True,
+                        "collection": "${SAVE_COLLECTION}",
+                        "platform": "facebook",
+                        "content_type": "group_post",
+                        "dedupe_field": "post_key",
+                        "tags": "group,crawl,${GROUP_NAME}",
                     },
 
                     {
@@ -321,29 +326,9 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                     {"type": "wait", "seconds": "${_READ}"},
                     {"type": "dismiss_popup", "retries": 1},
 
-                    # Lưu incremental sau mỗi round
-                    {
-                        "type": "save_extraction",
-                        "data_var": "posts",
-                        "collection": "${SAVE_COLLECTION}",
-                        "platform": "facebook",
-                        "content_type": "group_post",
-                        "dedupe_field": "post_key",
-                        "tags": "group,crawl,${GROUP_NAME}",
-                    },
                 ],
             },
 
-            # ── Phase 4: Final save ──────────────────────────────────────
-            {
-                "type": "save_extraction",
-                "data_var": "posts",
-                "collection": "${SAVE_COLLECTION}",
-                "platform": "facebook",
-                "content_type": "group_post",
-                "dedupe_field": "post_key",
-                "tags": "group,crawl,${GROUP_NAME}",
-            },
         ],
     },
 
@@ -445,10 +430,16 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                 "steps": [
                     # Đợi content render xong trước khi extract
                     {"type": "wait_stable", "timeout": 4, "stable_duration": 0.5},
-                    {"type": "extract", "strategy": "fb_posts", "expand_see_more": True},
+                    {"type": "extract", "strategy": "fb_posts", "expand_see_more": True,
+                     "collection": "${SAVE_COLLECTION}", "platform": "facebook",
+                     "content_type": "group_post", "dedupe_field": "text",
+                     "tags": "group,crawl,${GROUP_NAME}"},
                     # Đợi sau expand see_more để nội dung đầy đủ được parse
                     {"type": "wait", "seconds": 2},
-                    {"type": "extract", "strategy": "fb_posts", "expand_see_more": False},
+                    {"type": "extract", "strategy": "fb_posts", "expand_see_more": False,
+                     "collection": "${SAVE_COLLECTION}", "platform": "facebook",
+                     "content_type": "group_post", "dedupe_field": "text",
+                     "tags": "group,crawl,${GROUP_NAME}"},
                     {
                         "type": "random_pick",
                         "branches": [
@@ -506,22 +497,9 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                     {"type": "set_variable", "name": "_READ", "from_list": [3, 4, 4, 5, 6]},
                     {"type": "wait", "seconds": "${_READ}"},
                     {"type": "dismiss_popup", "retries": 1},
-                    {
-                        "type": "save_extraction",
-                        "data_var": "posts", "collection": "${SAVE_COLLECTION}",
-                        "platform": "facebook", "content_type": "group_post",
-                        "dedupe_field": "text", "tags": "group,crawl,${GROUP_NAME}",
-                    },
                 ],
             },
 
-            # Final save + về home
-            {
-                "type": "save_extraction",
-                "data_var": "posts", "collection": "${SAVE_COLLECTION}",
-                "platform": "facebook", "content_type": "group_post",
-                "dedupe_field": "text", "tags": "group,crawl,${GROUP_NAME}",
-            },
             {"type": "key", "key": "home"},
         ],
     },
@@ -594,12 +572,11 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                         "expand_see_more": True,
                         "stop_if_no_new": True,
                         "no_new_threshold": 100,
-                    },
-                    {
-                        "type": "save_extraction",
-                        "data_var": "posts", "collection": "${SAVE_COLLECTION}",
-                        "platform": "facebook", "content_type": "group_post",
-                        "dedupe_field": "text", "tags": "group,crawl,${GROUP_NAME}",
+                        "collection": "${SAVE_COLLECTION}",
+                        "platform": "facebook",
+                        "content_type": "group_post",
+                        "dedupe_field": "text",
+                        "tags": "group,crawl,${GROUP_NAME}",
                     },
                     {
                         "type": "scroll_down",
@@ -704,7 +681,10 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             {
                 "type": "repeat", "count": "${SCROLLS_PER_GROUP}",
                 "steps": [
-                    {"type": "extract", "strategy": "fb_posts", "expand_see_more": True},
+                    {"type": "extract", "strategy": "fb_posts", "expand_see_more": True,
+                     "collection": "${SAVE_COLLECTION}", "platform": "facebook",
+                     "content_type": "group_post", "dedupe_field": "text",
+                     "tags": "group,crawl,${GROUP_1}"},
                     {
                         "type": "random_pick",
                         "branches": [
@@ -760,19 +740,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                     {"type": "set_variable", "name": "_READ", "from_list": [2, 2.5, 3, 4, 5]},
                     {"type": "wait", "seconds": "${_READ}"},
                     {"type": "dismiss_popup", "retries": 1},
-                    {
-                        "type": "save_extraction",
-                        "data_var": "posts", "collection": "${SAVE_COLLECTION}",
-                        "platform": "facebook", "content_type": "group_post",
-                        "dedupe_field": "text", "tags": "group,crawl,${GROUP_1}",
-                    },
                 ],
-            },
-            {
-                "type": "save_extraction",
-                "data_var": "posts", "collection": "${SAVE_COLLECTION}",
-                "platform": "facebook", "content_type": "group_post",
-                "dedupe_field": "text", "tags": "group,crawl,${GROUP_1}",
             },
             {"type": "key", "key": "back"},
             {"type": "key", "key": "back"},
@@ -831,7 +799,10 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             {
                 "type": "repeat", "count": "${SCROLLS_PER_GROUP}",
                 "steps": [
-                    {"type": "extract", "strategy": "fb_posts", "expand_see_more": True},
+                    {"type": "extract", "strategy": "fb_posts", "expand_see_more": True,
+                     "collection": "${SAVE_COLLECTION}", "platform": "facebook",
+                     "content_type": "group_post", "dedupe_field": "text",
+                     "tags": "group,crawl,${GROUP_2}"},
                     {
                         "type": "random_pick",
                         "branches": [
@@ -887,19 +858,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                     {"type": "set_variable", "name": "_READ", "from_list": [2, 2.5, 3, 4, 5]},
                     {"type": "wait", "seconds": "${_READ}"},
                     {"type": "dismiss_popup", "retries": 1},
-                    {
-                        "type": "save_extraction",
-                        "data_var": "posts", "collection": "${SAVE_COLLECTION}",
-                        "platform": "facebook", "content_type": "group_post",
-                        "dedupe_field": "text", "tags": "group,crawl,${GROUP_2}",
-                    },
                 ],
-            },
-            {
-                "type": "save_extraction",
-                "data_var": "posts", "collection": "${SAVE_COLLECTION}",
-                "platform": "facebook", "content_type": "group_post",
-                "dedupe_field": "text", "tags": "group,crawl,${GROUP_2}",
             },
             {"type": "key", "key": "back"},
             {"type": "key", "key": "back"},
@@ -958,7 +917,10 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             {
                 "type": "repeat", "count": "${SCROLLS_PER_GROUP}",
                 "steps": [
-                    {"type": "extract", "strategy": "fb_posts", "expand_see_more": True},
+                    {"type": "extract", "strategy": "fb_posts", "expand_see_more": True,
+                     "collection": "${SAVE_COLLECTION}", "platform": "facebook",
+                     "content_type": "group_post", "dedupe_field": "text",
+                     "tags": "group,crawl,${GROUP_3}"},
                     {
                         "type": "random_pick",
                         "branches": [
@@ -1014,19 +976,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                     {"type": "set_variable", "name": "_READ", "from_list": [2, 2.5, 3, 4, 5]},
                     {"type": "wait", "seconds": "${_READ}"},
                     {"type": "dismiss_popup", "retries": 1},
-                    {
-                        "type": "save_extraction",
-                        "data_var": "posts", "collection": "${SAVE_COLLECTION}",
-                        "platform": "facebook", "content_type": "group_post",
-                        "dedupe_field": "text", "tags": "group,crawl,${GROUP_3}",
-                    },
                 ],
-            },
-            {
-                "type": "save_extraction",
-                "data_var": "posts", "collection": "${SAVE_COLLECTION}",
-                "platform": "facebook", "content_type": "group_post",
-                "dedupe_field": "text", "tags": "group,crawl,${GROUP_3}",
             },
             {"type": "key", "key": "back"},
             {"type": "key", "key": "back"},
@@ -1085,7 +1035,10 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             {
                 "type": "repeat", "count": "${SCROLLS_PER_GROUP}",
                 "steps": [
-                    {"type": "extract", "strategy": "fb_posts", "expand_see_more": True},
+                    {"type": "extract", "strategy": "fb_posts", "expand_see_more": True,
+                     "collection": "${SAVE_COLLECTION}", "platform": "facebook",
+                     "content_type": "group_post", "dedupe_field": "text",
+                     "tags": "group,crawl,${GROUP_4}"},
                     {
                         "type": "random_pick",
                         "branches": [
@@ -1141,19 +1094,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                     {"type": "set_variable", "name": "_READ", "from_list": [2, 2.5, 3, 4, 5]},
                     {"type": "wait", "seconds": "${_READ}"},
                     {"type": "dismiss_popup", "retries": 1},
-                    {
-                        "type": "save_extraction",
-                        "data_var": "posts", "collection": "${SAVE_COLLECTION}",
-                        "platform": "facebook", "content_type": "group_post",
-                        "dedupe_field": "text", "tags": "group,crawl,${GROUP_4}",
-                    },
                 ],
-            },
-            {
-                "type": "save_extraction",
-                "data_var": "posts", "collection": "${SAVE_COLLECTION}",
-                "platform": "facebook", "content_type": "group_post",
-                "dedupe_field": "text", "tags": "group,crawl,${GROUP_4}",
             },
             {"type": "key", "key": "home"},
         ],
@@ -1221,7 +1162,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                 "type": "loop",
                 "count": "${MAX_SCROLLS}",
                 "steps": [
-                    # Bước 1: Extract bài viết
+                    # Bước 1: Extract bài viết (auto-save)
                     {
                         "type": "extract",
                         "strategy": "fb_posts",
@@ -1231,12 +1172,6 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                         "expand_see_more_scroll_distance": 0.22,
                         "stop_if_no_new": True,
                         "no_new_threshold": 5,
-                    },
-
-                    # Bước 2: Lưu kết quả (dedup theo nội dung text)
-                    {
-                        "type": "save_extraction",
-                        "data_var": "posts",
                         "collection": "${SAVE_COLLECTION}",
                         "platform": "facebook",
                         "content_type": "group_post",
@@ -1244,7 +1179,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                         "tags": "group,scan,${GROUP_NAME}",
                     },
 
-                    # Bước 3: Scroll xuống bài tiếp theo
+                    # Bước 2: Scroll xuống bài tiếp theo
                     {
                         "type": "scroll_down",
                         "repeats": 1,
@@ -1262,6 +1197,231 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
         ],
     },
 
+    # ── fb_group_1h_one_group ─────────────────────────────────────────────
+    # Fragment: tìm nhóm + crawl + comment (giống fb_group_1h nhưng không launch_app / home).
+    # Dùng với run_scenario từ fb_group_1h_multi_account; biến MAX_SCROLLS, SAVE_COLLECTION…
+    # lấy từ scenario cha. Chỉ khai báo GROUP_NAME + GROUP_XPATH ở đây để không ghi đè biến cha.
+    {
+        "name": "fb_group_1h_one_group",
+        "is_builtin": False,
+        "category": "facebook",
+        "description": (
+            "Fragment nội bộ: một vòng tìm kiếm → tab Nhóm → tap xpath → loop crawl fb_group_1h. "
+            "Không mở app. Khi gọi trực tiếp cần đủ biến như fb_group_1h (MAX_SCROLLS, SCROLL_X_RATIO, …). "
+            "Thường dùng qua template fb_group_1h_multi_account."
+        ),
+        "tags": "facebook,group,1h,fragment,internal,crawl",
+        "variables": {
+            "GROUP_NAME": "openclaw vn",
+            "GROUP_XPATH": "//*[@content-desc=\"OpenClaw VN · Truy cập\"]",
+        },
+        "steps": [
+            {
+                "type": "if_element", "by": "content-desc", "value": "Tìm kiếm", "timeout": 5,
+                "then": [{"type": "tap_selector", "by": "content-desc", "value": "Tìm kiếm", "timeout": 4}],
+                "else": [{"type": "tap_ratio", "x": 0.87, "y": 0.035}],
+            },
+            {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
+            {"type": "input_text", "text": "${GROUP_NAME}", "via": "u2"},
+            {"type": "wait", "seconds": 2},
+            {"type": "key", "key": "enter"},
+            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
+            {
+                "type": "if_element", "by": "description", "value": "Kết quả tìm kiếm trong tab Nhóm, 3 trong số 7", "timeout": 5,
+                "then": [{"type": "tap_selector", "by": "description", "value": "Kết quả tìm kiếm trong tab Nhóm, 3 trong số 7", "timeout": 4}],
+                "else": [
+                    {
+                        "type": "if_element", "by": "text", "value": "Nhóm", "timeout": 3,
+                        "then": [{"type": "tap_selector", "by": "text", "value": "Nhóm", "timeout": 3}],
+                        "else": [
+                            {
+                                "type": "if_element", "by": "text", "value": "Groups", "timeout": 3,
+                                "then": [{"type": "tap_selector", "by": "text", "value": "Groups", "timeout": 3}],
+                                "else": [],
+                            },
+                        ],
+                    },
+                ],
+            },
+            {"type": "wait_stable", "timeout": 1, "stable_duration": 0.5},
+            {"type": "tap_selector", "by": "xpath", "value": "${GROUP_XPATH}", "timeout": 8},
+            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
+            {"type": "scroll_down", "repeats": 2, "start_x_ratio": "${SCROLL_X_RATIO}", "start_y_ratio": 0.65, "end_y_ratio": 0.47},
+            {"type": "wait", "seconds": 3},
+            {
+                "type": "loop",
+                "count": "${MAX_SCROLLS}",
+                "steps": [
+                    {"type": "wait", "seconds": 1},
+                    {
+                        "type": "extract",
+                        "strategy": "fb_posts",
+                        "expand_see_more": True,
+                        "expand_see_more_max_passes": 4,
+                        "expand_see_more_scroll": True,
+                        "expand_see_more_scroll_distance": 0.25,
+                        "expand_completion_retries": 4,
+                        "stop_if_no_new": False,
+                        "collection": "${SAVE_COLLECTION}",
+                        "platform": "facebook",
+                        "content_type": "group_post",
+                        "dedupe_field": "post_key",
+                        "tags": "group,crawl,${GROUP_NAME}",
+                    },
+                    # Một lần cuộn nhẹ để lộ hàng Thích/Bình luận khi bài dài; tránh 2 lần
+                    # (dễ đẩy bài trên cùng ra khỏi viewport → tap nhầm "Bình luận" bài dưới).
+                    {"type": "scroll_down", "repeats": 1, "start_x_ratio": 0.5, "start_y_ratio": 0.72, "end_y_ratio": 0.48},
+                    {"type": "wait", "seconds": 1},
+                    {
+                        "type": "if_element", "by": "text", "value": "Bình luận", "timeout": 6,
+                        "ignore_error": True,
+                        "then": [
+                            {"type": "tap_selector", "by": "text", "value": "Bình luận", "timeout": 5},
+                            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
+                            {
+                                "type": "if_element", "by": "text", "value": "Đang hiển thị Phù hợp nhất bình luận. Nhấn để thay đổi bộ lọc bình luận.", "timeout": 4, "ignore_error": True,
+                                "then": [
+                                    {"type": "tap_selector", "by": "text", "value": "Đang hiển thị Phù hợp nhất bình luận. Nhấn để thay đổi bộ lọc bình luận.", "timeout": 4, "ignore_error": True},
+                                    {"type": "wait", "seconds": 0.5},
+                                    {
+                                        "type": "if_element", "by": "text", "value": "Tất cả bình luận", "timeout": 4, "ignore_error": True,
+                                        "then": [{"type": "tap_selector", "by": "description", "value": "Tất cả bình luận, Hiển thị tất cả bình luận, bao gồm cả nội dung có thể là spam.", "timeout": 4, "ignore_error": True}],
+                                        "else": [
+                                            {
+                                                "type": "if_element", "by": "text", "value": "All comments", "timeout": 4, "ignore_error": True,
+                                                "then": [{"type": "tap_selector", "by": "text", "value": "All comments", "timeout": 4, "ignore_error": True}],
+                                                "else": [],
+                                            }
+                                        ],
+                                    },
+                                    {"type": "wait_stable", "timeout": 2, "stable_duration": 0.4},
+                                ],
+                                "else": [],
+                            },
+                            {
+                                "type": "loop",
+                                "count": "${MAX_COMMENT_SCROLLS}",
+                                "steps": [
+                                    {"type": "extract", "strategy": "fb_comments",
+                                     "parent_post_id_var": "_fb_comment_parent_pid",
+                                     "expand_see_more": True,
+                                     "expand_see_more_max_passes": 6,
+                                     "expand_see_more_scroll": True,
+                                     "expand_see_more_scroll_distance": 0.2,
+                                     "max_items": 200,
+                                     "stop_if_no_new": True, "no_new_threshold": 2,
+                                     "collection": "${SAVE_COLLECTION}",
+                                     "platform": "facebook",
+                                     "content_type": "comment",
+                                     "dedupe_field": "comment_key",
+                                     "tags": "group,comment,${GROUP_NAME}",
+                                     "save_parent_id_var": "_active_comment_parent_hash",
+                                     "item_level": 1},
+                                    {"type": "scroll_down", "repeats": 1, "start_x_ratio": 0.5, "start_y_ratio": 0.65, "end_y_ratio": 0.47, "duration_ms": 920, "pause_seconds": 1.05},
+                                    {"type": "wait", "seconds": 2},
+                                ],
+                            },
+                            {"type": "key", "key": "back"},
+                            {"type": "wait_stable", "timeout": 5, "stable_duration": 0.5},
+                            {"type": "dismiss_popup", "retries": 3},
+                            {"type": "wait_stable", "timeout": 5, "stable_duration": 0.5},
+                        ],
+                    },
+                    {"type": "scroll_down", "repeats": 1, "start_x_ratio": "${SCROLL_X_RATIO}", "start_y_ratio": 0.65, "end_y_ratio": 0.47},
+                    {"type": "set_variable", "name": "_W", "from_list": [1, 1, 1.5, 2, 2, 3]},
+                    {"type": "wait", "seconds": "${_W}"},
+                    {"type": "dismiss_popup", "retries": 2},
+                ],
+            },
+        ],
+    },
+
+    # ── fb_group_1h_multi_account ─────────────────────────────────────────
+    # 2 tài khoản × 2 nhóm mặc định: crawl hết nhóm trên acc1 → đổi acc → crawl acc2.
+    {
+        "name": "fb_group_1h_multi_account",
+        "is_builtin": False,
+        "category": "facebook",
+        "description": (
+            "Giống fb_group_1h nhưng nhiều nhóm và 2 tài khoản Facebook trên cùng thiết bị. "
+            "Luồng: (1) Acc hiện tại (đã đăng nhập sẵn) — GROUP_1 → GROUP_2; "
+            "(2) mở switcher hồ sơ, chọn ACCOUNT_2_SWITCH_LABEL; "
+            "(3) GROUP_3 → GROUP_4. "
+            "Sau mỗi nhóm: Back 2 lần rồi tìm nhóm tiếp theo. "
+            "\n"
+            "GROUP_1_NAME..4 + GROUP_1_XPATH..4: tìm kiếm và xpath hàng nhóm (như GROUP_NAME/GROUP_XPATH). "
+            "ACCOUNT_2_SWITCH_LABEL: đúng chữ hiển thị trên danh sách hồ sơ khi đổi tài khoản. "
+            "PROFILE_SHORTCUT_X/Y: tỷ lệ tap mở menu hồ sơ (mặc định góc phải dưới — chỉnh theo máy). "
+            "MAX_SCROLLS, SCROLL_X_RATIO, SAVE_COLLECTION, MAX_COMMENT_SCROLLS: giống fb_group_1h. "
+            "Nếu UI đổi: sửa bước switch account hoặc thu control-record."
+        ),
+        "tags": "facebook,group,1h,multi,multi-account,crawl",
+        "variables": {
+            "GROUP_1_NAME": "openclaw vn",
+            "GROUP_1_XPATH": "//*[@content-desc=\"OpenClaw VN · Truy cập\"]",
+            "GROUP_2_NAME": "Tìm kiếm việc làm",
+            "GROUP_2_XPATH": "//*[@text=\"Tìm kiếm việc làm\"]",
+            "ACCOUNT_2_SWITCH_LABEL": "Tên hiển thị acc 2",
+            "GROUP_3_NAME": "công nghệ thông tin",
+            "GROUP_3_XPATH": "//*[@text=\"công nghệ thông tin\"]",
+            "GROUP_4_NAME": "lập trình viên",
+            "GROUP_4_XPATH": "//*[@text=\"lập trình viên\"]",
+            "PROFILE_SHORTCUT_X": 0.92,
+            "PROFILE_SHORTCUT_Y": 0.96,
+            "MAX_SCROLLS": 180,
+            "MAX_COMMENT_SCROLLS": 20,
+            "COMMENT_NO_NEW_THRESHOLD": 2,
+            "SCROLL_X_RATIO": 0.18,
+            "SAVE_COLLECTION": "fb_group_posts",
+        },
+        "steps": [
+            {"type": "launch_app", "package": "com.facebook.katana", "title": "mở fb multi acc"},
+            {"type": "dismiss_popup", "retries": 3},
+            {"type": "wait_stable", "timeout": 8, "stable_duration": 0.5},
+            {"type": "set_variable", "name": "GROUP_NAME", "value": "${GROUP_1_NAME}"},
+            {"type": "set_variable", "name": "GROUP_XPATH", "value": "${GROUP_1_XPATH}"},
+            {"type": "run_scenario", "scenario_name": "fb_group_1h_one_group"},
+            {"type": "key", "key": "back"},
+            {"type": "key", "key": "back"},
+            {"type": "wait", "seconds": 2},
+            {"type": "wait_stable", "timeout": 5, "stable_duration": 0.5},
+            {"type": "set_variable", "name": "GROUP_NAME", "value": "${GROUP_2_NAME}"},
+            {"type": "set_variable", "name": "GROUP_XPATH", "value": "${GROUP_2_XPATH}"},
+            {"type": "run_scenario", "scenario_name": "fb_group_1h_one_group"},
+            {"type": "key", "key": "back"},
+            {"type": "key", "key": "back"},
+            {"type": "wait", "seconds": 2},
+            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
+            {"type": "tap_ratio", "x": "${PROFILE_SHORTCUT_X}", "y": "${PROFILE_SHORTCUT_Y}"},
+            {"type": "wait", "seconds": 2},
+            {
+                "type": "if_element", "by": "text", "value": "See all profiles", "timeout": 4,
+                "then": [{"type": "tap_selector", "by": "text", "value": "See all profiles", "timeout": 4}],
+                "else": [],
+            },
+            {
+                "type": "if_element", "by": "text", "value": "Xem tất cả hồ sơ", "timeout": 4,
+                "then": [{"type": "tap_selector", "by": "text", "value": "Xem tất cả hồ sơ", "timeout": 4}],
+                "else": [],
+            },
+            {"type": "wait_stable", "timeout": 5, "stable_duration": 0.45},
+            {"type": "tap_selector", "by": "text", "value": "${ACCOUNT_2_SWITCH_LABEL}", "timeout": 12},
+            {"type": "wait_stable", "timeout": 10, "stable_duration": 0.6},
+            {"type": "dismiss_popup", "retries": 2},
+            {"type": "set_variable", "name": "GROUP_NAME", "value": "${GROUP_3_NAME}"},
+            {"type": "set_variable", "name": "GROUP_XPATH", "value": "${GROUP_3_XPATH}"},
+            {"type": "run_scenario", "scenario_name": "fb_group_1h_one_group"},
+            {"type": "key", "key": "back"},
+            {"type": "key", "key": "back"},
+            {"type": "wait", "seconds": 2},
+            {"type": "wait_stable", "timeout": 5, "stable_duration": 0.5},
+            {"type": "set_variable", "name": "GROUP_NAME", "value": "${GROUP_4_NAME}"},
+            {"type": "set_variable", "name": "GROUP_XPATH", "value": "${GROUP_4_XPATH}"},
+            {"type": "run_scenario", "scenario_name": "fb_group_1h_one_group"},
+            {"type": "key", "key": "home"},
+        ],
+    },
+
     {
         "name": "fb_group_1h",
         "is_builtin": False,
@@ -1271,6 +1431,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "Chấp nhận bài trùng lặp — không dừng sớm khi feed lặp lại. "
             "Navigation 3 bước: tìm kiếm → tab Nhóm (descriptionContains) → tap nhóm qua xpath. "
             "Scroll neo trái (SCROLL_X_RATIO=0.18) tránh mở ảnh. "
+            "Extract tự bấm 'Xem thêm' nhiều vòng rồi dump hierarchy; retry khi bài còn bị cắt. "
             "Lưu toàn bộ vào SAVE_COLLECTION.\n"
             "GROUP_NAME: tên nhóm để tìm kiếm. "
             "GROUP_XPATH: xpath chính xác của nhóm trong kết quả. "
@@ -1325,7 +1486,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             {"type": "wait_stable", "timeout": 1, "stable_duration": 0.5},
 
             # ── Phase 4: Tap vào nhóm ───────────────────────────────────────
-            {"type": "tap_selector", "by": "text", "value": "OpenClaw VN · Tham gia", "timeout": 6},
+            {"type": "tap_selector", "by": "xpath", "value": "${GROUP_XPATH}", "timeout": 8},
             {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
 
             {"type": "scroll_down", "repeats": 2, "start_x_ratio": "${SCROLL_X_RATIO}", "start_y_ratio": 0.65, "end_y_ratio": 0.47},
@@ -1342,21 +1503,17 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                     # Chờ nội dung load xong (đặc biệt quan trọng cho bài viết dài)
                     {"type": "wait", "seconds": 1},
 
-                    # Extract bài viết đang hiển thị, expand "Xem thêm" 2 lần để lấy full text
+                    # Extract fb_posts: pre-expand “Xem thêm” + retry khi còn marker truncate.
+                    # Auto-save — DB tự dedup qua content_hash, không cần lo trùng
                     {
                         "type": "extract",
                         "strategy": "fb_posts",
                         "expand_see_more": True,
-                        "expand_see_more_max_passes": 3,
-                        "expand_see_more_scroll": False,
-                        "expand_see_more_scroll_distance": 0.22,
-                        "expand_completion_retries": 1,
+                        "expand_see_more_max_passes": 4,
+                        "expand_see_more_scroll": True,
+                        "expand_see_more_scroll_distance": 0.25,
+                        "expand_completion_retries": 4,
                         "stop_if_no_new": False,
-                    },
-                    # Lưu ngay — DB tự dedup qua content_hash, không cần lo trùng
-                    {
-                        "type": "save_extraction",
-                        "data_var": "posts",
                         "collection": "${SAVE_COLLECTION}",
                         "platform": "facebook",
                         "content_type": "group_post",
@@ -1364,26 +1521,31 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                         "tags": "group,crawl,${GROUP_NAME}",
                     },
 
+                    # Một lần cuộn nhẹ để lộ hàng Thích/Bình luận khi bài dài; tránh 2× cuộn mạnh
+                    # trước khi tap (dễ khiến nút "Bình luận" đầu tiên thuộc bài kế tiếp).
+                    {"type": "scroll_down", "repeats": 1, "start_x_ratio": 0.5, "start_y_ratio": 0.72, "end_y_ratio": 0.48},
+                    {"type": "wait", "seconds": 1},
                     # Vào comment bài viết đầu tiên → extract comment + cập nhật like count
+                    # (timeout đủ dài: feed đang load / chưa scroll tới bài có nút thì 1s hay miss)
                     {
-                        "type": "if_element", "by": "text", "value": "Bình luận", "timeout": 1,
+                        "type": "if_element", "by": "text", "value": "Bình luận", "timeout": 6,
                         "ignore_error": True,
                         "then": [
-                            {"type": "tap_selector", "by": "text", "value": "Bình luận", "timeout": 1},
+                            {"type": "tap_selector", "by": "text", "value": "Bình luận", "timeout": 5},
                             {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
                             # Ưu tiên chuyển sang "Tất cả bình luận" để lấy full volume.
                             {
-                                "type": "if_element", "by": "text", "value": "Đang hiển thị Phù hợp nhất bình luận. Nhấn để thay đổi bộ lọc bình luận.", "timeout": 1, "ignore_error": True,
+                                "type": "if_element", "by": "text", "value": "Đang hiển thị Phù hợp nhất bình luận. Nhấn để thay đổi bộ lọc bình luận.", "timeout": 4, "ignore_error": True,
                                 "then": [
-                                    {"type": "tap_selector", "by": "text", "value": "Đang hiển thị Phù hợp nhất bình luận. Nhấn để thay đổi bộ lọc bình luận.", "timeout": 1, "ignore_error": True},
+                                    {"type": "tap_selector", "by": "text", "value": "Đang hiển thị Phù hợp nhất bình luận. Nhấn để thay đổi bộ lọc bình luận.", "timeout": 4, "ignore_error": True},
                                     {"type": "wait", "seconds": 0.5},
                                     {
-                                        "type": "if_element", "by": "text", "value": "Tất cả bình luận", "timeout": 1, "ignore_error": True,
-                                        "then": [{"type": "tap_selector", "by": "description", "value": "Tất cả bình luận, Hiển thị tất cả bình luận, bao gồm cả nội dung có thể là spam.", "timeout": 1, "ignore_error": True}],
+                                        "type": "if_element", "by": "text", "value": "Tất cả bình luận", "timeout": 4, "ignore_error": True,
+                                        "then": [{"type": "tap_selector", "by": "description", "value": "Tất cả bình luận, Hiển thị tất cả bình luận, bao gồm cả nội dung có thể là spam.", "timeout": 4, "ignore_error": True}],
                                         "else": [
                                             {
-                                                "type": "if_element", "by": "text", "value": "All comments", "timeout": 1, "ignore_error": True,
-                                                "then": [{"type": "tap_selector", "by": "text", "value": "All comments", "timeout": 1, "ignore_error": True}],
+                                                "type": "if_element", "by": "text", "value": "All comments", "timeout": 4, "ignore_error": True,
+                                                "then": [{"type": "tap_selector", "by": "text", "value": "All comments", "timeout": 4, "ignore_error": True}],
                                                 "else": [],
                                             }
                                         ],
@@ -1399,28 +1561,29 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                                 "count": "${MAX_COMMENT_SCROLLS}",
                                 "steps": [
                                     {"type": "extract", "strategy": "fb_comments",
+                                     "parent_post_id_var": "_fb_comment_parent_pid",
                                      "expand_see_more": True,
                                      "expand_see_more_max_passes": 6,
                                      "expand_see_more_scroll": True,
                                      "expand_see_more_scroll_distance": 0.2,
                                      "max_items": 200,
-                                     "stop_if_no_new": True, "no_new_threshold": 2},
-                                    {
-                                        "type": "save_extraction",
-                                        "data_var": "comments",
-                                        "collection": "${SAVE_COLLECTION}",
-                                        "platform": "facebook",
-                                        "content_type": "comment",
-                                        "dedupe_field": "comment_key",
-                                        "tags": "group,comment,${GROUP_NAME}",
-                                        "parent_id_var": "_active_comment_parent_hash",
-                                        "item_level": 1,
-                                    },
-                                    {"type": "scroll_down", "repeats": 1, "start_x_ratio": 0.5, "start_y_ratio": 0.65, "end_y_ratio": 0.47},
-                                    {"type": "wait", "seconds": 1},
+                                     "stop_if_no_new": True, "no_new_threshold": 2,
+                                     "collection": "${SAVE_COLLECTION}",
+                                     "platform": "facebook",
+                                     "content_type": "comment",
+                                     "dedupe_field": "comment_key",
+                                     "tags": "group,comment,${GROUP_NAME}",
+                                     "save_parent_id_var": "_active_comment_parent_hash",
+                                     "item_level": 1},
+                                    {"type": "scroll_down", "repeats": 1, "start_x_ratio": 0.5, "start_y_ratio": 0.65, "end_y_ratio": 0.47, "duration_ms": 920, "pause_seconds": 1.05},
+                                    {"type": "wait", "seconds": 2},
                                 ],
                             },
 
+                            # Đóng sheet bình luận trước khi scroll feed — thiếu bước này sheet vẫn mở,
+                            # vòng sau extract lại cùng comment → trùng DB / trùng batch.
+                            {"type": "key", "key": "back"},
+                            {"type": "wait_stable", "timeout": 5, "stable_duration": 0.5},
                             {"type": "dismiss_popup", "retries": 3},
                             {"type": "wait_stable", "timeout": 5, "stable_duration": 0.5},
                         ],
@@ -1437,15 +1600,6 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             },
 
             # ── Phase 6: Kết thúc ────────────────────────────────────────────
-            {
-                "type": "save_extraction",
-                "data_var": "posts",
-                "collection": "${SAVE_COLLECTION}",
-                "platform": "facebook",
-                "content_type": "group_post",
-                "dedupe_field": "post_key",
-                "tags": "group,crawl,${GROUP_NAME}",
-            },
             {"type": "key", "key": "home"},
         ],
     },
@@ -1469,10 +1623,13 @@ async def seed_builtin_templates(db) -> int:
     Returns the number of templates inserted or updated.
     """
     from db.crud.scenario_template import create_template, get_template_by_name, update_template
+    from common.graph_compiler import steps_to_graph
 
     changed = 0
     for spec in BUILTIN_TEMPLATES:
         spec_is_builtin = spec.get("is_builtin", True)
+        raw_steps = spec.get("steps", [])
+        nodes, edges = steps_to_graph(raw_steps)
         existing = await get_template_by_name(db, spec["name"])
         if existing is None:
             await create_template(
@@ -1480,11 +1637,13 @@ async def seed_builtin_templates(db) -> int:
                 name=spec["name"],
                 description=spec.get("description", ""),
                 category=spec.get("category", "general"),
-                steps=spec.get("steps", []),
+                steps=raw_steps,
                 variables=spec.get("variables", {}),
                 tags=spec.get("tags", ""),
                 is_builtin=spec_is_builtin,
                 user_id=None,
+                nodes=nodes,
+                edges=edges,
             )
             changed += 1
         else:
@@ -1496,10 +1655,12 @@ async def seed_builtin_templates(db) -> int:
                 existing.id,
                 description=spec.get("description", ""),
                 category=spec.get("category", "general"),
-                steps=spec.get("steps", []),
+                steps=raw_steps,
                 variables=spec.get("variables", {}),
                 tags=spec.get("tags", ""),
                 is_builtin=spec_is_builtin,
+                nodes=nodes,
+                edges=edges,
             )
             changed += 1
 

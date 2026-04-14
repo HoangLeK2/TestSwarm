@@ -22,6 +22,7 @@ import type { FlowStep } from '@/features/campaigns/components/scenario-steps/ty
 import { stepsToFlowDoc, flowDocToSteps } from './converters';
 import { scenarioNodeRegistries } from './node-registries';
 import { BaseNode } from './base-node';
+import { FlowgramScenarioProvider, type FlowgramScenarioWorkbench } from './flowgram-scenario-context';
 
 // ─── Adder: "+" button between nodes ─────────────────────────────────────────
 // Must be inside FixedLayoutEditorProvider to use useClientContext().
@@ -130,9 +131,13 @@ export interface FlowgramCanvasProps {
   steps: FlowStep[];
   /** Called on every canvas change so parent can sync back. */
   onStepsChange?: (steps: FlowStep[]) => void;
+  /** Run / select wiring for scenario dialog (optional). */
+  workbench?: FlowgramScenarioWorkbench | null;
+  /** Exposes editor ctx for document.fromJSON sync from parent. */
+  onFlowCtx?: (ctx: FixedLayoutPluginContext | null) => void;
 }
 
-export function FlowgramCanvas({ steps, onStepsChange }: FlowgramCanvasProps) {
+export function FlowgramCanvas({ steps, onStepsChange, workbench = null, onFlowCtx }: FlowgramCanvasProps) {
   const ctxRef = useRef<FixedLayoutPluginContext | null>(null);
 
   const initialData = useMemo(() => stepsToFlowDoc(steps), []);  // intentionally no dep — only on mount
@@ -218,6 +223,11 @@ export function FlowgramCanvas({ steps, onStepsChange }: FlowgramCanvasProps) {
       },
       onInit(ctx) {
         ctxRef.current = ctx;
+        onFlowCtx?.(ctx);
+      },
+      onDispose() {
+        ctxRef.current = null;
+        onFlowCtx?.(null);
       },
       onAllLayersRendered(ctx) {
         setTimeout(() => {
@@ -225,10 +235,10 @@ export function FlowgramCanvas({ steps, onStepsChange }: FlowgramCanvasProps) {
         }, 100);
       },
     }),
-    [initialData, handleChange],
+    [initialData, handleChange, onFlowCtx],
   );
 
-  return (
+  const shell = (
     <FixedLayoutEditorProvider {...editorProps}>
       <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%' }}>
         <CanvasToolbar />
@@ -238,4 +248,9 @@ export function FlowgramCanvas({ steps, onStepsChange }: FlowgramCanvasProps) {
       </div>
     </FixedLayoutEditorProvider>
   );
+
+  if (workbench) {
+    return <FlowgramScenarioProvider value={workbench}>{shell}</FlowgramScenarioProvider>;
+  }
+  return shell;
 }

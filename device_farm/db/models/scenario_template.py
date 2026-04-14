@@ -31,6 +31,8 @@ class ScenarioTemplate(Base):
     description: Mapped[str] = mapped_column(Text, default="")
     category: Mapped[str] = mapped_column(String(100), default="general")
     steps: Mapped[list] = mapped_column(JSON, default=list)
+    nodes: Mapped[list] = mapped_column(JSON, default=list)
+    edges: Mapped[list] = mapped_column(JSON, default=list)
     variables: Mapped[dict] = mapped_column(JSON, default=dict)
     tags: Mapped[str] = mapped_column(String(500), default="")
     is_builtin: Mapped[bool] = mapped_column(Boolean, default=False)

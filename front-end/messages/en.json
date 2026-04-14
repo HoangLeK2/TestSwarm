@@ -464,7 +464,9 @@
         "noNewThresholdLabel": "Consecutive no-new threshold",
         "noNewThresholdHint": "Stop after N consecutive rounds with no new items.",
         "resultVarLabel": "Save extracted output into variable",
-        "resultVarHint": "Optional override target variable. Leave empty to use default context variable."
+        "resultVarHint": "Optional override target variable. Leave empty to use default context variable.",
+        "saveTitle": "Save data",
+        "saveEnableLabel": "Auto-save after extraction"
       },
       "saveExtraction": {
         "dataVarLabel": "Source variable (data_var)",

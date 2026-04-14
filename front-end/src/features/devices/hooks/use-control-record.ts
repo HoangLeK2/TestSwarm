@@ -59,6 +59,7 @@ function normalizeSelectorBy(by: unknown, fallback: SelectorBy = 'text'): Select
 function sanitizeScenarioStep(step: any): any {
   if (!step || typeof step !== 'object') return step;
   const next: any = { ...step };
+  delete next._id;
   if (next.by != null) next.by = normalizeSelectorBy(next.by);
   // Auto-fix repeat.count: if missing or < 1, default to 3
   if (next.type === 'repeat') {
@@ -142,7 +143,7 @@ export function useControlRecord(initialSerial?: string | null, initialCampaignI
   // ── Recording ────────────────────────────────────────────────────────────
   const [recording, setRecording] = useState(false);
   const recordingRef = useRef(false);
-  /** While true, taps still go to device but do not append recorded steps (selector pick mode). */
+  /** While true, tap/swipe/drag still go to device but do not append recorded steps (selector / coordinate pick). */
   const skipTapRecordingWhilePickRef = useRef(false);
   const recordXmlRef = useRef<string | null>(null);
   const [recordXml, setRecordXml] = useState<string | null>(null);
@@ -244,7 +245,10 @@ export function useControlRecord(initialSerial?: string | null, initialCampaignI
           : undefined;
 
       wsSend(msg);
-      if (skipTapRecordingWhilePickRef.current && m0.type === 'tap') {
+      if (
+        skipTapRecordingWhilePickRef.current &&
+        (m0.type === 'tap' || m0.type === 'swipe' || m0.type === 'drag')
+      ) {
         return;
       }
       if (!recordingRef.current || !selectedDevice) return;

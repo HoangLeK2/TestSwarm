@@ -112,7 +112,9 @@ async def save_content_item(
             author=str(data.get("author") or "")[:255] or None,
             author_id=str(data.get("author_id") or "")[:255] or None,
             url=str(data.get("url") or "")[:1000] or None,
-            likes_count=_safe_int(data.get("likes_count") or data.get("likes")),
+            likes_count=_safe_int(
+                data.get("likes_count") or data.get("likes") or data.get("reactions")
+            ),
             comments_count=_safe_int(data.get("comments_count") or data.get("comments")),
             shares_count=_safe_int(data.get("shares_count") or data.get("shares")),
             views_count=_safe_int(data.get("views_count") or data.get("views")),

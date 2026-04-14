@@ -102,15 +102,21 @@ export function UseTemplateDialog({ template }: { template: ScenarioTemplateOut 
           {t('trigger')}
         </Button>
       </DialogTrigger>
-      <DialogContent className='z-[1000] max-w-md'>
-        <DialogHeader>
+      <DialogContent
+        className={cn(
+          'z-[1000] flex max-h-[min(92vh,900px)] min-h-0 min-w-0 w-full flex-col gap-4 overflow-hidden p-4 sm:p-6',
+          'max-w-[calc(100vw-2rem)] sm:max-w-2xl',
+        )}
+      >
+        <DialogHeader className='shrink-0 space-y-1 text-left'>
           <DialogTitle>{t('title')}</DialogTitle>
           <p className='text-sm text-muted-foreground'>{template.name}</p>
         </DialogHeader>
-        <div className='space-y-4 pt-2'>
+        <div className='min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto overflow-x-hidden pt-0.5'>
           <div className='space-y-1'>
             <Label>{t('campaignNameLabel')}</Label>
             <Input
+              className='max-w-full'
               value={campaignName}
               onChange={(e) => setCampaignName(e.target.value)}
             />
@@ -142,7 +148,7 @@ export function UseTemplateDialog({ template }: { template: ScenarioTemplateOut 
                       onChange={(e) => setVarValues((prev) => ({ ...prev, [key]: e.target.value }))}
                       placeholder={`Nhập giá trị cho ${key}…`}
                       className={cn(
-                        'h-8 font-mono text-xs',
+                        'h-8 max-w-full font-mono text-xs',
                         def.required && !varValues[key]?.trim() && 'border-red-400/60 focus-visible:ring-red-400/30',
                       )}
                       type={def.type === 'integer' || def.type === 'float' || def.type === 'number' ? 'number' : 'text'}
@@ -155,27 +161,30 @@ export function UseTemplateDialog({ template }: { template: ScenarioTemplateOut 
             </div>
           )}
 
-          <div className='space-y-1'>
+          <div className='min-w-0 space-y-1'>
             <p className='text-xs font-medium'>
               {t('stepsPreview')} ({template.steps?.length ?? 0} {t('steps')})
             </p>
             {(template.steps?.length ?? 0) > 0 && (
-              <FlowEditor
-                steps={template.steps}
-                onChange={() => {}}
-                maxHeight='200px'
-                compact
-              />
+              <div className='min-w-0 max-w-full'>
+                <FlowEditor
+                  nestedInDialog
+                  steps={template.steps}
+                  onChange={() => {}}
+                  maxHeight='min(240px,32vh)'
+                  compact
+                />
+              </div>
             )}
           </div>
-          <Button
-            onClick={handleCreate}
-            disabled={isPending || !campaignName.trim()}
-            className='w-full'
-          >
-            {isPending ? t('creating') : t('submit')}
-          </Button>
         </div>
+        <Button
+          onClick={handleCreate}
+          disabled={isPending || !campaignName.trim()}
+          className='w-full shrink-0'
+        >
+          {isPending ? t('creating') : t('submit')}
+        </Button>
       </DialogContent>
     </Dialog>
   );

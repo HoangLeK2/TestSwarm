@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import dynamic from 'next/dynamic';
 import { toast } from 'sonner';
 import {
   useCampaignDevices,
@@ -29,14 +30,39 @@ import {
 } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
 import { Textarea } from '@/components/ui/textarea';
-import { FileText, Trash2, Circle, Square, RefreshCw, Sparkles, FolderOpen } from 'lucide-react';
-import { fetchHierarchy, previewScenario } from '@/features/devices/services/api';
+import { FileText, Trash2, Circle, Square, RefreshCw, Sparkles, FolderOpen, MousePointerClick, Move, List, GitBranch, Loader2 } from 'lucide-react';
+import { fetchHierarchy, previewScenario, previewScenarioStream } from '@/features/devices/services/api';
+import type { FixedLayoutPluginContext } from '@flowgram.ai/fixed-layout-editor';
+import { StepDetailPanel } from './flow-editor/step-detail-panel';
+import type { FlowStep } from './scenario-steps/types';
+import {
+  findStepByFlowgramId,
+  mergeStepByFlowgramId,
+  patchStepByFlowgramId,
+} from '@/features/scenario-templates/components/scenario-flow-editor/patch-step-tree';
+import { applyStepsToFlowgramDocument } from '@/features/scenario-templates/components/scenario-flow-editor/flow-doc-sync';
+import type { FlowgramRunState } from '@/features/scenario-templates/components/scenario-flow-editor/flowgram-scenario-context';
 import { DeviceControlEmbed } from '@/features/devices/components/device-control-embed';
 import { VariableEditor } from '@/components/variable-editor';
 import { FlowEditor } from './flow-editor';
 import { validateScenarioStepsForApi } from '../utils/validate-scenario-steps-for-api';
+import { stepsToGraph } from '../utils/steps-to-graph';
+import type { FlowNode, FlowEdge } from './scenario-steps/types';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import { findSelectorInXml } from '@/features/devices/utils/control-record-xml';
+
+const DynamicFlowgramCanvas = dynamic(
+  () =>
+    import('@/features/scenario-templates/components/scenario-flow-editor/canvas').then((m) => m.FlowgramCanvas),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex min-h-[min(380px,42vh)] items-center justify-center rounded-md border border-border bg-muted/20">
+        <Loader2 className="size-6 animate-spin text-muted-foreground" aria-hidden />
+      </div>
+    ),
+  },
+);
 
 type SelectorBy =
   | 'resource-id'
@@ -86,6 +112,8 @@ function normalizeSelectorBy(by: unknown, fallback: SelectorBy = 'text'): Select
 function sanitizeScenarioStep(step: any): any {
   if (!step || typeof step !== 'object') return step;
   const next: any = { ...step };
+  delete next._id;
+  delete next._fgId;
 
   if (next.by != null) {
     next.by = normalizeSelectorBy(next.by);
@@ -133,6 +161,18 @@ function sanitizeScenarioStep(step: any): any {
 function sanitizeScenarioStepsForApi(input: unknown): any[] {
   if (!Array.isArray(input)) return [];
   return input.map(sanitizeScenarioStep);
+}
+
+function flattenVarDefs(vars: Record<string, any>): Record<string, any> {
+  const out: Record<string, any> = {};
+  for (const [k, v] of Object.entries(vars)) {
+    if (v !== null && typeof v === 'object' && !Array.isArray(v) && 'type' in v && 'default' in v) {
+      out[k] = (v as { default?: unknown }).default;
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
 }
 
 type StepType =
@@ -360,10 +400,15 @@ function coerceSteps(raw: any[]): Step[] {
   });
 }
 
+/** Tắt tạm UI Flowgram (toggle + canvas). Đổi thành `true` để bật lại. */
+const ENABLE_FLOWGRAM_SCENARIO_UI = false;
+
 export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: Props) {
   const [open, setOpen] = useState(false);
   const [instructions, setInstructions] = useState('');
   const [steps, setSteps] = useState<Step[]>([]);
+  const [graphNodes, setGraphNodes] = useState<FlowNode[]>([]);
+  const [graphEdges, setGraphEdges] = useState<FlowEdge[]>([]);
   const [variables, setVariables] = useState<Record<string, any>>({});
   const [rawJson, setRawJson] = useState('');
   const [deviceModel, setDeviceModel] = useState('');
@@ -387,10 +432,162 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
   const [fetchingXml, setFetchingXml] = useState(false);
   const [recording, setRecording] = useState(false);
   const recordingRef = useRef(false);
+  /** Thủ công: thêm tap_ratio / swipe_ratio từ mirror (không dùng chế độ Ghi). */
+  const [coordPickMode, setCoordPickMode] = useState<null | 'tap' | 'swipe'>(null);
+  const deviceMirrorRef = useRef<HTMLDivElement>(null);
   /** XML cached from device — used for instant tap→selector without backend roundtrip */
   const [recordXml, setRecordXml] = useState<string | null>(null);
   const recordXmlRef = useRef<string | null>(null);
   const [refreshingXml, setRefreshingXml] = useState(false);
+  /** flowgram.ai canvas vs dnd list (FlowEditor) */
+  const [flowEditMode, setFlowEditMode] = useState(false);
+  /** Remount Flowgram when entering flow mode or after external step list changes while in flow mode */
+  const [flowCanvasKey, setFlowCanvasKey] = useState(0);
+  const [flowSelectedFgId, setFlowSelectedFgId] = useState<string | null>(null);
+  const [flowDetailStep, setFlowDetailStep] = useState<FlowStep | null>(null);
+  const [flowRunStates, setFlowRunStates] = useState<Record<string, FlowgramRunState>>({});
+  const [flowCoordPick, setFlowCoordPick] = useState<null | { fgId: string; kind: 'tap' | 'swipe' }>(null);
+  const flowCtxRef = useRef<FixedLayoutPluginContext | null>(null);
+  const stepsRef = useRef<Step[]>([]);
+  const flowSelectedFgIdRef = useRef<string | null>(null);
+  const flowDetailDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flowRunAbortRef = useRef<AbortController | null>(null);
+  const flowRunningIdsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!ENABLE_FLOWGRAM_SCENARIO_UI) setFlowEditMode(false);
+  }, []);
+  const showFlowEditUi = ENABLE_FLOWGRAM_SCENARIO_UI && flowEditMode;
+
+  useEffect(() => {
+    stepsRef.current = steps;
+  }, [steps]);
+  useEffect(() => {
+    flowSelectedFgIdRef.current = flowSelectedFgId;
+  }, [flowSelectedFgId]);
+
+  useEffect(() => {
+    if (!showFlowEditUi) {
+      setFlowSelectedFgId(null);
+      setFlowDetailStep(null);
+      setFlowCoordPick(null);
+      setFlowRunStates({});
+    }
+  }, [showFlowEditUi]);
+
+  useEffect(() => {
+    if (!flowSelectedFgId) {
+      setFlowDetailStep(null);
+      return;
+    }
+    const found = findStepByFlowgramId(steps as FlowStep[], flowSelectedFgId);
+    setFlowDetailStep(found ? (JSON.parse(JSON.stringify(found)) as FlowStep) : null);
+  }, [flowSelectedFgId, steps]);
+
+  // Debounced graph sync: stepsToGraph is O(n) — avoid running on every keystroke.
+  // Structural changes (add/remove/reorder) call this after updating steps.
+  const graphSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleGraphSync = useCallback((next: Step[]) => {
+    if (graphSyncTimerRef.current) clearTimeout(graphSyncTimerRef.current);
+    graphSyncTimerRef.current = setTimeout(() => {
+      const { nodes, edges } = stepsToGraph(next as Record<string, unknown>[]);
+      setGraphNodes(nodes);
+      setGraphEdges(edges);
+    }, 300);
+  }, []);
+
+  const replaceStepsAndGraph = useCallback((next: Step[]) => {
+    setSteps(next);
+    scheduleGraphSync(next);
+  }, [scheduleGraphSync]);
+
+  const appendStepsWithGraphSync = useCallback((append: (prev: Step[]) => Step[]) => {
+    // Compute next outside updater so we can schedule graph sync without
+    // calling setState from inside a setState updater.
+    setSteps((prev) => {
+      const next = append(prev);
+      scheduleGraphSync(next);
+      return next;
+    });
+  }, [scheduleGraphSync]);
+
+  const handleFlowRunLeaf = useCallback(
+    async (fgId: string, step: FlowStep) => {
+      const serial = previewSerial?.trim();
+      if (!serial) {
+        toast.error('Chọn thiết bị trong dropdown "Chọn device để test" (cùng hàng với Test toàn bộ)');
+        return;
+      }
+      if (flowRunningIdsRef.current.has(fgId)) return;
+      flowRunningIdsRef.current.add(fgId);
+      setFlowRunStates((s) => ({ ...s, [fgId]: 'running' }));
+      flowRunAbortRef.current?.abort();
+      const ctrl = new AbortController();
+      flowRunAbortRef.current = ctrl;
+      const payload = JSON.parse(JSON.stringify(step)) as Record<string, any>;
+      delete payload._fgId;
+      try {
+        await previewScenarioStream(
+          serial,
+          [payload],
+          (ev) => {
+            if (ev.event === 'step_done') {
+              setFlowRunStates((s) => ({ ...s, [fgId]: ev.ok ? 'ok' : 'error' }));
+              if (!ev.ok) toast.error(String(ev.message ?? 'Step lỗi'));
+            }
+          },
+          ctrl.signal,
+          flattenVarDefs(variables),
+        );
+      } catch (e) {
+        if (!ctrl.signal.aborted) {
+          setFlowRunStates((s) => ({ ...s, [fgId]: 'error' }));
+          toast.error(String(e));
+        }
+      } finally {
+        flowRunningIdsRef.current.delete(fgId);
+        setTimeout(() => {
+          setFlowRunStates((s) => {
+            const n = { ...s };
+            if (n[fgId] !== 'running') delete n[fgId];
+            return n;
+          });
+        }, 2800);
+      }
+    },
+    [previewSerial, variables],
+  );
+
+  const handleFlowDetailChange = useCallback(
+    (next: FlowStep) => {
+      setFlowDetailStep(JSON.parse(JSON.stringify(next)) as FlowStep);
+      if (flowDetailDebounceRef.current) clearTimeout(flowDetailDebounceRef.current);
+      flowDetailDebounceRef.current = setTimeout(() => {
+        const fgId = flowSelectedFgIdRef.current;
+        const ctx = flowCtxRef.current;
+        if (!fgId || !ctx) return;
+        const patched = patchStepByFlowgramId(stepsRef.current as FlowStep[], fgId, next);
+        try {
+          const synced = applyStepsToFlowgramDocument(ctx, patched);
+          replaceStepsAndGraph(synced as Step[]);
+        } catch (e) {
+          toast.error(`Không áp dụng được lên canvas: ${String(e)}`);
+        }
+      }, 240);
+    },
+    [replaceStepsAndGraph],
+  );
+
+  const flowWorkbench = useMemo(
+    () => ({
+      deviceSerial: previewSerial || null,
+      selectedFgId: flowSelectedFgId,
+      setSelectedFgId: setFlowSelectedFgId,
+      runStates: flowRunStates,
+      onRunLeafStep: handleFlowRunLeaf,
+    }),
+    [previewSerial, flowSelectedFgId, flowRunStates, handleFlowRunLeaf],
+  );
 
   const handleFetchXml = async () => {
     if (!xmlSerial) return;
@@ -417,6 +614,25 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
 
   useEffect(() => { recordingRef.current = recording; }, [recording]);
   useEffect(() => { recordXmlRef.current = recordXml; }, [recordXml]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setCoordPickMode(null);
+        setFlowCoordPick(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  useEffect(() => {
+    if (coordPickMode || flowCoordPick) {
+      queueMicrotask(() =>
+        deviceMirrorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }),
+      );
+    }
+  }, [coordPickMode, flowCoordPick]);
 
   const refreshRecordXml = useCallback(async (serial: string) => {
     if (!serial) return;
@@ -451,11 +667,11 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
     if (xml) {
       const sel = findSelectorInXml(xml, rx, ry);
       if (sel) {
-        setSteps((prev) => [...prev, { type: 'tap_selector', by: sel.by, value: sel.value, fallback_rx: rx3, fallback_ry: ry3 }]);
+        appendStepsWithGraphSync((prev) => [...prev, { type: 'tap_selector', by: sel.by, value: sel.value, fallback_rx: rx3, fallback_ry: ry3 }]);
         toast.success(`tap_selector by=${sel.by}: "${sel.value}"`, { duration: 2000 });
       } else {
         // XML có nhưng không tìm thấy element có text/id — flat XML (STF u2 limitation)
-        setSteps((prev) => [...prev, { type: 'tap_ratio', x: rx3, y: ry3 }]);
+        appendStepsWithGraphSync((prev) => [...prev, { type: 'tap_ratio', x: rx3, y: ry3 }]);
         toast.warning(
           'XML không có UI elements — dùng tap_ratio. Cần bật Accessibility Service trên thiết bị để ghi tap_selector.',
           { duration: 5000 }
@@ -463,10 +679,110 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
       }
       setTimeout(() => { if (recordingRef.current) refreshRecordXml(serial); }, 1000);
     } else {
-      setSteps((prev) => [...prev, { type: 'tap_ratio', x: rx3, y: ry3 }]);
+      appendStepsWithGraphSync((prev) => [...prev, { type: 'tap_ratio', x: rx3, y: ry3 }]);
       toast.info('Thêm tap_ratio — bấm "Ghi kịch bản" để lấy XML trước', { duration: 3000 });
     }
-  }, [refreshRecordXml]);
+  }, [refreshRecordXml, appendStepsWithGraphSync]);
+
+  const activateCoordPick = useCallback((mode: 'tap' | 'swipe') => {
+    if (recording) {
+      toast.warning('Tắt Ghi trước khi lấy tọa độ thủ công trên mirror.');
+      return;
+    }
+    setCoordPickMode((prev) => (prev === mode ? null : mode));
+  }, [recording]);
+
+  const handleEmbedTapForCoords = useCallback(
+    (serial: string, rx: number, ry: number) => {
+      const rx3 = parseFloat(rx.toFixed(3));
+      const ry3 = parseFloat(ry.toFixed(3));
+
+      if (showFlowEditUi && flowCoordPick?.kind === 'tap' && flowCtxRef.current && flowCoordPick.fgId) {
+        const ctx = flowCtxRef.current;
+        const fgId = flowCoordPick.fgId;
+        const merged = mergeStepByFlowgramId(stepsRef.current as FlowStep[], fgId, (prev) => {
+          if (prev.type === 'tap_ratio') return { ...prev, x: rx3, y: ry3 } as FlowStep;
+          if (prev.type === 'tap') {
+            const t = prev as FlowStep & { fallback?: { rx?: number; ry?: number } };
+            return {
+              ...t,
+              fallback: { ...(t.fallback ?? {}), rx: rx3, ry: ry3 },
+            } as FlowStep;
+          }
+          if (prev.type === 'swipe_ratio') return { ...prev, x1: rx3, y1: ry3 } as FlowStep;
+          return prev;
+        });
+        const synced = applyStepsToFlowgramDocument(ctx, merged);
+        replaceStepsAndGraph(synced as Step[]);
+        setFlowCoordPick(null);
+        toast.success(`Đã gán tọa độ (${rx3}, ${ry3}) cho node`, { duration: 2000 });
+        setTimeout(() => void refreshRecordXml(serial), 800);
+        return;
+      }
+
+      if (coordPickMode !== 'tap') return;
+      appendStepsWithGraphSync((prev) => [...prev, { type: 'tap_ratio', x: rx3, y: ry3 }]);
+      setCoordPickMode(null);
+      toast.success(`Đã thêm tap_ratio (${rx3}, ${ry3})`, { duration: 2000 });
+      setTimeout(() => {
+        void refreshRecordXml(serial);
+      }, 800);
+    },
+    [showFlowEditUi, flowCoordPick, coordPickMode, refreshRecordXml, appendStepsWithGraphSync, replaceStepsAndGraph],
+  );
+
+  const handleEmbedSwipeForCoords = useCallback(
+    (serial: string, rx1: number, ry1: number, rx2: number, ry2: number, durationMs: number) => {
+      const x1 = parseFloat(rx1.toFixed(3));
+      const y1 = parseFloat(ry1.toFixed(3));
+      const x2 = parseFloat(rx2.toFixed(3));
+      const y2 = parseFloat(ry2.toFixed(3));
+      const duration_ms = Math.round(Math.max(100, Math.min(durationMs, 2000)));
+
+      if (showFlowEditUi && flowCoordPick?.kind === 'swipe' && flowCtxRef.current && flowCoordPick.fgId) {
+        const ctx = flowCtxRef.current;
+        const fgId = flowCoordPick.fgId;
+        const merged = mergeStepByFlowgramId(stepsRef.current as FlowStep[], fgId, (prev) => {
+          if (prev.type === 'swipe_ratio') {
+            return { ...prev, x1, y1, x2, y2, duration_ms } as FlowStep;
+          }
+          return prev;
+        });
+        const synced = applyStepsToFlowgramDocument(ctx, merged);
+        replaceStepsAndGraph(synced as Step[]);
+        setFlowCoordPick(null);
+        toast.success(`Đã gán swipe_ratio cho node`, { duration: 2000 });
+        setTimeout(() => void refreshRecordXml(serial), 800);
+        return;
+      }
+
+      if (coordPickMode !== 'swipe') return;
+      appendStepsWithGraphSync((prev) => [...prev, { type: 'swipe_ratio', x1, y1, x2, y2, duration_ms }]);
+      setCoordPickMode(null);
+      toast.success(`Đã thêm swipe_ratio (${x1},${y1})→(${x2},${y2})`, { duration: 2000 });
+      setTimeout(() => {
+        void refreshRecordXml(serial);
+      }, 800);
+    },
+    [showFlowEditUi, flowCoordPick, coordPickMode, refreshRecordXml, appendStepsWithGraphSync, replaceStepsAndGraph],
+  );
+
+  const handleRecordSwipe = useCallback(
+    (serial: string, rx1: number, ry1: number, rx2: number, ry2: number, durationMs: number) => {
+      if (!recordingRef.current) return;
+      const x1 = parseFloat(rx1.toFixed(3));
+      const y1 = parseFloat(ry1.toFixed(3));
+      const x2 = parseFloat(rx2.toFixed(3));
+      const y2 = parseFloat(ry2.toFixed(3));
+      const duration_ms = Math.round(Math.max(100, Math.min(durationMs, 2000)));
+      appendStepsWithGraphSync((prev) => [...prev, { type: 'swipe_ratio', x1, y1, x2, y2, duration_ms }]);
+      toast.success(`Đã thêm swipe_ratio (${x1},${y1})→(${x2},${y2}) ${duration_ms}ms`, { duration: 2000 });
+      setTimeout(() => {
+        if (recordingRef.current) void refreshRecordXml(serial);
+      }, 1000);
+    },
+    [refreshRecordXml, appendStepsWithGraphSync],
+  );
 
   const removeCollectedXml = (id: string) => {
     setCollectedXmls((prev) => prev.filter((s) => s.id !== id));
@@ -480,7 +796,10 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
   // Intentionally excludes `devices` and `xmlSerial` so that selecting a device
   // in the dropdown does NOT wipe the user's unsaved edits.
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setFlowEditMode(false);
+      return;
+    }
     let currentInstructions = '';
     let currentSteps: Step[] = [];
     let currentDeviceModel = '';
@@ -511,6 +830,24 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
     setInstructions(currentInstructions);
     setSteps(currentSteps);
     setVariables(currentVariables);
+    // Load graph model if available and valid, else derive from steps.
+    // Validate that each node has required `id` and `order` fields before trusting
+    // the stored data (guards against old records saved before the graph refactor).
+    const rawNodes: unknown[] = Array.isArray((scenarioProp as any)?.nodes) ? (scenarioProp as any).nodes : [];
+    const validNodes = rawNodes.filter(
+      (n): n is FlowNode => typeof n === 'object' && n !== null && typeof (n as any).id === 'string' && typeof (n as any).order === 'string',
+    );
+    if (validNodes.length > 0) {
+      setGraphNodes(validNodes);
+      setGraphEdges(Array.isArray((scenarioProp as any)?.edges) ? (scenarioProp as any).edges : []);
+    } else if (currentSteps.length > 0) {
+      const { nodes, edges } = stepsToGraph(currentSteps as Record<string, unknown>[]);
+      setGraphNodes(nodes);
+      setGraphEdges(edges);
+    } else {
+      setGraphNodes([]);
+      setGraphEdges([]);
+    }
     setDeviceModel(currentDeviceModel);
     setAndroidVersion(currentAndroidVersion);
     setBrowserApp(currentBrowserApp);
@@ -548,7 +885,7 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
     if (scenarioProp) {
       // New 3-level: save to scenario row
       saveScenarioRow(
-        { campaignId: campaign.id, scenarioId: scenarioProp.id, data: { instructions, steps: sanitizedSteps, variables } },
+        { campaignId: campaign.id, scenarioId: scenarioProp.id, data: { instructions, steps: sanitizedSteps, variables, nodes: graphNodes as any, edges: graphEdges as any } },
         {
           onSuccess: () => { toast.success('Lưu kịch bản thành công'); setOpen(false); },
           onError: (err) => { toast.error(formatFarmApiError(err, 'Lưu kịch bản thất bại')); },
@@ -631,7 +968,9 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
         {
           onSuccess: (data) => {
             setInstructions(data.instructions ?? text);
-            setSteps(Array.isArray(data.steps) ? coerceSteps(data.steps) : []);
+            const s = Array.isArray(data.steps) ? coerceSteps(data.steps) : [];
+            replaceStepsAndGraph(s);
+            setFlowCanvasKey((k) => k + 1);
             toast.success('AI đã tạo kịch bản từ mô tả');
           },
           onError: () => { toast.error('Gọi AI sinh kịch bản thất bại'); },
@@ -646,7 +985,8 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
             const sc: any = data.scenario ?? {};
             setInstructions(sc.instructions ?? text);
             const currentSteps = Array.isArray(sc.steps) ? coerceSteps(sc.steps) : [];
-            setSteps(currentSteps);
+            replaceStepsAndGraph(currentSteps);
+            setFlowCanvasKey((k) => k + 1);
             toast.success('AI đã tạo kịch bản từ mô tả');
           },
           onError: () => { toast.error('Gọi AI sinh kịch bản thất bại'); },
@@ -683,7 +1023,8 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
       setBrowserApp(String(ctx.browser_app ?? ''));
       setDeviceNotes(String(ctx.notes ?? ''));
       setInstructions(nextInstructions);
-      setSteps(nextSteps);
+      replaceStepsAndGraph(nextSteps);
+      setFlowCanvasKey((k) => k + 1);
       setVariables(nextVariables);
       // Preserve raw JSON shape (including custom top-level keys) to avoid
       // lossy round-trip when users paste advanced scenario objects.
@@ -701,10 +1042,8 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
   };
 
   const handleAddStep = () => {
-    setSteps((prev) => [
-      ...prev,
-      { type: 'launch_app', package: '' }
-    ]);
+    appendStepsWithGraphSync((prev) => [...prev, { type: 'launch_app', package: '' }]);
+    if (showFlowEditUi) setFlowCanvasKey((k) => k + 1);
   };
 
 
@@ -719,7 +1058,9 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
     const source = allScenarios.find((s) => s.id === scenarioId);
     if (!source) return;
     if (steps.length > 0 && !window.confirm(`Kịch bản hiện tại có ${steps.length} bước. Tải từ "${source.name}" sẽ ghi đè — tiếp tục?`)) return;
-    setSteps(Array.isArray(source.steps) ? coerceSteps(source.steps) : []);
+    const loaded = Array.isArray(source.steps) ? coerceSteps(source.steps) : [];
+    replaceStepsAndGraph(loaded);
+    setFlowCanvasKey((k) => k + 1);
     if (source.instructions) setInstructions(source.instructions);
     toast.success(`Đã tải ${(source.steps as any[]).length} bước từ "${source.name}"`);
   };
@@ -959,9 +1300,39 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
           </div>
 
           <div className="space-y-2">
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-xs font-medium">Các bước thực thi</p>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Ẩn khi ENABLE_FLOWGRAM_SCENARIO_UI = false — xem hằng số đầu file scenario-dialog */}
+                {ENABLE_FLOWGRAM_SCENARIO_UI && (
+                  <div className="flex items-center rounded-md border border-border p-0.5">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={flowEditMode ? 'ghost' : 'secondary'}
+                      className="h-6 gap-1 rounded-sm px-2 text-[10px]"
+                      onClick={() => setFlowEditMode(false)}
+                      title="Chỉnh danh sách có thụt lề (kéo thả)"
+                    >
+                      <List size={12} />
+                      Danh sách
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={flowEditMode ? 'secondary' : 'ghost'}
+                      className="h-6 gap-1 rounded-sm px-2 text-[10px]"
+                      onClick={() => {
+                        if (!flowEditMode) setFlowCanvasKey((k) => k + 1);
+                        setFlowEditMode(true);
+                      }}
+                      title="Flowgram.ai — sơ đồ tuyến tính + khối lồng"
+                    >
+                      <GitBranch size={12} />
+                      Flow
+                    </Button>
+                  </div>
+                )}
                 {devices.length > 0 && (
                   <>
                     <Select value={previewSerial || '_none'} onValueChange={(v) => setPreviewSerial(v === '_none' ? '' : v)}>
@@ -993,17 +1364,87 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
               </div>
             </div>
 
-            {steps.length === 0 ? (
+            {showFlowEditUi ? (
+              <div className="space-y-2">
+                {flowCoordPick && (
+                  <div className="rounded-md border border-sky-400/50 bg-sky-50/90 px-2 py-1.5 text-[10px] text-sky-900 dark:bg-sky-950/30 dark:text-sky-200">
+                    {flowCoordPick.kind === 'tap'
+                      ? 'Chạm một điểm trên mirror bên phải để gán tọa độ cho node đang chọn. Esc để hủy.'
+                      : 'Vuốt trên mirror để gán swipe_ratio cho node đang chọn. Esc để hủy.'}
+                  </div>
+                )}
+                <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(260px,320px)] lg:items-start">
+                  <div className="relative min-h-[min(380px,48vh)] overflow-hidden rounded-md border border-border bg-muted/10">
+                    <DynamicFlowgramCanvas
+                      key={`scenario-flow-${flowCanvasKey}`}
+                      steps={steps as any[]}
+                      workbench={flowWorkbench}
+                      onFlowCtx={(ctx) => {
+                        flowCtxRef.current = ctx;
+                      }}
+                      onStepsChange={(newSteps) => {
+                        replaceStepsAndGraph(newSteps as Step[]);
+                      }}
+                    />
+                  </div>
+                  <div className="max-h-[min(48vh,520px)] min-h-[120px] overflow-y-auto rounded-md border border-border bg-card">
+                    {flowDetailStep ? (
+                      <StepDetailPanel
+                        step={flowDetailStep}
+                        onChange={handleFlowDetailChange}
+                        onClose={() => setFlowSelectedFgId(null)}
+                        onRequestPickSelector={undefined}
+                        onRequestPickTapCoords={
+                          flowSelectedFgId
+                            ? () => {
+                                setFlowCoordPick({ fgId: flowSelectedFgId, kind: 'tap' });
+                                setCoordPickMode(null);
+                                toast.info('Chạm mirror để gán tọa độ cho node này');
+                              }
+                            : undefined
+                        }
+                        onRequestPickSwipeCoords={
+                          flowSelectedFgId
+                            ? () => {
+                                setFlowCoordPick({ fgId: flowSelectedFgId, kind: 'swipe' });
+                                setCoordPickMode(null);
+                                toast.info('Vuốt trên mirror để gán swipe_ratio');
+                              }
+                            : undefined
+                        }
+                      />
+                    ) : (
+                      <p className="p-3 text-[11px] text-muted-foreground leading-relaxed">
+                        Chọn node trên flow (nút con trỏ trên thẻ) để chỉnh chi tiết. Nút play chạy một bước — cần chọn
+                        thiết bị ở dropdown &quot;Chọn device để test&quot;.
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <p className="text-[10px] text-muted-foreground leading-relaxed">
+                  <strong>Luồng nối</strong> do Flowgram (fixed-layout) vẽ tự động theo thứ tự dọc và nhánh
+                  (if/loop/random). Kéo thả node để đổi thứ tự.{' '}
+                  <strong>Không hỗ trợ kéo dây tự do</strong> giữa hai cổng bất kỳ — cần editor dạng free-graph
+                  (vd. React Flow) nếu muốn nối tùy ý.
+                </p>
+              </div>
+            ) : steps.length === 0 ? (
               <p className="text-[11px] text-muted-foreground">
-                Chưa có bước nào. Bạn có thể dùng AI để sinh hoặc tự thêm step thủ công.
+                Chưa có bước nào. Bạn có thể dùng AI để sinh, chế độ Flow (+ giữa các node), hoặc Thêm bước.
               </p>
             ) : (
               <div>
                 <FlowEditor
                   steps={steps as any[]}
-                  onChange={(newSteps) => setSteps(newSteps as Step[])}
+                  onChange={(newSteps) => {
+                    // Sync steps immediately; debounce expensive graph rebuild to avoid
+                    // per-keystroke O(n) stepsToGraph calls during config edits.
+                    setSteps(newSteps as Step[]);
+                    scheduleGraphSync(newSteps as Step[]);
+                  }}
                   maxHeight="min(380px, 42vh)"
                   compact
+                  nestedInDialog
                 />
               </div>
             )}
@@ -1029,7 +1470,10 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
           </div>
           </div>
           {devices.length > 0 && embedSerial && (
-            <div className="flex min-h-0 w-full shrink-0 flex-col self-stretch border-t border-border pt-3 order-2 lg:w-[320px] lg:min-w-[320px] lg:border-l lg:border-t-0 lg:pt-0 lg:pl-3 overflow-y-auto lg:max-h-full max-h-[min(52vh,520px)]">
+            <div
+              ref={deviceMirrorRef}
+              className="flex min-h-0 w-full shrink-0 flex-col self-stretch border-t border-border pt-3 order-2 lg:w-[320px] lg:min-w-[320px] lg:border-l lg:border-t-0 lg:pt-0 lg:pl-3 overflow-y-auto lg:max-h-full max-h-[min(52vh,520px)]"
+            >
               {!xmlSerial && (
                 <p className="mb-2 rounded-md bg-muted/50 px-2 py-1 text-[10px] text-muted-foreground">
                   Đang xem <span className="font-mono text-foreground">{embedSerial.slice(0, 12)}…</span>
@@ -1044,6 +1488,7 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
                   className="h-7 gap-1 text-[10px] px-2"
                   onClick={async () => {
                     const next = !recording;
+                    if (next && coordPickMode) setCoordPickMode(null);
                     const serialForRec = xmlSerial || devices[0]?.serial;
                     if (next && serialForRec) {
                       toast.info('Đang lấy XML màn hình hiện tại…');
@@ -1068,15 +1513,54 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
                   )}
                 </Button>
               </div>
+              <div className="mb-2 flex flex-wrap gap-1.5">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={coordPickMode === 'tap' ? 'default' : 'outline'}
+                  className="h-7 gap-1 text-[10px] px-2"
+                  disabled={recording}
+                  onClick={() => activateCoordPick('tap')}
+                  title="Cuộn tới mirror rồi chạm một điểm để thêm tap_ratio"
+                >
+                  <MousePointerClick size={12} />
+                  Chạm lấy tọa độ
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={coordPickMode === 'swipe' ? 'default' : 'outline'}
+                  className="h-7 gap-1 text-[10px] px-2"
+                  disabled={recording}
+                  onClick={() => activateCoordPick('swipe')}
+                  title="Vuốt trên mirror để thêm swipe_ratio"
+                >
+                  <Move size={12} />
+                  Vuốt lấy đoạn
+                </Button>
+              </div>
+              {coordPickMode === 'tap' && (
+                <div className="mb-2 rounded-md border border-sky-400/40 bg-sky-50 px-2 py-1.5 text-[10px] text-sky-900 dark:bg-sky-950/30 dark:text-sky-200">
+                  <strong>CHẠM TỌA ĐỘ:</strong> chạm một điểm trên màn hình bên dưới — thêm{' '}
+                  <code className="text-[9px]">tap_ratio</code>. Esc để hủy.
+                </div>
+              )}
+              {coordPickMode === 'swipe' && (
+                <div className="mb-2 rounded-md border border-sky-400/40 bg-sky-50 px-2 py-1.5 text-[10px] text-sky-900 dark:bg-sky-950/30 dark:text-sky-200">
+                  <strong>Vuốt:</strong> kéo trên màn hình bên dưới — thêm{' '}
+                  <code className="text-[9px]">swipe_ratio</code>. Esc để hủy.
+                </div>
+              )}
               {recording && (
                 <div className="mb-1.5 flex items-center justify-between gap-1 rounded bg-amber-50 px-2 py-1 dark:bg-amber-950/30">
                   <p className="text-[10px] text-amber-800 dark:text-amber-400">
                     {recordXml ? (
                       <>
-                        Đang ghi — tap → <code className="text-[9px]">tap_selector</code>. Đổi màn → làm mới XML.
+                        Đang ghi — tap → <code className="text-[9px]">tap_selector</code>, vuốt →{' '}
+                        <code className="text-[9px]">swipe_ratio</code>. Đổi màn → làm mới XML.
                       </>
                     ) : (
-                      <span className="text-destructive">Chưa có XML — tap → tap_ratio</span>
+                      <span className="text-destructive">Chưa có XML — tap → tap_ratio; vuốt vẫn ghi swipe_ratio</span>
                     )}
                   </p>
                   <Button
@@ -1099,7 +1583,28 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
                 initialSerial={embedSerial}
                 compact
                 hideStepMonitor
-                onTap={recording ? (serial, rx, ry) => handleRecordTap(serial, rx, ry) : undefined}
+                onTap={
+                  recording || coordPickMode === 'tap' || (showFlowEditUi && flowCoordPick?.kind === 'tap')
+                    ? (serial, rx, ry) => {
+                        if (coordPickMode === 'tap' || (showFlowEditUi && flowCoordPick?.kind === 'tap')) {
+                          handleEmbedTapForCoords(serial, rx, ry);
+                          return;
+                        }
+                        handleRecordTap(serial, rx, ry);
+                      }
+                    : undefined
+                }
+                onSwipe={
+                  recording || coordPickMode === 'swipe' || (showFlowEditUi && flowCoordPick?.kind === 'swipe')
+                    ? (serial, rx1, ry1, rx2, ry2, ms) => {
+                        if (coordPickMode === 'swipe' || (showFlowEditUi && flowCoordPick?.kind === 'swipe')) {
+                          handleEmbedSwipeForCoords(serial, rx1, ry1, rx2, ry2, ms);
+                          return;
+                        }
+                        handleRecordSwipe(serial, rx1, ry1, rx2, ry2, ms);
+                      }
+                    : undefined
+                }
               />
             </div>
           )}

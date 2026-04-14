@@ -1,6 +1,6 @@
 'use client';
 
-import { Crosshair } from 'lucide-react';
+import { Crosshair, MousePointerClick, Move } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -15,6 +15,10 @@ interface Props {
   onClose: () => void;
   /** Called when user wants to pick a selector from the device screen/tree. Should close the panel first. */
   onRequestPickSelector?: () => void;
+  /** Pick single tap ratios on mirror (tap_ratio / tap fallback). */
+  onRequestPickTapCoords?: () => void;
+  /** Pick swipe segment on mirror (swipe_ratio). */
+  onRequestPickSwipeCoords?: () => void;
 }
 
 const SELECTOR_OPTIONS = [
@@ -65,7 +69,14 @@ function SelectorFields({ step, onChange, onRequestPickSelector }: {
   );
 }
 
-export function StepDetailPanel({ step, onChange, onClose: _onClose, onRequestPickSelector }: Props) {
+export function StepDetailPanel({
+  step,
+  onChange,
+  onClose: _onClose,
+  onRequestPickSelector,
+  onRequestPickTapCoords,
+  onRequestPickSwipeCoords,
+}: Props) {
   const t = useTranslations('campaignsFeature.stepEditor');
   const typeName = getStepTypeName(step.type);
   const update = (fields: Partial<FlowStep>) => onChange({ ...step, ...fields });
@@ -141,7 +152,20 @@ export function StepDetailPanel({ step, onChange, onClose: _onClose, onRequestPi
 
             {/* Fallback coords */}
             <div className='space-y-2 rounded-md border border-border/60 p-2.5'>
-              <span className='text-[11px] font-semibold text-foreground'>Tọa độ dự phòng</span>
+              <div className='flex items-center justify-between'>
+                <span className='text-[11px] font-semibold text-foreground'>Tọa độ dự phòng</span>
+                {onRequestPickTapCoords && (
+                  <Button
+                    size='sm'
+                    variant='outline'
+                    className='h-6 gap-1 px-2 text-[10px] text-sky-800 border-sky-400/50 hover:bg-sky-50 dark:text-sky-300 dark:hover:bg-sky-950/30'
+                    onClick={onRequestPickTapCoords}
+                  >
+                    <MousePointerClick size={10} />
+                    Chạm mirror lấy tọa độ
+                  </Button>
+                )}
+              </div>
               <div className='grid grid-cols-2 gap-2'>
                 <div><Label className='text-[10px] text-muted-foreground'>X (0–1)</Label>
                   <Input type='number' min={0} max={1} step={0.01} className='h-8 text-xs'
@@ -171,18 +195,44 @@ export function StepDetailPanel({ step, onChange, onClose: _onClose, onRequestPi
         )}
 
         {step.type === 'tap_ratio' && (
-          <div className='grid grid-cols-2 gap-2'>
-            <F label='X (0-1)'><Input type='number' min={0} max={1} step={0.01} className='h-8 text-xs' value={step.x ?? 0.5} onChange={(e) => update({ x: parseFloat(e.target.value) || 0 })} /></F>
-            <F label='Y (0-1)'><Input type='number' min={0} max={1} step={0.01} className='h-8 text-xs' value={step.y ?? 0.5} onChange={(e) => update({ y: parseFloat(e.target.value) || 0 })} /></F>
+          <div className='space-y-2'>
+            {onRequestPickTapCoords && (
+              <Button
+                size='sm'
+                variant='outline'
+                className='h-7 w-full gap-1.5 text-[10px] text-sky-800 border-sky-400/50 hover:bg-sky-50 dark:text-sky-300 dark:hover:bg-sky-950/30'
+                onClick={onRequestPickTapCoords}
+              >
+                <MousePointerClick size={12} />
+                Chạm trên mirror để lấy tọa độ (CHẠM TỌA ĐỘ)
+              </Button>
+            )}
+            <div className='grid grid-cols-2 gap-2'>
+              <F label='X (0-1)'><Input type='number' min={0} max={1} step={0.01} className='h-8 text-xs' value={step.x ?? 0.5} onChange={(e) => update({ x: parseFloat(e.target.value) || 0 })} /></F>
+              <F label='Y (0-1)'><Input type='number' min={0} max={1} step={0.01} className='h-8 text-xs' value={step.y ?? 0.5} onChange={(e) => update({ y: parseFloat(e.target.value) || 0 })} /></F>
+            </div>
           </div>
         )}
 
         {step.type === 'swipe_ratio' && (
-          <div className='grid grid-cols-2 gap-2'>
+          <div className='space-y-2'>
+            {onRequestPickSwipeCoords && (
+              <Button
+                size='sm'
+                variant='outline'
+                className='h-7 w-full gap-1.5 text-[10px] text-sky-800 border-sky-400/50 hover:bg-sky-50 dark:text-sky-300 dark:hover:bg-sky-950/30'
+                onClick={onRequestPickSwipeCoords}
+              >
+                <Move size={12} />
+                Vuốt trên mirror để lấy đoạn (đầu → cuối)
+              </Button>
+            )}
+            <div className='grid grid-cols-2 gap-2'>
             <F label='Từ X'><Input type='number' min={0} max={1} step={0.01} className='h-8 text-xs' value={step.x1 ?? 0.5} onChange={(e) => update({ x1: parseFloat(e.target.value) })} /></F>
             <F label='Từ Y'><Input type='number' min={0} max={1} step={0.01} className='h-8 text-xs' value={step.y1 ?? 0.8} onChange={(e) => update({ y1: parseFloat(e.target.value) })} /></F>
             <F label='Tới X'><Input type='number' min={0} max={1} step={0.01} className='h-8 text-xs' value={step.x2 ?? 0.5} onChange={(e) => update({ x2: parseFloat(e.target.value) })} /></F>
             <F label='Tới Y'><Input type='number' min={0} max={1} step={0.01} className='h-8 text-xs' value={step.y2 ?? 0.2} onChange={(e) => update({ y2: parseFloat(e.target.value) })} /></F>
+            </div>
           </div>
         )}
 
@@ -424,6 +474,55 @@ export function StepDetailPanel({ step, onChange, onClose: _onClose, onRequestPi
                   onChange={(e) => update({ result_var: e.target.value || undefined })} />
                 <p className='mt-1 text-[10px] text-muted-foreground'>{t('extract.resultVarHint')}</p>
               </F>
+            </div>
+            {/* ── Inline save config ── */}
+            <div className='space-y-1.5 rounded-md border border-border/50 p-2.5'>
+              <div className='flex items-center justify-between'>
+                <span className='text-[11px] font-semibold'>{t('extract.saveTitle')}</span>
+                <label className='flex cursor-pointer items-center gap-2'>
+                  <input type='checkbox' className='size-3.5 rounded' checked={!!step.collection}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        update({
+                          collection: '${SAVE_COLLECTION}',
+                          platform: 'facebook',
+                          content_type: step.strategy === 'fb_comments' ? 'comment' : 'group_post',
+                          dedupe_field: step.strategy === 'fb_comments' ? 'comment_key' : 'text',
+                        });
+                      } else {
+                        const { collection: _c, platform: _p, content_type: _ct, dedupe_field: _d, tags: _t, save_parent_id_var: _sp, item_level: _il, ...rest } = step;
+                        onChange(rest as FlowStep);
+                      }
+                    }} />
+                  <span className='text-[11px]'>{t('extract.saveEnableLabel')}</span>
+                </label>
+              </div>
+              {step.collection && (
+                <>
+                  <F label={t('saveExtraction.collectionLabel')}>
+                    <Input className='h-8 text-xs font-mono' placeholder='default hoặc ${SAVE_COLLECTION}' value={step.collection ?? ''}
+                      onChange={(e) => update({ collection: e.target.value })} />
+                  </F>
+                  <div className='grid grid-cols-2 gap-2'>
+                    <F label={t('saveExtraction.platformLabel')}>
+                      <Input className='h-8 text-xs' placeholder='facebook' value={step.platform ?? ''}
+                        onChange={(e) => update({ platform: e.target.value || undefined })} />
+                    </F>
+                    <F label={t('saveExtraction.contentTypeLabel')}>
+                      <Input className='h-8 text-xs' placeholder='group_post' value={step.content_type ?? ''}
+                        onChange={(e) => update({ content_type: e.target.value || undefined })} />
+                    </F>
+                  </div>
+                  <F label={t('saveExtraction.dedupeFieldLabel')}>
+                    <Input className='h-8 text-xs font-mono' placeholder='comment_key | post_key | text' value={step.dedupe_field ?? ''}
+                      onChange={(e) => update({ dedupe_field: e.target.value || undefined })} />
+                  </F>
+                  <F label={t('saveExtraction.tagsLabel')}>
+                    <Input className='h-8 text-xs' placeholder='group,crawl,${GROUP_NAME}' value={step.tags ?? ''}
+                      onChange={(e) => update({ tags: e.target.value || undefined })} />
+                  </F>
+                </>
+              )}
             </div>
           </>
         )}

@@ -644,18 +644,38 @@ def test_extract_fb_posts_completion_retry_replaces_truncated_with_full():
             }
         ]
     }
-    truncated = [{"author": "A", "timestamp": "1 giờ", "text": "Nội dung preview … Xem thêm", "_pid": "p1", "post_key": "k1"}]
-    full = [{"author": "A", "timestamp": "1 giờ", "text": "Nội dung preview đã bung full không còn rút gọn", "_pid": "p1", "post_key": "k2"}]
-    with patch("tasks.fb_extract._expand_see_more", return_value=1), patch(
-        "tasks.fb_extract.parse_fb_posts_from_xml", side_effect=[truncated, full]
-    ), patch("tasks.fb_extract._dedup", side_effect=lambda lst: lst):
+    sid = "test-stable-sid"
+    truncated = [
+        {
+            "author": "A",
+            "timestamp": "1 giờ",
+            "text": "Nội dung preview. Xem thêm",
+            "_pid": "p1",
+            "post_key": "k1",
+            "stable_post_id": sid,
+        }
+    ]
+    full = [
+        {
+            "author": "A",
+            "timestamp": "1 giờ",
+            "text": "Nội dung preview. Đã bung full không còn rút gọn",
+            "_pid": "p1",
+            "post_key": "k2",
+            "stable_post_id": sid,
+        }
+    ]
+    with patch(
+        "tasks.fb_extract.expand_see_more_with_lazy_hydration", return_value=1
+    ), patch("tasks.fb_extract.parse_fb_posts_from_xml", side_effect=[truncated, full]):
         result = run_scenario_task(dev, scenario, context={"posts": []})
 
     assert result["success"] is True
     assert len(result["context"]["posts"]) == 1
     assert "Xem thêm" not in result["context"]["posts"][0]["text"]
     diag = result["step_results"][0].get("extract_diagnostics") or {}
-    assert diag.get("unresolved_before") == 1
+    assert diag.get("unresolved_first_parse") == 1
+    assert diag.get("unresolved_before") == 0
     assert diag.get("unresolved_after") == 0
 
 
@@ -671,10 +691,23 @@ def test_extract_fb_posts_completion_retry_stops_on_plateau():
             }
         ]
     }
-    truncated = [{"author": "A", "timestamp": "1 giờ", "text": "Nội dung preview … Xem thêm", "_pid": "p1", "post_key": "k1"}]
-    with patch("tasks.fb_extract._expand_see_more", return_value=1), patch(
-        "tasks.fb_extract.parse_fb_posts_from_xml", side_effect=[truncated, truncated, truncated]
-    ), patch("tasks.fb_extract._dedup", side_effect=lambda lst: lst):
+    sid = "plateau-sid"
+    truncated = [
+        {
+            "author": "A",
+            "timestamp": "1 giờ",
+            "text": "Nội dung preview. Xem thêm",
+            "_pid": "p1",
+            "post_key": "k1",
+            "stable_post_id": sid,
+        }
+    ]
+    with patch(
+        "tasks.fb_extract.expand_see_more_with_lazy_hydration", return_value=1
+    ), patch(
+        "tasks.fb_extract.parse_fb_posts_from_xml",
+        side_effect=[truncated, truncated, truncated, truncated, truncated, truncated],
+    ):
         result = run_scenario_task(dev, scenario, context={"posts": []})
 
     assert result["success"] is True
@@ -698,7 +731,9 @@ def test_extract_fb_posts_completion_retry_merges_when_viewport_drifts():
     }
     first = [{"author": "A", "timestamp": "1 giờ", "text": "Post A preview … Xem thêm", "_pid": "p1", "post_key": "k1"}]
     second = [{"author": "B", "timestamp": "2 giờ", "text": "Post B full content", "_pid": "p2", "post_key": "k2"}]
-    with patch("tasks.fb_extract._expand_see_more", return_value=1), patch(
+    with patch(
+        "tasks.fb_extract.expand_see_more_with_lazy_hydration", return_value=1
+    ), patch(
         "tasks.fb_extract.parse_fb_posts_from_xml", side_effect=[first, second]
     ):
         result = run_scenario_task(dev, scenario, context={"posts": []})
@@ -726,14 +761,24 @@ def test_extract_fb_posts_completion_retry_respects_scroll_config():
         ]
     }
     truncated = [{"author": "A", "timestamp": "1 giờ", "text": "Preview … Xem thêm", "_pid": "p1", "post_key": "k1"}]
-    with patch("tasks.fb_extract._expand_see_more", return_value=1) as mock_expand, patch(
-        "tasks.fb_extract.parse_fb_posts_from_xml", side_effect=[truncated, truncated, truncated]
+    with patch(
+        "tasks.fb_extract.expand_see_more_with_lazy_hydration", return_value=1
+    ) as mock_expand, patch(
+        "tasks.fb_extract.parse_fb_posts_from_xml",
+        side_effect=[truncated, truncated, truncated, truncated, truncated],
     ):
         result = run_scenario_task(dev, scenario, context={"posts": []})
 
     assert result["success"] is True
-    # Call #1: initial expand path, Call #2+: completion-retry path.
+    # Pre-expand always runs first; then post-parse hydrate; then completion retries.
     assert len(mock_expand.call_args_list) >= 2
-    _, kwargs_retry = mock_expand.call_args_list[1]
-    assert kwargs_retry.get("scroll_between") is False
-    assert kwargs_retry.get("scroll_distance") == 0.21
+    retry_kw = next(
+        (
+            c[1]
+            for c in mock_expand.call_args_list
+            if c[1].get("max_rounds") == max(3, min(8, 6))
+        ),
+        None,
+    )
+    assert retry_kw is not None
+    assert retry_kw.get("scroll_distance") == 0.21

@@ -23,12 +23,10 @@ device:
   stf_apk_path: ""       
 
   scrcpy_jar: "/opt/homebrew/share/scrcpy/scrcpy-server"
-  # Docker-optimized: lower bitrate reduces IDR keyframe burst (~50KB vs ~300KB).
-  scrcpy_max_fps: 15
+  scrcpy_max_fps: 25
   scrcpy_max_width: 480
-  scrcpy_bitrate: 2000000        # H.264 bitrate bps for local ADB path (2Mbps; was 8Mbps)
-  # Balanced quality/stability for 540p@12fps on WiFi ADB relay.
-  scrcpy_relay_bitrate: 900000
+  scrcpy_bitrate: 2000000        # H.264 bitrate bps for local ADB path (2Mbps)
+  scrcpy_relay_bitrate: 2000000  # relay bitrate — 2Mbps for smooth 480p@25fps
   scrcpy_control: true      # Touch/key via scrcpy — no WS tunnel overhead, critical for Docker
   u2_always_tunnel: false  # Local/LAN: prefer direct atx-agent on device_ip:7912 (no WS u2 tunnel)
 

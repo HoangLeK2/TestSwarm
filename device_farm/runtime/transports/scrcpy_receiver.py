@@ -97,6 +97,7 @@ class ScrcpyReceiver(threading.Thread):
         server_jar: str,
         max_fps: int = 30,
         max_width: int = 800,
+        bitrate: int = 2000000,
         reconnect_delay: float = 2.0,
         enable_control: bool = False,
         on_frame: Optional[Callable[[bytes], None]] = None,
@@ -126,6 +127,7 @@ class ScrcpyReceiver(threading.Thread):
         self.server_jar = server_jar
         self.max_fps = max_fps
         self.max_width = max_width
+        self.bitrate = bitrate
         self.reconnect_delay = reconnect_delay
         self.enable_control = enable_control
 
@@ -307,7 +309,7 @@ class ScrcpyReceiver(threading.Thread):
             f"video_codec=h264 "
             f"max_fps={self.max_fps} "
             f"max_size={self.max_width} "
-            f"video_bit_rate=2000000 "       # 2 Mbps — lower bitrate → smaller frames → less TCP burst
+            f"video_bit_rate={self.bitrate} "
             # Android MediaCodec H264 options (values = MediaCodecInfo constants,
             # NOT H264 spec profile_idc):
             #   profile=1     AVCProfileBaseline  → no B-frames, no CABAC.
@@ -322,7 +324,7 @@ class ScrcpyReceiver(threading.Thread):
             #   i-frame-interval=2  IDR every 2s (lower burst pressure than 1s)
             f"video_codec_options=profile:int=1"
             + (",latency:int=0" if 0 < self.sdk_version < 34 else "")
-            + ",i-frame-interval:int=2 "
+            + ",i-frame-interval:int=1 "
             f"stay_awake=true "
             f"send_device_meta=true "
             f"send_frame_meta=true "

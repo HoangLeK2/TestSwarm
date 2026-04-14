@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 
@@ -29,6 +30,26 @@ log = logging.getLogger(__name__)
 # Device serial may contain colons (WiFi ADB: 192.168.1.1:5555) so we cannot
 # count colons; instead we use a greedy .+ for the serial segment.
 _TOP_LEVEL_WF_RE = re.compile(r"^campaign:[^:]+:device:.+:scenario:[^:]+$")
+
+
+async def _workflow_ui_status(client, workflow_id: str, temporal_status: str) -> str:
+   
+    if temporal_status != "RUNNING":
+        return temporal_status
+    try:
+        from temporal.shared import WorkflowStatus
+        from temporal.workflows import ScenarioWorkflow
+
+        handle = client.get_workflow_handle(workflow_id)
+        progress = await handle.query(ScenarioWorkflow.get_progress)
+        ps = (getattr(progress, "status", None) or "").lower()
+        if ps == WorkflowStatus.PAUSED.value:
+            return "PAUSED"
+        if ps == WorkflowStatus.PAUSED_ON_ERROR.value:
+            return "paused_on_error"
+    except Exception:
+        log.debug("workflow status enrich failed id=%s", workflow_id, exc_info=True)
+    return temporal_status
 
 
 def build_campaign_fleet_router(
@@ -154,7 +175,7 @@ def build_campaign_fleet_router(
             }
         try:
             client = await get_temporal_client(config.temporal)
-            workflows = []
+            raw_rows: list[tuple[str, str, str, str | None]] = []
             # Top-level IDs have pattern: campaign:{id}:device:{serial}:scenario:{scen_id}
             # Child IDs have extra suffixes like :steps, :repeat:…, :if_element:…
             # We match exactly 5 colon-separated segments to exclude children.
@@ -167,12 +188,27 @@ def build_campaign_fleet_router(
             ):
                 if not _TOP_LEVEL_WF_RE.match(wf.id):
                     continue
-                workflows.append({
-                    "workflow_id": wf.id,
-                    "run_id": wf.run_id,
-                    "status": wf.status.name if wf.status else "UNKNOWN",
-                    "start_time": wf.start_time.isoformat() if wf.start_time else None,
-                })
+                temporal_st = wf.status.name if wf.status else "UNKNOWN"
+                raw_rows.append(
+                    (
+                        wf.id,
+                        wf.run_id,
+                        temporal_st,
+                        wf.start_time.isoformat() if wf.start_time else None,
+                    )
+                )
+
+            async def _one(row: tuple[str, str, str, str | None]) -> dict:
+                wf_id, run_id, temporal_st, start_time = row
+                ui_st = await _workflow_ui_status(client, wf_id, temporal_st)
+                return {
+                    "workflow_id": wf_id,
+                    "run_id": run_id,
+                    "status": ui_st,
+                    "start_time": start_time,
+                }
+
+            workflows = list(await asyncio.gather(*(_one(r) for r in raw_rows)))
             return {
                 "campaign_id": campaign_id,
                 "workflows": workflows,

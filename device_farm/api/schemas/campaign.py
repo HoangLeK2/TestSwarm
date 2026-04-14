@@ -1,6 +1,8 @@
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 from pydantic import BaseModel, field_validator
+
+from api.schemas.scenario import FlowNodeModel, FlowEdgeModel
 
 
 class ScenarioCreate(BaseModel):
@@ -9,6 +11,8 @@ class ScenarioCreate(BaseModel):
     steps: list = []
     variables: dict = {}
     order: int = 0
+    nodes: List[FlowNodeModel] = []
+    edges: List[FlowEdgeModel] = []
 
     @field_validator("steps")
     @classmethod
@@ -28,6 +32,8 @@ class ScenarioUpdate(BaseModel):
     steps: list | None = None
     variables: dict | None = None
     order: int | None = None
+    nodes: Optional[List[FlowNodeModel]] = None
+    edges: Optional[List[FlowEdgeModel]] = None
 
     @field_validator("steps")
     @classmethod
@@ -49,6 +55,8 @@ class ScenarioOut(BaseModel):
     steps: list
     variables: dict
     order: int
+    nodes: list = []
+    edges: list = []
     created_at: datetime
     updated_at: datetime
 

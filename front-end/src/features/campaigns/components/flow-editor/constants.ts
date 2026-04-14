@@ -69,10 +69,10 @@ function localizeCollection(collection?: string): string {
 export const INSERT_MENU = [
   {
     group: 'Thu thập dữ liệu',
-    description: 'Cào và lưu nội dung từ màn hình',
+    description: 'Cào và lưu nội dung từ màn hình (tự động lưu khi bật)',
     items: [
-      { type: 'extract', label: 'Trích xuất (extract)' },
-      { type: 'save_extraction', label: 'Lưu dữ liệu (save_extraction)' },
+      { type: 'extract', label: 'Trích xuất & Lưu dữ liệu' },
+      { type: 'save_extraction', label: 'Lưu dữ liệu riêng (nâng cao)' },
     ]
   },
   {
@@ -157,7 +157,10 @@ export function getStepSummary(step: FlowStep): string {
     case 'random_pick': return `${step.branches?.length ?? 0} nhánh`;
     case 'run_scenario': return step.scenario_name || step.scenario_id || '';
     case 'loop': return `×${step.count ?? '?'}`;
-    case 'extract': return localizeExtractStrategy(step.strategy);
+    case 'extract': {
+      const base = localizeExtractStrategy(step.strategy);
+      return step.collection ? `${base} → ${localizeCollection(step.collection)}` : base;
+    }
     case 'save_extraction': return `${localizeDataVar(step.data_var)} → ${localizeCollection(step.collection)}`;
     default: return '';
   }
@@ -227,8 +230,10 @@ export function getStepDisplay(step: FlowStep): { target: string; selectorBadge?
       return { target: step.scenario_name || step.scenario_id || '' };
     case 'loop':
       return { target: `×${step.count ?? '?'}` };
-    case 'extract':
-      return { target: localizeExtractStrategy(step.strategy) };
+    case 'extract': {
+      const base = localizeExtractStrategy(step.strategy);
+      return { target: step.collection ? `${base} → ${localizeCollection(step.collection)}` : base };
+    }
     case 'save_extraction':
       return { target: `${localizeDataVar(step.data_var)} → ${localizeCollection(step.collection)}` };
     default:
@@ -263,7 +268,7 @@ export function getStepTypeName(type: string): string {
     repeat: 'LẶP', repeat_until: 'LẶP CHO ĐẾN KHI',
     if_element: 'NẾU PHẦN TỬ', if_variable: 'NẾU BIẾN',
     random_pick: 'NGẪU NHIÊN', run_scenario: 'CHẠY KB CON',
-    loop: 'VÒNG LẶP', extract: 'TRÍCH XUẤT', save_extraction: 'LƯU DỮ LIỆU',
+    loop: 'VÒNG LẶP', extract: 'TRÍCH XUẤT', save_extraction: 'LƯU DỮ LIỆU (riêng)',
   };
   return map[type] ?? type.toUpperCase();
 }

@@ -11,10 +11,15 @@ function resetCounter() {
   _counter = 0;
 }
 
+function fgIdFromStep(step: FlowStep): string {
+  const raw = (step as Record<string, unknown>)._fgId;
+  return typeof raw === 'string' && raw.length > 0 ? raw : newId();
+}
+
 // ─── steps → FlowDocumentJSON ─────────────────────────────────────────────────
 
 function stepToNode(step: FlowStep): FlowNodeJSON {
-  const id = newId();
+  const id = fgIdFromStep(step);
 
   // Condition (if_element / if_variable)
   if (step.type === 'if_element' || step.type === 'if_variable') {
@@ -108,6 +113,10 @@ export function stepsToFlowDoc(steps: FlowStep[]): FlowDocumentJSON {
 
 // ─── FlowDocumentJSON → steps ─────────────────────────────────────────────────
 
+function withFgId<S extends FlowStep>(nodeId: string, step: S): S {
+  return { ...step, _fgId: nodeId } as S;
+}
+
 function nodeToStep(node: FlowNodeJSON): FlowStep | null {
   if (node.type === 'start' || node.type === 'end' || node.type === 'block') return null;
 
@@ -118,30 +127,30 @@ function nodeToStep(node: FlowNodeJSON): FlowStep | null {
   if (step.type === 'if_element' || step.type === 'if_variable') {
     const thenBlock = node.blocks?.[0];
     const elseBlock = node.blocks?.[1];
-    return {
+    return withFgId(node.id, {
       ...step,
       then: nodesToSteps(thenBlock?.blocks ?? []),
       else: nodesToSteps(elseBlock?.blocks ?? []),
-    } as FlowStep;
+    } as FlowStep);
   }
 
   if (step.type === 'random_pick') {
     const branches = (node.blocks ?? []).map((block, i) => ({
-      weight: (block.data as any)?.weight ?? 1,
+      weight: (block.data as { weight?: number })?.weight ?? 1,
       steps: nodesToSteps(block.blocks ?? []),
     }));
-    return { ...step, branches } as FlowStep;
+    return withFgId(node.id, { ...step, branches } as FlowStep);
   }
 
   if (step.type === 'repeat' || step.type === 'repeat_until' || step.type === 'loop') {
     const bodyBlock = node.blocks?.[0];
-    return {
+    return withFgId(node.id, {
       ...step,
       steps: nodesToSteps(bodyBlock?.blocks ?? []),
-    } as FlowStep;
+    } as FlowStep);
   }
 
-  return step;
+  return withFgId(node.id, step);
 }
 
 function nodesToSteps(nodes: FlowNodeJSON[]): FlowStep[] {

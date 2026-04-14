@@ -108,11 +108,7 @@
           "expand_see_more_scroll": true,
           "expand_see_more_scroll_distance": 0.25,
           "stop_if_no_new": true,
-          "no_new_threshold": 3
-        },
-        {
-          "type": "save_extraction",
-          "data_var": "posts",
+          "no_new_threshold": 3,
           "collection": "${SAVE_COLLECTION}",
           "platform": "facebook",
           "content_type": "group_post",
@@ -120,16 +116,28 @@
           "tags": "group,crawl,${GROUP_NAME}"
         },
         {
+          "type": "scroll_down",
+          "repeats": 2,
+          "start_x_ratio": 0.5,
+          "start_y_ratio": 0.7,
+          "end_y_ratio": 0.4
+        },
+        {
+          "type": "wait",
+          "seconds": 1
+        },
+        {
           "type": "if_element",
           "by": "text",
           "value": "Bình luận",
-          "timeout": 1,
+          "timeout": 6,
           "ignore_error": true,
           "then": [
             {
               "type": "tap_selector",
               "by": "text",
-              "value": "Bình luận"
+              "value": "Bình luận",
+              "timeout": 5
             },
             {
               "type": "wait_stable",
@@ -174,30 +182,34 @@
                 {
                   "type": "extract",
                   "strategy": "fb_comments",
+                  "parent_post_id_var": "_fb_comment_parent_pid",
                   "expand_see_more": true,
+                  "expand_see_more_max_passes": 6,
+                  "expand_see_more_scroll": true,
+                  "expand_see_more_scroll_distance": 0.22,
+                  "max_items": 150,
                   "stop_if_no_new": true,
-                  "no_new_threshold": 2
-                },
-                {
-                  "type": "save_extraction",
-                  "data_var": "comments",
+                  "no_new_threshold": 2,
                   "collection": "${SAVE_COLLECTION}",
                   "platform": "facebook",
                   "content_type": "comment",
-                  "dedupe_field": "text",
+                  "dedupe_field": "comment_key",
                   "tags": "group,comment,${GROUP_NAME}",
-                  "parent_id_var": "_first_new_post_hash"
+                  "save_parent_id_var": "_active_comment_parent_hash",
+                  "item_level": 1
                 },
                 {
                   "type": "scroll_down",
                   "repeats": 1,
                   "start_x_ratio": 0.5,
                   "start_y_ratio": 0.65,
-                  "end_y_ratio": 0.47
+                  "end_y_ratio": 0.47,
+                  "duration_ms": 920,
+                  "pause_seconds": 1.05
                 },
                 {
                   "type": "wait",
-                  "seconds": 1
+                  "seconds": 2
                 }
               ]
             },
@@ -241,15 +253,6 @@
           "retries": 2
         }
       ]
-    },
-    {
-      "type": "save_extraction",
-      "data_var": "posts",
-      "collection": "${SAVE_COLLECTION}",
-      "platform": "facebook",
-      "content_type": "group_post",
-      "dedupe_field": "text",
-      "tags": "group,crawl,${GROUP_NAME}"
     },
     {
       "type": "key",

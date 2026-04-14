@@ -20,12 +20,8 @@ import {
   SortableContext,
   sortableKeyboardCoordinates,
   verticalListSortingStrategy,
-  arrayMove,
-  useSortable,
 } from '@dnd-kit/sortable';
-import { restrictToVerticalAxis, restrictToParentElement } from '@dnd-kit/modifiers';
-import { CSS } from '@dnd-kit/utilities';
-import { GripVertical } from 'lucide-react';
+import { restrictToVerticalAxis } from '@dnd-kit/modifiers';
 import { isControlFlow, type FlowStep } from '../scenario-steps/types';
 import { StepCard } from './step-card';
 import { BracketBlock } from './bracket-block';
@@ -33,45 +29,16 @@ import { InsertButton } from './insert-button';
 import { StepDetailPanel } from './step-detail-panel';
 import type { SelectorPickTarget } from './selector-pick';
 import { selectorPickTargetEquals, isSelectorPickableStep } from './selector-pick';
-
-// ── Sortable step wrapper ────────────────────────────────────────────────────
-
-function SortableStepWrapper({
-  id,
-  children,
-}: {
-  id: string;
-  children: (dragHandle: React.ReactNode, isDragging: boolean) => React.ReactNode;
-}) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
-
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition: transition ?? undefined,
-  };
-
-  const dragHandle = (
-    <button
-      {...listeners}
-      {...attributes}
-      tabIndex={-1}
-      title='Kéo để thay đổi thứ tự'
-      className={[
-        'flex shrink-0 cursor-grab items-center self-stretch px-1 text-muted-foreground/30',
-        'hover:text-muted-foreground/70 active:cursor-grabbing',
-        isDragging ? 'cursor-grabbing text-muted-foreground/70' : '',
-      ].join(' ')}
-    >
-      <GripVertical size={11} />
-    </button>
-  );
-
-  return (
-    <div ref={setNodeRef} style={style} className={isDragging ? 'relative z-50 rounded shadow-lg' : ''}>
-      {children(dragHandle, isDragging)}
-    </div>
-  );
-}
+import type { CoordinatePickTarget } from './coordinate-pick';
+import {
+  coordinatePickTargetEquals,
+  isTapCoordinatePickableStep,
+  isSwipeCoordinatePickableStep,
+} from './coordinate-pick';
+import { encodeFlowListRef, stableStepDnDId } from './flow-dnd-ids';
+import { applyFlowDragEnd } from './flow-tree-dnd';
+import { SortableFlowRow } from './sortable-flow-row';
+import { encodeScenarioInlineRunKey } from './inline-run-key';
 
 // ── FlowEditor ───────────────────────────────────────────────────────────────
 
@@ -84,11 +51,20 @@ interface Props {
   /** When set, user is assigning a selector from device/hierarchy to this step. */
   selectorPickTarget?: SelectorPickTarget | null;
   onSelectorPickTargetChange?: (target: SelectorPickTarget | null) => void;
-  /** Run a single step on the device inline (without entering player mode). */
-  onRunStep?: (step: FlowStep, index: number) => void;
-  /** Per-step run state from the parent. */
-  stepRunStates?: Record<number, 'idle' | 'running' | 'ok' | 'error'>;
+  /** Pick tap_ratio / tap.fallback / swipe_ratio coordinates from device mirror. */
+  coordinatePickTarget?: CoordinatePickTarget | null;
+  onCoordinatePickTargetChange?: (target: CoordinatePickTarget | null) => void;
+  /** Run a single step or control-flow subtree on the device inline (`runKey` = stable id for UI). */
+  onRunStep?: (step: FlowStep, runKey: string) => void;
+  /** Per-step / per-block run state from the parent (keys from `encodeScenarioInlineRunKey`). */
+  stepRunStates?: Record<string, 'idle' | 'running' | 'ok' | 'error'>;
+  /** Abort current inline preview. */
+  onStopInlineRun?: () => void;
+  /** When FlowEditor is inside another Radix Dialog (e.g. template editor). */
+  nestedInDialog?: boolean;
 }
+
+const ROOT_SORTABLE_ID = encodeFlowListRef({ kind: 'root' });
 
 export function FlowEditor({
   steps,
@@ -97,17 +73,17 @@ export function FlowEditor({
   compact = false,
   selectorPickTarget = null,
   onSelectorPickTargetChange,
+  coordinatePickTarget = null,
+  onCoordinatePickTargetChange,
   onRunStep,
   stepRunStates = {},
+  onStopInlineRun,
+  nestedInDialog = false,
 }: Props) {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const selectedStep = selectedIndex != null ? steps[selectedIndex] : null;
 
-  // Stable IDs for DnD — prefer _id, fall back to index-based
-  const stepIds = useMemo(
-    () => steps.map((s, i) => (s as any)._id ?? `step-idx-${i}`),
-    [steps],
-  );
+  const stepIds = useMemo(() => steps.map((s, i) => stableStepDnDId(s, i)), [steps]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -117,30 +93,51 @@ export function FlowEditor({
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
       const { active, over } = event;
-      if (!over || active.id === over.id) return;
-      const oldIndex = stepIds.indexOf(active.id as string);
-      const newIndex = stepIds.indexOf(over.id as string);
-      if (oldIndex === -1 || newIndex === -1) return;
-      const reordered = arrayMove(steps, oldIndex, newIndex);
-      onChange(reordered);
-      // Adjust selection
-      if (selectedIndex === oldIndex) setSelectedIndex(newIndex);
-      else if (selectedIndex != null) {
-        if (oldIndex < selectedIndex && newIndex >= selectedIndex) setSelectedIndex(selectedIndex - 1);
-        else if (oldIndex > selectedIndex && newIndex <= selectedIndex) setSelectedIndex(selectedIndex + 1);
+      const activeContainer = active.data.current?.sortable?.containerId as string | undefined;
+      const overContainer = over?.data.current?.sortable?.containerId as string | undefined;
+      if (
+        activeContainer === ROOT_SORTABLE_ID &&
+        overContainer === ROOT_SORTABLE_ID &&
+        over &&
+        active.id !== over.id
+      ) {
+        const oldIndex = stepIds.indexOf(active.id as string);
+        const newIndex = stepIds.indexOf(over.id as string);
+        if (oldIndex >= 0 && newIndex >= 0) {
+          setSelectedIndex((prev) => {
+            if (prev === oldIndex) return newIndex;
+            if (prev == null) return prev;
+            if (oldIndex < prev && newIndex >= prev) return prev - 1;
+            if (oldIndex > prev && newIndex <= prev) return prev + 1;
+            return prev;
+          });
+        }
       }
+      applyFlowDragEnd(event, steps, onChange);
     },
-    [stepIds, steps, onChange, selectedIndex],
+    [stepIds, steps, onChange],
   );
 
   const togglePick = useCallback(
     (path: SelectorPickTarget) => {
       if (!onSelectorPickTargetChange) return;
+      onCoordinatePickTargetChange?.(null);
       onSelectorPickTargetChange(
         selectorPickTargetEquals(selectorPickTarget, path) ? null : path,
       );
     },
-    [onSelectorPickTargetChange, selectorPickTarget],
+    [onSelectorPickTargetChange, selectorPickTarget, onCoordinatePickTargetChange],
+  );
+
+  const toggleCoordPick = useCallback(
+    (path: CoordinatePickTarget) => {
+      if (!onCoordinatePickTargetChange) return;
+      onSelectorPickTargetChange?.(null);
+      onCoordinatePickTargetChange(
+        coordinatePickTargetEquals(coordinatePickTarget, path) ? null : path,
+      );
+    },
+    [onCoordinatePickTargetChange, coordinatePickTarget, onSelectorPickTargetChange],
   );
 
   useEffect(() => {
@@ -148,10 +145,18 @@ export function FlowEditor({
       if (e.key === 'Escape' && selectorPickTarget && onSelectorPickTargetChange) {
         onSelectorPickTargetChange(null);
       }
+      if (e.key === 'Escape' && coordinatePickTarget && onCoordinatePickTargetChange) {
+        onCoordinatePickTargetChange(null);
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selectorPickTarget, onSelectorPickTargetChange]);
+  }, [
+    selectorPickTarget,
+    onSelectorPickTargetChange,
+    coordinatePickTarget,
+    onCoordinatePickTargetChange,
+  ]);
 
   const insertAt = useCallback(
     (index: number, newStep: FlowStep) => {
@@ -171,8 +176,19 @@ export function FlowEditor({
           onSelectorPickTargetChange(null);
         }
       }
+      if (onCoordinatePickTargetChange && coordinatePickTarget?.rootIndex === index) {
+        onCoordinatePickTargetChange(null);
+      }
     },
-    [steps, onChange, selectedIndex, selectorPickTarget, onSelectorPickTargetChange],
+    [
+      steps,
+      onChange,
+      selectedIndex,
+      selectorPickTarget,
+      onSelectorPickTargetChange,
+      coordinatePickTarget,
+      onCoordinatePickTargetChange,
+    ],
   );
 
   const updateAt = useCallback(
@@ -229,7 +245,6 @@ export function FlowEditor({
 
   return (
     <>
-      {/* Edit dialog */}
       <Dialog open={!compact && selectedIndex != null} onOpenChange={(open) => { if (!open) setSelectedIndex(null); }}>
         <DialogContent className='max-w-sm p-0 gap-0'>
           <DialogHeader className='sr-only'>
@@ -244,8 +259,30 @@ export function FlowEditor({
                 onSelectorPickTargetChange
                   ? () => {
                       const idx = selectedIndex;
-                      setSelectedIndex(null); // close dialog first
+                      setSelectedIndex(null);
+                      onCoordinatePickTargetChange?.(null);
                       onSelectorPickTargetChange({ rootIndex: idx, path: [] });
+                    }
+                  : undefined
+              }
+              onRequestPickTapCoords={
+                onCoordinatePickTargetChange &&
+                (selectedStep.type === 'tap_ratio' || selectedStep.type === 'tap')
+                  ? () => {
+                      const idx = selectedIndex;
+                      setSelectedIndex(null);
+                      onSelectorPickTargetChange?.(null);
+                      onCoordinatePickTargetChange({ rootIndex: idx, path: [], mode: 'tap_point' });
+                    }
+                  : undefined
+              }
+              onRequestPickSwipeCoords={
+                onCoordinatePickTargetChange && selectedStep.type === 'swipe_ratio'
+                  ? () => {
+                      const idx = selectedIndex;
+                      setSelectedIndex(null);
+                      onSelectorPickTargetChange?.(null);
+                      onCoordinatePickTargetChange({ rootIndex: idx, path: [], mode: 'swipe_segment' });
                     }
                   : undefined
               }
@@ -254,21 +291,24 @@ export function FlowEditor({
         </DialogContent>
       </Dialog>
 
-      {/* Flow list */}
       <div className='min-w-0'>
-        <div className='overflow-y-auto' style={{ maxHeight }}>
+        <div className='min-w-0 overflow-x-hidden overflow-y-auto' style={{ maxHeight }}>
           <InsertButton onInsert={(s) => insertAt(0, s)} />
 
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
             onDragEnd={handleDragEnd}
-            modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+            modifiers={[restrictToVerticalAxis]}
           >
-            <SortableContext items={stepIds} strategy={verticalListSortingStrategy}>
+            <SortableContext
+              id={ROOT_SORTABLE_ID}
+              items={stepIds}
+              strategy={verticalListSortingStrategy}
+            >
               {steps.map((step, i) => (
                 <div key={stepIds[i]}>
-                  <SortableStepWrapper id={stepIds[i]!}>
+                  <SortableFlowRow id={stepIds[i]!}>
                     {(dragHandle, isDragging) => (
                       <div className={`flex items-stretch ${isDragging ? 'opacity-60' : ''}`}>
                         {dragHandle}
@@ -288,10 +328,20 @@ export function FlowEditor({
                               onRemoveChild={(key, ci) => removeChild(i, key, ci)}
                               onInsertChild={(key, at, s) => insertChild(i, key, at, s)}
                               compact={compact}
+                              nestedInDialog={nestedInDialog}
                               selectorPickTarget={selectorPickTarget}
                               onTogglePickSelector={onSelectorPickTargetChange ? togglePick : undefined}
-                              onRunSelf={onRunStep ? () => onRunStep(step, i) : undefined}
-                              onRunChild={onRunStep ? (s) => onRunStep(s, -1) : undefined}
+                              coordinatePickTarget={coordinatePickTarget}
+                              onToggleCoordinatePick={onCoordinatePickTargetChange ? toggleCoordPick : undefined}
+                              selfRunKey={encodeScenarioInlineRunKey(i, [])}
+                              stepRunStates={stepRunStates}
+                              onStopInlineRun={onStopInlineRun}
+                              onRunSelf={
+                                onRunStep
+                                  ? () => onRunStep(step, encodeScenarioInlineRunKey(i, []))
+                                  : undefined
+                              }
+                              onRunChild={onRunStep ? (s, k) => onRunStep(s, k) : undefined}
                             />
                           ) : (
                             <StepCard
@@ -300,8 +350,13 @@ export function FlowEditor({
                               selected={!compact && selectedIndex === i}
                               onClick={() => !compact && setSelectedIndex(selectedIndex === i ? null : i)}
                               onRemove={() => removeAt(i)}
-                              onRun={onRunStep ? () => onRunStep(step, i) : undefined}
-                              runState={stepRunStates[i] ?? 'idle'}
+                              onRun={
+                                onRunStep
+                                  ? () => onRunStep(step, encodeScenarioInlineRunKey(i, []))
+                                  : undefined
+                              }
+                              runState={stepRunStates[String(i)] ?? 'idle'}
+                              onStopInlineRun={onStopInlineRun}
                               isPickTarget={
                                 selectorPickTarget != null &&
                                 selectorPickTarget.rootIndex === i &&
@@ -312,12 +367,39 @@ export function FlowEditor({
                                   ? () => togglePick({ rootIndex: i, path: [] })
                                   : undefined
                               }
+                              coordPickActive={
+                                coordinatePickTarget &&
+                                coordinatePickTargetEquals(coordinatePickTarget, {
+                                  rootIndex: i,
+                                  path: [],
+                                  mode: 'tap_point',
+                                })
+                                  ? 'tap_point'
+                                  : coordinatePickTarget &&
+                                      coordinatePickTargetEquals(coordinatePickTarget, {
+                                        rootIndex: i,
+                                        path: [],
+                                        mode: 'swipe_segment',
+                                      })
+                                    ? 'swipe_segment'
+                                    : null
+                              }
+                              onTogglePickTapCoords={
+                                onCoordinatePickTargetChange && isTapCoordinatePickableStep(step)
+                                  ? () => toggleCoordPick({ rootIndex: i, path: [], mode: 'tap_point' })
+                                  : undefined
+                              }
+                              onTogglePickSwipeCoords={
+                                onCoordinatePickTargetChange && isSwipeCoordinatePickableStep(step)
+                                  ? () => toggleCoordPick({ rootIndex: i, path: [], mode: 'swipe_segment' })
+                                  : undefined
+                              }
                             />
                           )}
                         </div>
                       </div>
                     )}
-                  </SortableStepWrapper>
+                  </SortableFlowRow>
                   <InsertButton onInsert={(s) => insertAt(i + 1, s)} />
                 </div>
               ))}

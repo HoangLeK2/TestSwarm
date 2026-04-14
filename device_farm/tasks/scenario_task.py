@@ -1941,31 +1941,30 @@ def run_scenario_task(
             stop_if_no_new = bool(step.get("stop_if_no_new", False))
             no_new_threshold = int(step.get("no_new_threshold", 3))
             expand_see_more = bool(step.get("expand_see_more", True))
-            completion_retries = max(0, int(step.get("expand_completion_retries", 3) or 3))
+            _ecr = step.get("expand_completion_retries", 3)
+            completion_retries = max(0, int(3 if _ecr is None else _ecr))
 
             _em_passes = int(step.get("expand_see_more_max_passes", 2))
             _em_scroll = bool(step.get("expand_see_more_scroll", False))
             _em_scroll_dist = float(step.get("expand_see_more_scroll_distance", 0.3))
+            _lazy_rounds = int(step.get("expand_lazy_hydration_rounds", 6))
+            _prefetch_passes = int(step.get("expand_prefetch_scroll_passes", 0) or 0)
+            _lazy_scroll = float(step.get("expand_lazy_scroll_distance", _em_scroll_dist))
 
-            # Avoid duplicate expansion loops for posts:
-            # - pre-expand pass (here)
-            # - completion-aware retries (below)
-            # When completion_retries > 0, skip pre-expand and let retry loop decide
-            # based on unresolved truncation markers.
-            if strategy == "fb_posts" and expand_see_more and completion_retries <= 0:
+            # Always pre-expand posts: when expand_completion_retries > 0 the retry loop
+            # only runs if is_fb_post_truncated() is true — the parser can omit the
+            # "… Xem thêm" suffix, so skipping pre-expand meant never tapping See more.
+            if strategy == "fb_posts" and expand_see_more:
                 try:
-                    from tasks.fb_extract import _expand_see_more
-                    expanded = _expand_see_more(
+                    from tasks.fb_extract import expand_see_more_with_lazy_hydration
+                    expand_see_more_with_lazy_hydration(
                         device,
-                        max_passes=_em_passes,
-                        scroll_between=_em_scroll,
-                        scroll_distance=_em_scroll_dist,
+                        max_rounds=max(3, _lazy_rounds),
+                        scroll_distance=max(0.12, _lazy_scroll),
                     )
-                    if expanded:
-                        # Let UI settle after expanding truncated content.
-                        time.sleep(0.5)
-                except Exception:
-                    pass
+                    time.sleep(0.35)
+                except Exception as exc:
+                    log.warning("[%s] extract: pre-expand fb_posts (See more / lazy) failed: %s", serial, exc)
 
             if strategy == "fb_comments" and expand_see_more:
                 # Expand truncated long comments before parsing
@@ -1977,9 +1976,21 @@ def run_scenario_task(
                         scroll_between=_em_scroll,
                         scroll_distance=_em_scroll_dist,
                     )
-                    time.sleep(0.3)
-                except Exception:
-                    pass
+                    time.sleep(0.55)
+                except Exception as exc:
+                    log.warning("[%s] extract: pre-expand fb_comments (See more) failed: %s", serial, exc)
+
+            if strategy == "fb_posts" and expand_see_more and _prefetch_passes > 0:
+                try:
+                    from tasks.fb_extract import prefetch_viewport_scrolls
+                    prefetch_viewport_scrolls(
+                        device,
+                        passes=_prefetch_passes,
+                        distance=max(0.15, _em_scroll_dist),
+                        pause_s=float(step.get("expand_prefetch_scroll_pause", 0.7)),
+                    )
+                except Exception as exc:
+                    log.warning("[%s] extract: prefetch_viewport_scrolls failed: %s", serial, exc)
 
             xml = device.hierarchy_xml(force_refresh=True)
             if not xml:
@@ -1987,38 +1998,53 @@ def run_scenario_task(
                 step_result["message"] = "extract: hierarchy_xml returned None"
             else:
                 if strategy == "fb_posts":
-                    from tasks.fb_extract import parse_fb_posts_from_xml, _dedup
+                    from tasks.fb_extract import (
+                        parse_fb_posts_from_xml,
+                        _dedup,
+                        is_fb_post_truncated,
+                        expand_see_more_with_lazy_hydration,
+                    )
                     from services.content_store import compute_content_hash
                     scroll_idx = ctx.get("_loop_iter", 0)
                     new_posts = parse_fb_posts_from_xml(xml, source_index=scroll_idx)
 
                     def _snapshot(posts: List[Dict[str, Any]]) -> Tuple[int, int]:
-                        unresolved = 0
-                        total_len = 0
-                        for _p in posts:
-                            _t = str(_p.get("text") or "")
-                            total_len += len(_t)
-                            _tl = _t.lower()
-                            if ("xem thêm" in _tl) or ("see more" in _tl) or ("view more" in _tl):
-                                unresolved += 1
+                        unresolved = sum(1 for _p in posts if is_fb_post_truncated(_p))
+                        total_len = sum(len(str(_p.get("text") or "")) for _p in posts)
                         return unresolved, total_len
+
+                    unresolved_first, total_len_first = _snapshot(new_posts)
+
+                    if expand_see_more and any(is_fb_post_truncated(p) for p in new_posts):
+                        try:
+                            expand_see_more_with_lazy_hydration(
+                                device,
+                                max_rounds=max(2, min(_lazy_rounds, 5)),
+                                scroll_distance=max(0.12, _lazy_scroll),
+                            )
+                            xml_h = device.hierarchy_xml(force_refresh=True)
+                            if xml_h:
+                                new_posts = _dedup(
+                                    new_posts
+                                    + parse_fb_posts_from_xml(xml_h, source_index=scroll_idx)
+                                )
+                        except Exception as exc:
+                            log.warning("[%s] extract: mid-parse expand (truncated posts) failed: %s", serial, exc)
 
                     unresolved_before, total_len_before = _snapshot(new_posts)
                     retries_done = 0
                     plateau = 0
                     if expand_see_more and unresolved_before > 0:
-                        from tasks.fb_extract import _expand_see_more
                         max_retries = max(1, min(4, completion_retries))
                         prev_unresolved, prev_total_len = unresolved_before, total_len_before
 
                         for _ in range(max_retries):
                             retries_done += 1
                             try:
-                                _expand_see_more(
+                                expand_see_more_with_lazy_hydration(
                                     device,
-                                    max_passes=max(_em_passes, 6),
-                                    scroll_between=_em_scroll,
-                                    scroll_distance=_em_scroll_dist,
+                                    max_rounds=max(3, min(_lazy_rounds, 8)),
+                                    scroll_distance=max(0.12, _lazy_scroll),
                                 )
                                 time.sleep(0.6)
                                 xml_retry = device.hierarchy_xml(force_refresh=True)
@@ -2041,11 +2067,14 @@ def run_scenario_task(
                                 prev_unresolved, prev_total_len = curr_unresolved, curr_total_len
                                 if curr_unresolved == 0 or plateau >= 2:
                                     break
-                            except Exception:
+                            except Exception as exc:
+                                log.warning("[%s] extract: expand_completion retry failed: %s", serial, exc)
                                 break
 
                     unresolved_after, total_len_after = _snapshot(new_posts)
                     step_result["extract_diagnostics"] = {
+                        "unresolved_first_parse": unresolved_first,
+                        "total_len_first_parse": total_len_first,
                         "unresolved_before": unresolved_before,
                         "unresolved_after": unresolved_after,
                         "total_len_before": total_len_before,
@@ -2081,6 +2110,16 @@ def run_scenario_task(
                                 pid_map[_p["_pid"]] = compute_content_hash(_p, dedupe_field="post_key")
                         # Keep only current viewport map to avoid stale collisions.
                         ctx["_post_id_map"] = pid_map
+                        # Top-of-feed _pid for tap_selector("Bình luận") — pass via
+                        # parent_post_id_var on extract fb_comments. Header-based
+                        # _compute_post_id_from_nodes() is often None on VN comment UIs.
+                        _tpid = new_posts[0].get("_pid")
+                        if _tpid:
+                            ctx["_fb_comment_parent_pid"] = _tpid
+                        else:
+                            ctx.pop("_fb_comment_parent_pid", None)
+                    else:
+                        ctx.pop("_fb_comment_parent_pid", None)
                     # Track no-new streak for auto-break
                     if stop_if_no_new:
                         if added == 0:
@@ -2114,7 +2153,10 @@ def run_scenario_task(
                         step_result["message"] = f"extract text_nodes failed: {exc}"
                 elif strategy == "fb_comments":
                     from tasks.fb_extract import (
-                        parse_fb_comments_from_xml, _dedup_comments, _post_id_from_ctx,
+                        parse_fb_comments_from_xml,
+                        _dedup_comments,
+                        _is_junk_parsed_comment_row,
+                        _post_id_from_ctx,
                     )
                     # Prevent stale linkage from previous comment screens.
                     ctx["_active_comment_parent_hash"] = None
@@ -2126,7 +2168,12 @@ def run_scenario_task(
                     )
                     # Separate post_stats sentinel from actual comments
                     post_stats = next((x for x in raw_items if x.get("_type") == "post_stats"), None)
-                    new_comments = [x for x in raw_items if x.get("_type") != "post_stats"]
+                    new_comments = [
+                        x
+                        for x in raw_items
+                        if x.get("_type") != "post_stats"
+                        and not _is_junk_parsed_comment_row(x)
+                    ]
 
                     # If comment view exposes better reaction/share counts, update parent post.
                     # Prefer _post_id_map lookup (reliable: MD5 from comment view header → SHA256)
@@ -2211,6 +2258,80 @@ def run_scenario_task(
                 else:
                     step_result["ok"] = False
                     step_result["message"] = f"extract: unknown strategy {strategy!r}"
+
+                # ── Inline auto-save: when collection is set, save immediately ──
+                _auto_save_coll = step.get("collection")
+                if _auto_save_coll and step_result.get("ok", True):
+                    try:
+                        from services.content_store import save_content_item
+                        import concurrent.futures as _cf
+
+                        # Determine data_var from strategy
+                        _auto_data_var = "comments" if strategy == "fb_comments" else (
+                            "text_nodes" if strategy == "text_nodes" else "posts"
+                        )
+                        _auto_data = ctx.get(_auto_data_var, [])
+                        _auto_items: list = []
+                        if isinstance(_auto_data, list):
+                            _auto_items = [it for it in _auto_data if isinstance(it, dict)]
+                        elif isinstance(_auto_data, dict):
+                            _auto_items = [_auto_data]
+
+                        if _auto_items:
+                            # Offset tracking (same logic as save_extraction)
+                            _auto_offsets = ctx.setdefault("__save_extraction_offsets__", {})
+                            _auto_start = int(_auto_offsets.get(_auto_data_var, 0) or 0)
+                            _auto_batch = _auto_items[_auto_start:]
+
+                            if _auto_batch:
+                                _as_coll = _auto_save_coll
+                                _as_plat = step.get("platform")
+                                _as_ctype = step.get("content_type", "post")
+                                _as_dedup = step.get("dedupe_field")
+                                _as_tags = step.get("tags", "")
+                                _as_parent_var = step.get("save_parent_id_var")
+                                _as_parent_id = ctx.get(_as_parent_var) if _as_parent_var else None
+                                _as_level = int(step.get("item_level") or 0)
+                                _as_serial = device.serial
+                                _as_snap = list(_auto_batch)
+
+                                async def _auto_save_all() -> tuple:
+                                    _sv = _dp = _er = _pc = 0
+                                    for _it in _as_snap:
+                                        try:
+                                            _r = await save_content_item(
+                                                data=_it, collection=_as_coll,
+                                                platform=_as_plat, content_type=_as_ctype,
+                                                dedupe_field=_as_dedup, tags=_as_tags,
+                                                device_serial=_as_serial,
+                                                parent_id=_as_parent_id, item_level=_as_level,
+                                            )
+                                            if _r.get("saved"):
+                                                _sv += 1
+                                            else:
+                                                _dp += 1
+                                            _pc += 1
+                                        except Exception as _exc:
+                                            _er += 1
+                                            log.warning("[%s] extract auto-save failed: %s", _as_serial, _exc)
+                                            break
+                                    return _sv, _dp, _er, _pc
+
+                                with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
+                                    _fut = _pool.submit(asyncio.run, _auto_save_all())
+                                    _as_saved, _as_dup, _as_err, _as_proc = _fut.result(timeout=120)
+
+                                _auto_offsets[_auto_data_var] = _auto_start + _as_proc
+                                step_result["auto_save"] = {
+                                    "saved": _as_saved, "duplicate": _as_dup, "errors": _as_err,
+                                }
+                                step_result["message"] += (
+                                    f" | auto-save: saved={_as_saved}, dup={_as_dup}, err={_as_err}"
+                                )
+                                log.info(f"[{serial}] extract auto-save: saved={_as_saved}, dup={_as_dup}, err={_as_err}")
+                    except Exception as _as_exc:
+                        log.warning("[%s] extract auto-save failed: %s", serial, _as_exc)
+                        step_result["auto_save_error"] = str(_as_exc)
 
         # ── DF-009: OCR & Screen Text Extraction ──────────────────────────
         elif t == "extract_text_hierarchy":

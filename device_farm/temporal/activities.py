@@ -434,31 +434,57 @@ class DeviceActivities:
         stop_if_no_new = bool(step.get("stop_if_no_new", False))
         no_new_threshold = int(step.get("no_new_threshold", 3))
         expand_see_more = bool(step.get("expand_see_more", True))
-        completion_retries = max(0, int(step.get("expand_completion_retries", 3) or 3))
+        _ecr = step.get("expand_completion_retries", 3)
+        completion_retries = max(0, int(3 if _ecr is None else _ecr))
         em_passes = int(step.get("expand_see_more_max_passes", 2))
         em_scroll = bool(step.get("expand_see_more_scroll", False))
         em_scroll_distance = float(step.get("expand_see_more_scroll_distance", 0.3))
+        lazy_rounds = int(step.get("expand_lazy_hydration_rounds", 6))
+        lazy_scroll = float(step.get("expand_lazy_scroll_distance", em_scroll_distance))
+        prefetch_passes = int(step.get("expand_prefetch_scroll_passes", 0) or 0)
         break_requested = False
         details: dict[str, Any] = {}
 
         try:
-            # Avoid duplicate expansion loops for posts when completion retries are enabled.
-            do_pre_expand = (
-                expand_see_more
-                and (strategy == "fb_comments" or (strategy == "fb_posts" and completion_retries <= 0))
-            )
+            # Always pre-expand fb_posts when enabled (see scenario_task extract notes).
+            do_pre_expand = expand_see_more and strategy in ("fb_posts", "fb_comments")
             if do_pre_expand:
                 try:
-                    from tasks.fb_extract import _expand_see_more
-                    expanded = await _to_thread_with_heartbeat(
-                        _expand_see_more,
-                        device,
-                        max_passes=em_passes,
-                        scroll_between=em_scroll,
-                        scroll_distance=em_scroll_distance,
-                    )
+                    if strategy == "fb_posts":
+                        from tasks.fb_extract import expand_see_more_with_lazy_hydration
+
+                        expanded = await _to_thread_with_heartbeat(
+                            expand_see_more_with_lazy_hydration,
+                            device,
+                            max_rounds=max(3, lazy_rounds),
+                            scroll_distance=max(0.12, lazy_scroll),
+                        )
+                    else:
+                        from tasks.fb_extract import _expand_see_more
+
+                        expanded = await _to_thread_with_heartbeat(
+                            _expand_see_more,
+                            device,
+                            max_passes=em_passes,
+                            scroll_between=em_scroll,
+                            scroll_distance=em_scroll_distance,
+                        )
                     if expanded:
-                        await asyncio.sleep(0.5)
+                        await asyncio.sleep(0.55 if strategy == "fb_comments" else 0.35)
+                except Exception:
+                    pass
+
+            if strategy == "fb_posts" and expand_see_more and prefetch_passes > 0:
+                try:
+                    from tasks.fb_extract import prefetch_viewport_scrolls
+
+                    await _to_thread_with_heartbeat(
+                        prefetch_viewport_scrolls,
+                        device,
+                        passes=prefetch_passes,
+                        distance=max(0.15, em_scroll_distance),
+                        pause_s=float(step.get("expand_prefetch_scroll_pause", 0.7)),
+                    )
                 except Exception:
                     pass
 
@@ -471,38 +497,54 @@ class DeviceActivities:
                 )
 
             if strategy == "fb_posts":
-                from tasks.fb_extract import parse_fb_posts_from_xml, _dedup
+                from tasks.fb_extract import (
+                    parse_fb_posts_from_xml,
+                    _dedup,
+                    is_fb_post_truncated,
+                    expand_see_more_with_lazy_hydration,
+                )
                 from services.content_store import compute_content_hash
                 scroll_idx = ctx.get("_loop_iter", 0)
                 new_posts = parse_fb_posts_from_xml(xml, source_index=scroll_idx)
 
                 def _snapshot(posts: list[dict[str, Any]]) -> tuple[int, int]:
-                    unresolved = 0
-                    total_len = 0
-                    for _p in posts:
-                        _t = str(_p.get("text") or "")
-                        total_len += len(_t)
-                        _tl = _t.lower()
-                        if ("xem thêm" in _tl) or ("see more" in _tl) or ("view more" in _tl):
-                            unresolved += 1
+                    unresolved = sum(1 for _p in posts if is_fb_post_truncated(_p))
+                    total_len = sum(len(str(_p.get("text") or "")) for _p in posts)
                     return unresolved, total_len
+
+                unresolved_first, total_len_first = _snapshot(new_posts)
+
+                if expand_see_more and any(is_fb_post_truncated(p) for p in new_posts):
+                    try:
+                        await _to_thread_with_heartbeat(
+                            expand_see_more_with_lazy_hydration,
+                            device,
+                            max_rounds=max(2, min(lazy_rounds, 5)),
+                            scroll_distance=max(0.12, lazy_scroll),
+                        )
+                        xml_h = await _to_thread_with_heartbeat(device.hierarchy_xml, force_refresh=True)
+                        if xml_h:
+                            new_posts = _dedup(
+                                new_posts
+                                + parse_fb_posts_from_xml(xml_h, source_index=scroll_idx)
+                            )
+                    except Exception:
+                        pass
 
                 unresolved_before, total_len_before = _snapshot(new_posts)
                 retries_done = 0
                 plateau = 0
                 if expand_see_more and unresolved_before > 0:
-                    from tasks.fb_extract import _expand_see_more
                     max_retries = max(1, min(4, completion_retries))
                     prev_unresolved, prev_total_len = unresolved_before, total_len_before
                     for _ in range(max_retries):
                         retries_done += 1
                         try:
                             await _to_thread_with_heartbeat(
-                                _expand_see_more,
+                                expand_see_more_with_lazy_hydration,
                                 device,
-                                max_passes=max(em_passes, 6),
-                                scroll_between=em_scroll,
-                                scroll_distance=em_scroll_distance,
+                                max_rounds=max(3, min(lazy_rounds, 8)),
+                                scroll_distance=max(0.12, lazy_scroll),
                             )
                             await asyncio.sleep(0.6)
                             xml_retry = await _to_thread_with_heartbeat(device.hierarchy_xml, force_refresh=True)
@@ -534,6 +576,8 @@ class DeviceActivities:
                 details["extracted"] = added
                 details["total_posts"] = len(ctx["posts"])
                 details["extract_diagnostics"] = {
+                    "unresolved_first_parse": unresolved_first,
+                    "total_len_first_parse": total_len_first,
                     "unresolved_before": unresolved_before,
                     "unresolved_after": unresolved_after,
                     "total_len_before": total_len_before,
@@ -564,6 +608,13 @@ class DeviceActivities:
                         if _p.get("_pid"):
                             pid_map[_p["_pid"]] = compute_content_hash(_p, dedupe_field="post_key")
                     ctx["_post_id_map"] = pid_map
+                    _tpid = new_posts[0].get("_pid")
+                    if _tpid:
+                        ctx["_fb_comment_parent_pid"] = _tpid
+                    else:
+                        ctx.pop("_fb_comment_parent_pid", None)
+                else:
+                    ctx.pop("_fb_comment_parent_pid", None)
                 if stop_if_no_new:
                     if added == 0:
                         base_streak = ctx.get("_no_new_posts_streak", ctx.get("_no_new_streak", 0))
@@ -593,7 +644,10 @@ class DeviceActivities:
 
             elif strategy == "fb_comments":
                 from tasks.fb_extract import (
-                    parse_fb_comments_from_xml, _dedup_comments, _post_id_from_ctx,
+                    parse_fb_comments_from_xml,
+                    _dedup_comments,
+                    _is_junk_parsed_comment_row,
+                    _post_id_from_ctx,
                 )
                 ctx["_active_comment_parent_hash"] = None
                 parent_post_id_var = inp.step.get("parent_post_id_var")
@@ -604,7 +658,12 @@ class DeviceActivities:
                 )
                 # Separate post_stats sentinel from actual comments
                 post_stats = next((x for x in raw_items if x.get("_type") == "post_stats"), None)
-                new_comments = [x for x in raw_items if x.get("_type") != "post_stats"]
+                new_comments = [
+                    x
+                    for x in raw_items
+                    if x.get("_type") != "post_stats"
+                    and not _is_junk_parsed_comment_row(x)
+                ]
 
                 # Update parent post reaction/share counts with more accurate comment-view values
                 if post_stats:

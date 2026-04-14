@@ -1,8 +1,14 @@
+import type { FlowNode, FlowEdge } from './components/scenario-steps/types';
 export type CampaignStatus = 'idle' | 'running' | 'draft' | 'paused' | 'completed';
 
-/** Returns true when the campaign is in a non-running (ready) state */
+/** Ready to start a new run (not executing, not user-paused mid-run) */
 export function isIdleStatus(s: string): boolean {
-  return s === 'idle' || s === 'draft' || s === 'paused' || s === 'completed';
+  return s === 'idle' || s === 'draft' || s === 'completed';
+}
+
+/** Executing or user paused — poll workflows, show pause/resume/stop */
+export function isCampaignActiveExecution(s: string): boolean {
+  return s === 'running' || s === 'paused';
 }
 
 export type ScenarioOut = {
@@ -13,6 +19,8 @@ export type ScenarioOut = {
   steps: Record<string, any>[];
   variables: Record<string, any>;
   order: number;
+  nodes: FlowNode[];
+  edges: FlowEdge[];
   created_at: string;
   updated_at: string;
 };
@@ -23,6 +31,8 @@ export type ScenarioCreate = {
   steps?: Record<string, any>[];
   variables?: Record<string, any>;
   order?: number;
+  nodes?: FlowNode[];
+  edges?: FlowEdge[];
 };
 
 export type ScenarioUpdate = Partial<ScenarioCreate>;

@@ -392,7 +392,10 @@ def load_config(path: str = "config.yaml") -> Config:
             index_file=_get(device_raw, "index_file", "data/device_index.json"),
             stf_package=_get(device_raw, "stf_package", "jp.co.cyberagent.stf"),
             stf_apk_path=_get(device_raw, "stf_apk_path", ""),
-            scrcpy_jar=_get(device_raw, "scrcpy_jar", "/opt/homebrew/share/scrcpy/scrcpy-server"),
+            scrcpy_jar=(
+                os.environ.get("DEVICE_FARM_SCRCPY_JAR", "").strip()
+                or _get(device_raw, "scrcpy_jar", "/opt/homebrew/share/scrcpy/scrcpy-server")
+            ),
             scrcpy_max_fps=_get(device_raw, "scrcpy_max_fps", 30),
             scrcpy_max_width=_get(device_raw, "scrcpy_max_width", 800),
             scrcpy_bitrate=_get(device_raw, "scrcpy_bitrate", 8_000_000),

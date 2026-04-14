@@ -471,7 +471,7 @@ class WebSocketManager:
                     congestion = False
 
                 # In congestion, prefer skipping non-key deltas when version gaps are large.
-                if congestion and version_gap > 4 and not is_key:
+                if congestion and version_gap > 8 and not is_key:
                     last_version = version
                     continue
 

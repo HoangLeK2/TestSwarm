@@ -190,7 +190,7 @@ export function DeviceScreen({ device, wsSend, mode, onTap, onSwipe, onDragGestu
       if (h264StableTimerRef.current) clearTimeout(h264StableTimerRef.current);
       h264StableTimerRef.current = setTimeout(() => {
         setMjpegEnabled(false);
-      }, 5000);
+      }, 2000);
     } else {
       if (h264StableTimerRef.current) clearTimeout(h264StableTimerRef.current);
       setMjpegEnabled(true);

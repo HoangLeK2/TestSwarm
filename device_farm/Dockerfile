@@ -43,14 +43,21 @@ RUN uv venv .venv && \
 
 FROM base AS runner
 
+ARG SCRCPY_SERVER_VERSION=3.3.4
+
 # Runtime deps only (no gcc/g++)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libxml2 \
     libxslt1.1 \
     libavformat61 \
     libavcodec61 \
+    adb \
     curl \
-    && rm -rf /var/lib/apt/lists/*
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* && \
+    mkdir -p /usr/share/scrcpy && \
+    curl -fL "https://github.com/Genymobile/scrcpy/releases/download/v${SCRCPY_SERVER_VERSION}/scrcpy-server-v${SCRCPY_SERVER_VERSION}" \
+      -o /usr/share/scrcpy/scrcpy-server
 
 # Non-root user
 RUN groupadd --system --gid 1001 farm && \

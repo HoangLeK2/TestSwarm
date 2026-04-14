@@ -481,7 +481,7 @@ export function useControlRecord(initialSerial?: string | null, initialCampaignI
   }, []);
 
   const saveToScenario = useCallback(
-    async (campaignId: string, scenarioId: string) => {
+    async (campaignId: string, scenarioId: string, variables?: Record<string, any>) => {
       if (pendingScreenshotCount > 0) {
         toast.info(t('toast.waitingScreenshotBeforeSave', { count: pendingScreenshotCount }));
       }
@@ -497,7 +497,7 @@ export function useControlRecord(initialSerial?: string | null, initialCampaignI
         return;
       }
       setSavingCampaignId(scenarioId);
-      scenariosApi.update(campaignId, scenarioId, { steps: payloadSteps })
+      scenariosApi.update(campaignId, scenarioId, { steps: payloadSteps, variables })
         .then(() => { toast.success(t('toast.saveStepsSuccess')); setSaveDialogOpen(false); setSelectedCampaignId(null); })
         .catch((err) => toast.error(formatFarmApiError(err, t('toast.saveFailed'))))
         .finally(() => setSavingCampaignId(null));
@@ -506,7 +506,7 @@ export function useControlRecord(initialSerial?: string | null, initialCampaignI
   );
 
   const saveAsNewScenario = useCallback(
-    async (campaignId: string) => {
+    async (campaignId: string, variables?: Record<string, any>) => {
       if (pendingScreenshotCount > 0) {
         toast.info(t('toast.waitingScreenshotBeforeSave', { count: pendingScreenshotCount }));
       }
@@ -525,6 +525,7 @@ export function useControlRecord(initialSerial?: string | null, initialCampaignI
       scenariosApi.create(campaignId, {
         name: t('newScenarioName', { time: new Date().toLocaleTimeString('vi-VN') }),
         steps: payloadSteps,
+        variables,
       })
         .then(() => { toast.success(t('toast.createScenarioSuccess')); setSaveDialogOpen(false); setSelectedCampaignId(null); })
         .catch((err) => toast.error(formatFarmApiError(err, t('toast.createScenarioFailed'))))

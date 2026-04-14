@@ -1492,7 +1492,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
               <Button
                 variant='default'
                 className='w-full justify-start gap-2'
-                onClick={() => save.saveAsNew(save.selectedCampaignId!)}
+                onClick={() => save.saveAsNew(save.selectedCampaignId!, scenarioVariables)}
                 disabled={save.saving !== null}
               >
                 <Plus size={13} />
@@ -1506,7 +1506,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                       key={s.id}
                       variant='outline'
                       className='h-auto w-full flex-col items-start justify-start py-2 text-left'
-                      onClick={() => save.saveTo(save.selectedCampaignId!, s.id)}
+                      onClick={() => save.saveTo(save.selectedCampaignId!, s.id, scenarioVariables)}
                       disabled={save.saving !== null}
                     >
                       <span className='font-medium'>

@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 
 from relay.scrcpy_relay import ScrcpyRelaySession
 
@@ -37,15 +37,23 @@ class ScrcpySessionManager:
         await mgr.stop()            # shuts down all sessions
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        on_session_stopped: Optional[Callable[[str, str], None]] = None,
+    ) -> None:
         self._sessions:  Dict[str, ScrcpyRelaySession] = {}
         self._started_at: Dict[str, float] = {}  # serial → time.monotonic() at start
         self._cleanup_task: Optional[asyncio.Task] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._on_session_stopped = on_session_stopped
+        self._starting_serials: set[str] = set()
+        self._fatal_during_start: Dict[str, str] = {}
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     async def start(self) -> None:
         """Start the background cleanup task. Call once at agent startup."""
+        self._loop = asyncio.get_running_loop()
         self._cleanup_task = asyncio.create_task(
             self._cleanup_loop(), name="scrcpy-session-cleanup"
         )
@@ -66,7 +74,7 @@ class ScrcpySessionManager:
         if serials:
             logger.info("stopping all %d sessions on stream disconnect", len(serials))
         for serial in serials:
-            await self.stop_session(serial)
+            await self.stop_session(serial, reason="manual_stop")
 
     # ── Session API ───────────────────────────────────────────────────────────
 
@@ -102,24 +110,40 @@ class ScrcpySessionManager:
             loop=loop,
             bitrate=bitrate,
             low_latency=low_latency,
+            on_fatal=self._on_session_fatal,
         )
 
         try:
+            self._starting_serials.add(serial)
             # start() is blocking (JAR push ~1-2s) — run in executor
             await asyncio.get_running_loop().run_in_executor(None, session.start)
             self._sessions[serial] = session
             self._started_at[serial] = time.monotonic()
             logger.info("session started: %s (total=%d)", serial, len(self._sessions))
+            self._starting_serials.discard(serial)
+            fatal_reason = self._fatal_during_start.pop(serial, "")
+            if fatal_reason:
+                await self.stop_session(serial, reason=fatal_reason)
         except Exception as exc:
             logger.error("session start failed for %s: %s", serial, exc)
+            self._emit_stopped(serial, "startup_failure")
+            self._fatal_during_start.pop(serial, None)
+        finally:
+            self._starting_serials.discard(serial)
 
-    async def stop_session(self, serial: str) -> None:
+    async def stop_session(self, serial: str, reason: str = "manual_stop") -> None:
         """Stop and remove session for serial."""
         session = self._sessions.pop(serial, None)
         self._started_at.pop(serial, None)
         if session:
             await asyncio.get_running_loop().run_in_executor(None, session.stop)
-            logger.info("session stopped: %s (remaining=%d)", serial, len(self._sessions))
+            logger.info(
+                "session stopped: %s (reason=%s, remaining=%d)",
+                serial,
+                reason,
+                len(self._sessions),
+            )
+            self._emit_stopped(serial, reason)
 
     def send_control(self, serial: str, data: bytes) -> None:
         """Thread-safe — delegates to session.send_control()."""
@@ -170,4 +194,32 @@ class ScrcpySessionManager:
 
         for serial, reason in to_stop:
             logger.info("cleanup stopping session %s: %s", serial, reason)
-            await self.stop_session(serial)
+            reason_tag = "zombie_thread" if reason == "zombie thread" else "cleanup_idle"
+            await self.stop_session(serial, reason=reason_tag)
+
+    def _on_session_fatal(self, serial: str, reason: str) -> None:
+        """
+        Called from ScrcpyRelaySession relay thread when unrecoverable runtime
+        error happens. Schedule async stop on event loop thread-safely.
+        """
+        if self._loop is None:
+            return
+        def _schedule_stop_or_emit() -> None:
+            if serial in self._starting_serials:
+                self._fatal_during_start[serial] = reason
+                return
+            if serial in self._sessions:
+                asyncio.create_task(self.stop_session(serial, reason=reason))
+                return
+            # Fatal can happen during bootstrap before we register session in map.
+            self._emit_stopped(serial, reason)
+
+        self._loop.call_soon_threadsafe(_schedule_stop_or_emit)
+
+    def _emit_stopped(self, serial: str, reason: str) -> None:
+        cb = self._on_session_stopped
+        if cb:
+            try:
+                cb(serial, reason)
+            except Exception as exc:
+                logger.debug("on_session_stopped callback error: %s", exc)

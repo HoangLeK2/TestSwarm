@@ -150,45 +150,45 @@ services:
       NEXT_PUBLIC_WS_URL: ws://farm:8081
 
   # ─── MinIO (local S3) — tắt mặc định; bỏ # để dùng lại + uncomment minio_data volume ───
-  # minio:
-  #   profiles:
-  #     - minio
-  #   image: minio/minio:latest
-  #   restart: unless-stopped
-  #   command: server /data --console-address ":9001"
-  #   environment:
-  #     MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
-  #     MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
-  #   ports:
-  #     - "9000:9000"   # S3 API
-  #     - "9001:9001"   # Web Console → http://localhost:9001
-  #   volumes:
-  #     - minio_data:/data
-  #   healthcheck:
-  #     test: ["CMD", "mc", "ready", "local"]
-  #     interval: 5s
-  #     timeout: 3s
-  #     retries: 10
-  #     start_period: 5s
-  #
-  # minio-init:
-  #   profiles:
-  #     - minio
-  #   image: minio/mc:latest
-  #   depends_on:
-  #     minio:
-  #       condition: service_healthy
-  #   restart: "no"
-  #   entrypoint: >
-  #     /bin/sh -c "
-  #       mc alias set local http://minio:9000 ${MINIO_ACCESS_KEY:-minioadmin} ${MINIO_SECRET_KEY:-minioadmin} &&
-  #       mc mb --ignore-existing local/${MINIO_BUCKET:-device-farm} &&
-  #       mc anonymous set download local/${MINIO_BUCKET:-device-farm} &&
-  #       echo 'Bucket ${MINIO_BUCKET:-device-farm} ready.'
-  #     "
+  minio:
+    profiles:
+      - minio
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Web Console → http://localhost:9001
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+  
+  minio-init:
+    profiles:
+      - minio
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: >
+      /bin/sh -c "
+        mc alias set local http://minio:9000 ${MINIO_ACCESS_KEY:-minioadmin} ${MINIO_SECRET_KEY:-minioadmin} &&
+        mc mb --ignore-existing local/${MINIO_BUCKET:-device-farm} &&
+        mc anonymous set download local/${MINIO_BUCKET:-device-farm} &&
+        echo 'Bucket ${MINIO_BUCKET:-device-farm} ready.'
+      "
 
 
 volumes:
   pgdata:
   farm_captures:
-  # minio_data:
+  minio_data:

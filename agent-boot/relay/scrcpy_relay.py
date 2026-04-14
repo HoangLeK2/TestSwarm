@@ -26,7 +26,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 logger = logging.getLogger("relay.scrcpy")
 
@@ -150,6 +150,7 @@ class ScrcpyRelaySession:
         loop: asyncio.AbstractEventLoop,
         bitrate: int = 2_000_000,
         low_latency: bool = False,
+        on_fatal: Optional[Callable[[str, str], None]] = None,
     ) -> None:
         self._serial         = serial
         self._jar_version    = _BUNDLED_JAR_VERSION
@@ -180,6 +181,7 @@ class ScrcpyRelaySession:
         # Set on first successful handshake; constant for this session
         self._device_width:  int = 0
         self._device_height: int = 0
+        self._on_fatal = on_fatal
 
     # ── Public API ───────────────────────────────────────────────────────────
 
@@ -280,6 +282,11 @@ class ScrcpyRelaySession:
                         "[%s] scrcpy: max reconnects (%d) exceeded — giving up",
                         self._serial, _MAX_RECONNECTS,
                     )
+                    if self._on_fatal:
+                        try:
+                            self._on_fatal(self._serial, "runtime_error")
+                        except Exception as cb_exc:
+                            logger.warning("[%s] on_fatal callback failed: %s", self._serial, cb_exc)
                     break
 
                 logger.warning(

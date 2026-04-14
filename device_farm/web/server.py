@@ -400,10 +400,11 @@ def create_app(
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
     from services.image_store import init as _init_image_store
-    from services import minio_store
+    from services import minio_store, capture_store
     _captures_dir = Path("captures")
     _captures_dir.mkdir(exist_ok=True)
     _init_image_store(_captures_dir)
+    capture_store.init(_captures_dir)
     minio_store.init(config.object_storage)
     app.mount("/captures", StaticFiles(directory=str(_captures_dir)), name="captures")
 

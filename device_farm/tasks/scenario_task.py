@@ -834,36 +834,47 @@ def _capture_step_screenshot(
     selector: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """Save full screenshot + cropped element + XML hierarchy + selector info."""
+    from services import capture_store
+
     jpeg = device.take_screenshot()
     if not jpeg:
         return {}
 
     prefix = f"step_{idx:03d}_{step_type}"
+    # MinIO key mirrors local dir structure: captures/{session}/step_XXX_*.ext
+    session_name = os.path.basename(capture_dir)
+    minio_prefix = f"captures/{session_name}"
 
-    full_path = os.path.join(capture_dir, f"{prefix}_full.jpg")
-    with open(full_path, "wb") as f:
-        f.write(jpeg)
-    result: Dict[str, Any] = {"full": full_path}
+    # Full screenshot — skip quality gate (step captures are intentional, not minicap stream)
+    full_local = os.path.join(capture_dir, f"{prefix}_full.jpg")
+    full_key = f"{minio_prefix}/{prefix}_full.jpg"
+    full_url = capture_store.save_capture(jpeg, full_local, full_key, "image/jpeg", skip_quality=True)
+    if not full_url:
+        return {}
+    result: Dict[str, Any] = {"full": full_url}
 
-    # Save XML hierarchy only when CAPTURE_XML=1 (large files, rarely useful)
-    if os.environ.get("CAPTURE_XML", "").lower() in {"1", "true", "yes"}:
-        try:
-            xml = device.hierarchy_xml(force_refresh=False)
-            if xml:
-                xml_path = os.path.join(capture_dir, f"{prefix}_hierarchy.xml")
-                with open(xml_path, "w", encoding="utf-8") as f:
-                    f.write(xml)
-                result["hierarchy"] = xml_path
-        except Exception:
-            pass
+    # XML hierarchy
+    try:
+        xml = device.hierarchy_xml(force_refresh=False)
+        if xml:
+            xml_local = os.path.join(capture_dir, f"{prefix}_hierarchy.xml")
+            xml_key = f"{minio_prefix}/{prefix}_hierarchy.xml"
+            xml_url = capture_store.save_capture(
+                xml.encode("utf-8"), xml_local, xml_key, "application/xml",
+            )
+            if xml_url:
+                result["hierarchy"] = xml_url
+    except Exception:
+        pass
 
-    # Save selector info
+    # Selector info
     if selector:
-        sel_path = os.path.join(capture_dir, f"{prefix}_selector.json")
-        import json
-        with open(sel_path, "w", encoding="utf-8") as f:
-            json.dump(selector, f, ensure_ascii=False, indent=2)
-        result["selector"] = sel_path
+        sel_local = os.path.join(capture_dir, f"{prefix}_selector.json")
+        sel_key = f"{minio_prefix}/{prefix}_selector.json"
+        sel_bytes = json.dumps(selector, ensure_ascii=False, indent=2).encode("utf-8")
+        sel_url = capture_store.save_capture(sel_bytes, sel_local, sel_key, "application/json")
+        if sel_url:
+            result["selector"] = sel_url
 
     # Crop element
     if bounds:
@@ -880,9 +891,14 @@ def _capture_step_screenshot(
             )
             if crop_box[2] > crop_box[0] and crop_box[3] > crop_box[1]:
                 cropped = img.crop(crop_box)
-                elem_path = os.path.join(capture_dir, f"{prefix}_element.jpg")
-                cropped.save(elem_path, quality=85)
-                result["element"] = elem_path
+                buf = io.BytesIO()
+                cropped.save(buf, format="JPEG", quality=85)
+                crop_bytes = buf.getvalue()
+                elem_local = os.path.join(capture_dir, f"{prefix}_element.jpg")
+                elem_key = f"{minio_prefix}/{prefix}_element.jpg"
+                elem_url = capture_store.save_capture(crop_bytes, elem_local, elem_key, "image/jpeg", skip_quality=True)
+                if elem_url:
+                    result["element"] = elem_url
                 result["bounds"] = [bounds["left"], bounds["top"], bounds["right"], bounds["bottom"]]
         except Exception as exc:
             log.debug(f"crop failed: {exc}")

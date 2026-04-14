@@ -24,6 +24,18 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
+# Build-time args for NEXT_PUBLIC_* (baked into client bundle by `next build`).
+ARG NEXT_PUBLIC_PRODUCT_API_URL
+ARG NEXT_PUBLIC_DEVICE_FARM_WS_URL
+ARG NEXT_PUBLIC_ENVIRONMENT=dev
+ARG NEXT_PUBLIC_SENTRY_DSN
+ARG NEXT_PUBLIC_SENTRY_DISABLED=1
+ENV NEXT_PUBLIC_PRODUCT_API_URL=$NEXT_PUBLIC_PRODUCT_API_URL \
+    NEXT_PUBLIC_DEVICE_FARM_WS_URL=$NEXT_PUBLIC_DEVICE_FARM_WS_URL \
+    NEXT_PUBLIC_ENVIRONMENT=$NEXT_PUBLIC_ENVIRONMENT \
+    NEXT_PUBLIC_SENTRY_DSN=$NEXT_PUBLIC_SENTRY_DSN \
+    NEXT_PUBLIC_SENTRY_DISABLED=$NEXT_PUBLIC_SENTRY_DISABLED
+
 # Next.js collects completely anonymous telemetry data about general usage.
 # Learn more here: https://nextjs.org/telemetry
 # Uncomment the following line in case you want to disable telemetry during the build.

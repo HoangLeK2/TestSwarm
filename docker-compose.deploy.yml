@@ -22,22 +22,24 @@
 #   cd agent-boot && RELAY_MODE=grpc uv run main.py --relay-server <host>:50051 --relay-api-key <KEY>
 
 services:
-  postgres:
-    image: postgres:16-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${DB_NAME:-device_farm}
-      POSTGRES_USER: ${DB_USER:-postgres}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
-    ports:
-      - "${DB_PORT_PUBLISHED:-5433}:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
+  # ─── Local Postgres (DISABLED — bring your own) ───────────────────────────
+  # Uncomment to run Postgres inside compose. Then set DB_HOST=postgres in .env.
+  # postgres:
+  #   image: postgres:16-alpine
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_DB: ${DB_NAME:-device_farm}
+  #     POSTGRES_USER: ${DB_USER:-postgres}
+  #     POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+  #   ports:
+  #     - "${DB_PORT_PUBLISHED:-5433}:5432"
+  #   volumes:
+  #     - pgdata:/var/lib/postgresql/data
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+  #     interval: 5s
+  #     timeout: 3s
+  #     retries: 5
 
   temporal:
     image: temporalio/auto-setup:latest

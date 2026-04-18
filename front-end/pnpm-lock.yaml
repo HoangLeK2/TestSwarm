@@ -291,6 +291,9 @@ dependencies:
   react-device-frameset:
     specifier: ^1.3.4
     version: 1.3.4(react@19.0.0)
+  react-device-mockup:
+    specifier: ^1.0.0
+    version: 1.0.0(react@19.0.0)
   react-dom:
     specifier: 19.0.0
     version: 19.0.0(react@19.0.0)
@@ -10550,6 +10553,14 @@ packages:
     resolution: {integrity: sha512-M9VUa2up9TFOgsELHBFRkZf8ER0AyOYF5+5qbtYseQCZfg6XUxuNDX5VsJNfMGu6Zz6x9Dgh4rfFDFONK9H7dg==}
     peerDependencies:
       react: ^16.8.0 || ^17.0.0 || ^18.0.0
+    dependencies:
+      react: 19.0.0
+    dev: false
+
+  /react-device-mockup@1.0.0(react@19.0.0):
+    resolution: {integrity: sha512-rtLHqMdzs7FsnvYO7yCLbqvJYw8BmHEk6XsMHDQe4sBRU/SXPB3nofpjjXT3Me+MR2ZE3qsa1bVtASLRZwQO9g==}
+    peerDependencies:
+      react: '*'
     dependencies:
       react: 19.0.0
     dev: false

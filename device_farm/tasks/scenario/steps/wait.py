@@ -42,10 +42,15 @@ def handle_wait_element(sc: ScenarioContext, step: Dict[str, Any], idx: int, res
         return
     u2 = sc.device.u2
     iw_poll = float(step.get("poll", 0.5) or 0.5)
-    eid = _retry_find_element(u2, by, value, timeout=timeout, poll=iw_poll) if u2 else None
+    eid = _retry_find_element(
+        u2, by, value, timeout=timeout, poll=iw_poll, cancel_event=sc.cancel_event,
+    ) if u2 else None
     if eid is None:
         result["ok"] = False
-        result["message"] = f"wait_element {by}={value!r} not found after {timeout:.0f}s"
+        if sc.cancel_event is not None and sc.cancel_event.is_set():
+            result["message"] = f"wait_element cancelled ({by}={value!r})"
+        else:
+            result["message"] = f"wait_element {by}={value!r} not found after {timeout:.0f}s"
     else:
         result["message"] = f"wait_element found {by}={value!r}"
 
@@ -61,10 +66,15 @@ def handle_assert_element(sc: ScenarioContext, step: Dict[str, Any], idx: int, r
         return
     u2 = sc.device.u2
     iw_poll = float(step.get("poll", 0.5) or 0.5)
-    eid = _retry_find_element(u2, by, value, timeout=timeout, poll=iw_poll) if u2 else None
+    eid = _retry_find_element(
+        u2, by, value, timeout=timeout, poll=iw_poll, cancel_event=sc.cancel_event,
+    ) if u2 else None
     if eid is None:
         result["ok"] = False
-        result["message"] = f"assert_element FAILED: {by}={value!r} not visible after {timeout:.0f}s"
+        if sc.cancel_event is not None and sc.cancel_event.is_set():
+            result["message"] = f"assert_element cancelled ({by}={value!r})"
+        else:
+            result["message"] = f"assert_element FAILED: {by}={value!r} not visible after {timeout:.0f}s"
 
 
 @register_step("wait_stable")

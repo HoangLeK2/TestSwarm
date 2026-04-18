@@ -1,14 +1,126 @@
 'use client';
 
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
-import { Play, Square, ArrowLeft, CheckCircle2, XCircle, Loader2, Info, StepForward, ListRestart } from 'lucide-react';
+import { Progress } from '@/components/ui/progress';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import {
+  Play,
+  Square,
+  ArrowLeft,
+  CheckCircle2,
+  XCircle,
+  Loader2,
+  Info,
+  StepForward,
+  ListRestart,
+  Circle,
+  Braces,
+} from 'lucide-react';
 import { useCampaigns, useScenarios } from '@/features/campaigns/hooks/use-campaigns';
-import { previewScenarioStream, type PreviewStepResult } from '../../services/api';
+import { cancelPreviewStream, previewScenarioStream, type PreviewStepResult } from '../../services/api';
 import type { ScenarioOut } from '@/features/campaigns/types';
-import { getStepTypeName, getStepSummary } from '@/features/campaigns/components/flow-editor/constants';
+import {
+  getStepTypeName,
+  getStepSummary,
+  getStepDisplay,
+  STEP_COLORS,
+} from '@/features/campaigns/components/flow-editor/constants';
+import { StepIcon } from '@/features/campaigns/components/flow-editor/step-icon';
 import type { FlowStep } from '@/features/campaigns/components/scenario-steps/types';
+import { cn } from '@/lib/utils';
+import { useTranslations } from 'next-intl';
+
+type ScenarioPlayerT = ReturnType<typeof useTranslations>;
+
+function conditionKeysPreview(condition: unknown, max = 8): string {
+  if (!condition || typeof condition !== 'object') return '';
+  return Object.keys(condition as object).slice(0, max).join(', ');
+}
+
+/** Extra lines for if / loop / random_pick so preview list is not a flat mystery. */
+function ScenarioControlFlowExtra({ step, t }: { step: FlowStep; t: ScenarioPlayerT }) {
+  const type = step.type;
+
+  if (type === 'if_element' || type === 'if_variable' || type === 'if') {
+    const thenN = Array.isArray(step.then) ? step.then.length : 0;
+    const elseN = Array.isArray(step.else) ? step.else.length : 0;
+    const keys = type === 'if' ? conditionKeysPreview(step.condition) : '';
+    return (
+      <div className='mt-2 space-y-1 border-t border-border/50 pt-2 text-[10px] leading-relaxed text-muted-foreground'>
+        <div className='flex gap-1.5'>
+          <span className='shrink-0 text-emerald-600 dark:text-emerald-400' aria-hidden>
+            {'\u2713'}
+          </span>
+          <span>{t('thenSteps', { count: thenN })}</span>
+        </div>
+        <div className='flex gap-1.5'>
+          <span className='shrink-0 text-red-500/80' aria-hidden>
+            {'\u2717'}
+          </span>
+          <span>{t('elseSteps', { count: elseN })}</span>
+        </div>
+        {keys ? (
+          <p className='pl-4 font-mono text-[9px] text-muted-foreground/90'>{t('ifConditionHint', { keys })}</p>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (type === 'loop' || type === 'repeat' || type === 'repeat_until') {
+    const n = Array.isArray(step.steps) ? step.steps.length : 0;
+    const countVal = step.count ?? '?';
+    return (
+      <div className='mt-2 space-y-1 border-t border-border/50 pt-2 text-[10px] leading-relaxed text-muted-foreground'>
+        {type === 'repeat' ? <div>{t('repeatTimes', { count: countVal })}</div> : null}
+        {type === 'loop' ? <div>{t('loopTimes', { count: countVal })}</div> : null}
+        {type === 'repeat_until' ? (
+          <div>{t('repeatUntilMax', { max: step.max_iterations ?? '?' })}</div>
+        ) : null}
+        <div>{t('bodySteps', { count: n })}</div>
+      </div>
+    );
+  }
+
+  if (type === 'random_pick' && Array.isArray(step.branches)) {
+    return (
+      <div className='mt-2 space-y-0.5 border-t border-border/50 pt-2 text-[10px] leading-relaxed text-muted-foreground'>
+        {(step.branches as Array<{ steps?: FlowStep[]; weight?: number }>).map((br, bi) => (
+          <div key={bi}>
+            {t('randomBranch', {
+              letter: String.fromCharCode(65 + bi),
+              count: Array.isArray(br?.steps) ? br.steps.length : 0,
+              weight: br?.weight ?? 1,
+            })}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (type === 'break_if') {
+    const keys = conditionKeysPreview(step.condition);
+    if (!keys) return null;
+    return (
+      <p className='mt-2 border-t border-border/50 pt-2 text-[10px] text-muted-foreground'>
+        {t('breakIfHint', { keys })}
+      </p>
+    );
+  }
+
+  return null;
+}
 
 function flattenVarDefs(vars: Record<string, any>): Record<string, any> {
   const out: Record<string, any> = {};
@@ -31,9 +143,16 @@ interface ScenarioPlayerProps {
   preloadedName?: string;
   /** Variables for template substitution (e.g. APP_PACKAGE) when using preloadedSteps. */
   preloadedVariables?: Record<string, any>;
+  /** When true, device is running a campaign — block preview start. */
+  deviceBusy?: boolean;
+  /** Parent registers a stop handle so it can abort the preview from outside
+   *  (e.g. Farm back button, device switch). Called with the stop fn on mount
+   *  and with null on unmount. */
+  registerStop?: (fn: (() => void) | null) => void;
 }
 
-export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedSteps, preloadedName, preloadedVariables }: ScenarioPlayerProps) {
+export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedSteps, preloadedName, preloadedVariables, deviceBusy = false, registerStop }: ScenarioPlayerProps) {
+  const t = useTranslations('devicesControlRecord.scenarioPlayer');
   const { data: campaigns = [] } = useCampaigns();
   const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(null);
   const { data: scenarios = [] } = useScenarios(selectedCampaignId ?? '');
@@ -44,7 +163,64 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedStep
   const [currentStepIndex, setCurrentStepIndex] = useState(-1);
   const [loopCount, setLoopCount] = useState(1);
   const [currentLoop, setCurrentLoop] = useState(0);
+  const [exitConfirm, setExitConfirm] = useState<null | (() => void)>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // Current trace id from the in-flight preview stream. Captured from the
+  // server's 'start' SSE event so Stop + unmount can hit the explicit cancel
+  // endpoint instead of waiting for SSE disconnect detection.
+  const activePreviewRef = useRef<{ serial: string; traceId: string } | null>(null);
+
+  const hardStop = useCallback(() => {
+    abortRef.current?.abort();
+    const active = activePreviewRef.current;
+    if (active) {
+      cancelPreviewStream(active.serial, active.traceId).catch(() => undefined);
+      activePreviewRef.current = null;
+    }
+  }, []);
+
+  // Unmount cleanup: browser navigation away, Next.js route change, and tab
+  // close (pagehide). Scenario stops at next step boundary on the server.
+  useEffect(() => {
+    const onPageHide = () => hardStop();
+    window.addEventListener('pagehide', onPageHide);
+    return () => {
+      window.removeEventListener('pagehide', onPageHide);
+      hardStop();
+    };
+  }, [hardStop]);
+
+  // Expose stop to parent so Farm back button / device switch can abort.
+  useEffect(() => {
+    registerStop?.(hardStop);
+    return () => registerStop?.(null);
+  }, [hardStop, registerStop]);
+
+  // While a scenario is running, warn before browser close / reload /
+  // hard-navigation. Native beforeunload dialog — cannot be customized.
+  useEffect(() => {
+    if (!playing) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = t('exitBeforeUnload');
+      return e.returnValue;
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [playing, t]);
+
+  // Guard wrapper — if a scenario is playing, queue the exit action behind a
+  // confirm dialog. Otherwise run immediately.
+  const guardExit = useCallback(
+    (exitAction: () => void) => {
+      if (playing) {
+        setExitConfirm(() => exitAction);
+      } else {
+        exitAction();
+      }
+    },
+    [playing],
+  );
 
   // Step-by-step mode
   const [stepByStep, setStepByStep] = useState(false);
@@ -57,6 +233,7 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedStep
 
   const handlePlay = useCallback(async () => {
     if (!activeSteps?.length || !serial) return;
+    if (deviceBusy) return;
     setPlaying(true);
     onPlayingChange?.(true);
     setResults([]);
@@ -80,7 +257,12 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedStep
           (event) => {
             if (ctrl.signal.aborted) return;
             if (event.event === 'start') {
+              if (typeof event.trace_id === 'string') {
+                activePreviewRef.current = { serial, traceId: event.trace_id };
+              }
               setCurrentStepIndex(0);
+            } else if (event.event === 'done' || event.event === 'error') {
+              activePreviewRef.current = null;
             } else if (event.event === 'step_done') {
               const result: PreviewStepResult = {
                 index: event.index,
@@ -106,16 +288,20 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedStep
       onPlayingChange?.(false);
       setCurrentStepIndex(-1);
       abortRef.current = null;
+      activePreviewRef.current = null;
     }
-  }, [activeSteps, activeVariables, serial, loopCount, currentStepIndex]);
+  }, [activeSteps, activeVariables, serial, loopCount, currentStepIndex, deviceBusy]);
 
   const handleStop = useCallback(() => {
-    abortRef.current?.abort();
+    // Three-pronged stop: abort SSE fetch, hit explicit cancel route with
+    // trace id (zero polling lag server-side), flip local state.
+    hardStop();
     setPlaying(false);
-  }, []);
+  }, [hardStop]);
 
   const handleRunOneStep = useCallback(async () => {
     if (!activeSteps?.length || !serial || playing) return;
+    if (deviceBusy) return;
     const idx = stepCursor;
     if (idx >= activeSteps.length) return;
     const step = activeSteps[idx];
@@ -129,6 +315,11 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedStep
         [step],
         (event) => {
           if (ctrl.signal.aborted) return;
+          if (event.event === 'start' && typeof event.trace_id === 'string') {
+            activePreviewRef.current = { serial, traceId: event.trace_id };
+          } else if (event.event === 'done' || event.event === 'error') {
+            activePreviewRef.current = null;
+          }
           if (event.event === 'step_done') {
             setResults((prev) => {
               const next = prev.filter((r) => r.index !== idx);
@@ -147,9 +338,10 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedStep
       setPlaying(false);
       setCurrentStepIndex(-1);
       abortRef.current = null;
+      activePreviewRef.current = null;
       if (!ctrl.signal.aborted) setStepCursor(idx + 1);
     }
-  }, [activeSteps, serial, playing, stepCursor]);
+  }, [activeSteps, serial, playing, stepCursor, deviceBusy]);
 
   // Step 1: Select campaign (skip if preloaded)
   if (!preloadedSteps && !selectedCampaignId) {
@@ -190,12 +382,12 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedStep
         <div className='flex items-center gap-2'>
           <Button size='sm' variant='ghost' onClick={() => setSelectedCampaignId(null)}>
             <ArrowLeft className='mr-1 size-3.5' />
-            Campaigns
+            {t('campaignsNav')}
           </Button>
-          <span className='text-sm font-medium'>Select Scenario</span>
+          <span className='text-sm font-medium'>{t('selectScenario')}</span>
         </div>
         {scenarios.length === 0 ? (
-          <p className='text-xs text-muted-foreground py-4 text-center'>No scenarios in this campaign</p>
+          <p className='text-xs text-muted-foreground py-4 text-center'>{t('noScenarios')}</p>
         ) : (
           <div className='space-y-1'>
             {scenarios.map((s) => (
@@ -207,7 +399,9 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedStep
                 onClick={() => setSelectedScenario(s)}
               >
                 <span className='font-medium'>{s.name}</span>
-                <span className='text-[10px] text-muted-foreground'>{s.steps.length} steps</span>
+                <span className='text-[10px] text-muted-foreground'>
+                  {t('stepsInScenario', { count: s.steps.length })}
+                </span>
               </Button>
             ))}
           </div>
@@ -220,14 +414,42 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedStep
   const steps = activeSteps ?? [];
   const displayName = preloadedName ?? selectedScenario?.name ?? '';
 
+  const progressPct =
+    steps.length > 0
+      ? Math.round(
+          (stepByStep
+            ? stepCursor
+            : playing
+              ? Math.min(Math.max(currentStepIndex, 0) + 1, steps.length)
+              : results.length) /
+            steps.length *
+            100,
+        )
+      : 0;
+
   return (
-    <div className='space-y-3'>
-      <div className='flex items-center gap-2'>
-        <Button size='sm' variant='ghost' onClick={preloadedSteps ? onClose : () => { setSelectedScenario(null); setResults([]); }}>
+    <div className='flex min-h-0 flex-1 flex-col gap-3'>
+      <div className='flex shrink-0 flex-wrap items-center gap-2 border-b border-border/60 pb-3'>
+        <Button
+          size='sm'
+          variant='ghost'
+          onClick={() => {
+            const doExit = () => {
+              hardStop();
+              if (preloadedSteps) {
+                onClose();
+              } else {
+                setSelectedScenario(null);
+                setResults([]);
+              }
+            };
+            guardExit(doExit);
+          }}
+        >
           <ArrowLeft className='mr-1 size-3.5' />
-          {preloadedSteps ? 'Đóng' : 'Scenarios'}
+          {preloadedSteps ? t('close') : t('scenarios')}
         </Button>
-        <span className='truncate text-sm font-medium'>{displayName || 'Kịch bản hiện tại'}</span>
+        <span className='truncate text-sm font-medium'>{displayName || t('currentScenarioFallback')}</span>
         <div className='flex-1' />
         {/* Mode toggle */}
         <Button
@@ -236,10 +458,10 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedStep
           className='h-7 gap-1 px-2 text-[11px]'
           onClick={() => { setStepByStep(!stepByStep); setResults([]); setStepCursor(0); }}
           disabled={playing}
-          title={stepByStep ? 'Chuyển sang chạy toàn bộ' : 'Chuyển sang chạy từng bước'}
+          title={stepByStep ? t('modeToggleRunAllTitle') : t('modeToggleStepTitle')}
         >
           <StepForward className='size-3.5' />
-          {stepByStep ? 'Từng bước' : 'Tất cả'}
+          {stepByStep ? t('modeStepByStep') : t('modeAll')}
         </Button>
 
         {stepByStep ? (
@@ -250,24 +472,25 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedStep
               className='h-7 gap-1 px-2 text-[11px]'
               onClick={() => { setResults([]); setStepCursor(0); }}
               disabled={playing}
-              title='Reset về bước đầu'
+              title={t('resetFirstTitle')}
             >
               <ListRestart className='size-3.5' />
             </Button>
             {playing ? (
               <Button size='sm' variant='destructive' onClick={handleStop} className='h-7 px-3 text-xs'>
                 <Square className='mr-1 size-3.5' />
-                Stop
+                {t('stop')}
               </Button>
             ) : (
               <Button
                 size='sm'
                 onClick={handleRunOneStep}
-                disabled={!activeSteps?.length || stepCursor >= (activeSteps?.length ?? 0)}
+                disabled={!activeSteps?.length || stepCursor >= (activeSteps?.length ?? 0) || deviceBusy}
+                title={deviceBusy ? t('deviceBusyTitle') : undefined}
                 className='h-7 gap-1 px-3 text-xs'
               >
                 <StepForward className='size-3.5' />
-                Bước {stepCursor + 1}/{activeSteps?.length ?? 0}
+                {t('stepRunLabel', { current: stepCursor + 1, total: activeSteps?.length ?? 0 })}
               </Button>
             )}
           </>
@@ -275,7 +498,7 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedStep
           <>
             {/* Loop count */}
             <div className='flex items-center gap-1'>
-              <label className='text-[10px] text-muted-foreground'>Loop</label>
+              <label className='text-[10px] text-muted-foreground'>{t('loopLabel')}</label>
               <input
                 type='number'
                 min={1}
@@ -289,107 +512,194 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedStep
             {playing ? (
               <Button size='sm' variant='destructive' onClick={handleStop}>
                 <Square className='mr-1 size-3.5' />
-                Stop
+                {t('stop')}
               </Button>
             ) : (
-              <Button size='sm' onClick={handlePlay}>
+              <Button
+                size='sm'
+                onClick={handlePlay}
+                disabled={deviceBusy}
+                title={deviceBusy ? t('deviceBusyTitle') : undefined}
+              >
                 <Play className='mr-1 size-3.5' />
-                Play
+                {t('play')}
               </Button>
             )}
           </>
         )}
       </div>
 
-      {/* Loop progress */}
-      {playing && loopCount > 1 && (
-        <div className='text-[11px] text-muted-foreground'>
-          Run {currentLoop}/{loopCount}
+      {deviceBusy && !playing && (
+        <div className='shrink-0 rounded-md border border-amber-400/40 bg-amber-50/80 px-3 py-2 text-[11px] text-amber-800 dark:bg-amber-950/20 dark:text-amber-300'>
+          {t('deviceBusyBanner')}
         </div>
       )}
 
-      {/* Step list with results */}
-      <div className='max-h-[400px] space-y-1 overflow-y-auto rounded border border-border/60 bg-muted/30 p-2'>
+      {/* Loop progress */}
+      {playing && loopCount > 1 && (
+        <div className='shrink-0 text-[11px] text-muted-foreground'>
+          {t('runLoop', { current: currentLoop, total: loopCount })}
+        </div>
+      )}
+
+      {/* Progress — helps user see where the run is in the script */}
+      {steps.length > 0 && (
+        <div className='shrink-0 space-y-1.5'>
+          <div className='flex items-center justify-between gap-2 text-[11px] text-muted-foreground'>
+            <span>
+              {stepByStep
+                ? t('progressNext', {
+                    current: Math.min(stepCursor + 1, steps.length),
+                    total: steps.length,
+                  })
+                : playing
+                  ? t('progressRunning', {
+                      current: Math.min(Math.max(currentStepIndex, 0) + 1, steps.length),
+                      total: steps.length,
+                    })
+                  : results.length > 0
+                    ? t('progressDone', { done: results.length, total: steps.length })
+                    : t('progressOverview', { count: steps.length })}
+            </span>
+            <span className='tabular-nums font-medium text-foreground'>{progressPct}%</span>
+          </div>
+          <Progress value={progressPct} className='h-1.5' />
+        </div>
+      )}
+
+      {/* Step list — tall scroll region inside column 3 */}
+      <div className='min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-y-contain rounded-lg border border-border/50 bg-muted/20 p-2.5'>
         {steps.map((step, i) => {
+          const flowStep = step as unknown as FlowStep;
           const result = results.find((r) => r.index === i);
           const isRunning = playing && i === currentStepIndex;
           const isCursor = stepByStep && !playing && i === stepCursor && !result;
-          const isPending = playing && i > currentStepIndex && !result;
+          const display = getStepDisplay(flowStep);
+          const fallback = getStepSummary(flowStep);
+          const detail = (display.target || fallback).trim();
+          const colorCls = STEP_COLORS[step.type] ?? 'border-l-slate-400';
+          const hasVar = /\$\{[^}]+\}/.test(detail);
+
           return (
             <div
               key={i}
-              className={`flex items-center gap-2 rounded px-2 py-1.5 text-xs transition-colors ${
-                isRunning ? 'bg-primary/10 ring-1 ring-primary/30' :
-                isCursor ? 'bg-amber-500/10 ring-1 ring-amber-400/40' :
-                result?.ok ? 'bg-emerald-500/10' :
-                result && !result.ok ? 'bg-red-500/10' :
-                'bg-background'
-              }`}
+              className={cn(
+                'overflow-hidden rounded-lg border border-border/60 bg-card text-xs shadow-sm transition-[box-shadow,background-color]',
+                'border-l-[3px]',
+                colorCls,
+                isRunning && 'bg-primary/5 ring-2 ring-primary/25',
+                isCursor && 'bg-amber-500/5 ring-2 ring-amber-400/35',
+                result?.ok && !isRunning && 'bg-emerald-500/5',
+                result && !result.ok && !isRunning && 'bg-red-500/5',
+                !isRunning && !isCursor && !result && 'opacity-90',
+              )}
             >
-              {/* Status icon */}
-              <span className='flex-shrink-0'>
-                {isRunning ? (
-                  <Loader2 className='size-3.5 animate-spin text-primary' />
-                ) : result?.ok ? (
-                  <CheckCircle2 className='size-3.5 text-emerald-500' />
-                ) : result && !result.ok ? (
-                  <XCircle className='size-3.5 text-red-500' />
-                ) : isPending ? (
-                  <span className='text-muted-foreground/50 text-[10px]'>{i + 1}</span>
-                ) : (
-                  <span className='text-muted-foreground text-[10px]'>{i + 1}</span>
-                )}
-              </span>
+              <div className='flex items-start gap-2.5 px-2.5 py-2'>
+                {/* Status */}
+                <div className='mt-0.5 flex w-5 shrink-0 flex-col items-center gap-1'>
+                  {isRunning ? (
+                    <Loader2 className='size-4 animate-spin text-primary' />
+                  ) : result?.ok ? (
+                    <CheckCircle2 className='size-4 text-emerald-500' />
+                  ) : result && !result.ok ? (
+                    <XCircle className='size-4 text-red-500' />
+                  ) : (
+                    <Circle
+                      className={cn(
+                        'size-4 text-muted-foreground/35',
+                        playing && i > currentStepIndex && !result && 'text-muted-foreground/20',
+                      )}
+                      strokeWidth={1.5}
+                    />
+                  )}
+                  <span className='text-[9px] font-semibold tabular-nums text-muted-foreground'>{i + 1}</span>
+                </div>
 
-              {/* Step description */}
-              <span className='min-w-0 flex-1 overflow-hidden'>
-                <span className='block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground leading-tight'>
-                  {getStepTypeName(step.type)}
-                </span>
-                {(() => {
-                  const summary = getStepSummary(step as unknown as FlowStep);
-                  return summary ? (
-                    <span className='block truncate text-xs font-mono leading-tight' title={summary}>
-                      {summary}
+                {/* Step type icon */}
+                <div
+                  className={cn(
+                    'mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-md border border-border/50 bg-muted/40',
+                    isRunning && 'border-primary/30 bg-primary/5',
+                  )}
+                >
+                  <StepIcon type={step.type} size={16} />
+                </div>
+
+                {/* Text */}
+                <div className='min-w-0 flex-1'>
+                  <div className='flex flex-wrap items-center gap-1.5 gap-y-0.5'>
+                    <span className='text-[10px] font-bold uppercase tracking-wide text-muted-foreground'>
+                      {getStepTypeName(step.type)}
                     </span>
-                  ) : null;
-                })()}
-              </span>
+                    {display.selectorBadge ? (
+                      <Badge variant='secondary' className='h-5 px-1.5 py-0 text-[9px] font-medium'>
+                        {display.selectorBadge}
+                      </Badge>
+                    ) : null}
+                    {hasVar ? (
+                      <span
+                        className='inline-flex items-center gap-0.5 text-[9px] text-muted-foreground'
+                        title={t('variablesTooltip')}
+                      >
+                        <Braces className='size-3' />
+                        {t('variablesBadge')}
+                      </span>
+                    ) : null}
+                  </div>
+                  {detail ? (
+                    <p className='mt-1 line-clamp-4 text-[13px] leading-snug text-foreground' title={detail}>
+                      {detail}
+                    </p>
+                  ) : (
+                    <p className='mt-1 text-[11px] italic text-muted-foreground'>{t('noExtraDescription')}</p>
+                  )}
+                  <ScenarioControlFlowExtra step={flowStep} t={t} />
+                </div>
 
-              {/* Fallback badge */}
-              {result?.ok && (result as any).method === 'fallback_position' && (
-                <span className='flex-shrink-0 rounded bg-amber-500/15 px-1 py-0.5 text-[9px] text-amber-600 dark:text-amber-400'>
-                  fallback
-                </span>
-              )}
-
-              {/* Info popover for step result details */}
-              {result && result.message && (
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <button className={`flex-shrink-0 rounded p-0.5 hover:bg-accent ${
-                      result.ok ? 'text-emerald-500' : 'text-red-500'
-                    }`}>
-                      <Info className='size-3.5' />
-                    </button>
-                  </PopoverTrigger>
-                  <PopoverContent side='left' align='start' className='w-80 p-3'>
-                    <div className='space-y-1.5'>
-                      <div className='flex items-center gap-1.5 text-xs font-medium'>
-                        {result.ok ? (
-                          <CheckCircle2 className='size-3.5 text-emerald-500' />
-                        ) : (
-                          <XCircle className='size-3.5 text-red-500' />
-                        )}
-                        Step {i + 1}: {step.type}
-                      </div>
-                      <p className={`text-[11px] break-words ${result.ok ? 'text-muted-foreground' : 'text-red-500'}`}>
-                        {result.message}
-                      </p>
-                    </div>
-                  </PopoverContent>
-                </Popover>
-              )}
+                <div className='flex shrink-0 flex-col items-end gap-1'>
+                  {result?.ok && (result as any).method === 'fallback_position' && (
+                    <Badge variant='secondary' className='text-[9px] font-normal text-amber-800 dark:text-amber-200'>
+                      {t('fallbackBadge')}
+                    </Badge>
+                  )}
+                  {result && result.message ? (
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <button
+                          type='button'
+                          className={cn(
+                            'rounded-md p-1 hover:bg-accent',
+                            result.ok ? 'text-emerald-600' : 'text-red-600',
+                          )}
+                          aria-label={t('stepResultDetailsAria')}
+                        >
+                          <Info className='size-4' />
+                        </button>
+                      </PopoverTrigger>
+                      <PopoverContent side='left' align='start' className='w-80 p-3'>
+                        <div className='space-y-1.5'>
+                          <div className='flex items-center gap-1.5 text-xs font-medium'>
+                            {result.ok ? (
+                              <CheckCircle2 className='size-3.5 text-emerald-500' />
+                            ) : (
+                              <XCircle className='size-3.5 text-red-500' />
+                            )}
+                            {t('popoverStepTitle', { n: i + 1, typeName: getStepTypeName(step.type) })}
+                          </div>
+                          <p
+                            className={cn(
+                              'text-[11px] break-words',
+                              result.ok ? 'text-muted-foreground' : 'text-red-600',
+                            )}
+                          >
+                            {result.message}
+                          </p>
+                        </div>
+                      </PopoverContent>
+                    </Popover>
+                  ) : null}
+                </div>
+              </div>
             </div>
           );
         })}
@@ -397,11 +707,35 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedStep
 
       {/* Summary */}
       {results.length > 0 && !playing && (
-        <div className='text-xs text-muted-foreground'>
-          {results.filter((r) => r.ok).length}/{steps.length} steps passed
-          {loopCount > 1 && ` (${currentLoop} loops completed)`}
+        <div className='shrink-0 text-xs text-muted-foreground'>
+          {t('summaryPassed', { passed: results.filter((r) => r.ok).length, total: steps.length })}
+          {loopCount > 1 ? ` ${t('summaryLoops', { loops: currentLoop })}` : ''}
         </div>
       )}
+
+      <AlertDialog
+        open={exitConfirm !== null}
+        onOpenChange={(o) => { if (!o) setExitConfirm(null); }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('exitConfirmTitle')}</AlertDialogTitle>
+            <AlertDialogDescription>{t('exitConfirmDesc')}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('exitConfirmCancel')}</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const action = exitConfirm;
+                setExitConfirm(null);
+                if (action) action();
+              }}
+            >
+              {t('exitConfirmConfirm')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

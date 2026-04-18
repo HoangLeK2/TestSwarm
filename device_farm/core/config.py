@@ -223,6 +223,25 @@ class RedisConfig:
 
 
 @dataclass
+class SafeModeConfig:
+    """Operator-level switch for restricted / low-bandwidth deployments.
+
+    read_only
+        Reject every write method (POST/PUT/PATCH/DELETE) that would mutate
+        scenarios, templates, devices, sessions, schedules, or campaigns.
+        Auth endpoints stay reachable so the UI can still log in and browse.
+    stream_hierarchy
+        When false, /hierarchy, /ui_elements, and /hit_test return 503. The
+        hierarchy XML is typically 10–50 KB per dump, so disabling is the
+        cheapest way to cut bandwidth on observe-only setups.
+
+    Env overrides: FARM_READ_ONLY=1, FARM_STREAM_HIERARCHY=0.
+    """
+    read_only: bool = False
+    stream_hierarchy: bool = True
+
+
+@dataclass
 class Config:
     web: WebConfig = field(default_factory=WebConfig)
     ports: PortsConfig = field(default_factory=PortsConfig)
@@ -240,6 +259,7 @@ class Config:
     object_storage: ObjectStorageConfig = field(default_factory=ObjectStorageConfig)
     relay: RelayConfig = field(default_factory=RelayConfig)
     redis: RedisConfig = field(default_factory=RedisConfig)
+    safe_mode: SafeModeConfig = field(default_factory=SafeModeConfig)
     target_app: str = ""
     force_u2_mode: bool = False
 
@@ -370,6 +390,24 @@ def _build_database_config(raw: dict) -> DatabaseConfig:
     env_url = (os.environ.get("DATABASE_URL") or "").strip()
     if env_url:
         cfg.url = env_url
+    return cfg
+
+
+def _build_safe_mode_config(raw: dict) -> SafeModeConfig:
+    """YAML safe_mode section + env overrides (FARM_READ_ONLY, FARM_STREAM_HIERARCHY)."""
+    cfg = SafeModeConfig(
+        **{k: v for k, v in raw.items() if k in SafeModeConfig.__dataclass_fields__}
+    )
+    env_ro = (os.environ.get("FARM_READ_ONLY") or "").strip().lower()
+    if env_ro in {"1", "true", "yes", "on"}:
+        cfg.read_only = True
+    elif env_ro in {"0", "false", "no", "off"}:
+        cfg.read_only = False
+    env_sh = (os.environ.get("FARM_STREAM_HIERARCHY") or "").strip().lower()
+    if env_sh in {"0", "false", "no", "off"}:
+        cfg.stream_hierarchy = False
+    elif env_sh in {"1", "true", "yes", "on"}:
+        cfg.stream_hierarchy = True
     return cfg
 
 
@@ -540,6 +578,7 @@ def load_config(path: str = "config.yaml") -> Config:
         object_storage=_build_object_storage_config(raw),
         relay=_build_relay_config(raw.get("relay", {})),
         redis=_build_redis_config(raw.get("redis", {})),
+        safe_mode=_build_safe_mode_config(raw.get("safe_mode", {})),
         target_app=raw.get("target_app", ""),
         force_u2_mode=bool(raw.get("force_u2_mode", False)),
     )

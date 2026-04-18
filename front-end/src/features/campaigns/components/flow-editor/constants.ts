@@ -75,6 +75,24 @@ function localizeCollection(collection?: string): string {
   return trimmed;
 }
 
+/** Set `true` to show hierarchy / OCR / AI / auto screen-extract in the "+" insert menu again. */
+export const INSERT_MENU_SHOW_TEXT_EXTRACT_SHORTCUTS = false;
+
+const _INSERT_MENU_HIDDEN_TYPES = new Set<string>([
+  'extract_text_hierarchy',
+  'extract_text_ocr',
+  'extract_text_ai',
+  'extract_screen_data',
+]);
+
+export function getInsertMenuForUi(): typeof INSERT_MENU {
+  if (INSERT_MENU_SHOW_TEXT_EXTRACT_SHORTCUTS) return INSERT_MENU;
+  return INSERT_MENU.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => !_INSERT_MENU_HIDDEN_TYPES.has(item.type)),
+  })).filter((group) => group.items.length > 0);
+}
+
 export const INSERT_MENU = [
   {
     group: 'Thu thập dữ liệu',

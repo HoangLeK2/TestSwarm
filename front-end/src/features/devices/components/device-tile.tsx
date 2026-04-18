@@ -8,7 +8,7 @@ import { DeviceControls } from './device-controls';
 import { DeviceSTFPanel } from './device-stf-panel';
 import { DeviceStepMonitor } from './device-step-monitor';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Android } from '@/registry/magicui/android';
+import { DeviceAndroidFrame } from './device-android-frame';
 import { useTranslations } from 'next-intl';
 
 interface DeviceTileProps {
@@ -52,17 +52,8 @@ export function DeviceTile({
 
   const [gestureMode, setGestureMode] = useState<'tap' | 'swipe' | 'double_tap' | 'drag'>('tap');
 
-  const screenRatio = useMemo(() => {
-    const sw = device.screen_width || 1080;
-    const sh = device.screen_height || 1920;
-    return sh > 0 ? sw / sh : 9 / 19;
-  }, [device.screen_width, device.screen_height]);
-
-  const mockupSize = useMemo(() => {
-    const w = compact ? 250 : 310;
-    const h = Math.round(w * (830 / 378));
-    return { width: w, height: h };
-  }, [compact]);
+  /** Screen width inside the mockup (lib adds bezel + side button padding when `frameOnly={false}`). */
+  const mockupScreenWidth = useMemo(() => (compact ? 232 : 288), [compact]);
 
   const handlePinch = useCallback((scale: number) => {
     const dw = device.screen_width || 1080;
@@ -106,13 +97,9 @@ export function DeviceTile({
       )}
       <CardContent className={compact ? 'flex flex-1 flex-col gap-1.5 px-2 pb-2 pt-2' : `flex flex-1 flex-col gap-2 px-3 pb-3 ${hideHeader ? 'pt-2' : 'pt-3'}`}>
         <div className='flex flex-col items-center gap-2'>
-          <div className='mx-auto'>
-            <Android
-              width={mockupSize.width}
-              height={mockupSize.height}
-              screenRatio={screenRatio}
-            >
-              <div className='h-full w-full'>
+          <div className='mx-auto flex flex-col items-center gap-1'>
+            <DeviceAndroidFrame screenWidth={mockupScreenWidth}>
+              <div className='flex h-full min-h-0 w-full flex-col'>
                 {isActive ? (
                   <DeviceScreen
                     device={device}
@@ -123,6 +110,7 @@ export function DeviceTile({
                     onDragGesture={onDragGesture}
                     highlightBounds={highlightBounds}
                     gestureMode={gestureMode}
+                    captionBelowFrame
                   />
                 ) : (
                   <div className='flex h-full w-full items-center justify-center bg-zinc-900 text-[11px] text-muted-foreground'>
@@ -130,7 +118,16 @@ export function DeviceTile({
                   </div>
                 )}
               </div>
-            </Android>
+            </DeviceAndroidFrame>
+            {isActive && (
+              <p
+                className='mx-auto max-w-[min(320px,90vw)] truncate px-1 text-center font-mono text-[10px] text-muted-foreground'
+                id={`app-${id}`}
+                title={device.current_app ?? ''}
+              >
+                {(device.current_app ?? '—').split('.').slice(-1)[0] ?? '—'}
+              </p>
+            )}
           </div>
         </div>
         <DeviceControls

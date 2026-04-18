@@ -576,6 +576,28 @@ def create_app(
     )
     app.add_middleware(RequestLogMiddleware)
 
+    # Observe-only / low-bandwidth gates. Toggled via config.safe_mode or
+    # env (FARM_READ_ONLY, FARM_STREAM_HIERARCHY).
+    from web.safe_mode import SafeModeMiddleware, build_safe_mode_router
+    safe_mode = config.safe_mode
+    if safe_mode.read_only or not safe_mode.stream_hierarchy:
+        app.add_middleware(
+            SafeModeMiddleware,
+            read_only=safe_mode.read_only,
+            stream_hierarchy=safe_mode.stream_hierarchy,
+        )
+        log.info(
+            "safe_mode active: read_only=%s stream_hierarchy=%s",
+            safe_mode.read_only, safe_mode.stream_hierarchy,
+        )
+    app.include_router(
+        build_safe_mode_router(
+            read_only=safe_mode.read_only,
+            stream_hierarchy=safe_mode.stream_hierarchy,
+        ),
+        prefix="/api",
+    )
+
     # ── Prometheus instrumentation (tạm tắt) ──
     # from prometheus_fastapi_instrumentator import Instrumentator
     # Instrumentator().instrument(app).expose(app, endpoint="/metrics")
@@ -656,7 +678,11 @@ def create_app(
         db_enabled,
     )
 
-    ws_manager = WebSocketManager(manager, db_enabled=db_enabled)
+    ws_manager = WebSocketManager(
+        manager,
+        db_enabled=db_enabled,
+        read_only=config.safe_mode.read_only,
+    )
     if event_recorder is not None:
         ws_manager.bind_event_recorder(event_recorder)
     agent_session = DeviceAgentSession(manager, ws_manager, config)

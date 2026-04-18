@@ -868,21 +868,25 @@ export function StepDetailPanel({
               )}
               {step.expand_see_more && (
                 <div className='grid grid-cols-2 gap-2'>
-                  <F label='expand_lazy_hydration_rounds'>
+                  <F label={t('extract.lazyHydrationRoundsLabel')}>
                     <Input className='h-8 text-xs font-mono' value={String(step.expand_lazy_hydration_rounds ?? 6)}
                       onChange={(e) => update({ expand_lazy_hydration_rounds: parseNumOrVar(e.target.value, 6) })} />
+                    <p className='mt-1 text-[10px] text-muted-foreground'>{t('extract.lazyHydrationRoundsHint')}</p>
                   </F>
-                  <F label='expand_lazy_scroll_distance'>
+                  <F label={t('extract.lazyHydrationScrollDistanceLabel')}>
                     <Input className='h-8 text-xs font-mono' value={String(step.expand_lazy_scroll_distance ?? 0.3)}
                       onChange={(e) => update({ expand_lazy_scroll_distance: parseNumOrVar(e.target.value, 0.3) })} />
+                    <p className='mt-1 text-[10px] text-muted-foreground'>{t('extract.lazyHydrationScrollDistanceHint')}</p>
                   </F>
-                  <F label='expand_prefetch_scroll_passes'>
+                  <F label={t('extract.prefetchScrollPassesLabel')}>
                     <Input className='h-8 text-xs font-mono' value={String(step.expand_prefetch_scroll_passes ?? 0)}
                       onChange={(e) => update({ expand_prefetch_scroll_passes: parseNumOrVar(e.target.value, 0) })} />
+                    <p className='mt-1 text-[10px] text-muted-foreground'>{t('extract.prefetchScrollPassesHint')}</p>
                   </F>
-                  <F label='expand_prefetch_scroll_pause'>
+                  <F label={t('extract.prefetchScrollPauseLabel')}>
                     <Input className='h-8 text-xs font-mono' value={String(step.expand_prefetch_scroll_pause ?? 0.7)}
                       onChange={(e) => update({ expand_prefetch_scroll_pause: parseNumOrVar(e.target.value, 0.7) })} />
+                    <p className='mt-1 text-[10px] text-muted-foreground'>{t('extract.prefetchScrollPauseHint')}</p>
                   </F>
                 </div>
               )}

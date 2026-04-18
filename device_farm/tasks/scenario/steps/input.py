@@ -105,7 +105,9 @@ def handle_input_selector(sc: ScenarioContext, step: Dict[str, Any], idx: int, r
         if u2 is None:
             raise RuntimeError("u2 not available")
         iw_timeout, iw_poll = _get_implicit_wait_config(step, sc.scenario_iw_config)
-        eid = _retry_find_element(u2, by, value, timeout=iw_timeout, poll=iw_poll)
+        eid = _retry_find_element(
+            u2, by, value, timeout=iw_timeout, poll=iw_poll, cancel_event=sc.cancel_event,
+        )
         if eid is None:
             raise RuntimeError(f"element not visible after {iw_timeout:.0f}s: {by}={value!r}")
         if isinstance(eid, dict):

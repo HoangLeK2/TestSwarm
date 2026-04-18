@@ -25,7 +25,7 @@ import { restrictToVerticalAxis } from '@dnd-kit/modifiers';
 import { isContainerType, type FlowStep } from '../scenario-steps/types';
 import { StepCard } from './step-card';
 import { BracketBlock } from './bracket-block';
-import { InsertButton } from './insert-button';
+import { InsertGap } from './insert-button';
 import { StepDetailPanel } from './step-detail-panel';
 import type { SelectorPickTarget } from './selector-pick';
 import { selectorPickTargetEquals, isSelectorPickableStep } from './selector-pick';
@@ -295,8 +295,6 @@ export function FlowEditor({
 
       <div className='min-w-0'>
         <div className='min-w-0 overflow-x-hidden overflow-y-auto' style={{ maxHeight }}>
-          <InsertButton onInsert={(s) => insertAt(0, s)} />
-
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
@@ -310,6 +308,7 @@ export function FlowEditor({
             >
               {steps.map((step, i) => (
                 <div key={stepIds[i]}>
+                  <InsertGap onInsert={(s) => insertAt(i, s)} />
                   <SortableFlowRow id={stepIds[i]!}>
                     {(dragHandle, isDragging) => (
                       <div className={`flex items-stretch ${isDragging ? 'opacity-60' : ''}`}>
@@ -403,9 +402,9 @@ export function FlowEditor({
                       </div>
                     )}
                   </SortableFlowRow>
-                  <InsertButton onInsert={(s) => insertAt(i + 1, s)} />
                 </div>
               ))}
+              <InsertGap onInsert={(s) => insertAt(steps.length, s)} />
             </SortableContext>
           </DndContext>
 

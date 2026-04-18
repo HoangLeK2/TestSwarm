@@ -100,6 +100,14 @@ export async function restartDevice(serial: string): Promise<unknown> {
 
 /** UI hierarchy XML (uiautomator2 page source). refresh=true skips backend cache (force fresh dump). On 503 returns "". */
 export async function fetchHierarchy(serial: string, refresh = false): Promise<string> {
+  // Respect safe-mode: if the backend has stream_hierarchy=false, skip the
+  // request entirely so we don't spam the network with 503s.
+  try {
+    const { isHierarchyEnabled } = await import('@/features/core/services/safe-mode');
+    if (!isHierarchyEnabled()) return '';
+  } catch {
+    /* module not available — fall through */
+  }
   const url = refresh
     ? `/devices/${encodeURIComponent(serial)}/hierarchy?refresh=1`
     : `/devices/${encodeURIComponent(serial)}/hierarchy`;
@@ -413,6 +421,21 @@ export async function previewScenarioStream(
         } catch { /* skip malformed */ }
       }
     }
+  }
+}
+
+/** Explicit cancel for a preview-stream by (serial, trace_id). Idempotent:
+ * 404 after natural finish is expected and swallowed. Use this from unmount
+ * cleanup so the server drops the scenario even if the SSE TCP close has not
+ * yet been observed by `request.is_disconnected()` on the server side.
+ */
+export async function cancelPreviewStream(serial: string, traceId: string): Promise<void> {
+  try {
+    await farmApi.post(
+      `/devices/${encodeURIComponent(serial)}/scenario/preview-stream/${encodeURIComponent(traceId)}/cancel`,
+    );
+  } catch {
+    /* stream already finished / trace unknown — ignore */
   }
 }
 

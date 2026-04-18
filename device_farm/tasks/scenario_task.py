@@ -1081,7 +1081,35 @@ def run_scenario_task(
         _var_ctx=_var_ctx, _depth=_depth, _call_stack=_call_stack,
         cancel_event=cancel_event,
     )
-    return ScenarioExecutor(sc).run()
+    # Mark the device "scenario-active" so the frontend WS gate drops manual
+    # touch/swipe frames that would otherwise interleave with the script.
+    # Ref-counted (nested scenarios stack). The increment/decrement is NOT
+    # atomic in CPython (LOAD/ADD/STORE happens across bytecodes) so we
+    # serialize via a per-device threading.Lock created on first use.
+    _mark = _depth == 0
+    if _mark:
+        lock = getattr(device, "_scenario_active_lock", None)
+        if lock is None:
+            import threading as _th
+            lock = _th.Lock()
+            # Best-effort install; if another thread raced us, keep theirs.
+            if not hasattr(device, "_scenario_active_lock"):
+                device._scenario_active_lock = lock
+            lock = device._scenario_active_lock
+        with lock:
+            device._scenario_active = int(getattr(device, "_scenario_active", 0)) + 1
+    try:
+        return ScenarioExecutor(sc).run()
+    finally:
+        if _mark:
+            lock = getattr(device, "_scenario_active_lock", None)
+            if lock is not None:
+                with lock:
+                    n = int(getattr(device, "_scenario_active", 1)) - 1
+                    device._scenario_active = max(0, n)
+            else:
+                # Lock disappeared somehow — best-effort reset
+                device._scenario_active = 0
 
 
 def _run_scenario_task_legacy(

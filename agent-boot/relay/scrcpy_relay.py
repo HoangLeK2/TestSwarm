@@ -273,23 +273,13 @@ class ScrcpyRelaySession:
                 raise RuntimeError(f"adb connect {self._serial} failed: {out.strip()}")
             logger.info("[%s] adb connected", self._serial)
 
-        # Push bundled JAR only if not already present on the device.
-        # Both JAR and stamp must exist — a reboot wipes /data/local/tmp.
-        stamp_path = _SCRCPY_PATH_ON_DEVICE + f".{self._jar_version}.ok"
-        check_cmd = (
-            f"test -f {_SCRCPY_PATH_ON_DEVICE} && "
-            f"test -f {stamp_path} && echo ok"
-        )
-        out, rc = _adb("shell", check_cmd, serial=self._serial, timeout=5)
-        if "ok" not in out:
-            logger.info("[%s] pushing scrcpy-server %s", self._serial, self._jar_version)
-            out, rc = _adb("push", str(_BUNDLED_JAR), _SCRCPY_PATH_ON_DEVICE,
-                           serial=self._serial, timeout=20)
-            if rc != 0:
-                raise RuntimeError(f"adb push failed: {out.strip()}")
-            _adb("shell", f"touch {stamp_path}", serial=self._serial, timeout=5)
-        else:
-            logger.info("[%s] scrcpy-server already on device — skipping push", self._serial)
+        # Ensure JAR is on device. Stamp file alone is not trustworthy:
+        # bootstrap.py's `rm -rf scrcpy-server` removes the JAR but leaves the
+        # stamp (different filename), and some OEMs (Vivo/Honor anti-tamper)
+        # silently purge binaries from /data/local/tmp while leaving zero-byte
+        # marker files intact. Verify the JAR itself + size match the bundled
+        # copy; otherwise re-push.
+        self._ensure_server_jar_on_device()
 
         self._running = True
         self._relay_thread = threading.Thread(
@@ -438,6 +428,42 @@ class ScrcpyRelaySession:
         p = self._server_proc
         return p is not None and p.poll() is None
 
+    def _ensure_server_jar_on_device(self) -> None:
+        """Push scrcpy-server JAR if missing OR size doesn't match bundled copy.
+
+        Called both at start() AND before every _start_scrcpy_server() retry.
+        Retries are necessary because some OEMs (Vivo Android 16, Honor) wipe
+        binaries from /data/local/tmp asynchronously, and the previous logic
+        only pushed once at session start.
+        """
+        expected_size = _BUNDLED_JAR.stat().st_size
+        # `stat -c %s` returns size, or empty/error if file missing.
+        out, _rc = _adb(
+            "shell",
+            f"stat -c '%s' {_SCRCPY_PATH_ON_DEVICE} 2>/dev/null",
+            serial=self._serial,
+            timeout=5,
+        )
+        # Defensive parse: adb daemon can prepend warnings ("* daemon not
+        # running; starting now *", "device unauthorized"). Pick the last
+        # all-numeric token instead of trusting the whole stdout.
+        device_size = ""
+        for token in out.split():
+            if token.isdigit():
+                device_size = token
+        if device_size == str(expected_size):
+            return
+        logger.info(
+            "[%s] pushing scrcpy-server %s (device_size=%r expected=%d)",
+            self._serial, self._jar_version, device_size, expected_size,
+        )
+        out, rc = _adb(
+            "push", str(_BUNDLED_JAR), _SCRCPY_PATH_ON_DEVICE,
+            serial=self._serial, timeout=20,
+        )
+        if rc != 0:
+            raise RuntimeError(f"adb push failed: {out.strip()}")
+
     def _start_scrcpy_server(self) -> None:
         """
         Kill any leftover scrcpy on device, push JAR if needed, then start
@@ -448,6 +474,12 @@ class ScrcpyRelaySession:
         on newer Android versions (API 34+).
         """
         self._kill_server()
+
+        # Re-verify JAR on device before every (re)start. OEM cleanup daemons
+        # can purge /data/local/tmp between attempts; without this check the
+        # retry loop runs forever launching `app_process` against a missing
+        # CLASSPATH → ClassNotFoundException → SIGABRT.
+        self._ensure_server_jar_on_device()
 
         # Kill any orphaned scrcpy-server on device.
         # pkill returns 0 if it killed ≥1 process, non-zero if nothing was found.

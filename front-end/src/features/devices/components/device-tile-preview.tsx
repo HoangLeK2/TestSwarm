@@ -10,7 +10,7 @@ import { ROUTES } from '@/config/routes';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
-import { Android } from '@/registry/magicui/android';
+import { DeviceAndroidFrame } from './device-android-frame';
 import { useTranslations } from 'next-intl';
 import { toast } from 'sonner';
 import { DeviceStepMonitor } from './device-step-monitor';
@@ -85,17 +85,8 @@ export function DeviceTilePreview({
     serverAllowPreviewMjpeg &&
     loadStream;
 
-  const screenRatio = useMemo(() => {
-    const sw = device.screen_width || 1080;
-    const sh = device.screen_height || 1920;
-    return sh > 0 ? sw / sh : 9 / 19;
-  }, [device.screen_width, device.screen_height]);
-
-  const mockupSize = useMemo(() => {
-    const h = 620;
-    const w = Math.round(h * (378 / 830)); // keep Android SVG base ratio
-    return { width: w, height: h };
-  }, []);
+  /** Grid preview — target ~282px outer after lib bezel + side padding. */
+  const previewMockupScreenWidth = 262;
 
   const isContinuous =
     streamingConfig !== null && streamingConfig.mode === 'continuous';
@@ -223,11 +214,7 @@ export function DeviceTilePreview({
       <CardContent className='flex flex-1 flex-col gap-2 px-3 pb-3 pt-3'>
         <div className='flex flex-col items-center gap-2'>
           <div className='mx-auto'>
-            <Android
-              width={mockupSize.width}
-              height={mockupSize.height}
-              screenRatio={screenRatio}
-            >
+            <DeviceAndroidFrame screenWidth={previewMockupScreenWidth}>
               <div
                 ref={previewZoneRef}
                 className='relative h-full w-full overflow-hidden bg-black'
@@ -236,7 +223,7 @@ export function DeviceTilePreview({
                   <img
                     src={mjpegUrl!}
                     alt={`${device.brand} ${device.model} preview`}
-                    className={`absolute inset-0 h-full w-full object-contain transition-opacity duration-300 ${h264Active ? 'opacity-0' : 'opacity-100'}`}
+                    className={`absolute inset-0 h-full w-full object-cover object-bottom transition-opacity duration-300 ${h264Active ? 'opacity-0' : 'opacity-100'}`}
                   />
                 ) : isActive && !serverAllowPreviewMjpeg ? (
                   <div className='flex h-full w-full items-center justify-center bg-zinc-900 px-2 text-center text-[10px] text-muted-foreground'>
@@ -254,11 +241,11 @@ export function DeviceTilePreview({
                 {allowH264 && (
                   <canvas
                     ref={canvasRef}
-                    className={`pointer-events-none absolute inset-0 h-full w-full object-contain transition-opacity duration-300 ${h264Active ? 'opacity-100' : 'opacity-0'}`}
+                    className={`pointer-events-none absolute inset-0 h-full w-full object-cover object-bottom transition-opacity duration-300 ${h264Active ? 'opacity-100' : 'opacity-0'}`}
                   />
                 )}
               </div>
-            </Android>
+            </DeviceAndroidFrame>
           </div>
         </div>
         {SHOW_RELAY_SCRCPY_UI_TOGGLE &&

@@ -8,7 +8,7 @@ import { isContainerType, type FlowStep } from '../scenario-steps/types';
 import { BRACKET_COLORS, getStepTypeName, getStepSummary } from './constants';
 import { StepIcon } from './step-icon';
 import { StepCard } from './step-card';
-import { InsertButton } from './insert-button';
+import { InsertGap } from './insert-button';
 import { StepDetailPanel } from './step-detail-panel';
 import { StepEditOverlay } from './step-edit-overlay';
 import {
@@ -212,7 +212,6 @@ function ChildStepList({
 
   return (
     <div className='space-y-0'>
-      <InsertButton onInsert={(s) => onInsertChild(listKey, 0, s)} />
       <SortableContext
         id={sortableContainerId}
         items={childIds}
@@ -225,6 +224,7 @@ function ChildStepList({
           const bracketRunKey = encodeScenarioInlineRunKey(rootStepIndex ?? parentStepIndex, nestedPath);
           return (
             <div key={rowId}>
+              <InsertGap onInsert={(s) => onInsertChild(listKey, ci, s)} />
               <SortableFlowRow id={rowId}>
                 {(dragHandle, isDragging) => (
                   <div className={`flex items-stretch ${isDragging ? 'opacity-60' : ''}`}>
@@ -264,7 +264,6 @@ function ChildStepList({
                   </div>
                 )}
               </SortableFlowRow>
-              <InsertButton onInsert={(s) => onInsertChild(listKey, ci + 1, s)} />
             </div>
           );
         }
@@ -293,6 +292,7 @@ function ChildStepList({
               : null;
         return (
           <div key={rowId}>
+            <InsertGap onInsert={(s) => onInsertChild(listKey, ci, s)} />
             <SortableFlowRow id={rowId}>
               {(dragHandle, isDragging) => (
                 <div className={`flex items-stretch ${isDragging ? 'opacity-60' : ''}`}>
@@ -329,10 +329,10 @@ function ChildStepList({
                 </div>
               )}
             </SortableFlowRow>
-            <InsertButton onInsert={(s) => onInsertChild(listKey, ci + 1, s)} />
           </div>
         );
       })}
+        <InsertGap onInsert={(s) => onInsertChild(listKey, steps.length, s)} />
       </SortableContext>
       {steps.length === 0 && (
         <p className='py-1 text-center text-[10px] text-muted-foreground'>Trống</p>

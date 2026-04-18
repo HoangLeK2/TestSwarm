@@ -15,7 +15,6 @@ import re
 import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple, TYPE_CHECKING
 
-from tenacity import retry, stop_after_delay, wait_fixed, retry_if_result, before_sleep_log
 
 if TYPE_CHECKING:
     from runtime.core.device_client import DeviceClient
@@ -177,21 +176,22 @@ def _retry_find_element(
     value: str,
     timeout: float = 10.0,
     poll: float = 0.5,
+    cancel_event: Optional["threading.Event"] = None,
 ) -> Optional[Any]:
-    """Find element with Tenacity retry. Returns element id/dict or None."""
+    """Find element with a polling retry loop. Returns element id/dict or None.
+
+    If ``cancel_event`` is provided, the loop checks it between probes so a
+    user-triggered Stop does not have to wait out the full ``timeout``.
+    """
     if u2 is None:
         return None
 
-    @retry(
-        stop=stop_after_delay(timeout),
-        wait=wait_fixed(poll),
-        retry=retry_if_result(lambda r: r is None),
-        before_sleep=before_sleep_log(log, logging.DEBUG),
-        reraise=False,
-    )
-    def _find():
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    probe_timeout = min(0.5, max(0.05, float(poll)))
+
+    def _probe() -> Optional[Any]:
         try:
-            eid = u2.find_element(by, value, timeout=min(0.5, poll))
+            eid = u2.find_element(by, value, timeout=probe_timeout)
             if eid is None:
                 return None
             if hasattr(u2, "find_element_with_bounds"):
@@ -203,13 +203,24 @@ def _retry_find_element(
                     pass
             return eid
         except Exception as exc:
-            log.debug("_retry_find_element %s=%r attempt error: %s", by, value, exc)
+            log.debug("_retry_find_element %s=%r probe error: %s", by, value, exc)
             return None
 
-    try:
-        return _find()
-    except Exception:
-        return None
+    while True:
+        if cancel_event is not None and cancel_event.is_set():
+            log.info("_retry_find_element cancelled by user (by=%s value=%r)", by, value)
+            return None
+        found = _probe()
+        if found is not None:
+            return found
+        if time.monotonic() >= deadline:
+            return None
+        # Chunked sleep so cancel_event checks land within ~poll seconds even
+        # for long timeouts.
+        chunk = min(poll, max(0.0, deadline - time.monotonic()))
+        if chunk <= 0:
+            return None
+        time.sleep(chunk)
 
 
 # ── Implicit wait config ──────────────────────────────────────────────────────

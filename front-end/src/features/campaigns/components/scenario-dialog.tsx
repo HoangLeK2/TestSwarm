@@ -31,7 +31,7 @@ import {
 import { Separator } from '@/components/ui/separator';
 import { Textarea } from '@/components/ui/textarea';
 import { FileText, Trash2, Circle, Square, RefreshCw, Sparkles, FolderOpen, MousePointerClick, Move, List, GitBranch, Loader2 } from 'lucide-react';
-import { fetchHierarchy, previewScenario, previewScenarioStream } from '@/features/devices/services/api';
+import { cancelPreviewStream, fetchHierarchy, previewScenario, previewScenarioStream } from '@/features/devices/services/api';
 import type { FixedLayoutPluginContext } from '@flowgram.ai/fixed-layout-editor';
 import { StepDetailPanel } from './flow-editor/step-detail-panel';
 import type { FlowStep } from './scenario-steps/types';
@@ -462,6 +462,31 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
   const flowRunAbortRef = useRef<AbortController | null>(null);
   const stepRunAbortRef = useRef<AbortController | null>(null);
   const flowRunningIdsRef = useRef<Set<string>>(new Set());
+  // Captured from the server's 'start' SSE event. Lets Stop / dialog-close
+  // hit the explicit cancel endpoint instead of relying on the SSE disconnect
+  // detector (which can lag ~100ms and waits for a step boundary anyway).
+  const activePreviewRef = useRef<{ serial: string; traceId: string } | null>(null);
+
+  const hardStopPreview = useCallback(() => {
+    flowRunAbortRef.current?.abort();
+    stepRunAbortRef.current?.abort();
+    const active = activePreviewRef.current;
+    if (active) {
+      cancelPreviewStream(active.serial, active.traceId).catch(() => undefined);
+      activePreviewRef.current = null;
+    }
+  }, []);
+
+  // Dialog close / tab close / Next.js route change all end up unmounting
+  // this component. Make sure the scenario actually stops server-side.
+  useEffect(() => {
+    const onPageHide = () => hardStopPreview();
+    window.addEventListener('pagehide', onPageHide);
+    return () => {
+      window.removeEventListener('pagehide', onPageHide);
+      hardStopPreview();
+    };
+  }, [hardStopPreview]);
 
   useEffect(() => {
     if (!ENABLE_FLOWGRAM_SCENARIO_UI) setFlowEditMode(false);
@@ -540,6 +565,11 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
           serial,
           [payload],
           (ev) => {
+            if (ev.event === 'start' && typeof ev.trace_id === 'string') {
+              activePreviewRef.current = { serial, traceId: ev.trace_id };
+            } else if (ev.event === 'done' || ev.event === 'error') {
+              activePreviewRef.current = null;
+            }
             if (ev.event === 'step_done') {
               setFlowRunStates((s) => ({ ...s, [fgId]: ev.ok ? 'ok' : 'error' }));
               if (!ev.ok) toast.error(String(ev.message ?? 'Step lỗi'));
@@ -554,6 +584,7 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
           toast.error(String(e));
         }
       } finally {
+        activePreviewRef.current = null;
         flowRunningIdsRef.current.delete(fgId);
         setTimeout(() => {
           setFlowRunStates((s) => {
@@ -620,6 +651,11 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
           serial,
           [payload],
           (ev) => {
+            if (ev.event === 'start' && typeof ev.trace_id === 'string') {
+              activePreviewRef.current = { serial, traceId: ev.trace_id };
+            } else if (ev.event === 'done' || ev.event === 'error') {
+              activePreviewRef.current = null;
+            }
             if (ev.event === 'step_done') {
               setStepRunStates((s) => ({ ...s, [runKey]: ev.ok ? 'ok' : 'error' }));
               if (!ev.ok) toast.error(String(ev.message ?? 'Step lỗi'));
@@ -640,6 +676,7 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
           toast.error(String(e));
         }
       } finally {
+        activePreviewRef.current = null;
         if (!ctrl.signal.aborted) {
           setTimeout(() => {
             setStepRunStates((s) => {
@@ -1514,7 +1551,7 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
                   nestedInDialog
                   onRunStep={handleInlineRunStep}
                   stepRunStates={stepRunStates}
-                  onStopInlineRun={() => stepRunAbortRef.current?.abort()}
+                  onStopInlineRun={hardStopPreview}
                 />
               </div>
             )}

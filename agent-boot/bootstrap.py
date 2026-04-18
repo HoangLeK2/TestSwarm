@@ -542,6 +542,30 @@ def _ensure_stability_settings(serial: str) -> None:
     except Exception as exc:
         console.print(f"    [yellow]⚠[/yellow] stay_on_while_plugged_in failed: {exc}")
 
+    # Log available H264/H265 encoders so operators know what to flip to
+    # via SCRCPY_VIDEO_ENCODER if the default encoder stalls. Non-blocking:
+    # any failure here is diagnostic-only, never fails bootstrap.
+    try:
+        raw = _adb_shell("dumpsys media.codec 2>/dev/null", serial=serial, timeout=15)
+        encoders: list[str] = []
+        for line in raw.splitlines():
+            line = line.strip()
+            # Codec2 (c2.*) and legacy (OMX.*) encoder names for H264/H265
+            if (line.startswith(("c2.", "OMX.")) and
+                any(tag in line.lower() for tag in ("avc", "h264", "hevc", "h265")) and
+                "encoder" in line.lower()):
+                name = line.split()[0].rstrip(":")
+                if name not in encoders:
+                    encoders.append(name)
+        if encoders:
+            console.print(f"    [cyan]→[/cyan] available video encoders: {', '.join(encoders[:6])}")
+            console.print(
+                "      [dim]flip via SCRCPY_VIDEO_ENCODER=<name> or per-serial "
+                f"SCRCPY_VIDEO_ENCODER__{serial.replace(':','_').replace('.','_')}=<name>[/dim]"
+            )
+    except Exception as exc:
+        console.print(f"    [dim]encoder probe skipped: {exc}[/dim]")
+
 
 def step_open_app(serial: str, skip: bool) -> None:
     _step_header(7, "Open STFService")

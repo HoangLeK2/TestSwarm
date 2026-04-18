@@ -26,6 +26,8 @@ interface DeviceTileProps {
   compact?: boolean;
   /** Ẩn nút Steps trong header (khi steps đã hiện panel riêng bên cạnh) */
   hideStepMonitor?: boolean;
+  /** Ẩn toàn bộ header tên/model/serial ở đầu thẻ */
+  hideHeader?: boolean;
 }
 
 export function DeviceTile({
@@ -41,6 +43,7 @@ export function DeviceTile({
   highlightBounds,
   compact = false,
   hideStepMonitor = false,
+  hideHeader = false,
 }: DeviceTileProps) {
   const t = useTranslations('devicesFarm');
   const id = serialToId(device.serial);
@@ -56,7 +59,7 @@ export function DeviceTile({
   }, [device.screen_width, device.screen_height]);
 
   const mockupSize = useMemo(() => {
-    const w = compact ? 220 : 250;
+    const w = compact ? 250 : 310;
     const h = Math.round(w * (830 / 378));
     return { width: w, height: h };
   }, [compact]);
@@ -79,27 +82,29 @@ export function DeviceTile({
     <Card
       id={`tile-${id}`}
       data-serial={device.serial}
-      className='flex h-full flex-col border-border bg-card shadow-sm overflow-hidden'
+      className='flex h-full flex-col border-0 bg-transparent shadow-none overflow-visible'
     >
-      <CardHeader className={compact ? 'border-b border-border/60 px-2 py-2' : 'border-b border-border/60 px-4 py-3'}>
-        <div className='flex flex-col gap-1'>
-          <CardTitle className='flex items-center justify-between gap-2 text-xs'>
-            <span className='truncate font-medium text-foreground'>
-              {device.brand} {device.model}
+      {!hideHeader && (
+        <CardHeader className={compact ? 'border-b border-border/60 px-2 py-2' : 'border-b border-border/60 px-4 py-3'}>
+          <div className='flex flex-col gap-1'>
+            <CardTitle className='flex items-center justify-between gap-2 text-xs'>
+              <span className='truncate font-medium text-foreground'>
+                {device.brand} {device.model}
+              </span>
+              {!hideStepMonitor && (
+                <DeviceStepMonitor
+                  serial={device.serial}
+                  isBusy={device.state?.toUpperCase() === 'BUSY'}
+                />
+              )}
+            </CardTitle>
+            <span className='font-mono text-[10px] text-muted-foreground'>
+              {device.serial}
             </span>
-            {!hideStepMonitor && (
-              <DeviceStepMonitor
-                serial={device.serial}
-                isBusy={device.state?.toUpperCase() === 'BUSY'}
-              />
-            )}
-          </CardTitle>
-          <span className='font-mono text-[10px] text-muted-foreground'>
-            {device.serial}
-          </span>
-        </div>
-      </CardHeader>
-      <CardContent className={compact ? 'flex flex-1 flex-col gap-1.5 px-2 pb-2 pt-2' : 'flex flex-1 flex-col gap-2 px-3 pb-3 pt-3'}>
+          </div>
+        </CardHeader>
+      )}
+      <CardContent className={compact ? 'flex flex-1 flex-col gap-1.5 px-2 pb-2 pt-2' : `flex flex-1 flex-col gap-2 px-3 pb-3 ${hideHeader ? 'pt-2' : 'pt-3'}`}>
         <div className='flex flex-col items-center gap-2'>
           <div className='mx-auto'>
             <Android

@@ -181,7 +181,7 @@ function TreeNode({ node, expanded, matchingIds, selectedNodeId, onToggle, onCli
   return (
     <>
       <div
-        className={`flex cursor-pointer items-center gap-1 whitespace-nowrap rounded px-1 py-0.5 hover:bg-accent/50 ${
+        className={`flex min-w-full w-max cursor-pointer items-center gap-1 whitespace-nowrap rounded px-1 py-0.5 hover:bg-accent/50 ${
           isSelected ? 'bg-primary/15 ring-1 ring-primary/30' : ''
         }`}
         style={{ paddingLeft: indent + 4 }}

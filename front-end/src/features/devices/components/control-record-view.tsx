@@ -184,6 +184,12 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
     }
   }, [coordinatePickTarget, flowCoordPick, flowSelectorPickFgId]);
 
+  // Hierarchy changed => stale node bounds/highlight must be cleared.
+  useEffect(() => {
+    setHighlightBounds(null);
+    setSelectedNodeId(null);
+  }, [hierarchy.xml]);
+
   // Inline step runner (step-by-step without entering player mode)
   const [stepRunStates, setStepRunStates] = useState<Record<string, 'idle' | 'running' | 'ok' | 'error'>>({});
   const stepRunAbortRef = useRef<AbortController | null>(null);
@@ -710,7 +716,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
         {/* ── COL 1: UI Hierarchy tree ──────────────────────────────────── */}
         <div className={cn(
           'flex shrink-0 flex-col border-r border-border/60 bg-muted/10 transition-all duration-200',
-          leftCollapsed ? 'w-0 overflow-hidden' : 'w-[272px]',
+          leftCollapsed ? 'w-0 overflow-hidden' : 'w-[320px]',
         )}>
           {/* Tree */}
           <div className='min-h-0 flex-1 overflow-hidden'>
@@ -829,24 +835,14 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           {leftCollapsed ? <ChevronRight className='size-3' /> : <ChevronLeft className='size-3' />}
         </button>
 
-        {/* ── COL 2: Phone screen ───────────────────────────────────────── */}
+        {/* ── COL 2: Phone screen (centered) ───────────────────────────── */}
         <div
           ref={mirrorColRef}
-          className='flex w-[320px] shrink-0 flex-col items-center border-r border-border/60 bg-muted/20 overflow-y-auto'
+          className='flex min-w-0 flex-1 flex-col items-center border-r border-border/60 bg-muted/20 overflow-y-auto'
         >
           {selectedDevice ? (
             <>
-              {/* Device label */}
-              <div className='flex w-full shrink-0 items-center gap-2 border-b border-border/40 bg-background/60 px-3 py-1.5'>
-                <span className={cn('size-2 rounded-full shrink-0', device.wsConnected ? 'bg-green-500' : 'bg-muted-foreground/40')} />
-                <span className='truncate text-[11px] font-medium text-foreground'>
-                  {selectedDevice.brand} {selectedDevice.model}
-                </span>
-                <span className='ml-auto font-mono text-[10px] text-muted-foreground'>
-                  {selectedDevice.serial.slice(0, 10)}
-                </span>
-              </div>
-              <div className='p-3 w-full'>
+              <div className='w-full max-w-[460px] p-3'>
                 <DeviceTile
                   device={selectedDevice}
                   logLines={device.logs[selectedDevice.serial] ?? []}
@@ -855,6 +851,8 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                   onToggleMode={record.handleToggleMode}
                   onRestart={record.handleRestart}
                   onTap={handleScreenTap}
+                  hideHeader
+                  hideStepMonitor
                   onSwipe={
                     coordinatePickTarget?.mode === 'swipe_segment' ||
                     (showFlowUi && flowCoordPick?.kind === 'swipe')
@@ -874,7 +872,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
         </div>
 
         {/* ── COL 3: Recording / scenario editor ───────────────────────── */}
-        <div className='flex flex-1 flex-col overflow-hidden'>
+        <div className='flex w-[min(48vw,720px)] shrink-0 flex-col overflow-hidden'>
 
           {playerMode && selectedDevice ? (
             /* Player mode */
@@ -890,61 +888,6 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
             </div>
           ) : (
             <>
-              {/* Recording bar */}
-              {record.recording ? (
-                <div className='flex shrink-0 items-center gap-3 border-b border-red-200/60 bg-red-50/80 px-4 py-2.5 dark:border-red-900/30 dark:bg-red-950/20'>
-                  <span className='relative flex size-2.5 shrink-0'>
-                    <span className='absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75' />
-                    <span className='relative inline-flex size-2.5 rounded-full bg-red-500' />
-                  </span>
-                  <span className='text-xs font-semibold text-red-800 dark:text-red-300'>{t('recordingActive')}</span>
-                  {steps.items.length > 0 && (
-                    <span className='rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300'>
-                      {steps.items.length} bước
-                    </span>
-                  )}
-                  {record.pollingXml && (
-                    <RefreshCw size={11} className='animate-spin text-red-500/70' />
-                  )}
-                  <Button
-                    size='sm'
-                    variant='destructive'
-                    className='ml-auto h-7 gap-1.5 px-3 text-xs'
-                    onClick={() => void record.toggleRecording()}
-                  >
-                    <Square className='size-3' />
-                    {t('stopRecording')}
-                  </Button>
-                </div>
-              ) : (
-                <div className='flex shrink-0 items-center gap-2 border-b border-border/60 bg-background px-4 py-2'>
-                  <div className='min-w-0 flex-1'>
-                    <p className='text-[11px] font-semibold text-foreground'>{t('recordingIdleTitle')}</p>
-                    <p className='text-[10px] text-muted-foreground'>{t.rich('recordingIdleSubtitle', { strong: (c) => <strong>{c}</strong> })}</p>
-                  </div>
-                  <Button
-                    size='sm'
-                    variant='default'
-                    className='h-8 shrink-0 gap-1.5 text-xs'
-                    onClick={() => void record.toggleRecording()}
-                    disabled={!selectedDevice}
-                  >
-                    <Circle className='size-3 fill-current' />
-                    {t('startRecording')}
-                  </Button>
-                  <Button
-                    size='sm'
-                    variant='outline'
-                    className='h-8 shrink-0 gap-1.5 text-xs'
-                    onClick={() => setPlayerMode(true)}
-                    disabled={!selectedDevice}
-                  >
-                    <Play className='size-3' />
-                    {t('tryRun')}
-                  </Button>
-                </div>
-              )}
-
               {/* Selector pick banner */}
               {selectorPickTarget && (
                 <div className='flex shrink-0 items-center gap-2 border-b border-amber-400/30 bg-amber-50/80 px-4 py-2 dark:bg-amber-950/20'>
@@ -1032,24 +975,105 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                 <span className='text-[11px] font-semibold text-foreground'>
                   {showFlowUi ? 'Sơ đồ Flow' : t('editorSectionTitle')}
                 </span>
-                {steps.items.length > 0 && (
-                  <span className='rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary'>
-                    {steps.items.length} bước
-                  </span>
-                )}
                 <div className='flex-1' />
-                {/* Workflow breadcrumb */}
                 <div className='hidden items-center gap-1 sm:flex'>
-                  {[
-                    { label: '① Ghi', done: steps.items.length > 0 },
-                    { label: '② Chỉnh', done: false },
-                    { label: '③ Lưu', done: false },
-                  ].map(({ label, done }) => (
-                    <span key={label} className={`text-[9px] font-medium ${done ? 'text-primary' : 'text-muted-foreground/50'}`}>
-                      {label}
-                    </span>
-                  ))}
+                  {record.pollingXml && <RefreshCw size={11} className='animate-spin text-red-500/70' />}
+                  <Button
+                    size='sm'
+                    variant={record.recording ? 'destructive' : 'default'}
+                    className='h-7 gap-1.5 px-2 text-[10px]'
+                    onClick={() => void record.toggleRecording()}
+                    disabled={!selectedDevice}
+                  >
+                    {record.recording ? <Square className='size-3' /> : <Circle className='size-3 fill-current' />}
+                    {record.recording ? t('stopRecording') : t('startRecording')}
+                  </Button>
+                  <Button
+                    size='sm'
+                    variant='outline'
+                    className='h-7 gap-1.5 px-2 text-[10px]'
+                    onClick={() => setPlayerMode(true)}
+                    disabled={!selectedDevice}
+                  >
+                    <Play className='size-3' />
+                    {t('tryRun')}
+                  </Button>
                 </div>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button size='sm' variant='outline' className='h-7 gap-1 px-2 text-[10px]'>
+                      <Plus className='size-3' />
+                      Luồng
+                      <ChevronDown className='size-3' />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align='start' className='w-56'>
+                    <DropdownMenuLabel className='pb-0.5 pt-2'>
+                      <span className='block text-[11px] font-bold text-foreground'>Chờ / Delay</span>
+                    </DropdownMenuLabel>
+                    <DropdownMenuItem className='gap-2 text-xs' onClick={steps.addWait}>
+                      <StepIcon type='wait' size={13} /> Chờ (giây)
+                    </DropdownMenuItem>
+                    <DropdownMenuItem className='gap-2 text-xs' onClick={() => steps.addFlow('wait_element')}>
+                      <StepIcon type='wait_element' size={13} /> Chờ phần tử xuất hiện
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel className='pb-0.5 pt-1'>
+                      <span className='block text-[11px] font-bold text-foreground'>Điều kiện</span>
+                    </DropdownMenuLabel>
+                    <DropdownMenuItem className='gap-2 text-xs' onClick={() => steps.addFlow('if_element')}>
+                      <StepIcon type='if_element' size={13} /> Nếu phần tử tồn tại
+                    </DropdownMenuItem>
+                    <DropdownMenuItem className='gap-2 text-xs' onClick={() => steps.addFlow('if_variable')}>
+                      <StepIcon type='if_variable' size={13} /> Nếu biến thỏa điều kiện
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel className='pb-0.5 pt-1'>
+                      <span className='block text-[11px] font-bold text-foreground'>Lặp lại</span>
+                    </DropdownMenuLabel>
+                    <DropdownMenuItem className='gap-2 text-xs' onClick={() => steps.addFlow('repeat')}>
+                      <StepIcon type='repeat' size={13} /> Lặp N lần
+                    </DropdownMenuItem>
+                    <DropdownMenuItem className='gap-2 text-xs' onClick={() => steps.addFlow('repeat_until')}>
+                      <StepIcon type='repeat_until' size={13} /> Lặp cho đến khi
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <Tooltip delayDuration={300}>
+                  <TooltipTrigger asChild>
+                    <Button size='sm' variant='outline' className='h-7 gap-1 px-2 text-[10px]' onClick={() => setInstallDialogOpen(true)} disabled={!selectedDevice}>
+                      <PackagePlus className='size-3' />
+                      APK
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side='bottom' className='text-xs'>Cài APK từ URL lên thiết bị</TooltipContent>
+                </Tooltip>
+                <Tooltip delayDuration={300}>
+                  <TooltipTrigger asChild>
+                    <Button size='sm' variant='ghost' className='h-7 w-7 p-0' onClick={() => setJsonDialogOpen(true)} disabled={steps.items.length === 0}>
+                      <Code2 className='size-3.5' />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side='bottom' className='text-xs'>Xem JSON</TooltipContent>
+                </Tooltip>
+                <Tooltip delayDuration={300}>
+                  <TooltipTrigger asChild>
+                    <Button size='sm' variant='ghost' className='h-7 w-7 p-0' onClick={steps.copyJson} disabled={steps.items.length === 0}>
+                      <Copy className='size-3.5' />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side='bottom' className='text-xs'>Copy JSON</TooltipContent>
+                </Tooltip>
+                <Button
+                  size='sm'
+                  variant='default'
+                  className='h-7 gap-1 px-2 text-[10px]'
+                  onClick={steps.openSave}
+                  disabled={steps.items.length === 0}
+                >
+                  <Save className='size-3' />
+                  Lưu
+                </Button>
                 {/* Variables editor button */}
                 <Tooltip delayDuration={400}>
                   <TooltipTrigger asChild>
@@ -1266,7 +1290,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                             })) as any
                           )
                         }
-                        maxHeight='calc(100vh - 300px)'
+                        maxHeight='100%'
                         selectorPickTarget={selectorPickTarget}
                         onSelectorPickTargetChange={setSelectorPickTarget}
                         coordinatePickTarget={coordinatePickTarget}
@@ -1280,95 +1304,6 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                 )}
               </div>
 
-              {/* Action bar */}
-              <div className='flex shrink-0 items-center gap-1.5 border-t border-border/60 bg-background/80 px-3 py-2.5'>
-                {/* Install APK */}
-                <Tooltip delayDuration={300}>
-                  <TooltipTrigger asChild>
-                    <Button
-                      size='sm'
-                      variant='outline'
-                      className='h-7 gap-1 text-xs'
-                      onClick={() => setInstallDialogOpen(true)}
-                      disabled={!selectedDevice}
-                    >
-                      <PackagePlus className='size-3' />
-                      Cài APK
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side='top' className='text-xs'>Cài APK từ URL lên thiết bị</TooltipContent>
-                </Tooltip>
-
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button size='sm' variant='outline' className='h-7 gap-1 text-xs'>
-                      <Plus className='size-3' />
-                      Luồng
-                      <ChevronDown className='size-3' />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align='start' className='w-56'>
-                    <DropdownMenuLabel className='pb-0.5 pt-2'>
-                      <span className='block text-[11px] font-bold text-foreground'>Chờ / Delay</span>
-                    </DropdownMenuLabel>
-                    <DropdownMenuItem className='gap-2 text-xs' onClick={steps.addWait}>
-                      <StepIcon type='wait' size={13} /> Chờ (giây)
-                    </DropdownMenuItem>
-                    <DropdownMenuItem className='gap-2 text-xs' onClick={() => steps.addFlow('wait_element')}>
-                      <StepIcon type='wait_element' size={13} /> Chờ phần tử xuất hiện
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuLabel className='pb-0.5 pt-1'>
-                      <span className='block text-[11px] font-bold text-foreground'>Điều kiện</span>
-                    </DropdownMenuLabel>
-                    <DropdownMenuItem className='gap-2 text-xs' onClick={() => steps.addFlow('if_element')}>
-                      <StepIcon type='if_element' size={13} /> Nếu phần tử tồn tại
-                    </DropdownMenuItem>
-                    <DropdownMenuItem className='gap-2 text-xs' onClick={() => steps.addFlow('if_variable')}>
-                      <StepIcon type='if_variable' size={13} /> Nếu biến thỏa điều kiện
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuLabel className='pb-0.5 pt-1'>
-                      <span className='block text-[11px] font-bold text-foreground'>Lặp lại</span>
-                    </DropdownMenuLabel>
-                    <DropdownMenuItem className='gap-2 text-xs' onClick={() => steps.addFlow('repeat')}>
-                      <StepIcon type='repeat' size={13} /> Lặp N lần
-                    </DropdownMenuItem>
-                    <DropdownMenuItem className='gap-2 text-xs' onClick={() => steps.addFlow('repeat_until')}>
-                      <StepIcon type='repeat_until' size={13} /> Lặp cho đến khi
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-
-                <div className='ml-auto flex items-center gap-1.5'>
-                  <Tooltip delayDuration={300}>
-                    <TooltipTrigger asChild>
-                      <Button size='sm' variant='ghost' className='h-7 w-7 p-0' onClick={() => setJsonDialogOpen(true)} disabled={steps.items.length === 0}>
-                        <Code2 className='size-3.5' />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side='top' className='text-xs'>Xem JSON</TooltipContent>
-                  </Tooltip>
-                  <Tooltip delayDuration={300}>
-                    <TooltipTrigger asChild>
-                      <Button size='sm' variant='ghost' className='h-7 w-7 p-0' onClick={steps.copyJson} disabled={steps.items.length === 0}>
-                        <Copy className='size-3.5' />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side='top' className='text-xs'>Copy JSON</TooltipContent>
-                  </Tooltip>
-                  <Button
-                    size='sm'
-                    variant='default'
-                    className='h-7 gap-1.5 px-3 text-xs'
-                    onClick={steps.openSave}
-                    disabled={steps.items.length === 0}
-                  >
-                    <Save className='size-3' />
-                    Lưu kịch bản
-                  </Button>
-                </div>
-              </div>
             </>
           )}
         </div>

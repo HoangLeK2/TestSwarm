@@ -90,6 +90,29 @@ _RECONNECT_MAX  = 30.0
 # Tuned via env: agent runs at 30fps so anything >5s is unambiguously dead.
 _FRAME_TIMEOUT = float(os.environ.get("SCRCPY_FRAME_TIMEOUT_S", "5.0"))
 
+# ── Tier 1 env overrides (agent-boot-stability-rollout Phase 5) ──────────────
+# Per-device encoder / codec pinning for OEMs whose default Codec2 wrapper
+# stalls (Vivo Android 16 c2.qti.avc.encoder shows CCodecConfig BAD_INDEX +
+# param-skipped in logcat). Empty default = let scrcpy pick.
+#
+# Usage in .env or launch:
+#   SCRCPY_VIDEO_ENCODER=OMX.qcom.video.encoder.avc   # force Qualcomm HW H264
+#   SCRCPY_VIDEO_CODEC=h265                           # switch to HEVC (Vivo stable)
+# Per-serial form: SCRCPY_VIDEO_ENCODER__10AE7S00HD002JK=...  (double underscore)
+_VIDEO_ENCODER_DEFAULT = os.environ.get("SCRCPY_VIDEO_ENCODER", "").strip()
+_VIDEO_CODEC_DEFAULT   = os.environ.get("SCRCPY_VIDEO_CODEC", "h264").strip() or "h264"
+
+
+def _per_serial_env(base: str, serial: str, fallback: str) -> str:
+    """
+    Lookup per-serial env override first, fall back to default.
+    Serial format `10AE7S00HD002JK` → env key `<BASE>__10AE7S00HD002JK`.
+    WiFi serial `1.2.3.4:5555` → strip colons → `<BASE>__1_2_3_4_5555`.
+    """
+    safe = serial.replace(":", "_").replace(".", "_")
+    key = f"{base}__{safe}"
+    return os.environ.get(key, fallback).strip()
+
 # Soft IDR threshold: if we go this many seconds without a frame, request an
 # IDR keyframe from scrcpy-server before hitting the hard frame timeout. This
 # recovers from decoder-freeze-on-dropped-NAL ~200ms vs full restart ~2-3s.
@@ -449,11 +472,24 @@ class ScrcpyRelaySession:
             time.sleep(0.3)  # Nothing killed — small buffer for adb state settle
 
         ctrl_flag = "true" if self._enable_control else "false"
+
+        # Tier 1 env overrides — per-serial first, fall back to global default.
+        # Empty codec override keeps current behavior (h264). Empty encoder
+        # override lets scrcpy auto-pick.
+        codec = _per_serial_env("SCRCPY_VIDEO_CODEC", self._serial, _VIDEO_CODEC_DEFAULT)
+        encoder = _per_serial_env("SCRCPY_VIDEO_ENCODER", self._serial, _VIDEO_ENCODER_DEFAULT)
+        encoder_arg = f" video_encoder={encoder}" if encoder else ""
+        if encoder or codec != "h264":
+            logger.info(
+                "[%s] scrcpy encoder override: codec=%s encoder=%s",
+                self._serial, codec, encoder or "(auto)",
+            )
+
         server_cmd = (
             f"CLASSPATH={_SCRCPY_PATH_ON_DEVICE} "
             f"app_process / com.genymobile.scrcpy.Server {self._jar_version} "
             f"tunnel_forward=true video=true audio=false control={ctrl_flag} "
-            f"video_codec=h264 max_fps={self._max_fps} max_size={self._max_width} "
+            f"video_codec={codec}{encoder_arg} max_fps={self._max_fps} max_size={self._max_width} "
             f"video_bit_rate={self._bitrate} "
             # i-frame-interval:int=1 → faster decoder recovery after dropped deltas
             # when multiple devices stream concurrently over WiFi relay.

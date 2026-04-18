@@ -376,7 +376,7 @@ class TestScheduleActivities:
         )
 
         with patch("temporal.schedule_activities.activity") as mock_act, \
-             patch("db.database.AsyncSessionLocal", return_value=mock_db), \
+             patch("db.database.activity_session", return_value=mock_db), \
              patch("db.crud.schedule.update_schedule_run", new_callable=AsyncMock) as mock_ur, \
              patch("db.crud.schedule.update_schedule_after_run", new_callable=AsyncMock) as mock_ua:
             mock_act.heartbeat = MagicMock()

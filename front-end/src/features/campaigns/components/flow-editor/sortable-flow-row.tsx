@@ -3,6 +3,7 @@
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { GripVertical } from 'lucide-react';
+import { FLOW_ROW_DRAG_GUTTER_CLASS } from './flow-row-gutter';
 
 export function SortableFlowRow({
   id,
@@ -26,7 +27,8 @@ export function SortableFlowRow({
       tabIndex={-1}
       title='Kéo để thay đổi thứ tự hoặc thả vào khối repeat/if'
       className={[
-        'flex shrink-0 cursor-grab items-center self-stretch px-1 text-muted-foreground/30',
+        'flex shrink-0 cursor-grab items-center justify-center self-stretch text-muted-foreground/30',
+        FLOW_ROW_DRAG_GUTTER_CLASS,
         'hover:text-muted-foreground/70 active:cursor-grabbing',
         isDragging ? 'cursor-grabbing text-muted-foreground/70' : '',
       ].join(' ')}

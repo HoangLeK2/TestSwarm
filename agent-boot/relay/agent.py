@@ -32,9 +32,14 @@ from relay.mdns          import start_mdns_discovery
 from relay.device_state  import DeviceRegistry, DeviceState
 from relay.device_watcher import AdbDeviceWatcher
 from relay.session_manager import ScrcpySessionManager
+from relay.supervisor     import RelaySupervisor
 from relay.u2_session_pool import U2SessionPool
 
 logger = logging.getLogger("relay.agent")
+SCRCPY_RESTART_WINDOW_SECONDS = 120.0
+SCRCPY_RESTART_MAX_ATTEMPTS = 5
+SCRCPY_RESTART_MAX_BACKOFF_SECONDS = 15.0
+SCRCPY_STABLE_RESET_SECONDS = 30.0
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _RELAY_ID_FILE = os.path.join(os.path.dirname(_HERE), ".relay_id")
@@ -105,7 +110,11 @@ class RelayAgent:
             self._grpc_addr  = ""
 
         self._registry   = DeviceRegistry()
-        self._scrcpy_mgr = ScrcpySessionManager()
+        self._scrcpy_mgr = ScrcpySessionManager(on_session_stopped=self._on_session_stopped)
+        self._supervisor = RelaySupervisor(self)
+        self._scrcpy_desired: dict[str, dict[str, Any]] = {}
+        self._active_send_queue: Optional[asyncio.Queue] = None
+        self._active_loop: Optional[asyncio.AbstractEventLoop] = None
 
         self._u2_batch_enabled = os.getenv("U2_BATCH_ENABLED", "").lower() in ("1", "true")
         self._u2_pool: Optional[U2SessionPool] = None
@@ -124,6 +133,7 @@ class RelayAgent:
     async def run(self) -> None:
         zc = start_mdns_discovery()
         await self._scrcpy_mgr.start()
+        await self._supervisor.start()
 
         if self._u2_batch_enabled:
             loop = asyncio.get_running_loop()
@@ -161,6 +171,7 @@ class RelayAgent:
                     )
                     await asyncio.sleep(delay)
         finally:
+            await self._supervisor.stop()
             if self._u2_pool:
                 await self._u2_pool.stop()
             await self._scrcpy_mgr.stop()
@@ -180,6 +191,8 @@ class RelayAgent:
         # P-frames are dropped when full (decoder resyncs on next IDR).
         send_queue: asyncio.Queue = asyncio.Queue(maxsize=8)
         loop = asyncio.get_running_loop()
+        self._active_send_queue = send_queue
+        self._active_loop = loop
 
         async with websockets.connect(
             self._server_url,
@@ -199,6 +212,7 @@ class RelayAgent:
                 "version":  "2.0.0",
             }))
             logger.info("register sent: relay_id=%s serials=%s", self._relay_id, serials)
+            await self._resume_desired_scrcpy_sessions(send_queue, loop, source="ws-connected")
 
             # ── Device watcher + heartbeat ────────────────────────────────────
             watcher = AdbDeviceWatcher(
@@ -240,6 +254,10 @@ class RelayAgent:
                 hb_task.cancel()
                 sender_task.cancel()
                 await send_queue.put(None)
+                self._cancel_scrcpy_restart_tasks()
+                if self._active_send_queue is send_queue:
+                    self._active_send_queue = None
+                    self._active_loop = None
                 # Keep scrcpy sessions alive across transport reconnects.
                 # Transient WS/gRPC reconnects are common on unstable networks; stopping
                 # all sessions here causes 2-5s black/freeze gaps on every reconnect.
@@ -251,6 +269,8 @@ class RelayAgent:
 
         send_queue: asyncio.Queue = asyncio.Queue(maxsize=8)
         loop = asyncio.get_running_loop()
+        self._active_send_queue = send_queue
+        self._active_loop = loop
 
         logger.info("gRPC connecting → %s (relay_id=%s)", self._grpc_addr, self._relay_id)
 
@@ -271,6 +291,7 @@ class RelayAgent:
             "version":  "2.0.0",
         })
         await send_queue.put(register_msg)
+        await self._resume_desired_scrcpy_sessions(send_queue, loop, source="grpc-connected")
 
         # ── Device watcher + heartbeat ────────────────────────────────────────
         watcher = AdbDeviceWatcher(
@@ -312,6 +333,10 @@ class RelayAgent:
             hb_task.cancel()
             ctrl_task.cancel()
             await send_queue.put(None)
+            self._cancel_scrcpy_restart_tasks()
+            if self._active_send_queue is send_queue:
+                self._active_send_queue = None
+                self._active_loop = None
             # Keep scrcpy sessions alive across transport reconnects.
             # Transient WS/gRPC reconnects are common on unstable networks; stopping
             # all sessions here causes 2-5s black/freeze gaps on every reconnect.
@@ -384,8 +409,17 @@ class RelayAgent:
             self._clear_tcp_suppress_for_usb_anchor(serial)
             self._atx_lan_host_cache.pop(serial, None)
 
-        if ctx.state == DeviceState.OFFLINE and self._u2_pool:
-            asyncio.create_task(self._u2_pool.evict(serial))
+        if ctx.state == DeviceState.OFFLINE:
+            # Device-offline cascade: tear down every relay component owned for
+            # this serial so we don't waste retry budget hammering a dead device.
+            # scrcpy_mgr.stop_all_for_serial emits reason="device_offline" which
+            # _on_session_stopped treats as non-abnormal (no auto-resume until
+            # the device comes back ONLINE).
+            if self._u2_pool:
+                asyncio.create_task(self._u2_pool.evict(serial))
+            asyncio.create_task(
+                self._scrcpy_mgr.stop_all_for_serial(serial, reason="device_offline")
+            )
 
         if ctx.state == DeviceState.ONLINE:
             loop = asyncio.get_running_loop()
@@ -403,7 +437,8 @@ class RelayAgent:
                 if ":" in tcp_s:
                     self._atx_lan_host_cache[usb_s] = tcp_s.rsplit(":", 1)[0]
             for tcp_s, _usb_s in pairs or []:
-                await self._scrcpy_mgr.stop_session(tcp_s)
+                await self._scrcpy_mgr.stop_session(tcp_s, reason="manual_stop")
+            await self._resume_desired_scrcpy_sessions(send_queue, loop, source="device-online")
 
         if ctx.state == DeviceState.RECONNECTING and ":" in serial:
             usb_anchor = self._tcp_suppressed_for_usb.get(serial)
@@ -497,25 +532,48 @@ class RelayAgent:
             if adb_s != req:
                 self._scrcpy_logical_to_adb[req] = adb_s
                 logger.info("scrcpy_start remap %s -> %s (USB preferred)", req, adb_s)
-            await self._scrcpy_mgr.stop_session(req)
-            await self._scrcpy_mgr.start_session(
-                serial         = adb_s,
-                max_fps        = int(msg.get("max_fps") or 30),
-                max_width      = int(msg.get("max_width") or 800),
-                enable_control = bool(msg.get("control", True)),
-                port           = int(msg.get("port") or 27183),
-                send_queue     = send_queue,
-                loop           = loop,
-                bitrate        = int(msg.get("bitrate") or 2_000_000),
-                low_latency    = bool(msg.get("low_latency", False)),
-            )
+            state = self._scrcpy_desired.get(req) or {}
+            restart_task = state.get("restart_task")
+            if restart_task and not restart_task.done():
+                restart_task.cancel()
+            state.update({
+                "desired": True,
+                "manual_stop": False,
+                "last_stop_reason": "",
+                "cfg": {
+                    "max_fps": int(msg.get("max_fps") or 30),
+                    "max_width": int(msg.get("max_width") or 800),
+                    "enable_control": bool(msg.get("control", True)),
+                    "port": int(msg.get("port") or 27183),
+                    "bitrate": int(msg.get("bitrate") or 2_000_000),
+                    "low_latency": bool(msg.get("low_latency", False)),
+                },
+                "adb_serial": adb_s,
+                "retry_count": 0,
+                "retry_window_start": 0.0,
+                "restart_task": None,
+                "last_started_at": 0.0,
+            })
+            self._scrcpy_desired[req] = state
+            await self._start_desired_scrcpy(req, send_queue, loop)
 
         elif mtype == "scrcpy_stop":
             req = str(msg.get("serial", "") or "")
             adb_s = self._scrcpy_logical_to_adb.pop(req, req)
-            await self._scrcpy_mgr.stop_session(adb_s)
+            state = self._scrcpy_desired.get(req) or {}
+            restart_task = state.get("restart_task")
+            if restart_task and not restart_task.done():
+                restart_task.cancel()
+            state.update({
+                "desired": False,
+                "manual_stop": True,
+                "last_stop_reason": "manual_stop",
+                "restart_task": None,
+            })
+            self._scrcpy_desired[req] = state
+            await self._scrcpy_mgr.stop_session(adb_s, reason="manual_stop")
             if adb_s != req:
-                await self._scrcpy_mgr.stop_session(req)
+                await self._scrcpy_mgr.stop_session(req, reason="manual_stop")
 
         elif mtype == "u2_request":
             asyncio.create_task(self._handle_u2_request(msg, send_queue))
@@ -973,3 +1031,195 @@ class RelayAgent:
                 "output":    "",
                 "error":     str(exc),
             })
+
+    def _on_session_stopped(self, adb_serial: str, reason: str) -> None:
+        # NOTE: "device_offline" is deliberately NOT in this set. When a device
+        # disappears we already teardown scrcpy via stop_all_for_serial; the
+        # ONLINE transition's _resume_desired_scrcpy_sessions path brings it
+        # back up. Restarting from the stop callback would race the reconnect.
+        abnormal_reasons = {"zombie_thread", "runtime_error", "startup_failure"}
+        logical = self._logical_serial_for_adb(adb_serial)
+        state = self._scrcpy_desired.get(logical)
+        if not state:
+            return
+        state["last_stop_reason"] = reason
+        if not state.get("desired", False):
+            logger.info("auto-resume skipped %s: desired=false reason=%s", logical, reason)
+            return
+        if state.get("manual_stop", False):
+            logger.info("auto-resume skipped %s: manual_stop=true reason=%s", logical, reason)
+            return
+        if reason not in abnormal_reasons:
+            logger.info("auto-resume skipped %s: non-abnormal reason=%s", logical, reason)
+            return
+        logger.info("auto-resume flagged %s: reason=%s", logical, reason)
+        if self._active_send_queue is None or self._active_loop is None:
+            return
+
+        queue = self._active_send_queue
+        loop = self._active_loop
+
+        def _schedule_resume() -> None:
+            asyncio.create_task(
+                self._resume_desired_scrcpy_sessions(
+                    queue,
+                    loop,
+                    source="session-stopped",
+                )
+            )
+
+        loop.call_soon_threadsafe(_schedule_resume)
+
+    def _logical_serial_for_adb(self, adb_serial: str) -> str:
+        for logical, mapped in self._scrcpy_logical_to_adb.items():
+            if mapped == adb_serial:
+                return logical
+        return adb_serial
+
+    async def _start_desired_scrcpy(
+        self,
+        logical_serial: str,
+        send_queue: asyncio.Queue,
+        loop: asyncio.AbstractEventLoop,
+    ) -> bool:
+        state = self._scrcpy_desired.get(logical_serial)
+        if not state or not state.get("desired"):
+            return False
+
+        cfg = state.get("cfg") or {}
+        adb_serial = self._adb_serial_prefer_usb_over_tcp(logical_serial)
+        state["adb_serial"] = adb_serial
+        if adb_serial != logical_serial:
+            self._scrcpy_logical_to_adb[logical_serial] = adb_serial
+
+        await self._scrcpy_mgr.stop_session(adb_serial, reason="manual_stop")
+        await self._scrcpy_mgr.start_session(
+            serial=adb_serial,
+            max_fps=int(cfg.get("max_fps", 30)),
+            max_width=int(cfg.get("max_width", 800)),
+            enable_control=bool(cfg.get("enable_control", True)),
+            port=int(cfg.get("port", 27183)),
+            send_queue=send_queue,
+            loop=loop,
+            bitrate=int(cfg.get("bitrate", 2_000_000)),
+            low_latency=bool(cfg.get("low_latency", False)),
+        )
+        started = self._scrcpy_mgr.get(adb_serial) is not None
+        if started:
+            now = time.monotonic()
+            last_started = float(state.get("last_started_at", 0.0) or 0.0)
+            if now - last_started > SCRCPY_STABLE_RESET_SECONDS:
+                state["retry_count"] = 0
+                state["retry_window_start"] = 0.0
+            state["last_started_at"] = now
+            state["manual_stop"] = False
+            state["last_stop_reason"] = ""
+        return started
+
+    async def _resume_desired_scrcpy_sessions(
+        self,
+        send_queue: asyncio.Queue,
+        loop: asyncio.AbstractEventLoop,
+        source: str,
+    ) -> None:
+        # NOTE: "device_offline" is deliberately NOT in this set. When a device
+        # disappears we already teardown scrcpy via stop_all_for_serial; the
+        # ONLINE transition's _resume_desired_scrcpy_sessions path brings it
+        # back up. Restarting from the stop callback would race the reconnect.
+        abnormal_reasons = {"zombie_thread", "runtime_error", "startup_failure"}
+        for logical, state in list(self._scrcpy_desired.items()):
+            if not state.get("desired", False):
+                continue
+            if state.get("manual_stop", False):
+                continue
+            if state.get("last_stop_reason") not in abnormal_reasons:
+                continue
+            restart_task = state.get("restart_task")
+            if restart_task and not restart_task.done():
+                continue
+            task = asyncio.create_task(
+                self._restart_with_backoff(logical, send_queue, loop, source=source),
+                name=f"scrcpy-restart-{logical}",
+            )
+            state["restart_task"] = task
+
+    async def _restart_with_backoff(
+        self,
+        logical_serial: str,
+        _send_queue: asyncio.Queue,
+        _loop: asyncio.AbstractEventLoop,
+        source: str,
+    ) -> None:
+        state = self._scrcpy_desired.get(logical_serial)
+        if not state:
+            return
+
+        now = time.monotonic()
+        window_start = float(state.get("retry_window_start", 0.0) or 0.0)
+        retry_count = int(state.get("retry_count", 0) or 0)
+        if window_start <= 0 or (now - window_start) > SCRCPY_RESTART_WINDOW_SECONDS:
+            window_start = now
+            retry_count = 0
+
+        if retry_count >= SCRCPY_RESTART_MAX_ATTEMPTS:
+            logger.warning(
+                "auto-resume skipped %s: retry budget exceeded (%d/%d in %.0fs)",
+                logical_serial,
+                retry_count,
+                SCRCPY_RESTART_MAX_ATTEMPTS,
+                SCRCPY_RESTART_WINDOW_SECONDS,
+            )
+            state["restart_task"] = None
+            state["retry_count"] = retry_count
+            state["retry_window_start"] = window_start
+            return
+
+        delay = min(2 ** retry_count, SCRCPY_RESTART_MAX_BACKOFF_SECONDS)
+        logger.info(
+            "auto-resume scheduled %s in %.1fs (attempt=%d source=%s)",
+            logical_serial,
+            delay,
+            retry_count + 1,
+            source,
+        )
+        await asyncio.sleep(delay)
+
+        state = self._scrcpy_desired.get(logical_serial)
+        if not state:
+            return
+        if not state.get("desired") or state.get("manual_stop"):
+            state["restart_task"] = None
+            return
+
+        adb_serial = self._adb_serial_prefer_usb_over_tcp(logical_serial)
+        ctx = self._registry.get(adb_serial)
+        if not ctx or not ctx.is_available:
+            logger.info("auto-resume deferred %s: device not online (%s)", logical_serial, adb_serial)
+            state["restart_task"] = None
+            return
+
+        queue = self._active_send_queue
+        loop = self._active_loop
+        if queue is None or loop is None:
+            logger.info("auto-resume deferred %s: transport not connected", logical_serial)
+            state["restart_task"] = None
+            return
+
+        state["retry_window_start"] = window_start
+        state["retry_count"] = retry_count + 1
+        started = await self._start_desired_scrcpy(logical_serial, queue, loop)
+        state["restart_task"] = None
+        if started:
+            logger.info("auto-resume success %s", logical_serial)
+            state["retry_count"] = 0
+            state["retry_window_start"] = 0.0
+            state["last_stop_reason"] = ""
+        else:
+            logger.warning("auto-resume failed to start %s", logical_serial)
+
+    def _cancel_scrcpy_restart_tasks(self) -> None:
+        for state in self._scrcpy_desired.values():
+            task = state.get("restart_task")
+            if task and not task.done():
+                task.cancel()
+            state["restart_task"] = None

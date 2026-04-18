@@ -5,10 +5,34 @@ import hashlib
 import json
 import logging
 import os
+import re
 import unicodedata
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 log = logging.getLogger(__name__)
+
+try:
+    import ftfy as _ftfy  # type: ignore
+except Exception:
+    _ftfy = None
+
+try:
+    import dateparser as _dateparser  # type: ignore
+except Exception:
+    _dateparser = None
+
+
+def clean_text(text: Any) -> Any:
+   
+    if not isinstance(text, str) or not text:
+        return text
+    if _ftfy is None:
+        return text.strip()
+    try:
+        return _ftfy.fix_text(text).strip()
+    except Exception:
+        return text.strip()
 
 
 def compute_content_hash(
@@ -31,6 +55,18 @@ def compute_content_hash(
 
     normalized = unicodedata.normalize("NFC", raw.strip())
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def scope_content_hash(base_hash: str, execution_id: str | None = None) -> str:
+    """Scope hash by execution so each run can persist historical data.
+
+    - When execution_id is None: keep backward-compatible hash.
+    - When execution_id exists: same content in different runs becomes distinct.
+    """
+    if not execution_id:
+        return base_hash
+    raw = f"{execution_id}:{base_hash}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def _safe_int(val: Any) -> int | None:
@@ -58,6 +94,121 @@ def _safe_int(val: Any) -> int | None:
         return None
 
 
+def _first_present(data: dict[str, Any], *keys: str) -> Any:
+    """Return first key that exists and is not None."""
+    for key in keys:
+        if key in data and data[key] is not None:
+            return data[key]
+    return None
+
+
+def _normalize_media_urls(value: Any) -> list[str]:
+    """Normalize media URL/container payload to a JSON-safe list[str]."""
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return [str(v) for v in value if v is not None and str(v).strip()]
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return []
+        if s.startswith("[") and s.endswith("]"):
+            try:
+                parsed = json.loads(s)
+                if isinstance(parsed, list):
+                    return [str(v) for v in parsed if v is not None and str(v).strip()]
+            except Exception:
+                pass
+        return [s]
+    return []
+
+
+_RE_RELATIVE_TIME = re.compile(
+    r"^\s*(\d+)\s*(giây|phút|giờ|ngày|tuần|tháng|năm|second|minute|hour|day|week|month|year)s?\s*(trước|ago)?\s*$",
+    re.IGNORECASE,
+)
+_RE_CALENDAR_DATE = re.compile(r"^\s*(\d{1,2})/(\d{1,2})/(\d{4})\s*$")
+
+
+def _parse_content_date(value: Any) -> datetime | None:
+    """Best-effort parser for extracted publish timestamps."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+    s = str(value).strip()
+    if not s:
+        return None
+
+    # Normalize common separators/whitespace from mobile a11y content.
+    s_clean = s.replace("\u00a0", " ").replace("\u202f", " ").strip()
+    s_lower = s_clean.lower()
+
+    # ISO / RFC-ish timestamps first.
+    try:
+        if "t" in s_lower or "-" in s_lower:
+            iso_raw = re.sub(r"[Zz]$", "+00:00", s_clean)
+            parsed = datetime.fromisoformat(iso_raw)
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except Exception:
+        pass
+
+    # dd/mm/yyyy
+    m = _RE_CALENDAR_DATE.match(s_clean)
+    if m:
+        day, month, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        try:
+            return datetime(year, month, day, tzinfo=timezone.utc)
+        except ValueError:
+            return None
+
+    now = datetime.now(timezone.utc)
+    if s_lower in {"hôm qua", "yesterday"}:
+        return now - timedelta(days=1)
+    if s_lower in {"just now", "vừa xong", "bây giờ", "now"}:
+        return now
+
+    m = _RE_RELATIVE_TIME.match(s_lower)
+    if m:
+        amount = int(m.group(1))
+        unit = m.group(2).lower()
+        if unit in {"giây", "second"}:
+            return now - timedelta(seconds=amount)
+        if unit in {"phút", "minute"}:
+            return now - timedelta(minutes=amount)
+        if unit in {"giờ", "hour"}:
+            return now - timedelta(hours=amount)
+        if unit in {"ngày", "day"}:
+            return now - timedelta(days=amount)
+        if unit in {"tuần", "week"}:
+            return now - timedelta(weeks=amount)
+        if unit in {"tháng", "month"}:
+            return now - timedelta(days=30 * amount)
+        if unit in {"năm", "year"}:
+            return now - timedelta(days=365 * amount)
+
+    # "March 15", "3/15/2026", "yesterday at 5pm", "il y a 2 heures", etc.
+    if _dateparser is not None:
+        try:
+            dt = _dateparser.parse(
+                s_clean,
+                languages=["vi", "en"],
+                settings={
+                    "RETURN_AS_TIMEZONE_AWARE": True,
+                    "PREFER_DAY_OF_MONTH": "first",
+                    "TO_TIMEZONE": "UTC",
+                    "RELATIVE_BASE": now.replace(tzinfo=None),
+                },
+            )
+            if dt is not None:
+                return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        except Exception:
+            pass
+
+    return None
+
+
 async def save_content_item(
     data: dict[str, Any],
     collection: str = "default",
@@ -65,7 +216,6 @@ async def save_content_item(
     content_type: str = "post",
     device_serial: str | None = None,
     campaign_id: str | None = None,
-    run_id: str | None = None,
     execution_id: str | None = None,
     scenario_name: str | None = None,
     dedupe_field: str | None = None,
@@ -73,6 +223,7 @@ async def save_content_item(
     tags: str = "",
     parent_id: str | None = None,
     item_level: int = 0,
+    user_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Save extracted content to database with deduplication.
@@ -85,16 +236,47 @@ async def save_content_item(
         get_or_create_collection, increment_collection_count,
     )
 
-    content_hash = compute_content_hash(data, dedupe_field)
+    base_hash = compute_content_hash(data, dedupe_field)
+    content_hash = scope_content_hash(base_hash, execution_id)
+    scoped_parent_id = scope_content_hash(parent_id, execution_id) if parent_id else None
+
+    # Phase 5 — Bloom filter fast path. Skips DB when probably duplicate.
+    # Graceful no-op when Redis/RedisBloom unavailable. False positives
+    # (~0.1%) are still verified in DB before returning "duplicate".
+    bloom_bucket = f"content:{collection}"
+    try:
+        from services import bloom_dedup
+        if await bloom_dedup.is_duplicate(bloom_bucket, content_hash):
+            async with activity_session() as db:
+                existing = await get_content_by_hash(
+                    db, content_hash, collection,
+                    user_id=user_id, execution_id=execution_id,
+                )
+                if existing:
+                    return {"saved": False, "reason": "duplicate", "id": existing.id, "via": "bloom"}
+    except Exception as exc:
+        log.debug("bloom fast path skipped (%s)", exc)
 
     async with activity_session() as db:
         # Dedup check
-        existing = await get_content_by_hash(db, content_hash, collection)
+        existing = await get_content_by_hash(
+            db,
+            content_hash,
+            collection,
+            user_id=user_id,
+            execution_id=execution_id,
+        )
         if existing:
             return {"saved": False, "reason": "duplicate", "id": existing.id}
 
         # Ensure collection exists
-        await get_or_create_collection(db, collection, platform=platform, content_type=content_type)
+        await get_or_create_collection(
+            db,
+            collection,
+            platform=platform,
+            content_type=content_type,
+            user_id=user_id,
+        )
 
         # Save screenshot if provided
         screenshot_path = None
@@ -102,38 +284,78 @@ async def save_content_item(
             screenshot_path = _save_screenshot(screenshot_bytes, content_hash)
 
         # Map known fields from data dict
+        _body = clean_text(
+            data.get("content")
+            or data.get("body")
+            or data.get("text")
+            or data.get("message")
+            or data.get("caption")
+            or data.get("description")
+        )
+        _author = clean_text(
+            data.get("author")
+            or data.get("name")
+            or data.get("username")
+            or data.get("full_name")
+        )
+        _url = (
+            data.get("url")
+            or data.get("permalink")
+            or data.get("link")
+        )
+        _media_urls = _normalize_media_urls(
+            _first_present(data, "media_urls", "media_artifacts", "permalink_candidates")
+        )
+        _content_date = _parse_content_date(
+            _first_present(
+                data,
+                "content_date",
+                "posted_at",
+                "published_at",
+                "timestamp",
+                "date",
+                "date_posted",
+            )
+        )
+
         item = await create_content_item(
             db,
             collection=collection,
             platform=platform,
             content_type=content_type,
             title=str(data.get("title") or "")[:500] or None,
-            body=data.get("content") or data.get("body") or data.get("text"),
-            author=str(data.get("author") or "")[:255] or None,
+            body=_body,
+            author=str(_author or "")[:255] or None,
             author_id=str(data.get("author_id") or "")[:255] or None,
-            url=str(data.get("url") or "")[:1000] or None,
-            likes_count=_safe_int(
-                data.get("likes_count") or data.get("likes") or data.get("reactions")
-            ),
-            comments_count=_safe_int(data.get("comments_count") or data.get("comments")),
-            shares_count=_safe_int(data.get("shares_count") or data.get("shares")),
-            views_count=_safe_int(data.get("views_count") or data.get("views")),
-            media_urls=data.get("media_urls", []),
+            url=str(_url or "")[:1000] or None,
+            likes_count=_safe_int(_first_present(data, "likes_count", "likes", "reactions", "like")),
+            comments_count=_safe_int(_first_present(data, "comments_count", "comments", "comment")),
+            shares_count=_safe_int(_first_present(data, "shares_count", "shares", "share")),
+            views_count=_safe_int(_first_present(data, "views_count", "views", "view")),
+            media_urls=_media_urls,
             raw_data=data,
             tags=tags,
             content_hash=content_hash,
             device_serial=device_serial,
             campaign_id=campaign_id,
-            run_id=run_id,
             execution_id=execution_id,
             scenario_name=scenario_name,
             screenshot_path=screenshot_path,
-            parent_id=parent_id,
+            content_date=_content_date,
+            parent_id=scoped_parent_id,
             item_level=item_level,
+            user_id=user_id,
         )
 
-        await increment_collection_count(db, collection)
+        await increment_collection_count(db, collection, user_id=user_id)
         await db.commit()
+
+        # Phase 5 — record in Bloom filter so future checks fast-path.
+        try:
+            from services import bloom_dedup
+            await bloom_dedup.mark_seen(bloom_bucket, content_hash)
+        except Exception as exc:
+            log.debug("bloom mark_seen skipped (%s)", exc)
 
         log.info(f"Content saved: id={item.id} collection={collection} hash={content_hash[:12]}")
         return {"saved": True, "id": item.id}

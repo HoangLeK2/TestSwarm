@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ROUTES } from '@/config/routes';
-import { DeviceFarmHeader, SAVE_BANDWIDTH_LS } from './header';
+import { DeviceFarmHeader } from './header';
 import { DeviceTilePreview } from './device-tile-preview';
 import { ConnectDeviceDialog } from './connect-device-dialog';
 import { useDeviceFarm } from '../hooks/use-device-farm';
@@ -18,15 +18,6 @@ export function DeviceFarm() {
   const [connectDialogOpen, setConnectDialogOpen] = useState(false);
   const [serverAllowPreviewMjpeg, setServerAllowPreviewMjpeg] = useState(true);
   const [streamingConfig, setStreamingConfig] = useState<DeviceFarmStreamingConfig | null>(null);
-  const [saveBandwidth, setSaveBandwidth] = useState(false);
-
-  useEffect(() => {
-    try {
-      setSaveBandwidth(typeof window !== 'undefined' && localStorage.getItem(SAVE_BANDWIDTH_LS) === '1');
-    } catch {
-      /* ignore */
-    }
-  }, []);
 
   useEffect(() => {
     farmApi
@@ -81,16 +72,6 @@ export function DeviceFarm() {
         ).length}
         wsConnected={wsConnected}
         wifiDenseposeUrl={wifiDenseposeUrl}
-        saveBandwidth={saveBandwidth}
-        onSaveBandwidthChange={(v) => {
-          setSaveBandwidth(v);
-          try {
-            if (v) localStorage.setItem(SAVE_BANDWIDTH_LS, '1');
-            else localStorage.removeItem(SAVE_BANDWIDTH_LS);
-          } catch {
-            /* ignore */
-          }
-        }}
       />
 
       <main className='mx-auto flex max-w-7xl flex-col gap-4 px-4 pb-8 pt-4'>
@@ -127,7 +108,6 @@ export function DeviceFarm() {
                 key={device.serial}
                 device={device}
                 serverAllowPreviewMjpeg={serverAllowPreviewMjpeg}
-                saveBandwidth={saveBandwidth}
                 streamingConfig={streamingConfig}
               />
             ))}

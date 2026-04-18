@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { useTranslations } from 'next-intl';
 import { MonitorContent } from './monitor-content';
 import type { CampaignOut } from '../../types';
 import { isCampaignActiveExecution } from '../../types';
@@ -20,7 +21,12 @@ interface Props {
 }
 
 export function CampaignMonitorDialog({ campaign, children }: Props) {
+  const t = useTranslations('campaignsFeature.list');
   const isRunning = isCampaignActiveExecution(campaign.status);
+  const statusLabel = isRunning ? t('monitorStatusRunning') : t('monitorStatusIdle');
+  const statusClass = isRunning
+    ? 'bg-green-500/15 text-green-600 dark:text-green-400'
+    : 'bg-blue-500/15 text-blue-600 dark:text-blue-400';
 
   return (
     <Dialog>
@@ -32,7 +38,6 @@ export function CampaignMonitorDialog({ campaign, children }: Props) {
                 size='sm'
                 variant='ghost'
                 className='h-7 gap-1.5 px-2 text-xs'
-                disabled={!isRunning}
               >
                 <Activity size={13} />
               </Button>
@@ -40,7 +45,7 @@ export function CampaignMonitorDialog({ campaign, children }: Props) {
           </DialogTrigger>
         </TooltipTrigger>
         <TooltipContent side='top' className='text-xs'>
-          Theo dõi tiến trình
+          {t('monitorTooltip')}
         </TooltipContent>
       </Tooltip>
 
@@ -49,15 +54,15 @@ export function CampaignMonitorDialog({ campaign, children }: Props) {
           <div className='flex items-center gap-2'>
             <Activity size={15} className='text-primary' />
             <DialogTitle className='text-sm font-semibold'>
-              Theo dõi — {campaign.name}
+              {t('monitorTitle', { campaign: campaign.name })}
             </DialogTitle>
-            <span className='ml-auto rounded-full bg-green-500/15 px-2 py-0.5 text-[10px] font-bold text-green-600 dark:text-green-400'>
-              ĐANG CHẠY
+            <span className={`ml-auto rounded-full px-2 py-0.5 text-[10px] font-bold ${statusClass}`}>
+              {statusLabel}
             </span>
           </div>
         </DialogHeader>
 
-        <MonitorContent campaignId={campaign.id} />
+        <MonitorContent campaignId={campaign.id} isRunning={isRunning} />
       </DialogContent>
     </Dialog>
   );

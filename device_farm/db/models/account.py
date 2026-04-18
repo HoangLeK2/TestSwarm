@@ -18,6 +18,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.database import Base
+from .enums import AccountStatus
 from .utils import _now, _uuid
 
 
@@ -48,7 +49,7 @@ class Account(Base):
     username: Mapped[str] = mapped_column(String(255), nullable=False)
     password_encrypted: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     display_name: Mapped[str] = mapped_column(String(255), default="")
-    status: Mapped[str] = mapped_column(String(20), default="active")
+    status: Mapped[str] = mapped_column(String(20), default=AccountStatus.ACTIVE)
 
     # Cooldown: set by account_manager when daily usage limit is hit.
     cooldown_until: Mapped[Optional[datetime]] = mapped_column(

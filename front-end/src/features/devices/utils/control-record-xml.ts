@@ -187,8 +187,8 @@ export function getScreenSignature(xml: string): { package: string; texts: strin
 export async function pollUntilUiChange(
   serial: string,
   oldHash: number,
-  intervalMs = 300,
-  timeoutMs = 3000
+  intervalMs = 700,
+  timeoutMs = 2800
 ): Promise<string | null> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {

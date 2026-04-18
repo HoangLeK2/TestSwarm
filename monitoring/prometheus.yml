@@ -1,0 +1,10 @@
+# Temporarily disabled (backend not using Prometheus now).
+# global:
+#   scrape_interval: 15s
+#   evaluation_interval: 15s
+#
+# scrape_configs:
+#   - job_name: "device-farm"
+#     static_configs:
+#       - targets: ["farm:8081"]
+#     metrics_path: /metrics

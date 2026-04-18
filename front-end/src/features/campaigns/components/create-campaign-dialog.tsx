@@ -27,6 +27,15 @@ type FormData = {
   description?: string;
 };
 
+type SocialPlatform = 'facebook' | 'instagram' | 'tiktok' | 'linkedin';
+
+const PLATFORM_OPTIONS: Array<{ value: SocialPlatform; labelKey: string }> = [
+  { value: 'facebook', labelKey: 'platformFacebook' },
+  { value: 'instagram', labelKey: 'platformInstagram' },
+  { value: 'tiktok', labelKey: 'platformTiktok' },
+  { value: 'linkedin', labelKey: 'platformLinkedin' },
+];
+
 function Section({
   icon: Icon,
   title,
@@ -58,6 +67,7 @@ export function CreateCampaignDialog() {
   });
   const [open, setOpen] = useState(false);
   const [variables, setVariables] = useState<Record<string, any>>({});
+  const [platform, setPlatform] = useState<SocialPlatform>('facebook');
   const [targetGroupId, setTargetGroupId] = useState<string | undefined>(undefined);
   const { mutate, isPending, error } = useCreateCampaign();
   const { data: groups } = useDeviceGroups();
@@ -69,16 +79,21 @@ export function CreateCampaignDialog() {
   } = useForm<FormData>({ resolver: zodResolver(schema) });
 
   const onSubmit = (data: FormData) => {
+    const nextVariables: Record<string, any> = {
+      ...variables,
+      __PLATFORM__: platform,
+    };
     mutate(
       {
         ...data,
-        variables: Object.keys(variables).length > 0 ? variables : undefined,
+        variables: Object.keys(nextVariables).length > 0 ? nextVariables : undefined,
         target_group_id: targetGroupId || undefined,
       },
       {
         onSuccess: () => {
           reset();
           setVariables({});
+          setPlatform('facebook');
           setTargetGroupId(undefined);
           setOpen(false);
         },
@@ -132,6 +147,33 @@ export function CreateCampaignDialog() {
                   />
                 </div>
               </div>
+            </Section>
+
+            <hr className='border-border' />
+
+            <Section
+              icon={Layers}
+              title={t('platformLabel')}
+              hint='(required)'
+            >
+              <Select
+                value={platform}
+                onValueChange={(v) => setPlatform(v as SocialPlatform)}
+              >
+                <SelectTrigger className='h-9 w-full'>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className='z-[10001]'>
+                  {PLATFORM_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>
+                      {t(opt.labelKey)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className='mt-1.5 text-[11px] text-muted-foreground'>
+                {t('platformHint')}
+              </p>
             </Section>
 
             <hr className='border-border' />
@@ -191,6 +233,9 @@ export function CreateCampaignDialog() {
                 <code className='rounded bg-muted px-1 font-mono'>{'${tên_biến}'}</code>.
                 Ví dụ: <code className='rounded bg-muted px-1 font-mono'>username</code>,{' '}
                 <code className='rounded bg-muted px-1 font-mono'>password</code>.
+              </p>
+              <p className='mb-2 text-[11px] text-muted-foreground'>
+                {t('accountModeHint')}
               </p>
               <VariableEditor variables={variables} onChange={setVariables} />
             </Section>

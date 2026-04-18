@@ -243,6 +243,33 @@ async def get_expired_cooldown_accounts(db: AsyncSession) -> List[Account]:
     return list(result.scalars().all())
 
 
+async def get_available_account(
+    db: AsyncSession,
+    platform: str,
+    user_id: Optional[str] = None,
+) -> Optional[Account]:
+    """Phase 2 — pick least-recently-used active account for `platform` not in cooldown.
+
+    Used for rotation when crawling to distribute load across accounts and avoid
+    hammering a single identity (anti-detection).
+
+    Returns None if no eligible account.
+    """
+    now = datetime.now(timezone.utc)
+    stmt = (
+        select(Account)
+        .where(Account.platform == platform)
+        .where(Account.status == "active")
+        .where((Account.cooldown_until.is_(None)) | (Account.cooldown_until < now))
+    )
+    if user_id is not None:
+        stmt = stmt.where(Account.user_id == user_id)
+    # NULLS FIRST so never-used accounts come before recently-used ones.
+    stmt = stmt.order_by(Account.last_used_at.asc().nullsfirst()).limit(1)
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
+
+
 # ── DeviceAccount CRUD ─────────────────────────────────────────────────────────
 
 

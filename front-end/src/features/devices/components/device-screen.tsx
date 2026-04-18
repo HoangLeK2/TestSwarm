@@ -28,9 +28,24 @@ interface DeviceScreenProps {
   highlightBounds?: [number, number, number, number] | null;
   /** Gesture mode: tap, swipe, double_tap, drag */
   gestureMode?: 'tap' | 'swipe' | 'double_tap' | 'drag';
+  /** Omit app caption row — parent renders it under the mockup for full-height stream. */
+  captionBelowFrame?: boolean;
+  /** Must match Tailwind object-* on img/canvas so taps map to the visible crop. */
+  streamCoverAlign?: 'center' | 'bottom';
 }
 
-export function DeviceScreen({ device, wsSend, mode, onTap, onSwipe, onDragGesture, highlightBounds, gestureMode }: DeviceScreenProps) {
+export function DeviceScreen({
+  device,
+  wsSend,
+  mode,
+  onTap,
+  onSwipe,
+  onDragGesture,
+  highlightBounds,
+  gestureMode,
+  captionBelowFrame = false,
+  streamCoverAlign = 'bottom',
+}: DeviceScreenProps) {
   const t = useTranslations('devicesFarm');
   const wrapRef    = useRef<HTMLDivElement>(null);
   const canvasRef  = useRef<HTMLCanvasElement>(null);
@@ -41,6 +56,7 @@ export function DeviceScreen({ device, wsSend, mode, onTap, onSwipe, onDragGestu
   onSwipeRef.current = onSwipe;
   onDragGestureRef.current = onDragGesture;
   const [hasFrame, setHasFrame] = useState(false);
+  const [mjpegFailed, setMjpegFailed] = useState(false);
   const [wsConnected, setWsConnected] = useState(false);
   const [loadingElapsedSec, setLoadingElapsedSec] = useState(0);
 
@@ -55,6 +71,7 @@ export function DeviceScreen({ device, wsSend, mode, onTap, onSwipe, onDragGestu
   const [h264Active, setH264Active] = useState(false);
   const h264TimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const h264StableTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const h264WarmupRef = React.useRef<{ startedAt: number; frames: number }>({ startedAt: 0, frames: 0 });
   const [mjpegEnabled, setMjpegEnabled] = useState(true);
 
   const [streamingFlags, setStreamingFlags] = useState<{
@@ -151,6 +168,10 @@ export function DeviceScreen({ device, wsSend, mode, onTap, onSwipe, onDragGestu
     return token ? `${base}&token=${encodeURIComponent(token)}` : base;
   }, [isActive, mjpegEnabled, device.serial]);
 
+  useEffect(() => {
+    setMjpegFailed(false);
+  }, [mjpegUrl]);
+
   // Always pass real serial so binary frames are subscribed immediately on mount.
   // jmuxer gracefully handles missing MSE via onError — MJPEG fallback stays visible.
   useH264Video(
@@ -159,7 +180,22 @@ export function DeviceScreen({ device, wsSend, mode, onTap, onSwipe, onDragGestu
     {
       onFrame: useCallback(() => {
         if (!hasFrame) setHasFrame(true);
-        if (!h264Active) setH264Active(true);
+
+        // Warm-up gate: avoid switching to H264 on the very first decoded frame.
+        // The first 1-2 frames after connect/reconnect are often unstable and
+        // cause visible "giat" when we fade out MJPEG too early.
+        const now = Date.now();
+        const warm = h264WarmupRef.current;
+        if (warm.startedAt === 0 || (now - warm.startedAt) > 1500) {
+          warm.startedAt = now;
+          warm.frames = 1;
+        } else {
+          warm.frames += 1;
+        }
+        if (!h264Active && warm.frames >= 4) {
+          setH264Active(true);
+        }
+
         if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
         h264TimeoutRef.current = setTimeout(() => setH264Active(false), 8000);
       }, [hasFrame, h264Active]),
@@ -170,6 +206,7 @@ export function DeviceScreen({ device, wsSend, mode, onTap, onSwipe, onDragGestu
   useEffect(() => {
     setH264Active(false);
     setMjpegEnabled(true);
+    h264WarmupRef.current = { startedAt: 0, frames: 0 };
     if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
     if (h264StableTimerRef.current) clearTimeout(h264StableTimerRef.current);
   }, [device.serial, isActive, relayH264Allowed]);
@@ -223,16 +260,28 @@ export function DeviceScreen({ device, wsSend, mode, onTap, onSwipe, onDragGestu
   }, [isActive, hasFrame, device.serial]);
 
   // ── Touch / gesture ──────────────────────────────────────────────────────
+  /** `object-cover`: fill view, crop — map pointer to device pixels. */
   const clientToDevice = useCallback(
     (displayX: number, displayY: number, displayW: number, displayH: number) => {
       if (displayW <= 0 || displayH <= 0 || dw <= 0 || dh <= 0) return { x: 0, y: 0 };
+      const scale = Math.max(displayW / dw, displayH / dh);
+      const drawnW = dw * scale;
+      const drawnH = dh * scale;
+      const ox = (displayW - drawnW) / 2;
+      const oy =
+        streamCoverAlign === 'bottom' ? displayH - drawnH : (displayH - drawnH) / 2;
+      const x = (displayX - ox) / scale;
+      const y = (displayY - oy) / scale;
       return {
-        x: Math.max(0, Math.min(Math.round((displayX / displayW) * dw), dw - 1)),
-        y: Math.max(0, Math.min(Math.round((displayY / displayH) * dh), dh - 1)),
+        x: Math.max(0, Math.min(Math.round(x), dw - 1)),
+        y: Math.max(0, Math.min(Math.round(y), dh - 1)),
       };
     },
-    [dw, dh]
+    [dw, dh, streamCoverAlign]
   );
+
+  const streamObjectClass =
+    streamCoverAlign === 'bottom' ? 'object-cover object-bottom' : 'object-cover object-center';
 
   const bind = useGesture(
     {
@@ -291,8 +340,8 @@ export function DeviceScreen({ device, wsSend, mode, onTap, onSwipe, onDragGestu
       const allowTap = mode === 'tap' || !!onTap;
       if (!allowTap) return;
       wsSend({ type: 'tap', serial: device.serial, x: p.x, y: p.y });
-      if (onTap && rect.width > 0 && rect.height > 0) {
-        onTap((e.clientX - rect.left) / rect.width, (e.clientY - rect.top) / rect.height);
+      if (onTap && dw > 0 && dh > 0) {
+        onTap(p.x / dw, p.y / dh);
       }
     },
     [mode, gestureMode, clientToDevice, wsSend, device.serial, onTap]
@@ -323,35 +372,35 @@ export function DeviceScreen({ device, wsSend, mode, onTap, onSwipe, onDragGestu
   );
 
   return (
-    <>
+    <div className='flex h-full min-h-0 w-full flex-col'>
       <div
         {...bind()}
         ref={wrapRef}
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
         onWheel={handleWheel}
-        className={`relative w-full overflow-hidden rounded-md border border-border bg-black ${
+        className={`relative min-h-0 w-full flex-1 overflow-hidden bg-black ${
           gestureMode === 'double_tap' ? 'cursor-cell' :
           gestureMode === 'drag' ? 'cursor-grab' :
           mode === 'swipe' ? 'cursor-crosshair' : 'cursor-pointer'
         }`}
-        style={{ aspectRatio: `${dw}/${dh}` }}
         id={`wrap-${id}`}
       >
         {/* MJPEG baseline — always shown until H264 takes over */}
-        {mjpegUrl && (
+        {mjpegUrl && !mjpegFailed && (
           <img
             src={mjpegUrl}
             alt={`${device.brand} ${device.model}`}
-            className={`absolute inset-0 h-full w-full object-contain transition-opacity duration-500 ${h264Active ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
+            className={`absolute inset-0 h-full w-full ${streamObjectClass} transition-opacity duration-500 ${h264Active ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
             onLoad={() => { setHasFrame(true); }}
+            onError={() => setMjpegFailed(true)}
             draggable={false}
           />
         )}
         {/* H264 live canvas — WebCodecs decode, zero MSE buffering latency */}
         <canvas
           ref={canvasRef}
-          className={`pointer-events-none absolute inset-0 h-full w-full object-contain transition-opacity duration-500 ${h264Active ? 'opacity-100' : 'opacity-0'}`}
+          className={`pointer-events-none absolute inset-0 h-full w-full ${streamObjectClass} transition-opacity duration-500 ${h264Active ? 'opacity-100' : 'opacity-0'}`}
         />
 
         {/* Highlight bounds overlay for XML tree node selection */}
@@ -389,7 +438,7 @@ export function DeviceScreen({ device, wsSend, mode, onTap, onSwipe, onDragGestu
         )}
       </div>
       {SHOW_RELAY_SCRCPY_UI_TOGGLE && isContinuous && (
-        <div className='mt-1 flex items-center justify-between gap-2 text-[10px] text-muted-foreground'>
+        <div className='mt-1 flex shrink-0 items-center justify-between gap-2 text-[10px] text-muted-foreground'>
           <span className='truncate' title={t('screenStreamHint')}>
             {t('screenStream')}
           </span>
@@ -402,20 +451,13 @@ export function DeviceScreen({ device, wsSend, mode, onTap, onSwipe, onDragGestu
           />
         </div>
       )}
-      <div className='mt-1 flex items-center justify-between text-[10px] text-muted-foreground'>
-        <span
-          className={`font-medium ${device.battery >= 0 && device.battery < 20 ? 'text-red-500' : ''}`}
-          id={`bat-${id}`}
-        >
-          🔋 {device.battery >= 0 ? `${device.battery}%` : '?'}
-        </span>
-        <span className='truncate font-mono' id={`app-${id}`} title={device.current_app ?? ''}>
-          {(device.current_app ?? '—').split('.').slice(-1)[0] ?? '—'}
-        </span>
-        <span className='rounded bg-muted px-1 py-0.5 font-mono text-[9px]' id={`task-${id}`}>
-          IDLE
-        </span>
-      </div>
-    </>
+      {!captionBelowFrame && (
+        <div className='mt-1 flex shrink-0 justify-center px-1 text-[10px] text-muted-foreground'>
+          <span className='truncate text-center font-mono' id={`app-${id}`} title={device.current_app ?? ''}>
+            {(device.current_app ?? '—').split('.').slice(-1)[0] ?? '—'}
+          </span>
+        </div>
+      )}
+    </div>
   );
 }

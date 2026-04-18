@@ -272,9 +272,9 @@ class AdbRelayManager:
         # Fire for already-online devices
         for serial in list(self._serial_index.keys()):
             try:
-                callback(serial)
+                callback(serial, self._capabilities.get(serial, {}))
             except Exception as exc:
-                logger.debug("on_device_online (retroactive) error serial=%s: %s", serial, exc)
+                logger.debug("on_capabilities_update (retroactive) error serial=%s: %s", serial, exc)
 
     async def register(self, conn: RelayConnection) -> None:
         callbacks_to_fire: list = []
@@ -296,6 +296,7 @@ class AdbRelayManager:
                 cb(serial)
             except Exception as exc:
                 logger.debug("pending scrcpy callback error ip=%s: %s", ip, exc)
+        await self._sync_relay_to_redis(conn)
         if self._on_device_online:
             for s in conn.serials:
                 try:
@@ -341,6 +342,7 @@ class AdbRelayManager:
                 self._scrcpy_running.discard(s)
         if conn:
             conn.fail_all(error)
+            await self._remove_relay_from_redis(relay_id, conn.serials)
         logger.info("relay unregistered: id=%s", relay_id)
 
     def update_capabilities(self, caps_list: list) -> None:
@@ -387,11 +389,61 @@ class AdbRelayManager:
                     "tags":            list(cap.tags),
                 }
             self._pool_state.setdefault(serial, "available")
+            asyncio.ensure_future(self._sync_caps_to_redis(serial, self._capabilities[serial]))
             if self._on_capabilities_update:
                 try:
                     self._on_capabilities_update(serial, self._capabilities[serial])
                 except Exception as exc:
                     logger.debug("on_capabilities_update error serial=%s: %s", serial, exc)
+
+ 
+    async def _sync_relay_to_redis(self, conn: RelayConnection) -> None:
+        from services import redis_store
+        if not redis_store.enabled():
+            return
+        try:
+            r = redis_store.client()
+            pipe = r.pipeline()
+            pipe.hset(redis_store.key("relay:agents"), conn.relay_id, json.dumps({
+                "relay_id": conn.relay_id,
+                "serials": sorted(conn.serials),
+            }))
+            for s in conn.serials:
+                pipe.set(redis_store.key(f"device:{s}:relay"), conn.relay_id)
+            pipe.delete(redis_store.key(f"relay:{conn.relay_id}:serials"))
+            for s in conn.serials:
+                pipe.sadd(redis_store.key(f"relay:{conn.relay_id}:serials"), s)
+            await pipe.execute()
+        except Exception as exc:
+            logger.debug("Redis relay sync failed for %s: %s", conn.relay_id, exc)
+
+    async def _remove_relay_from_redis(self, relay_id: str, serials: set) -> None:
+        from services import redis_store
+        if not redis_store.enabled():
+            return
+        try:
+            r = redis_store.client()
+            pipe = r.pipeline()
+            pipe.hdel(redis_store.key("relay:agents"), relay_id)
+            pipe.delete(redis_store.key(f"relay:{relay_id}:serials"))
+            for s in serials:
+                pipe.delete(redis_store.key(f"device:{s}:relay"))
+                pipe.delete(redis_store.key(f"device:{s}:caps"))
+            await pipe.execute()
+        except Exception as exc:
+            logger.debug("Redis relay remove failed for %s: %s", relay_id, exc)
+
+    async def _sync_caps_to_redis(self, serial: str, caps: dict) -> None:
+        from services import redis_store
+        if not redis_store.enabled():
+            return
+        try:
+            r = redis_store.client()
+            # Convert all values to strings for Redis hash
+            str_caps = {k: str(v) for k, v in caps.items()}
+            await r.hset(redis_store.key(f"device:{serial}:caps"), mapping=str_caps)
+        except Exception as exc:
+            logger.debug("Redis caps sync failed for %s: %s", serial, exc)
 
     # ── Device pool ───────────────────────────────────────────────────────────
 

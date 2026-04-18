@@ -58,9 +58,68 @@ _HASH_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_nam
 from runtime.core import DeviceClient
 from common.variable_resolver import VariableContext
 from core.env import capture_pre_step_enabled
+from services.extraction_usecase import (
+    persist_data_items,
+    resolve_comment_parent_hash,
+)
+from services.scenario_step_contract import (
+    extract_data_var_for_strategy,
+    normalize_extract_step,
+    normalize_save_extraction_step,
+)
+
+# Re-export helpers from tasks.scenario.utils for backward compatibility.
+# External callers (temporal/activities.py) import these from scenario_task —
+# keep them importable here without duplicating logic.
+from tasks.scenario.utils import (  # noqa: F401
+    _CONTAINER_CLASSES,
+    _HASH_EXECUTOR,
+    _POPUP_DISMISS_PATTERNS,
+    _normalize_xml,
+    _hash_hierarchy,
+    _xml_has_element,
+    _wait_for_element,
+    _retry_find_element,
+    _IW_DEFAULT_TIMEOUT,
+    _IW_DEFAULT_POLL,
+    _IW_MAX_TIMEOUT,
+    _get_implicit_wait_config,
+    _decode_element_image,
+    _wait_element_gone,
+    _wait_ui_change,
+    _wait_screen_stable,
+    _auto_dismiss_popup,
+    _tap_best_in_bounds,
+    _make_bounds,
+    _execute_tap,
+    _evaluate_condition,
+    _eval_ru_condition,
+    _capture_step_screenshot,
+    ScenarioCancelled,
+)
 
 
 log = logging.getLogger(__name__)
+
+
+def _run_async_coro_sync(coro: Any, timeout: float = 120.0) -> Any:
+    """Run async coroutine from sync code with minimal overhead.
+
+    Fast path: when no running loop exists in this thread, use asyncio.run directly.
+    Fallback: if already inside an event loop, offload to a dedicated thread.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    fut = pool.submit(asyncio.run, coro)
+    try:
+        return fut.result(timeout=timeout)
+    finally:
+        # Timeout must not block the caller by waiting for running future.
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 class StepBase(TypedDict):
@@ -834,36 +893,47 @@ def _capture_step_screenshot(
     selector: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """Save full screenshot + cropped element + XML hierarchy + selector info."""
+    from services import capture_store
+
     jpeg = device.take_screenshot()
     if not jpeg:
         return {}
 
     prefix = f"step_{idx:03d}_{step_type}"
+    # MinIO key mirrors local dir structure: captures/{session}/step_XXX_*.ext
+    session_name = os.path.basename(capture_dir)
+    minio_prefix = f"captures/{session_name}"
 
-    full_path = os.path.join(capture_dir, f"{prefix}_full.jpg")
-    with open(full_path, "wb") as f:
-        f.write(jpeg)
-    result: Dict[str, Any] = {"full": full_path}
+    # Full screenshot — skip quality gate (step captures are intentional, not minicap stream)
+    full_local = os.path.join(capture_dir, f"{prefix}_full.jpg")
+    full_key = f"{minio_prefix}/{prefix}_full.jpg"
+    full_url = capture_store.save_capture(jpeg, full_local, full_key, "image/jpeg", skip_quality=True)
+    if not full_url:
+        return {}
+    result: Dict[str, Any] = {"full": full_url}
 
-    # Save XML hierarchy only when CAPTURE_XML=1 (large files, rarely useful)
-    if os.environ.get("CAPTURE_XML", "").lower() in {"1", "true", "yes"}:
-        try:
-            xml = device.hierarchy_xml(force_refresh=False)
-            if xml:
-                xml_path = os.path.join(capture_dir, f"{prefix}_hierarchy.xml")
-                with open(xml_path, "w", encoding="utf-8") as f:
-                    f.write(xml)
-                result["hierarchy"] = xml_path
-        except Exception:
-            pass
+    # XML hierarchy
+    try:
+        xml = device.hierarchy_xml(force_refresh=False)
+        if xml:
+            xml_local = os.path.join(capture_dir, f"{prefix}_hierarchy.xml")
+            xml_key = f"{minio_prefix}/{prefix}_hierarchy.xml"
+            xml_url = capture_store.save_capture(
+                xml.encode("utf-8"), xml_local, xml_key, "application/xml",
+            )
+            if xml_url:
+                result["hierarchy"] = xml_url
+    except Exception:
+        pass
 
-    # Save selector info
+    # Selector info
     if selector:
-        sel_path = os.path.join(capture_dir, f"{prefix}_selector.json")
-        import json
-        with open(sel_path, "w", encoding="utf-8") as f:
-            json.dump(selector, f, ensure_ascii=False, indent=2)
-        result["selector"] = sel_path
+        sel_local = os.path.join(capture_dir, f"{prefix}_selector.json")
+        sel_key = f"{minio_prefix}/{prefix}_selector.json"
+        sel_bytes = json.dumps(selector, ensure_ascii=False, indent=2).encode("utf-8")
+        sel_url = capture_store.save_capture(sel_bytes, sel_local, sel_key, "application/json")
+        if sel_url:
+            result["selector"] = sel_url
 
     # Crop element
     if bounds:
@@ -880,9 +950,14 @@ def _capture_step_screenshot(
             )
             if crop_box[2] > crop_box[0] and crop_box[3] > crop_box[1]:
                 cropped = img.crop(crop_box)
-                elem_path = os.path.join(capture_dir, f"{prefix}_element.jpg")
-                cropped.save(elem_path, quality=85)
-                result["element"] = elem_path
+                buf = io.BytesIO()
+                cropped.save(buf, format="JPEG", quality=85)
+                crop_bytes = buf.getvalue()
+                elem_local = os.path.join(capture_dir, f"{prefix}_element.jpg")
+                elem_key = f"{minio_prefix}/{prefix}_element.jpg"
+                elem_url = capture_store.save_capture(crop_bytes, elem_local, elem_key, "image/jpeg", skip_quality=True)
+                if elem_url:
+                    result["element"] = elem_url
                 result["bounds"] = [bounds["left"], bounds["top"], bounds["right"], bounds["bottom"]]
         except Exception as exc:
             log.debug(f"crop failed: {exc}")
@@ -986,6 +1061,68 @@ def run_scenario_task(
 
     cancel_event: threading.Event — nếu set(), scenario dừng graceful ở step tiếp theo.
     """
+    from tasks.scenario.context import ScenarioContext
+    from tasks.scenario.executor import ScenarioExecutor
+
+    serial = device.serial
+    trace_id = str(scenario.get("_trace_id") or "-")
+    trace_source = str(scenario.get("_trace_source") or "scenario_task")
+    log.info(
+        "[SCENARIO][trace=%s][serial=%s][source=%s] DISPATCH steps=%s",
+        trace_id,
+        serial,
+        trace_source,
+        len(scenario.get("steps", []) or []),
+    )
+
+    sc = ScenarioContext.from_args(
+        device, scenario,
+        context=context, on_step_done=on_step_done,
+        _var_ctx=_var_ctx, _depth=_depth, _call_stack=_call_stack,
+        cancel_event=cancel_event,
+    )
+    # Mark the device "scenario-active" so the frontend WS gate drops manual
+    # touch/swipe frames that would otherwise interleave with the script.
+    # Ref-counted (nested scenarios stack). The increment/decrement is NOT
+    # atomic in CPython (LOAD/ADD/STORE happens across bytecodes) so we
+    # serialize via a per-device threading.Lock created on first use.
+    _mark = _depth == 0
+    if _mark:
+        lock = getattr(device, "_scenario_active_lock", None)
+        if lock is None:
+            import threading as _th
+            lock = _th.Lock()
+            # Best-effort install; if another thread raced us, keep theirs.
+            if not hasattr(device, "_scenario_active_lock"):
+                device._scenario_active_lock = lock
+            lock = device._scenario_active_lock
+        with lock:
+            device._scenario_active = int(getattr(device, "_scenario_active", 0)) + 1
+    try:
+        return ScenarioExecutor(sc).run()
+    finally:
+        if _mark:
+            lock = getattr(device, "_scenario_active_lock", None)
+            if lock is not None:
+                with lock:
+                    n = int(getattr(device, "_scenario_active", 1)) - 1
+                    device._scenario_active = max(0, n)
+            else:
+                # Lock disappeared somehow — best-effort reset
+                device._scenario_active = 0
+
+
+def _run_scenario_task_legacy(
+    device: "DeviceClient",
+    scenario: Dict[str, Any],
+    context: Optional[Dict[str, Any]] = None,
+    on_step_done: Optional[Callable[[Dict[str, Any]], None]] = None,
+    _var_ctx: Optional[VariableContext] = None,
+    _depth: int = 0,
+    _call_stack: frozenset[str] = frozenset(),
+    cancel_event: Optional["threading.Event"] = None,
+) -> Dict[str, Any]:
+    """Legacy monolith implementation — kept for reference, not called."""
     serial = device.serial
     steps: List[ScenarioStep] = scenario.get("steps", []) or []  # type: ignore[assignment]
     log.info(f"[{serial}] run_scenario_task: {len(steps)} steps")
@@ -1937,6 +2074,7 @@ def run_scenario_task(
 
         elif t == "extract":
             """Extract UI data (posts, text nodes) from current screen into context."""
+            step = normalize_extract_step(step)
             strategy = str(step.get("strategy", "fb_posts"))
             stop_if_no_new = bool(step.get("stop_if_no_new", False))
             no_new_threshold = int(step.get("no_new_threshold", 3))
@@ -2180,11 +2318,7 @@ def run_scenario_task(
                     # over _first_new_post_hash (unreliable: assumes topmost feed post).
                     if post_stats:
                         ctx["_comment_view_stats"] = post_stats
-                        _pid_key = parent_post_id  # MD5 derived from comment view XML header
-                        parent_hash = (
-                            ctx.get("_post_id_map", {}).get(_pid_key)
-                            or ctx.get("_first_new_post_hash")
-                        )
+                        parent_hash = resolve_comment_parent_hash(ctx, parent_post_id)
                         if parent_hash:
                             # Persist resolved parent for downstream save_extraction(parent_id_var=...).
                             ctx["_active_comment_parent_hash"] = parent_hash
@@ -2221,11 +2355,7 @@ def run_scenario_task(
                                 log.warning(f"[{serial}] update_content_stats failed: {exc}")
                     else:
                         # Keep parent link stable even when header stats are not visible.
-                        _pid_key = parent_post_id
-                        parent_hash = (
-                            ctx.get("_post_id_map", {}).get(_pid_key)
-                            or ctx.get("_first_new_post_hash")
-                        )
+                        parent_hash = resolve_comment_parent_hash(ctx, parent_post_id)
                         if parent_hash:
                             ctx["_active_comment_parent_hash"] = parent_hash
 
@@ -2263,72 +2393,44 @@ def run_scenario_task(
                 _auto_save_coll = step.get("collection")
                 if _auto_save_coll and step_result.get("ok", True):
                     try:
-                        from services.content_store import save_content_item
-                        import concurrent.futures as _cf
-
-                        # Determine data_var from strategy
-                        _auto_data_var = "comments" if strategy == "fb_comments" else (
-                            "text_nodes" if strategy == "text_nodes" else "posts"
+                        _auto_data_var = extract_data_var_for_strategy(step)
+                        _auto_data = ctx.get(_auto_data_var)
+                        _auto_offsets = ctx.setdefault("__save_extraction_offsets__", {})
+                        _as_parent_var = step.get("parent_id_var")
+                        _as_parent_id = ctx.get(_as_parent_var) if _as_parent_var else None
+                        _as_level = int(step.get("item_level") or 0)
+                        _report, _updated_offsets = _run_async_coro_sync(
+                            persist_data_items(
+                                data=_auto_data,
+                                data_var=_auto_data_var,
+                                offsets=_auto_offsets,
+                                collection=_auto_save_coll,
+                                platform=step.get("platform"),
+                                content_type=step.get("content_type", "post"),
+                                dedupe_field=step.get("dedupe_field"),
+                                tags=step.get("tags", ""),
+                                device_serial=device.serial,
+                                campaign_id=(scenario.get("campaign_id")),
+                                execution_id=(scenario.get("execution_id") or scenario.get("run_id")),
+                                parent_id=_as_parent_id,
+                                item_level=_as_level,
+                                user_id=(scenario.get("_campaign_vars") or {}).get("__USER_ID__"),
+                            )
                         )
-                        _auto_data = ctx.get(_auto_data_var, [])
-                        _auto_items: list = []
-                        if isinstance(_auto_data, list):
-                            _auto_items = [it for it in _auto_data if isinstance(it, dict)]
-                        elif isinstance(_auto_data, dict):
-                            _auto_items = [_auto_data]
-
-                        if _auto_items:
-                            # Offset tracking (same logic as save_extraction)
-                            _auto_offsets = ctx.setdefault("__save_extraction_offsets__", {})
-                            _auto_start = int(_auto_offsets.get(_auto_data_var, 0) or 0)
-                            _auto_batch = _auto_items[_auto_start:]
-
-                            if _auto_batch:
-                                _as_coll = _auto_save_coll
-                                _as_plat = step.get("platform")
-                                _as_ctype = step.get("content_type", "post")
-                                _as_dedup = step.get("dedupe_field")
-                                _as_tags = step.get("tags", "")
-                                _as_parent_var = step.get("save_parent_id_var")
-                                _as_parent_id = ctx.get(_as_parent_var) if _as_parent_var else None
-                                _as_level = int(step.get("item_level") or 0)
-                                _as_serial = device.serial
-                                _as_snap = list(_auto_batch)
-
-                                async def _auto_save_all() -> tuple:
-                                    _sv = _dp = _er = _pc = 0
-                                    for _it in _as_snap:
-                                        try:
-                                            _r = await save_content_item(
-                                                data=_it, collection=_as_coll,
-                                                platform=_as_plat, content_type=_as_ctype,
-                                                dedupe_field=_as_dedup, tags=_as_tags,
-                                                device_serial=_as_serial,
-                                                parent_id=_as_parent_id, item_level=_as_level,
-                                            )
-                                            if _r.get("saved"):
-                                                _sv += 1
-                                            else:
-                                                _dp += 1
-                                            _pc += 1
-                                        except Exception as _exc:
-                                            _er += 1
-                                            log.warning("[%s] extract auto-save failed: %s", _as_serial, _exc)
-                                            break
-                                    return _sv, _dp, _er, _pc
-
-                                with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
-                                    _fut = _pool.submit(asyncio.run, _auto_save_all())
-                                    _as_saved, _as_dup, _as_err, _as_proc = _fut.result(timeout=120)
-
-                                _auto_offsets[_auto_data_var] = _auto_start + _as_proc
-                                step_result["auto_save"] = {
-                                    "saved": _as_saved, "duplicate": _as_dup, "errors": _as_err,
-                                }
-                                step_result["message"] += (
-                                    f" | auto-save: saved={_as_saved}, dup={_as_dup}, err={_as_err}"
-                                )
-                                log.info(f"[{serial}] extract auto-save: saved={_as_saved}, dup={_as_dup}, err={_as_err}")
+                        ctx["__save_extraction_offsets__"] = _updated_offsets
+                        step_result["auto_save"] = {
+                            "saved": _report.saved_count,
+                            "duplicate": _report.duplicate_count,
+                            "errors": _report.error_count,
+                        }
+                        step_result["message"] += (
+                            f" | auto-save: saved={_report.saved_count}, "
+                            f"dup={_report.duplicate_count}, err={_report.error_count}"
+                        )
+                        log.info(
+                            f"[{serial}] extract auto-save: saved={_report.saved_count}, "
+                            f"dup={_report.duplicate_count}, err={_report.error_count}"
+                        )
                     except Exception as _as_exc:
                         log.warning("[%s] extract auto-save failed: %s", serial, _as_exc)
                         step_result["auto_save_error"] = str(_as_exc)
@@ -2486,13 +2588,13 @@ def run_scenario_task(
                     step_result["message"] = f"extract_screen_data failed: {exc}"
 
         elif t == "save_extraction":
+            step = normalize_save_extraction_step(step)
             data_var = step.get("data_var", "")
             if not data_var:
                 step_result["ok"] = False
                 step_result["message"] = "save_extraction: missing data_var"
             else:
                 try:
-                    from services.content_store import save_content_item
                     data = _var_ctx._runtime_vars.get(data_var)
                     # Fallback to scenario context for extract strategies that store in ctx.
                     if data is None:
@@ -2501,123 +2603,57 @@ def run_scenario_task(
                         step_result["ok"] = False
                         step_result["message"] = f"save_extraction: variable '{data_var}' not found"
                     else:
-                        items: list[dict[str, Any]] = []
-                        if isinstance(data, str):
-                            items = [{"text": data}]
-                        elif isinstance(data, dict):
-                            items = [data]
-                        elif isinstance(data, list):
-                            if not data:
-                                # Empty list — no posts yet, not an error.
-                                items = []
-                            else:
-                                items = [item for item in data if isinstance(item, dict)]
-                                if not items:
-                                    step_result["ok"] = False
-                                    step_result["message"] = (
-                                        f"save_extraction: variable '{data_var}' is a list but has no object items"
-                                    )
-                        else:
+                        if not isinstance(data, (str, dict, list)):
                             step_result["ok"] = False
                             step_result["message"] = (
                                 f"save_extraction: unsupported type for '{data_var}': {type(data).__name__}"
                             )
-                            items = []
-
-                        if not items:
-                            # Nothing to save (empty list or error already set above).
-                            step_result["saved_count"] = 0
-                            step_result["duplicate_count"] = 0
-                            step_result["error_count"] = 0
-                            if step_result.get("ok", True):
-                                step_result["message"] = "save_extraction: no items to save"
-                            # else: preserve the error message set above
+                            continue
+                        if isinstance(data, list) and data and not any(isinstance(item, dict) for item in data):
+                            step_result["ok"] = False
+                            step_result["message"] = (
+                                f"save_extraction: variable '{data_var}' is a list but has no object items"
+                            )
                             continue
 
-                        start_idx = 0
-                        if isinstance(data, list):
-                            offsets = ctx.setdefault("__save_extraction_offsets__", {})
-                            start_idx = int(offsets.get(data_var, 0) or 0)
-                            if start_idx > 0:
-                                items = items[start_idx:]
-
-                        if not items:
-                            # All items already saved in a previous iteration — no-op.
-                            step_result["saved_count"] = 0
-                            step_result["duplicate_count"] = 0
-                            step_result["error_count"] = 0
-                            step_result["message"] = "save_extraction: no new items to save"
-                            continue
-
-                        import concurrent.futures as _cf
-
-                        _coll = step.get("collection", "default")
-                        _plat = step.get("platform")
-                        _ctype = step.get("content_type", "post")
-                        _dedup_f = step.get("dedupe_field")
-                        _tags = step.get("tags", "")
-                        _dserial = device.serial
-                        _items_snap = list(items)
-                        # Hierarchy: read parent_id from ctx via parent_id_var
+                        offsets = ctx.setdefault("__save_extraction_offsets__", {})
                         _parent_id_var = step.get("parent_id_var")
                         _parent_id = ctx.get(_parent_id_var) if _parent_id_var else None
-                        _item_level = int(step.get("item_level") or 0)
-
-                        async def _save_all_items() -> tuple[int, int, int, int, dict[str, Any]]:
-                            _sv = _dp = _er = _pc = 0
-                            _last: dict[str, Any] = {}
-                            for _it in _items_snap:
-                                try:
-                                    _r = await save_content_item(
-                                        data=_it,
-                                        collection=_coll,
-                                        platform=_plat,
-                                        content_type=_ctype,
-                                        dedupe_field=_dedup_f,
-                                        tags=_tags,
-                                        device_serial=_dserial,
-                                        parent_id=_parent_id,
-                                        item_level=_item_level,
-                                    )
-                                    _last = _r
-                                    if _r.get("saved"):
-                                        _sv += 1
-                                    else:
-                                        _dp += 1
-                                    _pc += 1
-                                except Exception as _exc:
-                                    _er += 1
-                                    log.warning(
-                                        "[%s] save_extraction item failed (%s): %s",
-                                        _dserial,
-                                        data_var,
-                                        _exc,
-                                    )
-                                    break
-                            return _sv, _dp, _er, _pc, _last
-
-                        # Run in a dedicated thread with its own event loop to avoid
-                        # asyncpg pool cross-loop issues when called from async context.
-                        with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
-                            _fut = _pool.submit(asyncio.run, _save_all_items())
-                            saved_count, duplicate_count, error_count, processed_count, last_result = (
-                                _fut.result(timeout=120)
+                        report, updated_offsets = _run_async_coro_sync(
+                            persist_data_items(
+                                data=data,
+                                data_var=data_var,
+                                offsets=offsets,
+                                collection=step.get("collection", "default"),
+                                platform=step.get("platform"),
+                                content_type=step.get("content_type", "post"),
+                                dedupe_field=step.get("dedupe_field"),
+                                tags=step.get("tags", ""),
+                                device_serial=device.serial,
+                                campaign_id=(scenario.get("campaign_id")),
+                                execution_id=(scenario.get("execution_id") or scenario.get("run_id")),
+                                parent_id=_parent_id,
+                                item_level=int(step.get("item_level") or 0),
+                                user_id=(scenario.get("_campaign_vars") or {}).get("__USER_ID__"),
                             )
-                        if isinstance(data, list):
-                            offsets = ctx.setdefault("__save_extraction_offsets__", {})
-                            offsets[data_var] = start_idx + processed_count
-
-                        step_result["saved"] = saved_count > 0
-                        step_result["saved_count"] = saved_count
-                        step_result["duplicate_count"] = duplicate_count
-                        step_result["error_count"] = error_count
-                        step_result["last_result"] = last_result
-                        if error_count > 0 and saved_count == 0 and duplicate_count == 0:
+                        )
+                        ctx["__save_extraction_offsets__"] = updated_offsets
+                        step_result["saved"] = report.saved_count > 0
+                        step_result["saved_count"] = report.saved_count
+                        step_result["duplicate_count"] = report.duplicate_count
+                        step_result["error_count"] = report.error_count
+                        step_result["last_result"] = report.last_result or {}
+                        if (
+                            report.error_count > 0
+                            and report.saved_count == 0
+                            and report.duplicate_count == 0
+                        ):
                             step_result["ok"] = False
                             step_result["message"] = "save_extraction: all items failed"
                         else:
                             step_result["message"] = (
-                                f"save_extraction: saved={saved_count}, duplicate={duplicate_count}, errors={error_count}"
+                                f"save_extraction: saved={report.saved_count}, "
+                                f"duplicate={report.duplicate_count}, errors={report.error_count}"
                             )
                 except Exception as exc:
                     step_result["ok"] = False

@@ -65,7 +65,12 @@ export class WebGLRenderer {
         depth: false,
         stencil: false,
         alpha: false,
-        preserveDrawingBuffer: false,
+        // Idle screen on device → encoder emits no new frames → RAF tick has
+        // no frame to draw → with preserveDrawingBuffer:false the compositor
+        // resets the framebuffer to clearColor (black) every vsync, causing
+        // intermittent black frames during stillness. Preserving the buffer
+        // keeps the last decoded frame visible until a new one arrives.
+        preserveDrawingBuffer: true,
         premultipliedAlpha: false,
       }) as WebGLRenderingContext | null) || null;
     if (!gl) return;

@@ -1,4 +1,5 @@
 import { farmApi, deviceFarmBackendBase } from '@/lib/farm-api';
+import { tokenStorage } from '@/lib/token-storage';
 
 export interface ContentItem {
   id: string;
@@ -65,7 +66,7 @@ export const contentApi = {
    * Trigger a streaming download of the current filtered content.
    * Opens the URL directly so the browser handles the file download.
    */
-  exportStream: (filters: ContentFilters, format: ExportFormat): void => {
+  exportStream: async (filters: ContentFilters, format: ExportFormat): Promise<void> => {
     const params = new URLSearchParams({ format });
     if (filters.collection) params.set('collection', filters.collection);
     if (filters.platform) params.set('platform', filters.platform);
@@ -73,12 +74,25 @@ export const contentApi = {
     if (filters.search) params.set('search', filters.search);
     if (filters.device_serial) params.set('device_serial', filters.device_serial);
     if (filters.campaign_id) params.set('campaign_id', filters.campaign_id);
-    if (filters.run_id) params.set('run_id', filters.run_id);
+    if (filters.run_id) params.set('execution_id', filters.run_id);
     const url = `${deviceFarmBackendBase}/api/content/export/stream?${params.toString()}`;
+    const token = tokenStorage.getAuthToken();
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Export failed with status ${response.status}`);
+    }
+
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url;
+    a.href = objectUrl;
     a.download = `content-export.${format}`;
     a.click();
+    URL.revokeObjectURL(objectUrl);
   },
 
   list: async (filters?: ContentFilters): Promise<ContentListResponse> => {

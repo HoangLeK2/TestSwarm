@@ -13,12 +13,10 @@ import uuid
 from typing import Any, Dict, Optional
 
 from fastapi import WebSocket, WebSocketDisconnect
-from jose import JWTError, jwt
 from starlette.websockets import WebSocketDisconnect as StarletteWSDisconnect
 
 from services import pairing as _pairing_mod
 from core.config import Config
-from core.security import jwt_algorithm, jwt_secret_key
 from db import crud as repo
 from db.database import AsyncSessionLocal
 from runtime.core import DeviceManager, DeviceState
@@ -130,28 +128,36 @@ async def heartbeat(manager: DeviceManager) -> None:
 
 
 async def get_ws_user_id(ws: WebSocket) -> Optional[str]:
+    """Extract user_id from JWT passed as ?token=... in the WebSocket URL.
+
+    WebSockets are the one place we accept a query-string token because
+    browsers cannot set custom headers on WS upgrades. The decode itself
+    goes through the unified AuthContext path so WS and HTTP share the
+    same token validation rules.
     """
-    Extract user_id from JWT passed as ?token=... in the WebSocket URL.
-    Returns None if token is missing/invalid; WS will behave as anonymous.
-    """
-    token = ws.query_params.get("token")
-    if not token:
-        return None
-    try:
-        payload = jwt.decode(token, jwt_secret_key(), algorithms=[jwt_algorithm()])
-        user_id: Optional[str] = payload.get("sub")
-        token_type: Optional[str] = payload.get("type")
-        if not user_id or token_type == "refresh":
-            return None
-        return str(user_id)
-    except JWTError:
-        return None
+    from api.auth.context import try_decode_access_token
+
+    ctx = try_decode_access_token(ws.query_params.get("token"))
+    return ctx.user_id if ctx else None
 
 
 class WebSocketManager:
     """Manages frontend WebSocket connections (/ws)."""
 
-    def __init__(self, manager: DeviceManager, db_enabled: bool = False) -> None:
+    # Any WS message type that mutates device state. Blocked when read_only.
+    WRITE_MESSAGE_TYPES: frozenset[str] = frozenset({
+        "tap", "swipe", "key", "long_tap", "pinch", "double_tap", "drag",
+        "tap_selector", "screen_on", "screen_off", "unlock", "swipe_ext",
+        "install",
+    })
+
+    def __init__(
+        self,
+        manager: DeviceManager,
+        db_enabled: bool = False,
+        *,
+        read_only: bool = False,
+    ) -> None:
         self.manager = manager
         self._connections: Dict[str, WebSocket] = {}
         # ctrl_q: JSON status/control messages (subscribe_status)
@@ -164,6 +170,9 @@ class WebSocketManager:
         self._max_devices_per_ws: int = max(1, int(os.environ.get("MAX_DEVICES_PER_WS", "3")))
         self._lock = asyncio.Lock()
         self._db_enabled = db_enabled
+        # Safe-mode: reject write-type frames. BaseHTTPMiddleware can't see
+        # WS frames, so the gate must live inside the receive loop.
+        self._read_only = bool(read_only)
 
     def bind_event_recorder(self, recorder) -> None:
         """Subscribe to EventRecorder to broadcast device_event messages to all frontends."""
@@ -429,6 +438,26 @@ class WebSocketManager:
         lag_sum_ms = 0.0
         last_stats_ts = time.monotonic()
 
+        def _request_idr_recover() -> None:
+            """Throttled IDR request — heals decoder reference chain after any drop.
+
+            Throttled at scrcpy_control._idr_min_interval_s (default 1.0s) so
+            N concurrent connections / drop bursts produce at most 1 IDR/sec.
+            Without throttle, multi-viewer reconnect storms or congestion
+            cascades amplify into back-to-back keyframes that worsen congestion.
+            """
+            recv = getattr(device, "_scrcpy_receiver", None)
+            ctrl = getattr(recv, "control", None) if recv is not None else None
+            if ctrl is None:
+                return
+            fn = getattr(ctrl, "_request_idr_throttled", None) or getattr(ctrl, "request_idr", None)
+            if fn is None:
+                return
+            try:
+                fn()
+            except Exception:
+                pass
+
         # Freeze bootstrap refs and send under the same lock used by live sends.
         cfg_ref, key_ref = device.get_stream_bootstrap(max_key_age_s=2.0)
         try:
@@ -443,6 +472,12 @@ class WebSocketManager:
             pass
         except Exception:
             return
+
+        # No fresh keyframe in cache → static screen. Request IDR (throttled)
+        # so decoder has something to start with. Without this, browser stays
+        # black until user moves screen (motion → natural IDR, up to ~14s).
+        if key_ref is None:
+            _request_idr_recover()
 
         while True:
             try:
@@ -473,6 +508,9 @@ class WebSocketManager:
                 # In congestion, prefer skipping non-key deltas when version gaps are large.
                 if congestion and version_gap > 8 and not is_key:
                     last_version = version
+                    # Dropped non-key → reference chain broken on browser. Ask encoder
+                    # for fresh IDR so decoder can re-sync without showing corrupt frames.
+                    _request_idr_recover()
                     continue
 
                 send_started = time.monotonic()
@@ -483,9 +521,16 @@ class WebSocketManager:
                     await asyncio.wait_for(ws_send_lock.acquire(), timeout=0.1)
                 except asyncio.TimeoutError:
                     last_version = version
+                    # Drop on lock contention. Always recover — if we drop a
+                    # keyframe, every subsequent P-frame references something
+                    # the browser never decoded → silent corruption.
+                    _request_idr_recover()
                     continue
                 try:
                     await asyncio.wait_for(ws.send_bytes(frame), timeout=0.25)
+                except asyncio.TimeoutError:
+                    _request_idr_recover()
+                    raise
                 finally:
                     ws_send_lock.release()
                 send_elapsed_ms = (time.monotonic() - send_started) * 1000.0
@@ -540,8 +585,14 @@ class WebSocketManager:
                 data = await ws.receive_json()
             except (WebSocketDisconnect, StarletteWSDisconnect):
                 break
+            except RuntimeError as exc:
+                # Starlette: receive_* raises this when the socket is no longer CONNECTED
+                # (client gone, etc.) — not always WebSocketDisconnect. Must not `continue` spin.
+                log.debug("Frontend WS receiver exit: %s", exc)
+                break
             except Exception as exc:
                 log.warning(f"Frontend WS receiver error (continuing): {exc}")
+                await asyncio.sleep(0.05)
                 continue
 
             msg_type = data.get("type")
@@ -553,6 +604,32 @@ class WebSocketManager:
             device = self.manager.get_device(serial) if serial else None
             if not device:
                 continue
+
+            # Write-frame gates. BaseHTTPMiddleware can't see WS frames, so
+            # every input-mutating message type is filtered here.
+            #
+            # 1) Global read-only mode: farm-wide observe-only deployments.
+            # 2) Device-busy guard: covers both
+            #    (a) dispatcher-owned tasks that flip state=BUSY
+            #    (b) scenario runs started via Temporal / preview / fleet that
+            #        do NOT flip state but bump `_scenario_active` via the
+            #        `run_scenario_task` wrapper. Either signal means a script
+            #        is driving the device and manual taps must not interleave.
+            if msg_type in self.WRITE_MESSAGE_TYPES:
+                if self._read_only:
+                    log.debug(
+                        "ws drop write frame type=%s serial=%s (read_only)",
+                        msg_type, serial,
+                    )
+                    continue
+                is_busy_state = getattr(device, "state", None) == DeviceState.BUSY
+                scenario_active = int(getattr(device, "_scenario_active", 0) or 0) > 0
+                if is_busy_state or scenario_active:
+                    log.info(
+                        "ws drop write frame type=%s serial=%s (busy_state=%s scenario_active=%s)",
+                        msg_type, serial, is_busy_state, scenario_active,
+                    )
+                    continue
 
             # Fire-and-forget all input commands — don't await executor so the receiver
             # immediately loops back to receive_json() for the next message.
@@ -732,6 +809,26 @@ class DeviceAgentSession:
 
             # ── Shared-secret auth (set AGENT_SECRET env var to enable) ────
             _required_secret = os.environ.get("AGENT_SECRET", "").strip()
+            _env_name = os.environ.get("DEVICE_FARM_ENV", "").strip().lower()
+            _strict_agent_auth = _env_name in {"prod", "production", "staging"} or (
+                os.environ.get("AGENT_AUTH_REQUIRED", "").strip().lower() in {"1", "true", "yes", "on"}
+            )
+            _has_valid_pair = bool(pair_id and pair_id in _pairing_mod.store)
+            _has_pending_key = bool(key)
+            if _strict_agent_auth and not _required_secret and not (_has_valid_pair or _has_pending_key):
+                log.warning(
+                    "[DEVICE-WS] Agent %s from %s: rejected — strict auth requires secret or pair/key",
+                    serial,
+                    client_addr,
+                )
+                await ws.send_json(
+                    {
+                        "type": "error",
+                        "message": "Agent auth required (set AGENT_SECRET or use pairing key).",
+                    }
+                )
+                await ws.close(code=4003)
+                return
             if _required_secret:
                 _provided = (
                     hello.get("secret", "") or ws.query_params.get("secret", "")

@@ -19,6 +19,11 @@ export function useDeviceFarm() {
   const wsRef = useRef<ReturnType<typeof createWs> | null>(null);
 
   const wsSend = useCallback((obj: object) => wsRef.current?.send(obj), []);
+  const refreshTasks = useCallback(() => {
+    fetchTasks()
+      .then((data) => setTasks(Array.isArray(data) ? data : []))
+      .catch(() => {});
+  }, []);
 
   // Fetch user's registered devices to filter the live list
   useEffect(() => {
@@ -43,15 +48,20 @@ export function useDeviceFarm() {
 
   useEffect(() => {
     const handleVisibility = () => {
-      if (document.visibilityState === 'visible') refreshDevices();
+      if (document.visibilityState === 'visible') {
+        refreshDevices();
+        refreshTasks();
+      }
     };
     document.addEventListener('visibilitychange', handleVisibility);
     window.addEventListener('focus', refreshDevices);
+    window.addEventListener('focus', refreshTasks);
     return () => {
       document.removeEventListener('visibilitychange', handleVisibility);
       window.removeEventListener('focus', refreshDevices);
+      window.removeEventListener('focus', refreshTasks);
     };
-  }, [refreshDevices]);
+  }, [refreshDevices, refreshTasks]);
 
   useEffect(() => {
     fetchConfig()
@@ -60,13 +70,8 @@ export function useDeviceFarm() {
   }, []);
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      fetchTasks()
-        .then((data) => setTasks(Array.isArray(data) ? data : []))
-        .catch(() => {});
-    }, 3000);
-    return () => clearInterval(interval);
-  }, []);
+    refreshTasks();
+  }, [refreshTasks]);
 
   useEffect(() => {
     wsRef.current = createWs((msg: WsMessage) => {

@@ -1908,13 +1908,39 @@ class TestAllScenariosEmptySteps:
         return mock_db
 
     @pytest.mark.asyncio
+    async def test_no_scenarios_returns_400(self):
+        """Campaign with zero scenario rows cannot dispatch."""
+        from services.campaign_dispatch import enqueue_campaign_run_temporal
+
+        mock_campaign = MagicMock()
+        mock_campaign.variables = {}
+        mock_campaign.target_group_id = None
+
+        mock_device = MagicMock()
+        mock_device.id = "dev-1"
+        mock_device.serial = "emulator-5554"
+
+        patches = [
+            patch("services.campaign_dispatch.AsyncSessionLocal", return_value=self._make_db_mock()),
+            patch("services.campaign_dispatch.repo.get_campaign", return_value=mock_campaign),
+            patch("services.campaign_dispatch.repo.list_campaign_devices", return_value=[mock_device]),
+            patch("services.campaign_dispatch.repo.list_scenarios", return_value=[]),
+        ]
+        with ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            result, status = await enqueue_campaign_run_temporal("campaign-1", MagicMock())
+
+        assert status == 400
+        assert "no scenarios" in result["error"].lower()
+
+    @pytest.mark.asyncio
     async def test_all_empty_scenarios_returns_400_not_500(self):
         """When all scenarios exist but have no steps, return 400 with clear message."""
         from services.campaign_dispatch import enqueue_campaign_run_temporal
 
         mock_campaign = MagicMock()
         mock_campaign.variables = {}
-        mock_campaign.scenario = {}
         mock_campaign.target_group_id = None
 
         mock_device = MagicMock()

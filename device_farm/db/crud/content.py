@@ -11,14 +11,22 @@ from db.models.content import ContentCollection, ContentExport, ContentItem
 
 
 async def get_content_by_hash(
-    db: AsyncSession, content_hash: str, collection: str,
+    db: AsyncSession,
+    content_hash: str,
+    collection: str,
+    *,
+    user_id: str | None = None,
+    execution_id: str | None = None,
 ) -> Optional[ContentItem]:
-    result = await db.execute(
-        select(ContentItem).where(
-            ContentItem.content_hash == content_hash,
-            ContentItem.collection == collection,
-        )
+    stmt = select(ContentItem).where(
+        ContentItem.content_hash == content_hash,
+        ContentItem.collection == collection,
     )
+    if user_id:
+        stmt = stmt.where(ContentItem.user_id == user_id)
+    if execution_id:
+        stmt = stmt.where(ContentItem.execution_id == execution_id)
+    result = await db.execute(stmt)
     return result.scalar_one_or_none()
 
 
@@ -29,8 +37,13 @@ async def create_content_item(db: AsyncSession, **kwargs) -> ContentItem:
     return item
 
 
-async def get_content_item(db: AsyncSession, item_id: str) -> Optional[ContentItem]:
-    result = await db.execute(select(ContentItem).where(ContentItem.id == item_id))
+async def get_content_item(
+    db: AsyncSession, item_id: str, *, user_id: str | None = None
+) -> Optional[ContentItem]:
+    stmt = select(ContentItem).where(ContentItem.id == item_id)
+    if user_id:
+        stmt = stmt.where(ContentItem.user_id == user_id)
+    result = await db.execute(stmt)
     return result.scalar_one_or_none()
 
 
@@ -43,9 +56,10 @@ async def query_content(
     search: str | None = None,
     device_serial: str | None = None,
     campaign_id: str | None = None,
-    run_id: str | None = None,
+    execution_id: str | None = None,
     content_hash: str | None = None,
     parent_id: str | None = None,
+    user_id: str | None = None,
     date_from: datetime | None = None,
     date_to: datetime | None = None,
     limit: int = 50,
@@ -64,12 +78,14 @@ async def query_content(
         stmt = stmt.where(ContentItem.device_serial == device_serial)
     if campaign_id:
         stmt = stmt.where(ContentItem.campaign_id == campaign_id)
-    if run_id:
-        stmt = stmt.where(ContentItem.run_id == run_id)
+    if execution_id:
+        stmt = stmt.where(ContentItem.execution_id == execution_id)
     if content_hash:
         stmt = stmt.where(ContentItem.content_hash == content_hash)
     if parent_id:
         stmt = stmt.where(ContentItem.parent_id == parent_id)
+    if user_id:
+        stmt = stmt.where(ContentItem.user_id == user_id)
     if date_from:
         stmt = stmt.where(ContentItem.extracted_at >= date_from)
     if date_to:
@@ -119,10 +135,22 @@ async def update_content_stats(
     return result.rowcount > 0
 
 
-async def delete_content_item(db: AsyncSession, item_id: str) -> bool:
-    result = await db.execute(
-        delete(ContentItem).where(ContentItem.id == item_id)
-    )
+async def count_by_execution(
+    db: AsyncSession, execution_id: str, *, user_id: str | None = None
+) -> int:
+    """Phase 5 — count content items saved under an execution."""
+    stmt = select(func.count(ContentItem.id)).where(ContentItem.execution_id == execution_id)
+    if user_id:
+        stmt = stmt.where(ContentItem.user_id == user_id)
+    result = await db.execute(stmt)
+    return int(result.scalar() or 0)
+
+
+async def delete_content_item(db: AsyncSession, item_id: str, *, user_id: str | None = None) -> bool:
+    stmt = delete(ContentItem).where(ContentItem.id == item_id)
+    if user_id:
+        stmt = stmt.where(ContentItem.user_id == user_id)
+    result = await db.execute(stmt)
     return result.rowcount > 0
 
 
@@ -139,8 +167,12 @@ async def delete_content_by_collection(db: AsyncSession, collection: str) -> int
 async def get_or_create_collection(
     db: AsyncSession, name: str, **kwargs,
 ) -> ContentCollection:
+    user_id = kwargs.get("user_id")
     result = await db.execute(
-        select(ContentCollection).where(ContentCollection.name == name)
+        select(ContentCollection).where(
+            ContentCollection.name == name,
+            ContentCollection.user_id == user_id,
+        )
     )
     coll = result.scalar_one_or_none()
     if coll:
@@ -151,27 +183,44 @@ async def get_or_create_collection(
     return coll
 
 
-async def list_collections(db: AsyncSession) -> list[ContentCollection]:
+async def list_collections(db: AsyncSession, *, user_id: str) -> list[ContentCollection]:
     result = await db.execute(
-        select(ContentCollection).order_by(ContentCollection.updated_at.desc())
+        select(ContentCollection)
+        .where(ContentCollection.user_id == user_id)
+        .order_by(ContentCollection.updated_at.desc())
     )
     return list(result.scalars().all())
 
 
-async def delete_collection(db: AsyncSession, name: str) -> int:
+async def delete_collection(db: AsyncSession, name: str, *, user_id: str) -> int:
     """Delete collection + all its items. Returns items deleted."""
-    count = await delete_content_by_collection(db, name)
+    result = await db.execute(
+        delete(ContentItem).where(
+            ContentItem.collection == name,
+            ContentItem.user_id == user_id,
+        )
+    )
+    count = result.rowcount
     await db.execute(
-        delete(ContentCollection).where(ContentCollection.name == name)
+        delete(ContentCollection).where(
+            ContentCollection.name == name,
+            ContentCollection.user_id == user_id,
+        )
     )
     return count
 
 
-async def increment_collection_count(db: AsyncSession, name: str) -> None:
+async def increment_collection_count(
+    db: AsyncSession,
+    name: str,
+    *,
+    user_id: str | None = None,
+) -> None:
+    stmt = update(ContentCollection).where(ContentCollection.name == name)
+    if user_id:
+        stmt = stmt.where(ContentCollection.user_id == user_id)
     await db.execute(
-        update(ContentCollection)
-        .where(ContentCollection.name == name)
-        .values(item_count=ContentCollection.item_count + 1)
+        stmt.values(item_count=ContentCollection.item_count + 1)
     )
 
 
@@ -185,9 +234,12 @@ async def create_export(db: AsyncSession, **kwargs) -> ContentExport:
     return export
 
 
-async def get_export(db: AsyncSession, export_id: str) -> Optional[ContentExport]:
+async def get_export(db: AsyncSession, export_id: str, *, user_id: str | None = None) -> Optional[ContentExport]:
+    stmt = select(ContentExport).where(ContentExport.id == export_id)
+    if user_id:
+        stmt = stmt.where(ContentExport.user_id == user_id)
     result = await db.execute(
-        select(ContentExport).where(ContentExport.id == export_id)
+        stmt
     )
     return result.scalar_one_or_none()
 
@@ -198,9 +250,12 @@ async def update_export(db: AsyncSession, export_id: str, **kwargs) -> None:
     )
 
 
-async def list_exports(db: AsyncSession, limit: int = 20) -> list[ContentExport]:
+async def list_exports(db: AsyncSession, *, user_id: str, limit: int = 20) -> list[ContentExport]:
     result = await db.execute(
-        select(ContentExport).order_by(ContentExport.created_at.desc()).limit(limit)
+        select(ContentExport)
+        .where(ContentExport.user_id == user_id)
+        .order_by(ContentExport.created_at.desc())
+        .limit(limit)
     )
     return list(result.scalars().all())
 
@@ -208,13 +263,18 @@ async def list_exports(db: AsyncSession, limit: int = 20) -> list[ContentExport]
 # ── Stats ─────────────────────────────────────────────────────────────────────
 
 
-async def content_stats(db: AsyncSession) -> dict[str, Any]:
+async def content_stats(db: AsyncSession, *, user_id: str) -> dict[str, Any]:
     """Aggregate content stats."""
-    total = (await db.execute(select(func.count(ContentItem.id)))).scalar_one()
+    total = (
+        await db.execute(
+            select(func.count(ContentItem.id)).where(ContentItem.user_id == user_id)
+        )
+    ).scalar_one()
 
     # By platform
     platform_rows = await db.execute(
         select(ContentItem.platform, func.count(ContentItem.id))
+        .where(ContentItem.user_id == user_id)
         .group_by(ContentItem.platform)
     )
     by_platform = {row[0] or "unknown": row[1] for row in platform_rows.all()}
@@ -222,6 +282,7 @@ async def content_stats(db: AsyncSession) -> dict[str, Any]:
     # By collection
     coll_rows = await db.execute(
         select(ContentItem.collection, func.count(ContentItem.id))
+        .where(ContentItem.user_id == user_id)
         .group_by(ContentItem.collection)
     )
     by_collection = {row[0]: row[1] for row in coll_rows.all()}
@@ -229,6 +290,7 @@ async def content_stats(db: AsyncSession) -> dict[str, Any]:
     # Latest
     latest = (await db.execute(
         select(func.max(ContentItem.extracted_at))
+        .where(ContentItem.user_id == user_id)
     )).scalar_one()
 
     return {

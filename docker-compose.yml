@@ -7,9 +7,9 @@
 # Services:
 #   farm       — Backend API + Temporal worker + gRPC relay (8081, 50051 → host)
 #   frontend   — Next.js dashboard (port 3000)
-#   temporal   — Temporal Server (port 7233, UI: 8233) — uses external Postgres
-#   postgres   — Disabled by default. Bring your own Postgres (set DB_HOST in .env).
-#                Uncomment block below to run a local Postgres.
+#   postgres   — PostgreSQL (host port 5443 → container 5432; avoid clash with local PG)
+#   temporal   — Temporal Server (port 7233, UI: 8233)
+#   minio — đã comment; bật lại khi cần S3 local (kèm volume minio_data).
 #
 # DB config (read from .env in this directory, all have fallbacks):
 #   DB_HOST (default: host.docker.internal — external Postgres on the host)
@@ -74,10 +74,83 @@ services:
     ports:
       - "8233:8080"   # Temporal UI at http://localhost:8233
 
-  farm:
-    build:
-      context: ./device_farm
-      dockerfile: Dockerfile
+  # farm:
+  #   build:
+  #     context: ./device_farm
+  #     dockerfile: Dockerfile
+  #   restart: unless-stopped
+  #   env_file:
+  #     - ./device_farm/.env
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     temporal:
+  #       condition: service_healthy
+  #   # Bridge network (default): works on Docker Desktop Mac/Windows. Agent-boot on the
+  #   # host uses localhost:8081 and localhost:50051 via published ports below.
+  #   # On Linux bare metal you can switch to network_mode: host + 127.0.0.1:* URLs if you want lower NAT overhead.
+  #   ports:
+  #     - "8081:8081"
+  #     - "50051:50051"
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         cpus: '4.0'
+  #         memory: 4G
+  #   environment:
+  #     DATABASE_URL: postgresql://postgres:${DB_PASSWORD:-postgres}@postgres:5432/device_farm
+  #     TEMPORAL_SERVER_URL: temporal:7233
+  #     SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+  #     ACCESS_EXPIRE_HOURS: ${ACCESS_EXPIRE_HOURS:-1}
+  #     OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  #     GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  #     # Cloudflare R2 (ưu tiên). Để trống nếu chỉ lưu local / dùng presigned.
+  #     R2_ENDPOINT: ${R2_ENDPOINT:-}
+  #     R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+  #     R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
+  #     R2_BUCKET: ${R2_BUCKET:-device-farm}
+  #     R2_PUBLIC_BASE_URL: ${R2_PUBLIC_BASE_URL:-}
+  #     R2_SECURE: ${R2_SECURE:-}
+  #     R2_PUBLIC_URL_INCLUDE_BUCKET: ${R2_PUBLIC_URL_INCLUDE_BUCKET:-}
+  #     R2_REGION: ${R2_REGION:-}
+  #     # Legacy MinIO / S3 env (bật khi trỏ tới MinIO ngoài compose)
+  #     # MINIO_ENDPOINT: ${MINIO_ENDPOINT:-}
+  #     # MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-}
+  #     # MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-}
+  #     # MINIO_BUCKET: ${MINIO_BUCKET:-}
+  #     # MINIO_PUBLIC_BASE_URL: ${MINIO_PUBLIC_BASE_URL:-}
+  #     REDIS_URL: redis://redis:6379/0
+  #     RELAY_API_KEY: ${RELAY_API_KEY:-}
+  #     RELAY_PORT: ${RELAY_PORT:-50051}
+  #     DEVICE_FARM_U2_ALWAYS_TUNNEL: ${DEVICE_FARM_U2_ALWAYS_TUNNEL:-1}
+  #     DEVICE_FARM_SCRCPY_JAR: ${DEVICE_FARM_SCRCPY_JAR:-/usr/share/scrcpy/scrcpy-server}
+  #   volumes:
+  #     - ./device_farm/config.yaml:/app/config.yaml:ro
+  #     - farm_captures:/app/captures
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:8081/api/live"]
+  #     interval: 15s
+  #     timeout: 5s
+  #     retries: 3
+  #     start_period: 10s
+
+  # frontend:
+  #   build:
+  #     context: ./front-end
+  #     dockerfile: Dockerfile
+  #   restart: unless-stopped
+  #   depends_on:
+  #     farm:
+  #       condition: service_healthy
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     NEXT_PUBLIC_API_URL: http://farm:8081
+  #     NEXT_PUBLIC_WS_URL: ws://farm:8081
+
+  # ─── Redis (shared state) ───
+  redis:
+    image: redis:7-alpine
     restart: unless-stopped
     env_file:
       - ./.env
@@ -122,8 +195,7 @@ services:
       DEVICE_FARM_U2_ALWAYS_TUNNEL: ${DEVICE_FARM_U2_ALWAYS_TUNNEL:-1}
       DEVICE_FARM_SCRCPY_JAR: ${DEVICE_FARM_SCRCPY_JAR:-/usr/share/scrcpy/scrcpy-server}
     volumes:
-      - ./device_farm/config.yaml:/app/config.yaml:ro
-      - farm_captures:/app/captures
+      - redis_data:/data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8081/api/health"]
       interval: 15s
@@ -159,16 +231,10 @@ services:
       NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
       NEXT_PUBLIC_SENTRY_DISABLED: ${NEXT_PUBLIC_SENTRY_DISABLED:-1}
 
-  # ─── MinIO (local S3) — tắt mặc định; bỏ # để dùng lại + uncomment minio_data volume ───
-  # minio:
-  #   profiles:
-  #     - minio
-  #   image: minio/minio:latest
+  # ─── Observability (tạm tắt Prometheus/Grafana vì BE chưa dùng) ───
+  # prometheus:
+  #   image: prom/prometheus:latest
   #   restart: unless-stopped
-  #   command: server /data --console-address ":9001"
-  #   environment:
-  #     MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
-  #     MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
   #   ports:
   #     - "9000:9000"
   #     - "9001:9001"
@@ -184,4 +250,7 @@ services:
 volumes:
   pgdata:
   farm_captures:
-  # minio_data:
+  minio_data:
+  redis_data:
+  # prometheus_data:
+  # grafana_data:

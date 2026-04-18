@@ -221,9 +221,11 @@ class TestOCREngineExtract:
         assert isinstance(engine.available, bool)
 
     def test_unavailable_engine(self):
-        engine = OCREngine(tesseract_cmd="/nonexistent/path")
+        # Force tesseract backend with bad cmd so it can't find binary; paddle also
+        # not installed in test env → should raise.
+        engine = OCREngine(tesseract_cmd="/nonexistent/path", backend="tesseract")
         assert engine.available is False
-        with pytest.raises(RuntimeError, match="Tesseract not installed"):
+        with pytest.raises(RuntimeError, match="No OCR backend available"):
             engine.extract_text(b"fake")
 
 

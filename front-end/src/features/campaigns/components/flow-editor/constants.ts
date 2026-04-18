@@ -6,13 +6,20 @@ export const STEP_COLORS: Record<string, string> = {
   input_text: 'border-l-cyan-500', input_selector: 'border-l-cyan-500', key: 'border-l-cyan-500',
   launch_app: 'border-l-indigo-500', open_url: 'border-l-indigo-500',
   scroll_down: 'border-l-indigo-500', scroll_to: 'border-l-indigo-500',
-  wait: 'border-l-green-500', wait_element: 'border-l-green-500', wait_stable: 'border-l-green-500',
+  wait: 'border-l-green-500', wait_element: 'border-l-green-500', wait_stable: 'border-l-green-500', verify_screen: 'border-l-green-500',
   assert_element: 'border-l-green-500', dismiss_popup: 'border-l-green-500',
   double_tap: 'border-l-blue-400', pinch: 'border-l-sky-500', drag: 'border-l-blue-600',
   take_screenshot: 'border-l-violet-500', set_clipboard: 'border-l-teal-500',
   set_variable: 'border-l-purple-500',
+  set_var: 'border-l-purple-500',
   loop: 'border-l-teal-500',
   extract: 'border-l-fuchsia-500', save_extraction: 'border-l-fuchsia-600',
+  extract_text_hierarchy: 'border-l-fuchsia-500',
+  extract_text_ocr: 'border-l-fuchsia-500',
+  extract_text_ai: 'border-l-fuchsia-500',
+  extract_screen_data: 'border-l-fuchsia-500',
+  if: 'border-l-amber-500',
+  break_if: 'border-l-amber-500',
   repeat: 'border-l-orange-500', repeat_until: 'border-l-orange-500',
   if_element: 'border-l-amber-500', if_variable: 'border-l-amber-500',
   random_pick: 'border-l-rose-500', run_scenario: 'border-l-pink-500',
@@ -26,6 +33,8 @@ export const BRACKET_COLORS: Record<string, { border: string; bg: string; label:
   random_pick: { border: 'border-rose-400/60', bg: 'bg-rose-50/50 dark:bg-rose-950/20', label: 'text-rose-600 dark:text-rose-400' },
   run_scenario: { border: 'border-pink-400/60', bg: 'bg-pink-50/50 dark:bg-pink-950/20', label: 'text-pink-600 dark:text-pink-400' },
   loop: { border: 'border-teal-400/60', bg: 'bg-teal-50/50 dark:bg-teal-950/20', label: 'text-teal-600 dark:text-teal-400' },
+  if: { border: 'border-amber-400/60', bg: 'bg-amber-50/50 dark:bg-amber-950/20', label: 'text-amber-600 dark:text-amber-400' },
+  break_if: { border: 'border-amber-400/60', bg: 'bg-amber-50/50 dark:bg-amber-950/20', label: 'text-amber-600 dark:text-amber-400' },
 };
 
 function localizeExtractStrategy(strategy?: string): string {
@@ -66,6 +75,24 @@ function localizeCollection(collection?: string): string {
   return trimmed;
 }
 
+/** Set `true` to show hierarchy / OCR / AI / auto screen-extract in the "+" insert menu again. */
+export const INSERT_MENU_SHOW_TEXT_EXTRACT_SHORTCUTS = false;
+
+const _INSERT_MENU_HIDDEN_TYPES = new Set<string>([
+  'extract_text_hierarchy',
+  'extract_text_ocr',
+  'extract_text_ai',
+  'extract_screen_data',
+]);
+
+export function getInsertMenuForUi(): typeof INSERT_MENU {
+  if (INSERT_MENU_SHOW_TEXT_EXTRACT_SHORTCUTS) return INSERT_MENU;
+  return INSERT_MENU.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => !_INSERT_MENU_HIDDEN_TYPES.has(item.type)),
+  })).filter((group) => group.items.length > 0);
+}
+
 export const INSERT_MENU = [
   {
     group: 'Thu thập dữ liệu',
@@ -73,6 +100,10 @@ export const INSERT_MENU = [
     items: [
       { type: 'extract', label: 'Trích xuất & Lưu dữ liệu' },
       { type: 'save_extraction', label: 'Lưu dữ liệu riêng (nâng cao)' },
+      { type: 'extract_text_hierarchy', label: 'Trích xuất text từ hierarchy' },
+      { type: 'extract_text_ocr', label: 'OCR text từ screenshot' },
+      { type: 'extract_text_ai', label: 'AI extract text' },
+      { type: 'extract_screen_data', label: 'Extract dữ liệu màn hình (auto)' },
     ]
   },
   {
@@ -99,6 +130,7 @@ export const INSERT_MENU = [
       { type: 'take_screenshot', label: 'Chụp màn hình' },
       { type: 'set_clipboard', label: 'Ghi clipboard' },
       { type: 'set_variable', label: 'Gán biến' },
+      { type: 'set_var', label: 'Gán biến (legacy)' },
     ]
   },
   {
@@ -108,8 +140,11 @@ export const INSERT_MENU = [
       { type: 'wait', label: 'Chờ (giây)' },
       { type: 'wait_element', label: 'Chờ phần tử xuất hiện' },
       { type: 'wait_stable', label: 'Chờ màn hình ổn định' },
+      { type: 'verify_screen', label: 'Xác minh màn hình (SSIM)' },
       { type: 'if_element', label: 'Nếu phần tử tồn tại' },
       { type: 'if_variable', label: 'Nếu biến thỏa điều kiện' },
+      { type: 'if', label: 'If tổng quát (condition)' },
+      { type: 'break_if', label: 'Break nếu thỏa condition' },
       { type: 'loop', label: 'Vòng lặp (hỗ trợ biến)' },
       { type: 'repeat', label: 'Lặp N lần' },
       { type: 'repeat_until', label: 'Lặp cho đến khi' },
@@ -147,6 +182,7 @@ export function getStepSummary(step: FlowStep): string {
     case 'take_screenshot': return step.save_path ?? '';
     case 'set_clipboard': return `"${step.text ?? ''}"`;
     case 'set_variable': return `${step.name} = ${step.value ?? '…'}`;
+    case 'set_var': return `${step.key ?? ''} = ${JSON.stringify(step.value ?? '')}`;
     case 'repeat': return `${step.count}×`;
     case 'repeat_until': return `tối đa ${step.max_iterations}`;
     case 'if_element': return `[${step.by}] "${step.value}"`;
@@ -162,6 +198,10 @@ export function getStepSummary(step: FlowStep): string {
       return step.collection ? `${base} → ${localizeCollection(step.collection)}` : base;
     }
     case 'save_extraction': return `${localizeDataVar(step.data_var)} → ${localizeCollection(step.collection)}`;
+    case 'extract_text_hierarchy': return step.save_as ?? 'texts';
+    case 'extract_text_ocr': return step.save_as ?? 'ocr_text';
+    case 'extract_text_ai': return step.save_as ?? 'ai_text';
+    case 'extract_screen_data': return step.save_as ?? 'screen_data';
     default: return '';
   }
 }
@@ -202,6 +242,8 @@ export function getStepDisplay(step: FlowStep): { target: string; selectorBadge?
       return { target: step.url ?? '' };
     case 'wait_stable':
       return { target: step.timeout != null ? `timeout ${step.timeout}s` : '' };
+    case 'verify_screen':
+      return { target: step.ssim_threshold != null ? `SSIM ≥ ${step.ssim_threshold}` : 'verify screen' };
     case 'dismiss_popup':
       return { target: step.retries != null ? `×${step.retries}` : '' };
     case 'tap_position':
@@ -212,6 +254,8 @@ export function getStepDisplay(step: FlowStep): { target: string; selectorBadge?
     }
     case 'set_variable':
       return { target: step.name ? `${step.name} = ${step.value ?? '…'}` : '' };
+    case 'set_var':
+      return { target: step.key ? `${step.key} = ${JSON.stringify(step.value ?? '')}` : '' };
     case 'repeat':
       return { target: step.count != null ? `${step.count} lần` : '' };
     case 'repeat_until':
@@ -228,6 +272,10 @@ export function getStepDisplay(step: FlowStep): { target: string; selectorBadge?
       return { target: `${step.branches?.length ?? 0} nhánh` };
     case 'run_scenario':
       return { target: step.scenario_name || step.scenario_id || '' };
+    case 'if':
+      return { target: Object.keys(step.condition ?? {}).join(', ') || 'condition' };
+    case 'break_if':
+      return { target: Object.keys(step.condition ?? {}).join(', ') || 'condition' };
     case 'loop':
       return { target: `×${step.count ?? '?'}` };
     case 'extract': {
@@ -236,6 +284,14 @@ export function getStepDisplay(step: FlowStep): { target: string; selectorBadge?
     }
     case 'save_extraction':
       return { target: `${localizeDataVar(step.data_var)} → ${localizeCollection(step.collection)}` };
+    case 'extract_text_hierarchy':
+      return { target: step.save_as ?? 'texts' };
+    case 'extract_text_ocr':
+      return { target: step.save_as ?? 'ocr_text' };
+    case 'extract_text_ai':
+      return { target: step.save_as ?? 'ai_text' };
+    case 'extract_screen_data':
+      return { target: step.save_as ?? 'screen_data' };
     default:
       return { target: getStepSummary(step) };
   }
@@ -244,9 +300,10 @@ export function getStepDisplay(step: FlowStep): { target: string; selectorBadge?
 /** Returns which top-level category a step type belongs to. */
 export function getStepCategory(type: string): 'action' | 'flow' {
   const flowTypes = new Set([
-    'wait', 'wait_element', 'wait_stable',
+    'wait', 'wait_element', 'wait_stable', 'verify_screen',
     'loop', 'repeat', 'repeat_until',
     'if_element', 'if_variable',
+    'if', 'break_if',
     'random_pick', 'run_scenario',
   ]);
   return flowTypes.has(type) ? 'flow' : 'action';
@@ -260,15 +317,20 @@ export function getStepTypeName(type: string): string {
     input_text: 'NHẬP TEXT', input_selector: 'NHẬP VÀO', key: 'NHẤN PHÍM',
     launch_app: 'MỞ APP', open_url: 'MỞ URL',
     scroll_down: 'CUỘN XUỐNG', scroll_to: 'CUỘN TỚI',
-    wait: 'CHỜ', wait_element: 'CHỜ PHẦN TỬ', wait_stable: 'CHỜ ỔN ĐỊNH',
+    wait: 'CHỜ', wait_element: 'CHỜ PHẦN TỬ', wait_stable: 'CHỜ ỔN ĐỊNH', verify_screen: 'VERIFY SCREEN',
     assert_element: 'KIỂM TRA', dismiss_popup: 'ĐÓNG POPUP',
     double_tap: 'CHẠM ĐÚP', pinch: 'PHÓNG TO/THU', drag: 'KÉO THẢ',
     take_screenshot: 'CHỤP MÀN HÌNH', set_clipboard: 'CLIPBOARD',
     set_variable: 'GÁN BIẾN',
+    set_var: 'GÁN BIẾN (LEGACY)',
     repeat: 'LẶP', repeat_until: 'LẶP CHO ĐẾN KHI',
-    if_element: 'NẾU PHẦN TỬ', if_variable: 'NẾU BIẾN',
+    if_element: 'NẾU PHẦN TỬ', if_variable: 'NẾU BIẾN', if: 'IF', break_if: 'BREAK IF',
     random_pick: 'NGẪU NHIÊN', run_scenario: 'CHẠY KB CON',
     loop: 'VÒNG LẶP', extract: 'TRÍCH XUẤT', save_extraction: 'LƯU DỮ LIỆU (riêng)',
+    extract_text_hierarchy: 'EXTRACT TEXT HIERARCHY',
+    extract_text_ocr: 'EXTRACT TEXT OCR',
+    extract_text_ai: 'EXTRACT TEXT AI',
+    extract_screen_data: 'EXTRACT SCREEN DATA',
   };
   return map[type] ?? type.toUpperCase();
 }

@@ -3,7 +3,7 @@ scripts/fix_scenario_variables.py
 
 One-shot migration: find all Scenario rows with empty variables={} that
 reference ${VAR} placeholders in their steps, then backfill variables from
-the parent campaign's scenario JSON (which contains the template defaults).
+the campaign's default Scenario row (lowest order) embedded dict + campaign.variables.
 
 Run:
     cd /Users/hoanglcpila.vn/deviceFarmer/device_farm
@@ -20,6 +20,8 @@ from typing import Any
 from sqlalchemy import select, update
 
 from db.database import AsyncSessionLocal
+from db.crud.campaign import list_scenarios
+from db.crud.default_scenario import scenario_row_to_embedded_dict
 from db.models.campaign import Campaign, Scenario
 
 
@@ -56,6 +58,15 @@ async def run(dry_run: bool = False, debug: bool = False) -> None:
         # Load campaigns once
         camp_result = await db.execute(select(Campaign))
         campaigns_by_id = {c.id: c for c in camp_result.scalars().all()}
+        default_embedded_cache: dict[str, dict] = {}
+
+        async def _default_embedded(campaign_id: str) -> dict:
+            if campaign_id not in default_embedded_cache:
+                rows = await list_scenarios(db, campaign_id)
+                default_embedded_cache[campaign_id] = (
+                    scenario_row_to_embedded_dict(rows[0]) if rows else {}
+                )
+            return default_embedded_cache[campaign_id]
 
         fixed = 0
         for s in scenarios:
@@ -69,11 +80,11 @@ async def run(dry_run: bool = False, debug: bool = False) -> None:
                 print(f"    referenced vars: {referenced}")
                 print(f"    campaign found: {campaign is not None}")
                 if campaign:
-                    sc_json = campaign.scenario or {}
-                    tv = (sc_json.get("variables") or {}) if isinstance(sc_json, dict) else {}
+                    emb = await _default_embedded(campaign.id)
+                    tv = (emb.get("variables") or {}) if isinstance(emb, dict) else {}
                     cv = campaign.variables or {}
-                    print(f"    campaign.scenario keys: {list(sc_json.keys()) if isinstance(sc_json, dict) else sc_json}")
-                    print(f"    campaign.scenario['variables']: {tv}")
+                    print(f"    default scenario embedded keys: {list(emb.keys()) if isinstance(emb, dict) else emb}")
+                    print(f"    embedded['variables']: {tv}")
                     print(f"    campaign.variables: {cv}")
 
             if not referenced:
@@ -86,11 +97,11 @@ async def run(dry_run: bool = False, debug: bool = False) -> None:
                     print("    → SKIP: campaign not found")
                 continue
 
-            sc_json = campaign.scenario or {}
-            template_vars: dict = (sc_json.get("variables") or {}) if isinstance(sc_json, dict) else {}
+            emb = await _default_embedded(campaign.id)
+            template_vars: dict = (emb.get("variables") or {}) if isinstance(emb, dict) else {}
             campaign_vars: dict = campaign.variables or {}
 
-            # Merge both sources: campaign.scenario["variables"] + campaign.variables
+            # Merge: default scenario variables + campaign.variables
             all_available = {**template_vars, **campaign_vars}
 
             if not all_available:

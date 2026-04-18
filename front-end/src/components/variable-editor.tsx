@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef, KeyboardEvent } from 'react';
-import { Plus, Trash2, ChevronDown, ChevronRight, Info } from 'lucide-react';
+import { Plus, Trash2, ChevronDown, ChevronRight, Info, Copy, Check } from 'lucide-react';
+import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -22,15 +23,15 @@ type VarEntry = {
 
 
 const BUILTINS = [
-  { name: '${__NOW__}', desc: 'ISO timestamp hiện tại' },
-  { name: '${__DATE__}', desc: 'YYYY-MM-DD' },
-  { name: '${__TIME__}', desc: 'HH:MM:SS' },
-  { name: '${__DEVICE_SERIAL__}', desc: 'Serial thiết bị đang chạy' },
-  { name: '${__DEVICE_MODEL__}', desc: 'Model thiết bị' },
-  { name: '${__RANDOM_INT_1_100__}', desc: 'Số ngẫu nhiên 1–100' },
-  { name: '${__RANDOM_UUID__}', desc: 'UUID v4' },
-  { name: '${__STEP_INDEX__}', desc: 'Index bước hiện tại' },
-];
+  { name: '${__NOW__}', descKey: 'builtins.now' },
+  { name: '${__DATE__}', descKey: 'builtins.date' },
+  { name: '${__TIME__}', descKey: 'builtins.time' },
+  { name: '${__DEVICE_SERIAL__}', descKey: 'builtins.deviceSerial' },
+  { name: '${__DEVICE_MODEL__}', descKey: 'builtins.deviceModel' },
+  { name: '${__RANDOM_INT_1_100__}', descKey: 'builtins.randomInt' },
+  { name: '${__RANDOM_UUID__}', descKey: 'builtins.randomUuid' },
+  { name: '${__STEP_INDEX__}', descKey: 'builtins.stepIndex' },
+] as const;
 
 function toEntries(vars: Record<string, any>): VarEntry[] {
   return Object.entries(vars).map(([key, value]) => {
@@ -66,10 +67,12 @@ function ListTagInput({
   tags,
   onChange,
   disabled,
+  t,
 }: {
   tags: string[];
   onChange: (tags: string[]) => void;
   disabled?: boolean;
+  t: (key: string) => string;
 }) {
   const [draft, setDraft] = useState('');
 
@@ -120,11 +123,11 @@ function ListTagInput({
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKeyDown}
           onBlur={addTag}
-          placeholder={tags.length === 0 ? 'Nhập giá trị, Enter để thêm…' : '+'}
+          placeholder={tags.length === 0 ? t('listInputPlaceholder') : '+'}
         />
       )}
       {tags.length === 0 && disabled && (
-        <span className='text-muted-foreground/50'>Danh sách trống</span>
+        <span className='text-muted-foreground/50'>{t('listEmpty')}</span>
       )}
     </div>
   );
@@ -136,10 +139,12 @@ function TypeSelect({
   value,
   onChange,
   disabled,
+  t,
 }: {
   value: VarType;
   onChange: (t: VarType) => void;
   disabled?: boolean;
+  t: (key: string) => string;
 }) {
   return (
     <Select value={value} onValueChange={(v) => onChange(v as VarType)} disabled={disabled}>
@@ -147,9 +152,9 @@ function TypeSelect({
         <SelectValue />
       </SelectTrigger>
       <SelectContent className='z-[10001]'>
-        <SelectItem value='string'>Chuỗi</SelectItem>
-        <SelectItem value='number'>Số</SelectItem>
-        <SelectItem value='list'>Danh sách</SelectItem>
+        <SelectItem value='string'>{t('types.string')}</SelectItem>
+        <SelectItem value='number'>{t('types.number')}</SelectItem>
+        <SelectItem value='list'>{t('types.list')}</SelectItem>
       </SelectContent>
     </Select>
   );
@@ -168,8 +173,10 @@ interface Props {
 }
 
 export function VariableEditor({ variables, onChange, disabled, showBuiltins = true }: Props) {
+  const t = useTranslations('components.variableEditor');
   const [entries, setEntries] = useState<VarEntry[]>(() => toEntries(variables));
   const [builtinsOpen, setBuiltinsOpen] = useState(false);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const internalChange = useRef(false);
 
   // Sync from parent only for external resets (not our own onChange)
@@ -206,14 +213,48 @@ export function VariableEditor({ variables, onChange, disabled, showBuiltins = t
     [entries, commit],
   );
 
+  const copyToken = useCallback(async (key: string) => {
+    if (!key.trim()) return;
+    const token = `\${${key}}`;
+    try {
+      await navigator.clipboard.writeText(token);
+      setCopiedKey(key);
+      window.setTimeout(() => setCopiedKey((current) => (current === key ? null : current)), 1200);
+    } catch {
+      // Ignore clipboard failures to keep editor interactions simple.
+    }
+  }, []);
+
+  const getValuePlaceholder = useCallback((entry: VarEntry) => {
+    if (entry.type === 'number') {
+      return t('valuePlaceholderNumber');
+    }
+    if (entry.type === 'string') {
+      return entry.key
+        ? t('valuePlaceholderStringWithRef', { key: entry.key })
+        : t('valuePlaceholderString');
+    }
+    return '';
+  }, [t]);
+
   return (
     <div className='space-y-3'>
+      <div className='rounded-md border bg-muted/20 px-3 py-2 text-[11px] text-muted-foreground'>
+        <p className='font-medium text-foreground'>{t('quickGuide.title')}</p>
+        <p className='mt-1'>{t('quickGuide.step1')}</p>
+        <p>{t('quickGuide.step2')}</p>
+        <p>
+          {t('quickGuide.step3Prefix')}{' '}
+          <code className='rounded bg-muted px-1 font-mono'>{'${ten_bien}'}</code>.
+        </p>
+      </div>
+
       {/* Header row */}
       {entries.length > 0 && (
         <div className='flex gap-2 px-0.5'>
-          <span className='w-[130px] text-[10px] font-medium uppercase tracking-wide text-muted-foreground'>Tên biến</span>
-          <span className='w-[100px] text-[10px] font-medium uppercase tracking-wide text-muted-foreground'>Loại</span>
-          <span className='flex-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground'>Giá trị</span>
+          <span className='w-[130px] text-[10px] font-medium uppercase tracking-wide text-muted-foreground'>{t('columns.variableName')}</span>
+          <span className='w-[100px] text-[10px] font-medium uppercase tracking-wide text-muted-foreground'>{t('columns.type')}</span>
+          <span className='flex-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground'>{t('columns.value')}</span>
           <span className='w-7' />
         </div>
       )}
@@ -222,19 +263,32 @@ export function VariableEditor({ variables, onChange, disabled, showBuiltins = t
       {entries.map((entry, i) => (
         <div key={i} className='flex items-start gap-2'>
           {/* Key */}
-          <Input
-            value={entry.key}
-            onChange={(e) => update(i, { key: e.target.value })}
-            placeholder='tên_biến'
-            disabled={disabled}
-            className='h-8 w-[130px] shrink-0 font-mono text-xs'
-          />
+          <div className='w-[130px] shrink-0 space-y-1'>
+            <Input
+              value={entry.key}
+              onChange={(e) => update(i, { key: e.target.value })}
+              placeholder={t('keyPlaceholder')}
+              disabled={disabled}
+              className='h-8 font-mono text-xs'
+            />
+            {entry.key.trim() && (
+              <button
+                type='button'
+                className='flex items-center gap-1 text-[10px] text-primary hover:underline'
+                onClick={() => copyToken(entry.key)}
+              >
+                {copiedKey === entry.key ? <Check size={10} /> : <Copy size={10} />}
+                <code className='font-mono'>{`\${${entry.key}}`}</code>
+              </button>
+            )}
+          </div>
 
           {/* Type */}
           <TypeSelect
             value={entry.type}
             onChange={(t) => update(i, { type: t, strVal: '', listVal: [] })}
             disabled={disabled}
+            t={t}
           />
 
           {/* Value */}
@@ -244,13 +298,14 @@ export function VariableEditor({ variables, onChange, disabled, showBuiltins = t
                 tags={entry.listVal}
                 onChange={(tags) => update(i, { listVal: tags })}
                 disabled={disabled}
+                t={t}
               />
             ) : (
               <Input
                 type={entry.type === 'number' ? 'number' : 'text'}
                 value={entry.strVal}
                 onChange={(e) => update(i, { strVal: e.target.value })}
-                placeholder={entry.type === 'number' ? '0' : entry.key ? `\${${entry.key}}` : 'Giá trị…'}
+                placeholder={getValuePlaceholder(entry)}
                 disabled={disabled}
                 className='h-8 text-xs'
               />
@@ -273,10 +328,10 @@ export function VariableEditor({ variables, onChange, disabled, showBuiltins = t
 
       {entries.length === 0 && (
         <div className='rounded-md border border-dashed px-3 py-3 text-xs text-muted-foreground'>
-          <p className='font-medium'>Chưa có biến nào.</p>
+          <p className='font-medium'>{t('emptyTitle')}</p>
           <p className='mt-0.5 text-[11px]'>
-            Dùng biến trong kịch bản qua cú pháp{' '}
-            <code className='rounded bg-muted px-1 font-mono'>{'${tên_biến}'}</code>.
+            {t('emptyHintPrefix')}{' '}
+            <code className='rounded bg-muted px-1 font-mono'>{'${ten_bien}'}</code>.
           </p>
         </div>
       )}
@@ -291,7 +346,7 @@ export function VariableEditor({ variables, onChange, disabled, showBuiltins = t
         className='h-7 text-xs'
       >
         <Plus size={12} className='mr-1' />
-        Thêm biến
+        {t('addVariable')}
       </Button>
 
       {/* Built-in variables reference */}
@@ -304,14 +359,14 @@ export function VariableEditor({ variables, onChange, disabled, showBuiltins = t
           >
             {builtinsOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
             <Info size={11} />
-            <span className='font-medium'>Biến hệ thống có sẵn</span>
+            <span className='font-medium'>{t('builtinsTitle')}</span>
           </button>
           {builtinsOpen && (
             <div className='grid grid-cols-2 gap-x-4 gap-y-1 border-t px-3 py-2'>
               {BUILTINS.map((b) => (
                 <div key={b.name} className='flex flex-col'>
                   <code className='text-[10px] font-mono text-primary'>{b.name}</code>
-                  <span className='text-[10px] text-muted-foreground'>{b.desc}</span>
+                  <span className='text-[10px] text-muted-foreground'>{t(b.descKey)}</span>
                 </div>
               ))}
             </div>

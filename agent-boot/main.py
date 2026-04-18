@@ -17,6 +17,18 @@ Quick start:
 """
 from __future__ import annotations
 
+import os as _os
+
+# Silence gRPC C++ glog fork warnings BEFORE any grpc import.
+# subprocess.Popen() falls back to fork+exec on Linux/glibc<2.34 (no
+# posix_spawn close-from support). With gRPC threads alive, fork triggers
+# `Other threads are currently calling into gRPC, skipping fork() handlers`
+# in parent + `FD from fork parent still in poll list: fd(N)` in child for
+# every inherited FD. Pure noise — child immediately exec's, FDs vanish.
+# ERROR drops INFO/WARNING glog from gRPC's C++ runtime; Python-level
+# gRPC errors still surface via the standard logger.
+_os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
+
 import argparse
 import asyncio
 import os

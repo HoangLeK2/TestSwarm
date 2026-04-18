@@ -11,6 +11,7 @@ cụ thể (author, comment, stats) — bổ sung golden.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Iterable, List
 
@@ -77,6 +78,8 @@ def test_fb_pre_hierarchy_since_175633_no_toolbar_junk_in_long_bodies(xml_path: 
 
 
 def test_fb_pre_hierarchy_since_175633_corpus_nonempty() -> None:
+    if not _FB_PRE_XML_PATHS and os.getenv("ALLOW_MISSING_CAPTURE_CORPUS") == "1":
+        pytest.skip("session 175633+ capture corpus not available on this machine")
     assert len(_FB_PRE_XML_PATHS) >= 10, (
         "expected device_farm/captures/49c62ff79ec0c35d_2026-04-12_*/*_pre_hierarchy.xml "
         f"with {_FB_PKG} from session {_MIN_SESSION_SUFFIX}+"

@@ -4,13 +4,47 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import importlib
 import queue
 import threading
+from uuid import uuid4
 from typing import Any, Callable, Dict, List, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
+# Keyed by (serial, trace_id) with owner user_id so cancel routes must match
+# both the device and (optionally) the caller, preventing cross-device and
+# cross-owner cancels that plain trace_id lookup allowed.
+_ACTIVE_PREVIEWS: Dict[tuple, dict] = {}
+_ACTIVE_PREVIEWS_LOCK = threading.Lock()
+
+
+def _register_preview(
+    serial: str,
+    trace_id: str,
+    event: "threading.Event",
+    user_id: Optional[str] = None,
+) -> None:
+    with _ACTIVE_PREVIEWS_LOCK:
+        _ACTIVE_PREVIEWS[(serial, trace_id)] = {
+            "event": event,
+            "user_id": user_id,
+        }
+
+
+def _unregister_preview(serial: str, trace_id: str) -> None:
+    with _ACTIVE_PREVIEWS_LOCK:
+        _ACTIVE_PREVIEWS.pop((serial, trace_id), None)
+
+
+def _get_preview_entry(serial: str, trace_id: str) -> Optional[dict]:
+    with _ACTIVE_PREVIEWS_LOCK:
+        return _ACTIVE_PREVIEWS.get((serial, trace_id))
+from api.auth import policy
+from api.auth.context import AuthContext
+from api.deps import caller_auth_from_request
 from api.schemas.device_control import ScenarioPreviewRequest
 from common.session_lock import SessionLockStore
 from core.config import Config
@@ -18,11 +52,18 @@ from db import crud as repo
 from db.database import AsyncSessionLocal
 from runtime.core import DeviceManager
 
+log = logging.getLogger(__name__)
+trace_log = importlib.import_module("structlog").get_logger("scenario_trace")
+
 
 def run_scenario_on_device(
     manager: DeviceManager, serial: str, steps: List[Dict[str, Any]],
     on_step_done: Optional[Callable[[Dict[str, Any]], None]] = None,
     variables: Optional[Dict[str, Any]] = None,
+    trace_id: Optional[str] = None,
+    trace_source: str = "api.preview",
+    user_id: Optional[str] = None,
+    cancel_event: Optional["threading.Event"] = None,
 ) -> Dict[str, Any]:
     from tasks.scenario_task import run_scenario_task
 
@@ -31,12 +72,30 @@ def run_scenario_on_device(
         return {"error": f"Device {serial} not found"}
     if not steps:
         return {"error": "steps must be a non-empty array"}
-    scenario: Dict[str, Any] = {"instructions": "", "steps": steps, "variables": variables or {}}
-    return run_scenario_task(device, scenario, on_step_done=on_step_done)
+    scenario: Dict[str, Any] = {
+        "instructions": "",
+        "steps": steps,
+        "variables": variables or {},
+        "_trace_id": trace_id or f"scn-{uuid4().hex[:10]}",
+        "_trace_source": trace_source,
+        "_campaign_vars": {"__USER_ID__": str(user_id)} if user_id else {},
+    }
+    return run_scenario_task(device, scenario, on_step_done=on_step_done, cancel_event=cancel_event)
+
+
+def _resolve_user_id_from_request(request: Request) -> Optional[str]:
+    """Delegates to the unified auth context. Preserves the legacy return
+    shape (Optional[str]) so existing callers don't need to change."""
+    ctx = caller_auth_from_request(request)
+    return ctx.user_id if ctx else None
 
 
 async def _execute_scenario_body(
-    manager: DeviceManager, serial: str, body: ScenarioPreviewRequest
+    manager: DeviceManager,
+    serial: str,
+    body: ScenarioPreviewRequest,
+    trace_source: str = "api.preview",
+    user_id: Optional[str] = None,
 ):
     if not body.steps:
         return JSONResponse(
@@ -45,7 +104,25 @@ async def _execute_scenario_body(
         )
     loop = asyncio.get_running_loop()
     import functools
-    fn = functools.partial(run_scenario_on_device, manager, serial, body.steps, None, body.variables)
+    trace_id = f"scn-{uuid4().hex[:10]}"
+    trace_log.info(
+        "scenario_request",
+        trace_id=trace_id,
+        serial=serial,
+        source=trace_source,
+        total_steps=len(body.steps),
+    )
+    fn = functools.partial(
+        run_scenario_on_device,
+        manager,
+        serial,
+        body.steps,
+        None,
+        body.variables,
+        trace_id,
+        trace_source,
+        user_id,
+    )
     result = await loop.run_in_executor(None, fn)
     if "error" in result:
         return JSONResponse(result, status_code=400)
@@ -60,14 +137,17 @@ def build_scenarios_router(
     router = APIRouter()
 
     @router.post("/devices/{serial}/scenario/preview")
-    async def api_scenario_preview(serial: str, body: ScenarioPreviewRequest):
+    async def api_scenario_preview(serial: str, body: ScenarioPreviewRequest, request: Request):
         device = manager.get_device(serial)
         if not device:
             return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
-        return await _execute_scenario_body(manager, serial, body)
+        user_id = _resolve_user_id_from_request(request)
+        return await _execute_scenario_body(
+            manager, serial, body, trace_source="api.preview", user_id=user_id
+        )
 
     @router.post("/devices/{serial}/scenario/preview-stream")
-    async def api_scenario_preview_stream(serial: str, body: ScenarioPreviewRequest):
+    async def api_scenario_preview_stream(serial: str, body: ScenarioPreviewRequest, request: Request):
         """
         SSE endpoint: streams step results as they complete.
         Each event is a JSON object with the step result.
@@ -78,8 +158,19 @@ def build_scenarios_router(
             return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
         if not body.steps:
             return JSONResponse({"error": "steps must be a non-empty array"}, status_code=400)
+        trace_id = f"scn-{uuid4().hex[:10]}"
+        trace_log.info(
+            "scenario_stream_request",
+            trace_id=trace_id,
+            serial=serial,
+            source="api.preview_stream",
+            total_steps=len(body.steps),
+        )
+        user_id = _resolve_user_id_from_request(request)
 
-        # Queue for thread→async communication
+        cancel_event = threading.Event()
+        _register_preview(serial, trace_id, cancel_event, user_id=user_id)
+
         q: queue.Queue[Dict[str, Any] | None] = queue.Queue()
 
         def on_step_done(result: Dict[str, Any]) -> None:
@@ -87,32 +178,46 @@ def build_scenarios_router(
 
         def run_in_thread() -> None:
             try:
-                final = run_scenario_on_device(manager, serial, body.steps, on_step_done=on_step_done, variables=body.variables)
+                final = run_scenario_on_device(
+                    manager,
+                    serial,
+                    body.steps,
+                    on_step_done=on_step_done,
+                    variables=body.variables,
+                    trace_id=trace_id,
+                    trace_source="api.preview_stream",
+                    user_id=user_id,
+                    cancel_event=cancel_event,
+                )
                 q.put({"_event": "done", **final})
             except Exception as exc:
                 q.put({"_event": "error", "error": str(exc)})
             finally:
                 q.put(None)  # sentinel
 
-        # Start execution in background thread
         threading.Thread(target=run_in_thread, daemon=True).start()
 
         async def event_generator():
             total_steps = len(body.steps)
-            yield f"data: {json.dumps({'event': 'start', 'total_steps': total_steps})}\n\n"
-            while True:
-                # Poll queue with small sleep to avoid blocking event loop
-                try:
-                    item = await asyncio.get_event_loop().run_in_executor(None, q.get, True, 0.1)
-                except queue.Empty:
-                    continue
-                if item is None:
-                    break
-                if "_event" in item:
-                    evt_type = item.pop("_event")
-                    yield f"data: {json.dumps({'event': evt_type, **item})}\n\n"
-                else:
-                    yield f"data: {json.dumps({'event': 'step_done', **item})}\n\n"
+            yield f"data: {json.dumps({'event': 'start', 'trace_id': trace_id, 'total_steps': total_steps})}\n\n"
+            try:
+                while True:
+                    if await request.is_disconnected():
+                        cancel_event.set()
+                        break
+                    try:
+                        item = await asyncio.get_event_loop().run_in_executor(None, q.get, True, 0.1)
+                    except queue.Empty:
+                        continue
+                    if item is None:
+                        break
+                    if "_event" in item:
+                        evt_type = item.pop("_event")
+                        yield f"data: {json.dumps({'event': evt_type, **item})}\n\n"
+                    else:
+                        yield f"data: {json.dumps({'event': 'step_done', **item})}\n\n"
+            finally:
+                _unregister_preview(serial, trace_id)
 
         return StreamingResponse(
             event_generator(),
@@ -120,23 +225,56 @@ def build_scenarios_router(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    @router.post("/devices/{serial}/scenario/preview-stream/{trace_id}/cancel")
+    async def api_scenario_preview_stream_cancel(serial: str, trace_id: str, request: Request):
+        entry = _get_preview_entry(serial, trace_id)
+        if entry is None:
+            return JSONResponse(
+                {"error": "trace not found or already finished"}, status_code=404
+            )
+        # Owner check: only the user who started the stream (or an unauth
+        # caller when the stream had no owner) may cancel.
+        owner_id = entry.get("user_id")
+        caller_id = _resolve_user_id_from_request(request)
+        if owner_id and caller_id != owner_id:
+            return JSONResponse(
+                {"error": "not owner of this trace"}, status_code=403
+            )
+        entry["event"].set()
+        return {"ok": True, "serial": serial, "trace_id": trace_id, "cancelled": True}
+
     @router.post("/devices/{serial}/scenario/run")
-    async def api_scenario_run(serial: str, body: ScenarioPreviewRequest):
+    async def api_scenario_run(serial: str, body: ScenarioPreviewRequest, request: Request):
         device = manager.get_device(serial)
         if not device:
             return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
-        return await _execute_scenario_body(manager, serial, body)
+        user_id = _resolve_user_id_from_request(request)
+        return await _execute_scenario_body(
+            manager, serial, body, trace_source="api.run", user_id=user_id
+        )
 
     @router.post("/sessions/{session_id}/scenario/run")
-    async def api_sessions_scenario_run(session_id: str, body: ScenarioPreviewRequest):
-        device_id = session_store.get_device_for_session(session_id)
-        if device_id is None and config.database.enabled:
-            async with AsyncSessionLocal() as db:
-                row = await repo.get_mcp_session(db, session_id)
-                if row and row.status == "active":
-                    device_id = row.device_serial
+    async def api_sessions_scenario_run(session_id: str, body: ScenarioPreviewRequest, request: Request):
+        ctx = caller_auth_from_request(request)
+        if ctx is None:
+            return JSONResponse({"error": "Not authenticated"}, status_code=401)
+        if not config.database.enabled:
+            return JSONResponse(
+                {"error": "Session API requires database (multi-user) mode"},
+                status_code=501,
+            )
+        try:
+            device_id = await policy.assert_owns_session(ctx, session_id)
+        except HTTPException as exc:
+            return JSONResponse({"error": str(exc.detail)}, status_code=exc.status_code)
+        except Exception:
+            log.exception("sessions_scenario_run: assert_owns_session infra error")
+            return JSONResponse(
+                {"error": "Backend unavailable"}, status_code=503
+            )
         if not device_id:
             return JSONResponse({"error": "Session not found"}, status_code=404)
+        caller_id = ctx.user_id
         if not body.steps:
             return JSONResponse(
                 {"error": "steps must be a non-empty array"},
@@ -144,7 +282,26 @@ def build_scenarios_router(
             )
         loop = asyncio.get_running_loop()
         import functools
-        fn = functools.partial(run_scenario_on_device, manager, device_id, body.steps, None, body.variables)
+        trace_id = f"scn-{uuid4().hex[:10]}"
+        trace_log.info(
+            "scenario_session_request",
+            trace_id=trace_id,
+            serial=device_id,
+            source="api.session_run",
+            total_steps=len(body.steps),
+            session_id=session_id,
+        )
+        fn = functools.partial(
+            run_scenario_on_device,
+            manager,
+            device_id,
+            body.steps,
+            None,
+            body.variables,
+            trace_id,
+            "api.session_run",
+            caller_id,
+        )
         result = await loop.run_in_executor(None, fn)
         if "error" in result:
             return JSONResponse(result, status_code=400)

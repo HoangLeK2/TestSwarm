@@ -7,6 +7,7 @@ from sqlalchemy import Boolean, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.database import Base
+from .enums import UserRole
 from .utils import _now, _uuid, _api_key
 
 
@@ -18,7 +19,7 @@ class User(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     api_key: Mapped[str] = mapped_column(String(64), unique=True, default=_api_key, index=True)
-    role: Mapped[str] = mapped_column(String(20), default="operator")  # admin | operator
+    role: Mapped[str] = mapped_column(String(20), default=UserRole.OPERATOR)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 

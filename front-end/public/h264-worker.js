@@ -28,6 +28,29 @@ let flushInFlight = false;
 let needKeyframe = false;
 const MAX_DRIFT_US = 500000;
 const MAX_SAFE_TS_US = Number.MAX_SAFE_INTEGER;
+let lastDecoderErrorLogAt = 0;
+let sameDecoderErrorCount = 0;
+let lastDecoderErrorMsg = '';
+
+function logDecoderError(accel, msg) {
+  var now = Date.now();
+  var text = String(msg || 'unknown');
+  if (text === lastDecoderErrorMsg) {
+    sameDecoderErrorCount += 1;
+  } else {
+    lastDecoderErrorMsg = text;
+    sameDecoderErrorCount = 0;
+  }
+  // throttle noisy decode failures (device stream hiccups can spam thousands of lines)
+  if ((now - lastDecoderErrorLogAt) < 1500 && sameDecoderErrorCount > 0) return;
+  lastDecoderErrorLogAt = now;
+  console.error(
+    '[H264Worker] decoder error (accel=' + accel + ')'
+      + (sameDecoderErrorCount > 0 ? ' x' + (sameDecoderErrorCount + 1) : '')
+      + ':',
+    text
+  );
+}
 
 function nextMonotonicTsUs() {
   var nowUs = Math.floor(performance.now() * 1000);
@@ -192,7 +215,7 @@ function initDecoder(avccRecord) {
     },
     error: function(e) {
       var msg = (e && e.message) ? e.message : String(e);
-      console.error('[H264Worker] decoder error (accel=' + accel + '):', msg);
+      logDecoderError(accel, msg);
       if (!hwFailed) {
         // Hardware decode failed — switch to software for all future IDRs
         hwFailed = true;
@@ -288,7 +311,7 @@ self.onmessage = function(event) {
         // flush() forces "next chunk must be keyframe", which creates
         // decode errors under normal P-frame flow.
       } catch (e) {
-        console.error('[H264Worker] decode threw:', e && e.message);
+        logDecoderError(hwFailed ? 'no-preference' : 'prefer-hardware', e && e.message);
         closeDecoder();
       }
       break;
@@ -357,7 +380,7 @@ self.onmessage = function(event) {
           lastDecodeTsUs = tsUs;
           // Do not flush in live mode (see note above).
         } catch (e) {
-          console.error('[H264Worker] decode threw:', e && e.message);
+          logDecoderError(hwFailed ? 'no-preference' : 'prefer-hardware', e && e.message);
           closeDecoder();
         }
       }

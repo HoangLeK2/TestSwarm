@@ -13,6 +13,7 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, JSON, Stri
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.database import Base
+from .enums import RunStatus, ScheduleTargetType
 from .utils import _now, _uuid
 
 
@@ -38,6 +39,7 @@ class Schedule(Base):
         String(36),
         ForeignKey("device_groups.id", ondelete="SET NULL"),
         nullable=True,
+        index=True,
     )
     filter_state: Mapped[str] = mapped_column(String(20), default="READY")
     filter_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
@@ -99,8 +101,7 @@ class ScheduleRun(Base):
         nullable=False,
         index=True,
     )
-    # pending → running → completed | failed | partial
-    status: Mapped[str] = mapped_column(String(20), default="pending")
+    status: Mapped[str] = mapped_column(String(20), default=RunStatus.PENDING)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     finished_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True

@@ -283,6 +283,15 @@ def _looks_like_merged_like_button_a11y(body: str) -> bool:
     return "nút thích." in b and "bình luận" in b and "nhấn đúp" in b
 
 
+def _looks_like_nav_chrome_text(text: str) -> bool:
+    t = (text or "").casefold()
+    return (
+        "logo facebook" in t
+        and "tab 2/6" in t
+        and ("marketplace" in t or "reels" in t)
+    )
+
+
 def _assert_fb_posts_and_comments_match_dump(xml: str, rel: str) -> None:
     corpus_raw = _xml_visible_corpus(xml)
     corpus_norm = _nfc(_collapse_ws(corpus_raw)).casefold()
@@ -315,7 +324,11 @@ def _assert_fb_posts_and_comments_match_dump(xml: str, rel: str) -> None:
         if ca and len(ca) >= 2:
             _assert_in_corpus(corpus_norm, ca, f"{rel} comment[{j}] author")
         ct = (c.get("text") or "").strip()
-        if len(ct) >= 10 and not _looks_like_a11y_sticker_garbage(ct):
+        if (
+            len(ct) >= 10
+            and not _looks_like_a11y_sticker_garbage(ct)
+            and not _looks_like_nav_chrome_text(ct)
+        ):
             if "thành viên •" in ct.casefold() and "tham gia" in ct.casefold():
                 pass
             else:

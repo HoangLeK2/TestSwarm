@@ -11,6 +11,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from core.config import Config
+from api.deps import CurrentUser, DB
+from db import crud as repo
 from runtime.core import DeviceManager, TaskQueue
 from services.campaign_dispatch import enqueue_campaign_run_temporal
 from temporal.worker import get_temporal_client
@@ -30,6 +32,7 @@ log = logging.getLogger(__name__)
 # Device serial may contain colons (WiFi ADB: 192.168.1.1:5555) so we cannot
 # count colons; instead we use a greedy .+ for the serial segment.
 _TOP_LEVEL_WF_RE = re.compile(r"^campaign:[^:]+:device:.+:scenario:[^:]+$")
+_WORKFLOW_CAMPAIGN_RE = re.compile(r"^campaign:([^:]+):")
 
 
 async def _workflow_ui_status(client, workflow_id: str, temporal_status: str) -> str:
@@ -59,13 +62,37 @@ def build_campaign_fleet_router(
 ) -> APIRouter:
     router = APIRouter()
 
+    async def _get_campaign_or_404(db: DB, campaign_id: str, user_id: str):
+        campaign = await repo.get_campaign(db, campaign_id)
+        if not campaign or campaign.user_id != user_id:
+            return None
+        return campaign
+
+    async def _assert_campaign_owned(db: DB, campaign_id: str, user_id: str) -> None:
+        if not await _get_campaign_or_404(db, campaign_id, user_id):
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="Campaign not found")
+
+    async def _assert_workflow_owned(db: DB, workflow_id: str, user_id: str) -> None:
+        from fastapi import HTTPException
+
+        match = _WORKFLOW_CAMPAIGN_RE.match(workflow_id or "")
+        if not match:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+        campaign_id = match.group(1)
+        await _assert_campaign_owned(db, campaign_id, user_id)
+
     # ── Campaign → Temporal workflow ─────────────────────────────────
 
     @router.post("/campaigns/{campaign_id}/run")
     async def api_run_campaign(
         campaign_id: str,
+        db: DB,
+        user: CurrentUser,
         body: CampaignRunBody = Body(default_factory=CampaignRunBody),
     ):
+        await _assert_campaign_owned(db, campaign_id, user.id)
         if not config.database.enabled:
             return JSONResponse(
                 {"error": "Database is disabled; campaigns are not available"},
@@ -159,13 +186,14 @@ def build_campaign_fleet_router(
     # ── Workflow monitoring & control ────────────────────────────────
 
     @router.get("/campaigns/{campaign_id}/workflows")
-    async def api_list_campaign_workflows(campaign_id: str):
+    async def api_list_campaign_workflows(campaign_id: str, db: DB, user: CurrentUser):
         """List top-level Temporal workflow runs for a campaign.
 
         Only returns ScenarioWorkflow entries (one per device×scenario).
         Child workflows (ScenarioStepsWorkflow) are excluded — they are an
         implementation detail and would flood the list.
         """
+        await _assert_campaign_owned(db, campaign_id, user.id)
         if not config.temporal.enabled:
             return {
                 "campaign_id": campaign_id,
@@ -221,8 +249,13 @@ def build_campaign_fleet_router(
             )
 
     @router.get("/devices/{serial}/running-workflows")
-    async def api_device_running_workflows(serial: str):
+    async def api_device_running_workflows(serial: str, db: DB, user: CurrentUser):
         """List RUNNING/PAUSED top-level scenario workflows for a specific device serial."""
+        device = await repo.get_device_by_serial(db, serial)
+        if not device or device.user_id != user.id:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="Device not found")
         if not config.temporal.enabled:
             return {"serial": serial, "workflows": [], "temporal_available": False}
         try:
@@ -250,12 +283,13 @@ def build_campaign_fleet_router(
             )
 
     @router.get("/workflows/{workflow_id}/progress")
-    async def api_workflow_progress(workflow_id: str):
+    async def api_workflow_progress(workflow_id: str, db: DB, user: CurrentUser):
         """Query real-time progress of a Temporal scenario workflow.
 
         When the child ScenarioStepsWorkflow is paused on error, status is
         overridden to 'paused_on_error' and error_message is populated.
         """
+        await _assert_workflow_owned(db, workflow_id, user.id)
         try:
             from temporal.workflows import ScenarioWorkflow, ScenarioStepsWorkflow
 
@@ -295,7 +329,7 @@ def build_campaign_fleet_router(
             )
 
     @router.get("/workflows/{workflow_id}/steps")
-    async def api_workflow_steps(workflow_id: str):
+    async def api_workflow_steps(workflow_id: str, db: DB, user: CurrentUser):
         """Query step-by-step execution log for a scenario workflow.
 
         - While RUNNING: queries the child steps workflow (live, real-time).
@@ -303,6 +337,7 @@ def build_campaign_fleet_router(
 
         Returns a flat list of step entries with index, type, ok, message, depth.
         """
+        await _assert_workflow_owned(db, workflow_id, user.id)
         if not config.temporal.enabled:
             return JSONResponse({"error": "Temporal is not enabled"}, status_code=503)
         try:
@@ -364,7 +399,7 @@ def build_campaign_fleet_router(
             )
 
     @router.post("/workflows/{workflow_id}/pause")
-    async def api_workflow_pause(workflow_id: str):
+    async def api_workflow_pause(workflow_id: str, db: DB, user: CurrentUser):
         """Pause a running scenario workflow at the next step boundary.
 
         SECURITY NOTE: workflow_id is caller-supplied and not validated for
@@ -372,6 +407,7 @@ def build_campaign_fleet_router(
         know. Add campaign-ownership middleware before exposing this to untrusted
         users.
         """
+        await _assert_workflow_owned(db, workflow_id, user.id)
         try:
             from temporal.workflows import ScenarioStepsWorkflow, ScenarioWorkflow
 
@@ -391,8 +427,9 @@ def build_campaign_fleet_router(
             )
 
     @router.post("/workflows/{workflow_id}/resume")
-    async def api_workflow_resume(workflow_id: str):
+    async def api_workflow_resume(workflow_id: str, db: DB, user: CurrentUser):
         """Resume a paused scenario workflow."""
+        await _assert_workflow_owned(db, workflow_id, user.id)
         try:
             from temporal.workflows import ScenarioStepsWorkflow, ScenarioWorkflow
 
@@ -412,8 +449,9 @@ def build_campaign_fleet_router(
             )
 
     @router.post("/workflows/{workflow_id}/cancel")
-    async def api_workflow_cancel(workflow_id: str):
+    async def api_workflow_cancel(workflow_id: str, db: DB, user: CurrentUser):
         """Cancel a scenario workflow — cancels both parent and child steps workflow."""
+        await _assert_workflow_owned(db, workflow_id, user.id)
         try:
             client = await get_temporal_client(config.temporal)
             for wf_id in [workflow_id, f"{workflow_id}:steps"]:

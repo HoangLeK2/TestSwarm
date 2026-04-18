@@ -102,7 +102,7 @@ class TestLongTapFallbackFlow:
 
 
 class TestKeyFallbackFlow:
-    def test_key_uses_scrcpy_control_first(self):
+    def test_nav_key_does_not_use_scrcpy_control(self):
         d = _make_device()
         mock_ctrl = MagicMock()
         mock_ctrl.is_connected = True
@@ -111,7 +111,7 @@ class TestKeyFallbackFlow:
         mock_receiver._ctrl_lock = threading.Lock()
         d._scrcpy_receiver = mock_receiver
         d.key("home")
-        mock_ctrl.key.assert_called_once_with("home")
+        mock_ctrl.key.assert_not_called()
 
     def test_key_falls_back_to_u2(self):
         d = _make_device()
@@ -129,12 +129,12 @@ class TestKeyFallbackFlow:
         d._agent_send = mock_send
         d.key("home")
         msg = mock_send.call_args[0][0]
-        assert msg["type"] == "shell"
-        assert "KEYCODE_HOME" in msg["cmd"]
+        assert msg["type"] == "key"
+        assert msg["key"] == "home"
 
 
 class TestInputTextFallbackFlow:
-    def test_input_text_uses_scrcpy_control_first(self):
+    def test_input_text_does_not_use_scrcpy_control(self):
         d = _make_device()
         mock_ctrl = MagicMock()
         mock_ctrl.is_connected = True
@@ -143,7 +143,7 @@ class TestInputTextFallbackFlow:
         mock_receiver._ctrl_lock = threading.Lock()
         d._scrcpy_receiver = mock_receiver
         d.input_text("hello")
-        mock_ctrl.input_text.assert_called_once_with("hello")
+        mock_ctrl.input_text.assert_not_called()
 
     def test_input_text_falls_back_to_u2(self):
         d = _make_device()

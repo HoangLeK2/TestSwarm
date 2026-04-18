@@ -1,9 +1,30 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { DeviceTile } from './device-tile';
+import { SafeModeBanner } from '@/features/core/components/safe-mode-banner';
+import { useSafeMode } from '@/features/core/services/use-safe-mode';
 import { Button } from '@/components/ui/button';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import {
   Select,
@@ -84,7 +105,7 @@ import { StepIcon } from '@/features/campaigns/components/flow-editor/step-icon'
 import type { FlowStep } from '@/features/campaigns/components/scenario-steps/types';
 import { findSelectorInXml } from '../utils/control-record-xml';
 import { parseHierarchyTree, findNodeIdAtRatio } from '../utils/hierarchy-tree';
-import { previewScenarioStream } from '../services/api';
+import { previewScenarioStream, cancelPreviewStream } from '../services/api';
 import { useTranslations } from 'next-intl';
 import type { FixedLayoutPluginContext } from '@flowgram.ai/fixed-layout-editor';
 import { StepDetailPanel } from '@/features/campaigns/components/flow-editor/step-detail-panel';
@@ -124,6 +145,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
   const t = useTranslations('devicesControlRecord.view');
   const { error, device, record, steps, save, hierarchy, selector } = useControlRecord(initialSerial, initialCampaignId, initialScenarioId);
   const { setSkipTapRecordingWhilePick } = record;
+  const { read_only: safeReadOnly, stream_hierarchy: safeHierarchy } = useSafeMode();
 
   const [highlightBounds, setHighlightBounds] = useState<[number, number, number, number] | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null);
@@ -157,6 +179,53 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
   const [installUrl, setInstallUrl] = useState('');
   const [jsonDialogOpen, setJsonDialogOpen] = useState(false);
 
+  // Scenario-player running state + stop handle. Used by the Farm back button
+  // and device-switch guard to confirm+abort before leaving.
+  const router = useRouter();
+  const [playerPlaying, setPlayerPlaying] = useState(false);
+  const stopPlayerRef = useRef<(() => void) | null>(null);
+  const [exitConfirm, setExitConfirm] = useState<null | (() => void)>(null);
+  const guardWhilePlaying = useCallback(
+    (action: () => void) => {
+      if (playerPlaying) {
+        setExitConfirm(() => action);
+      } else {
+        action();
+      }
+    },
+    [playerPlaying],
+  );
+
+  // Global guard: while preview is running, intercept ANY <a> click on the
+  // page (sidebar, header nav, …) and show the exit confirm. Without this,
+  // Next.js client-side navigation skips the local Farm-button guard.
+  useEffect(() => {
+    if (!playerPlaying) return;
+    const onClick = (e: MouseEvent) => {
+      if (e.defaultPrevented) return;
+      if (e.button !== 0) return;
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      const anchor = target?.closest('a');
+      if (!anchor) return;
+      const href = anchor.getAttribute('href');
+      if (!href || href.startsWith('#') || anchor.target === '_blank') return;
+      e.preventDefault();
+      e.stopPropagation();
+      setExitConfirm(() => () => router.push(href));
+    };
+    document.addEventListener('click', onClick, true);
+    const onBeforeUnload = (ev: BeforeUnloadEvent) => {
+      ev.preventDefault();
+      ev.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => {
+      document.removeEventListener('click', onClick, true);
+      window.removeEventListener('beforeunload', onBeforeUnload);
+    };
+  }, [playerPlaying, router]);
+
   const setCoordinatePickTargetSafe = useCallback(
     (next: CoordinatePickTarget | null) => {
       if (next != null && record.recording) {
@@ -176,12 +245,56 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
     }
   }, [coordinatePickTarget, flowCoordPick, flowSelectorPickFgId]);
 
+  // Hierarchy changed => stale node bounds/highlight must be cleared.
+  useEffect(() => {
+    setHighlightBounds(null);
+    setSelectedNodeId(null);
+  }, [hierarchy.xml]);
+
   // Inline step runner (step-by-step without entering player mode)
   const [stepRunStates, setStepRunStates] = useState<Record<string, 'idle' | 'running' | 'ok' | 'error'>>({});
   const stepRunAbortRef = useRef<AbortController | null>(null);
+  // Track active SSE preview trace so unmount (navigation away) can both
+  // abort the fetch AND hit the server's explicit cancel endpoint — the SSE
+  // disconnect check on the server can lag a cycle on slow networks, and
+  // the user expected the scenario to stop the moment they leave the page.
+  const activePreviewRef = useRef<{ serial: string; traceId: string } | null>(null);
+
+  // Hard stop on unmount: abort both in-flight previews and POST the explicit
+  // cancel route so the server drops the scenario even if it hasn't yet
+  // noticed the TCP close. Also fire on pagehide (tab close / back-forward).
+  useEffect(() => {
+    const hardStop = () => {
+      stepRunAbortRef.current?.abort();
+      flowRunLeafAbortRef.current?.abort();
+      const active = activePreviewRef.current;
+      if (active) {
+        // Fire-and-forget — we're unmounting, no point awaiting.
+        cancelPreviewStream(active.serial, active.traceId).catch(() => undefined);
+        activePreviewRef.current = null;
+      }
+    };
+    const onPageHide = () => hardStop();
+    window.addEventListener('pagehide', onPageHide);
+    return () => {
+      window.removeEventListener('pagehide', onPageHide);
+      hardStop();
+    };
+  }, []);
 
   const handleStopInlineRun = useCallback(() => {
+    // Three-pronged stop so the scenario exits quickly regardless of where
+    // the executor is stuck:
+    //   1) abort() closes the SSE fetch → server notices disconnect (~100ms)
+    //   2) explicit cancel route sets cancel_event immediately (no polling lag)
+    //   3) also stop any flow-leaf run that may be active
     stepRunAbortRef.current?.abort();
+    flowRunLeafAbortRef.current?.abort();
+    const active = activePreviewRef.current;
+    if (active) {
+      cancelPreviewStream(active.serial, active.traceId).catch(() => undefined);
+      activePreviewRef.current = null;
+    }
     setStepRunStates((s) => {
       const hadRunning = Object.values(s).some((st) => st === 'running');
       if (!hadRunning) return s;
@@ -262,6 +375,11 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           serial,
           [payload],
           (ev) => {
+            if (ev.event === 'start' && typeof ev.trace_id === 'string') {
+              activePreviewRef.current = { serial, traceId: ev.trace_id };
+            } else if (ev.event === 'done' || ev.event === 'error') {
+              activePreviewRef.current = null;
+            }
             if (ev.event === 'step_done') {
               setFlowRunStates((s) => ({ ...s, [fgId]: ev.ok ? 'ok' : 'error' }));
               if (!ev.ok) toast.error(String(ev.message ?? 'Step lỗi'));
@@ -276,6 +394,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           toast.error(String(e));
         }
       } finally {
+        activePreviewRef.current = null;
         flowRunningFgIdsRef.current.delete(fgId);
         setTimeout(() => {
           setFlowRunStates((s) => {
@@ -330,11 +449,17 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
       stepRunAbortRef.current = ctrl;
       const label = /^\d+$/.test(runKey) ? `Bước ${Number(runKey) + 1}` : 'Bước';
       setStepRunStates((s) => ({ ...s, [runKey]: 'running' }));
+      const serial = device.selectedDevice.serial;
       try {
         await previewScenarioStream(
-          device.selectedDevice.serial,
+          serial,
           [step as Record<string, any>],
           (event) => {
+            if (event.event === 'start' && typeof event.trace_id === 'string') {
+              activePreviewRef.current = { serial, traceId: event.trace_id };
+            } else if (event.event === 'done' || event.event === 'error') {
+              activePreviewRef.current = null;
+            }
             if (event.event === 'step_done') {
               setStepRunStates((s) => ({ ...s, [runKey]: event.ok ? 'ok' : 'error' }));
               if (!event.ok) toast.error(`${label}: ${event.message ?? 'Lỗi'}`);
@@ -355,6 +480,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           toast.error(`${label}: ${String(e)}`);
         }
       } finally {
+        activePreviewRef.current = null;
         if (!ctrl.signal.aborted) {
           setTimeout(() => setStepRunStates((s) => {
             const n = { ...s };
@@ -453,7 +579,6 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
         }
         setFlowCoordPick(null);
         toast.success('Đã gán swipe_ratio cho node', { duration: 2000 });
-        if (device.selectedDevice) setTimeout(() => hierarchy.refresh(), 800);
         return;
       }
 
@@ -512,7 +637,6 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
         }
         setFlowCoordPick(null);
         toast.success(`Đã gán tọa độ (${rx3}, ${ry3}) cho node`, { duration: 2000 });
-        if (device.selectedDevice) setTimeout(() => hierarchy.refresh(), 800);
         return;
       }
 
@@ -619,14 +743,19 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
   return (
     <div className='flex h-[calc(100vh-80px)] flex-col overflow-hidden bg-background'>
 
+      <SafeModeBanner className='mx-3 mt-2' />
+
       {/* ── Top bar ─────────────────────────────────────────────────────── */}
       <div className='flex shrink-0 items-center gap-3 border-b bg-background px-3 py-2'>
         {/* Back */}
-        <Button asChild variant='ghost' size='sm' className='-ml-1 shrink-0 gap-1.5 text-muted-foreground hover:text-foreground'>
-          <Link href={ROUTES.DEVICES.ROOT}>
-            <ArrowLeft className='size-3.5' />
-            Farm
-          </Link>
+        <Button
+          variant='ghost'
+          size='sm'
+          className='-ml-1 shrink-0 gap-1.5 text-muted-foreground hover:text-foreground'
+          onClick={() => guardWhilePlaying(() => router.push(ROUTES.DEVICES.ROOT))}
+        >
+          <ArrowLeft className='size-3.5' />
+          Farm
         </Button>
 
         <div className='h-5 w-px bg-border' />
@@ -648,7 +777,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
         {/* Device selector */}
         <Select
           value={device.selectedSerial ?? ''}
-          onValueChange={(v) => device.setSelectedSerial(v || null)}
+          onValueChange={(v) => guardWhilePlaying(() => device.setSelectedSerial(v || null))}
         >
           <SelectTrigger className='h-8 w-[220px] shrink-0 text-xs'>
             <SelectValue placeholder={t('selectPhonePlaceholder')} />
@@ -704,10 +833,15 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
         {/* ── COL 1: UI Hierarchy tree ──────────────────────────────────── */}
         <div className={cn(
           'flex shrink-0 flex-col border-r border-border/60 bg-muted/10 transition-all duration-200',
-          leftCollapsed ? 'w-0 overflow-hidden' : 'w-[272px]',
+          leftCollapsed || !safeHierarchy ? 'w-0 overflow-hidden' : 'w-[320px]',
         )}>
           {/* Tree */}
           <div className='min-h-0 flex-1 overflow-hidden'>
+            {!safeHierarchy ? (
+              <div className='p-3 text-[11px] text-muted-foreground'>
+                Safe mode: không stream cây giao diện.
+              </div>
+            ) : (
             <XmlTreeViewer
               xml={hierarchy.xml}
               loading={hierarchy.loading}
@@ -727,6 +861,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
               autoRefresh={hierarchy.autoRefresh}
               onAutoRefreshChange={hierarchy.setAutoRefresh}
             />
+            )}
           </div>
 
           {/* Selector bar */}
@@ -740,10 +875,22 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                   <span className='min-w-0 flex-1 truncate font-mono text-[10px] text-muted-foreground'>
                     <span className='font-bold text-primary'>[{selector.by}]</span> {selector.value}
                   </span>
-                  <Button size='sm' variant='secondary' className='h-5 shrink-0 px-1.5 text-[9px]' onClick={selector.tap} disabled={!selectedDevice}>
+                  <Button
+                    size='sm'
+                    variant='secondary'
+                    className='h-5 shrink-0 px-1.5 text-[9px]'
+                    onClick={selector.tap}
+                    disabled={!selectedDevice || safeReadOnly}
+                    title={safeReadOnly ? 'Safe mode: read-only' : undefined}
+                  >
                     Tap
                   </Button>
                 </div>
+                {safeReadOnly ? (
+                  <p className='text-[10px] italic text-muted-foreground'>
+                    Safe mode: không cho điều khiển / thêm bước.
+                  </p>
+                ) : (
                 <div className='flex flex-wrap gap-1'>
                   <Tooltip delayDuration={300}>
                     <TooltipTrigger asChild>
@@ -806,6 +953,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                     <TooltipContent side='top' className='text-[10px]'>Thêm bước input_selector</TooltipContent>
                   </Tooltip>
                 </div>
+                )}
               </>
             ) : (
               <p className='text-[10px] text-muted-foreground'>{t('selectorBarHint')}</p>
@@ -823,24 +971,14 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           {leftCollapsed ? <ChevronRight className='size-3' /> : <ChevronLeft className='size-3' />}
         </button>
 
-        {/* ── COL 2: Phone screen ───────────────────────────────────────── */}
+        {/* ── COL 2: Phone screen (centered) ───────────────────────────── */}
         <div
           ref={mirrorColRef}
-          className='flex w-[320px] shrink-0 flex-col items-center border-r border-border/60 bg-muted/20 overflow-y-auto'
+          className='flex w-[clamp(360px,34vw,520px)] shrink-0 flex-col items-center border-r border-border/60 bg-muted/20 overflow-y-auto'
         >
           {selectedDevice ? (
             <>
-              {/* Device label */}
-              <div className='flex w-full shrink-0 items-center gap-2 border-b border-border/40 bg-background/60 px-3 py-1.5'>
-                <span className={cn('size-2 rounded-full shrink-0', device.wsConnected ? 'bg-green-500' : 'bg-muted-foreground/40')} />
-                <span className='truncate text-[11px] font-medium text-foreground'>
-                  {selectedDevice.brand} {selectedDevice.model}
-                </span>
-                <span className='ml-auto font-mono text-[10px] text-muted-foreground'>
-                  {selectedDevice.serial.slice(0, 10)}
-                </span>
-              </div>
-              <div className='p-3 w-full'>
+              <div className='w-full max-w-[460px] p-3'>
                 <DeviceTile
                   device={selectedDevice}
                   logLines={device.logs[selectedDevice.serial] ?? []}
@@ -849,6 +987,8 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                   onToggleMode={record.handleToggleMode}
                   onRestart={record.handleRestart}
                   onTap={handleScreenTap}
+                  hideHeader
+                  hideStepMonitor
                   onSwipe={
                     coordinatePickTarget?.mode === 'swipe_segment' ||
                     (showFlowUi && flowCoordPick?.kind === 'swipe')
@@ -868,77 +1008,24 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
         </div>
 
         {/* ── COL 3: Recording / scenario editor ───────────────────────── */}
-        <div className='flex flex-1 flex-col overflow-hidden'>
+        <div className='flex min-w-0 flex-1 flex-col overflow-hidden'>
 
           {playerMode && selectedDevice ? (
-            /* Player mode */
-            <div className='flex flex-1 flex-col overflow-auto p-4'>
+            /* Player mode — fill column; list scrolls inside ScenarioPlayer */
+            <div className='flex min-h-0 flex-1 flex-col overflow-hidden p-4'>
               <ScenarioPlayer
                 serial={selectedDevice.serial}
-                onClose={() => setPlayerMode(false)}
-                onPlayingChange={hierarchy.setPaused}
+                onClose={() => guardWhilePlaying(() => setPlayerMode(false))}
+                onPlayingChange={(p) => { hierarchy.setPaused(p); setPlayerPlaying(p); }}
+                registerStop={(fn) => { stopPlayerRef.current = fn; }}
                 preloadedSteps={steps.items.length > 0 ? (steps.items as any[]) : undefined}
                 preloadedName={save.editingContext?.name}
                 preloadedVariables={scenarioVariables}
+                deviceBusy={(selectedDevice.state || '').replace('DeviceState.', '') === 'BUSY'}
               />
             </div>
           ) : (
             <>
-              {/* Recording bar */}
-              {record.recording ? (
-                <div className='flex shrink-0 items-center gap-3 border-b border-red-200/60 bg-red-50/80 px-4 py-2.5 dark:border-red-900/30 dark:bg-red-950/20'>
-                  <span className='relative flex size-2.5 shrink-0'>
-                    <span className='absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75' />
-                    <span className='relative inline-flex size-2.5 rounded-full bg-red-500' />
-                  </span>
-                  <span className='text-xs font-semibold text-red-800 dark:text-red-300'>{t('recordingActive')}</span>
-                  {steps.items.length > 0 && (
-                    <span className='rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300'>
-                      {steps.items.length} bước
-                    </span>
-                  )}
-                  {record.pollingXml && (
-                    <RefreshCw size={11} className='animate-spin text-red-500/70' />
-                  )}
-                  <Button
-                    size='sm'
-                    variant='destructive'
-                    className='ml-auto h-7 gap-1.5 px-3 text-xs'
-                    onClick={() => void record.toggleRecording()}
-                  >
-                    <Square className='size-3' />
-                    {t('stopRecording')}
-                  </Button>
-                </div>
-              ) : (
-                <div className='flex shrink-0 items-center gap-2 border-b border-border/60 bg-background px-4 py-2'>
-                  <div className='min-w-0 flex-1'>
-                    <p className='text-[11px] font-semibold text-foreground'>{t('recordingIdleTitle')}</p>
-                    <p className='text-[10px] text-muted-foreground'>{t.rich('recordingIdleSubtitle', { strong: (c) => <strong>{c}</strong> })}</p>
-                  </div>
-                  <Button
-                    size='sm'
-                    variant='default'
-                    className='h-8 shrink-0 gap-1.5 text-xs'
-                    onClick={() => void record.toggleRecording()}
-                    disabled={!selectedDevice}
-                  >
-                    <Circle className='size-3 fill-current' />
-                    {t('startRecording')}
-                  </Button>
-                  <Button
-                    size='sm'
-                    variant='outline'
-                    className='h-8 shrink-0 gap-1.5 text-xs'
-                    onClick={() => setPlayerMode(true)}
-                    disabled={!selectedDevice}
-                  >
-                    <Play className='size-3' />
-                    {t('tryRun')}
-                  </Button>
-                </div>
-              )}
-
               {/* Selector pick banner */}
               {selectorPickTarget && (
                 <div className='flex shrink-0 items-center gap-2 border-b border-amber-400/30 bg-amber-50/80 px-4 py-2 dark:bg-amber-950/20'>
@@ -1026,24 +1113,115 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                 <span className='text-[11px] font-semibold text-foreground'>
                   {showFlowUi ? 'Sơ đồ Flow' : t('editorSectionTitle')}
                 </span>
-                {steps.items.length > 0 && (
-                  <span className='rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary'>
-                    {steps.items.length} bước
-                  </span>
-                )}
                 <div className='flex-1' />
-                {/* Workflow breadcrumb */}
                 <div className='hidden items-center gap-1 sm:flex'>
-                  {[
-                    { label: '① Ghi', done: steps.items.length > 0 },
-                    { label: '② Chỉnh', done: false },
-                    { label: '③ Lưu', done: false },
-                  ].map(({ label, done }) => (
-                    <span key={label} className={`text-[9px] font-medium ${done ? 'text-primary' : 'text-muted-foreground/50'}`}>
-                      {label}
-                    </span>
-                  ))}
+                  {record.pollingXml && <RefreshCw size={11} className='animate-spin text-red-500/70' />}
+                  <Button
+                    size='sm'
+                    variant={record.recording ? 'destructive' : 'default'}
+                    className='h-7 gap-1.5 px-2 text-[10px]'
+                    onClick={() => void record.toggleRecording()}
+                    disabled={!selectedDevice}
+                  >
+                    {record.recording ? <Square className='size-3' /> : <Circle className='size-3 fill-current' />}
+                    {record.recording ? t('stopRecording') : t('startRecording')}
+                  </Button>
+                  <Button
+                    size='sm'
+                    variant='outline'
+                    className='h-7 gap-1.5 px-2 text-[10px]'
+                    onClick={() => setPlayerMode(true)}
+                    disabled={
+                      !selectedDevice ||
+                      (selectedDevice.state || '').replace('DeviceState.', '') === 'BUSY'
+                    }
+                    title={
+                      selectedDevice &&
+                      (selectedDevice.state || '').replace('DeviceState.', '') === 'BUSY'
+                        ? 'Thiết bị đang chạy campaign — không cho chạy thử'
+                        : undefined
+                    }
+                  >
+                    <Play className='size-3' />
+                    {t('tryRun')}
+                  </Button>
                 </div>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button size='sm' variant='outline' className='h-7 gap-1 px-2 text-[10px]'>
+                      <Plus className='size-3' />
+                      Luồng
+                      <ChevronDown className='size-3' />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align='start' className='w-56'>
+                    <DropdownMenuLabel className='pb-0.5 pt-2'>
+                      <span className='block text-[11px] font-bold text-foreground'>Chờ / Delay</span>
+                    </DropdownMenuLabel>
+                    <DropdownMenuItem className='gap-2 text-xs' onClick={steps.addWait}>
+                      <StepIcon type='wait' size={13} /> Chờ (giây)
+                    </DropdownMenuItem>
+                    <DropdownMenuItem className='gap-2 text-xs' onClick={() => steps.addFlow('wait_element')}>
+                      <StepIcon type='wait_element' size={13} /> Chờ phần tử xuất hiện
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel className='pb-0.5 pt-1'>
+                      <span className='block text-[11px] font-bold text-foreground'>Điều kiện</span>
+                    </DropdownMenuLabel>
+                    <DropdownMenuItem className='gap-2 text-xs' onClick={() => steps.addFlow('if_element')}>
+                      <StepIcon type='if_element' size={13} /> Nếu phần tử tồn tại
+                    </DropdownMenuItem>
+                    <DropdownMenuItem className='gap-2 text-xs' onClick={() => steps.addFlow('if_variable')}>
+                      <StepIcon type='if_variable' size={13} /> Nếu biến thỏa điều kiện
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel className='pb-0.5 pt-1'>
+                      <span className='block text-[11px] font-bold text-foreground'>Lặp lại</span>
+                    </DropdownMenuLabel>
+                    <DropdownMenuItem className='gap-2 text-xs' onClick={() => steps.addFlow('repeat')}>
+                      <StepIcon type='repeat' size={13} /> Lặp N lần
+                    </DropdownMenuItem>
+                    <DropdownMenuItem className='gap-2 text-xs' onClick={() => steps.addFlow('repeat_until')}>
+                      <StepIcon type='repeat_until' size={13} /> Lặp cho đến khi
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <Tooltip delayDuration={300}>
+                  <TooltipTrigger asChild>
+                    <Button size='sm' variant='outline' className='h-7 gap-1 px-2 text-[10px]' onClick={() => setInstallDialogOpen(true)} disabled={!selectedDevice}>
+                      <PackagePlus className='size-3' />
+                      APK
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side='bottom' className='text-xs'>Cài APK từ URL lên thiết bị</TooltipContent>
+                </Tooltip>
+                <Tooltip delayDuration={300}>
+                  <TooltipTrigger asChild>
+                    <Button size='sm' variant='ghost' className='h-7 w-7 p-0' onClick={() => setJsonDialogOpen(true)} disabled={steps.items.length === 0}>
+                      <Code2 className='size-3.5' />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side='bottom' className='text-xs'>Xem JSON</TooltipContent>
+                </Tooltip>
+                <Tooltip delayDuration={300}>
+                  <TooltipTrigger asChild>
+                    <Button size='sm' variant='ghost' className='h-7 w-7 p-0' onClick={steps.copyJson} disabled={steps.items.length === 0}>
+                      <Copy className='size-3.5' />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side='bottom' className='text-xs'>Copy JSON</TooltipContent>
+                </Tooltip>
+                <Button
+                  size='sm'
+                  variant='default'
+                  className='h-7 gap-1 px-2 text-[10px]'
+                  onClick={steps.openSave}
+                  disabled={steps.items.length === 0 || safeReadOnly}
+                  title={safeReadOnly ? 'Safe mode: không cho lưu' : undefined}
+                >
+                  <Save className='size-3' />
+                  Lưu
+                </Button>
                 {/* Variables editor button */}
                 <Tooltip delayDuration={400}>
                   <TooltipTrigger asChild>
@@ -1084,64 +1262,91 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
               {/* Flow editor */}
               <div className='min-h-0 flex-1 overflow-hidden px-3 pb-2'>
                 {steps.items.length === 0 ? (
-                  <div className='flex h-full flex-col justify-center gap-4 overflow-y-auto rounded-xl border border-dashed border-border/50 bg-muted/10 px-5 py-6'>
-                    {/* Guide header */}
-                    <div className='text-center'>
-                      <p className='text-sm font-semibold text-foreground'>Cách tạo kịch bản</p>
-                      <p className='mt-0.5 text-[11px] text-muted-foreground'>Làm theo 3 bước đơn giản dưới đây</p>
-                    </div>
-
-                    {/* Steps */}
-                    <ol className='space-y-3'>
-                      {[
-                        {
-                          n: '1',
-                          icon: <Circle className='size-4 fill-current text-primary' />,
-                          title: 'Bắt đầu ghi',
-                          desc: 'Nhấn nút "Bắt đầu ghi" phía trên, rồi thao tác trên màn hình điện thoại.',
-                          active: !record.recording,
-                        },
-                        {
-                          n: '2',
-                          icon: <Square className='size-4 text-red-500' />,
-                          title: 'Dừng ghi',
-                          desc: 'Nhấn "Dừng ghi" khi đã thực hiện đủ các thao tác cần kịch bản.',
-                          active: record.recording,
-                        },
-                        {
-                          n: '3',
-                          icon: <Save className='size-4 text-emerald-600' />,
-                          title: 'Lưu kịch bản',
-                          desc: 'Kiểm tra lại danh sách bước, chỉnh sửa nếu cần rồi nhấn "Lưu kịch bản".',
-                          active: false,
-                        },
-                      ].map(({ n, icon, title, desc, active }) => (
-                        <li key={n} className={`flex gap-3 rounded-lg px-3 py-2.5 transition-colors ${active ? 'bg-primary/8 ring-1 ring-primary/20' : 'bg-background/60'}`}>
-                          <div className={`flex size-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${active ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>
-                            {n}
+                  (() => {
+                    type Picker = { type: string; label: string; onClick: () => void };
+                    const interactions: Picker[] = [
+                      { type: 'tap_selector',      label: t('emptyNodePicker.tapSelector'),    onClick: () => steps.addFlow('tap_selector') },
+                      { type: 'long_tap_selector', label: t('emptyNodePicker.longTap'),         onClick: () => steps.addFlow('long_tap_selector') },
+                      { type: 'input_selector',    label: t('emptyNodePicker.inputText'),       onClick: () => steps.addFlow('input_selector') },
+                      { type: 'assert_element',    label: t('emptyNodePicker.assertElement'),   onClick: () => steps.addFlow('assert_element') },
+                      { type: 'tap_ratio',         label: t('emptyNodePicker.tapRatio'),        onClick: () => steps.addFlow('tap_ratio') },
+                      { type: 'swipe_ratio',       label: t('emptyNodePicker.swipe'),           onClick: () => steps.addFlow('swipe_ratio') },
+                      { type: 'key',               label: t('emptyNodePicker.keyPress'),        onClick: () => steps.addFlow('key') },
+                      { type: 'set_variable',      label: t('emptyNodePicker.setVariable'),     onClick: () => steps.addFlow('set_variable') },
+                    ];
+                    const flow: Picker[] = [
+                      { type: 'wait',          label: t('emptyNodePicker.waitSeconds'), onClick: steps.addWait },
+                      { type: 'wait_element',  label: t('emptyNodePicker.waitElement'), onClick: () => steps.addFlow('wait_element') },
+                      { type: 'if_element',    label: t('emptyNodePicker.ifElement'),   onClick: () => steps.addFlow('if_element') },
+                      { type: 'if_variable',   label: t('emptyNodePicker.ifVariable'),  onClick: () => steps.addFlow('if_variable') },
+                      { type: 'repeat',        label: t('emptyNodePicker.repeatN'),     onClick: () => steps.addFlow('repeat') },
+                      { type: 'repeat_until',  label: t('emptyNodePicker.repeatUntil'), onClick: () => steps.addFlow('repeat_until') },
+                    ];
+                    const sections = [
+                      {
+                        key: 'interaction',
+                        title: t('emptyNodePicker.sectionInteraction'),
+                        items: interactions,
+                        accent: 'indigo',
+                        bar: 'bg-indigo-500',
+                        chip: 'bg-indigo-50 text-indigo-700 ring-indigo-200/60',
+                        iconWrap: 'bg-indigo-50 text-indigo-600 ring-indigo-100',
+                        cardHover: 'hover:border-indigo-300 hover:bg-indigo-50/40 hover:shadow-sm',
+                      },
+                      {
+                        key: 'flow',
+                        title: t('emptyNodePicker.sectionFlow'),
+                        items: flow,
+                        accent: 'amber',
+                        bar: 'bg-amber-500',
+                        chip: 'bg-amber-50 text-amber-700 ring-amber-200/60',
+                        iconWrap: 'bg-amber-50 text-amber-600 ring-amber-100',
+                        cardHover: 'hover:border-amber-300 hover:bg-amber-50/40 hover:shadow-sm',
+                      },
+                    ];
+                    return (
+                      <div className='flex h-full items-start justify-center overflow-y-auto rounded-xl bg-gradient-to-b from-muted/[0.04] to-transparent px-5 py-8'>
+                        <div className='w-full max-w-2xl space-y-6'>
+                          <div className='text-center'>
+                            <h3 className='text-base font-semibold tracking-tight text-foreground'>
+                              {t('emptyNodePicker.title')}
+                            </h3>
+                            <p className='mx-auto mt-1 max-w-md text-xs leading-relaxed text-muted-foreground'>
+                              {t('emptyNodePicker.subtitle')}
+                            </p>
                           </div>
-                          <div className='min-w-0'>
-                            <div className='flex items-center gap-1.5'>
-                              {icon}
-                              <span className='text-[12px] font-semibold text-foreground'>{title}</span>
-                              {active && <span className='rounded-full bg-primary/15 px-1.5 py-px text-[9px] font-bold text-primary'>Bước hiện tại</span>}
+                          {sections.map((s) => (
+                            <div key={s.key} className='space-y-2.5'>
+                              <div className='flex items-center gap-2'>
+                                <span className={`h-3.5 w-1 rounded-full ${s.bar}`} aria-hidden />
+                                <span className='text-xs font-semibold uppercase tracking-wide text-foreground/80'>
+                                  {s.title}
+                                </span>
+                                <span className={`ml-auto rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1 ring-inset ${s.chip}`}>
+                                  {s.items.length}
+                                </span>
+                              </div>
+                              <div className='grid grid-cols-2 gap-2 sm:grid-cols-3'>
+                                {s.items.map((it) => (
+                                  <button
+                                    key={it.type}
+                                    type='button'
+                                    onClick={it.onClick}
+                                    className={`group flex h-12 items-center gap-2.5 rounded-lg border border-border/60 bg-background px-2.5 text-left text-xs font-medium text-foreground/90 transition ${s.cardHover}`}
+                                  >
+                                    <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md ring-1 ring-inset transition group-hover:scale-105 ${s.iconWrap}`}>
+                                      <StepIcon type={it.type as any} size={14} />
+                                    </span>
+                                    <span className='truncate'>{it.label}</span>
+                                  </button>
+                                ))}
+                              </div>
                             </div>
-                            <p className='mt-0.5 text-[11px] leading-relaxed text-muted-foreground'>{desc}</p>
-                          </div>
-                        </li>
-                      ))}
-                    </ol>
-
-                    <Button
-                      size='sm'
-                      className='mx-auto gap-1.5'
-                      onClick={() => void record.toggleRecording()}
-                      disabled={!selectedDevice}
-                    >
-                      <Circle className='size-3 fill-current' />
-                      {t('startRecording')}
-                    </Button>
-                  </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()
                 ) : showFlowUi ? (
                   <div className='flex h-full max-h-[calc(100vh-280px)] min-h-[280px] flex-col overflow-hidden rounded-lg border border-border/50 bg-background lg:flex-row'>
                     <div className='relative min-h-[220px] flex-1 overflow-hidden lg:min-h-0'>
@@ -1238,7 +1443,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                             })) as any
                           )
                         }
-                        maxHeight='calc(100vh - 300px)'
+                        maxHeight='calc(100vh - 170px)'
                         selectorPickTarget={selectorPickTarget}
                         onSelectorPickTargetChange={setSelectorPickTarget}
                         coordinatePickTarget={coordinatePickTarget}
@@ -1252,95 +1457,6 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                 )}
               </div>
 
-              {/* Action bar */}
-              <div className='flex shrink-0 items-center gap-1.5 border-t border-border/60 bg-background/80 px-3 py-2.5'>
-                {/* Install APK */}
-                <Tooltip delayDuration={300}>
-                  <TooltipTrigger asChild>
-                    <Button
-                      size='sm'
-                      variant='outline'
-                      className='h-7 gap-1 text-xs'
-                      onClick={() => setInstallDialogOpen(true)}
-                      disabled={!selectedDevice}
-                    >
-                      <PackagePlus className='size-3' />
-                      Cài APK
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side='top' className='text-xs'>Cài APK từ URL lên thiết bị</TooltipContent>
-                </Tooltip>
-
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button size='sm' variant='outline' className='h-7 gap-1 text-xs'>
-                      <Plus className='size-3' />
-                      Luồng
-                      <ChevronDown className='size-3' />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align='start' className='w-56'>
-                    <DropdownMenuLabel className='pb-0.5 pt-2'>
-                      <span className='block text-[11px] font-bold text-foreground'>Chờ / Delay</span>
-                    </DropdownMenuLabel>
-                    <DropdownMenuItem className='gap-2 text-xs' onClick={steps.addWait}>
-                      <StepIcon type='wait' size={13} /> Chờ (giây)
-                    </DropdownMenuItem>
-                    <DropdownMenuItem className='gap-2 text-xs' onClick={() => steps.addFlow('wait_element')}>
-                      <StepIcon type='wait_element' size={13} /> Chờ phần tử xuất hiện
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuLabel className='pb-0.5 pt-1'>
-                      <span className='block text-[11px] font-bold text-foreground'>Điều kiện</span>
-                    </DropdownMenuLabel>
-                    <DropdownMenuItem className='gap-2 text-xs' onClick={() => steps.addFlow('if_element')}>
-                      <StepIcon type='if_element' size={13} /> Nếu phần tử tồn tại
-                    </DropdownMenuItem>
-                    <DropdownMenuItem className='gap-2 text-xs' onClick={() => steps.addFlow('if_variable')}>
-                      <StepIcon type='if_variable' size={13} /> Nếu biến thỏa điều kiện
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuLabel className='pb-0.5 pt-1'>
-                      <span className='block text-[11px] font-bold text-foreground'>Lặp lại</span>
-                    </DropdownMenuLabel>
-                    <DropdownMenuItem className='gap-2 text-xs' onClick={() => steps.addFlow('repeat')}>
-                      <StepIcon type='repeat' size={13} /> Lặp N lần
-                    </DropdownMenuItem>
-                    <DropdownMenuItem className='gap-2 text-xs' onClick={() => steps.addFlow('repeat_until')}>
-                      <StepIcon type='repeat_until' size={13} /> Lặp cho đến khi
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-
-                <div className='ml-auto flex items-center gap-1.5'>
-                  <Tooltip delayDuration={300}>
-                    <TooltipTrigger asChild>
-                      <Button size='sm' variant='ghost' className='h-7 w-7 p-0' onClick={() => setJsonDialogOpen(true)} disabled={steps.items.length === 0}>
-                        <Code2 className='size-3.5' />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side='top' className='text-xs'>Xem JSON</TooltipContent>
-                  </Tooltip>
-                  <Tooltip delayDuration={300}>
-                    <TooltipTrigger asChild>
-                      <Button size='sm' variant='ghost' className='h-7 w-7 p-0' onClick={steps.copyJson} disabled={steps.items.length === 0}>
-                        <Copy className='size-3.5' />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side='top' className='text-xs'>Copy JSON</TooltipContent>
-                  </Tooltip>
-                  <Button
-                    size='sm'
-                    variant='default'
-                    className='h-7 gap-1.5 px-3 text-xs'
-                    onClick={steps.openSave}
-                    disabled={steps.items.length === 0}
-                  >
-                    <Save className='size-3' />
-                    Lưu kịch bản
-                  </Button>
-                </div>
-              </div>
             </>
           )}
         </div>
@@ -1405,10 +1521,10 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
 
       {/* ── JSON viewer dialog ──────────────────────────────────────────────── */}
       <Dialog open={jsonDialogOpen} onOpenChange={setJsonDialogOpen}>
-        <DialogContent className='max-w-2xl'>
-          <DialogHeader>
-            <DialogTitle className='flex items-center gap-2 text-base'>
-              <Code2 className='size-4' />
+        <DialogContent className='max-h-[min(90dvh,920px)] max-w-2xl gap-4 overflow-hidden grid-rows-[auto_minmax(0,1fr)]'>
+          <DialogHeader className='shrink-0'>
+            <DialogTitle className='flex flex-wrap items-center gap-2 pr-8 text-base'>
+              <Code2 className='size-4 shrink-0' />
               JSON kịch bản
               {steps.items.length > 0 && (
                 <span className='rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary'>
@@ -1417,16 +1533,16 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
               )}
             </DialogTitle>
           </DialogHeader>
-          <div className='relative'>
+          <div className='relative flex min-h-0 flex-col'>
             <Button
               size='sm'
               variant='outline'
-              className='absolute right-2 top-2 z-10 h-6 gap-1 px-2 text-[10px]'
+              className='absolute right-1 top-1 z-10 h-6 gap-1 px-2 text-[10px] shadow-sm'
               onClick={steps.copyJson}
             >
               <Copy className='size-3' /> Copy
             </Button>
-            <pre className='max-h-[60vh] overflow-auto rounded-md border border-border bg-muted/40 p-3 text-[11px] font-mono leading-relaxed'>
+            <pre className='max-w-full min-h-0 flex-1 overflow-x-auto overflow-y-auto overscroll-y-contain rounded-md border border-border bg-muted/40 p-3 pb-10 pr-14 pt-9 text-[11px] font-mono leading-relaxed'>
               {JSON.stringify(
                 steps.items.map((s: any) => {
                   const { _id, ...rest } = s;
@@ -1492,7 +1608,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
               <Button
                 variant='default'
                 className='w-full justify-start gap-2'
-                onClick={() => save.saveAsNew(save.selectedCampaignId!)}
+                onClick={() => save.saveAsNew(save.selectedCampaignId!, scenarioVariables)}
                 disabled={save.saving !== null}
               >
                 <Plus size={13} />
@@ -1506,7 +1622,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                       key={s.id}
                       variant='outline'
                       className='h-auto w-full flex-col items-start justify-start py-2 text-left'
-                      onClick={() => save.saveTo(save.selectedCampaignId!, s.id)}
+                      onClick={() => save.saveTo(save.selectedCampaignId!, s.id, scenarioVariables)}
                       disabled={save.saving !== null}
                     >
                       <span className='font-medium'>
@@ -1523,6 +1639,31 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           )}
         </DialogContent>
       </Dialog>
+
+      <AlertDialog
+        open={exitConfirm !== null}
+        onOpenChange={(o) => { if (!o) setExitConfirm(null); }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('exitConfirmTitle')}</AlertDialogTitle>
+            <AlertDialogDescription>{t('exitConfirmDesc')}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('exitConfirmCancel')}</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const action = exitConfirm;
+                setExitConfirm(null);
+                stopPlayerRef.current?.();
+                if (action) action();
+              }}
+            >
+              {t('exitConfirmConfirm')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

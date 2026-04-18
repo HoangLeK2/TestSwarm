@@ -22,10 +22,10 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { restrictToVerticalAxis } from '@dnd-kit/modifiers';
-import { isControlFlow, type FlowStep } from '../scenario-steps/types';
+import { isContainerType, type FlowStep } from '../scenario-steps/types';
 import { StepCard } from './step-card';
 import { BracketBlock } from './bracket-block';
-import { InsertButton } from './insert-button';
+import { InsertGap } from './insert-button';
 import { StepDetailPanel } from './step-detail-panel';
 import type { SelectorPickTarget } from './selector-pick';
 import { selectorPickTargetEquals, isSelectorPickableStep } from './selector-pick';
@@ -82,6 +82,7 @@ export function FlowEditor({
 }: Props) {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const selectedStep = selectedIndex != null ? steps[selectedIndex] : null;
+  const availableVariables = useMemo(() => collectVariableNames(steps), [steps]);
 
   const stepIds = useMemo(() => steps.map((s, i) => stableStepDnDId(s, i)), [steps]);
 
@@ -255,6 +256,7 @@ export function FlowEditor({
               step={selectedStep}
               onChange={(s) => updateAt(selectedIndex, s)}
               onClose={() => setSelectedIndex(null)}
+              availableVariables={availableVariables}
               onRequestPickSelector={
                 onSelectorPickTargetChange
                   ? () => {
@@ -293,8 +295,6 @@ export function FlowEditor({
 
       <div className='min-w-0'>
         <div className='min-w-0 overflow-x-hidden overflow-y-auto' style={{ maxHeight }}>
-          <InsertButton onInsert={(s) => insertAt(0, s)} />
-
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
@@ -308,12 +308,13 @@ export function FlowEditor({
             >
               {steps.map((step, i) => (
                 <div key={stepIds[i]}>
+                  <InsertGap onInsert={(s) => insertAt(i, s)} />
                   <SortableFlowRow id={stepIds[i]!}>
                     {(dragHandle, isDragging) => (
                       <div className={`flex items-stretch ${isDragging ? 'opacity-60' : ''}`}>
                         {dragHandle}
                         <div className='min-w-0 flex-1'>
-                          {isControlFlow(step.type) ? (
+                          {isContainerType(step.type) ? (
                             <BracketBlock
                               step={step}
                               stepIndex={i}
@@ -348,6 +349,7 @@ export function FlowEditor({
                               step={step}
                               index={i}
                               selected={!compact && selectedIndex === i}
+                              compact={compact}
                               onClick={() => !compact && setSelectedIndex(selectedIndex === i ? null : i)}
                               onRemove={() => removeAt(i)}
                               onRun={
@@ -400,9 +402,9 @@ export function FlowEditor({
                       </div>
                     )}
                   </SortableFlowRow>
-                  <InsertButton onInsert={(s) => insertAt(i + 1, s)} />
                 </div>
               ))}
+              <InsertGap onInsert={(s) => insertAt(steps.length, s)} />
             </SortableContext>
           </DndContext>
 
@@ -415,4 +417,45 @@ export function FlowEditor({
       </div>
     </>
   );
+}
+
+function collectVariableNames(steps: FlowStep[]): string[] {
+  const names = new Set<string>();
+
+  const collectFromStep = (step: FlowStep) => {
+    if (step.type === 'set_variable' && step.name?.trim()) {
+      names.add(step.name.trim());
+    }
+    if (step.type === 'if_variable' && step.name?.trim()) {
+      names.add(step.name.trim());
+    }
+    if (step.type === 'set_var' && step.key?.trim()) {
+      names.add(step.key.trim());
+    }
+    if (step.type === 'run_scenario' && step.variables) {
+      Object.keys(step.variables).forEach((k) => {
+        if (k.trim()) names.add(k.trim());
+      });
+    }
+
+    if ('steps' in step && Array.isArray(step.steps)) {
+      step.steps.forEach(collectFromStep);
+    }
+    if ('then' in step && Array.isArray(step.then)) {
+      step.then.forEach(collectFromStep);
+    }
+    if ('else' in step && Array.isArray(step.else)) {
+      step.else.forEach(collectFromStep);
+    }
+    if ('branches' in step && Array.isArray(step.branches)) {
+      step.branches.forEach((branch) => {
+        if (Array.isArray(branch.steps)) {
+          branch.steps.forEach(collectFromStep);
+        }
+      });
+    }
+  };
+
+  steps.forEach(collectFromStep);
+  return Array.from(names).sort((a, b) => a.localeCompare(b));
 }

@@ -11,6 +11,7 @@ Tests cover:
 from __future__ import annotations
 
 import csv
+from datetime import datetime, timezone
 import io
 import json
 import os
@@ -19,7 +20,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from services.content_store import compute_content_hash, _safe_int
+from services.content_store import (
+    _first_present,
+    _normalize_media_urls,
+    compute_content_hash,
+    _parse_content_date,
+    _safe_int,
+)
 
 
 # ── Content Hash ──────────────────────────────────────────────────────────────
@@ -116,6 +123,46 @@ class TestSafeInt:
     def test_zero(self):
         assert _safe_int(0) == 0
         assert _safe_int("0") == 0
+
+
+class TestParseContentDate:
+    def test_iso_datetime(self):
+        dt = _parse_content_date("2026-04-15T10:30:00Z")
+        assert isinstance(dt, datetime)
+        assert dt.tzinfo is not None
+        assert dt.year == 2026 and dt.month == 4 and dt.day == 15
+
+    def test_dd_mm_yyyy(self):
+        dt = _parse_content_date("15/04/2026")
+        assert dt == datetime(2026, 4, 15, tzinfo=timezone.utc)
+
+    def test_relative_vietnamese(self):
+        dt = _parse_content_date("2 giờ trước")
+        assert isinstance(dt, datetime)
+
+    def test_invalid_returns_none(self):
+        assert _parse_content_date("khong phai ngay") is None
+
+    def test_lowercase_z_timezone(self):
+        dt = _parse_content_date("2026-04-15T10:30:00z")
+        assert isinstance(dt, datetime)
+        assert dt.tzinfo is not None
+
+    def test_naive_datetime_becomes_utc(self):
+        dt = _parse_content_date(datetime(2026, 4, 15, 10, 30, 0))
+        assert isinstance(dt, datetime)
+        assert dt.tzinfo == timezone.utc
+
+
+class TestFieldHelpers:
+    def test_first_present_keeps_zero(self):
+        data = {"likes_count": 0, "likes": "1.2K"}
+        assert _first_present(data, "likes_count", "likes") == 0
+
+    def test_normalize_media_urls_string_json(self):
+        value = '["https://a.example/x.jpg","https://b.example/y.jpg"]'
+        out = _normalize_media_urls(value)
+        assert out == ["https://a.example/x.jpg", "https://b.example/y.jpg"]
 
 
 # ── Content Export CSV/JSON Writing ───────────────────────────────────────────

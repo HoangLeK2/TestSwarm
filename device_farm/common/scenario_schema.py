@@ -278,15 +278,35 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
     },
     "extract": {
         "required": ["strategy"],
-        "optional": ["stop_if_no_new", "no_new_threshold", "expand_see_more"],
+        "optional": [
+            "stop_if_no_new",
+            "no_new_threshold",
+            "expand_see_more",
+            "extract_profile",
+            "strategy_version",
+            "collection",
+            "platform",
+            "content_type",
+            "dedupe_field",
+            "tags",
+            "extract_var",
+            "save_parent_id_var",
+            "parent_id_var",
+            "item_level",
+        ],
         "description": (
             "Extract UI data từ màn hình hiện tại vào context['posts']. "
             "strategy: 'fb_posts' — parse FB post cards (author/text/timestamp/reactions/"
             "comments/shares/post_type/image_desc/comment_preview); "
             "'text_nodes' — thu thập tất cả text node vào context['text_nodes']. "
+            "'fb_comments' — parse comment rows + stats trong comment view/feed preview. "
+            "extract_profile: balanced|aggressive|safe (áp defaults scan params). "
+            "strategy_version: lock behavior parser/runtime (vd: fb_comments:v1). "
             "stop_if_no_new (bool, default False): set ctx['_break']=True khi không có bài mới "
             "trong no_new_threshold (default 3) lần scroll liên tiếp — dùng bên trong step 'loop'. "
             "expand_see_more (bool, default True): tự tap nút 'See more'/'Xem thêm' trước khi parse. "
+            "Nếu set collection/platform/content_type/dedupe_field thì extract sẽ auto-save "
+            "incremental vào content DB với offset tracking. "
             "⚠ Dùng với step 'loop' (không phải 'repeat') để stop_if_no_new hoạt động."
         ),
     },
@@ -361,12 +381,23 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
     },
     "save_extraction": {
         "required": ["data_var"],
-        "optional": ["collection", "platform", "content_type", "dedupe_field", "tags"],
+        "optional": [
+            "collection",
+            "platform",
+            "content_type",
+            "dedupe_field",
+            "tags",
+            "parent_id_var",
+            "save_parent_id_var",
+            "item_level",
+        ],
         "description": (
             "Save extracted data to content database with deduplication (DF-010). "
             "data_var: name of runtime variable containing the data (from extract_text_* or set_variable). "
             "collection: name of content collection (default: 'default'). "
             "dedupe_field: field in data to use for dedup hash (e.g. 'content'). "
+            "parent_id_var (alias: save_parent_id_var): link children rows to parent hash from context. "
+            "item_level: hierarchy level (0 post, 1 comment/reply). "
             "Data is saved to content_items table with SHA256 hash-based dedup."
         ),
     },

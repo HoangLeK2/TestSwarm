@@ -7,6 +7,7 @@ from typing import Any, Dict, Tuple
 
 from db.database import AsyncSessionLocal
 from db import crud as repo
+from db.crud.default_scenario import DEVICE_CONTEXT_KEY
 
 log = logging.getLogger(__name__)
 
@@ -58,9 +59,11 @@ def _build_scenario_registry(
         "by_template_name": {},
     }
     for s in scenarios:
+        _vars = dict(s.variables or {})
+        _vars.pop(DEVICE_CONTEXT_KEY, None)
         entry: Dict[str, Any] = {
             "steps": s.steps or [],
-            "variables": s.variables or {},
+            "variables": _vars,
             "name": s.name,
         }
         registry["by_id"][s.id] = entry
@@ -127,8 +130,26 @@ async def enqueue_campaign_run_temporal(
             return {"error": "Campaign has no devices"}, 400
 
         scenarios = await repo.list_scenarios(db, campaign_id)
+        if not scenarios:
+            return {
+                "error": "Campaign has no scenarios. Add a scenario before running.",
+                "campaign_id": campaign_id,
+            }, 400
+        if all(not s.steps for s in scenarios):
+            log.error(
+                "Campaign %s: %d scenario(s) found but none have steps — "
+                "configure steps before running",
+                campaign_id, len(scenarios),
+            )
+            return {
+                "error": (
+                    f"Campaign has {len(scenarios)} scenario(s) but none contain steps. "
+                    "Add steps to at least one scenario before running."
+                ),
+                "campaign_id": campaign_id,
+            }, 400
+
         templates = await list_templates(db)
-        legacy_scenario: dict = campaign.scenario or {}
 
         registry = _build_scenario_registry(scenarios, templates)
 
@@ -145,18 +166,8 @@ async def enqueue_campaign_run_temporal(
             pass
 
         await repo.update_campaign_status(db, campaign_id, "running")
-        # Create a CampaignRun record — populated with workflow IDs after dispatch
-        from db.crud.campaign_run import create_campaign_run
-        run_record = await create_campaign_run(
-            db,
-            campaign_id=campaign_id,
-            device_serials=[d.serial for d in devices],
-            workflow_ids=[],
-            scenarios_count=len(scenarios),
-        )
-        run_id = run_record.id
 
-        # Create Execution coordinator record (DF-011)
+        # Create Execution record (single source of truth for all run types)
         from db.crud.execution import create_execution, add_device_to_execution
         execution_record = await create_execution(
             db,
@@ -164,6 +175,7 @@ async def enqueue_campaign_run_temporal(
             campaign_id=campaign_id,
             user_id=getattr(campaign, "user_id", None),
             status="running",
+            meta={"scenarios_count": len(scenarios)},
         )
         execution_id = execution_record.id
         for d in devices:
@@ -186,67 +198,29 @@ async def enqueue_campaign_run_temporal(
 
     workflow_ids: list[str] = []
 
-    # Detect early: all scenarios have empty steps (misconfiguration, not Temporal failure)
-    if scenarios and all(not s.steps for s in scenarios):
-        log.error(
-            "Campaign %s: %d scenario(s) found but none have steps — "
-            "configure steps before running",
-            campaign_id, len(scenarios),
-        )
-        return {
-            "error": (
-                f"Campaign has {len(scenarios)} scenario(s) but none contain steps. "
-                "Add steps to at least one scenario before running."
-            ),
-            "campaign_id": campaign_id,
-        }, 400
-
-    if scenarios:
-        for d in devices:
-            acct_vars = device_account_vars.get(d.id, {})
-            for scen in scenarios:
-                if not scen.steps:
-                    continue
-                wf_id = f"campaign:{campaign_id}:device:{d.serial}:scenario:{scen.id}"
-                try:
-                    from temporalio.common import WorkflowIDReusePolicy
-                    await temporal_client.start_workflow(
-                        ScenarioWorkflow.run,
-                        ScenarioInput(
-                            campaign_id=campaign_id,
-                            device_serial=d.serial,
-                            steps=scen.steps,
-                            variables={**(scen.variables or {}), **acct_vars},
-                            campaign_vars=campaign.variables or {},
-                            scenario_registry=registry,
-                            run_id=run_id,
-                            execution_id=execution_id,
-                        ),
-                        id=wf_id,
-                        task_queue=task_queue,
-                        id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
-                    )
-                    workflow_ids.append(wf_id)
-                except Exception as exc:
-                    log.error("Failed to start workflow %s: %s", wf_id, exc)
-    elif isinstance(legacy_scenario, dict) and legacy_scenario.get("steps"):
-        for d in devices:
-            acct_vars = device_account_vars.get(d.id, {})
-            wf_id = f"campaign:{campaign_id}:device:{d.serial}:scenario:legacy"
+    for d in devices:
+        acct_vars = device_account_vars.get(d.id, {})
+        for scen in scenarios:
+            if not scen.steps:
+                continue
+            wf_id = f"campaign:{campaign_id}:device:{d.serial}:scenario:{scen.id}"
             try:
+                from temporalio.common import WorkflowIDReusePolicy
+                _sc_vars = dict(scen.variables or {})
+                _sc_vars.pop(DEVICE_CONTEXT_KEY, None)
+                _campaign_vars = dict(campaign.variables or {})
+                if campaign.user_id:
+                    _campaign_vars["__USER_ID__"] = str(campaign.user_id)
                 await temporal_client.start_workflow(
                     ScenarioWorkflow.run,
                     ScenarioInput(
                         campaign_id=campaign_id,
                         device_serial=d.serial,
-                        steps=legacy_scenario.get("steps", []),
-                        variables={
-                            **(legacy_scenario.get("variables") or {}),
-                            **acct_vars,
-                        },
-                        campaign_vars=campaign.variables or {},
+                        steps=scen.steps,
+                        variables={**_sc_vars, **acct_vars},
+                        campaign_vars=_campaign_vars,
                         scenario_registry=registry,
-                        run_id=run_id,
+                        run_id=execution_id,
                         execution_id=execution_id,
                     ),
                     id=wf_id,
@@ -257,36 +231,35 @@ async def enqueue_campaign_run_temporal(
             except Exception as exc:
                 log.error("Failed to start workflow %s: %s", wf_id, exc)
 
-    expected_workflows = len(devices) * (len(scenarios) or 1)
+    scen_with_steps = sum(1 for s in scenarios if s.steps)
+    expected_workflows = len(devices) * scen_with_steps
     if expected_workflows > 0 and not workflow_ids:
         log.error(
             "Campaign %s: all %d workflow start(s) failed — no devices are running",
             campaign_id, expected_workflows,
         )
-        # Mark run as failed
-        from db.crud.campaign_run import finish_campaign_run
+        # Mark execution as failed and reset campaign out of running state
+        from db.crud.execution import finish_execution
         async with AsyncSessionLocal() as db:
-            await finish_campaign_run(db, run_id, status="failed")
+            await finish_execution(db, execution_id, status="failed")
+            await repo.update_campaign_status(db, campaign_id, "idle")
             await db.commit()
         return {
             "error": "Failed to start any workflows — check Temporal server connectivity",
             "campaign_id": campaign_id,
         }, 500
 
-    # Update run record with actual workflow IDs
-    from sqlalchemy import update as sa_update
-    from db.models.campaign import CampaignRun
+    # Store workflow IDs in execution.meta
+    from db.crud.execution import update_execution
     async with AsyncSessionLocal() as db:
-        await db.execute(
-            sa_update(CampaignRun)
-            .where(CampaignRun.id == run_id)
-            .values(workflow_ids=workflow_ids)
+        await update_execution(
+            db, execution_id,
+            meta={**execution_record.meta, "workflow_ids": workflow_ids},
         )
         await db.commit()
 
     return {
         "id": campaign_id,
-        "run_id": run_id,
         "execution_id": execution_id,
         "status": "running",
         "device_serials": [d.serial for d in devices],

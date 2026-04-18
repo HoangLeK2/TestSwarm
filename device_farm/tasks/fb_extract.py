@@ -116,6 +116,11 @@ _NOISE_TEXTS = frozenset({
     "most relevant", "phù hợp nhất",
 })
 
+# Comment-button exact-label tokens used as anchor by comment-region resolver.
+# Widened from literal "Bình luận" to cover EN locale devices. Keep this small
+# and exact-match only — loose widening risks matching nav-bar badges.
+_COMMENT_BUTTON_TOKENS = frozenset({"Bình luận", "Comment", "Comments"})
+
 _NOISE_PREFIXES = (
     "lựa chọn khác cho bài viết",
     "nút bình luận",
@@ -126,8 +131,23 @@ _NOISE_PREFIXES = (
 # "nút thích" không bỏ vào noise vì content-desc có thể chứa số like:
 # "1.200 lượt thích. Nút Thích." → cần parse trước rồi skip
 
-# Prefix dùng để trích xuất tên tác giả từ content-desc avatar
-_AUTHOR_PREFIX = "ảnh đại diện của"
+# Prefix dùng để trích xuất tên tác giả từ content-desc avatar.
+# VN + EN. Extend with additional locales only when a capture forces it.
+_AUTHOR_PREFIXES: Tuple[str, ...] = (
+    "ảnh đại diện của",
+    "profile picture of",
+    "profile photo of",
+)
+_AUTHOR_PREFIX = _AUTHOR_PREFIXES[0]  # backward-compat for any external users
+
+
+def _author_prefix_match(desc_lower: str) -> Optional[str]:
+    """Return the matching prefix if ``desc_lower`` starts with any known
+    author-prefix, else None."""
+    for p in _AUTHOR_PREFIXES:
+        if desc_lower.startswith(p):
+            return p
+    return None
 
 _NOISE_CONTAINS = (
     "bảng ở cạnh",
@@ -346,6 +366,14 @@ def _refresh_post_derived_hashes(post: Dict[str, Any]) -> None:
     post["post_key"] = hashlib.sha1(_pk_raw.encode("utf-8")).hexdigest()
 
 
+# F2.5 — when set, posts that match ``_is_junk_recycler_post`` are KEPT with
+# ``_soft_junk: True`` rather than silently dropped, so operators can audit
+# whether the junk heuristic is over-eager and dropping real posts.
+def _keep_soft_junk() -> bool:
+    import os
+    return os.environ.get("FB_KEEP_SOFT_JUNK", "0") == "1"
+
+
 def _is_junk_recycler_post(post: Dict[str, Any]) -> bool:
     """Rows from comment sheets / thread chips / composer saved as feed posts — drop."""
     author = (post.get("author") or "").strip()
@@ -353,6 +381,93 @@ def _is_junk_recycler_post(post: Dict[str, Any]) -> bool:
     al = author.lower()
     tl = text.lower()
     combined_lc = f"{al} {tl}"
+
+    # Live-run 2026-04-18: group header card saved as a post.
+    # "Ảnh bìa của nhóm OpenClaw VN..." / "OpenClaw VN, Nhóm Công khai · N thành viên ..."
+    # Also catch the group-suggestion variant ("<Group>, Công khai · N thành viên / Tham gia")
+    if (
+        al.startswith("ảnh bìa của nhóm")
+        or al.startswith("cover photo of group")
+        or "nhóm công khai · " in tl
+        or "nhóm riêng tư · " in tl
+        or ", công khai · " in al and "thành viên" in al
+        or ", công khai · " in tl and "thành viên" in tl
+        or "public group · " in tl
+        or "private group · " in tl
+        or "thành viên đã tham gia nhóm" in tl
+        or "members have joined" in tl
+    ):
+        return True
+
+    # Feed suggestion rows — Facebook injects "Made for you" / "People you may
+    # know" / "Suggested groups" cards in group feeds; parser clusters them as
+    # posts. Drop by author token.
+    _SUGGESTION_AUTHORS = (
+        "dành cho bạn", "suggested for you", "made for you",
+        "xem tất cả những người bạn có thể biết",
+        "những người bạn có thể biết",
+        "people you may know",
+        "gợi ý cho bạn",
+        "nhóm gợi ý", "suggested groups",
+    )
+    if any(al.startswith(tok) or al == tok for tok in _SUGGESTION_AUTHORS):
+        return True
+    if any(tok in al for tok in ("những người bạn có thể biết", "people you may know")):
+        return True
+
+    # Overflow menu ("Lựa chọn khác về <group>" / "More options for <group>")
+    if al.startswith("lựa chọn khác về") or al.startswith("more options for"):
+        return True
+
+    # Device-farm own UI leaking through (when FB not focused / pairing screen).
+    # Example: "Device Farm Agent / Identity and Pairing DEVICE DETAILS Serial".
+    if (
+        al.startswith("device farm agent")
+        or "identity and pairing" in tl
+        or "device details serial" in tl
+        or al == "pair device"
+    ):
+        return True
+
+    # Composer prompt leaking in as post 1.
+    # "Hiển thị trang cá nhân / Bạn viết gì đi... Cảm xúc Check in Thăm dò"
+    # "Đi tới trang cá nhân / Bạn đang nghĩ gì?" (newer FB composer wording)
+    if (
+        "bạn viết gì đi" in tl
+        or "bạn đang nghĩ gì" in tl
+        or "what's on your mind" in tl
+        or al.startswith("hiển thị trang cá nhân")
+        or al.startswith("đi tới trang cá nhân")
+        or al.startswith("go to profile")
+    ):
+        return True
+
+    # Stories strip ("Khay tin / Tạo tin" = story tray + create-story).
+    if (
+        al.startswith("khay tin")
+        or "khay tin" in tl
+        or al == "tạo tin"
+        or "your story" in tl and "stories" in tl
+    ):
+        return True
+
+    # Text-formatting toolbar chips ("Đỏ đậm, màu nền" / "Bold, Italic, Background")
+    # that appear when the composer is focused. ≥ 2 toolbar tokens OR ≥ 2 tokens
+    # at the START of body — covers both "Đỏ đậm, màu nền" alone and the longer
+    # "Đỏ đậm, màu nền <then search suggestions>" form.
+    _TOOLBAR_TOKENS = (
+        "đỏ đậm", "in đậm", "in nghiêng", "gạch chân", "màu nền",
+        "bold", "italic", "underline", "background color",
+    )
+    tb_hits = sum(1 for tok in _TOOLBAR_TOKENS if tok in tl)
+    if tb_hits >= 2 and len(text) < 160:
+        return True
+    # Even on longer bodies, if the body STARTS with two toolbar tokens in the
+    # first 40 chars, it's the formatting-chip row leaking in.
+    head = tl[:40]
+    head_hits = sum(1 for tok in _TOOLBAR_TOKENS if tok in head)
+    if head_hits >= 2:
+        return True
 
     # Album / reaction count chip mis-read as author (e.g. "+3", "12")
     if re.match(r"^\+?\d{1,3}$", author) and len(text) < 64:
@@ -747,8 +862,9 @@ def _collect_text_nodes(element, toolbar_cutoff_y: int = 200) -> List[Dict[str, 
         # Trích xuất tên tác giả từ content-desc avatar: "Ảnh đại diện của {NAME}..."
         is_author_hint = False
         desc_lower = desc.lower()
-        if desc_lower.startswith(_AUTHOR_PREFIX):
-            remainder = desc[len(_AUTHOR_PREFIX):].strip().lstrip(",").strip()
+        matched_prefix = _author_prefix_match(desc_lower)
+        if matched_prefix is not None:
+            remainder = desc[len(matched_prefix):].strip().lstrip(",").strip()
             # Lấy phần trước dấu phẩy đầu tiên (bỏ ", Nút." hoặc phần phụ)
             name_part = remainder.split(",")[0].strip()
             if 2 <= len(name_part) <= 80:
@@ -808,7 +924,7 @@ def _extract_media_artifacts(element) -> List[Dict[str, Any]]:
         label = desc or text
         if not label:
             continue
-        if desc.lower().startswith(_AUTHOR_PREFIX):
+        if _author_prefix_match(desc.lower()) is not None:
             continue
         m = _RE_FB_CAROUSEL.search(label)
         if not m:
@@ -881,6 +997,15 @@ def _extract_post(
             i > anchor_idx and t_lower in ("bình luận", "comment")
         ):
             continue
+        # F2.6 — node-level noise-prefix check. Was previously only applied
+        # to the *concatenated* body (post-loop), which killed real captions
+        # that happen to start with such a phrase. Moving it per-node drops
+        # accessibility menu labels like "Lựa chọn khác cho bài viết" that
+        # live in a single node without touching legitimate body text.
+        if any(t_lower.startswith(p) for p in _NOISE_PREFIXES):
+            continue
+        if any(token in t_lower for token in _NOISE_CONTAINS):
+            continue
 
         # Album tiles (VN: "Ảnh 1/3, mở rộng ảnh") — never merge into body text.
         if _RE_FB_CAROUSEL.search(t):
@@ -942,23 +1067,32 @@ def _extract_post(
 
     comment_preview = " ".join(comment_preview_parts).strip() or None
     body = " ".join(body_parts).strip()
-    if body:
-        b = body.lower()
-        if any(b.startswith(prefix) for prefix in _NOISE_PREFIXES):
-            body = ""
-        if any(token in b for token in _NOISE_CONTAINS):
-            body = ""
-        if "chia sẻ với: nhóm công khai" in b and len(body) < 60:
-            body = ""
+    # F2.6 — previously, the concatenated body was entirely zeroed if it
+    # started with any ``_NOISE_PREFIXES`` entry or contained any
+    # ``_NOISE_CONTAINS`` token. That killed captions that happen to begin
+    # with a noise phrase ("Theo dõi trang này để..."). Node-level noise
+    # filtering upstream (``_is_noise_text``) already drops pure-noise rows,
+    # so the broad post-concat wipe is redundant and harmful. Kept only the
+    # narrow short-chia-sẻ wipe because it targets a real multi-node pattern.
+    if body and "chia sẻ với: nhóm công khai" in body.lower() and len(body) < 60:
+        body = ""
 
-    if not author and not body:
+    # F2.4 — keep the post if ANY signal is present. A post with a timestamp
+    # + reactions count but missing author/body is still a real post — mark
+    # ``_incomplete`` so downstream (save layer) can flag + optionally re-
+    # crawl. Previously we dropped silently on "no author AND no body".
+    permalinks = list(permalink_candidates or [])
+    has_fb_link = bool(fb_post_id or permalinks)
+    has_stats = any(v is not None for v in (reactions, comments, shares, views))
+    has_signal = any((
+        author, body, timestamp, image_desc, has_stats, has_fb_link,
+    ))
+    if not has_signal:
         return None
+    incomplete = not (author and body)
 
     if image_desc and post_type == "text":
         post_type = "photo"
-
-    permalinks = list(permalink_candidates or [])
-    has_fb_link = bool(fb_post_id or permalinks)
     post_type = _merge_post_type(
         post_type,
         structural_type_hint,
@@ -1011,6 +1145,9 @@ def _extract_post(
     }
     if feed_item_index is not None:
         out["feed_item_index"] = feed_item_index
+    # F2.4 — surface partial-signal posts so downstream can flag / re-crawl.
+    if incomplete:
+        out["_incomplete"] = True
     return out
 
 
@@ -1098,6 +1235,9 @@ def _extract_posts_from_recycler(root, source_index: int) -> Optional[List[Dict[
                 if post.get("post_type") == "text":
                     post["post_type"] = "photo"
             if _is_junk_recycler_post(post):
+                if _keep_soft_junk():
+                    post["_soft_junk"] = True
+                    posts.append(post)
                 continue
             posts.append(post)
     return posts
@@ -1185,30 +1325,186 @@ def _parse_xml(xml: str) -> Optional[Any]:
         return None
 
 
-def parse_fb_posts_from_xml(xml: str, source_index: int = 0) -> List[Dict[str, Any]]:
-    """Parse UIAutomator2 hierarchy XML → list of post dicts."""
+# ---------------------------------------------------------------------------
+# Phase 0 observability: diagnostic schema for parse-entrypoint results.
+# Every empty parse should carry a reason_code so upstream (scenario engine,
+# failure-bundle dumper, operator logs) can distinguish legitimate end-of-feed
+# from parser brittleness or session-death conditions.
+# ---------------------------------------------------------------------------
+
+# Login / rate-limit screen heuristic markers. Kept narrow — exact substring
+# match against joined node text. Expanded carefully so we don't false-positive
+# on a legit post containing the word "đăng nhập".
+_LOGIN_SCREEN_MARKERS = (
+    "đăng nhập",
+    "log in",
+    "log into facebook",
+    "enter password",
+    "quên mật khẩu",
+    "forgot password",
+)
+_RATE_LIMIT_MARKERS = (
+    "temporarily blocked",
+    "tạm thời bị chặn",
+    "you're temporarily blocked",
+    "bạn đã bị chặn tạm thời",
+    "try again later",
+    "thử lại sau",
+)
+
+
+def _scan_special_screen(root) -> Optional[str]:
+    """Return 'login_screen' | 'rate_limited' | None by scanning visible text.
+
+    Joins visible text + content-desc into one lowercased blob and checks for
+    known markers. Cheap, runs once per parse call.
+    """
+    try:
+        blob_parts: List[str] = []
+        for node in root.iter():
+            t = (node.get("text") or "").strip()
+            d = (node.get("content-desc") or "").strip()
+            if t:
+                blob_parts.append(t)
+            if d:
+                blob_parts.append(d)
+            if len(blob_parts) > 400:  # cap cost
+                break
+        blob = " ".join(blob_parts).casefold()
+        for m in _LOGIN_SCREEN_MARKERS:
+            if m in blob:
+                # Require that we do NOT also see typical feed content (post
+                # action words) — otherwise this is just a post quoting the word.
+                if "bình luận" not in blob and "comment" not in blob:
+                    return "login_screen"
+        for m in _RATE_LIMIT_MARKERS:
+            if m in blob:
+                return "rate_limited"
+    except Exception:
+        return None
+    return None
+
+
+def _empty_post_diagnostic(reason_code: str, **extra) -> Dict[str, Any]:
+    base: Dict[str, Any] = {
+        "reason_code": reason_code,
+        "posts_returned": 0,
+        "candidate_clusters": 0,
+        "filtered_junk_count": 0,
+        "truncated_post_count": 0,
+        "locale_tokens_hit": [],
+    }
+    base.update(extra)
+    return base
+
+
+def parse_fb_posts_from_xml_with_diagnostic(
+    xml: str,
+    source_index: int = 0,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Parse feed posts from hierarchy XML.
+
+    Returns (posts, diagnostic). Diagnostic always populated with at least a
+    `reason_code`. Production callers (scenario engine, temporal activities)
+    should use this variant so empty returns can be traced.
+    """
+    t0 = time.monotonic()
+
     root = _parse_xml(xml)
     if root is None:
-        return []
-    _, screen_h = _infer_screen_size(root)
+        diag = _empty_post_diagnostic(
+            "xml_parse_error",
+            elapsed_ms=round((time.monotonic() - t0) * 1000, 2),
+        )
+        return [], diag
+
+    # Detect login / rate-limit screens early so scenario engine can short-circuit
+    # without attempting to treat them as "empty feed".
+    special = _scan_special_screen(root)
+    if special:
+        diag = _empty_post_diagnostic(
+            special,
+            elapsed_ms=round((time.monotonic() - t0) * 1000, 2),
+        )
+        return [], diag
+
+    screen_w, screen_h = _infer_screen_size(root)
     posts = _extract_posts_from_recycler(root, source_index)
     if posts is not None:
         if posts:
-            return posts
-        # Recycler trả về []: thread/sheet (cố ý) hoặc mọi item bị lọc — chỉ thread thì không fallback.
+            truncated_n = sum(1 for p in posts if is_fb_post_truncated(p))
+            diag = {
+                "reason_code": "ok",
+                "posts_returned": len(posts),
+                "candidate_clusters": len(posts),
+                "filtered_junk_count": 0,
+                "truncated_post_count": truncated_n,
+                "screen_size": [screen_w, screen_h],
+                "locale_tokens_hit": [],
+                "path": "recycler",
+                "elapsed_ms": round((time.monotonic() - t0) * 1000, 2),
+            }
+            return posts, diag
         if _hierarchy_is_fb_comment_sheet(root):
-            return []
+            diag = _empty_post_diagnostic(
+                "comment_sheet_no_posts_expected",
+                screen_size=[screen_w, screen_h],
+                elapsed_ms=round((time.monotonic() - t0) * 1000, 2),
+            )
+            return [], diag
+
     nodes = _collect_text_nodes(root)
     clusters = _cluster_into_posts(nodes, screen_height=screen_h)
     result: List[Dict[str, Any]] = []
+    junk_count = 0
     for cluster in clusters:
         post = _extract_post(cluster, source_index)
         if post:
             _maybe_fix_merged_feed_caption(post)
             _refresh_post_derived_hashes(post)
-            if not _is_junk_recycler_post(post):
+            if _is_junk_recycler_post(post):
+                junk_count += 1
+                if _keep_soft_junk():
+                    post["_soft_junk"] = True
+                    result.append(post)
+            else:
                 result.append(post)
-    return result
+
+    if not result:
+        reason = "no_candidates" if not clusters else "all_filtered_junk"
+        diag = _empty_post_diagnostic(
+            reason,
+            candidate_clusters=len(clusters),
+            filtered_junk_count=junk_count,
+            screen_size=[screen_w, screen_h],
+            elapsed_ms=round((time.monotonic() - t0) * 1000, 2),
+        )
+        return [], diag
+
+    truncated_n = sum(1 for p in result if is_fb_post_truncated(p))
+    diag = {
+        "reason_code": "ok",
+        "posts_returned": len(result),
+        "candidate_clusters": len(clusters),
+        "filtered_junk_count": junk_count,
+        "truncated_post_count": truncated_n,
+        "screen_size": [screen_w, screen_h],
+        "locale_tokens_hit": [],
+        "path": "cluster",
+        "elapsed_ms": round((time.monotonic() - t0) * 1000, 2),
+    }
+    return result, diag
+
+
+def parse_fb_posts_from_xml(xml: str, source_index: int = 0) -> List[Dict[str, Any]]:
+    """Parse UIAutomator2 hierarchy XML → list of post dicts.
+
+    Thin wrapper over ``parse_fb_posts_from_xml_with_diagnostic`` that drops the
+    diagnostic for backward compatibility with tests and legacy callers.
+    Prefer the diagnostic variant in new production code.
+    """
+    posts, _ = parse_fb_posts_from_xml_with_diagnostic(xml, source_index)
+    return posts
 
 
 def _dedup(posts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1653,7 +1949,7 @@ def _cluster_into_comments(nodes: List[Dict[str, Any]]) -> List[List[Dict[str, A
     clusters: List[List[Dict]] = []
     current: List[Dict] = [nodes[0]]
     prev_cy = nodes[0]["cy"]
-    pending_footer = Falsex
+    pending_footer = False
 
     def _inline_comment_footer_row(text: str, footer_gap: float) -> bool:
         tt = text.strip()
@@ -1909,7 +2205,7 @@ def _find_binh_luan_button_in_element(element) -> Optional[Tuple[int, int, int]]
             continue
         t = (node.get("text") or "").strip()
         d = (node.get("content-desc") or "").strip()
-        if t != "Bình luận" and d != "Bình luận":
+        if t not in _COMMENT_BUTTON_TOKENS and d not in _COMMENT_BUTTON_TOKENS:
             continue
         m = re.match(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", node.get("bounds") or "")
         if not m:
@@ -1930,7 +2226,7 @@ def _legacy_last_binh_luan_anchors(root) -> Tuple[Optional[int], Optional[int], 
         text = (node.get("text") or "").strip()
         desc = (node.get("content-desc") or "").strip()
         cls = node.get("class", "")
-        if (text == "Bình luận" or desc == "Bình luận") and "Button" in cls:
+        if (text in _COMMENT_BUTTON_TOKENS or desc in _COMMENT_BUTTON_TOKENS) and "Button" in cls:
             m = re.match(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", node.get("bounds", ""))
             if m:
                 y1, y2 = int(m.group(2)), int(m.group(4))
@@ -2003,36 +2299,45 @@ def _resolve_comment_region_anchors(
     return _legacy_last_binh_luan_anchors(root)
 
 
-def parse_fb_comments_from_xml(
+def parse_fb_comments_from_xml_with_diagnostic(
     xml: str,
     parent_post_id: Optional[str] = None,
     max_items: int = 50,
-) -> List[Dict[str, Any]]:
-    """Parse comments from current screen XML.
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Parse comments from hierarchy XML with full diagnostic.
 
-    Works for both:
-    - Feed view: extracts comment-preview nodes below post action buttons
-    - Post detail view: extracts all visible comments
-
-    Lọc sơ bộ: cùng card RecyclerView với nút Bình luận của **đúng bài**
-    (khớp ``parent_post_id`` ↔ ``_pid`` hàng feed, hoặc hàng trên cùng có nút),
-    bỏ toolbar phải (x0 lớn), bỏ chuỗi tìm kiếm / menu / bàn phím.
-
-    Each comment dict: author, text, timestamp, likes, reactions (same as likes when set),
-    optional post_reactions / post_shares (parent post header), parent_post_id, comment_key, …
-    First element may be {_type: post_stats, reactions, shares} when the header exposes counts.
-
-    parent_post_id is:
-    1. Passed in externally (from executor ctx), OR
-    2. Auto-derived from the post header nodes in the XML (for post detail view)
+    Returns (comments, diagnostic). Production callers (extraction step,
+    temporal activity) should use this variant; ``parse_fb_comments_from_xml``
+    keeps the original signature for tests and legacy code.
     """
+    t0 = time.monotonic()
+
+    def _diag(reason: str, **extra) -> Dict[str, Any]:
+        base: Dict[str, Any] = {
+            "reason_code": reason,
+            "posts_returned": 0,  # kept for consistent schema
+            "comments_returned": 0,
+            "anchor_button_found": False,
+            "nodes_in_band": 0,
+            "candidate_clusters": 0,
+            "locale_tokens_hit": [],
+            "elapsed_ms": round((time.monotonic() - t0) * 1000, 2),
+        }
+        base.update(extra)
+        return base
+
     root = _parse_xml(xml)
     if root is None:
-        return []
+        return [], _diag("xml_parse_error")
+
+    # Session-death / rate-limit detection (same heuristic as posts).
+    special = _scan_special_screen(root)
+    if special:
+        return [], _diag(special)
 
     all_nodes = _collect_text_nodes(root, toolbar_cutoff_y=200)
     if not all_nodes:
-        return []
+        return [], _diag("no_text_nodes")
 
     row_match_pid = parent_post_id
     if parent_post_id is None:
@@ -2041,17 +2346,13 @@ def parse_fb_comments_from_xml(
     action_btn_y2, action_btn_y_mid, comment_y_max = _resolve_comment_region_anchors(
         root, row_match_pid
     )
-    screen_w, _screen_h = _infer_screen_size(root)
-    # Loại chip cạnh phải (Tìm kiếm trong nhóm, Công cụ khác…) — x0 thường > ~64% màn hình.
+    anchor_found = action_btn_y2 is not None
+    screen_w, screen_h = _infer_screen_size(root)
     comment_x_max = max(380, int(screen_w * 0.64))
 
-    # Filter: main column x≥150, plus narrow left avatar name strip (thread / OP row).
-    # is_author_hint (ảnh đại diện) allowed only on that strip so post header hints
-    # in other layouts stay excluded when they do not match strip geometry.
     def _in_comment_vertical_band(n: Dict[str, Any]) -> bool:
         x0 = n["bounds"][0]
         if x0 >= comment_x_max:
-            # Reaction count sits on the far right; still part of the comment row.
             if x0 < screen_w - 24 and _is_comment_reaction_count_row(n["text"]):
                 pass
             else:
@@ -2076,9 +2377,14 @@ def parse_fb_comments_from_xml(
             comment_nodes.append(n)
 
     if not comment_nodes:
-        return []
+        reason = "anchor_not_found" if not anchor_found else "no_nodes_in_band"
+        return [], _diag(
+            reason,
+            anchor_button_found=anchor_found,
+            nodes_in_band=0,
+            screen_size=[screen_w, screen_h],
+        )
 
-    # Row alignment + left column before main column (badge vs avatar same band).
     comment_nodes.sort(key=lambda n: (n["bounds"][1] // 35, n["bounds"][0]))
 
     clusters = _cluster_into_comments(comment_nodes)
@@ -2102,7 +2408,7 @@ def parse_fb_comments_from_xml(
     if header_stats:
         result.insert(0, header_stats)
 
-    # Denormalize parent post engagement onto each comment row (saved in raw_data / export).
+    # Denormalize parent post engagement onto each comment row.
     _pr = header_stats.get("reactions") if header_stats else None
     _ps = header_stats.get("shares") if header_stats else None
     if _pr is not None or _ps is not None:
@@ -2114,7 +2420,40 @@ def parse_fb_comments_from_xml(
             if _ps is not None:
                 c["post_shares"] = _ps
 
-    return result
+    if not result:
+        return [], _diag(
+            "empty_cluster",
+            anchor_button_found=anchor_found,
+            nodes_in_band=len(comment_nodes),
+            candidate_clusters=len(clusters),
+            screen_size=[screen_w, screen_h],
+        )
+
+    return result, {
+        "reason_code": "ok",
+        "comments_returned": len([c for c in result if c.get("_type") != "post_stats"]),
+        "anchor_button_found": anchor_found,
+        "nodes_in_band": len(comment_nodes),
+        "candidate_clusters": len(clusters),
+        "screen_size": [screen_w, screen_h],
+        "locale_tokens_hit": [],
+        "has_header_stats": bool(header_stats),
+        "elapsed_ms": round((time.monotonic() - t0) * 1000, 2),
+    }
+
+
+def parse_fb_comments_from_xml(
+    xml: str,
+    parent_post_id: Optional[str] = None,
+    max_items: int = 50,
+) -> List[Dict[str, Any]]:
+    """Parse comments from current screen XML.
+
+    Thin wrapper over ``parse_fb_comments_from_xml_with_diagnostic`` that drops
+    the diagnostic for backward compatibility.
+    """
+    rows, _ = parse_fb_comments_from_xml_with_diagnostic(xml, parent_post_id, max_items)
+    return rows
 
 
 def _dedup_comments(comments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

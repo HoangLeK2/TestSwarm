@@ -5,8 +5,11 @@ import logging
 import os
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
+from urllib.parse import urlparse
 
 import yaml
+
+log = logging.getLogger(__name__)
 
 
 
@@ -14,6 +17,15 @@ import yaml
 class WebConfig:
     host: str = "0.0.0.0"
     port: int = 8080
+    cors_allow_all: bool = False
+    cors_allowed_origins: List[str] = field(
+        default_factory=lambda: [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+        ]
+    )
     # Disable uvicorn WS ping: concurrent ping + frame drains cause
     # "assert waiter is None or waiter.cancelled()" in websockets legacy.
     # App-level heartbeat (ws.py:heartbeat every 5s) keeps connections alive.
@@ -198,6 +210,35 @@ class RelayConfig:
     enabled: bool = False
     port: int = 50051
     api_key: str = ""   # set via RELAY_API_KEY env var or config.yaml
+    tls_cert_file: str = ""
+    tls_key_file: str = ""
+    allow_insecure_grpc: bool = True
+
+
+@dataclass
+class RedisConfig:
+    enabled: bool = False
+    url: str = "redis://localhost:6379/0"
+    prefix: str = "df:"
+
+
+@dataclass
+class SafeModeConfig:
+    """Operator-level switch for restricted / low-bandwidth deployments.
+
+    read_only
+        Reject every write method (POST/PUT/PATCH/DELETE) that would mutate
+        scenarios, templates, devices, sessions, schedules, or campaigns.
+        Auth endpoints stay reachable so the UI can still log in and browse.
+    stream_hierarchy
+        When false, /hierarchy, /ui_elements, and /hit_test return 503. The
+        hierarchy XML is typically 10–50 KB per dump, so disabling is the
+        cheapest way to cut bandwidth on observe-only setups.
+
+    Env overrides: FARM_READ_ONLY=1, FARM_STREAM_HIERARCHY=0.
+    """
+    read_only: bool = False
+    stream_hierarchy: bool = True
 
 
 @dataclass
@@ -217,6 +258,8 @@ class Config:
     temporal: TemporalConfig = field(default_factory=TemporalConfig)
     object_storage: ObjectStorageConfig = field(default_factory=ObjectStorageConfig)
     relay: RelayConfig = field(default_factory=RelayConfig)
+    redis: RedisConfig = field(default_factory=RedisConfig)
+    safe_mode: SafeModeConfig = field(default_factory=SafeModeConfig)
     target_app: str = ""
     force_u2_mode: bool = False
 
@@ -329,6 +372,13 @@ def _build_relay_config(raw: dict) -> RelayConfig:
             cfg.port = int(_relay_port_env)
         except ValueError:
             pass
+    if os.environ.get("RELAY_TLS_CERT_FILE"):
+        cfg.tls_cert_file = os.environ["RELAY_TLS_CERT_FILE"].strip()
+    if os.environ.get("RELAY_TLS_KEY_FILE"):
+        cfg.tls_key_file = os.environ["RELAY_TLS_KEY_FILE"].strip()
+    allow_insecure = os.environ.get("RELAY_ALLOW_INSECURE_GRPC")
+    if allow_insecure is not None and str(allow_insecure).strip() != "":
+        cfg.allow_insecure_grpc = str(allow_insecure).strip().lower() in ("1", "true", "yes", "on")
     return cfg
 
 
@@ -340,6 +390,36 @@ def _build_database_config(raw: dict) -> DatabaseConfig:
     env_url = (os.environ.get("DATABASE_URL") or "").strip()
     if env_url:
         cfg.url = env_url
+    return cfg
+
+
+def _build_safe_mode_config(raw: dict) -> SafeModeConfig:
+    """YAML safe_mode section + env overrides (FARM_READ_ONLY, FARM_STREAM_HIERARCHY)."""
+    cfg = SafeModeConfig(
+        **{k: v for k, v in raw.items() if k in SafeModeConfig.__dataclass_fields__}
+    )
+    env_ro = (os.environ.get("FARM_READ_ONLY") or "").strip().lower()
+    if env_ro in {"1", "true", "yes", "on"}:
+        cfg.read_only = True
+    elif env_ro in {"0", "false", "no", "off"}:
+        cfg.read_only = False
+    env_sh = (os.environ.get("FARM_STREAM_HIERARCHY") or "").strip().lower()
+    if env_sh in {"0", "false", "no", "off"}:
+        cfg.stream_hierarchy = False
+    elif env_sh in {"1", "true", "yes", "on"}:
+        cfg.stream_hierarchy = True
+    return cfg
+
+
+def _build_redis_config(raw: dict) -> RedisConfig:
+    """YAML redis section + ``REDIS_URL`` env override."""
+    cfg = RedisConfig(
+        **{k: v for k, v in raw.items() if k in RedisConfig.__dataclass_fields__}
+    )
+    env_url = (os.environ.get("REDIS_URL") or "").strip()
+    if env_url:
+        cfg.url = env_url
+        cfg.enabled = True
     return cfg
 
 
@@ -371,10 +451,50 @@ def load_config(path: str = "config.yaml") -> Config:
     else:
         op_delay = (0, 0.1)
 
+    def _normalize_cors_origins(raw_origins) -> list[str]:
+        if not isinstance(raw_origins, list):
+            return []
+        allowed: list[str] = []
+        for raw_origin in raw_origins:
+            origin = str(raw_origin).strip()
+            if not origin:
+                continue
+            # Reject wildcard-style origins to prevent accidental allow-all CORS.
+            if origin == "*" or "*" in origin:
+                log.warning("Ignoring unsafe CORS origin with wildcard: %s", origin)
+                continue
+            parsed = urlparse(origin)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                log.warning("Ignoring invalid CORS origin: %s", origin)
+                continue
+            normalized = f"{parsed.scheme}://{parsed.netloc}"
+            if normalized not in allowed:
+                allowed.append(normalized)
+        return allowed
+
+    web_cors_allowed_origins = _get(web_raw, "cors_allowed_origins", None)
+    if not isinstance(web_cors_allowed_origins, list):
+        web_cors_allowed_origins = [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+        ]
+    web_cors_allowed_origins = _normalize_cors_origins(web_cors_allowed_origins)
+
+    env_cors_origins = os.environ.get("CORS_ALLOWED_ORIGINS", "").strip()
+    if env_cors_origins:
+        web_cors_allowed_origins = _normalize_cors_origins(env_cors_origins.split(","))
+
     return Config(
         web=WebConfig(
             host=_get(web_raw, "host", "0.0.0.0"),
             port=_get(web_raw, "port", 8080),
+            cors_allow_all=bool(
+                str(os.environ.get("CORS_ALLOW_ALL", _get(web_raw, "cors_allow_all", False))).strip().lower()
+                in ("1", "true", "yes", "on")
+            ),
+            cors_allowed_origins=web_cors_allowed_origins,
             ws_ping_interval=None,  # disabled: concurrent drain assertion in websockets legacy
             ws_ping_timeout=None,
         ),
@@ -457,11 +577,88 @@ def load_config(path: str = "config.yaml") -> Config:
         temporal=_build_temporal_config(raw.get("temporal", {})),
         object_storage=_build_object_storage_config(raw),
         relay=_build_relay_config(raw.get("relay", {})),
+        redis=_build_redis_config(raw.get("redis", {})),
+        safe_mode=_build_safe_mode_config(raw.get("safe_mode", {})),
         target_app=raw.get("target_app", ""),
         force_u2_mode=bool(raw.get("force_u2_mode", False)),
     )
 
 
 def setup_logging(cfg: LoggingConfig) -> None:
+    import importlib
+    from logging.handlers import TimedRotatingFileHandler
+    from pathlib import Path
+
+    structlog = importlib.import_module("structlog")
+
+    class _TraceFileFilter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            name = record.name or ""
+            return (
+                name == "scenario_trace"
+                or name == "api_trace"
+                or name.startswith("tasks.scenario")
+                or name.startswith("tasks.scenario_task")
+                or name.startswith("api.routes.device_control.scenarios")
+                or name.startswith("api.routes")
+                or name.startswith("web.server")
+                or name.startswith("runtime.core.device_client")
+            )
+
     level = getattr(logging, cfg.level.upper(), logging.INFO)
-    logging.basicConfig(level=level, format=cfg.format)
+    log_dir = Path(os.getenv("FARM_LOG_DIR", "logs"))
+    log_dir.mkdir(parents=True, exist_ok=True)
+    scenario_log_path = Path(os.getenv("SCENARIO_LOG_FILE", str(log_dir / "scenario-trace.log")))
+    if not scenario_log_path.is_absolute():
+        scenario_log_path = log_dir / scenario_log_path
+    scenario_log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    pre_chain = [
+        structlog.stdlib.add_log_level,
+        structlog.processors.TimeStamper(fmt="%Y-%m-%d %H:%M:%S"),
+    ]
+    shared_processors = [
+        structlog.stdlib.add_log_level,
+        structlog.processors.TimeStamper(fmt="%Y-%m-%d %H:%M:%S"),
+        structlog.processors.StackInfoRenderer(),
+        structlog.processors.format_exc_info,
+        structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+    ]
+
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(level)
+    console_handler.setFormatter(
+        structlog.stdlib.ProcessorFormatter(
+            processor=structlog.dev.ConsoleRenderer(colors=True),
+            foreign_pre_chain=pre_chain,
+        )
+    )
+
+    scenario_handler = TimedRotatingFileHandler(
+        filename=str(scenario_log_path),
+        when="midnight",
+        backupCount=14,
+        encoding="utf-8",
+    )
+    scenario_handler.setLevel(level)
+    scenario_handler.addFilter(_TraceFileFilter())
+    scenario_handler.setFormatter(
+        structlog.stdlib.ProcessorFormatter(
+            processor=structlog.processors.JSONRenderer(),
+            foreign_pre_chain=pre_chain,
+        )
+    )
+
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.setLevel(level)
+    root.addHandler(console_handler)
+    root.addHandler(scenario_handler)
+
+    structlog.configure(
+        processors=shared_processors,
+        context_class=dict,
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
+        cache_logger_on_first_use=True,
+    )

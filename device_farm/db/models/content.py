@@ -4,10 +4,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, JSON, SmallInteger, String, Text, Index
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, JSON, SmallInteger, String, Text, Index, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.database import Base
+from .enums import ContentExportStatus
 from .utils import _now, _uuid
 
 
@@ -54,13 +55,13 @@ class ContentItem(Base):
     campaign_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("campaigns.id", ondelete="SET NULL"), nullable=True, index=True
     )
-    run_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("campaign_runs.id", ondelete="SET NULL"), nullable=True, index=True
-    )
     execution_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("executions.id", ondelete="SET NULL"), nullable=True, index=True
     )
     scenario_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    user_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     # Timestamps
     extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
@@ -74,7 +75,7 @@ class ContentItem(Base):
     )
 
     __table_args__ = (
-        Index("idx_ci_hash_collection", "content_hash", "collection", unique=True),
+        Index("idx_ci_hash_collection_user", "content_hash", "collection", "user_id", unique=True),
         Index("idx_ci_extracted_at", "extracted_at"),
         Index("idx_ci_parent_level", "parent_id", "item_level"),
     )
@@ -97,8 +98,8 @@ class ContentItem(Base):
             "tags": self.tags,
             "device_serial": self.device_serial,
             "campaign_id": self.campaign_id,
-            "run_id": self.run_id,
             "execution_id": self.execution_id,
+            "user_id": self.user_id,
             "extracted_at": self.extracted_at.isoformat() if self.extracted_at else None,
         }
 
@@ -109,16 +110,20 @@ class ContentCollection(Base):
     __tablename__ = "content_collections"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[str] = mapped_column(Text, default="")
     platform: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     content_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     item_count: Mapped[int] = mapped_column(Integer, default=0)
     user_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+    __table_args__ = (
+        UniqueConstraint("name", "user_id", name="uq_content_collections_name_user"),
+    )
 
 
 class ContentExport(Base):
@@ -129,13 +134,13 @@ class ContentExport(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     collection: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     format: Mapped[str] = mapped_column(String(10), nullable=False, default="csv")
-    status: Mapped[str] = mapped_column(String(20), default="pending")
+    status: Mapped[str] = mapped_column(String(20), default=ContentExportStatus.PENDING)
     filters: Mapped[dict] = mapped_column(JSON, default=dict)
     file_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     file_size_bytes: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     item_count: Mapped[int] = mapped_column(Integer, default=0)
     user_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

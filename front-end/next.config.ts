@@ -43,7 +43,7 @@ const baseConfig: NextConfig = {
   compiler: {
     // removeConsole: process.env.NEXT_PUBLIC_ENVIRONMENT !== 'dev'
   },
-  transpilePackages: ['geist'],
+  transpilePackages: ['geist', 'react-device-mockup'],
   webpack(config, { isServer }) {
     if (!isServer) {
       // jmuxer uses Node.js stream module — polyfill for browser

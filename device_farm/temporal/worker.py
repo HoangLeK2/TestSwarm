@@ -154,6 +154,15 @@ def start_temporal_worker(
             except Exception:
                 log.exception("temporal-worker-%d error", idx)
             finally:
+                # Dispose the per-loop SQLAlchemy engine before closing the
+                # loop so its connection pool releases cleanly. Skipping this
+                # leaves asyncpg connections waiting on a dead loop and emits
+                # "Task was destroyed" warnings on shutdown.
+                try:
+                    from db.database import dispose_loop_engine
+                    loop.run_until_complete(dispose_loop_engine())
+                except Exception as _exc:
+                    log.warning("dispose_loop_engine failed on worker %d: %s", idx, _exc)
                 loop.close()
 
         thread = threading.Thread(

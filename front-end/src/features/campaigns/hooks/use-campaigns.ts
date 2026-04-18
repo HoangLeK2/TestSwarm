@@ -1,14 +1,14 @@
 'use client';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
-import { campaignsApi, scenariosApi, tasksApi, workflowsApi } from '../services/api';
+import { campaignsApi, dlqApi, executionsApi, scenariosApi, tasksApi, workflowsApi } from '../services/api';
 import type {
   CampaignCreate,
   CampaignOut,
   CampaignRunResponse,
   CampaignStatus,
   ScenarioCreate,
-  ScenarioUpdate
+  ScenarioUpdate,
 } from '../types';
 import { isCampaignActiveExecution } from '../types';
 import { fleetRun, fleetStatus, type FleetStatusResult } from '../../devices/services/api';
@@ -320,17 +320,62 @@ export function useStepAction(campaignId: string) {
   });
 }
 
+export function useDlqEntries(enabled: boolean, status?: string) {
+  return useQuery({
+    queryKey: ['dlq-entries', status ?? 'all'],
+    queryFn: () => dlqApi.list({ status, limit: 100 }),
+    enabled,
+    refetchInterval: enabled ? 5000 : false,
+  });
+}
+
+export function useRetryDlqEntry() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (dlqId: string) => dlqApi.retry(dlqId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['dlq-entries'] });
+      qc.invalidateQueries({ queryKey: ['campaign-workflows'] });
+      qc.invalidateQueries({ queryKey: ['workflow-progress'] });
+    },
+  });
+}
+
+export function useDismissDlqEntry() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (dlqId: string) => dlqApi.dismiss(dlqId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['dlq-entries'] });
+    },
+  });
+}
+
+export function useLatestExecutionArtifacts(campaignId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['campaign-artifacts', campaignId],
+    enabled: enabled && !!campaignId,
+    queryFn: async () => {
+      const listing = await executionsApi.list({ campaignId, limit: 1, offset: 0 });
+      const latest = listing.items?.[0];
+      if (!latest) {
+        return { execution: null, artifacts: [] as import('../types').ExecutionArtifact[] };
+      }
+      const artifacts = await executionsApi.listArtifacts(latest.id);
+      return { execution: latest, artifacts };
+    },
+    refetchInterval: enabled ? 5000 : false,
+  });
+}
+
 // ── Fleet run ─────────────────────────────────────────────────────────────────
 
 /** Fleet run: dispatch campaign scenario to ALL READY devices. */
 export function useFleetRunCampaign(onDone?: (result: FleetStatusResult) => void) {
   const mutation = useMutation({
     mutationFn: (campaign: CampaignOut) => {
-      // Try new scenarios[], else fall back to legacy scenario field
       const scenarios = campaign.scenarios ?? [];
-      const steps = scenarios.length
-        ? scenarios.flatMap((s) => s.steps)
-        : campaign.scenario?.steps;
+      const steps = scenarios.flatMap((s) => s.steps);
       if (!Array.isArray(steps) || !steps.length) {
         return Promise.reject(new Error('Campaign chưa có kịch bản (steps). Hãy thiết lập kịch bản trước.'));
       }

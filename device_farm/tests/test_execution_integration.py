@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import ExitStack
+from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
+from fastapi import HTTPException
 
 from temporal.shared import (
     SaveExtractionInput,
@@ -44,7 +46,6 @@ def _make_campaign(campaign_id="camp-1", user_id="user-1"):
     m = MagicMock()
     m.id = campaign_id
     m.user_id = user_id
-    m.scenario = {}
     m.variables = {"__PLATFORM__": "facebook"}
     m.target_group_id = None
     return m
@@ -166,16 +167,16 @@ class TestCampaignDispatchExecution:
                 new_callable=AsyncMock, return_value=[],
             ))
             stack.enter_context(patch(
-                "db.crud.campaign_run.create_campaign_run",
-                create_run_mock,
-            ))
-            stack.enter_context(patch(
                 "db.crud.execution.create_execution",
                 create_execution_mock,
             ))
             stack.enter_context(patch(
                 "db.crud.execution.add_device_to_execution",
                 add_device_mock,
+            ))
+            stack.enter_context(patch(
+                "db.crud.execution.update_execution",
+                AsyncMock(),
             ))
             stack.enter_context(patch(
                 "services.campaign_dispatch._get_device_account_vars",
@@ -227,16 +228,16 @@ class TestCampaignDispatchExecution:
                 new_callable=AsyncMock, return_value=[],
             ))
             stack.enter_context(patch(
-                "db.crud.campaign_run.create_campaign_run",
-                AsyncMock(return_value=self.mock_run),
-            ))
-            stack.enter_context(patch(
                 "db.crud.execution.create_execution",
                 create_execution_mock,
             ))
             stack.enter_context(patch(
                 "db.crud.execution.add_device_to_execution",
                 add_device_mock,
+            ))
+            stack.enter_context(patch(
+                "db.crud.execution.update_execution",
+                AsyncMock(),
             ))
             stack.enter_context(patch(
                 "services.campaign_dispatch._get_device_account_vars",
@@ -281,15 +282,15 @@ class TestCampaignDispatchExecution:
                 new_callable=AsyncMock, return_value=[],
             ))
             stack.enter_context(patch(
-                "db.crud.campaign_run.create_campaign_run",
-                AsyncMock(return_value=self.mock_run),
-            ))
-            stack.enter_context(patch(
                 "db.crud.execution.create_execution",
                 AsyncMock(return_value=self.mock_execution),
             ))
             stack.enter_context(patch(
                 "db.crud.execution.add_device_to_execution",
+                AsyncMock(),
+            ))
+            stack.enter_context(patch(
+                "db.crud.execution.update_execution",
                 AsyncMock(),
             ))
             stack.enter_context(patch(
@@ -340,15 +341,15 @@ class TestCampaignDispatchExecution:
                 new_callable=AsyncMock, return_value=[],
             ))
             stack.enter_context(patch(
-                "db.crud.campaign_run.create_campaign_run",
-                AsyncMock(return_value=self.mock_run),
-            ))
-            stack.enter_context(patch(
                 "db.crud.execution.create_execution",
                 AsyncMock(return_value=self.mock_execution),
             ))
             stack.enter_context(patch(
                 "db.crud.execution.add_device_to_execution",
+                AsyncMock(),
+            ))
+            stack.enter_context(patch(
+                "db.crud.execution.update_execution",
                 AsyncMock(),
             ))
             stack.enter_context(patch(
@@ -362,7 +363,7 @@ class TestCampaignDispatchExecution:
         assert len(started_args) == 1
         assert isinstance(started_args[0], ScenarioInput)
         assert started_args[0].execution_id == "exec-001"
-        assert started_args[0].run_id == "run-001"
+        assert started_args[0].run_id == "exec-001"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -566,14 +567,54 @@ class TestFinalizeCampaignExecutionResult:
 
         upsert_mock.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_campaign_idle_skips_caller_workflow_in_running_count(self):
+        """Parent ScenarioWorkflow is still Running while finalize_campaign runs; exclude it."""
+        acts = self._make_activities()
+        db_mock = _make_db_mock()
+        update_status_mock = AsyncMock()
+
+        class _WfRow:
+            def __init__(self, wf_id: str) -> None:
+                self.id = wf_id
+
+        async def _list_only_caller(_query: str):
+            yield _WfRow("campaign:c1:device:dev1:scenario:sc1")
+
+        mock_client = MagicMock()
+        mock_client.list_workflows = lambda q: _list_only_caller(q)
+
+        mock_info = MagicMock()
+        mock_info.workflow_id = "campaign:c1:device:dev1:scenario:sc1"
+
+        cfg = MagicMock()
+
+        with ExitStack() as stack:
+            stack.enter_context(patch("temporal.activities.activity.heartbeat", MagicMock()))
+            stack.enter_context(patch("temporal.activities.activity.info", return_value=mock_info))
+            stack.enter_context(patch("temporal.activities._temporal_config", cfg))
+            stack.enter_context(patch(
+                "temporal.worker.get_temporal_client", AsyncMock(return_value=mock_client),
+            ))
+            stack.enter_context(patch(
+                "db.database.activity_session", return_value=db_mock,
+            ))
+            stack.enter_context(patch(
+                "db.crud.campaign.update_campaign_status", update_status_mock,
+            ))
+
+            await acts.finalize_campaign({"campaign_id": "c1", "run_id": None, "success": True})
+
+        update_status_mock.assert_awaited_once()
+        assert update_status_mock.await_args[0] == (db_mock, "c1", "idle")
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Part 4: execute_save_extraction passes execution_id to save_content_item
 # ═══════════════════════════════════════════════════════════════════════════════
 
-
 class TestSaveExtractionExecutionId:
-    """execute_save_extraction must forward execution_id to save_content_item."""
+    """execute_save_extraction must forward execution_id to persistence facade."""
 
     def _make_activities(self):
         from temporal.activities import DeviceActivities
@@ -585,7 +626,7 @@ class TestSaveExtractionExecutionId:
         return acts
 
     @pytest.mark.asyncio
-    async def test_execution_id_forwarded_to_save_content_item(self):
+    async def test_execution_id_forwarded_to_persist_data_items(self):
         acts = self._make_activities()
 
         posts = [{"content": "hello world", "author": "user1"}]
@@ -599,23 +640,24 @@ class TestSaveExtractionExecutionId:
             execution_id="exec-001",
         )
 
-        save_mock = AsyncMock(return_value={"saved": True, "id": "item-1"})
+        from services.extraction_usecase import PersistReport
+
+        persist_mock = AsyncMock(return_value=(PersistReport(saved_count=1, processed_count=1), {}))
 
         with ExitStack() as stack:
             stack.enter_context(patch("temporal.activities.activity"))
-            # save_content_item imported inside execute_save_extraction → patch at source
             stack.enter_context(patch(
-                "services.content_store.save_content_item", save_mock
+                "temporal.activities.persist_data_items", persist_mock
             ))
 
             from temporal.activities import DeviceActivities
             result = await acts.execute_save_extraction(inp)
 
-        save_mock.assert_awaited_once()
-        call_kwargs = save_mock.call_args.kwargs
+        persist_mock.assert_awaited_once()
+        call_kwargs = persist_mock.call_args.kwargs
         assert call_kwargs["execution_id"] == "exec-001"
         assert call_kwargs["campaign_id"] == "camp-1"
-        assert call_kwargs["run_id"] == "run-001"
+        assert call_kwargs["data_var"] == "posts"
         assert result.ok is True
 
     @pytest.mark.asyncio
@@ -634,19 +676,20 @@ class TestSaveExtractionExecutionId:
             execution_id=None,
         )
 
-        save_mock = AsyncMock(return_value={"saved": True, "id": "item-2"})
+        from services.extraction_usecase import PersistReport
+
+        persist_mock = AsyncMock(return_value=(PersistReport(saved_count=1, processed_count=1), {}))
 
         with ExitStack() as stack:
             stack.enter_context(patch("temporal.activities.activity"))
-            # save_content_item imported inside execute_save_extraction → patch at source
             stack.enter_context(patch(
-                "services.content_store.save_content_item", save_mock
+                "temporal.activities.persist_data_items", persist_mock
             ))
 
             result = await acts.execute_save_extraction(inp)
 
-        save_mock.assert_awaited_once()
-        call_kwargs = save_mock.call_args.kwargs
+        persist_mock.assert_awaited_once()
+        call_kwargs = persist_mock.call_args.kwargs
         assert call_kwargs["execution_id"] is None
         assert result.ok is True
 
@@ -754,3 +797,126 @@ class TestExecutionCRUD:
         assert er.failed_steps == [{"index": 1, "message": "err"}]
         # Should NOT call db.add for existing records
         db.add.assert_not_called()
+
+
+class TestDlqRetryReenqueue:
+    """DLQ retry endpoint should enqueue campaign run and update status."""
+
+    @pytest.mark.asyncio
+    async def test_retry_dlq_success_marks_resolved(self):
+        from api.routes import executions as executions_route
+
+        db = AsyncMock()
+        user = MagicMock()
+        user.id = "user-1"
+        entry = MagicMock()
+        entry.id = "dlq-1"
+        entry.execution_id = "exec-1"
+        entry.device_serial = "SN001"
+        entry.error = None
+        entry.retry_count = 1
+        entry.status = "retrying"
+        entry.last_attempt_at = None
+        entry.created_at = datetime.now(timezone.utc)
+        execution = MagicMock()
+        execution.id = "exec-1"
+        execution.user_id = "user-1"
+        execution.campaign_id = "camp-1"
+        request = MagicMock()
+        request.app.state.scheduler = MagicMock()
+        request.app.state.scheduler._client = AsyncMock()
+        request.app.state.scheduler._cfg = MagicMock()
+
+        with ExitStack() as stack:
+            begin_mock = stack.enter_context(
+                patch("db.crud.execution_dlq.begin_dlq_retry_for_user", AsyncMock(return_value=(entry, True)))
+            )
+            set_status_mock = stack.enter_context(
+                patch("db.crud.execution_dlq.set_dlq_status", AsyncMock(return_value=entry))
+            )
+            stack.enter_context(
+                patch.object(executions_route, "get_execution", AsyncMock(return_value=execution))
+            )
+            stack.enter_context(
+                patch(
+                    "services.campaign_dispatch.enqueue_campaign_run_temporal",
+                    AsyncMock(return_value=({"id": "camp-1"}, 200)),
+                )
+            )
+
+            out = await executions_route.retry_dlq("dlq-1", request, db, user)
+
+        begin_mock.assert_awaited_once()
+        set_status_mock.assert_awaited_once_with(db, "dlq-1", "resolved")
+        assert out.id == "dlq-1"
+
+    @pytest.mark.asyncio
+    async def test_retry_dlq_idempotent_when_already_retrying(self):
+        from api.routes import executions as executions_route
+
+        db = AsyncMock()
+        user = MagicMock()
+        user.id = "user-1"
+        entry = MagicMock()
+        entry.id = "dlq-1"
+        entry.execution_id = "exec-1"
+        entry.device_serial = "SN001"
+        entry.error = None
+        entry.retry_count = 1
+        entry.status = "retrying"
+        entry.last_attempt_at = None
+        entry.created_at = datetime.now(timezone.utc)
+        execution = MagicMock()
+        execution.id = "exec-1"
+        execution.user_id = "user-1"
+        execution.campaign_id = "camp-1"
+        request = MagicMock()
+        request.app.state.scheduler = MagicMock()
+        request.app.state.scheduler._client = AsyncMock()
+        request.app.state.scheduler._cfg = MagicMock()
+
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch("db.crud.execution_dlq.begin_dlq_retry_for_user", AsyncMock(return_value=(entry, False)))
+            )
+            stack.enter_context(
+                patch.object(executions_route, "get_execution", AsyncMock(return_value=execution))
+            )
+            enqueue_mock = stack.enter_context(
+                patch("services.campaign_dispatch.enqueue_campaign_run_temporal", AsyncMock())
+            )
+
+            out = await executions_route.retry_dlq("dlq-1", request, db, user)
+
+        enqueue_mock.assert_not_awaited()
+        assert out.id == "dlq-1"
+
+    @pytest.mark.asyncio
+    async def test_retry_dlq_not_owned_returns_404_without_mutation(self):
+        from api.routes import executions as executions_route
+
+        db = AsyncMock()
+        user = MagicMock()
+        user.id = "user-1"
+        request = MagicMock()
+        request.app.state.scheduler = MagicMock()
+        request.app.state.scheduler._client = AsyncMock()
+        request.app.state.scheduler._cfg = MagicMock()
+
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch("db.crud.execution_dlq.begin_dlq_retry_for_user", AsyncMock(return_value=(None, False)))
+            )
+            set_status_mock = stack.enter_context(
+                patch("db.crud.execution_dlq.set_dlq_status", AsyncMock())
+            )
+            enqueue_mock = stack.enter_context(
+                patch("services.campaign_dispatch.enqueue_campaign_run_temporal", AsyncMock())
+            )
+
+            with pytest.raises(HTTPException) as exc:
+                await executions_route.retry_dlq("dlq-not-owned", request, db, user)
+        assert exc.value.status_code == 404
+
+        set_status_mock.assert_not_awaited()
+        enqueue_mock.assert_not_awaited()

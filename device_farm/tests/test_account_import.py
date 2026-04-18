@@ -221,7 +221,7 @@ async def test_bulk_batch_sizes_are_correct():
 
 
 @pytest.mark.asyncio
-async def test_bulk_password_encryption_called(monkeypatch):
+async def test_bulk_password_encryption_called():
     """Row with password='plain123' → encrypt_password called."""
     rows = [{"platform": "facebook", "username": "user1", "password": "plain123"}]
     db = _make_db_session()
@@ -232,14 +232,19 @@ async def test_bulk_password_encryption_called(monkeypatch):
         encrypted_calls.append(plain)
         return f"ENCRYPTED:{plain}"
 
-    with patch("db.crud.account._insert_batch", new_callable=AsyncMock) as mock_insert, \
-         patch("common.crypto.encrypt_password", side_effect=_mock_encrypt), \
-         patch("db.crud.account.encrypt_password", side_effect=_mock_encrypt):
-        mock_insert.side_effect = lambda db_, batch: len(batch)
+    inserted_batches: list[list[dict]] = []
+
+    async def _capture_insert(db_, batch):
+        inserted_batches.append(list(batch))
+        return len(batch)
+
+    with patch("db.crud.account._insert_batch", side_effect=_capture_insert), \
+         patch("common.crypto.encrypt_password", side_effect=_mock_encrypt):
         await bulk_create_accounts(db, rows, user_id="u1")
 
     # encrypt_password should have been invoked with the plaintext
     assert "plain123" in encrypted_calls
+    assert inserted_batches[0][0]["password_encrypted"] == "ENCRYPTED:plain123"
 
 
 @pytest.mark.asyncio
@@ -266,8 +271,7 @@ async def test_bulk_password_encrypted_not_reencrypted():
         return len(batch)
 
     with patch("db.crud.account._insert_batch", side_effect=_capture_insert), \
-         patch("common.crypto.encrypt_password", side_effect=_mock_encrypt), \
-         patch("db.crud.account.encrypt_password", side_effect=_mock_encrypt):
+         patch("common.crypto.encrypt_password", side_effect=_mock_encrypt):
         await bulk_create_accounts(db, rows, user_id="u1")
 
     # encrypt_password should NOT have been called at all

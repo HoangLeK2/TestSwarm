@@ -4,6 +4,14 @@ import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DeviceTile } from './device-tile';
 import { Button } from '@/components/ui/button';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import {
   Select,
@@ -453,7 +461,6 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
         }
         setFlowCoordPick(null);
         toast.success('Đã gán swipe_ratio cho node', { duration: 2000 });
-        if (device.selectedDevice) setTimeout(() => hierarchy.refresh(), 800);
         return;
       }
 
@@ -512,7 +519,6 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
         }
         setFlowCoordPick(null);
         toast.success(`Đã gán tọa độ (${rx3}, ${ry3}) cho node`, { duration: 2000 });
-        if (device.selectedDevice) setTimeout(() => hierarchy.refresh(), 800);
         return;
       }
 
@@ -1084,63 +1090,85 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
               {/* Flow editor */}
               <div className='min-h-0 flex-1 overflow-hidden px-3 pb-2'>
                 {steps.items.length === 0 ? (
-                  <div className='flex h-full flex-col justify-center gap-4 overflow-y-auto rounded-xl border border-dashed border-border/50 bg-muted/10 px-5 py-6'>
-                    {/* Guide header */}
-                    <div className='text-center'>
-                      <p className='text-sm font-semibold text-foreground'>Cách tạo kịch bản</p>
-                      <p className='mt-0.5 text-[11px] text-muted-foreground'>Làm theo 3 bước đơn giản dưới đây</p>
-                    </div>
-
-                    {/* Steps */}
-                    <ol className='space-y-3'>
-                      {[
-                        {
-                          n: '1',
-                          icon: <Circle className='size-4 fill-current text-primary' />,
-                          title: 'Bắt đầu ghi',
-                          desc: 'Nhấn nút "Bắt đầu ghi" phía trên, rồi thao tác trên màn hình điện thoại.',
-                          active: !record.recording,
-                        },
-                        {
-                          n: '2',
-                          icon: <Square className='size-4 text-red-500' />,
-                          title: 'Dừng ghi',
-                          desc: 'Nhấn "Dừng ghi" khi đã thực hiện đủ các thao tác cần kịch bản.',
-                          active: record.recording,
-                        },
-                        {
-                          n: '3',
-                          icon: <Save className='size-4 text-emerald-600' />,
-                          title: 'Lưu kịch bản',
-                          desc: 'Kiểm tra lại danh sách bước, chỉnh sửa nếu cần rồi nhấn "Lưu kịch bản".',
-                          active: false,
-                        },
-                      ].map(({ n, icon, title, desc, active }) => (
-                        <li key={n} className={`flex gap-3 rounded-lg px-3 py-2.5 transition-colors ${active ? 'bg-primary/8 ring-1 ring-primary/20' : 'bg-background/60'}`}>
-                          <div className={`flex size-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${active ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>
-                            {n}
+                  <div className='flex h-full items-center justify-center rounded-xl bg-muted/[0.06] px-5 py-6'>
+                    <Card className='w-full max-w-md gap-0 border-0 bg-transparent py-0 shadow-none'>
+                      <CardHeader className='gap-1.5 px-4 py-4 text-left'>
+                        <CardTitle className='text-sm'>{t('emptyNodePicker.title')}</CardTitle>
+                        <CardDescription className='text-xs leading-relaxed'>{t('emptyNodePicker.subtitle')}</CardDescription>
+                      </CardHeader>
+                      <CardContent className='space-y-3 p-4 text-left'>
+                        <div className='space-y-2'>
+                          <Badge variant='secondary' className='h-5 rounded-md px-2 text-[10px] font-semibold'>
+                            {t('emptyNodePicker.sectionInteraction')}
+                          </Badge>
+                          <div className='grid grid-cols-2 gap-2'>
+                          <Button size='sm' variant='outline' className='h-8 justify-start gap-1.5 text-xs' onClick={() => steps.addFlow('tap_selector')}>
+                            <StepIcon type='tap_selector' size={13} />
+                            {t('emptyNodePicker.tapSelector')}
+                          </Button>
+                          <Button size='sm' variant='outline' className='h-8 justify-start gap-1.5 text-xs' onClick={() => steps.addFlow('long_tap_selector')}>
+                            <StepIcon type='long_tap_selector' size={13} />
+                            {t('emptyNodePicker.longTap')}
+                          </Button>
+                          <Button size='sm' variant='outline' className='h-8 justify-start gap-1.5 text-xs' onClick={() => steps.addFlow('input_selector')}>
+                            <StepIcon type='input_selector' size={13} />
+                            {t('emptyNodePicker.inputText')}
+                          </Button>
+                          <Button size='sm' variant='outline' className='h-8 justify-start gap-1.5 text-xs' onClick={() => steps.addFlow('assert_element')}>
+                            <StepIcon type='assert_element' size={13} />
+                            {t('emptyNodePicker.assertElement')}
+                          </Button>
+                          <Button size='sm' variant='outline' className='h-8 justify-start gap-1.5 text-xs' onClick={() => steps.addFlow('tap_ratio')}>
+                            <StepIcon type='tap_ratio' size={13} />
+                            {t('emptyNodePicker.tapRatio')}
+                          </Button>
+                          <Button size='sm' variant='outline' className='h-8 justify-start gap-1.5 text-xs' onClick={() => steps.addFlow('swipe_ratio')}>
+                            <StepIcon type='swipe_ratio' size={13} />
+                            {t('emptyNodePicker.swipe')}
+                          </Button>
+                          <Button size='sm' variant='outline' className='h-8 justify-start gap-1.5 text-xs' onClick={() => steps.addFlow('key')}>
+                            <StepIcon type='key' size={13} />
+                            {t('emptyNodePicker.keyPress')}
+                          </Button>
+                          <Button size='sm' variant='outline' className='h-8 justify-start gap-1.5 text-xs' onClick={() => steps.addFlow('set_variable')}>
+                            <StepIcon type='set_variable' size={13} />
+                            {t('emptyNodePicker.setVariable')}
+                          </Button>
                           </div>
-                          <div className='min-w-0'>
-                            <div className='flex items-center gap-1.5'>
-                              {icon}
-                              <span className='text-[12px] font-semibold text-foreground'>{title}</span>
-                              {active && <span className='rounded-full bg-primary/15 px-1.5 py-px text-[9px] font-bold text-primary'>Bước hiện tại</span>}
-                            </div>
-                            <p className='mt-0.5 text-[11px] leading-relaxed text-muted-foreground'>{desc}</p>
+                        </div>
+                        <div className='space-y-2'>
+                          <Badge variant='secondary' className='h-5 rounded-md px-2 text-[10px] font-semibold'>
+                            {t('emptyNodePicker.sectionFlow')}
+                          </Badge>
+                          <div className='grid grid-cols-2 gap-2'>
+                            <Button size='sm' variant='outline' className='h-8 justify-start gap-1.5 text-xs' onClick={steps.addWait}>
+                              <StepIcon type='wait' size={13} />
+                              {t('emptyNodePicker.waitSeconds')}
+                            </Button>
+                            <Button size='sm' variant='outline' className='h-8 justify-start gap-1.5 text-xs' onClick={() => steps.addFlow('wait_element')}>
+                              <StepIcon type='wait_element' size={13} />
+                              {t('emptyNodePicker.waitElement')}
+                            </Button>
+                            <Button size='sm' variant='outline' className='h-8 justify-start gap-1.5 text-xs' onClick={() => steps.addFlow('if_element')}>
+                              <StepIcon type='if_element' size={13} />
+                              {t('emptyNodePicker.ifElement')}
+                            </Button>
+                            <Button size='sm' variant='outline' className='h-8 justify-start gap-1.5 text-xs' onClick={() => steps.addFlow('if_variable')}>
+                              <StepIcon type='if_variable' size={13} />
+                              {t('emptyNodePicker.ifVariable')}
+                            </Button>
+                            <Button size='sm' variant='outline' className='h-8 justify-start gap-1.5 text-xs' onClick={() => steps.addFlow('repeat')}>
+                              <StepIcon type='repeat' size={13} />
+                              {t('emptyNodePicker.repeatN')}
+                            </Button>
+                            <Button size='sm' variant='outline' className='h-8 justify-start gap-1.5 text-xs' onClick={() => steps.addFlow('repeat_until')}>
+                              <StepIcon type='repeat_until' size={13} />
+                              {t('emptyNodePicker.repeatUntil')}
+                            </Button>
                           </div>
-                        </li>
-                      ))}
-                    </ol>
-
-                    <Button
-                      size='sm'
-                      className='mx-auto gap-1.5'
-                      onClick={() => void record.toggleRecording()}
-                      disabled={!selectedDevice}
-                    >
-                      <Circle className='size-3 fill-current' />
-                      {t('startRecording')}
-                    </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
                   </div>
                 ) : showFlowUi ? (
                   <div className='flex h-full max-h-[calc(100vh-280px)] min-h-[280px] flex-col overflow-hidden rounded-lg border border-border/50 bg-background lg:flex-row'>

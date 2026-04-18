@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
-from typing import Any
+from typing import Any, Callable
 
 from relay.u2_session_pool import U2SessionPool
 
@@ -19,6 +19,53 @@ logger = logging.getLogger(__name__)
 
 MAX_BATCH_ACTIONS = 100
 MAX_FLOW_TIMEOUT = 60.0
+
+# Error substrings that signal a dead session — these should trigger evict+retry.
+# Kept as string patterns (not classes) because uiautomator2 exception hierarchy
+# varies across versions; matching on message is version-stable.
+_DEAD_SESSION_MARKERS = (
+    "502 bad gateway",     # specific to atx-agent proxy; avoid generic "gateway"
+    "504 gateway",         #   which would match app-under-test HTTP errors
+    "read timeout",
+    "connection refused",
+    "connection reset",
+    "connection aborted",
+    "broken pipe",
+    "device not ready",
+    "atx-agent not running",
+    "uiautomator not connected",
+)
+
+
+def _looks_like_dead_session(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return any(marker in msg for marker in _DEAD_SESSION_MARKERS)
+
+
+async def _run_with_retry(
+    pool: U2SessionPool,
+    loop: asyncio.AbstractEventLoop,
+    serial: str,
+    fn: Callable[[Any], Any],
+) -> Any:
+    """
+    Run `fn(device)` with one evict+retry attempt if the first try looks like a
+    dead session. Non-session errors (ValueError, selector errors, etc.) are
+    re-raised immediately — only transport-level failures trigger retry.
+    """
+    dev = await pool.get_session(serial)
+    try:
+        return await loop.run_in_executor(None, fn, dev)
+    except Exception as exc:
+        if not _looks_like_dead_session(exc):
+            raise
+        logger.warning(
+            "u2-exec: dead-session marker (%s) for serial=%s — evict + retry once",
+            exc, serial,
+        )
+        await pool.evict(serial)
+        dev = await pool.get_session(serial)
+        return await loop.run_in_executor(None, fn, dev)
 
 # ── Selector resolver ──────────────────────────────────────────────────────────
 
@@ -209,25 +256,21 @@ class U2Executor:
             logger.warning("u2_batch: %d actions exceeds cap %d, truncating", len(actions), MAX_BATCH_ACTIONS)
             actions = actions[:MAX_BATCH_ACTIONS]
 
-        try:
-            dev = await self._pool.get_session(serial)
-        except Exception as exc:
-            return {"ok": False, "stopped_at": 0, "results": [],
-                    "error": f"session unavailable: {exc}"}
-
         results: list[dict] = []
         for idx, act in enumerate(actions):
             op = act.get("op", "")
             fn = _OP_TABLE.get(op)
             if fn is None:
-                entry = {"op": op, "ok": False, "error": f"unknown op: {op}"}
-                results.append(entry)
+                results.append({"op": op, "ok": False, "error": f"unknown op: {op}"})
                 if early_exit:
                     return {"ok": False, "stopped_at": idx, "results": results,
                             "error": f"action[{idx}] unknown op: {op}"}
                 continue
             try:
-                value = await self._loop.run_in_executor(None, fn, dev, act)
+                value = await _run_with_retry(
+                    self._pool, self._loop, serial,
+                    lambda d, _fn=fn, _act=act: _fn(d, _act),
+                )
                 entry: dict = {"op": op, "ok": True}
                 if value is not None:
                     entry["value"] = value
@@ -244,12 +287,10 @@ class U2Executor:
         if fn is None:
             return {"ok": False, "value": None, "error": f"unknown flow: {flow}"}
         try:
-            dev = await self._pool.get_session(serial)
-        except Exception as exc:
-            return {"ok": False, "value": None,
-                    "error": f"session unavailable: {exc}"}
-        try:
-            value = await self._loop.run_in_executor(None, fn, dev, params)
+            value = await _run_with_retry(
+                self._pool, self._loop, serial,
+                lambda d, _fn=fn, _p=params: _fn(d, _p),
+            )
             return {"ok": True, "value": value, "error": None}
         except Exception as exc:
             logger.warning("u2_flow %s failed serial=%s: %s", flow, serial, exc)

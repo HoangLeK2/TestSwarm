@@ -55,6 +55,7 @@ export function DeviceScreen({ device, wsSend, mode, onTap, onSwipe, onDragGestu
   const [h264Active, setH264Active] = useState(false);
   const h264TimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const h264StableTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const h264WarmupRef = React.useRef<{ startedAt: number; frames: number }>({ startedAt: 0, frames: 0 });
   const [mjpegEnabled, setMjpegEnabled] = useState(true);
 
   const [streamingFlags, setStreamingFlags] = useState<{
@@ -159,7 +160,22 @@ export function DeviceScreen({ device, wsSend, mode, onTap, onSwipe, onDragGestu
     {
       onFrame: useCallback(() => {
         if (!hasFrame) setHasFrame(true);
-        if (!h264Active) setH264Active(true);
+
+        // Warm-up gate: avoid switching to H264 on the very first decoded frame.
+        // The first 1-2 frames after connect/reconnect are often unstable and
+        // cause visible "giat" when we fade out MJPEG too early.
+        const now = Date.now();
+        const warm = h264WarmupRef.current;
+        if (warm.startedAt === 0 || (now - warm.startedAt) > 1500) {
+          warm.startedAt = now;
+          warm.frames = 1;
+        } else {
+          warm.frames += 1;
+        }
+        if (!h264Active && warm.frames >= 4) {
+          setH264Active(true);
+        }
+
         if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
         h264TimeoutRef.current = setTimeout(() => setH264Active(false), 8000);
       }, [hasFrame, h264Active]),
@@ -170,6 +186,7 @@ export function DeviceScreen({ device, wsSend, mode, onTap, onSwipe, onDragGestu
   useEffect(() => {
     setH264Active(false);
     setMjpegEnabled(true);
+    h264WarmupRef.current = { startedAt: 0, frames: 0 };
     if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
     if (h264StableTimerRef.current) clearTimeout(h264StableTimerRef.current);
   }, [device.serial, isActive, relayH264Allowed]);

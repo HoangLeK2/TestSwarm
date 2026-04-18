@@ -32,6 +32,7 @@ from relay.mdns          import start_mdns_discovery
 from relay.device_state  import DeviceRegistry, DeviceState
 from relay.device_watcher import AdbDeviceWatcher
 from relay.session_manager import ScrcpySessionManager
+from relay.supervisor     import RelaySupervisor
 from relay.u2_session_pool import U2SessionPool
 
 logger = logging.getLogger("relay.agent")
@@ -110,6 +111,7 @@ class RelayAgent:
 
         self._registry   = DeviceRegistry()
         self._scrcpy_mgr = ScrcpySessionManager(on_session_stopped=self._on_session_stopped)
+        self._supervisor = RelaySupervisor(self)
         self._scrcpy_desired: dict[str, dict[str, Any]] = {}
         self._active_send_queue: Optional[asyncio.Queue] = None
         self._active_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -131,6 +133,7 @@ class RelayAgent:
     async def run(self) -> None:
         zc = start_mdns_discovery()
         await self._scrcpy_mgr.start()
+        await self._supervisor.start()
 
         if self._u2_batch_enabled:
             loop = asyncio.get_running_loop()
@@ -168,6 +171,7 @@ class RelayAgent:
                     )
                     await asyncio.sleep(delay)
         finally:
+            await self._supervisor.stop()
             if self._u2_pool:
                 await self._u2_pool.stop()
             await self._scrcpy_mgr.stop()
@@ -405,8 +409,17 @@ class RelayAgent:
             self._clear_tcp_suppress_for_usb_anchor(serial)
             self._atx_lan_host_cache.pop(serial, None)
 
-        if ctx.state == DeviceState.OFFLINE and self._u2_pool:
-            asyncio.create_task(self._u2_pool.evict(serial))
+        if ctx.state == DeviceState.OFFLINE:
+            # Device-offline cascade: tear down every relay component owned for
+            # this serial so we don't waste retry budget hammering a dead device.
+            # scrcpy_mgr.stop_all_for_serial emits reason="device_offline" which
+            # _on_session_stopped treats as non-abnormal (no auto-resume until
+            # the device comes back ONLINE).
+            if self._u2_pool:
+                asyncio.create_task(self._u2_pool.evict(serial))
+            asyncio.create_task(
+                self._scrcpy_mgr.stop_all_for_serial(serial, reason="device_offline")
+            )
 
         if ctx.state == DeviceState.ONLINE:
             loop = asyncio.get_running_loop()
@@ -1020,6 +1033,10 @@ class RelayAgent:
             })
 
     def _on_session_stopped(self, adb_serial: str, reason: str) -> None:
+        # NOTE: "device_offline" is deliberately NOT in this set. When a device
+        # disappears we already teardown scrcpy via stop_all_for_serial; the
+        # ONLINE transition's _resume_desired_scrcpy_sessions path brings it
+        # back up. Restarting from the stop callback would race the reconnect.
         abnormal_reasons = {"zombie_thread", "runtime_error", "startup_failure"}
         logical = self._logical_serial_for_adb(adb_serial)
         state = self._scrcpy_desired.get(logical)
@@ -1105,6 +1122,10 @@ class RelayAgent:
         loop: asyncio.AbstractEventLoop,
         source: str,
     ) -> None:
+        # NOTE: "device_offline" is deliberately NOT in this set. When a device
+        # disappears we already teardown scrcpy via stop_all_for_serial; the
+        # ONLINE transition's _resume_desired_scrcpy_sessions path brings it
+        # back up. Restarting from the stop callback would race the reconnect.
         abnormal_reasons = {"zombie_thread", "runtime_error", "startup_failure"}
         for logical, state in list(self._scrcpy_desired.items()):
             if not state.get("desired", False):

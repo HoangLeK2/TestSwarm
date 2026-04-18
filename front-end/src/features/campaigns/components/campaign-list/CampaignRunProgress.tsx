@@ -1,11 +1,46 @@
 'use client';
 
 import { useTranslations } from 'next-intl';
-import { Progress } from '@/components/ui/progress';
 import {
   useCampaignProgress,
   useCampaignWorkflows,
 } from '../../hooks/use-campaigns';
+
+function StatPill({
+  label,
+  tone = 'neutral',
+}: {
+  label: string;
+  tone?: 'neutral' | 'running' | 'paused' | 'failed';
+}) {
+  const toneClass =
+    tone === 'running'
+      ? 'bg-blue-500/10 text-blue-700 dark:text-blue-300'
+      : tone === 'paused'
+        ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
+        : tone === 'failed'
+          ? 'bg-destructive/10 text-destructive'
+          : 'bg-muted text-foreground';
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium leading-4 ${toneClass}`}
+    >
+      {label}
+    </span>
+  );
+}
+
+function CampaignProgressBar({ value }: { value: number }) {
+  const safe = Math.max(0, Math.min(100, value));
+  return (
+    <div className='h-2 w-full overflow-hidden rounded-full bg-muted/80 ring-1 ring-border/50'>
+      <div
+        className='h-full rounded-full bg-gradient-to-r from-blue-500 to-indigo-500 transition-[width] duration-300 ease-out'
+        style={{ width: `${safe}%` }}
+      />
+    </div>
+  );
+}
 
 export function CampaignRunProgress({
   campaignId,
@@ -37,21 +72,17 @@ export function CampaignRunProgress({
     const pct = total ? Math.round((terminal / total) * 100) : 0;
 
     return (
-      <div className='mt-2 flex min-w-0 flex-col gap-1 border-t border-border/30 pt-2 text-[11px]'>
-        <div className='flex items-start justify-between gap-2'>
-          <div className='flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5'>
-            <span className='font-medium tabular-nums text-foreground'>{completed}/{total}</span>
-            {running > 0 && (
-              <span className='text-blue-600 dark:text-blue-400'>{t('wfRunning', { count: running })}</span>
-            )}
-            {paused > 0 && (
-              <span className='text-amber-600 dark:text-amber-400'>{t('wfPaused', { count: paused })}</span>
-            )}
-            {failed > 0 && <span className='font-medium text-destructive'>{t('wfFailed', { count: failed })}</span>}
+      <div className='mt-2 flex min-w-0 flex-col gap-1.5 border-t border-border/40 pt-2'>
+        <div className='flex items-center justify-between gap-2'>
+          <div className='flex min-w-0 flex-wrap items-center gap-1.5'>
+            <StatPill label={`${completed}/${total}`} />
+            {running > 0 && <StatPill label={t('wfRunning', { count: running })} tone='running' />}
+            {paused > 0 && <StatPill label={t('wfPaused', { count: paused })} tone='paused' />}
+            {failed > 0 && <StatPill label={t('wfFailed', { count: failed })} tone='failed' />}
           </div>
-          <span className='shrink-0 tabular-nums text-sm font-semibold leading-none text-foreground'>{pct}%</span>
+          <span className='shrink-0 tabular-nums text-xs font-semibold text-foreground'>{pct}%</span>
         </div>
-        <Progress value={pct} className='h-1.5 w-full bg-muted' />
+        <CampaignProgressBar value={pct} />
       </div>
     );
   }
@@ -60,23 +91,19 @@ export function CampaignRunProgress({
   if (!legacyProgress || legacyProgress.total === 0) return null;
 
   return (
-    <div className='mt-2 flex min-w-0 flex-col gap-1 border-t border-border/30 pt-2 text-[11px]'>
-      <div className='flex items-start justify-between gap-2'>
-        <div className='flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5'>
-          <span className='font-medium text-foreground'>
-            {t('progressDone', { done: legacyProgress.done, total: legacyProgress.total })}
-          </span>
-          {legacyProgress.failed > 0 && (
-            <span className='font-medium text-destructive'>
-              {t('progressFailed', { count: legacyProgress.failed })}
-            </span>
-          )}
+    <div className='mt-2 flex min-w-0 flex-col gap-1.5 border-t border-border/40 pt-2'>
+      <div className='flex items-center justify-between gap-2'>
+        <div className='flex min-w-0 flex-wrap items-center gap-1.5'>
+          <StatPill
+            label={t('progressDone', { done: legacyProgress.done, total: legacyProgress.total })}
+          />
+          {legacyProgress.failed > 0 && <StatPill label={t('progressFailed', { count: legacyProgress.failed })} tone='failed' />}
         </div>
-        <span className='shrink-0 tabular-nums text-sm font-semibold leading-none text-foreground'>
+        <span className='shrink-0 tabular-nums text-xs font-semibold text-foreground'>
           {legacyProgress.pct}%
         </span>
       </div>
-      <Progress value={legacyProgress.pct} className='h-1.5 w-full bg-muted' />
+      <CampaignProgressBar value={legacyProgress.pct} />
     </div>
   );
 }

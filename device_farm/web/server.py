@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import importlib
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
+from uuid import uuid4
 
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,6 +17,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
 from api.mount import mount_http_routers
+from api.deps import AdminUser
 from core.config import Config
 from db.database import init_db
 from runtime.core import DeviceManager, TaskQueue
@@ -21,6 +25,7 @@ from common.session_lock import SessionLockStore
 from .ws import WebSocketManager, DeviceAgentSession, get_ws_user_id, heartbeat
 
 log = logging.getLogger(__name__)
+api_trace_log = importlib.import_module("structlog").get_logger("api_trace")
 
 
 class RequestLogMiddleware(BaseHTTPMiddleware):
@@ -31,9 +36,86 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         if request.headers.get("upgrade", "").lower() == "websocket":
             log.info("[REQUEST] %s %s (WebSocket) from %s", request.method, path, addr)
+            return await call_next(request)
+
+        request_id = request.headers.get("x-request-id") or f"req-{uuid4().hex[:10]}"
+        request.state.request_id = request_id
+        started = time.perf_counter()
+        api_trace_log.info(
+            "http_request_start",
+            request_id=request_id,
+            method=request.method,
+            path=path,
+            client=addr,
+            query=str(request.url.query or ""),
+        )
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            api_trace_log.exception(
+                "http_request_error",
+                request_id=request_id,
+                method=request.method,
+                path=path,
+                client=addr,
+                duration_ms=round(elapsed_ms, 1),
+                error=str(exc),
+            )
+            log.exception(
+                "[REQUEST] %s %s from %s -> 500 in %.1fms",
+                request.method,
+                path,
+                addr,
+                elapsed_ms,
+            )
+            raise
+
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        response.headers["X-Request-ID"] = request_id
+        api_trace_log.info(
+            "http_request_end",
+            request_id=request_id,
+            method=request.method,
+            path=path,
+            client=addr,
+            status_code=response.status_code,
+            duration_ms=round(elapsed_ms, 1),
+        )
+        # Keep static/assets less noisy; log API-ish paths prominently.
+        if (
+            path.startswith("/api/")
+            or path.startswith("/devices/")
+            or path.startswith("/campaigns/")
+            or path.startswith("/executions/")
+            or path.startswith("/workflows/")
+            or path.startswith("/tasks")
+            or path.startswith("/fleet/")
+            or path.startswith("/sessions/")
+            or path.startswith("/events")
+            or path.startswith("/stf/")
+            or path.startswith("/connect/")
+        ):
+            log.info(
+                "[REQUEST][%s] %s %s from %s -> %s in %.1fms",
+                request_id,
+                request.method,
+                path,
+                addr,
+                response.status_code,
+                elapsed_ms,
+            )
         else:
-            log.debug("[REQUEST] %s %s from %s", request.method, path, addr)
-        return await call_next(request)
+            log.debug(
+                "[REQUEST][%s] %s %s from %s -> %s in %.1fms",
+                request_id,
+                request.method,
+                path,
+                addr,
+                response.status_code,
+                elapsed_ms,
+            )
+        return response
 
 
 def create_app(
@@ -55,6 +137,40 @@ def create_app(
             _app.state.event_recorder = event_recorder
         log.info("Device Farm server started")
         asyncio.create_task(heartbeat(manager))
+
+        # ── Prometheus metrics collector (tạm tắt) ──
+        # async def _metrics_collector() -> None:
+        #     from web.metrics import (
+        #         devices_online, devices_by_state, relay_agents_connected,
+        #         relay_devices_total, task_queue_depth,
+        #     )
+        #     from runtime.core.device_client import DeviceState
+        #     while True:
+        #         try:
+        #             all_devs = manager.all_devices()
+        #             devices_online.set(len(all_devs))
+        #             state_counts: dict[str, int] = {}
+        #             for d in all_devs:
+        #                 s = d.state.name if isinstance(d.state, DeviceState) else str(d.state)
+        #                 state_counts[s] = state_counts.get(s, 0) + 1
+        #             for state_name, count in state_counts.items():
+        #                 devices_by_state.labels(state=state_name).set(count)
+        #             task_queue_depth.set(queue.size() if hasattr(queue, "size") else len(queue))
+        #             try:
+        #                 from runtime.transports.adb_relay_server import get_relay_manager
+        #                 rmgr = get_relay_manager()
+        #                 if rmgr is not None:
+        #                     relay_agents_connected.set(len(rmgr.registered_relays()))
+        #                     relay_devices_total.set(len(rmgr.list_devices()))
+        #                 else:
+        #                     relay_agents_connected.set(0)
+        #                     relay_devices_total.set(0)
+        #             except Exception:
+        #                 pass
+        #         except Exception:
+        #             pass
+        #         await asyncio.sleep(15)
+        # asyncio.create_task(_metrics_collector())
         # Schedule daily event cleanup (keep 30 days)
         if event_recorder is not None:
             async def _event_cleanup_loop() -> None:
@@ -68,7 +184,32 @@ def create_app(
                 await init_db()
                 log.info("PostgreSQL connected and tables ready")
             except Exception as exc:  # noqa: BLE001
-                log.warning("PostgreSQL init failed (running without DB): %s", exc)
+                # Fail fast: continuing with a half-migrated schema causes opaque
+                # runtime 500s (e.g. UndefinedColumnError during campaign dispatch).
+                log.exception("PostgreSQL init failed; aborting startup")
+                raise RuntimeError("PostgreSQL init failed; check migrations/schema") from exc
+
+            # Phase 1 — crash recovery: mark executions stuck in 'running' (from a
+            # crashed previous session) as failed + DLQ them so operators can retry.
+            try:
+                from services.crash_recovery import recover_stuck_executions
+                await recover_stuck_executions(stale_after_minutes=5)
+            except Exception as rec_exc:
+                log.warning("crash recovery failed (non-fatal): %s", rec_exc)
+
+        # ── Redis shared state ──
+        from services import redis_store
+        await redis_store.init(config.redis)
+        if redis_store.enabled():
+            import json as _json
+            try:
+                _redis_devs = await redis_store.client().hgetall(redis_store.key("devices"))
+                for _serial in _redis_devs:
+                    manager.ensure_device(_serial)
+                if _redis_devs:
+                    log.info("Restored %d device(s) from Redis", len(_redis_devs))
+            except Exception as _exc:
+                log.warning("Redis device restore failed: %s", _exc)
 
         # ── Start lifecycle components attached by main.py ──
         watchdog = getattr(_app.state, "watchdog", None)
@@ -130,6 +271,9 @@ def create_app(
                         relay_manager,
                         api_key=config.relay.api_key or None,
                         port=grpc_port,
+                        tls_cert_file=getattr(config.relay, "tls_cert_file", ""),
+                        tls_key_file=getattr(config.relay, "tls_key_file", ""),
+                        allow_insecure=bool(getattr(config.relay, "allow_insecure_grpc", True)),
                     )
                     _app.state.grpc_server = grpc_server
                     log.info("gRPC relay server ready on port %d", grpc_port)
@@ -329,6 +473,7 @@ def create_app(
 
         # ── Shutdown ──
         log.info("Shutting down…")
+        await redis_store.close()
         grpc_server = getattr(_app.state, "grpc_server", None)
         if grpc_server is not None:
             await grpc_server.stop(grace=5)
@@ -362,26 +507,57 @@ def create_app(
         and getattr(config.database, "enabled", False)
     )
 
+    cors_allow_all = bool(getattr(config.web, "cors_allow_all", False))
+    cors_allowed_origins = (
+        ["*"]
+        if cors_allow_all
+        else [origin.strip() for origin in (config.web.cors_allowed_origins or []) if origin.strip()]
+    )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[],
-        allow_origin_regex=r"https?://.*",
+        allow_origins=cors_allowed_origins,
         allow_methods=["*"],
         allow_headers=["*"],
-        allow_credentials=True,
+        allow_credentials=False if cors_allow_all else bool(cors_allowed_origins),
     )
     app.add_middleware(RequestLogMiddleware)
 
+    # ── Prometheus instrumentation (tạm tắt) ──
+    # from prometheus_fastapi_instrumentator import Instrumentator
+    # Instrumentator().instrument(app).expose(app, endpoint="/metrics")
+
+    # ── Health endpoints ──
+    @app.get("/api/live")
+    async def liveness():
+        return {"status": "ok"}
+
+    @app.get("/api/ready")
+    async def readiness():
+        checks: dict = {"status": "ok", "devices": len(manager.all_devices())}
+        if db_enabled:
+            try:
+                from sqlalchemy import text as sa_text
+                from db.database import AsyncSessionLocal
+                async with AsyncSessionLocal() as session:
+                    await session.execute(sa_text("SELECT 1"))
+                checks["db"] = "ok"
+            except Exception:
+                checks["db"] = "fail"
+                checks["status"] = "degraded"
+        try:
+            from runtime.transports.adb_relay_server import get_relay_manager
+            rmgr = get_relay_manager()
+            checks["relay_agents"] = len(rmgr.registered_relays()) if rmgr else 0
+        except Exception:
+            checks["relay_agents"] = 0
+        return checks
+
     @app.get("/api/health")
     async def health():
-        return {
-            "status": "ok",
-            "devices": len(manager.all_devices()),
-            "db": db_enabled,
-        }
+        return await readiness()
 
     @app.get("/api/relay/status")
-    async def relay_status():
+    async def relay_status(_: AdminUser):
         """Debug endpoint — shows connected relay agents and their registered serials."""
         try:
             from runtime.transports.adb_relay_server import get_relay_manager
@@ -407,6 +583,9 @@ def create_app(
     capture_store.init(_captures_dir)
     minio_store.init(config.object_storage)
     app.mount("/captures", StaticFiles(directory=str(_captures_dir)), name="captures")
+    _screenshots_dir = Path("screenshots")
+    _screenshots_dir.mkdir(exist_ok=True)
+    app.mount("/screenshots", StaticFiles(directory=str(_screenshots_dir)), name="screenshots")
 
     assets_dir = Path(front_end_dist) / "assets" if front_end_dist else None
     if assets_dir and assets_dir.exists():

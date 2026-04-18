@@ -1,0 +1,247 @@
+"""ScenarioExecutor — main step loop and result assembly."""
+from __future__ import annotations
+
+import asyncio
+import logging
+import random
+import time
+import importlib
+from typing import Any, Dict, TYPE_CHECKING
+
+from tasks.scenario.capture import capture_pre_step, capture_post_step
+from tasks.scenario.steps import dispatch_step
+
+if TYPE_CHECKING:
+    from tasks.scenario.context import ScenarioContext
+
+log = logging.getLogger(__name__)
+trace_log = importlib.import_module("structlog").get_logger("scenario_trace")
+
+_MAX_NESTING_DEPTH = 10
+
+
+def _persist_checkpoint(sc: "ScenarioContext", next_step: int) -> None:
+    """Best-effort async checkpoint write. Never blocks or raises.
+
+    Uses the device's event loop if available; silently skips otherwise.
+    Top-level executions only — nested scenarios inherit parent's execution.
+    """
+    if sc.depth > 0 or not sc.execution_id:
+        return
+    loop = getattr(sc.device, "_loop", None)
+    if loop is None or loop.is_closed():
+        return
+
+    async def _do():
+        try:
+            from db.database import activity_session
+            from db.crud.execution import update_execution
+            async with activity_session() as db:
+                await update_execution(db, sc.execution_id, checkpoint_step=next_step)
+                await db.commit()
+        except Exception as exc:
+            log.debug("checkpoint write failed (non-fatal): %s", exc)
+
+    try:
+        asyncio.run_coroutine_threadsafe(_do(), loop)
+    except Exception as exc:
+        log.debug("checkpoint schedule failed (non-fatal): %s", exc)
+
+
+class ScenarioExecutor:
+    def __init__(self, sc: "ScenarioContext"):
+        self.sc = sc
+
+    def run(self) -> Dict[str, Any]:
+        sc = self.sc
+        scenario_started_at = time.monotonic()
+        total_steps = len(sc.steps)
+        trace_log.info(
+            "scenario_start",
+            trace_id=sc.trace_id,
+            serial=sc.serial,
+            depth=sc.depth,
+            source=sc.trace_source,
+            total_steps=total_steps,
+            capture_enabled=bool(sc.capture_enabled),
+            visual_anchor_enabled=bool(sc.visual_anchor_enabled),
+        )
+
+        # Check nesting depth
+        if sc.depth > _MAX_NESTING_DEPTH:
+            log.warning(f"[{sc.serial}] run_scenario_task: max nesting depth {_MAX_NESTING_DEPTH} exceeded")
+            return {
+                "serial": sc.serial,
+                "success": False,
+                "steps_executed": 0,
+                "step_results": [{"type": "error", "ok": False, "message": f"Max nesting depth {_MAX_NESTING_DEPTH} exceeded"}],
+                "failed_message": f"Max nesting depth {_MAX_NESTING_DEPTH} exceeded",
+                "context": sc.ctx,
+            }
+
+        if sc.visual_anchor_enabled:
+            log.info(f"[{sc.serial}] Visual Anchoring ON (SSIM≥{sc.va_ssim_threshold}, image≥{sc.va_image_threshold})")
+        if sc.capture_enabled and sc.capture_dir:
+            log.info(f"[{sc.serial}] Step capture enabled → {sc.capture_dir} settle={sc.capture_settle_ms}ms")
+            if sc.capture_pre_step:
+                log.info(f"[{sc.serial}] Step pre-capture enabled (CAPTURE_PRE_STEP=1)")
+
+        if sc.start_step and sc.start_step > 0:
+            log.info(f"[{sc.serial}] resume from checkpoint step #{sc.start_step}")
+            trace_log.info(
+                "scenario_resume", trace_id=sc.trace_id, serial=sc.serial,
+                start_step=sc.start_step, total_steps=total_steps,
+            )
+            # Mark skipped steps so step_results length stays consistent with step indices.
+            for skip_idx in range(sc.start_step):
+                sc.step_results.append({"index": skip_idx, "type": "resumed", "ok": True, "message": "skipped — resumed from checkpoint"})
+
+        for idx, raw_step in enumerate(sc.steps):
+            if idx < sc.start_step:
+                continue  # already executed pre-checkpoint
+            # Cancellation checkpoint
+            if sc.cancel_event is not None and sc.cancel_event.is_set():
+                log.info(f"[{sc.serial}] scenario CANCELLED at step#{idx + 1}")
+                sc.step_results.append({"index": idx, "type": "cancelled", "ok": False, "message": "Cancelled by user"})
+                return {
+                    "serial": sc.serial,
+                    "success": False,
+                    "steps_executed": idx,
+                    "step_results": sc.step_results,
+                    "failed_message": f"Cancelled at step {idx + 1}",
+                    "context": sc.ctx,
+                }
+
+            step: Dict[str, Any] = sc.var_ctx.resolve(raw_step, step_index=idx)
+            t = step.get("type")
+            trace_log.info(
+                "step_start",
+                trace_id=sc.trace_id,
+                serial=sc.serial,
+                step_index=idx + 1,
+                total_steps=total_steps,
+                step_type=t,
+                step_id=step.get("id") or step.get("_id") or "-",
+            )
+
+            step_result: Dict[str, Any] = {"index": idx, "type": t, "ok": True}
+
+            # Pre-step capture
+            capture_pre_step(sc, step, idx, step_result)
+
+            # Record timestamp before action
+            step_start_t = time.monotonic()
+
+            # Dispatch to handler
+            handler_result = dispatch_step(sc, step, idx)
+            # Merge handler result into step_result
+            step_result.update(handler_result)
+            step_dur_ms = (time.monotonic() - step_start_t) * 1000.0
+            trace_log.info(
+                "step_end",
+                trace_id=sc.trace_id,
+                serial=sc.serial,
+                step_index=idx + 1,
+                total_steps=total_steps,
+                step_type=t,
+                ok=bool(step_result.get("ok", True)),
+                duration_ms=round(step_dur_ms, 1),
+                message=str(step_result.get("message") or "-"),
+            )
+
+            # Post-step capture
+            capture_post_step(sc, step, idx, step_result, step_start_t)
+
+            sc.step_results.append(step_result)
+
+            if step_result.get("ok", True):
+                _persist_checkpoint(sc, idx + 1)
+
+            # Notify caller
+            if sc.on_step_done is not None:
+                try:
+                    sc.on_step_done(step_result)
+                except Exception:
+                    pass
+
+            # Phase 2 — anti-detection jitter between steps. Applied only at
+            # top-level scenarios (nested scenarios inherit pacing from parent)
+            # and never after the last step.
+            if (
+                sc.depth == 0
+                and sc.jitter_max_ms > 0
+                and idx + 1 < total_steps
+                and step_result.get("ok", True)
+            ):
+                delay_ms = random.uniform(sc.jitter_min_ms, sc.jitter_max_ms)
+                time.sleep(delay_ms / 1000.0)
+
+        result = self._build_result()
+        total_dur_ms = (time.monotonic() - scenario_started_at) * 1000.0
+        failed_step = next((r for r in sc.step_results if not r.get("ok", True)), None)
+        trace_log.info(
+            "scenario_end",
+            trace_id=sc.trace_id,
+            serial=sc.serial,
+            depth=sc.depth,
+            success=bool(result.get("success")),
+            executed_steps=result.get("steps_executed"),
+            total_steps=total_steps,
+            duration_ms=round(total_dur_ms, 1),
+            failed_step=(failed_step.get("index") + 1) if failed_step else None,
+            failed_message=str(result.get("failed_message") or ""),
+        )
+        return result
+
+    def _build_result(self) -> Dict[str, Any]:
+        sc = self.sc
+        all_ok = all(r.get("ok", True) for r in sc.step_results)
+        failed_steps = [r for r in sc.step_results if not r.get("ok", True)]
+        first_fail_msg = failed_steps[0].get("message", "step failed") if failed_steps else ""
+
+        result = {
+            "serial": sc.serial,
+            "success": all_ok,
+            "steps_executed": len(sc.steps),
+            "step_results": sc.step_results,
+            "failed_message": first_fail_msg if not all_ok else None,
+            "context": sc.ctx,
+        }
+        if sc.capture_dir:
+            result["capture_dir"] = sc.capture_dir
+        return result
+
+
+def run_nested_scenario(
+    sc: "ScenarioContext",
+    nested_steps: list,
+    *,
+    variables: dict | None = None,
+    isolate_variables: bool = True,
+    call_stack_add: str | None = None,
+    extra_scenario_keys: dict | None = None,
+) -> Dict[str, Any]:
+    """
+    Execute nested steps without importing tasks.scenario_task.
+
+    Used by composition/control-flow handlers to avoid reverse imports.
+    """
+    child_var_ctx = (
+        sc.var_ctx.child_scope(variables or {})
+        if isolate_variables
+        else sc.var_ctx
+    )
+    child_scenario: Dict[str, Any] = {"steps": nested_steps, "variables": variables or {}}
+    if extra_scenario_keys:
+        child_scenario.update(extra_scenario_keys)
+    child_call_stack = sc.call_stack | ({call_stack_add} if call_stack_add else set())
+    child = sc.__class__.from_args(
+        sc.device,
+        child_scenario,
+        context=sc.ctx,
+        _var_ctx=child_var_ctx,
+        _depth=sc.depth + 1,
+        _call_stack=frozenset(child_call_stack),
+        cancel_event=sc.cancel_event,
+    )
+    return ScenarioExecutor(child).run()

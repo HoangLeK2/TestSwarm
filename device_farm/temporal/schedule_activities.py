@@ -61,6 +61,7 @@ class ScheduleActivities:
                 "target_id": schedule.target_id,
                 "inline_steps": schedule.inline_steps,
                 "inline_variables": schedule.inline_variables or {},
+                "user_id": str(schedule.user_id) if schedule.user_id else None,
                 "device_group_id": schedule.device_group_id,
                 "filter_state": schedule.filter_state,
                 "filter_model": schedule.filter_model,
@@ -243,13 +244,17 @@ class ScheduleActivities:
             raise RuntimeError("No task queue available")
 
         task_ids: list[str] = []
+        campaign_vars: dict[str, Any] = {}
+        user_id = cfg.get("user_id")
+        if user_id:
+            campaign_vars["__USER_ID__"] = str(user_id)
         for i, device in enumerate(devices):
             activity.heartbeat(f"dispatch_device:{i}:{device.serial}")
             delay = i * stagger_interval if stagger else 0
             payload = {
                 "steps": steps,
                 "variables": variables,
-                "_campaign_vars": {},
+                "_campaign_vars": campaign_vars,
                 "_scenario_registry": registry,
             }
             task = Task(

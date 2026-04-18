@@ -456,6 +456,37 @@ class ScenarioStepsWorkflow:
             step_results.append(entry)
             self._step_log.append({**entry, "depth": inp.depth})
 
+        def _with_persist_metrics(message: str | None, details: dict[str, Any] | None) -> str:
+            """Make persistence counters visible even when UI ignores details."""
+            base = str(message or "")
+            if not isinstance(details, dict):
+                return base
+
+            # extract step: details.auto_save = {saved, duplicate, errors}
+            auto = details.get("auto_save")
+            if isinstance(auto, dict):
+                saved = int(auto.get("saved", 0) or 0)
+                dup = int(auto.get("duplicate", 0) or 0)
+                err = int(auto.get("errors", 0) or 0)
+                marker = f"auto-save: saved={saved}, dup={dup}, err={err}"
+                if marker not in base:
+                    base = f"{base} | {marker}" if base else marker
+
+            # save_extraction step: details has saved_count/duplicate_count/error_count
+            if (
+                "saved_count" in details
+                or "duplicate_count" in details
+                or "error_count" in details
+            ):
+                saved = int(details.get("saved_count", 0) or 0)
+                dup = int(details.get("duplicate_count", 0) or 0)
+                err = int(details.get("error_count", 0) or 0)
+                marker = f"saved={saved}, duplicate={dup}, errors={err}"
+                if marker not in base:
+                    base = f"{base} | {marker}" if base else marker
+
+            return base
+
         # ── Batch accumulator for leaf steps ────────────────────────────────
         # Consecutive non-control-flow steps are grouped into one activity call
         # (3 Temporal history events per batch vs 3N for individual calls).
@@ -759,6 +790,10 @@ class ScenarioStepsWorkflow:
                         step_index=idx,
                         context=runtime_context,
                         scenario_config=inp.scenario_config,
+                        campaign_id=inp.campaign_id,
+                        run_id=inp.run_id,
+                        execution_id=inp.execution_id,
+                        user_id=inp.campaign_vars.get("__USER_ID__"),
                     ),
                     result_type=ExtractResult,
                     start_to_close_timeout=_LONG_TIMEOUT,
@@ -769,7 +804,7 @@ class ScenarioStepsWorkflow:
                 _append({
                     "index": idx, "type": "extract",
                     "ok": extract_result.ok,
-                    "message": extract_result.message,
+                    "message": _with_persist_metrics(extract_result.message, extract_result.details),
                     "details": extract_result.details,
                 })
                 steps_executed += 1
@@ -798,6 +833,7 @@ class ScenarioStepsWorkflow:
                         campaign_id=inp.campaign_id,
                         run_id=inp.run_id,
                         execution_id=inp.execution_id,
+                        user_id=inp.campaign_vars.get("__USER_ID__"),
                     ),
                     result_type=StepResult,
                     start_to_close_timeout=timedelta(seconds=120),
@@ -811,7 +847,8 @@ class ScenarioStepsWorkflow:
                     runtime_context = {**runtime_context, "__save_extraction_offsets__": offsets}
                 _append({
                     "index": idx, "type": "save_extraction",
-                    "ok": save_result.ok, "message": save_result.message or "",
+                    "ok": save_result.ok,
+                    "message": _with_persist_metrics(save_result.message, save_result.details),
                     "details": save_result.details,
                 })
                 steps_executed += 1

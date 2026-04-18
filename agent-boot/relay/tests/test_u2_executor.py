@@ -126,7 +126,9 @@ async def test_session_unavailable(event_loop):
     result = await exc.run_batch("serial", [{"op": "click", "x": 1, "y": 2}])
     assert result["ok"] is False
     assert result["stopped_at"] == 0
-    assert "session unavailable" in result["error"]
+    # Phase 2 moved get_session into the per-action loop so errors are attributed
+    # to the specific action that tried to acquire the session.
+    assert "no device" in result["error"]
 
 
 @pytest.mark.asyncio

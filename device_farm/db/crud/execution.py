@@ -32,11 +32,19 @@ async def create_execution(
     user_id: Optional[str] = None,
     status: str = "pending",
 ) -> Execution:
+    # Auto-snapshot scenario version when scenario_id is provided
+    scenario_version_id = None
+    if scenario_id is not None:
+        from db.crud.scenario_version import create_scenario_version
+        version = await create_scenario_version(db, scenario_id)
+        scenario_version_id = version.id
+
     execution = Execution(
         run_type=run_type,
         status=status,
         campaign_id=campaign_id,
         scenario_id=scenario_id,
+        scenario_version_id=scenario_version_id,
         device_config=device_config or {},
         loop_config=loop_config or {},
         error_config=error_config or {},

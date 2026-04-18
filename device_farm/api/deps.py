@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import secrets
 from typing import Annotated, AsyncGenerator
 
 from fastapi import Depends, HTTPException, Request, status
@@ -78,9 +80,32 @@ def make_device_auth_dependency(db_enabled: bool):
     without a database continue to work unchanged.
     """
     if not db_enabled:
-        async def _no_auth() -> None:
-            return
-        return _no_auth
+        fallback_key = os.environ.get("DEVICE_CONTROL_API_KEY", "").strip()
+        env_name = os.environ.get("DEVICE_FARM_ENV", "").strip().lower()
+        is_prod_like = env_name in {"prod", "production", "staging"}
+        if is_prod_like and not fallback_key:
+            raise RuntimeError(
+                "DEVICE_CONTROL_API_KEY is required when database is disabled in production/staging."
+            )
+
+        if not fallback_key:
+            async def _no_auth() -> None:
+                return
+            return _no_auth
+
+        async def _require_fallback_api_key(request: Request) -> None:
+            provided = (
+                request.headers.get("x-device-control-key")
+                or request.query_params.get("device_control_key")
+                or ""
+            ).strip()
+            if not provided or not secrets.compare_digest(provided, fallback_key):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid device control key",
+                )
+
+        return _require_fallback_api_key
 
     async def _require_auth(
         request: Request,

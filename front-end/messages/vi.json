@@ -110,6 +110,44 @@
         "edit": "Chỉnh sửa",
         "update": "Cập nhật"
       }
+    },
+    "variableEditor": {
+      "listInputPlaceholder": "Nhập giá trị, nhấn Enter để thêm...",
+      "listEmpty": "Danh sách trống",
+      "types": {
+        "string": "Chuỗi",
+        "number": "Số",
+        "list": "Danh sách"
+      },
+      "quickGuide": {
+        "title": "Cách dùng nhanh",
+        "step1": "1) Tạo biến với tên dễ nhớ (VD: username, password).",
+        "step2": "2) Chọn đúng kiểu dữ liệu (Chuỗi, Số, Danh sách).",
+        "step3Prefix": "3) Dùng lại biến trong step bằng cú pháp"
+      },
+      "columns": {
+        "variableName": "Tên biến",
+        "type": "Loại",
+        "value": "Giá trị"
+      },
+      "keyPlaceholder": "vd: username",
+      "valuePlaceholderNumber": "VD: 3",
+      "valuePlaceholderString": "VD: nguyen@gmail.com",
+      "valuePlaceholderStringWithRef": "VD: nguyen@gmail.com hoặc ${key}",
+      "emptyTitle": "Chưa có biến nào.",
+      "emptyHintPrefix": "Dùng biến trong kịch bản qua cú pháp",
+      "addVariable": "Thêm biến",
+      "builtinsTitle": "Biến hệ thống có sẵn",
+      "builtins": {
+        "now": "ISO timestamp hiện tại",
+        "date": "YYYY-MM-DD",
+        "time": "HH:MM:SS",
+        "deviceSerial": "Serial thiết bị đang chạy",
+        "deviceModel": "Model thiết bị",
+        "randomInt": "Số ngẫu nhiên 1-100",
+        "randomUuid": "UUID v4",
+        "stepIndex": "Index bước hiện tại"
+      }
     }
   },
   "navigation": {
@@ -327,7 +365,14 @@
       "targetGroupLabel": "Nhóm thiết bị mục tiêu",
       "targetGroupPlaceholder": "Chọn nhóm thiết bị...",
       "noGroup": "Không chọn nhóm (tất cả thiết bị)",
-      "variablesLabel": "Biến"
+      "variablesLabel": "Biến",
+      "platformLabel": "Nền tảng mạng xã hội",
+      "platformFacebook": "Facebook",
+      "platformInstagram": "Instagram",
+      "platformTiktok": "TikTok",
+      "platformLinkedin": "LinkedIn",
+      "platformHint": "Mỗi lần chạy campaign sẽ dùng nền tảng này để map account theo thiết bị và mặc định trích xuất.",
+      "accountModeHint": "Chiến lược account hiện tại: backend dùng account primary theo từng thiết bị cho nền tảng đã chọn."
     },
     "list": {
       "statusIdle": "Sẵn sàng",
@@ -363,6 +408,14 @@
       "cancellingAll": "Đang huỷ {count} workflow…",
       "titleLivePreview": "Xem màn hình thiết bị đang chạy",
       "liveDialogTitle": "Xem trực tiếp thiết bị",
+      "titleMonitor": "Theo dõi",
+      "monitorTooltip": "Theo dõi tiến trình",
+      "monitorTitle": "Theo dõi — {campaign}",
+      "monitorStatusRunning": "ĐANG CHẠY",
+      "monitorStatusIdle": "THEO DÕI",
+      "monitorNotRunningMessage": "Campaign không chạy — hiển thị artifact và DLQ gần nhất.",
+      "monitorTemporalUnavailableMessage": "Temporal chưa được kích hoạt — không thể theo dõi từng bước.",
+      "monitorNoRunningWorkflowsMessage": "Chưa có workflow nào đang chạy.",
       "wfRunning": "{count} đang chạy",
       "wfPaused": "{count} tạm dừng",
       "wfFailed": "{count} lỗi",
@@ -411,6 +464,11 @@
       "helper": "Chọn 1: bấm nút dấu cộng. Chọn nhiều: tick ô rồi bấm \"Thêm đã chọn\". \"Chọn tất cả\" rồi thêm = thêm hết."
     },
     "stepEditor": {
+      "variableInsert": {
+        "placeholder": "Chèn biến...",
+        "availableVariables": "Biến có thể dùng",
+        "builtinVariables": "Biến hệ thống"
+      },
       "extract": {
         "strategyFbPosts": "Bài viết Facebook",
         "strategyFbComments": "Bình luận Facebook",
@@ -460,6 +518,41 @@
         "itemLevelPost": "0 - Bài viết",
         "itemLevelComment": "1 - Bình luận",
         "itemLevelReply": "2 - Trả lời bình luận"
+      }
+    },
+    "scenarioStepsInline": {
+      "group": {
+        "actions": "Hành động",
+        "variables": "Biến",
+        "controlFlow": "Luồng điều khiển"
+      },
+      "placeholder": {
+        "package": "com.example.app",
+        "url": "https://...",
+        "selector": "selector",
+        "textToInput": "nội dung nhập",
+        "varName": "TEN_BIEN",
+        "valueOrBuiltin": "giá trị hoặc ${__BUILTIN__}",
+        "key": "enter/back/home"
+      },
+      "startXRatioTitle": "start_x_ratio - neo trái để tránh mở ảnh full-width",
+      "branchLabel": "Nhánh {name}",
+      "weightLabel": "trọng số:",
+      "addBranch": "Thêm nhánh",
+      "addStep": "Thêm bước",
+      "add": "Thêm",
+      "stepsLabel": "steps",
+      "thenLabel": "then",
+      "elseLabel": "else",
+      "runScenario": {
+        "scenarioLabel": "kịch bản:",
+        "selectScenario": "-- chọn kịch bản --",
+        "campaignScenarios": "Kịch bản trong Campaign",
+        "sharedTemplates": "Mẫu dùng chung",
+        "orNameLabel": "hoặc tên:",
+        "scenarioNamePlaceholder": "ten_kich_ban",
+        "variableOverrides": "ghi đè biến (tuỳ chọn):",
+        "preview": "Xem trước ({count} bước)"
       }
     }
   },
@@ -564,7 +657,27 @@
       "tooltipDeleteStep": "Xóa bước",
       "tooltipScenarioSection": "Danh sách bước kịch bản: thao tác, chờ, nhánh điều kiện. Thêm bước bằng nút + hoặc menu phía dưới.",
       "tooltipSelectorBar": "Selector dùng cho thao tác thủ công (Chạm) và khi gán từ cây UI. Khi đang gán selector cho một bước, vùng này đồng bộ để bạn xem trước.",
-      "tooltipHierarchyPanel": "Cây phần tử theo dump UI hiện tại. Click một dòng để highlight trên mirror và điền selector; dùng ô tìm để lọc nhanh."
+      "tooltipHierarchyPanel": "Cây phần tử theo dump UI hiện tại. Click một dòng để highlight trên mirror và điền selector; dùng ô tìm để lọc nhanh.",
+      "emptyNodePicker": {
+        "title": "Chọn node để bắt đầu",
+        "subtitle": "Thêm step trực tiếp từ đây để bắt đầu dựng kịch bản.",
+        "sectionInteraction": "Tương tác",
+        "sectionFlow": "Luồng",
+        "tapSelector": "Tap selector",
+        "longTap": "Long tap",
+        "inputText": "Nhập text",
+        "assertElement": "Assert element",
+        "tapRatio": "Tap tọa độ",
+        "swipe": "Swipe",
+        "keyPress": "Nhấn phím",
+        "setVariable": "Set biến",
+        "waitSeconds": "Chờ (giây)",
+        "waitElement": "Chờ phần tử",
+        "ifElement": "Nếu phần tử",
+        "ifVariable": "Nếu biến",
+        "repeatN": "Lặp N lần",
+        "repeatUntil": "Lặp đến khi"
+      }
     },
     "controls": {
       "tapMode": "Chế độ chạm",

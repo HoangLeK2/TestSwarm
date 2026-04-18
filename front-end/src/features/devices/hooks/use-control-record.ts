@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { campaignsApi, scenariosApi } from '@/features/campaigns/services/api';
 import type { ScenarioOut } from '@/features/campaigns/types';
@@ -150,6 +151,8 @@ export function useControlRecord(initialSerial?: string | null, initialCampaignI
   const [pollingXml, setPollingXml] = useState(false);
   const pollingXmlRef = useRef(false);
   const togglingRecordingRef = useRef(false);
+  const [hierarchyRefreshPulse, setHierarchyRefreshPulse] = useState(0);
+  const lastHierarchyPulseAtRef = useRef(0);
 
   useEffect(() => { recordingRef.current = recording; }, [recording]);
   useEffect(() => { recordXmlRef.current = recordXml; }, [recordXml]);
@@ -168,6 +171,14 @@ export function useControlRecord(initialSerial?: string | null, initialCampaignI
 
   const setSkipTapRecordingWhilePick = useCallback((v: boolean) => {
     skipTapRecordingWhilePickRef.current = v;
+  }, []);
+
+  const pulseHierarchyRefresh = useCallback(() => {
+    const now = Date.now();
+    // Collapse burst actions (tap/swipe spam) into one refresh pulse.
+    if (now - lastHierarchyPulseAtRef.current < 1500) return;
+    lastHierarchyPulseAtRef.current = now;
+    setHierarchyRefreshPulse((v) => v + 1);
   }, []);
 
   const toggleRecording = useCallback(async () => {
@@ -245,6 +256,22 @@ export function useControlRecord(initialSerial?: string | null, initialCampaignI
           : undefined;
 
       wsSend(msg);
+      if (
+        selectedDevice &&
+        m0.serial === selectedDevice.serial &&
+        [
+          'tap',
+          'swipe',
+          'drag',
+          'double_tap',
+          'tap_selector',
+          'input_text',
+          'open_url',
+          'launch_app',
+        ].includes(String(m0.type ?? ''))
+      ) {
+        pulseHierarchyRefresh();
+      }
       if (
         skipTapRecordingWhilePickRef.current &&
         (m0.type === 'tap' || m0.type === 'swipe' || m0.type === 'drag')
@@ -375,7 +402,7 @@ export function useControlRecord(initialSerial?: string | null, initialCampaignI
         });
       }
     },
-    [wsSend, selectedDevice, recordStep, t, trackScreenshotTask]
+    [wsSend, selectedDevice, recordStep, t, trackScreenshotTask, pulseHierarchyRefresh]
   );
 
   const addWaitStep = useCallback(() => {
@@ -535,30 +562,111 @@ export function useControlRecord(initialSerial?: string | null, initialCampaignI
   );
 
   // ── Hierarchy / Inspector ────────────────────────────────────────────────
-  const [hierarchyXml, setHierarchyXml] = useState<string>('');
-  const [hierarchyLoading, setHierarchyLoading] = useState(false);
   const [autoRefreshHierarchy, setAutoRefreshHierarchy] = useState(true);
   const [hierarchyPaused, setHierarchyPaused] = useState(false);
+  const lastHierarchyFetchAtRef = useRef(0);
+  const lastHierarchyAppRef = useRef<string>('');
+  const selectedHierarchySerial = selectedDevice?.serial ?? null;
+  const selectedHierarchyApp = selectedDevice?.current_app ?? '';
+  const queryClient = useQueryClient();
+  const hierarchyQueryKey = useMemo(
+    () => ['device-hierarchy', selectedHierarchySerial ?? 'none'] as const,
+    [selectedHierarchySerial]
+  );
+  const hierarchyQuery = useQuery({
+    queryKey: hierarchyQueryKey,
+    queryFn: () => fetchHierarchy(selectedHierarchySerial as string, false),
+    enabled: false,
+    refetchOnWindowFocus: false,
+    staleTime: 1500,
+    gcTime: 1000 * 60,
+  });
+  const hierarchyXml = useMemo(() => hierarchyQuery.data ?? '', [hierarchyQuery.data]);
+  const hierarchyLoading = hierarchyQuery.isFetching;
+
+  const fetchAndSetHierarchy = useCallback(
+    async (serial: string, refresh: boolean): Promise<string> => {
+      const xml = (await fetchHierarchy(serial, refresh)) ?? '';
+      queryClient.setQueryData(['device-hierarchy', serial], xml);
+      return xml;
+    },
+    [queryClient]
+  );
 
   const refreshHierarchy = useCallback(() => {
-    if (!selectedDevice) return;
-    setHierarchyLoading(true);
-    fetchHierarchy(selectedDevice.serial, true)
-      .then(setHierarchyXml)
-      .catch((e) => setHierarchyXml(`${errorPrefix} ${String(e)}`))
-      .finally(() => setHierarchyLoading(false));
-  }, [selectedDevice, errorPrefix]);
+    if (!selectedHierarchySerial) return;
+    fetchAndSetHierarchy(selectedHierarchySerial, true).catch((e) => {
+      queryClient.setQueryData(hierarchyQueryKey, `${errorPrefix} ${String(e)}`);
+    });
+  }, [selectedHierarchySerial, fetchAndSetHierarchy, queryClient, hierarchyQueryKey, errorPrefix]);
 
   useEffect(() => {
-    if (!autoRefreshHierarchy || !selectedDevice || hierarchyPaused) return;
-    fetchHierarchy(selectedDevice.serial, true).then(setHierarchyXml).catch(() => {});
-    const id = setInterval(() => {
-      fetchHierarchy(selectedDevice.serial)
-        .then(setHierarchyXml)
-        .catch((e) => setHierarchyXml((prev) => (prev.startsWith(errorPrefix) ? prev : `${errorPrefix} ${String(e)}`)));
-    }, 3000);
-    return () => clearInterval(id);
-  }, [autoRefreshHierarchy, selectedDevice, hierarchyPaused, errorPrefix]);
+    if (!autoRefreshHierarchy || !selectedHierarchySerial || hierarchyPaused) return;
+    lastHierarchyAppRef.current = selectedHierarchyApp;
+    fetchAndSetHierarchy(selectedHierarchySerial, true).catch(() => {});
+  }, [
+    autoRefreshHierarchy,
+    selectedHierarchySerial,
+    selectedHierarchyApp,
+    hierarchyPaused,
+    fetchAndSetHierarchy,
+  ]);
+
+  // Refresh hierarchy when the foreground app changes.
+  useEffect(() => {
+    if (!autoRefreshHierarchy || !selectedHierarchySerial || hierarchyPaused) return;
+    const app = selectedHierarchyApp;
+    if (lastHierarchyAppRef.current === app) return;
+    lastHierarchyAppRef.current = app;
+    const tid = setTimeout(() => {
+      hierarchyQuery.refetch().catch((e) => {
+        queryClient.setQueryData(
+          hierarchyQueryKey,
+          `${errorPrefix} ${String(e)}`
+        );
+      });
+    }, 220);
+    return () => clearTimeout(tid);
+  }, [
+    autoRefreshHierarchy,
+    selectedHierarchySerial,
+    selectedHierarchyApp,
+    hierarchyPaused,
+    errorPrefix,
+    hierarchyQuery,
+    queryClient,
+    hierarchyQueryKey,
+  ]);
+
+  // Refresh hierarchy on interaction pulses (tap/swipe/drag/key...).
+  useEffect(() => {
+    if (!autoRefreshHierarchy || !selectedHierarchySerial || hierarchyPaused) return;
+    if (hierarchyRefreshPulse <= 0) return;
+    const now = Date.now();
+    if (now - lastHierarchyFetchAtRef.current < 1200) return;
+    const tid = setTimeout(() => {
+      hierarchyQuery.refetch()
+        .then(() => {
+          lastHierarchyFetchAtRef.current = Date.now();
+        })
+        .catch((e) => {
+          queryClient.setQueryData(
+            hierarchyQueryKey,
+            `${errorPrefix} ${String(e)}`
+          );
+        });
+    }, 220);
+    return () => clearTimeout(tid);
+  }, [
+    hierarchyRefreshPulse,
+    autoRefreshHierarchy,
+    selectedHierarchySerial,
+    hierarchyPaused,
+    errorPrefix,
+    hierarchyQuery,
+    queryClient,
+    hierarchyQueryKey,
+  ]);
 
   const parsedHierarchyNodes = useMemo(() => parseHierarchySelectorNodes(hierarchyXml), [hierarchyXml]);
 

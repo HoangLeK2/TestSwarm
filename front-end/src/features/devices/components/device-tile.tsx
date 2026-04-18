@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import type { Device } from '../types';
 import { serialToId } from '../helpers';
 import { DeviceScreen } from './device-screen';
@@ -8,6 +8,7 @@ import { DeviceControls } from './device-controls';
 import { DeviceSTFPanel } from './device-stf-panel';
 import { DeviceStepMonitor } from './device-step-monitor';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Android } from '@/registry/magicui/android';
 import { useTranslations } from 'next-intl';
 
 interface DeviceTileProps {
@@ -47,6 +48,18 @@ export function DeviceTile({
     device.state && !['DISCONNECTED', 'DEAD'].includes(device.state.toUpperCase());
 
   const [gestureMode, setGestureMode] = useState<'tap' | 'swipe' | 'double_tap' | 'drag'>('tap');
+
+  const screenRatio = useMemo(() => {
+    const sw = device.screen_width || 1080;
+    const sh = device.screen_height || 1920;
+    return sh > 0 ? sw / sh : 9 / 19;
+  }, [device.screen_width, device.screen_height]);
+
+  const mockupSize = useMemo(() => {
+    const w = compact ? 220 : 250;
+    const h = Math.round(w * (830 / 378));
+    return { width: w, height: h };
+  }, [compact]);
 
   const handlePinch = useCallback((scale: number) => {
     const dw = device.screen_width || 1080;
@@ -88,14 +101,13 @@ export function DeviceTile({
       </CardHeader>
       <CardContent className={compact ? 'flex flex-1 flex-col gap-1.5 px-2 pb-2 pt-2' : 'flex flex-1 flex-col gap-2 px-3 pb-3 pt-3'}>
         <div className='flex flex-col items-center gap-2'>
-          <div className={compact ? 'relative w-full max-w-[220px]' : 'relative w-full max-w-[260px]'}>
-            <div className='pointer-events-none absolute inset-0 rounded-[1.75rem] border border-border/40 bg-gradient-to-b from-background/40 to-background/80 shadow-[0_18px_40px_rgba(15,23,42,0.55)]' />
-            <div className={`relative mx-auto flex aspect-[9/19] w-full items-center justify-center rounded-[1.5rem] border border-border/80 bg-black px-1.5 pb-2 pt-3 ${compact ? 'my-1 max-w-[200px]' : 'my-2 max-w-[240px]'}`}>
-              <div className='pointer-events-none absolute left-1/2 top-1.5 flex -translate-x-1/2 items-center gap-1 rounded-full bg-zinc-900 px-4 py-1 shadow-sm'>
-                <span className='h-1.5 w-10 rounded-full bg-zinc-700' />
-                <span className='h-2 w-2 rounded-full bg-zinc-600' />
-              </div>
-              <div className='relative h-full w-full overflow-hidden rounded-xl bg-black'>
+          <div className='mx-auto'>
+            <Android
+              width={mockupSize.width}
+              height={mockupSize.height}
+              screenRatio={screenRatio}
+            >
+              <div className='h-full w-full'>
                 {isActive ? (
                   <DeviceScreen
                     device={device}
@@ -113,7 +125,7 @@ export function DeviceTile({
                   </div>
                 )}
               </div>
-            </div>
+            </Android>
           </div>
         </div>
         <DeviceControls

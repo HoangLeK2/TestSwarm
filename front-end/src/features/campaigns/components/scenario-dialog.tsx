@@ -404,6 +404,11 @@ function coerceSteps(raw: any[]): Step[] {
 const ENABLE_FLOWGRAM_SCENARIO_UI = false;
 
 export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: Props) {
+  /** Prefer explicit prop; else first scenario row (API order) — legacy JSON field removed. */
+  const effectiveRow = useMemo(
+    () => scenarioProp ?? campaign.scenarios?.[0],
+    [scenarioProp, campaign.scenarios],
+  );
   const [open, setOpen] = useState(false);
   const [instructions, setInstructions] = useState('');
   const [steps, setSteps] = useState<Step[]>([]);
@@ -415,14 +420,14 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
   const [androidVersion, setAndroidVersion] = useState('');
   const [browserApp, setBrowserApp] = useState('');
   const [deviceNotes, setDeviceNotes] = useState('');
-  // Legacy (campaign.scenario field)
+  // PATCH /campaigns/:id/scenario when no row yet; else scenario row APIs
   const { mutate: saveScenario, isPending: savingLegacy } = useUpdateCampaignScenario();
   const { mutate: compileScenario, isPending: compilingLegacy } = useCompileCampaignScenario();
-  // New (scenario row)
   const { mutate: saveScenarioRow, isPending: savingRow } = useUpdateScenario();
   const { mutate: compileScenarioRow, isPending: compilingRow } = useCompileScenario();
-  const isPending = scenarioProp ? savingRow : savingLegacy;
-  const compiling = scenarioProp ? compilingRow : compilingLegacy;
+  const useRowApi = Boolean(effectiveRow?.id);
+  const isPending = useRowApi ? savingRow : savingLegacy;
+  const compiling = useRowApi ? compilingRow : compilingLegacy;
   const { data: devices = [] } = useCampaignDevices(campaign.id);
   const [previewSerial, setPreviewSerial] = useState('');
   const [xmlSerial, setXmlSerial] = useState('');
@@ -446,12 +451,16 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
   const [flowSelectedFgId, setFlowSelectedFgId] = useState<string | null>(null);
   const [flowDetailStep, setFlowDetailStep] = useState<FlowStep | null>(null);
   const [flowRunStates, setFlowRunStates] = useState<Record<string, FlowgramRunState>>({});
+  const [stepRunStates, setStepRunStates] = useState<
+    Record<string, 'idle' | 'running' | 'ok' | 'error'>
+  >({});
   const [flowCoordPick, setFlowCoordPick] = useState<null | { fgId: string; kind: 'tap' | 'swipe' }>(null);
   const flowCtxRef = useRef<FixedLayoutPluginContext | null>(null);
   const stepsRef = useRef<Step[]>([]);
   const flowSelectedFgIdRef = useRef<string | null>(null);
   const flowDetailDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const flowRunAbortRef = useRef<AbortController | null>(null);
+  const stepRunAbortRef = useRef<AbortController | null>(null);
   const flowRunningIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -587,6 +596,62 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
       onRunLeafStep: handleFlowRunLeaf,
     }),
     [previewSerial, flowSelectedFgId, flowRunStates, handleFlowRunLeaf],
+  );
+
+  const handleInlineRunStep = useCallback(
+    async (step: FlowStep, runKey: string) => {
+      const serial = (previewSerial || devices[0]?.serial || '').trim();
+      if (!serial) {
+        toast.error('Chọn thiết bị trong dropdown "Chọn device để test" (cùng hàng với Test toàn bộ)');
+        return;
+      }
+      if (stepRunStates[runKey] === 'running') return;
+
+      stepRunAbortRef.current?.abort();
+      const ctrl = new AbortController();
+      stepRunAbortRef.current = ctrl;
+
+      setStepRunStates((s) => ({ ...s, [runKey]: 'running' }));
+      const payload = JSON.parse(JSON.stringify(step)) as Record<string, unknown>;
+      delete payload._fgId;
+
+      try {
+        await previewScenarioStream(
+          serial,
+          [payload],
+          (ev) => {
+            if (ev.event === 'step_done') {
+              setStepRunStates((s) => ({ ...s, [runKey]: ev.ok ? 'ok' : 'error' }));
+              if (!ev.ok) toast.error(String(ev.message ?? 'Step lỗi'));
+            }
+          },
+          ctrl.signal,
+          flattenVarDefs(variables),
+        );
+      } catch (e) {
+        if (ctrl.signal.aborted) {
+          setStepRunStates((s) => {
+            const n = { ...s };
+            delete n[runKey];
+            return n;
+          });
+        } else {
+          setStepRunStates((s) => ({ ...s, [runKey]: 'error' }));
+          toast.error(String(e));
+        }
+      } finally {
+        if (!ctrl.signal.aborted) {
+          setTimeout(() => {
+            setStepRunStates((s) => {
+              const n = { ...s };
+              if (n[runKey] !== 'running') delete n[runKey];
+              return n;
+            });
+          }, 2800);
+        }
+      }
+    },
+    [previewSerial, devices, stepRunStates, variables],
   );
 
   const handleFetchXml = async () => {
@@ -809,22 +874,18 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
 
     let currentVariables: Record<string, any> = {};
 
-    if (scenarioProp) {
-      // New 3-level: load from scenario row
-      currentInstructions = scenarioProp.instructions ?? '';
-      currentSteps = Array.isArray(scenarioProp.steps) ? coerceSteps(scenarioProp.steps) : [];
-      currentVariables = (scenarioProp as any).variables ?? {};
-    } else {
-      // Legacy: load from campaign.scenario field
-      const sc: any = campaign.scenario ?? {};
-      currentInstructions = sc.instructions ?? '';
-      currentSteps = Array.isArray(sc.steps) ? coerceSteps(sc.steps) : [];
-      currentVariables = sc.variables ?? campaign.variables ?? {};
+    if (effectiveRow) {
+      currentInstructions = effectiveRow.instructions ?? '';
+      currentSteps = Array.isArray(effectiveRow.steps) ? coerceSteps(effectiveRow.steps) : [];
+      currentVariables = (effectiveRow as ScenarioOut).variables ?? {};
+      const sc: any = (campaign.scenario as any) ?? {};
       const ctx: any = sc.device_context ?? {};
       currentDeviceModel = ctx.device_model ?? '';
       currentAndroidVersion = ctx.android_version ?? '';
       currentBrowserApp = ctx.browser_app ?? '';
       currentDeviceNotes = ctx.notes ?? '';
+    } else {
+      currentVariables = campaign.variables ?? {};
     }
 
     setInstructions(currentInstructions);
@@ -833,13 +894,13 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
     // Load graph model if available and valid, else derive from steps.
     // Validate that each node has required `id` and `order` fields before trusting
     // the stored data (guards against old records saved before the graph refactor).
-    const rawNodes: unknown[] = Array.isArray((scenarioProp as any)?.nodes) ? (scenarioProp as any).nodes : [];
+    const rawNodes: unknown[] = Array.isArray((effectiveRow as any)?.nodes) ? (effectiveRow as any).nodes : [];
     const validNodes = rawNodes.filter(
       (n): n is FlowNode => typeof n === 'object' && n !== null && typeof (n as any).id === 'string' && typeof (n as any).order === 'string',
     );
     if (validNodes.length > 0) {
       setGraphNodes(validNodes);
-      setGraphEdges(Array.isArray((scenarioProp as any)?.edges) ? (scenarioProp as any).edges : []);
+      setGraphEdges(Array.isArray((effectiveRow as any)?.edges) ? (effectiveRow as any).edges : []);
     } else if (currentSteps.length > 0) {
       const { nodes, edges } = stepsToGraph(currentSteps as Record<string, unknown>[]);
       setGraphNodes(nodes);
@@ -856,12 +917,13 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
       JSON.stringify({ instructions: currentInstructions, steps: currentSteps, variables: currentVariables }, null, 2)
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, campaign.scenario, scenarioProp]);
+  }, [open, campaign.scenario, campaign.scenarios, effectiveRow]);
 
   // Initialize xmlSerial once per dialog open when devices are available.
   // Separate from the form-reset effect so that device selection does not
   // trigger a form reset.
   const xmlSerialInitedRef = useRef(false);
+  const previewSerialInitedRef = useRef(false);
   useEffect(() => {
     if (!open) { xmlSerialInitedRef.current = false; return; }
     if (!xmlSerialInitedRef.current && devices.length > 0 && !xmlSerial) {
@@ -869,6 +931,14 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
       setXmlSerial(devices[0].serial);
     }
   }, [open, devices, xmlSerial]);
+
+  useEffect(() => {
+    if (!open) { previewSerialInitedRef.current = false; return; }
+    if (!previewSerialInitedRef.current && devices.length > 0 && !previewSerial) {
+      previewSerialInitedRef.current = true;
+      setPreviewSerial(devices[0].serial);
+    }
+  }, [open, devices, previewSerial]);
 
   // Khi đổi thiết bị thì xóa toàn bộ XML đã thu (mỗi thiết bị một bộ snapshot)
   useEffect(() => {
@@ -882,17 +952,15 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
       toast.error(check.message);
       return;
     }
-    if (scenarioProp) {
-      // New 3-level: save to scenario row
+    if (useRowApi && effectiveRow?.id) {
       saveScenarioRow(
-        { campaignId: campaign.id, scenarioId: scenarioProp.id, data: { instructions, steps: sanitizedSteps, variables, nodes: graphNodes as any, edges: graphEdges as any } },
+        { campaignId: campaign.id, scenarioId: effectiveRow.id, data: { instructions, steps: sanitizedSteps, variables, nodes: graphNodes as any, edges: graphEdges as any } },
         {
           onSuccess: () => { toast.success('Lưu kịch bản thành công'); setOpen(false); },
           onError: (err) => { toast.error(formatFarmApiError(err, 'Lưu kịch bản thất bại')); },
         }
       );
     } else {
-      // Legacy: save to campaign.scenario field
       const existing = (campaign.scenario as any) ?? {};
       const deviceContext = { device_model: deviceModel, android_version: androidVersion, browser_app: browserApp, notes: deviceNotes };
       const next: Record<string, any> = { ...existing, instructions, steps: sanitizedSteps, variables, device_context: deviceContext };
@@ -907,7 +975,8 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
   };
 
   const handlePreviewAll = async () => {
-    if (!previewSerial) {
+    const serial = (previewSerial || devices[0]?.serial || '').trim();
+    if (!serial) {
       toast.error('Chọn thiết bị để test kịch bản');
       return;
     }
@@ -918,7 +987,7 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
     }
     setPreviewingAll(true);
     try {
-      const res = await previewScenario(previewSerial, sanitizedSteps);
+      const res = await previewScenario(serial, sanitizedSteps);
       const failed =
         res.step_results?.filter((r) => r && typeof r.ok === 'boolean' && !r.ok) ?? [];
       if (failed.length > 0) {
@@ -961,10 +1030,9 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
       deviceSerial = xmlSerial;
       toast.info('Backend sẽ gọi uiautomator2 lấy XML từ thiết bị, đang gọi AI…');
     }
-    if (scenarioProp) {
-      // New: compile and save to scenario row
+    if (useRowApi && effectiveRow?.id) {
       compileScenarioRow(
-        { campaignId: campaign.id, scenarioId: scenarioProp.id, instructions: text, uiXml, deviceSerial, deviceContext },
+        { campaignId: campaign.id, scenarioId: effectiveRow.id, instructions: text, uiXml, deviceSerial, deviceContext },
         {
           onSuccess: (data) => {
             setInstructions(data.instructions ?? text);
@@ -977,7 +1045,6 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
         }
       );
     } else {
-      // Legacy: compile and save to campaign.scenario
       compileScenario(
         { id: campaign.id, instructions: text, uiXml, deviceSerial, deviceContext },
         {
@@ -1050,8 +1117,8 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
   /** Other scenarios in the campaign — used for the "load from template" picker. */
   const { data: allScenarios = [] } = useScenarios(campaign.id);
   const loadableScenarios = useMemo(
-    () => allScenarios.filter((s) => s.id !== scenarioProp?.id && Array.isArray(s.steps) && s.steps.length > 0),
-    [allScenarios, scenarioProp?.id]
+    () => allScenarios.filter((s) => s.id !== effectiveRow?.id && Array.isArray(s.steps) && s.steps.length > 0),
+    [allScenarios, effectiveRow?.id]
   );
 
   const handleLoadFromScenario = (scenarioId: string) => {
@@ -1084,7 +1151,7 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
         <DialogHeader className="shrink-0">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <DialogTitle className="text-base">
-              {scenarioProp ? `Kịch bản: ${scenarioProp.name}` : 'Kịch bản campaign'}
+              {effectiveRow ? `Kịch bản: ${effectiveRow.name}` : 'Kịch bản campaign'}
             </DialogTitle>
             {loadableScenarios.length > 0 && (
               <div className="flex items-center gap-1.5">
@@ -1352,7 +1419,7 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
                       size="sm"
                       variant="outline"
                       onClick={handlePreviewAll}
-                      disabled={previewingAll || !steps.length || !previewSerial}
+                      disabled={previewingAll || !steps.length || (!previewSerial && devices.length === 0)}
                     >
                       {previewingAll ? 'Đang test…' : 'Test toàn bộ'}
                     </Button>
@@ -1445,6 +1512,9 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
                   maxHeight="min(380px, 42vh)"
                   compact
                   nestedInDialog
+                  onRunStep={handleInlineRunStep}
+                  stepRunStates={stepRunStates}
+                  onStopInlineRun={() => stepRunAbortRef.current?.abort()}
                 />
               </div>
             )}

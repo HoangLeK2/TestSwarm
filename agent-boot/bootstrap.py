@@ -50,6 +50,7 @@ _STF_APK_CANDIDATES = [
 _U2_PKG      = "com.github.uiautomator"
 _U2_TEST_PKG = "com.github.uiautomator.test"
 _STF_PKG     = "jp.co.cyberagent.stf"
+_STF_A11Y_SERVICE = f"{_STF_PKG}/jp.co.cyberagent.stf.TouchAccessibilityService"
 
 # atx-agent
 _ATX_AGENT_VERSION  = "0.10.1"
@@ -464,6 +465,84 @@ def step_grant_permissions(serial: str, skip: bool) -> None:
             console.print(f"    [green]✓[/green] {perm}")
 
 
+def _is_stf_a11y_bound(serial: str) -> bool:
+    """
+    True when STF accessibility service is currently bound by AccessibilityManager.
+    """
+    out = _adb_shell("dumpsys accessibility", serial=serial, timeout=20)
+    for line in out.splitlines():
+        if "Bound services:" in line and _STF_A11Y_SERVICE in line:
+            return True
+    return False
+
+
+def _ensure_stf_a11y_bound(serial: str) -> bool:
+    """
+    Auto-heal common Vivo/ColorOS state:
+      - enabled_accessibility_services contains STF service
+      - but Bound services is empty (service not actually attached)
+    """
+    if _is_stf_a11y_bound(serial):
+        console.print("    [green]✓[/green] Accessibility service already bound")
+        return True
+
+    enabled = _adb_shell("settings get secure enabled_accessibility_services", serial=serial, timeout=10)
+    if _STF_A11Y_SERVICE not in enabled:
+        _adb_shell(
+            f"settings put secure enabled_accessibility_services '{_STF_A11Y_SERVICE}'",
+            serial=serial,
+            timeout=10,
+        )
+        _adb_shell("settings put secure accessibility_enabled 1", serial=serial, timeout=10)
+        console.print("    [cyan]→[/cyan] Added STF accessibility service to secure settings")
+
+    # Rebind sequence: toggle a11y off/on and restart STF process.
+    _adb_shell("settings put secure enabled_accessibility_services ''", serial=serial, timeout=10)
+    _adb_shell("settings put secure accessibility_enabled 0", serial=serial, timeout=10)
+    _adb_shell(f"am force-stop {_STF_PKG}", serial=serial, timeout=10)
+    _adb_shell(
+        f"settings put secure enabled_accessibility_services '{_STF_A11Y_SERVICE}'",
+        serial=serial,
+        timeout=10,
+    )
+    _adb_shell("settings put secure accessibility_enabled 1", serial=serial, timeout=10)
+    _adb(
+        "shell", "am", "start", "-n", f"{_STF_PKG}/.IdentityActivity",
+        "-a", "android.intent.action.MAIN", serial=serial, check=False, timeout=10
+    )
+
+    for _ in range(6):
+        time.sleep(0.8)
+        if _is_stf_a11y_bound(serial):
+            console.print("    [green]✓[/green] Accessibility service rebound")
+            return True
+
+    console.print("    [yellow]⚠[/yellow] Accessibility enabled but not bound yet (manual toggle may still be needed)")
+    return False
+
+
+def _ensure_stability_settings(serial: str) -> None:
+    """
+    Device-side settings that keep agent-boot connections stable.
+
+    Currently: stay_on_while_plugged_in=3 → screen stays on while on AC/USB,
+    avoids the sleep → adb offline → scrcpy crash cycle (Genymobile/scrcpy#6607).
+
+    NOTE: We previously tried to whitelist `com.github.uiautomator/.AccessibilityService`
+    here. That service does NOT exist in the uiautomator APK — openatx/uiautomator2
+    runs via the UiAutomation API (test instrumentation), not an AccessibilityService.
+    Android silently rejects unknown services. STF is the only a11y service
+    actually needed; its rebind is handled by _ensure_stf_a11y_bound.
+
+    Idempotent — safe to re-run on every bootstrap.
+    """
+    try:
+        _adb_shell("settings put global stay_on_while_plugged_in 3", serial=serial, timeout=10)
+        console.print("    [green]✓[/green] stay_on_while_plugged_in=3 (screen stays on while charging)")
+    except Exception as exc:
+        console.print(f"    [yellow]⚠[/yellow] stay_on_while_plugged_in failed: {exc}")
+
+
 def step_open_app(serial: str, skip: bool) -> None:
     _step_header(7, "Open STFService")
     if skip:
@@ -472,6 +551,7 @@ def step_open_app(serial: str, skip: bool) -> None:
     _adb("shell", "am", "start", "-n", f"{_STF_PKG}/.IdentityActivity",
          "-a", "android.intent.action.MAIN", serial=serial, check=False, timeout=10)
     console.print("    [green]✓[/green] STFService opened (IdentityActivity)")
+    _ensure_stf_a11y_bound(serial)
     console.print()
     console.print(Panel(
         "[bold]Next steps on phone:[/bold]\n\n"
@@ -527,6 +607,11 @@ def boot_device(serial: str, stf_apk: Path | None, *,
         step_install_stf(active, stf_apk, skip=skip_stf)
         step_grant_permissions(active, skip=skip_stf)
         step_open_app(active, skip=skip_stf)
+        # MUST run after step_open_app — the STF a11y rebind sequence inside
+        # _ensure_stf_a11y_bound() clears enabled_accessibility_services then
+        # sets ONLY the STF service. Running our settings after it guarantees
+        # the u2 AccessibilityService survives the rebind.
+        _ensure_stability_settings(active)
 
         # u2 + atx-agent are required for device control
         critical_ok = skip_u2 or (u2_ok and atx_ok)

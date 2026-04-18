@@ -5,6 +5,7 @@ export type SelectorBy =
   | 'text'
   | 'xpath'
   | 'class name'
+  | 'content-desc'
   | 'description'
   | 'descriptionContains'
   | 'descriptionStartsWith';
@@ -33,27 +34,42 @@ export type TapStep = {
 
 export type ScenarioStep =
   | { type: 'launch_app'; package: string; wait_after?: number }
-  | { type: 'open_url'; url: string }
+  | { type: 'open_url'; url: string; package?: string }
   | { type: 'wait'; seconds: number }
   | { type: 'tap_ratio'; x: number; y: number }
-  | { type: 'tap_position'; pos: 'top_center' | 'middle_center' | 'bottom_center' }
+  | { type: 'tap_position'; pos: 'top_left' | 'top_center' | 'top_right' | 'middle_left' | 'middle_center' | 'middle_right' | 'bottom_left' | 'bottom_center' | 'bottom_right' | 'search_bar' }
   | { type: 'swipe_ratio'; x1: number; y1: number; x2: number; y2: number; duration_ms?: number }
   | TapStep
   | { type: 'tap_selector'; by: SelectorBy; value: string; fallback_rx?: number; fallback_ry?: number; timeout?: number }
-  | { type: 'wait_element'; by: SelectorBy; value: string; timeout?: number }
-  | { type: 'assert_element'; by: SelectorBy; value: string; timeout?: number }
+  | { type: 'wait_element'; by: SelectorBy; value: string; timeout?: number; poll?: number }
+  | { type: 'assert_element'; by: SelectorBy; value: string; timeout?: number; poll?: number }
   | { type: 'input_selector'; by: SelectorBy; value: string; text: string; clear_first?: boolean }
   | { type: 'long_tap_selector'; by: SelectorBy; value: string; duration_ms?: number }
   | { type: 'scroll_to'; by: SelectorBy; value: string; direction?: 'down' | 'up'; max_swipes?: number }
   | { type: 'input_text'; text: string; via: 'u2' | 'a11y_key' }
   | { type: 'key'; key: string }
-  | { type: 'scroll_down'; repeats: number; start_x_ratio?: number | string }
+  | {
+      type: 'scroll_down';
+      repeats: number;
+      start_x_ratio?: number | string;
+      start_y_ratio?: number;
+      end_y_ratio?: number;
+      duration_ms?: number;
+      pause_seconds?: number;
+    }
   | { type: 'verify_screen'; screenshot: string; ssim_threshold?: number; timeout?: number; poll?: number }
   | { type: 'double_tap'; rx?: number; ry?: number; x?: number; y?: number; wait_after?: number }
   | { type: 'drag'; rx1?: number; ry1?: number; rx2?: number; ry2?: number; x1?: number; y1?: number; x2?: number; y2?: number; duration_ms?: number }
   | { type: 'pinch'; scale: number; cx?: number; cy?: number; rx?: number; ry?: number; duration_ms?: number }
   | { type: 'take_screenshot'; save_path?: string }
-  | { type: 'set_clipboard'; text: string };
+  | { type: 'set_clipboard'; text: string }
+  | { type: 'if'; condition: Record<string, unknown>; then?: ScenarioStep[]; else?: ScenarioStep[] }
+  | { type: 'break_if'; condition: Record<string, unknown> }
+  | { type: 'set_var'; key: string; value: unknown }
+  | { type: 'extract_text_hierarchy'; save_as?: string; format?: string; filter_class?: string; exclude_empty?: boolean }
+  | { type: 'extract_text_ocr'; save_as?: string; language?: string; region?: Record<string, unknown>; psm?: number; preprocess?: boolean; scale_factor?: number }
+  | { type: 'extract_text_ai'; save_as?: string; prompt?: string; provider?: string; format?: string; model?: string; region?: Record<string, unknown> }
+  | { type: 'extract_screen_data'; save_as?: string; strategy?: string; schema?: Record<string, unknown> };
 
 export function scenarioToJson(steps: ScenarioStep[]): string {
   return JSON.stringify({ steps }, null, 2);

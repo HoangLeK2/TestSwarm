@@ -144,3 +144,40 @@ export type CampaignRunResponse = {
   /** Present when execution_engine is task_queue */
   task_ids?: string[];
 };
+
+export type DlqStatus = 'pending' | 'retrying' | 'resolved' | 'failed' | 'dismissed' | 'unknown';
+
+export type DlqEntry = {
+  id: string;
+  execution_id: string;
+  device_serial: string;
+  error: string | null;
+  retry_count: number;
+  status: DlqStatus;
+  last_attempt_at: string | null;
+  created_at: string;
+};
+
+export type ExecutionOut = {
+  id: string;
+  run_type: string;
+  status: string;
+  campaign_id: string | null;
+  scenario_id: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
+export type ExecutionArtifact = {
+  artifact_type: string;
+  execution_id: string;
+  device_serial: string | null;
+  step_index: number | null;
+  step_type: string | null;
+  ok: boolean | null;
+  message: string | null;
+  url: string | null;
+  metadata: Record<string, any>;
+  created_at: string | null;
+};

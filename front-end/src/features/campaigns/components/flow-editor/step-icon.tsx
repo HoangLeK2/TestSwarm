@@ -44,9 +44,11 @@ const ICON_MAP: Record<string, React.ComponentType<LucideProps>> = {
   wait: Timer,
   wait_element: Search,
   wait_stable: Timer,
+  verify_screen: CheckCircle,
   assert_element: CheckCircle,
   dismiss_popup: XCircle,
   set_variable: Variable,
+  set_var: Variable,
   repeat: Repeat,
   repeat_until: Repeat1,
   if_element: GitBranch,
@@ -58,6 +60,12 @@ const ICON_MAP: Record<string, React.ComponentType<LucideProps>> = {
   drag: GripVertical,
   take_screenshot: Camera,
   set_clipboard: Clipboard,
+  extract_text_hierarchy: Search,
+  extract_text_ocr: Search,
+  extract_text_ai: Search,
+  extract_screen_data: Search,
+  if: GitBranch,
+  break_if: GitBranch,
 };
 
 const COLOR_MAP: Record<string, string> = {
@@ -67,13 +75,21 @@ const COLOR_MAP: Record<string, string> = {
   launch_app: 'text-indigo-500', open_url: 'text-indigo-500',
   scroll_down: 'text-indigo-400', scroll_to: 'text-indigo-400',
   wait: 'text-green-500', wait_element: 'text-green-500', wait_stable: 'text-green-500',
+  verify_screen: 'text-green-500',
   assert_element: 'text-green-600', dismiss_popup: 'text-red-400',
   double_tap: 'text-blue-400', pinch: 'text-sky-500', drag: 'text-blue-600',
   take_screenshot: 'text-violet-500', set_clipboard: 'text-teal-500',
   set_variable: 'text-purple-500',
+  set_var: 'text-purple-500',
   repeat: 'text-orange-500', repeat_until: 'text-orange-500',
   if_element: 'text-amber-500', if_variable: 'text-amber-500',
   random_pick: 'text-rose-500', run_scenario: 'text-pink-500',
+  extract_text_hierarchy: 'text-fuchsia-500',
+  extract_text_ocr: 'text-fuchsia-500',
+  extract_text_ai: 'text-fuchsia-500',
+  extract_screen_data: 'text-fuchsia-500',
+  if: 'text-amber-500',
+  break_if: 'text-amber-500',
 };
 
 interface Props {

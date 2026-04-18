@@ -40,6 +40,7 @@ class STFServiceClient(threading.Thread):
         on_connectivity: Optional[Callable[[ConnectivityInfo], None]] = None,
         on_airplane: Optional[Callable[[bool], None]] = None,
         on_phone_state: Optional[Callable[[PhoneStateInfo], None]] = None,
+        on_stream_error: Optional[Callable[[Exception], None]] = None,
     ) -> None:
         super().__init__(daemon=True, name=f"stfsvc-{serial}")
         self.serial = serial
@@ -51,6 +52,7 @@ class STFServiceClient(threading.Thread):
         self._on_connectivity = on_connectivity
         self._on_airplane = on_airplane
         self._on_phone_state = on_phone_state
+        self._on_stream_error = on_stream_error
 
         self._logger = logging.getLogger(f"stfservice.{serial}")
         self._running = False
@@ -358,6 +360,11 @@ class STFServiceClient(threading.Thread):
                 self._connect_and_stream()
             except Exception as exc:
                 if self._running:
+                    if self._on_stream_error:
+                        try:
+                            self._on_stream_error(exc)
+                        except Exception as cb_exc:
+                            self._logger.debug(f"[{self.serial}] STFService on_stream_error callback failed: {cb_exc}")
                     self._logger.warning(f"[{self.serial}] STFService stream error: {exc}; retrying in 3s")
                     time.sleep(3)
 

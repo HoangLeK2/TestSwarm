@@ -18,7 +18,7 @@ import threading
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
 from core.config import Config
@@ -102,7 +102,7 @@ class Dispatcher(threading.Thread):
     def _run_task(self, device: DeviceClient, task: Task) -> None:
         serial = device.serial
         log.info(f"[{serial}] Starting task {task.id[:8]} ({task.name or task.fn.__name__})")
-        task.started_at = datetime.utcnow()
+        task.started_at = datetime.now(timezone.utc)
 
         result = None
         error_msg = None
@@ -153,7 +153,16 @@ class Dispatcher(threading.Thread):
             log.error(f"[{serial}] Task {task.id[:8]} failed: {exc}", exc_info=True)
 
         finally:
-            task.finished_at = datetime.utcnow()
+            task.finished_at = datetime.now(timezone.utc)
+            elapsed = (task.finished_at - task.started_at).total_seconds()
+
+            # ── Prometheus metrics (tạm tắt) ──
+            # try:
+            #     from web.metrics import tasks_dispatched_total, task_duration_seconds
+            #     task_duration_seconds.observe(elapsed)
+            # except Exception:
+            #     pass
+
             scenario_failed = (
                 not success
                 and result is not None
@@ -165,6 +174,11 @@ class Dispatcher(threading.Thread):
                 task.result = result
                 log.info(f"[{serial}] Task {task.id[:8]} done")
                 self._record_completion(serial)
+                # try:
+                #     from web.metrics import tasks_dispatched_total
+                #     tasks_dispatched_total.labels(status="success").inc()
+                # except Exception:
+                #     pass
             elif scenario_failed or task.retry_count >= task.max_retries:
                 task.status = TaskStatus.FAILED
                 task.error = error_msg
@@ -172,6 +186,14 @@ class Dispatcher(threading.Thread):
                     f"[{serial}] Task {task.id[:8]} failed"
                     + (" (scenario steps)" if scenario_failed else " (no retries left)")
                 )
+                # try:
+                #     from web.metrics import tasks_dispatched_total
+                #     if error_msg and "timed out" in error_msg:
+                #         tasks_dispatched_total.labels(status="timeout").inc()
+                #     else:
+                #         tasks_dispatched_total.labels(status="failure").inc()
+                # except Exception:
+                #     pass
             else:
                 log.info(
                     f"[{serial}] Task {task.id[:8]} requeuing "
@@ -190,7 +212,7 @@ class Dispatcher(threading.Thread):
 
     def _is_rate_limited(self, serial: str) -> bool:
         max_tpm = self.config.dispatcher.max_tasks_per_minute
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         cutoff = now - timedelta(minutes=1)
 
         with self._rate_lock:
@@ -200,4 +222,4 @@ class Dispatcher(threading.Thread):
 
     def _record_completion(self, serial: str) -> None:
         with self._rate_lock:
-            self._rate_tracker[serial].append(datetime.utcnow())
+            self._rate_tracker[serial].append(datetime.now(timezone.utc))

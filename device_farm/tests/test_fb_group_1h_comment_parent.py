@@ -18,6 +18,11 @@ from tasks.fb_extract import parse_fb_comments_from_xml, parse_fb_posts_from_xml
 CAPTURES = Path(__file__).resolve().parent.parent / "captures"
 
 
+def _require_capture_file(path: Path) -> None:
+    if not path.exists():
+        pytest.skip(f"missing capture fixture: {path.name}")
+
+
 def _walk_steps(steps: List[Dict[str, Any]] | None) -> Generator[Dict[str, Any], None, None]:
     for s in steps or []:
         yield s
@@ -37,6 +42,21 @@ def test_fb_group_1h_template_fb_comments_has_parent_post_id_var() -> None:
     assert fb_comment, "fb_group_1h must include extract fb_comments"
     for step in fb_comment:
         assert step.get("parent_post_id_var") == "_fb_comment_parent_pid", step
+        assert step.get("extract_profile"), step
+        assert step.get("strategy_version"), step
+
+
+def test_fb_group_1h_template_extract_posts_has_profile_and_version() -> None:
+    spec = next(t for t in BUILTIN_TEMPLATES if t["name"] == "fb_group_1h")
+    fb_posts = [
+        s
+        for s in _walk_steps(spec.get("steps"))
+        if s.get("type") == "extract" and s.get("strategy") == "fb_posts"
+    ]
+    assert fb_posts, "fb_group_1h must include extract fb_posts"
+    for step in fb_posts:
+        assert step.get("extract_profile"), step
+        assert step.get("strategy_version"), step
 
 
 def test_fb_group_1h_save_comments_uses_active_parent_hash() -> None:
@@ -56,6 +76,8 @@ def test_fb_group_1h_save_comments_uses_active_parent_hash() -> None:
 def test_171940_comment_rows_match_feed_top_post_pid() -> None:
     """Golden: same session feed pre-dump + comment scroll — all bodies share parent_post_id."""
     root = CAPTURES / "49c62ff79ec0c35d_2026-04-12_171940"
+    _require_capture_file(root / "step_000_extract_pre_hierarchy.xml")
+    _require_capture_file(root / "step_002_scroll_down_hierarchy.xml")
     feed_xml = (root / "step_000_extract_pre_hierarchy.xml").read_text(encoding="utf-8", errors="replace")
     com_xml = (root / "step_002_scroll_down_hierarchy.xml").read_text(encoding="utf-8", errors="replace")
     posts = parse_fb_posts_from_xml(feed_xml)
@@ -185,9 +207,9 @@ def test_recycler_items_sorted_by_top_y_when_dom_order_is_reversed() -> None:
 
 
 def test_post_id_map_resolves_same_hash_as_compute_content_hash() -> None:
-    feed_xml = (
-        CAPTURES / "49c62ff79ec0c35d_2026-04-12_171940/step_000_extract_pre_hierarchy.xml"
-    ).read_text(encoding="utf-8", errors="replace")
+    path = CAPTURES / "49c62ff79ec0c35d_2026-04-12_171940/step_000_extract_pre_hierarchy.xml"
+    _require_capture_file(path)
+    feed_xml = path.read_text(encoding="utf-8", errors="replace")
     posts = parse_fb_posts_from_xml(feed_xml)
     pid = posts[0]["_pid"]
     expected = compute_content_hash(posts[0], dedupe_field="post_key")

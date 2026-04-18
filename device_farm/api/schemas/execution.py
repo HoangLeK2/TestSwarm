@@ -8,6 +8,19 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
+from db.models.enums import ExecutionStatus, ExecutionResultStatus
+
+
+# ── Step result validation ───────────────────────────────────────────────────
+
+
+class StepResult(BaseModel):
+    """Schema for items in passed_steps / failed_steps arrays."""
+    index: int = Field(..., ge=0, description="Step index in scenario")
+    name: Optional[str] = None
+    error: Optional[str] = None
+    duration_ms: Optional[int] = None
+
 
 # ── Request schemas ───────────────────────────────────────────────────────────
 
@@ -40,7 +53,7 @@ class FinishBody(BaseModel):
 
 
 class UpsertResultBody(BaseModel):
-    status: str = Field(default="pending")
+    status: ExecutionResultStatus = Field(default=ExecutionResultStatus.PENDING)
     passed_steps: list[Any] = Field(default_factory=list)
     failed_steps: list[Any] = Field(default_factory=list)
     error_detail: Optional[str] = None
@@ -74,6 +87,7 @@ class ExecutionOut(BaseModel):
     status: str
     campaign_id: Optional[str]
     scenario_id: Optional[str]
+    scenario_version_id: Optional[str] = None
     device_config: dict[str, Any]
     loop_config: dict[str, Any]
     error_config: dict[str, Any]

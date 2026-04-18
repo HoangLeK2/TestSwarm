@@ -12,6 +12,7 @@ Mode B — Relay (agent-boot):
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -42,9 +43,8 @@ class DeviceManager:
         # Serial → slot index (persisted so the same device gets the same slot)
         self._index_map: Dict[str, int] = {}
         self._load_index_map()
-        # Pre-populate registry from index so dashboard shows devices (DISCONNECTED) before any agent connects
-        for serial in list(self._index_map.keys()):
-            self.ensure_device(serial)
+        # Keep index history for stable slot assignment, but do not pre-register
+        # devices from disk. Registry should reflect only currently live devices.
 
     # ── Registry ──────────────────────────────────────────────────────────────
 
@@ -64,6 +64,7 @@ class DeviceManager:
                 client.set_event_loop(self._event_loop)
             self._registry[serial] = client
             log.info(f"Registered new device via WebSocket agent: {serial} → slot {idx}")
+            self._fire_redis_sync(serial, client)
             return client
 
     def get_device(self, serial: str) -> Optional[DeviceClient]:
@@ -88,6 +89,7 @@ class DeviceManager:
         """Remove a device from registry when agent permanently disconnects."""
         with self._lock:
             self._registry.pop(serial, None)
+        self._fire_redis_remove(serial)
 
     # ── Relay Device Registration (Mode B) ──────────────────────────────────
 
@@ -111,6 +113,7 @@ class DeviceManager:
                 client.set_event_loop(self._event_loop)
             self._registry[serial] = client
             log.info(f"Registered relay device: {serial} → slot {idx}")
+            self._fire_redis_sync(serial, client)
             return client
 
     # register_adb_device kept as compatibility shim — routes to relay bootstrap.
@@ -148,6 +151,46 @@ class DeviceManager:
             log.warning(f"[{serial}] no event loop — bootstrap will run when relay connects")
 
         return client
+
+    # ── Redis sync (fire-and-forget) ─────────────────────────────────────────
+
+    def _fire_redis_sync(self, serial: str, client: DeviceClient) -> None:
+        loop = self._event_loop
+        if loop is None:
+            return
+        asyncio.run_coroutine_threadsafe(self._sync_device_to_redis(serial, client), loop)
+
+    def _fire_redis_remove(self, serial: str) -> None:
+        loop = self._event_loop
+        if loop is None:
+            return
+        asyncio.run_coroutine_threadsafe(self._remove_device_from_redis(serial), loop)
+
+    async def _sync_device_to_redis(self, serial: str, client: DeviceClient) -> None:
+        from services import redis_store
+        if not redis_store.enabled():
+            return
+        try:
+            r = redis_store.client()
+            await r.hset(redis_store.key("devices"), serial, json.dumps({
+                "serial": serial,
+                "index": client.index,
+                "state": client.state.name if isinstance(client.state, DeviceState) else str(client.state),
+                "model": getattr(client, "_model", ""),
+                "brand": getattr(client, "_brand", ""),
+            }))
+        except Exception as exc:
+            log.debug("Redis device sync failed for %s: %s", serial, exc)
+
+    async def _remove_device_from_redis(self, serial: str) -> None:
+        from services import redis_store
+        if not redis_store.enabled():
+            return
+        try:
+            r = redis_store.client()
+            await r.hdel(redis_store.key("devices"), serial)
+        except Exception as exc:
+            log.debug("Redis device remove failed for %s: %s", serial, exc)
 
     # ── Event Loop ───────────────────────────────────────────────────────────
 
@@ -188,7 +231,10 @@ class DeviceManager:
             try:
                 with open(path) as f:
                     self._index_map = json.load(f)
-                log.info(f"Loaded device index map: {self._index_map}")
+                log.info(
+                    "Loaded persisted device slot map (history, not live registry): %s",
+                    self._index_map,
+                )
             except Exception as exc:
                 log.warning(f"Could not load index map {path}: {exc}")
 

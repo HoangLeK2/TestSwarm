@@ -92,7 +92,7 @@
               "collection": "${SAVE_COLLECTION}",
               "platform": "facebook",
               "content_type": "comment",
-              "dedupe_field": "text",
+              "dedupe_field": "comment_key",
               "tags": "group,comment,${GROUP_NAME}",
               "save_parent_id_var": "_active_comment_parent_hash",
               "item_level": 1
@@ -110,7 +110,7 @@
               "collection": "${SAVE_COLLECTION}",
               "platform": "facebook",
               "content_type": "comment",
-              "dedupe_field": "text",
+              "dedupe_field": "comment_key",
               "tags": "group,comment,${GROUP_NAME}",
               "save_parent_id_var": "_active_comment_parent_hash",
               "item_level": 1

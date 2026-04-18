@@ -4,7 +4,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { ChevronDown, ChevronRight, Crosshair, Loader2, Play, Square, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { isControlFlow, type FlowStep } from '../scenario-steps/types';
+import { isContainerType, type FlowStep } from '../scenario-steps/types';
 import { BRACKET_COLORS, getStepTypeName, getStepSummary } from './constants';
 import { StepIcon } from './step-icon';
 import { StepCard } from './step-card';
@@ -220,7 +220,7 @@ function ChildStepList({
       >
         {steps.map((child, ci) => {
           const rowId = childIds[ci]!;
-        if (isControlFlow(child.type)) {
+        if (isContainerType(child.type)) {
           const nestedPath = [...(pathFromRoot ?? []), { listKey, childIndex: ci }];
           const bracketRunKey = encodeScenarioInlineRunKey(rootStepIndex ?? parentStepIndex, nestedPath);
           return (
@@ -635,7 +635,7 @@ export function BracketBlock({
             />
           )}
 
-          {(step.type === 'if_element' || step.type === 'if_variable') && (() => {
+          {(step.type === 'if_element' || step.type === 'if_variable' || step.type === 'if') && (() => {
             const thenSteps = step.then ?? [];
             const elseSteps = step.else ?? [];
             return (

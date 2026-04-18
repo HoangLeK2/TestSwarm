@@ -10,7 +10,10 @@ import type {
   ScenarioOut,
   ScenarioUpdate,
   TaskOut,
-  WorkflowProgress
+  WorkflowProgress,
+  DlqEntry,
+  ExecutionOut,
+  ExecutionArtifact,
 } from '../types';
 
 export type {
@@ -24,7 +27,10 @@ export type {
   ScenarioOut,
   ScenarioUpdate,
   TaskOut,
-  WorkflowProgress
+  WorkflowProgress,
+  DlqEntry,
+  ExecutionOut,
+  ExecutionArtifact,
 } from '../types';
 
 export type StepActionResponse = {
@@ -172,4 +178,38 @@ export const tasksApi = {
     farmApi
       .get<TaskOut[]>(`/tasks?name_prefix=${encodeURIComponent(namePrefix)}`)
       .then((r) => r.data)
+};
+
+export const dlqApi = {
+  list: (params?: { status?: string; offset?: number; limit?: number }) =>
+    farmApi
+      .get<DlqEntry[]>('/executions/dlq', {
+        params: {
+          ...(params?.status ? { status: params.status } : {}),
+          ...(params?.offset != null ? { offset: params.offset } : {}),
+          ...(params?.limit != null ? { limit: params.limit } : {}),
+        },
+      })
+      .then((r) => r.data),
+  retry: (dlqId: string) =>
+    farmApi.post<DlqEntry>(`/executions/dlq/${encodeURIComponent(dlqId)}/retry`).then((r) => r.data),
+  dismiss: (dlqId: string) =>
+    farmApi.delete(`/executions/dlq/${encodeURIComponent(dlqId)}`).then((r) => r.data),
+};
+
+export const executionsApi = {
+  list: (params?: { campaignId?: string; limit?: number; offset?: number }) =>
+    farmApi
+      .get<{ total: number; items: ExecutionOut[] }>('/executions', {
+        params: {
+          ...(params?.campaignId ? { campaign_id: params.campaignId } : {}),
+          ...(params?.limit != null ? { limit: params.limit } : {}),
+          ...(params?.offset != null ? { offset: params.offset } : {}),
+        },
+      })
+      .then((r) => r.data),
+  listArtifacts: (executionId: string) =>
+    farmApi
+      .get<ExecutionArtifact[]>(`/executions/${encodeURIComponent(executionId)}/artifacts`)
+      .then((r) => r.data),
 };

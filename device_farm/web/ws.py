@@ -732,6 +732,26 @@ class DeviceAgentSession:
 
             # ── Shared-secret auth (set AGENT_SECRET env var to enable) ────
             _required_secret = os.environ.get("AGENT_SECRET", "").strip()
+            _env_name = os.environ.get("DEVICE_FARM_ENV", "").strip().lower()
+            _strict_agent_auth = _env_name in {"prod", "production", "staging"} or (
+                os.environ.get("AGENT_AUTH_REQUIRED", "").strip().lower() in {"1", "true", "yes", "on"}
+            )
+            _has_valid_pair = bool(pair_id and pair_id in _pairing_mod.store)
+            _has_pending_key = bool(key)
+            if _strict_agent_auth and not _required_secret and not (_has_valid_pair or _has_pending_key):
+                log.warning(
+                    "[DEVICE-WS] Agent %s from %s: rejected — strict auth requires secret or pair/key",
+                    serial,
+                    client_addr,
+                )
+                await ws.send_json(
+                    {
+                        "type": "error",
+                        "message": "Agent auth required (set AGENT_SECRET or use pairing key).",
+                    }
+                )
+                await ws.close(code=4003)
+                return
             if _required_secret:
                 _provided = (
                     hello.get("secret", "") or ws.query_params.get("secret", "")

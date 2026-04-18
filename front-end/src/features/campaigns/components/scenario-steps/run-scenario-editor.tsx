@@ -6,6 +6,7 @@ import { useScenarioTemplates } from '@/features/scenario-templates/hooks/use-sc
 import { VariableEditor } from '@/components/variable-editor';
 import type { FlowStep } from './types';
 import { getStepIcon } from './types';
+import { useTranslations } from 'next-intl';
 
 type Props = {
   step: FlowStep;
@@ -18,6 +19,7 @@ const inputCls = 'border rounded px-1.5 py-0.5 bg-background text-[11px]';
 const labelCls = 'shrink-0 text-[11px] text-muted-foreground';
 
 export function RunScenarioFields({ step, onChange, campaignScenarios = [] }: Props) {
+  const t = useTranslations('campaignsFeature.scenarioStepsInline.runScenario');
   const { data: templates } = useScenarioTemplates();
   const [showPreview, setShowPreview] = useState(false);
 
@@ -47,15 +49,15 @@ export function RunScenarioFields({ step, onChange, campaignScenarios = [] }: Pr
     <div className='space-y-2'>
       {/* Scenario picker */}
       <div className='flex flex-wrap items-center gap-2'>
-        <span className={labelCls}>scenario:</span>
+        <span className={labelCls}>{t('scenarioLabel')}</span>
         <select
           className={`${inputCls} flex-1 min-w-[160px]`}
           value={selected ? `${selected.source}:${selected.name}` : ''}
           onChange={(e) => handleSelect(e.target.value)}
         >
-          <option value=''>-- select scenario --</option>
+          <option value=''>{t('selectScenario')}</option>
           {campaignScenarios.length > 0 && (
-            <optgroup label='Campaign Scenarios'>
+            <optgroup label={t('campaignScenarios')}>
               {campaignScenarios.map((s) => (
                 <option key={s.id} value={`campaign:${s.name}`}>
                   {s.name}
@@ -64,7 +66,7 @@ export function RunScenarioFields({ step, onChange, campaignScenarios = [] }: Pr
             </optgroup>
           )}
           {(templates ?? []).length > 0 && (
-            <optgroup label='Shared Templates'>
+            <optgroup label={t('sharedTemplates')}>
               {(templates ?? []).map((t) => (
                 <option key={t.id} value={`${t.category}:${t.name}`}>
                   [{t.category}] {t.name}
@@ -73,10 +75,10 @@ export function RunScenarioFields({ step, onChange, campaignScenarios = [] }: Pr
             </optgroup>
           )}
         </select>
-        <span className={labelCls}>or name:</span>
+        <span className={labelCls}>{t('orNameLabel')}</span>
         <input
           className={`${inputCls} w-36`}
-          placeholder='scenario_name'
+          placeholder={t('scenarioNamePlaceholder')}
           value={step.scenario_name ?? ''}
           onChange={(e) => {
             onChange('scenario_name', e.target.value);
@@ -88,7 +90,7 @@ export function RunScenarioFields({ step, onChange, campaignScenarios = [] }: Pr
       {/* Variable overrides */}
       <div className='space-y-1'>
         <span className={`${labelCls} text-[10px]`}>
-          variable overrides (optional):
+          {t('variableOverrides')}
         </span>
         <VariableEditor
           variables={step.variables ?? {}}
@@ -106,13 +108,15 @@ export function RunScenarioFields({ step, onChange, campaignScenarios = [] }: Pr
             onClick={() => setShowPreview((v) => !v)}
           >
             {showPreview ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
-            Preview ({selected.steps.length} steps)
+            {t('preview', { count: selected.steps.length })}
           </button>
           {showPreview && (
             <div className='mt-1 max-h-40 overflow-y-auto rounded border bg-muted/30 p-2'>
-              {selected.steps.map((s: any, i: number) => (
+              {selected.steps.map((s: any, i: number) => {
+                const StepIcon = getStepIcon(s.type);
+                return (
                 <div key={i} className='flex items-center gap-1 text-[10px] text-muted-foreground py-0.5'>
-                  <span>{getStepIcon(s.type)}</span>
+                  <span><StepIcon size={12} className='inline-block align-middle' /></span>
                   <span className='font-mono'>#{i + 1}</span>
                   <span className='font-medium'>{s.type}</span>
                   {s.package && <span className='truncate'>— {s.package}</span>}
@@ -122,7 +126,7 @@ export function RunScenarioFields({ step, onChange, campaignScenarios = [] }: Pr
                   {s.seconds != null && <span>— {s.seconds}s</span>}
                   {s.count != null && <span>— ×{s.count}</span>}
                 </div>
-              ))}
+              )})}
             </div>
           )}
         </div>

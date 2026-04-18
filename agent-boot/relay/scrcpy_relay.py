@@ -23,6 +23,7 @@ import shutil
 import socket
 import struct
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -77,9 +78,62 @@ def _relay_enqueue(q: asyncio.Queue, frame: bytes, is_cfg: bool, is_key: bool) -
             pass
 
 
+# Retry budget: max _MAX_RECONNECTS failures per _RETRY_WINDOW seconds.
+# Outside the window, the counter resets — matches agent.py:SCRCPY_RESTART_WINDOW_SECONDS.
 _MAX_RECONNECTS = 10
-_RECONNECT_BASE = 2.0    # seconds
-_RECONNECT_MAX  = 30.0   # seconds cap
+_RETRY_WINDOW   = 120.0  # seconds
+_RECONNECT_BASE = 2.0
+_RECONNECT_MAX  = 30.0
+
+# Frame timeout: socket.recv raises socket.timeout after this many seconds without
+# data. Catches hung streams where TCP is alive but the device encoder stalled.
+# Tuned via env: agent runs at 30fps so anything >5s is unambiguously dead.
+_FRAME_TIMEOUT = float(os.environ.get("SCRCPY_FRAME_TIMEOUT_S", "5.0"))
+
+# Soft IDR threshold: if we go this many seconds without a frame, request an
+# IDR keyframe from scrcpy-server before hitting the hard frame timeout. This
+# recovers from decoder-freeze-on-dropped-NAL ~200ms vs full restart ~2-3s.
+_IDR_REQUEST_AFTER = float(os.environ.get("SCRCPY_IDR_REQUEST_AFTER_S", "1.5"))
+
+# scrcpy 3.3.x control message type. Hardcoded to the bundled server version
+# (see _BUNDLED_JAR_VERSION); re-check if you bump the jar.
+_SC_CTRL_RESET_VIDEO = 17
+
+# TCP keepalive tuned for WiFi: detect dead peer ~9s after last ACK. Defaults
+# of 2h are useless — NAT/router drop silent TCP after 5-15min idle.
+_KEEPALIVE_IDLE     = 3   # seconds of idle before first probe
+_KEEPALIVE_INTERVAL = 3   # seconds between probes
+_KEEPALIVE_COUNT    = 3   # fails before the socket is declared dead
+
+
+def _enable_tcp_keepalive(sock: socket.socket) -> None:
+    """
+    Enable SO_KEEPALIVE with aggressive timing. macOS exposes TCP_KEEPALIVE
+    (seconds until first probe); Linux exposes TCP_KEEPIDLE/INTVL/CNT. Apply
+    whichever is available — silently skip unsupported options.
+    """
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    except OSError:
+        return
+    # macOS
+    TCP_KEEPALIVE = getattr(socket, "TCP_KEEPALIVE", 0x10)
+    try:
+        sock.setsockopt(socket.IPPROTO_TCP, TCP_KEEPALIVE, _KEEPALIVE_IDLE)
+    except OSError:
+        pass
+    # Linux
+    for opt, val in (
+        ("TCP_KEEPIDLE", _KEEPALIVE_IDLE),
+        ("TCP_KEEPINTVL", _KEEPALIVE_INTERVAL),
+        ("TCP_KEEPCNT", _KEEPALIVE_COUNT),
+    ):
+        n = getattr(socket, opt, None)
+        if n is not None:
+            try:
+                sock.setsockopt(socket.IPPROTO_TCP, n, val)
+            except OSError:
+                pass
 
 # Regex matches both 3-byte (\x00\x00\x01) and 4-byte (\x00\x00\x00\x01) Annex-B start codes.
 # Used to split Annex-B byte streams into individual NAL units in O(n) via the C regex engine.
@@ -169,6 +223,7 @@ class ScrcpyRelaySession:
         self._running          = False
         self._relay_thread: Optional[threading.Thread] = None
         self._server_proc: Optional[subprocess.Popen] = None
+        self._callback_fired   = False   # guards against double _on_fatal emit
 
         self._video_sock: Optional[socket.socket] = None
         self._ctrl_sock:  Optional[socket.socket] = None
@@ -239,6 +294,17 @@ class ScrcpyRelaySession:
             except Exception as exc:
                 logger.debug("[%s] ctrl send: %s", self._serial, exc)
 
+    def _request_idr(self) -> None:
+        """
+        Ask scrcpy-server to emit an IDR keyframe NOW. Used by the streaming
+        loop when frames stop arriving — forces decoder re-sync ~200ms instead
+        of tearing down the session. No-op if control socket not connected.
+
+        Wire format: 1 byte message type (_SC_CTRL_RESET_VIDEO). Tied to the
+        bundled scrcpy-server version — see _BUNDLED_JAR_VERSION.
+        """
+        self.send_control(bytes([_SC_CTRL_RESET_VIDEO]))
+
     def is_alive(self) -> bool:
         """True while relay thread is running (not zombie)."""
         t = self._relay_thread
@@ -254,55 +320,93 @@ class ScrcpyRelaySession:
           - Start scrcpy-server once; only restart if it has died.
           - On socket/stream failure, try reconnecting to the EXISTING server first.
           - Kill + restart server only every 3rd consecutive failure (avoids constant churn).
+          - Retry budget is window-based: _MAX_RECONNECTS per _RETRY_WINDOW seconds.
+            Failures outside the window reset the counter → transient flaps don't
+            exhaust the budget over the device's lifetime.
+          - _on_fatal is guaranteed to fire exactly once if the thread ever exits
+            while _running is True — even on unexpected exceptions (try/finally).
         """
         delay = _RECONNECT_BASE
         server_alive = False
+        window_start = time.monotonic()
+        exit_reason: Optional[str] = None
 
-        while self._running:
-            try:
-                # (Re)start server only if it is dead or has never been started.
-                if not server_alive or not self._is_server_running():
-                    self._start_scrcpy_server()
-                    server_alive = True
+        try:
+            while self._running:
+                try:
+                    # (Re)start server only if it is dead or has never been started.
+                    if not server_alive or not self._is_server_running():
+                        self._start_scrcpy_server()
+                        server_alive = True
 
-                # Connect sockets and stream until error or stop.
-                self._connect_and_stream()
+                    # Connect sockets and stream until error or stop.
+                    self._connect_and_stream()
 
-                # Clean exit — reset counters.
-                delay = _RECONNECT_BASE
-                self._reconnect_count = 0
-                server_alive = self._is_server_running()
+                    # Clean exit — reset counters.
+                    delay = _RECONNECT_BASE
+                    self._reconnect_count = 0
+                    window_start = time.monotonic()
+                    server_alive = self._is_server_running()
 
-            except Exception as exc:
-                if not self._running:
-                    break
-                self._reconnect_count += 1
-                if self._reconnect_count > _MAX_RECONNECTS:
-                    logger.error(
-                        "[%s] scrcpy: max reconnects (%d) exceeded — giving up",
-                        self._serial, _MAX_RECONNECTS,
+                except Exception as exc:
+                    if not self._running:
+                        break
+
+                    # Window-based budget: reset counter if we're past the window.
+                    now = time.monotonic()
+                    if now - window_start > _RETRY_WINDOW:
+                        self._reconnect_count = 0
+                        window_start = now
+
+                    self._reconnect_count += 1
+                    if self._reconnect_count > _MAX_RECONNECTS:
+                        logger.error(
+                            "[%s] scrcpy: max reconnects (%d) exceeded in %.0fs window — giving up",
+                            self._serial, _MAX_RECONNECTS, _RETRY_WINDOW,
+                        )
+                        exit_reason = "runtime_error"
+                        break
+
+                    logger.warning(
+                        "[%s] scrcpy error (attempt %d/%d): %s — retry in %.1fs",
+                        self._serial, self._reconnect_count, _MAX_RECONNECTS, exc, delay,
                     )
-                    if self._on_fatal:
-                        try:
-                            self._on_fatal(self._serial, "runtime_error")
-                        except Exception as cb_exc:
-                            logger.warning("[%s] on_fatal callback failed: %s", self._serial, cb_exc)
-                    break
+                    self._close_sockets()
 
-                logger.warning(
-                    "[%s] scrcpy error (attempt %d/%d): %s — retry in %.1fs",
-                    self._serial, self._reconnect_count, _MAX_RECONNECTS, exc, delay,
-                )
-                self._close_sockets()
+                    # Every 3rd failure force-restart the server (catches hung scrcpy).
+                    if self._reconnect_count % 3 == 0 or not self._is_server_running():
+                        logger.info("[%s] restarting scrcpy-server (attempt %d)", self._serial, self._reconnect_count)
+                        self._kill_server()
+                        server_alive = False
 
-                # Every 3rd failure force-restart the server (catches hung scrcpy).
-                if self._reconnect_count % 3 == 0 or not self._is_server_running():
-                    logger.info("[%s] restarting scrcpy-server (attempt %d)", self._serial, self._reconnect_count)
-                    self._kill_server()
-                    server_alive = False
+                    time.sleep(delay)
+                    delay = min(delay * 2, _RECONNECT_MAX)
 
-                time.sleep(delay)
-                delay = min(delay * 2, _RECONNECT_MAX)
+            # Normal termination path (either stop() called or budget exhausted).
+            if exit_reason is None and self._running:
+                # Loop exited with running=True but no reason — defensive: treat as
+                # runtime_error so the callback can trigger a restart.
+                exit_reason = "runtime_error"
+
+        except BaseException as exc:  # includes KeyboardInterrupt / SystemExit
+            logger.exception("[%s] scrcpy relay thread crashed: %s", self._serial, exc)
+            # Interpreter-shutdown signals are NOT runtime errors — the whole
+            # process is going away, so we must not tell the farm to restart
+            # this session. Leave exit_reason unset in that case.
+            if not isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                exit_reason = "runtime_error"
+            raise
+        finally:
+            # Guarantee the callback fires exactly once if _running is still True
+            # (i.e. we didn't exit via stop()). This is the load-bearing fix —
+            # without try/finally, silent thread exits leave the farm server
+            # unaware that the stream is dead.
+            if exit_reason and not self._callback_fired and self._on_fatal:
+                self._callback_fired = True
+                try:
+                    self._on_fatal(self._serial, exit_reason)
+                except Exception as cb_exc:
+                    logger.warning("[%s] on_fatal callback failed: %s", self._serial, cb_exc)
 
     # ── Server lifecycle ─────────────────────────────────────────────────────
 
@@ -364,10 +468,19 @@ class ScrcpyRelaySession:
             f"send_device_meta=true send_frame_meta=true"
         )
 
+        # Clean env so adb subprocess doesn't spam "MallocStackLogging: process
+        # is not in a debuggable environment …" on every start. Matches the
+        # cleanup done in the _adb() helper.
+        env = os.environ.copy()
+        env.pop("MallocStackLogging", None)
+        env.pop("MallocStackLoggingDirectory", None)
+        env.pop("MallocStackLoggingNoCompact", None)
+
         self._server_proc = subprocess.Popen(
             [_ADB, "-s", self._serial, "shell", server_cmd],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            env=env,
         )
 
         # Log server output in background — critical for diagnosing encoder crashes.
@@ -406,6 +519,10 @@ class ScrcpyRelaySession:
         #    _connect_with_retry retries until scrcpy accepts OR timeout expires.
         video_sock = self._connect_with_retry("127.0.0.1", self._port, timeout=10.0)
         video_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        _enable_tcp_keepalive(video_sock)
+        # Frame-timeout: socket.recv raises socket.timeout after _FRAME_TIMEOUT seconds
+        # of silence. Catches hung streams where TCP is alive but the encoder stalled.
+        # Handshake needs longer grace — temporarily unset, restore before streaming.
         video_sock.settimeout(None)
         self._video_sock = video_sock
 
@@ -414,6 +531,7 @@ class ScrcpyRelaySession:
         if self._enable_control:
             ctrl_sock = self._connect_with_retry("127.0.0.1", self._port, timeout=5.0)
             ctrl_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            _enable_tcp_keepalive(ctrl_sock)
             ctrl_sock.settimeout(None)
             with self._ctrl_lock:
                 self._ctrl_sock = ctrl_sock
@@ -443,10 +561,49 @@ class ScrcpyRelaySession:
         slen     = len(serial_b)
         w, h = self._device_width, self._device_height
 
+        # Two-stage frame recovery:
+        #  1. socket timeout at _IDR_REQUEST_AFTER (~1.5s) — if hit, ask
+        #     scrcpy-server for an IDR keyframe and retry. Fixes the "frozen
+        #     screen" case where the decoder is stuck on a corrupt NAL after
+        #     WiFi packet loss; recovery ~200ms.
+        #  2. if we STILL have no frame _FRAME_TIMEOUT seconds after the last
+        #     good frame → encoder genuinely stalled → raise, outer loop
+        #     reconnects the session.
+        video_sock.settimeout(_IDR_REQUEST_AFTER)
+        last_good_frame = time.monotonic()
+        idr_requested = False
+
+        def _read_header_or_idr() -> bytes:
+            nonlocal last_good_frame, idr_requested
+            while True:
+                try:
+                    return _recvall(video_sock, 12)
+                except socket.timeout:
+                    elapsed = time.monotonic() - last_good_frame
+                    if elapsed >= _FRAME_TIMEOUT:
+                        raise RuntimeError(
+                            f"scrcpy frame timeout ({_FRAME_TIMEOUT:.1f}s) — encoder stalled"
+                        )
+                    if not idr_requested:
+                        self._request_idr()
+                        idr_requested = True
+                        logger.info(
+                            "[%s] scrcpy: %.1fs without frame — requested IDR keyframe",
+                            self._serial, elapsed,
+                        )
+                    # keep waiting; loop continues
+                    continue
+
         while self._running:
-            header = _recvall(video_sock, 12)
+            header = _read_header_or_idr()
             pts_raw, size = struct.unpack(">QI", header)
-            data = _recvall(video_sock, size)
+            try:
+                data = _recvall(video_sock, size)
+            except socket.timeout:
+                raise RuntimeError(f"scrcpy mid-frame timeout ({_IDR_REQUEST_AFTER}s) — encoder stalled mid-NAL")
+
+            last_good_frame = time.monotonic()
+            idr_requested = False
 
             self.last_frame_time = time.monotonic()
 

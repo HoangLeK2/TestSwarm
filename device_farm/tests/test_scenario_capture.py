@@ -293,19 +293,27 @@ class TestStaleFrameGuard:
 
         import logging as _logging
         _log = _logging.getLogger("tasks.scenario_task")
+        _log_capture = _logging.getLogger("tasks.scenario.capture")
+        _log_executor = _logging.getLogger("tasks.scenario.executor")
 
         # Patch time.sleep only (so settle sleep doesn't slow tests) but NOT
         # time.monotonic — the stale-guard deadline uses real monotonic,
         # which ensures the loop exits naturally after stale_wait_ms real ms.
-        with patch("tasks.scenario_task.time.sleep"):
-            with patch("tasks.scenario_task._capture_step_screenshot", return_value={}):
-                with patch("tasks.scenario_task.os.makedirs"):
-                    with patch.dict(os.environ, env_patch, clear=False):
-                        with patch.object(_log, "warning",
-                                          side_effect=lambda m, *a, **kw: warnings_list.append(m)):
-                            with patch.object(_log, "info",
-                                              side_effect=lambda m, *a, **kw: infos_list.append(m)):
-                                run_scenario_task(device=device, scenario=scenario)
+        with patch("tasks.scenario_task.time.sleep"), \
+             patch("tasks.scenario.capture.time.sleep"), \
+             patch("tasks.scenario_task._capture_step_screenshot", return_value={}), \
+             patch("tasks.scenario_task.os.makedirs"), \
+             patch("tasks.scenario.context.os.makedirs"), \
+             patch.dict(os.environ, env_patch, clear=False):
+            _collect_warn = lambda m, *a, **kw: warnings_list.append(m % a if a else m)
+            _collect_info = lambda m, *a, **kw: infos_list.append(m % a if a else m)
+            with patch.object(_log, "warning", side_effect=_collect_warn), \
+                 patch.object(_log, "info", side_effect=_collect_info), \
+                 patch.object(_log_capture, "warning", side_effect=_collect_warn), \
+                 patch.object(_log_capture, "info", side_effect=_collect_info), \
+                 patch.object(_log_executor, "warning", side_effect=_collect_warn), \
+                 patch.object(_log_executor, "info", side_effect=_collect_info):
+                run_scenario_task(device=device, scenario=scenario)
         return warnings_list, infos_list
 
     def test_fresh_frame_no_warning(self):

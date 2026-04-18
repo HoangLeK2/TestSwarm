@@ -15,7 +15,7 @@ import heapq
 import threading
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
@@ -44,7 +44,7 @@ class Task:
     status: TaskStatus = TaskStatus.PENDING
     result: Any = None
     error: Optional[str] = None
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
     cancel_event: threading.Event = field(default_factory=threading.Event)
@@ -155,7 +155,7 @@ class TaskQueue:
 
         if chosen is not None:
             chosen.status = TaskStatus.RUNNING
-            chosen.started_at = datetime.utcnow()
+            chosen.started_at = datetime.now(timezone.utc)
         return chosen
 
     def _peek_pending(self, heap: List[_HeapItem]) -> Optional[Task]:
@@ -245,7 +245,7 @@ class TaskQueue:
         if self._ops_since_cleanup < self._CLEANUP_EVERY:
             return
         self._ops_since_cleanup = 0
-        cutoff = datetime.utcnow() - timedelta(hours=self._TTL_HOURS)
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=self._TTL_HOURS)
         terminal = {TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.CANCELLED}
         stale = [
             tid for tid, t in self._all.items()

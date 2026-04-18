@@ -183,9 +183,9 @@ def main() -> None:
     app.state.dispatcher = Dispatcher(manager, task_queue, config)
 
     # ── 3. Run uvicorn in main thread (owns the event loop) ──────────────
-    # uvloop: 2-4x faster event loop vs asyncio default (C extension, zero-overhead I/O).
-    # Falls back to asyncio if uvloop is not installed.
-    _loop = "uvloop" if not reload_enabled else "auto"
+    # Default to asyncio loop for runtime stability with asyncpg on macOS.
+    # Allow explicit override via FARM_EVENT_LOOP=uvloop when needed.
+    _loop = os.getenv("FARM_EVENT_LOOP", "asyncio").strip().lower() if not reload_enabled else "auto"
     uvicorn.run(
         app,
         host=config.web.host,

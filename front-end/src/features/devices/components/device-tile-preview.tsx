@@ -10,17 +10,17 @@ import { ROUTES } from '@/config/routes';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
+import { Android } from '@/registry/magicui/android';
 import { useTranslations } from 'next-intl';
 import { toast } from 'sonner';
 import { DeviceStepMonitor } from './device-step-monitor';
 import { SHOW_RELAY_SCRCPY_UI_TOGGLE } from '../streaming-ui-flags';
+import { useH264Video } from '../hooks/use-h264-canvas';
 
 interface DeviceTilePreviewProps {
   device: Device;
   /** Server allows MJPEG on grid (/api/config). */
   serverAllowPreviewMjpeg?: boolean;
-  /** User toggled "save bandwidth" in header — disables all grid previews. */
-  saveBandwidth?: boolean;
   /** From GET /api/config — relay scrcpy toggle only in continuous mode. */
   streamingConfig?: DeviceFarmStreamingConfig | null;
 }
@@ -28,7 +28,6 @@ interface DeviceTilePreviewProps {
 export function DeviceTilePreview({
   device,
   serverAllowPreviewMjpeg = true,
-  saveBandwidth = false,
   streamingConfig = null,
 }: DeviceTilePreviewProps) {
   const t = useTranslations('devicesFarm');
@@ -68,23 +67,49 @@ export function DeviceTilePreview({
     return undefined;
   }, [inView]);
 
+  const previewFps = useMemo(() => {
+    const raw = Number(process.env.NEXT_PUBLIC_DEVICE_FARM_PREVIEW_FPS ?? 8);
+    if (!Number.isFinite(raw)) return 8;
+    return Math.max(1, Math.min(15, Math.round(raw)));
+  }, []);
+
   const mjpegUrl = useMemo(() => {
     if (!isActive) return null;
-    const base = `${deviceFarmBackendBase}/stream/${encodeURIComponent(device.serial)}?fps=1`;
+    const base = `${deviceFarmBackendBase}/stream/${encodeURIComponent(device.serial)}?fps=${previewFps}`;
     const token = tokenStorage.getAuthToken();
     return token ? `${base}&token=${encodeURIComponent(token)}` : base;
-  }, [device.serial, isActive]);
+  }, [device.serial, isActive, previewFps]);
 
   const showMjpeg =
     Boolean(mjpegUrl) &&
     serverAllowPreviewMjpeg &&
-    !saveBandwidth &&
     loadStream;
+
+  const screenRatio = useMemo(() => {
+    const sw = device.screen_width || 1080;
+    const sh = device.screen_height || 1920;
+    return sh > 0 ? sw / sh : 9 / 19;
+  }, [device.screen_width, device.screen_height]);
+
+  const mockupSize = useMemo(() => {
+    const h = 620;
+    const w = Math.round(h * (378 / 830)); // keep Android SVG base ratio
+    return { width: w, height: h };
+  }, []);
 
   const isContinuous =
     streamingConfig !== null && streamingConfig.mode === 'continuous';
   const [relayStreamOn, setRelayStreamOn] = useState(true);
   const [relayStreamBusy, setRelayStreamBusy] = useState(false);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [h264Active, setH264Active] = useState(false);
+  const h264TimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const h264WarmupRef = useRef<{ startedAt: number; frames: number }>({ startedAt: 0, frames: 0 });
+
+  const allowH264 =
+    isActive &&
+    loadStream &&
+    (streamingConfig === null || streamingConfig.mode !== 'continuous' || relayStreamOn);
 
   useLayoutEffect(() => {
     if (!streamingConfig || streamingConfig.mode !== 'continuous') return;
@@ -129,6 +154,37 @@ export function DeviceTilePreview({
     [device.serial, isActive, isContinuous, t]
   );
 
+  useH264Video(
+    allowH264 ? device.serial : '',
+    canvasRef,
+    {
+      onFrame: useCallback(() => {
+        const now = Date.now();
+        const warm = h264WarmupRef.current;
+        if (warm.startedAt === 0 || (now - warm.startedAt) > 1500) {
+          warm.startedAt = now;
+          warm.frames = 1;
+        } else {
+          warm.frames += 1;
+        }
+        if (!h264Active && warm.frames >= 4) {
+          setH264Active(true);
+        }
+        if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
+        h264TimeoutRef.current = setTimeout(() => setH264Active(false), 8000);
+      }, [h264Active]),
+    }
+  );
+
+  useEffect(() => {
+    setH264Active(false);
+    h264WarmupRef.current = { startedAt: 0, frames: 0 };
+    if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
+    return () => {
+      if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
+    };
+  }, [device.serial, allowH264]);
+
   return (
     <Card
       id={`tile-${id}`}
@@ -166,30 +222,25 @@ export function DeviceTilePreview({
       </CardHeader>
       <CardContent className='flex flex-1 flex-col gap-2 px-3 pb-3 pt-3'>
         <div className='flex flex-col items-center gap-2'>
-          <div className='relative w-full max-w-[260px]'>
-            <div className='pointer-events-none absolute inset-0 rounded-[1.75rem] border border-border/40 bg-gradient-to-b from-background/40 to-background/80 shadow-[0_18px_40px_rgba(15,23,42,0.55)]' />
-            <div className='relative mx-auto my-2 flex aspect-[9/19] w-full max-w-[240px] items-center justify-center rounded-[1.5rem] border border-border/80 bg-black px-1.5 pb-2 pt-3'>
-              <div className='pointer-events-none absolute left-1/2 top-1.5 flex -translate-x-1/2 items-center gap-1 rounded-full bg-zinc-900 px-4 py-1 shadow-sm'>
-                <span className='h-1.5 w-10 rounded-full bg-zinc-700' />
-                <span className='h-2 w-2 rounded-full bg-zinc-600' />
-              </div>
+          <div className='mx-auto'>
+            <Android
+              width={mockupSize.width}
+              height={mockupSize.height}
+              screenRatio={screenRatio}
+            >
               <div
                 ref={previewZoneRef}
-                className='relative h-full w-full overflow-hidden rounded-xl bg-black'
+                className='relative h-full w-full overflow-hidden bg-black'
               >
                 {isActive && showMjpeg ? (
                   <img
                     src={mjpegUrl!}
                     alt={`${device.brand} ${device.model} preview`}
-                    className='h-full w-full object-contain'
+                    className={`absolute inset-0 h-full w-full object-contain transition-opacity duration-300 ${h264Active ? 'opacity-0' : 'opacity-100'}`}
                   />
                 ) : isActive && !serverAllowPreviewMjpeg ? (
                   <div className='flex h-full w-full items-center justify-center bg-zinc-900 px-2 text-center text-[10px] text-muted-foreground'>
                     {t('previewDisabledByServer')}
-                  </div>
-                ) : isActive && saveBandwidth ? (
-                  <div className='flex h-full w-full items-center justify-center bg-zinc-900 px-2 text-center text-[10px] text-muted-foreground'>
-                    {t('previewSaveBandwidth')}
                   </div>
                 ) : isActive && !loadStream ? (
                   <div className='flex h-full w-full items-center justify-center bg-zinc-900 px-2 text-center text-[10px] text-muted-foreground'>
@@ -200,8 +251,14 @@ export function DeviceTilePreview({
                     {t('deviceInactive')}
                   </div>
                 )}
+                {allowH264 && (
+                  <canvas
+                    ref={canvasRef}
+                    className={`pointer-events-none absolute inset-0 h-full w-full object-contain transition-opacity duration-300 ${h264Active ? 'opacity-100' : 'opacity-0'}`}
+                  />
+                )}
               </div>
-            </div>
+            </Android>
           </div>
         </div>
         {SHOW_RELAY_SCRCPY_UI_TOGGLE &&

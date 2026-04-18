@@ -20,9 +20,9 @@ class ScenarioInput:
     # Scenario-level config: visual_anchor, implicit_wait, etc.
     # Passed through to each activity so 1-step mini-scenarios inherit settings.
     scenario_config: dict[str, Any] = field(default_factory=dict)
-    # Run tracking — set by campaign_dispatch when creating a CampaignRun record
+    # Execution coordinator ID — links to executions table
+    # Legacy: run_id is kept as alias for backward compat with in-flight workflows
     run_id: str | None = None
-    # Execution coordinator ID — links to executions table (DF-011)
     execution_id: str | None = None
 
 
@@ -40,7 +40,7 @@ class StepsInput:
     # Shared execution context: posts, text_nodes, _no_new_streak, vars (legacy ctx)
     context: dict[str, Any] = field(default_factory=dict)
     campaign_id: str | None = None
-    run_id: str | None = None
+    run_id: str | None = None  # Legacy alias for execution_id
     execution_id: str | None = None
     # Accumulates step_results across continue_as_new boundaries so retry/history-reset
     # workflows still return the full result set to the parent ScenarioWorkflow.
@@ -176,6 +176,10 @@ class ExtractInput:
     # Current context — extract mutates posts / text_nodes / _no_new_streak
     context: dict[str, Any] = field(default_factory=dict)
     scenario_config: dict[str, Any] = field(default_factory=dict)
+    campaign_id: str | None = None
+    run_id: str | None = None  # Legacy alias for execution_id
+    execution_id: str | None = None
+    user_id: str | None = None
 
 
 @dataclass
@@ -199,5 +203,6 @@ class SaveExtractionInput:
     # Context carries posts / text_nodes collected so far
     context: dict[str, Any] = field(default_factory=dict)
     campaign_id: str | None = None
-    run_id: str | None = None
+    run_id: str | None = None  # Legacy alias for execution_id
     execution_id: str | None = None
+    user_id: str | None = None

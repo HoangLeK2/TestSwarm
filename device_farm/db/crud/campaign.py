@@ -13,7 +13,6 @@ async def create_campaign(
     name: str,
     user_id: str,
     description: str = "",
-    scenario: dict | None = None,
     variables: dict | None = None,
     target_group_id: str | None = None,
 ) -> Campaign:
@@ -21,7 +20,6 @@ async def create_campaign(
         name=name,
         user_id=user_id,
         description=description,
-        scenario=scenario or {},
         variables=variables or {},
         target_group_id=target_group_id,
     )

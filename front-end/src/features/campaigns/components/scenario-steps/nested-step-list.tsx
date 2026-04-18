@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import { useTranslations } from 'next-intl';
 import {
   type FlowStep,
   isControlFlow,
@@ -38,14 +39,15 @@ function ActionStepFields({
   step: FlowStep;
   onChange: (field: string, value: any) => void;
 }) {
+  const t = useTranslations('campaignsFeature.scenarioStepsInline');
   switch (step.type) {
     case 'launch_app':
       return (
-        <input className={`${inputCls} w-48`} placeholder='com.example.app' value={step.package ?? ''} onChange={(e) => onChange('package', e.target.value)} />
+        <input className={`${inputCls} w-48`} placeholder={t('placeholder.package')} value={step.package ?? ''} onChange={(e) => onChange('package', e.target.value)} />
       );
     case 'open_url':
       return (
-        <input className={`${inputCls} flex-1`} placeholder='https://...' value={step.url ?? ''} onChange={(e) => onChange('url', e.target.value)} />
+        <input className={`${inputCls} flex-1`} placeholder={t('placeholder.url')} value={step.url ?? ''} onChange={(e) => onChange('url', e.target.value)} />
       );
     case 'wait':
       return (
@@ -76,20 +78,20 @@ function ActionStepFields({
           <select className={`${inputCls} w-24`} value={step.by ?? 'resource-id'} onChange={(e) => onChange('by', e.target.value)}>
             {['text', 'resource-id', 'xpath', 'class name'].map((o) => <option key={o} value={o}>{o}</option>)}
           </select>
-          <input className={`${inputCls} w-28`} placeholder='selector' value={step.value ?? ''} onChange={(e) => onChange('value', e.target.value)} />
-          <input className={`${inputCls} flex-1 min-w-[80px]`} placeholder='text to input' value={step.text ?? ''} onChange={(e) => onChange('text', e.target.value)} />
+          <input className={`${inputCls} w-28`} placeholder={t('placeholder.selector')} value={step.value ?? ''} onChange={(e) => onChange('value', e.target.value)} />
+          <input className={`${inputCls} flex-1 min-w-[80px]`} placeholder={t('placeholder.textToInput')} value={step.text ?? ''} onChange={(e) => onChange('text', e.target.value)} />
         </div>
       );
     case 'input_text':
       return (
-        <input className={`${inputCls} flex-1`} placeholder='text to input' value={step.text ?? ''} onChange={(e) => onChange('text', e.target.value)} />
+        <input className={`${inputCls} flex-1`} placeholder={t('placeholder.textToInput')} value={step.text ?? ''} onChange={(e) => onChange('text', e.target.value)} />
       );
     case 'set_variable':
       return (
         <div className='flex gap-1'>
-          <input className={`${inputCls} w-24 font-mono`} placeholder='VAR_NAME' value={step.name ?? ''} onChange={(e) => onChange('name', e.target.value)} />
+          <input className={`${inputCls} w-24 font-mono`} placeholder={t('placeholder.varName')} value={step.name ?? ''} onChange={(e) => onChange('name', e.target.value)} />
           <span className='text-[11px] text-muted-foreground'>=</span>
-          <input className={`${inputCls} flex-1`} placeholder='value or ${__BUILTIN__}' value={step.value ?? ''} onChange={(e) => onChange('value', e.target.value)} />
+          <input className={`${inputCls} flex-1`} placeholder={t('placeholder.valueOrBuiltin')} value={step.value ?? ''} onChange={(e) => onChange('value', e.target.value)} />
         </div>
       );
     case 'scroll_down':
@@ -100,7 +102,7 @@ function ActionStepFields({
           <input
             className={`${inputCls} min-w-0 flex-1 font-mono`}
             placeholder='0.18'
-            title='start_x_ratio — neo trái, tránh mở ảnh full-width'
+            title={t('startXRatioTitle')}
             value={step.start_x_ratio != null ? String(step.start_x_ratio) : ''}
             onChange={(e) => {
               const v = e.target.value.trim();
@@ -120,7 +122,7 @@ function ActionStepFields({
       );
     case 'key':
       return (
-        <input className={`${inputCls} w-24`} placeholder='enter/back/home' value={step.key ?? ''} onChange={(e) => onChange('key', e.target.value)} />
+        <input className={`${inputCls} w-24`} placeholder={t('placeholder.key')} value={step.key ?? ''} onChange={(e) => onChange('key', e.target.value)} />
       );
     default:
       return null;
@@ -148,9 +150,10 @@ function StepRow({
   onMove: (dir: -1 | 1) => void;
   totalSiblings: number;
 }) {
+  const t = useTranslations('campaignsFeature.scenarioStepsInline');
   const [collapsed, setCollapsed] = useState(false);
   const controlFlow = isControlFlow(step.type);
-  const icon = getStepIcon(step.type);
+  const Icon = getStepIcon(step.type);
 
   const updateField = useCallback(
     (field: string, value: any) => {
@@ -231,7 +234,9 @@ function StepRow({
         )}
 
         {/* Icon + number */}
-        <span className='text-sm' title={step.type}>{icon}</span>
+        <span className='text-sm' title={step.type}>
+          <Icon size={14} className='inline-block align-middle' />
+        </span>
         <span className='text-[10px] font-mono text-muted-foreground'>{prefix}</span>
 
         {/* Type selector */}
@@ -240,17 +245,17 @@ function StepRow({
           value={step.type}
           onChange={(e) => handleTypeChange(e.target.value)}
         >
-          <optgroup label='Actions'>
+          <optgroup label={t('group.actions')}>
             {ALL_STEP_TYPES.filter((t) => t.group === 'action').map((t) => (
               <option key={t.value} value={t.value}>{t.label}</option>
             ))}
           </optgroup>
-          <optgroup label='Variables'>
+          <optgroup label={t('group.variables')}>
             {ALL_STEP_TYPES.filter((t) => t.group === 'variable').map((t) => (
               <option key={t.value} value={t.value}>{t.label}</option>
             ))}
           </optgroup>
-          <optgroup label='Control Flow'>
+          <optgroup label={t('group.controlFlow')}>
             {ALL_STEP_TYPES.filter((t) => t.group === 'control').map((t) => (
               <option key={t.value} value={t.value}>{t.label}</option>
             ))}
@@ -290,7 +295,7 @@ function StepRow({
               onChange={(s) => updateSubSteps('steps', s)}
               depth={depth + 1}
               parentPrefix={prefix}
-              label='steps'
+              label={t('stepsLabel')}
             />
           )}
 
@@ -302,14 +307,14 @@ function StepRow({
                 onChange={(s) => updateSubSteps('then', s)}
                 depth={depth + 1}
                 parentPrefix={prefix}
-                label='then'
+                label={t('thenLabel')}
               />
               <NestedStepList
                 steps={step.else ?? []}
                 onChange={(s) => updateSubSteps('else', s)}
                 depth={depth + 1}
                 parentPrefix={prefix}
-                label='else'
+                label={t('elseLabel')}
               />
             </>
           )}
@@ -328,9 +333,9 @@ function StepRow({
                 <div key={bi} className='rounded border border-dashed p-1'>
                   <div className='flex items-center gap-2 px-1 pb-1'>
                     <span className='text-[10px] font-medium text-muted-foreground'>
-                      Branch {String.fromCharCode(65 + bi)}
+                      {t('branchLabel', { name: String.fromCharCode(65 + bi) })}
                     </span>
-                    <span className='text-[10px] text-muted-foreground'>weight:</span>
+                    <span className='text-[10px] text-muted-foreground'>{t('weightLabel')}</span>
                     <input
                       type='number'
                       min={1}
@@ -357,7 +362,7 @@ function StepRow({
               ))}
               <Button type='button' size='sm' variant='ghost' className='h-6 text-[10px]' onClick={addBranch}>
                 <Plus size={10} className='mr-1' />
-                Add branch
+                {t('addBranch')}
               </Button>
             </div>
           )}
@@ -382,6 +387,7 @@ export function NestedStepList({
   parentPrefix?: string;
   label?: string;
 }) {
+  const t = useTranslations('campaignsFeature.scenarioStepsInline');
   const addStep = useCallback(
     (type = 'wait') => {
       onChange([...steps, createDefaultStep(type)]);
@@ -438,7 +444,7 @@ export function NestedStepList({
       ))}
       <Button type='button' size='sm' variant='ghost' className='h-6 text-[10px] text-muted-foreground' onClick={() => addStep()}>
         <Plus size={10} className='mr-1' />
-        {depth === 0 ? 'Add step' : 'Add'}
+        {depth === 0 ? t('addStep') : t('add')}
       </Button>
     </div>
   );

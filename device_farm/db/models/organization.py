@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.database import Base
@@ -18,6 +18,12 @@ class Organization(Base):
     business_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     business_logo: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    # Webhook config: POST to webhook_url on task complete/failed events.
+    # webhook_events: comma-separated list e.g. "task.complete,task.failed"
+    webhook_url: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True)
+    webhook_secret: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    webhook_events: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, default="task.failed")
 
     members: Mapped[list["OrganizationMember"]] = relationship(
         "OrganizationMember", back_populates="organization", cascade="all, delete-orphan"

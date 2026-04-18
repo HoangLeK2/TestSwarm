@@ -5,10 +5,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, JSON, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.database import Base
+from .enums import ExecutionStatus, ExecutionResultStatus
 from .utils import _now, _uuid
 
 
@@ -49,12 +50,12 @@ class Execution(Base):
         Index("idx_executions_scenario", "scenario_id"),
         Index("idx_executions_user", "user_id"),
         Index("idx_executions_created", "created_at"),
+        Index("idx_executions_sv", "scenario_version_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     run_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    # pending | running | completed | failed | cancelled
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default=ExecutionStatus.PENDING)
 
     # 1-1 optional FK references
     campaign_id: Mapped[Optional[str]] = mapped_column(
@@ -62,6 +63,9 @@ class Execution(Base):
     )
     scenario_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("scenarios.id", ondelete="SET NULL"), nullable=True
+    )
+    scenario_version_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("scenario_versions.id", ondelete="SET NULL"), nullable=True
     )
 
     # Behaviour configuration
@@ -81,9 +85,13 @@ class Execution(Base):
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # Scenario executor resumes from this index on restart (steps must be idempotent).
+    checkpoint_step: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
     # Relationships
     campaign: Mapped[Optional["Campaign"]] = relationship("Campaign")
     scenario: Mapped[Optional["Scenario"]] = relationship("Scenario")
+    scenario_version: Mapped[Optional["ScenarioVersion"]] = relationship("ScenarioVersion")
     execution_devices: Mapped[list["ExecutionDevice"]] = relationship(
         "ExecutionDevice", back_populates="execution", cascade="all, delete-orphan"
     )
@@ -119,8 +127,7 @@ class ExecutionResult(Base):
         String(36), ForeignKey("devices.id", ondelete="CASCADE"), nullable=False
     )
 
-    # pending | running | passed | failed | error
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default=ExecutionResultStatus.PENDING)
     run_time_sec: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     passed_steps: Mapped[list] = mapped_column(JSON, default=list)
     failed_steps: Mapped[list] = mapped_column(JSON, default=list)

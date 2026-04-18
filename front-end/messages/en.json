@@ -108,6 +108,44 @@
         "confirm": "Confirm",
         "cancel": "Cancel"
       }
+    },
+    "variableEditor": {
+      "listInputPlaceholder": "Type value, press Enter to add...",
+      "listEmpty": "Empty list",
+      "types": {
+        "string": "String",
+        "number": "Number",
+        "list": "List"
+      },
+      "quickGuide": {
+        "title": "Quick guide",
+        "step1": "1) Create variables with meaningful names (e.g. username, password).",
+        "step2": "2) Choose the right data type (String, Number, List).",
+        "step3Prefix": "3) Reuse variables in steps with syntax"
+      },
+      "columns": {
+        "variableName": "Variable",
+        "type": "Type",
+        "value": "Value"
+      },
+      "keyPlaceholder": "e.g. username",
+      "valuePlaceholderNumber": "e.g. 3",
+      "valuePlaceholderString": "e.g. nguyen@gmail.com",
+      "valuePlaceholderStringWithRef": "e.g. nguyen@gmail.com or ${key}",
+      "emptyTitle": "No variables yet.",
+      "emptyHintPrefix": "Use variables in scenarios with syntax",
+      "addVariable": "Add variable",
+      "builtinsTitle": "Built-in system variables",
+      "builtins": {
+        "now": "Current ISO timestamp",
+        "date": "YYYY-MM-DD",
+        "time": "HH:MM:SS",
+        "deviceSerial": "Current running device serial",
+        "deviceModel": "Device model",
+        "randomInt": "Random number 1-100",
+        "randomUuid": "UUID v4",
+        "stepIndex": "Current step index"
+      }
     }
   },
   "navigation": {
@@ -354,7 +392,14 @@
       "targetGroupLabel": "Target Device Group",
       "targetGroupPlaceholder": "Select a device group...",
       "noGroup": "No group (all devices)",
-      "variablesLabel": "Variables"
+      "variablesLabel": "Variables",
+      "platformLabel": "Social Platform",
+      "platformFacebook": "Facebook",
+      "platformInstagram": "Instagram",
+      "platformTiktok": "TikTok",
+      "platformLinkedin": "LinkedIn",
+      "platformHint": "Campaign run uses this platform to resolve device accounts and extraction defaults.",
+      "accountModeHint": "Account strategy: backend uses primary account per device for the selected platform."
     },
     "list": {
       "statusIdle": "Idle",
@@ -390,6 +435,14 @@
       "cancellingAll": "Cancelling {count} workflow(s)…",
       "titleLivePreview": "View running device screen",
       "liveDialogTitle": "Live device preview",
+      "titleMonitor": "Monitor",
+      "monitorTooltip": "Track progress",
+      "monitorTitle": "Monitor — {campaign}",
+      "monitorStatusRunning": "RUNNING",
+      "monitorStatusIdle": "MONITOR",
+      "monitorNotRunningMessage": "Campaign is not running — showing latest artifacts and DLQ.",
+      "monitorTemporalUnavailableMessage": "Temporal is not enabled — step-by-step monitoring is unavailable.",
+      "monitorNoRunningWorkflowsMessage": "No workflow is currently running.",
       "wfRunning": "{count} running",
       "wfPaused": "{count} paused",
       "wfFailed": "{count} failed",
@@ -438,6 +491,11 @@
       "helper": "Single add: click plus button. Multi add: tick checkboxes then click \"Add selected\". \"Select all\" then add = add all."
     },
     "stepEditor": {
+      "variableInsert": {
+        "placeholder": "Insert variable...",
+        "availableVariables": "Available variables",
+        "builtinVariables": "Built-in variables"
+      },
       "extract": {
         "strategyFbPosts": "Facebook posts",
         "strategyFbComments": "Facebook comments",
@@ -487,6 +545,41 @@
         "itemLevelPost": "0 - Post",
         "itemLevelComment": "1 - Comment",
         "itemLevelReply": "2 - Reply"
+      }
+    },
+    "scenarioStepsInline": {
+      "group": {
+        "actions": "Actions",
+        "variables": "Variables",
+        "controlFlow": "Control Flow"
+      },
+      "placeholder": {
+        "package": "com.example.app",
+        "url": "https://...",
+        "selector": "selector",
+        "textToInput": "text to input",
+        "varName": "VAR_NAME",
+        "valueOrBuiltin": "value or ${__BUILTIN__}",
+        "key": "enter/back/home"
+      },
+      "startXRatioTitle": "start_x_ratio - left anchor to avoid opening full-width images",
+      "branchLabel": "Branch {name}",
+      "weightLabel": "weight:",
+      "addBranch": "Add branch",
+      "addStep": "Add step",
+      "add": "Add",
+      "stepsLabel": "steps",
+      "thenLabel": "then",
+      "elseLabel": "else",
+      "runScenario": {
+        "scenarioLabel": "scenario:",
+        "selectScenario": "-- select scenario --",
+        "campaignScenarios": "Campaign Scenarios",
+        "sharedTemplates": "Shared Templates",
+        "orNameLabel": "or name:",
+        "scenarioNamePlaceholder": "scenario_name",
+        "variableOverrides": "variable overrides (optional):",
+        "preview": "Preview ({count} steps)"
       }
     }
   },
@@ -591,7 +684,27 @@
       "tooltipDeleteStep": "Remove step",
       "tooltipScenarioSection": "Scenario steps: actions, waits, branches. Add steps via + or the bottom menu.",
       "tooltipSelectorBar": "Selector for manual Tap and when picking from the UI tree. It syncs while assigning a selector to a step.",
-      "tooltipHierarchyPanel": "Widget tree from the current UI dump. Click a row to highlight on the mirror and fill the selector; use search to filter."
+      "tooltipHierarchyPanel": "Widget tree from the current UI dump. Click a row to highlight on the mirror and fill the selector; use search to filter.",
+      "emptyNodePicker": {
+        "title": "Choose a node to start",
+        "subtitle": "Add steps directly from here to start building the scenario.",
+        "sectionInteraction": "Interaction",
+        "sectionFlow": "Flow",
+        "tapSelector": "Tap selector",
+        "longTap": "Long tap",
+        "inputText": "Input text",
+        "assertElement": "Assert element",
+        "tapRatio": "Tap by ratio",
+        "swipe": "Swipe",
+        "keyPress": "Key press",
+        "setVariable": "Set variable",
+        "waitSeconds": "Wait (seconds)",
+        "waitElement": "Wait element",
+        "ifElement": "If element",
+        "ifVariable": "If variable",
+        "repeatN": "Repeat N times",
+        "repeatUntil": "Repeat until"
+      }
     },
     "controls": {
       "tapMode": "Tap mode",

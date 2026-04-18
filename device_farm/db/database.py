@@ -53,7 +53,9 @@ engine = create_async_engine(
     echo=False,
     pool_size=10,
     max_overflow=20,
-    pool_pre_ping=True,
+    # NOTE: keep pre_ping off for asyncpg stability on some macOS builds.
+    # We rely on normal query retry/error handling instead of ping-on-checkout.
+    pool_pre_ping=False,
 )
 
 AsyncSessionLocal = async_sessionmaker(

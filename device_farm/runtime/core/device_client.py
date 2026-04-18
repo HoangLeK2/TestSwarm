@@ -409,6 +409,15 @@ class DeviceClient:
         # Discard stale u2 client — its tunnel port is dead after agent reconnect.
         with self._u2_lock:
             self._u2 = None
+        # Discard stale STF client too. Its reconnect loop otherwise keeps dialing
+        # the previous local tunnel port after fast WS reconnects.
+        stale_stf = self._stf_service
+        if stale_stf is not None:
+            try:
+                stale_stf.stop_client()
+            except Exception:
+                pass
+            self._stf_service = None
         # Stop prior TunnelSet before binding a new one. On fast WS reconnect,
         # on_agent_disconnected(sender=...) may skip teardown (new _agent_send
         # already replaced) — leaving zombie accept threads that still hit the old
@@ -1462,10 +1471,19 @@ class DeviceClient:
         # queryIntentActivities fallback).  Do NOT use am start via shell here —
         # Runtime.exec() from app UID (non-shell) is blocked by assertPackageMatchesCallingUid
         # on Android 12+ (SecurityException: package=com.android.shell does not belong to uid).
-        payload: Dict[str, Any] = {"type": "launch_app", "package": pkg}
+        send = self._agent_send
+        if send is None:
+            raise RuntimeError(
+                f"launch_app: no control channel available for serial={self.serial} "
+                "(adb relay/u2 unavailable, agent disconnected)"
+            )
+        payload: Dict[str, Any] = {"type": "launch_app", "package": pkg, "serial": self.serial}
         if comp:
             payload["component"] = comp
-        self._send_to_agent(payload)
+        try:
+            send(payload)
+        except Exception as exc:
+            raise RuntimeError(f"launch_app: agent send failed: {exc}") from exc
 
     def open_url(self, url: str, package: str | None = None) -> None:
         """
@@ -1495,6 +1513,18 @@ class DeviceClient:
             if self._ws_hierarchy_a11y_available:
                 self._log("a11y not available on device — using u2 fallback for hierarchy", level=logging.WARNING)
                 self._ws_hierarchy_a11y_available = False
+            # Auto-heal path: when a11y is unavailable, proactively ensure u2 is up
+            # so hierarchy/controls can continue via fallback without manual actions.
+            if self._agent_send is not None:
+                now_mono = time.monotonic()
+                last_req = float(getattr(self, "_a11y_recover_requested_at", 0.0) or 0.0)
+                if (now_mono - last_req) >= 10.0:
+                    setattr(self, "_a11y_recover_requested_at", now_mono)
+                    try:
+                        self._send_to_agent({"type": "start_services", "services": ["u2"]})
+                        self._log("a11y unavailable: requested agent start_services[u2]", level=logging.INFO)
+                    except Exception as exc:
+                        self._log(f"a11y unavailable: start_services[u2] request failed: {exc}", level=logging.WARNING)
         elif xml:
             self._ws_hierarchy_a11y_available = True  # re-enable if it starts working
         self._ws_hierarchy_event.set()
@@ -1507,7 +1537,14 @@ class DeviceClient:
             data = q.get("data") or {}
             xml = data.get("xml") if isinstance(data, dict) else None
             if xml:
+                self._log(f"a11y dump_hierarchy ok xml_len={len(str(xml))}", level=logging.INFO)
                 return str(xml)
+            self._log("a11y dump_hierarchy ok but empty xml", level=logging.WARNING)
+        else:
+            self._log(
+                f"a11y dump_hierarchy failed: {q.get('error') or 'unknown'}",
+                level=logging.WARNING,
+            )
         if self._agent_send is None:
             return None
         self._ws_hierarchy_xml = None
@@ -1554,8 +1591,9 @@ class DeviceClient:
                 return xml
 
             # Fallback: a11y query / WS direct.
-            # Only try WS direct if a11y was previously healthy to avoid spam.
-            if self._agent_send is not None and self._ws_hierarchy_a11y_available:
+            # Always retry when agent channel exists so we can auto-recover
+            # after transient a11y/u2 outages without requiring reconnect.
+            if self._agent_send is not None:
                 xml = self._hierarchy_via_ws(timeout=5.0)
                 if xml and not self._is_empty_hierarchy(xml):
                     self._log(f"hierarchy: route=a11y bytes={len(xml)}", level=logging.DEBUG)
@@ -3088,6 +3126,36 @@ class DeviceClient:
                 self.airplane_mode = enabled
                 self._publish_status()
 
+            def _on_stf_stream_error(exc: Exception) -> None:
+                """
+                Auto-heal when STF socket keeps refusing connections.
+                App UI may still be visible while the background socket server is down.
+                """
+                if self._agent_send is None:
+                    return
+                msg = str(exc or "")
+                is_refused = (
+                    "Connection refused" in msg
+                    or "Errno 61" in msg
+                    or isinstance(exc, ConnectionRefusedError)
+                )
+                if not is_refused:
+                    return
+                now = time.monotonic()
+                last = float(getattr(self, "_stf_heal_requested_at", 0.0) or 0.0)
+                if (now - last) < 20.0:
+                    return
+                self._log("STFService socket refused — requesting STF app restart via agent shell", level=logging.WARNING)
+                try:
+                    self._send_to_agent({"type": "shell", "cmd": "am force-stop jp.co.cyberagent.stf || true"})
+                    self._send_to_agent({
+                        "type": "shell",
+                        "cmd": "am start -n jp.co.cyberagent.stf/.IdentityActivity -a android.intent.action.MAIN",
+                    })
+                    setattr(self, "_stf_heal_requested_at", now)
+                except Exception as shell_exc:
+                    self._log(f"STFService auto-heal shell request failed: {shell_exc}", level=logging.WARNING)
+
             svc = STFServiceClient(
                 serial=self.serial,
                 host="127.0.0.1",
@@ -3096,6 +3164,7 @@ class DeviceClient:
                 on_rotation=_on_rotation,
                 on_connectivity=_on_connectivity,
                 on_airplane=_on_airplane,
+                on_stream_error=_on_stf_stream_error,
             )
             svc.start_client()
             self._stf_service = svc

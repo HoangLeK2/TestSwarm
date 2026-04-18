@@ -74,12 +74,13 @@ class _MockDevice:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestTemporalFallback:
-    """campaign_fleet router uses TaskQueue when temporal.enabled=False."""
+    """campaign_fleet router behavior when Temporal availability changes."""
 
     @pytest.mark.anyio
     async def test_temporal_disabled_calls_taskqueue(self):
-        """When temporal.enabled=False, enqueue_campaign_run (TaskQueue) is called directly."""
+        """When temporal.enabled=False, route rejects campaign run (503)."""
         from core.config import Config, TemporalConfig, DatabaseConfig
+        from fastapi.responses import JSONResponse
 
         config = Config()
         config.temporal = TemporalConfig(enabled=False)
@@ -89,13 +90,13 @@ class TestTemporalFallback:
         manager = MagicMock()
 
         with patch(
-            "api.routes.device_control.campaign_fleet.enqueue_campaign_run",
-            new_callable=AsyncMock,
-            return_value=({"id": "c1", "status": "running"}, 200),
-        ) as mock_tq, patch(
             "api.routes.device_control.campaign_fleet.enqueue_campaign_run_temporal",
             new_callable=AsyncMock,
-        ) as mock_temporal:
+        ) as mock_temporal, patch(
+            "api.routes.device_control.campaign_fleet.repo.get_campaign",
+            new_callable=AsyncMock,
+            return_value=MagicMock(user_id="u1"),
+        ):
             from api.routes.device_control.campaign_fleet import build_campaign_fleet_router
             router = build_campaign_fleet_router(manager, queue, config)
 
@@ -107,15 +108,17 @@ class TestTemporalFallback:
                     break
             assert handler is not None
 
-            result = await handler("c1")
+            result = await handler("c1", db=AsyncMock(), user=MagicMock(id="u1"))
 
-            mock_tq.assert_called_once_with("c1", queue)
+            assert isinstance(result, JSONResponse)
+            assert result.status_code == 503
             mock_temporal.assert_not_called()
 
     @pytest.mark.anyio
     async def test_temporal_enabled_but_fails_fallback_to_taskqueue(self):
-        """When temporal.enabled=True but Temporal raises, falls back to TaskQueue."""
+        """When temporal.enabled=True but Temporal raises, route returns 500."""
         from core.config import Config, TemporalConfig, DatabaseConfig
+        from fastapi.responses import JSONResponse
 
         config = Config()
         config.temporal = TemporalConfig(enabled=True, server_url="localhost:9999")
@@ -129,10 +132,10 @@ class TestTemporalFallback:
             new_callable=AsyncMock,
             side_effect=ConnectionRefusedError("temporal not running"),
         ), patch(
-            "api.routes.device_control.campaign_fleet.enqueue_campaign_run",
+            "api.routes.device_control.campaign_fleet.repo.get_campaign",
             new_callable=AsyncMock,
-            return_value=({"id": "c1", "status": "running"}, 200),
-        ) as mock_tq:
+            return_value=MagicMock(user_id="u1"),
+        ):
             from api.routes.device_control.campaign_fleet import build_campaign_fleet_router
             router = build_campaign_fleet_router(manager, queue, config)
 
@@ -142,8 +145,9 @@ class TestTemporalFallback:
                     handler = route.endpoint
                     break
 
-            result = await handler("c1")
-            mock_tq.assert_called_once_with("c1", queue)
+            result = await handler("c1", db=AsyncMock(), user=MagicMock(id="u1"))
+            assert isinstance(result, JSONResponse)
+            assert result.status_code == 500
 
     @pytest.mark.anyio
     async def test_database_disabled_returns_503(self):
@@ -167,7 +171,12 @@ class TestTemporalFallback:
                 handler = route.endpoint
                 break
 
-        result = await handler("c1")
+        with patch(
+            "api.routes.device_control.campaign_fleet.repo.get_campaign",
+            new_callable=AsyncMock,
+            return_value=MagicMock(user_id="u1"),
+        ):
+            result = await handler("c1", db=AsyncMock(), user=MagicMock(id="u1"))
         assert isinstance(result, JSONResponse)
         assert result.status_code == 503
 

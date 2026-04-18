@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import struct
 from typing import Any, Optional
 
@@ -232,6 +233,9 @@ async def start_grpc_server(
     relay_manager: Any,
     api_key: Optional[str] = None,
     port: int = 50051,
+    tls_cert_file: str = "",
+    tls_key_file: str = "",
+    allow_insecure: bool = True,
 ) -> Any:
     """Start gRPC relay server. Returns the server object (call stop() on shutdown)."""
     server = aio.server(
@@ -254,7 +258,25 @@ async def start_grpc_server(
     relay_pb2_grpc.add_RelayServiceServicer_to_server(
         RelayServicer(relay_manager, api_key), server
     )
-    server.add_insecure_port(f"[::]:{port}")
+    env_name = os.environ.get("DEVICE_FARM_ENV", "").strip().lower()
+    is_prod_like = env_name in {"prod", "production", "staging"}
+    tls_ready = bool(tls_cert_file and tls_key_file)
+
+    if tls_ready:
+        with open(tls_key_file, "rb") as key_file, open(tls_cert_file, "rb") as cert_file:
+            key_bytes = key_file.read()
+            cert_bytes = cert_file.read()
+        server_credentials = grpc.ssl_server_credentials(((key_bytes, cert_bytes),))
+        server.add_secure_port(f"[::]:{port}", server_credentials)
+        log.info("gRPC relay server uses TLS on port %d", port)
+    else:
+        if is_prod_like and not allow_insecure:
+            raise RuntimeError(
+                "Refusing insecure gRPC relay in production/staging. "
+                "Set relay.tls_cert_file + relay.tls_key_file or explicitly enable allow_insecure_grpc."
+            )
+        server.add_insecure_port(f"[::]:{port}")
+        log.warning("gRPC relay server is running WITHOUT TLS on port %d", port)
     await server.start()
     log.info("gRPC relay server listening on port %d", port)
     return server

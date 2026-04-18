@@ -1653,7 +1653,7 @@ def _cluster_into_comments(nodes: List[Dict[str, Any]]) -> List[List[Dict[str, A
     clusters: List[List[Dict]] = []
     current: List[Dict] = [nodes[0]]
     prev_cy = nodes[0]["cy"]
-    pending_footer = Falsex
+    pending_footer = False
 
     def _inline_comment_footer_row(text: str, footer_gap: float) -> bool:
         tt = text.strip()

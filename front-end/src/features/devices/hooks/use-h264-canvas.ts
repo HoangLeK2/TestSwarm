@@ -13,7 +13,7 @@
  */
 
 import { useEffect, useRef } from 'react';
-import { subscribeBinaryFrames, getLastConfigFrame, getLastKeyFrame } from '../services/ws';
+import { subscribeBinaryFrames, getLastConfigFrame, getLastKeyFrame, subscribeDeviceFarm } from '../services/ws';
 import { WebGLRenderer } from '../lib/webgl-renderer';
 
 export function useH264Video(
@@ -37,6 +37,7 @@ export function useH264Video(
   const onFrameRef = useRef(opts?.onFrame);
   const onStatsRef = useRef(opts?.onStats);
   const serialRef  = useRef(serial);
+  const wsConnectedRef = useRef(false);
 
   onFrameRef.current = opts?.onFrame;
   onStatsRef.current = opts?.onStats;
@@ -50,7 +51,7 @@ export function useH264Video(
       return;
     }
 
-    const worker = new Worker('/h264-worker.js?v=18');
+    const worker = new Worker('/h264-worker.js?v=19');
     workerRef.current = worker;
 
     const drawLatest = () => {
@@ -167,15 +168,10 @@ export function useH264Video(
   // ── Reset when serial changes, then immediately replay cached config+IDR ──
   // Without replay, the worker sits with decoder=null until the next live IDR
   // (3-14 s depending on device). With replay, it decodes within ~50 ms.
-  useEffect(() => {
-    const w = workerRef.current;
-    if (!w) return;
-
-    w.postMessage({ type: 'reset' });
-    if (!serial) return;
-
+  const replayCachedBootstrap = (w: Worker, serialValue: string) => {
+    if (!serialValue) return;
     // Replay config (SPS/PPS)
-    const cfgBuf = getLastConfigFrame(serial);
+    const cfgBuf = getLastConfigFrame(serialValue);
     if (cfgBuf) {
       let view: DataView;
       try {
@@ -194,7 +190,7 @@ export function useH264Video(
     }
 
     // Replay last keyframe — live P-frames after this IDR remain valid refs
-    const keyBuf = getLastKeyFrame(serial);
+    const keyBuf = getLastKeyFrame(serialValue);
     if (keyBuf) {
       let view: DataView;
       try {
@@ -205,7 +201,7 @@ export function useH264Video(
       const slen = view.getUint8(1);
       const doff = 2 + slen + 4;
       if (keyBuf.byteLength >= doff + 9) {
-        const isKey     = view.getUint8(doff) !== 0;
+        const isKey = view.getUint8(doff) !== 0;
         const ptsHi = view.getUint32(doff + 1, false);
         const ptsLo = view.getUint32(doff + 5, false);
         // Safe-number bound for (hi << 32) | lo within JS Number precision:
@@ -220,5 +216,34 @@ export function useH264Video(
         }
       }
     }
+  };
+
+  useEffect(() => {
+    const w = workerRef.current;
+    if (!w) return;
+
+    w.postMessage({ type: 'reset' });
+    if (!serial) return;
+    replayCachedBootstrap(w, serial);
   }, [serial]);
+
+  // Reconnect warm-up: WS reconnect often leaves decoder on stale refs.
+  // Refresh worked because it recreated hook+worker; do that automatically.
+  useEffect(() => {
+    const unsub = subscribeDeviceFarm((msg) => {
+      if (msg.type !== 'ws_status') return;
+      const next = Boolean(msg.connected);
+      const prev = wsConnectedRef.current;
+      wsConnectedRef.current = next;
+      if (!prev && next) {
+        const w = workerRef.current;
+        const s = serialRef.current;
+        if (!w || !s) return;
+        w.postMessage({ type: 'reset' });
+        // Allow ws.ts cache replay microtask to settle before bootstrap replay.
+        setTimeout(() => replayCachedBootstrap(w, s), 30);
+      }
+    });
+    return () => unsub();
+  }, []);
 }

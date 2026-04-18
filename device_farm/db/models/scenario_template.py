@@ -37,7 +37,7 @@ class ScenarioTemplate(Base):
     tags: Mapped[str] = mapped_column(String(500), default="")
     is_builtin: Mapped[bool] = mapped_column(Boolean, default=False)
     user_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(

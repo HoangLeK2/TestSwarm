@@ -24,6 +24,7 @@ interface Props {
   step: FlowStep;
   index: number;
   selected: boolean;
+  compact?: boolean;
   onClick: () => void;
   onRemove: () => void;
   /** Run this single step on the device. */
@@ -44,6 +45,7 @@ interface Props {
 export function StepCard({
   step,
   selected,
+  compact = false,
   onClick,
   onRemove,
   onRun,
@@ -205,7 +207,10 @@ export function StepCard({
         {onRun && runState !== 'running' && (
           <button
             type='button'
-            className='shrink-0 rounded p-0.5 opacity-0 transition-opacity hover:bg-primary/10 hover:text-primary group-hover:opacity-100'
+            className={cn(
+              'shrink-0 rounded p-0.5 transition-opacity hover:bg-primary/10 hover:text-primary',
+              compact ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
+            )}
             onClick={(e) => { e.stopPropagation(); onRun(); }}
             aria-label='Chạy bước này'
             title='Chạy bước này trên thiết bị'

@@ -263,6 +263,7 @@ class SchedulerService:
             "target_id": schedule.target_id,
             "inline_steps": schedule.inline_steps,
             "inline_variables": schedule.inline_variables or {},
+            "user_id": str(schedule.user_id) if schedule.user_id else None,
             "device_group_id": schedule.device_group_id,
             "filter_state": schedule.filter_state,
             "filter_model": schedule.filter_model,
@@ -510,6 +511,7 @@ class SchedulerEngine:
             "target_id": schedule.target_id,
             "inline_steps": schedule.inline_steps,
             "inline_variables": schedule.inline_variables or {},
+            "user_id": str(schedule.user_id) if schedule.user_id else None,
             "device_group_id": schedule.device_group_id,
             "filter_state": schedule.filter_state,
             "filter_model": schedule.filter_model,
@@ -688,12 +690,16 @@ async def _dispatch_fleet(
         raise RuntimeError("No task queue available")
 
     task_ids: list[str] = []
+    _campaign_vars: dict[str, Any] = {}
+    _user_id = cfg.get("user_id")
+    if _user_id:
+        _campaign_vars["__USER_ID__"] = str(_user_id)
     for i, device in enumerate(devices):
         delay = i * stagger_interval if stagger else 0
         payload = {
             "steps": steps,
             "variables": variables,
-            "_campaign_vars": {},
+            "_campaign_vars": _campaign_vars,
             "_scenario_registry": registry,
         }
         task = Task(

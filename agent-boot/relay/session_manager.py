@@ -18,10 +18,12 @@ from relay.scrcpy_relay import ScrcpyRelaySession
 
 logger = logging.getLogger("relay.session_mgr")
 
-SESSION_TTL     = 300   # seconds — kill idle sessions after 5 minutes
+SESSION_TTL     = 60    # seconds — kill sessions that went stale (no frames) for 1 minute.
+                        # Frame-timeout in scrcpy_relay._connect_and_stream (5s) normally
+                        # catches stalls first; this sweep is the safety net.
 ZOMBIE_TIMEOUT  = 10    # seconds — relay thread must be alive within this after start
 MAX_SESSIONS    = 48    # max concurrent scrcpy sessions per relay agent
-CLEANUP_INTERVAL = 30   # seconds between cleanup sweeps
+CLEANUP_INTERVAL = 15   # seconds between cleanup sweeps (halved from 30 to match lower TTL)
 
 
 class ScrcpySessionManager:
@@ -75,6 +77,19 @@ class ScrcpySessionManager:
             logger.info("stopping all %d sessions on stream disconnect", len(serials))
         for serial in serials:
             await self.stop_session(serial, reason="manual_stop")
+
+    async def stop_all_for_serial(self, serial: str, reason: str = "device_offline") -> None:
+        """
+        Stop every session for one serial. Idempotent.
+
+        Used by the device-offline cascade in RelayAgent._on_device_event: when a
+        device disappears, we must tear down scrcpy cleanly or the relay thread
+        will keep reconnecting for minutes until the retry budget exhausts.
+        """
+        if serial in self._sessions:
+            await self.stop_session(serial, reason=reason)
+        # Drop any pending fatal-during-start marker — device is gone.
+        self._fatal_during_start.pop(serial, None)
 
     # ── Session API ───────────────────────────────────────────────────────────
 

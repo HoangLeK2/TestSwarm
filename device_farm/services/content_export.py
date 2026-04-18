@@ -5,7 +5,7 @@ import csv
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -29,7 +29,7 @@ async def process_export(export_id: str) -> None:
             log.error(f"Export {export_id} not found")
             return
 
-        await update_export(db, export_id, status="processing")
+        await update_export(db, export_id, status="running")
         await db.commit()
 
     try:
@@ -45,6 +45,7 @@ async def process_export(export_id: str) -> None:
                 search=filters.get("search"),
                 device_serial=filters.get("device_serial"),
                 campaign_id=filters.get("campaign_id"),
+                user_id=export.user_id,
                 limit=100_000,  # cap for safety
                 offset=0,
             )
@@ -69,7 +70,7 @@ async def process_export(export_id: str) -> None:
                 file_path=file_path,
                 file_size_bytes=file_size,
                 item_count=len(items),
-                completed_at=datetime.utcnow(),
+                completed_at=datetime.now(timezone.utc),
             )
             await db.commit()
 

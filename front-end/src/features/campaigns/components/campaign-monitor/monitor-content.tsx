@@ -1,45 +1,74 @@
 'use client';
 
 import { useCampaignWorkflows } from '../../hooks/use-campaigns';
+import { useTranslations } from 'next-intl';
 import { WorkflowProgressCard } from './workflow-progress-card';
+import { ArtifactPanel } from './artifact-panel';
+import { DlqPanel } from './dlq-panel';
 
 interface Props {
   campaignId: string;
+  isRunning: boolean;
 }
 
-export function MonitorContent({ campaignId }: Props) {
-  const { data, isLoading } = useCampaignWorkflows(campaignId, true);
+export function MonitorContent({ campaignId, isRunning }: Props) {
+  const t = useTranslations('campaignsFeature.list');
+  const { data, isLoading } = useCampaignWorkflows(campaignId, isRunning);
   const workflows = data?.workflows ?? [];
-
-  if (!data?.temporal_available) {
-    return (
-      <div className='flex items-center justify-center py-12 text-xs text-muted-foreground'>
-        Temporal chưa được kích hoạt — không thể theo dõi từng bước.
-      </div>
-    );
-  }
 
   if (isLoading) {
     return (
       <div className='flex items-center justify-center py-12 text-xs text-muted-foreground'>
-        Đang tải...
+        {t('loading')}
+      </div>
+    );
+  }
+
+  if (!isRunning) {
+    return (
+      <div>
+        <div className='flex items-center justify-center py-12 text-xs text-muted-foreground'>
+          {t('monitorNotRunningMessage')}
+        </div>
+        <ArtifactPanel campaignId={campaignId} />
+        <DlqPanel />
+      </div>
+    );
+  }
+
+  if (!data?.temporal_available) {
+    return (
+      <div>
+        <div className='flex items-center justify-center py-12 text-xs text-muted-foreground'>
+          {t('monitorTemporalUnavailableMessage')}
+        </div>
+        <ArtifactPanel campaignId={campaignId} />
+        <DlqPanel />
       </div>
     );
   }
 
   if (workflows.length === 0) {
     return (
-      <div className='flex items-center justify-center py-12 text-xs text-muted-foreground'>
-        Chưa có workflow nào đang chạy.
+      <div>
+        <div className='flex items-center justify-center py-12 text-xs text-muted-foreground'>
+          {t('monitorNoRunningWorkflowsMessage')}
+        </div>
+        <ArtifactPanel campaignId={campaignId} />
+        <DlqPanel />
       </div>
     );
   }
 
   return (
-    <div className='max-h-[70vh] overflow-y-auto divide-y'>
-      {workflows.map((wf) => (
-        <WorkflowProgressCard key={wf.workflow_id} wf={wf} campaignId={campaignId} />
-      ))}
+    <div>
+      <div className='max-h-[54vh] overflow-y-auto divide-y'>
+        {workflows.map((wf) => (
+          <WorkflowProgressCard key={wf.workflow_id} wf={wf} campaignId={campaignId} />
+        ))}
+      </div>
+      <ArtifactPanel campaignId={campaignId} />
+      <DlqPanel />
     </div>
   );
 }

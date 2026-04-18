@@ -69,9 +69,9 @@ export function getCampaignColumns(
     {
       id: 'actions',
       header: '',
-      size: 360,
+      size: 320,
       meta: {
-        cellClassName: 'align-top max-w-[min(100vw-2rem,400px)] whitespace-normal py-3',
+        cellClassName: 'align-top max-w-[min(100vw-2rem,360px)] whitespace-normal py-3',
       },
       cell: ({ row }) => {
         const c = row.original;

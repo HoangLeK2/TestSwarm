@@ -14,6 +14,13 @@ from api.schemas.campaign import (
     ScenarioCreate, ScenarioUpdate, ScenarioOut,
 )
 from db import crud as repo
+from db.crud.default_scenario import (
+    ensure_default_scenario,
+    get_default_scenario,
+    merge_scenario_variables_for_row,
+    scenario_row_to_embedded_dict,
+)
+from db.crud.device import get_device_by_serial
 from services.image_store import save_step_images, delete_scenario_images
 
 router = APIRouter(prefix="/campaigns", tags=["campaigns"])
@@ -63,11 +70,15 @@ def _scenario_to_out(s) -> ScenarioOut:
 
 
 def _to_out(c, scenarios=None) -> CampaignOut:
+    scenarios_list = scenarios or []
+    embedded = None
+    if scenarios_list:
+        embedded = scenario_row_to_embedded_dict(scenarios_list[0])
     return CampaignOut(
         id=c.id, name=c.name, description=c.description,
-        status=c.status, scenario=c.scenario,
+        status=c.status, scenario=embedded,
         variables=c.variables or {},
-        scenarios=[_scenario_to_out(s) for s in (scenarios or [])],
+        scenarios=[_scenario_to_out(s) for s in scenarios_list],
         user_id=c.user_id, created_at=c.created_at,
         target_group_id=getattr(c, "target_group_id", None),
     )
@@ -94,20 +105,28 @@ async def list_campaigns(db: DB, user: CurrentUser):
 
 @router.post("", response_model=CampaignOut, status_code=status.HTTP_201_CREATED)
 async def create_campaign(body: CampaignCreate, db: DB, user: CurrentUser):
-    campaign = await repo.create_campaign(
-        db, body.name, user.id, body.description, body.scenario, body.variables,
-        target_group_id=body.target_group_id,
-    )
+    valid_device_ids: list[str] = []
     for device_id in body.device_ids:
         device = await repo.get_device(db, device_id)
-        if device and device.user_id == user.id:
-            await repo.add_device_to_campaign(db, campaign.id, device_id)
-    # Mirror legacy `campaign.scenario` into a Scenario row so list/edit UIs see it.
+        if not device or device.user_id != user.id:
+            raise HTTPException(status_code=404, detail=f"Device not found: {device_id}")
+        valid_device_ids.append(device_id)
+
+    campaign = await repo.create_campaign(
+        db, body.name, user.id, body.description, body.variables,
+        target_group_id=body.target_group_id,
+    )
+    for device_id in valid_device_ids:
+        await repo.add_device_to_campaign(db, campaign.id, device_id)
     sc = body.scenario or {}
     steps = sc.get("steps") if isinstance(sc, dict) else None
     if isinstance(steps, list) and len(steps) > 0:
         scenario_template_vars: dict = (sc.get("variables") or {}) if isinstance(sc, dict) else {}
-        merged_vars = {**scenario_template_vars, **(body.variables or {})}
+        merged_vars = merge_scenario_variables_for_row(
+            {**scenario_template_vars, **(body.variables or {})},
+            {},
+            sc.get("device_context") if isinstance(sc, dict) else None,
+        )
         scenario_row = await repo.create_scenario(
             db,
             campaign.id,
@@ -122,6 +141,26 @@ async def create_campaign(body: CampaignCreate, db: DB, user: CurrentUser):
         from common.graph_compiler import steps_to_graph
         nodes, edges = steps_to_graph(saved_steps)
         await repo.update_scenario(db, scenario_row.id, steps=saved_steps, nodes=nodes, edges=edges)
+    elif isinstance(sc, dict) and (
+        sc.get("instructions")
+        or sc.get("variables")
+        or sc.get("device_context")
+    ):
+        scenario_template_vars = (sc.get("variables") or {}) if isinstance(sc.get("variables"), dict) else {}
+        merged_vars = merge_scenario_variables_for_row(
+            {**scenario_template_vars, **(body.variables or {})},
+            {},
+            sc.get("device_context"),
+        )
+        await repo.create_scenario(
+            db,
+            campaign.id,
+            name=body.name,
+            instructions=str(sc.get("instructions") or ""),
+            steps=[],
+            variables=merged_vars,
+            order=0,
+        )
     await db.commit()
     scenarios = await repo.list_scenarios(db, campaign.id)
     return _to_out(campaign, scenarios)
@@ -313,15 +352,44 @@ async def campaign_content_stats(campaign_id: str, db: DB, user: CurrentUser):
     }
 
 
-# ── Legacy scenario field (kept for MCP backward-compat) ─────────────────────
+# ── PATCH full scenario blob → default Scenario row (MCP / legacy clients) ────
 
 @router.patch("/{campaign_id}/scenario", response_model=CampaignOut)
 async def update_scenario(
     campaign_id: str, body: ScenarioUpdateBody, db: DB, user: CurrentUser
 ):
+    from common.graph_compiler import compile_graph_to_steps, ensure_step_ids, steps_to_graph
+
     campaign = await _get_campaign_or_404(campaign_id, user.id, db)
-    campaign.scenario = body.scenario or {}
-    await db.flush()
+    patch = body.scenario if isinstance(body.scenario, dict) else {}
+    s = await ensure_default_scenario(db, campaign.id, name=campaign.name)
+    instructions = str(patch.get("instructions", s.instructions or ""))
+    nodes_in = patch.get("nodes")
+    edges_in = patch.get("edges")
+    steps_in = patch.get("steps")
+    patch_vars = patch.get("variables") if isinstance(patch.get("variables"), dict) else {}
+    device_context = patch.get("device_context")
+
+    if isinstance(nodes_in, list) and len(nodes_in) > 0:
+        compiled = compile_graph_to_steps(nodes_in, edges_in or [])
+        saved_steps = ensure_step_ids(save_step_images(compiled, s.id))
+        n, e = steps_to_graph(saved_steps)
+        vars_merged = merge_scenario_variables_for_row(s.variables, patch_vars, device_context)
+        await repo.update_scenario(
+            db, s.id,
+            instructions=instructions, steps=saved_steps, nodes=n, edges=e, variables=vars_merged,
+        )
+    elif isinstance(steps_in, list):
+        saved_steps = ensure_step_ids(save_step_images(steps_in, s.id))
+        n, e = steps_to_graph(saved_steps) if saved_steps else ([], [])
+        vars_merged = merge_scenario_variables_for_row(s.variables, patch_vars, device_context)
+        await repo.update_scenario(
+            db, s.id,
+            instructions=instructions, steps=saved_steps, nodes=n, edges=e, variables=vars_merged,
+        )
+    else:
+        vars_merged = merge_scenario_variables_for_row(s.variables, patch_vars, device_context)
+        await repo.update_scenario(db, s.id, instructions=instructions, variables=vars_merged)
     await db.commit()
     scenarios = await repo.list_scenarios(db, campaign_id)
     return _to_out(campaign, scenarios)
@@ -343,20 +411,30 @@ async def compile_scenario(
     instructions = body.instructions
     if not instructions and body.scenario_id:
         s = await repo.get_scenario(db, body.scenario_id)
-        if s:
-            instructions = s.instructions or ""
+        if not s or s.campaign_id != campaign_id:
+            raise HTTPException(status_code=404, detail="Scenario not found")
+        instructions = s.instructions or ""
     if not instructions:
-        instructions = (campaign.scenario or {}).get("instructions") or ""
+        d0 = await get_default_scenario(db, campaign.id)
+        if d0:
+            instructions = scenario_row_to_embedded_dict(d0).get("instructions") or ""
     if not instructions:
         raise HTTPException(
             status_code=400,
             detail="No instructions provided",
         )
 
-    device_context = body.device_context or (campaign.scenario or {}).get("device_context")
+    device_context = body.device_context
+    if device_context is None:
+        dctx = await get_default_scenario(db, campaign.id)
+        if dctx:
+            device_context = scenario_row_to_embedded_dict(dctx).get("device_context")
 
     ui_xml = (body.ui_xml or "").strip() or None
     if not ui_xml and body.device_serial:
+        device_row = await get_device_by_serial(db, body.device_serial.strip())
+        if not device_row or device_row.user_id != user.id:
+            raise HTTPException(status_code=404, detail="Device not found")
         manager = getattr(request.app.state, "manager", None)
         if manager:
             device = manager.get_device(body.device_serial.strip())
@@ -381,22 +459,44 @@ async def compile_scenario(
             detail={"message": "Scenario validation failed", "errors": validation_errors},
         )
 
-    # Save to specific scenario row if scenario_id provided, else legacy field
     if body.scenario_id:
         s = await repo.get_scenario(db, body.scenario_id)
-        if s and s.campaign_id == campaign_id:
-            from common.graph_compiler import steps_to_graph
-            compiled_steps = scenario.get("steps", [])
-            nodes, edges = steps_to_graph(compiled_steps)
-            await repo.update_scenario(
-                db, body.scenario_id,
-                steps=compiled_steps,
-                instructions=instructions,
-                nodes=nodes,
-                edges=edges,
-            )
+        if not s or s.campaign_id != campaign_id:
+            raise HTTPException(status_code=404, detail="Scenario not found")
+        from common.graph_compiler import steps_to_graph
+        compiled_steps = scenario.get("steps", [])
+        nodes, edges = steps_to_graph(compiled_steps)
+        vars_merged = merge_scenario_variables_for_row(
+            s.variables,
+            scenario.get("variables") if isinstance(scenario.get("variables"), dict) else {},
+            body.device_context,
+        )
+        await repo.update_scenario(
+            db, body.scenario_id,
+            steps=compiled_steps,
+            instructions=instructions,
+            nodes=nodes,
+            edges=edges,
+            variables=vars_merged,
+        )
     else:
-        campaign.scenario = scenario
+        from common.graph_compiler import steps_to_graph
+        tgt = await ensure_default_scenario(db, campaign.id, name=campaign.name)
+        compiled_steps = scenario.get("steps", [])
+        nodes, edges = steps_to_graph(compiled_steps)
+        vars_merged = merge_scenario_variables_for_row(
+            tgt.variables,
+            scenario.get("variables") if isinstance(scenario.get("variables"), dict) else {},
+            body.device_context,
+        )
+        await repo.update_scenario(
+            db, tgt.id,
+            steps=compiled_steps,
+            instructions=instructions,
+            nodes=nodes,
+            edges=edges,
+            variables=vars_merged,
+        )
         await db.flush()
 
     await db.commit()
@@ -512,6 +612,9 @@ async def compile_scenario_row(
 
     ui_xml = (body.ui_xml or "").strip() or None
     if not ui_xml and body.device_serial:
+        device_row = await get_device_by_serial(db, body.device_serial.strip())
+        if not device_row or device_row.user_id != user.id:
+            raise HTTPException(status_code=404, detail="Device not found")
         manager = getattr(request.app.state, "manager", None)
         if manager:
             device = manager.get_device(body.device_serial.strip())
@@ -546,20 +649,18 @@ async def compile_scenario_row(
     return _scenario_to_out(s)
 
 
-# ── Campaign Runs ─────────────────────────────────────────────────────────────
+# ── Campaign Runs (backed by executions table) ───────────────────────────────
 
-def _run_to_dict(run) -> dict:
+def _execution_to_run_dict(ex) -> dict:
+    meta = ex.meta or {}
     return {
-        "id": run.id,
-        "campaign_id": run.campaign_id,
-        "status": run.status,
-        "device_serials": run.device_serials or [],
-        "workflow_ids": run.workflow_ids or [],
-        "scenarios_count": run.scenarios_count,
-        "total_saved": run.total_saved,
-        "total_duplicate": run.total_duplicate,
-        "started_at": run.started_at.isoformat() if run.started_at else None,
-        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        "id": ex.id,
+        "campaign_id": ex.campaign_id,
+        "status": ex.status,
+        "workflow_ids": meta.get("workflow_ids", []),
+        "scenarios_count": meta.get("scenarios_count", 0),
+        "started_at": ex.started_at.isoformat() if ex.started_at else None,
+        "finished_at": ex.finished_at.isoformat() if ex.finished_at else None,
     }
 
 
@@ -572,23 +673,29 @@ async def list_runs(
     offset: int = 0,
 ):
     await _get_campaign_or_404(campaign_id, user.id, db)
-    from db.crud.campaign_run import list_campaign_runs
-    runs, total = await list_campaign_runs(db, campaign_id, limit=limit, offset=offset)
-    return {"total": total, "items": [_run_to_dict(r) for r in runs]}
+    from db.crud.execution import list_executions
+    runs, total = await list_executions(
+        db, campaign_id=campaign_id, run_type="campaign_run", limit=limit, offset=offset,
+    )
+    return {"total": total, "items": [_execution_to_run_dict(r) for r in runs]}
 
 
 @router.get("/{campaign_id}/runs/{run_id}")
 async def get_run(campaign_id: str, run_id: str, db: DB, user: CurrentUser):
     await _get_campaign_or_404(campaign_id, user.id, db)
-    from db.crud.campaign_run import get_campaign_run
-    run = await get_campaign_run(db, run_id)
-    if not run or run.campaign_id != campaign_id:
+    from db.crud.execution import get_execution
+    run = await get_execution(db, run_id)
+    if not run or run.campaign_id != campaign_id or run.user_id != user.id:
         raise HTTPException(status_code=404, detail="Run not found")
-    return _run_to_dict(run)
+    return _execution_to_run_dict(run)
 
 
 @router.get("/{campaign_id}/runs/{run_id}/content/stats")
 async def run_content_stats(campaign_id: str, run_id: str, db: DB, user: CurrentUser):
     await _get_campaign_or_404(campaign_id, user.id, db)
-    from db.crud.campaign_run import run_content_stats as _stats
-    return await _stats(db, run_id)
+    from db.crud.execution import get_execution
+    run = await get_execution(db, run_id)
+    if not run or run.campaign_id != campaign_id or run.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Run not found")
+    from db.crud.execution import execution_summary
+    return await execution_summary(db, run_id)

@@ -25,6 +25,16 @@ from temporal.shared import (
     SaveExtractionInput,
     StepResult,
 )
+from services.extraction_usecase import (
+    persist_data_items,
+    resolve_comment_parent_hash,
+    update_parent_stats_if_available,
+)
+from services.scenario_step_contract import (
+    extract_data_var_for_strategy,
+    normalize_extract_step,
+    normalize_save_extraction_step,
+)
 
 log = logging.getLogger(__name__)
 
@@ -155,7 +165,7 @@ class DeviceActivities:
         """
         _validate_serial(inp.device_serial)
         device = _get_device(inp.device_serial)
-        step = inp.step
+        step = normalize_extract_step(inp.step)
         step_type = step.get("type", "")
         idx = inp.step_index
 
@@ -503,7 +513,7 @@ class DeviceActivities:
                     is_fb_post_truncated,
                     expand_see_more_with_lazy_hydration,
                 )
-                from services.content_store import compute_content_hash
+                from services.content_store import compute_content_hash, scope_content_hash
                 scroll_idx = ctx.get("_loop_iter", 0)
                 new_posts = parse_fb_posts_from_xml(xml, source_index=scroll_idx)
 
@@ -600,13 +610,17 @@ class DeviceActivities:
                 # Uses new_posts[0] (topmost post on screen), NOT the first "new" post,
                 # because tap_selector("Bình luận") taps the topmost button on screen.
                 if new_posts:
-                    ctx["_first_new_post_hash"] = compute_content_hash(
-                        new_posts[0], dedupe_field="post_key"
+                    ctx["_first_new_post_hash"] = scope_content_hash(
+                        compute_content_hash(new_posts[0], dedupe_field="post_key"),
+                        inp.execution_id or inp.run_id,
                     )
                     pid_map = {}
                     for _p in new_posts:
                         if _p.get("_pid"):
-                            pid_map[_p["_pid"]] = compute_content_hash(_p, dedupe_field="post_key")
+                            pid_map[_p["_pid"]] = scope_content_hash(
+                                compute_content_hash(_p, dedupe_field="post_key"),
+                                inp.execution_id or inp.run_id,
+                            )
                     ctx["_post_id_map"] = pid_map
                     _tpid = new_posts[0].get("_pid")
                     if _tpid:
@@ -650,52 +664,103 @@ class DeviceActivities:
                     _post_id_from_ctx,
                 )
                 ctx["_active_comment_parent_hash"] = None
-                parent_post_id_var = inp.step.get("parent_post_id_var")
-                max_items = int(inp.step.get("max_items") or 50)
-                parent_post_id = _post_id_from_ctx(ctx, parent_post_id_var)
-                raw_items = parse_fb_comments_from_xml(
-                    xml, parent_post_id=parent_post_id, max_items=max_items,
+                parent_post_id_var = step.get("parent_post_id_var")
+                max_items = int(step.get("max_items") or 400)
+                comment_scroll_passes = int(
+                    step.get("comment_scroll_passes")
+                    or step.get("scroll_passes")
+                    or 0
                 )
-                # Separate post_stats sentinel from actual comments
-                post_stats = next((x for x in raw_items if x.get("_type") == "post_stats"), None)
-                new_comments = [
-                    x
-                    for x in raw_items
-                    if x.get("_type") != "post_stats"
-                    and not _is_junk_parsed_comment_row(x)
-                ]
+                comment_scroll_distance = float(
+                    step.get("comment_scroll_distance")
+                    or step.get("scroll_distance")
+                    or 0.45
+                )
+                comment_scroll_pause_s = float(
+                    step.get("comment_scroll_pause_s")
+                    or step.get("scroll_pause_s")
+                    or 0.45
+                )
+                no_growth_break = int(step.get("comment_no_growth_break") or 2)
+                min_comment_scan_passes = int(step.get("min_comment_scan_passes") or 0)
+                parent_post_id = _post_id_from_ctx(ctx, parent_post_id_var)
+
+                def _parse_comment_frame(frame_xml: str) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+                    raw_items = parse_fb_comments_from_xml(
+                        frame_xml,
+                        parent_post_id=parent_post_id,
+                        max_items=max_items,
+                    )
+                    frame_post_stats = next((x for x in raw_items if x.get("_type") == "post_stats"), None)
+                    frame_comments = [
+                        x
+                        for x in raw_items
+                        if x.get("_type") != "post_stats"
+                        and not _is_junk_parsed_comment_row(x)
+                    ]
+                    return frame_post_stats, frame_comments
+
+                # Parse current viewport first, then scroll several passes to collect more comments.
+                post_stats, new_comments = _parse_comment_frame(xml)
+                def _comment_identity(row: dict[str, Any]) -> str:
+                    return str(
+                        row.get("comment_key")
+                        or f"{row.get('author','')}|{row.get('text','')}|{row.get('timestamp','')}"
+                    )
+                seen_comment_keys = {_comment_identity(c) for c in new_comments}
+                scanned_frames = 1
+                growthless_streak = 0
+                for pass_idx in range(max(0, comment_scroll_passes)):
+                    if len(new_comments) >= max_items:
+                        break
+                    await _to_thread_with_heartbeat(
+                        device.scroll,
+                        "down",
+                        max(0.1, min(0.9, comment_scroll_distance)),
+                    )
+                    await asyncio.sleep(max(0.1, comment_scroll_pause_s))
+                    xml_next = await _to_thread_with_heartbeat(device.hierarchy_xml, force_refresh=True)
+                    if not xml_next:
+                        break
+                    scanned_frames += 1
+                    frame_stats, frame_comments = _parse_comment_frame(xml_next)
+                    if frame_stats:
+                        post_stats = frame_stats
+                    prev_len = len(new_comments)
+                    for c in frame_comments:
+                        key = _comment_identity(c)
+                        if key in seen_comment_keys:
+                            continue
+                        seen_comment_keys.add(key)
+                        new_comments.append(c)
+                    if len(new_comments) == prev_len:
+                        growthless_streak += 1
+                        # Don't terminate too early: first passes often only warm up/lazy-load.
+                        if (
+                            pass_idx + 1 >= max(0, min_comment_scan_passes)
+                            and growthless_streak >= max(1, no_growth_break)
+                        ):
+                            break
+                    else:
+                        growthless_streak = 0
+                # Final safety dedup (single pass), avoids repeated N^2-ish dedup per frame.
+                new_comments = _dedup_comments(new_comments)
 
                 # Update parent post reaction/share counts with more accurate comment-view values
                 if post_stats:
                     ctx["_comment_view_stats"] = post_stats
-                    pid_key = parent_post_id
-                    parent_hash = (
-                        ctx.get("_post_id_map", {}).get(pid_key)
-                        or ctx.get("_first_new_post_hash")
-                    )
+                    parent_hash = resolve_comment_parent_hash(ctx, parent_post_id)
                     if parent_hash:
                         ctx["_active_comment_parent_hash"] = parent_hash
                         try:
-                            from db.database import activity_session
-                            from db.crud.content import update_content_stats
-                            from services.content_store import _safe_int
-                            async with activity_session() as _db:
-                                updated = await update_content_stats(
-                                    _db,
-                                    content_hash=parent_hash,
-                                    likes_count=_safe_int(post_stats.get("reactions")),
-                                    shares_count=_safe_int(post_stats.get("shares")),
-                                )
-                                if updated:
-                                    await _db.commit()
+                            await update_parent_stats_if_available(
+                                content_hash=parent_hash,
+                                post_stats=post_stats,
+                            )
                         except Exception as exc:
                             log.warning(f"update_content_stats failed: {exc}")
                 else:
-                    pid_key = parent_post_id
-                    parent_hash = (
-                        ctx.get("_post_id_map", {}).get(pid_key)
-                        or ctx.get("_first_new_post_hash")
-                    )
+                    parent_hash = resolve_comment_parent_hash(ctx, parent_post_id)
                     if parent_hash:
                         ctx["_active_comment_parent_hash"] = parent_hash
 
@@ -707,6 +772,13 @@ class DeviceActivities:
                 details["total_comments"] = len(ctx["comments"])
                 details["parent_post_id"] = parent_post_id
                 details["post_stats"] = post_stats
+                details["comment_scan"] = {
+                    "frames": scanned_frames,
+                    "scroll_passes": comment_scroll_passes,
+                    "max_items": max_items,
+                    "growthless_streak": growthless_streak,
+                    "min_scan_passes": min_comment_scan_passes,
+                }
                 msg = (
                     f"extract fb_comments: +{added} new "
                     f"(total {len(ctx['comments'])}, post={parent_post_id})"
@@ -731,6 +803,43 @@ class DeviceActivities:
                     context=ctx,
                 )
 
+            # Temporal path parity with task-queue path: optional inline autosave.
+            # If `collection` exists on extract step, persist newly extracted records now.
+            collection = str(step.get("collection") or "").strip()
+            if collection:
+                offsets = ctx.get("__save_extraction_offsets__", ctx.get("__extract_save_offsets__", {}))
+                extracted_var = extract_data_var_for_strategy(step)
+                source_data = ctx.get(extracted_var)
+                parent_hash = ctx.get("_active_comment_parent_hash")
+                item_level = 1 if strategy == "fb_comments" else 0
+                report, updated_offsets = await persist_data_items(
+                    data=source_data,
+                    data_var=extracted_var,
+                    offsets=offsets,
+                    collection=collection,
+                    platform=step.get("platform"),
+                    content_type=step.get("content_type", "comment" if strategy == "fb_comments" else "post"),
+                    dedupe_field=step.get("dedupe_field"),
+                    tags=step.get("tags"),
+                    device_serial=inp.device_serial,
+                    campaign_id=inp.campaign_id,
+                    execution_id=inp.execution_id or inp.run_id,
+                    parent_id=parent_hash if strategy == "fb_comments" else None,
+                    item_level=item_level,
+                    user_id=inp.user_id,
+                )
+                # Use one shared namespace so extract inline-save and explicit save_extraction
+                # coordinate offsets for the same data_var.
+                ctx["__save_extraction_offsets__"] = updated_offsets
+                details["auto_save"] = {
+                    "saved": report.saved_count,
+                    "duplicate": report.duplicate_count,
+                    "errors": report.error_count,
+                    "saved_count": report.saved_count,
+                    "duplicate_count": report.duplicate_count,
+                    "error_count": report.error_count,
+                }
+
             return ExtractResult(
                 ok=True,
                 message=msg,
@@ -752,7 +861,7 @@ class DeviceActivities:
         this activity is fully async and safe with the asyncpg connection pool.
         """
         _validate_serial(inp.device_serial)
-        step = inp.step
+        step = normalize_save_extraction_step(inp.step)
         idx = inp.step_index
         activity.heartbeat(f"save_extraction:{idx}")
 
@@ -773,34 +882,20 @@ class DeviceActivities:
             )
 
         try:
-            from services.content_store import save_content_item
-
-            items: list[dict[str, Any]] = []
-            if isinstance(data, str):
-                items = [{"text": data}]
-            elif isinstance(data, dict):
-                items = [data]
-            elif isinstance(data, list):
-                items = [item for item in data if isinstance(item, dict)]
-            else:
+            if not isinstance(data, (str, dict, list)):
                 return StepResult(
                     index=idx, step_type="save_extraction", ok=False,
                     message=f"save_extraction: unsupported type for '{data_var}': {type(data).__name__}",
                 )
-
-            # Offset tracking so repeated calls don't re-save already-saved items
-            offsets = ctx.get("__save_extraction_offsets__", {})
-            start_idx = int(offsets.get(data_var, 0))
-            if start_idx > 0:
-                items = items[start_idx:]
-
-            if not items:
+            if isinstance(data, list) and data and not any(isinstance(item, dict) for item in data):
                 return StepResult(
-                    index=idx, step_type="save_extraction", ok=True,
-                    message="save_extraction: no new items to save",
-                    details={"saved_count": 0, "duplicate_count": 0, "error_count": 0},
+                    index=idx,
+                    step_type="save_extraction",
+                    ok=False,
+                    message=f"save_extraction: variable '{data_var}' is a list but has no object items",
                 )
 
+            offsets = ctx.get("__save_extraction_offsets__", {})
             coll = step.get("collection", "default")
             platform = step.get("platform")
             ctype = step.get("content_type", "post")
@@ -809,54 +904,40 @@ class DeviceActivities:
             parent_id_var = step.get("parent_id_var")
             parent_id = ctx.get(parent_id_var) if parent_id_var else None
             item_level = int(step.get("item_level") or 0)
-            saved = dup = err = 0
-
-            for item in items:
-                try:
-                    result = await save_content_item(
-                        data=item,
-                        collection=coll,
-                        platform=platform,
-                        content_type=ctype,
-                        dedupe_field=dedupe_field,
-                        tags=tags,
-                        device_serial=inp.device_serial,
-                        campaign_id=inp.campaign_id,
-                        run_id=inp.run_id,
-                        execution_id=inp.execution_id,
-                        parent_id=parent_id,
-                        item_level=item_level,
-                    )
-                    if result.get("saved"):
-                        saved += 1
-                    else:
-                        dup += 1
-                except Exception as exc:
-                    err += 1
-                    log.warning("[%s] save_extraction item failed: %s", inp.device_serial, exc)
-                    # Continue processing remaining items — don't bail on first error.
-
-            ok = not (err > 0 and saved == 0 and dup == 0)
-            msg = f"save_extraction: saved={saved}, duplicate={dup}, errors={err}"
+            report, updated_offsets = await persist_data_items(
+                data=data,
+                data_var=data_var,
+                offsets=offsets,
+                collection=coll,
+                platform=platform,
+                content_type=ctype,
+                dedupe_field=dedupe_field,
+                tags=tags,
+                device_serial=inp.device_serial,
+                campaign_id=inp.campaign_id,
+                execution_id=inp.execution_id,
+                parent_id=parent_id,
+                item_level=item_level,
+                user_id=inp.user_id,
+            )
+            ok = not (
+                report.error_count > 0
+                and report.saved_count == 0
+                and report.duplicate_count == 0
+            )
+            msg = (
+                f"save_extraction: saved={report.saved_count}, "
+                f"duplicate={report.duplicate_count}, errors={report.error_count}"
+            )
             if not ok:
                 msg = "save_extraction: all items failed"
-
-            # Advance offset only past items that were successfully processed (saved or
-            # deduplicated). Items that errored are NOT counted so a Temporal retry
-            # will re-attempt them rather than silently skipping them.
-            # Design trade-off (at-least-once): if the activity is retried after a partial
-            # write (e.g. DB commit succeeded but activity heartbeat was lost), previously
-            # saved items will be re-attempted. The `dedupe_field` key prevents duplicate
-            # rows — so at-least-once is safe as long as dedupe_field is configured.
-            new_offset = start_idx + saved + dup
-            updated_offsets = {data_var: new_offset}
 
             return StepResult(
                 index=idx, step_type="save_extraction", ok=ok, message=msg,
                 details={
-                    "saved_count": saved,
-                    "duplicate_count": dup,
-                    "error_count": err,
+                    "saved_count": report.saved_count,
+                    "duplicate_count": report.duplicate_count,
+                    "error_count": report.error_count,
                     "updated_offsets": updated_offsets,
                 },
             )
@@ -899,47 +980,32 @@ class DeviceActivities:
 
     @activity.defn
     async def finalize_campaign(self, inp: dict) -> None:
-        """Update CampaignRun + Campaign DB status when a workflow ends.
+        """Update Execution + Campaign DB status when a workflow ends.
 
         Called at the end of ScenarioWorkflow.run (success, failure, or cancel).
-        - Always updates CampaignRun.status to "completed" or "failed".
         - When all workflows for the campaign are done, sets Campaign.status = "idle".
 
-        Accepts a dict: {"campaign_id": str, "run_id": str|None, "success": bool}
+        Accepts a dict: {"campaign_id": str, "execution_id": str|None, "success": bool}
         (kept as dict for Temporal serialization simplicity).
         """
         # Support both old str payload (backward compat) and new dict payload.
         if isinstance(inp, str):
             campaign_id: str = inp
-            run_id = None
             success = True
             execution_id = None
             device_serial = None
             step_results: list = []
         else:
             campaign_id = inp.get("campaign_id", "")
-            run_id = inp.get("run_id")
             success = bool(inp.get("success", True))
-            execution_id = inp.get("execution_id")
+            # run_id is legacy alias for execution_id
+            execution_id = inp.get("execution_id") or inp.get("run_id")
             device_serial = inp.get("device_serial")
             step_results = inp.get("step_results") or []
 
         activity.heartbeat("finalize_campaign")
 
-        # Always update the CampaignRun status so the UI reflects real outcome.
-        if run_id:
-            try:
-                from db.database import activity_session
-                from db.crud.campaign_run import finish_campaign_run
-                run_status = "completed" if success else "failed"
-                async with activity_session() as db:
-                    await finish_campaign_run(db, run_id, status=run_status)
-                    await db.commit()
-                log.info("finalize_campaign: run %s → %s", run_id, run_status)
-            except Exception as exc:
-                log.warning("finalize_campaign: run status update failed (%s): %s", run_id, exc)
-
-        # Persist per-device execution result (DF-011)
+        # Persist per-device execution result
         if execution_id and device_serial:
             try:
                 from datetime import datetime, timezone as _tz
@@ -949,9 +1015,11 @@ class DeviceActivities:
                 er_status = "passed" if success else "failed"
                 passed_steps = [s for s in step_results if s.get("ok")]
                 failed_steps = [s for s in step_results if not s.get("ok")]
+                _device_id = None
                 async with activity_session() as db:
                     device = await get_device_by_serial(db, device_serial)
                     if device:
+                        _device_id = device.id
                         await upsert_execution_result(
                             db,
                             execution_id=execution_id,
@@ -961,11 +1029,33 @@ class DeviceActivities:
                             failed_steps=failed_steps,
                             finished_at=datetime.now(_tz.utc),
                         )
+                        # DLQ: create entry when run fails
+                        if not success:
+                            from db.crud.execution_dlq import create_dlq_entry
+                            error_msg = (failed_steps[-1].get("message") if failed_steps else None)
+                            await create_dlq_entry(
+                                db,
+                                execution_id=execution_id,
+                                device_serial=device_serial,
+                                error=error_msg,
+                            )
                         await db.commit()
                 log.info(
                     "finalize_campaign: execution_result %s/%s → %s",
                     execution_id, device_serial, er_status,
                 )
+                # Webhook: fire-and-forget notification
+                org_id = inp.get("org_id") if isinstance(inp, dict) else None
+                if org_id:
+                    from services.webhook_dispatcher import dispatch_webhook
+                    event = "task.complete" if success else "task.failed"
+                    await dispatch_webhook(org_id, event, {
+                        "execution_id": execution_id,
+                        "device_serial": device_serial,
+                        "status": er_status,
+                        "passed_steps": len(passed_steps),
+                        "failed_steps": len(failed_steps),
+                    })
             except Exception as exc:
                 log.warning(
                     "finalize_campaign: execution_result update failed (%s/%s): %s",
@@ -982,14 +1072,24 @@ class DeviceActivities:
         try:
             from temporal.worker import get_temporal_client
             client = await get_temporal_client(cfg)
+            # This activity runs *while* the parent ScenarioWorkflow is still in
+            # ExecutionStatus=Running (it awaits this activity before return).
+            # Without excluding the caller, list_workflows always sees ≥1 match
+            # and the campaign never flips back to idle in the DB.
+            try:
+                caller_wf_id = activity.info().workflow_id or ""
+            except Exception:
+                caller_wf_id = ""
             wf_query = (
                 f'WorkflowId STARTS_WITH "campaign:{campaign_id}:" '
                 f'AND ExecutionStatus="Running"'
             )
             still_running = 0
-            async for _ in client.list_workflows(wf_query):
+            async for wf_exec in client.list_workflows(wf_query):
+                if caller_wf_id and wf_exec.id == caller_wf_id:
+                    continue
                 still_running += 1
-                break  # one is enough to know we're not done
+                break  # one other running workflow is enough
             if still_running == 0:
                 from db.database import activity_session
                 from db.crud.campaign import update_campaign_status

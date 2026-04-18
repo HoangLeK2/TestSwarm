@@ -20,7 +20,6 @@ load_dotenv(dotenv_path=_root / ".env", override=False)
 os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
 
 import logging
-import shlex
 import shutil
 
 import uvicorn
@@ -113,30 +112,17 @@ def main() -> None:
     reload_enabled = farm_reload_enabled()
 
     # Auto-run agent-boot when starting the server.
-    # Phase 1: bootstrap (blocking, fast) — installs u2/atx-agent on connected devices.
+    # Phase 1 (bootstrap install of u2/atx-agent on connected devices) is
+    # intentionally disabled — `_run_agent_boot` is no longer invoked here.
     # Phase 2: relay daemon (background subprocess) — keeps gRPC stream open for scrcpy/adb.
     # Disable entirely with FARM_AGENT_BOOT=0.
     auto = os.getenv("FARM_AGENT_BOOT", "1").strip().lower()
     if auto not in {"0", "false", "no", "off"}:
         log = logging.getLogger("main")
-        # ── Phase 1: bootstrap ────────────────────────────────────────────────
-        try:
-            args_raw = os.getenv("FARM_AGENT_BOOT_ARGS", "").strip()
-            if args_raw:
-                bootstrap_args = shlex.split(args_raw)
-            else:
-                bootstrap_args = ["--bootstrap-only", "--skip-stf", "--skip-tcpip"]
-                serial = os.getenv("FARM_AGENT_BOOT_SERIAL", "").strip()
-                if serial:
-                    bootstrap_args = ["--serial", serial, *bootstrap_args]
-
-            log.info("agent-boot bootstrap: %s", " ".join(bootstrap_args))
-            # _run_agent_boot(bootstrap_args)
-            log.info("agent-boot bootstrap: done")
-        except SystemExit as e:
-            log.warning("agent-boot bootstrap: skipped (%s)", e)
-        except Exception as e:
-            log.warning("agent-boot bootstrap: failed (%s)", e)
+        log.warning(
+            "agent-boot bootstrap: SKIPPED (phase-1 install disabled in code). "
+            "Set FARM_AGENT_BOOT=0 to silence this warning."
+        )
 
         # ── Phase 2: relay daemon (background) ───────────────────────────────
         try:

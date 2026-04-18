@@ -87,6 +87,14 @@ class Dispatcher(threading.Thread):
     def _try_dispatch(self, device: DeviceClient) -> None:
         if self._is_rate_limited(device.serial):
             return
+        # Refuse dispatch if prior worker still alive (zombie from timeout).
+        prior = getattr(device, "_active_worker", None)
+        if prior is not None and prior.is_alive():
+            log.warning(
+                f"[{device.serial}] skip dispatch — prior worker still alive "
+                f"(thread={prior.name})"
+            )
+            return
         task = self.queue.get_next(serial=device.serial)
         if task is None:
             return
@@ -97,6 +105,7 @@ class Dispatcher(threading.Thread):
             daemon=True,
             name=f"task-{task.id[:8]}-{device.serial}",
         )
+        device._active_worker = t
         t.start()
 
     def _run_task(self, device: DeviceClient, task: Task) -> None:
@@ -107,6 +116,7 @@ class Dispatcher(threading.Thread):
         result = None
         error_msg = None
         success = False
+        quarantined = False
 
         try:
           
@@ -134,10 +144,21 @@ class Dispatcher(threading.Thread):
             worker.join(timeout=task.timeout)
 
             if worker.is_alive():
-                # Timeout — we can't truly kill the thread in Python,
-                # but we mark it as failed and move on.
+                # Timeout — can't kill Python thread. Signal cooperative cancel
+                # (long scenarios poll task.cancel_event) then QUARANTINE device
+                # so dispatcher does not assign new task while zombie still running.
                 error_msg = f"Task timed out after {task.timeout}s"
-                log.error(f"[{serial}] {error_msg}")
+                log.error(f"[{serial}] {error_msg} — quarantining device")
+                try:
+                    task.cancel_event.set()
+                except Exception:
+                    pass
+                # Grace window for cooperative abort
+                worker.join(timeout=5.0)
+                if worker.is_alive():
+                    device._zombie_worker = worker
+                    device.state = DeviceState.ERROR
+                    quarantined = True
             elif exc_holder[0] is not None:
                 raise exc_holder[0]
             else:
@@ -201,8 +222,16 @@ class Dispatcher(threading.Thread):
                 )
                 self.queue.requeue(task)
 
+            # Clear active worker pointer if this call's worker finished.
+            # If zombie, leave pointer; _try_dispatch will skip device until
+            # thread dies or watchdog resets state.
+            aw = getattr(device, "_active_worker", None)
+            if aw is not None and not aw.is_alive():
+                device._active_worker = None
+
             # Return device to READY if it hasn't been moved to ERROR/DEAD
-            if device.state == DeviceState.BUSY:
+            # and we did not just quarantine it.
+            if not quarantined and device.state == DeviceState.BUSY:
                 device.state = DeviceState.READY
 
             # NOTE: Campaign status is currently updated explicitly via the API.

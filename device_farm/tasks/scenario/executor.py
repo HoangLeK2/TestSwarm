@@ -8,8 +8,41 @@ import time
 import importlib
 from typing import Any, Dict, TYPE_CHECKING
 
-from tasks.scenario.capture import capture_pre_step, capture_post_step
+from tasks.scenario.capture import StaleFrameError, capture_pre_step, capture_post_step
 from tasks.scenario.steps import dispatch_step
+
+
+# F1.5 — reason codes that are considered retryable when a step fails.
+# Extraction empty-parse reasons + capture staleness. Other codes (login_screen,
+# rate_limited, xml_parse_error) are NOT retryable — they indicate session or
+# programming problems that retries won't fix.
+_DEFAULT_RETRY_REASONS = frozenset({
+    "stale_frame",
+    "no_candidates",
+    "no_feed_container",
+    "all_filtered_junk",
+    "empty_cluster",
+    "anchor_not_found",
+    "no_nodes_in_band",
+    "no_text_nodes",
+})
+
+
+def _compute_backoff_s(attempt: int, base_ms: float, cap_ms: float, jitter_ms: float) -> float:
+    """Exponential backoff with jitter. attempt is 1-based."""
+    expo = base_ms * (2 ** (attempt - 1))
+    delay_ms = min(cap_ms, expo) + random.uniform(0, max(0.0, jitter_ms))
+    return max(0.0, delay_ms / 1000.0)
+
+
+def _is_retryable(step_result: Dict[str, Any], retry_on: frozenset) -> bool:
+    """True if step result marks as retryable OR has a reason_code in retry_on."""
+    if step_result.get("ok", True):
+        return False
+    if step_result.get("retryable") is True:
+        return True
+    code = str(step_result.get("reason_code") or "")
+    return code in retry_on
 
 if TYPE_CHECKING:
     from tasks.scenario.context import ScenarioContext
@@ -25,6 +58,10 @@ def _persist_checkpoint(sc: "ScenarioContext", next_step: int) -> None:
 
     Uses the device's event loop if available; silently skips otherwise.
     Top-level executions only — nested scenarios inherit parent's execution.
+
+    Writes are advance-only: the SQL UPDATE refuses to regress checkpoint_step
+    so fire-and-forget calls that land out-of-order cannot overwrite a newer
+    checkpoint with an older one.
     """
     if sc.depth > 0 or not sc.execution_id:
         return
@@ -32,18 +69,39 @@ def _persist_checkpoint(sc: "ScenarioContext", next_step: int) -> None:
     if loop is None or loop.is_closed():
         return
 
+    execution_id = sc.execution_id
+
     async def _do():
         try:
+            from sqlalchemy import update
             from db.database import activity_session
-            from db.crud.execution import update_execution
+            from db.models.execution import Execution
             async with activity_session() as db:
-                await update_execution(db, sc.execution_id, checkpoint_step=next_step)
+                stmt = (
+                    update(Execution)
+                    .where(Execution.id == execution_id)
+                    .where(
+                        (Execution.checkpoint_step.is_(None))
+                        | (Execution.checkpoint_step < next_step)
+                    )
+                    .values(checkpoint_step=next_step)
+                )
+                await db.execute(stmt)
                 await db.commit()
         except Exception as exc:
             log.debug("checkpoint write failed (non-fatal): %s", exc)
 
+    def _on_done(fut):
+        exc = fut.exception()
+        if exc is not None:
+            log.warning(
+                "checkpoint future failed exec_id=%s step=%s: %s",
+                execution_id, next_step, exc,
+            )
+
     try:
-        asyncio.run_coroutine_threadsafe(_do(), loop)
+        fut = asyncio.run_coroutine_threadsafe(_do(), loop)
+        fut.add_done_callback(_on_done)
     except Exception as exc:
         log.debug("checkpoint schedule failed (non-fatal): %s", exc)
 
@@ -132,10 +190,75 @@ class ScenarioExecutor:
             # Record timestamp before action
             step_start_t = time.monotonic()
 
-            # Dispatch to handler
-            handler_result = dispatch_step(sc, step, idx)
-            # Merge handler result into step_result
-            step_result.update(handler_result)
+            # F1.5 — per-step retry config (optional per step):
+            #   "retry": {"attempts": 3, "backoff_ms": 500, "jitter_ms": 300,
+            #             "backoff_cap_ms": 5000, "on": ["stale_frame", "no_candidates"]}
+            retry_cfg = step.get("retry") if isinstance(step.get("retry"), dict) else {}
+            max_attempts = max(1, int(retry_cfg.get("attempts") or 1))
+            backoff_ms = float(retry_cfg.get("backoff_ms") or 500)
+            jitter_ms = float(retry_cfg.get("jitter_ms") or 250)
+            backoff_cap_ms = float(retry_cfg.get("backoff_cap_ms") or 5000)
+            retry_on_cfg = retry_cfg.get("on")
+            if retry_on_cfg:
+                retry_on = frozenset(str(r) for r in retry_on_cfg)
+            else:
+                retry_on = _DEFAULT_RETRY_REASONS
+
+            attempts_used = 0
+            handler_result: Dict[str, Any] = {}
+            for attempt in range(1, max_attempts + 1):
+                attempts_used = attempt
+                # Re-dispatch (handler may be called multiple times; handlers
+                # should be idempotent — extract is by virtue of dedupe).
+                try:
+                    handler_result = dispatch_step(sc, step, idx)
+                except Exception as exc:
+                    handler_result = {
+                        "ok": False,
+                        "message": f"{t}: handler raised: {exc}",
+                        "reason_code": "handler_exception",
+                    }
+                    log.exception(f"[{sc.serial}] step#{idx + 1} handler raised")
+
+                merged = {"index": idx, "type": t, "ok": True}
+                merged.update(handler_result)
+
+                # Also catch StaleFrameError from capture_post_step so retry
+                # treats it like any other retryable condition.
+                stale_raised = False
+                try:
+                    capture_post_step(sc, step, idx, merged, step_start_t)
+                except StaleFrameError as sfe:
+                    stale_raised = True
+                    merged["ok"] = False
+                    merged["reason_code"] = "stale_frame"
+                    merged["retryable"] = True
+                    merged["message"] = f"{t}: {sfe}"
+                    log.warning(f"[{sc.serial}] step#{idx + 1}: {sfe}")
+
+                if _is_retryable(merged, retry_on) and attempt < max_attempts:
+                    delay = _compute_backoff_s(attempt, backoff_ms, backoff_cap_ms, jitter_ms)
+                    trace_log.info(
+                        "step_retry",
+                        trace_id=sc.trace_id,
+                        serial=sc.serial,
+                        step_index=idx + 1,
+                        step_type=t,
+                        attempt=attempt,
+                        max_attempts=max_attempts,
+                        reason_code=merged.get("reason_code"),
+                        backoff_ms=round(delay * 1000, 1),
+                        stale_frame=stale_raised,
+                    )
+                    time.sleep(delay)
+                    step_result = {"index": idx, "type": t, "ok": True}
+                    capture_pre_step(sc, step, idx, step_result)
+                    step_start_t = time.monotonic()
+                    continue
+
+                step_result = merged
+                break
+
             step_dur_ms = (time.monotonic() - step_start_t) * 1000.0
             trace_log.info(
                 "step_end",
@@ -147,10 +270,8 @@ class ScenarioExecutor:
                 ok=bool(step_result.get("ok", True)),
                 duration_ms=round(step_dur_ms, 1),
                 message=str(step_result.get("message") or "-"),
+                attempts=attempts_used,
             )
-
-            # Post-step capture
-            capture_post_step(sc, step, idx, step_result, step_start_t)
 
             sc.step_results.append(step_result)
 

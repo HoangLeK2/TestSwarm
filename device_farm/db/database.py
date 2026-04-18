@@ -11,15 +11,18 @@ Usage in Temporal activities (separate thread/loop):
 """
 from __future__ import annotations
 
+import asyncio
+import threading
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from typing import Dict
 
 from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.pool import NullPool
 from sqlalchemy.orm import DeclarativeBase
 
 from core.config import load_config
@@ -53,9 +56,8 @@ engine = create_async_engine(
     echo=False,
     pool_size=10,
     max_overflow=20,
-    # NOTE: keep pre_ping off for asyncpg stability on some macOS builds.
-    # We rely on normal query retry/error handling instead of ping-on-checkout.
-    pool_pre_ping=False,
+    pool_pre_ping=True,
+    pool_recycle=300,
 )
 
 AsyncSessionLocal = async_sessionmaker(
@@ -65,30 +67,68 @@ AsyncSessionLocal = async_sessionmaker(
 )
 
 
+# ── Per-event-loop engine cache ──────────────────────────────────────────────
+# Creating a new engine + dispose on every activity_session() call caused
+# connection churn on hot paths (checkpoint per step, loop_state per iter).
+# We cache one pooled engine per running event loop so callers share a pool
+# scoped to their loop — no cross-loop Future leakage, no per-call churn.
+_loop_engines: Dict[int, tuple[AsyncEngine, async_sessionmaker]] = {}
+_loop_engines_lock = threading.Lock()
+
+
+def _engine_for_loop(loop: asyncio.AbstractEventLoop) -> tuple[AsyncEngine, async_sessionmaker]:
+    key = id(loop)
+    entry = _loop_engines.get(key)
+    if entry is not None:
+        return entry
+    with _loop_engines_lock:
+        entry = _loop_engines.get(key)
+        if entry is not None:
+            return entry
+        act_engine = create_async_engine(
+            DATABASE_URL,
+            echo=False,
+            pool_size=5,
+            max_overflow=10,
+            pool_pre_ping=True,
+            pool_recycle=300,
+        )
+        factory = async_sessionmaker(act_engine, class_=AsyncSession, expire_on_commit=False)
+        _loop_engines[key] = (act_engine, factory)
+        return _loop_engines[key]
+
+
+async def dispose_loop_engine() -> None:
+    """Call on loop shutdown to release the loop-scoped engine."""
+    loop = asyncio.get_running_loop()
+    key = id(loop)
+    with _loop_engines_lock:
+        entry = _loop_engines.pop(key, None)
+    if entry is not None:
+        try:
+            await entry[0].dispose()
+        except Exception:
+            pass
+
+
 @asynccontextmanager
 async def activity_session() -> AsyncGenerator[AsyncSession, None]:
     """
     Session factory for Temporal activities (or any code running in a
     separate thread/event loop from the main FastAPI process).
 
-    Uses NullPool so each connection is created fresh in the caller's event
-    loop — avoids the "Future attached to a different loop" error that occurs
-    when the pooled engine's connections are borrowed across loop boundaries.
+    Uses a per-event-loop pooled engine so checkpoint/loop-iter hot paths
+    reuse connections instead of building/tearing a pool each call.
     """
-    act_engine = create_async_engine(DATABASE_URL, echo=False, poolclass=NullPool)
-    act_session_factory = async_sessionmaker(
-        act_engine, class_=AsyncSession, expire_on_commit=False
-    )
-    try:
-        async with act_session_factory() as session:
-            try:
-                yield session
-                await session.commit()
-            except Exception:
-                await session.rollback()
-                raise
-    finally:
-        await act_engine.dispose()
+    loop = asyncio.get_running_loop()
+    _, factory = _engine_for_loop(loop)
+    async with factory() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
 
 
 class Base(DeclarativeBase):

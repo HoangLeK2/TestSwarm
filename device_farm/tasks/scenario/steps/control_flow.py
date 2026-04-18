@@ -1,8 +1,10 @@
 """Step handlers: loop, if, break_if, repeat, repeat_until, if_element, if_variable, random_pick, set_variable, set_var."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import random
+import threading
 import time
 from typing import Any, Dict, List
 
@@ -11,6 +13,20 @@ from tasks.scenario.context import ScenarioContext
 from tasks.scenario.utils import _evaluate_condition, _eval_ru_condition, _wait_for_element
 
 log = logging.getLogger(__name__)
+
+# Per-execution asyncio.Lock for serializing loop_state writes.
+# Keyed by execution_id; leaks are bounded since executions finish.
+_LOOP_PERSIST_LOCKS: Dict[str, asyncio.Lock] = {}
+_LOOP_PERSIST_LOCKS_GUARD = threading.Lock()
+
+
+def _loop_persist_lock_for(execution_id: str) -> asyncio.Lock:
+    with _LOOP_PERSIST_LOCKS_GUARD:
+        lock = _LOOP_PERSIST_LOCKS.get(execution_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            _LOOP_PERSIST_LOCKS[execution_id] = lock
+        return lock
 
 
 def _run_nested(sc: ScenarioContext, nested_steps: list, extra_scenario_keys: dict = None) -> Dict[str, Any]:
@@ -51,15 +67,29 @@ def handle_loop(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dic
         result["message"] = "loop: must specify either 'count' or 'while'"
         return
 
+    # F4.1 — mid-loop resume. If scenario starts with a saved
+    # ``_resume_loop_iter`` in ctx or scenario dict, skip iterations already
+    # completed before the crash. Loop step is the most common place for long
+    # work (scroll crawls), so mid-loop granularity matters more than
+    # step-level.
+    resume_from = int(
+        sc.ctx.pop("_resume_loop_iter", None)
+        or (sc.scenario.get("_loop_state") or {}).get("_loop_iter") or 0
+    )
+    if resume_from:
+        log.info(f"[{sc.serial}] loop: resuming from iter {resume_from}/{iterations}")
+
     sub_results = []
     actual_iters = 0
-    for i in range(iterations):
+    for i in range(resume_from, iterations):
         if use_while and not _evaluate_condition(sc.device, while_cond, sc.ctx):
             break
         sc.ctx["_loop_iter"] = i
         nested_result = _run_nested(sc, nested_steps)
         sub_results.append({"iteration": i, "result": nested_result})
         actual_iters += 1
+        # F4.1 — persist mid-loop iteration index so resume picks up cleanly.
+        _persist_loop_iter(sc, i + 1)
         if not nested_result.get("success"):
             result["ok"] = False
             result["message"] = (
@@ -75,6 +105,62 @@ def handle_loop(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dic
     result["sub_results"] = sub_results
     if result.get("ok", True):
         result["message"] = f"loop: {actual_iters} iteration(s)"
+
+
+def _persist_loop_iter(sc: ScenarioContext, next_iter: int) -> None:
+    """Best-effort async write of loop iter to Execution.meta.
+
+    Never blocks or raises. Only fires for top-level scenarios with an
+    execution_id. Nested scenarios inherit parent's execution and skip.
+    """
+    import asyncio
+
+    if sc.depth > 0 or not sc.execution_id:
+        return
+    loop = getattr(sc.device, "_loop", None)
+    if loop is None or loop.is_closed():
+        return
+
+    # Per-execution asyncio.Lock serializes read-modify-write on Execution.meta
+    # so fire-and-forget schedules can't interleave and race the JSON blob.
+    lock = _loop_persist_lock_for(sc.execution_id)
+    execution_id = sc.execution_id
+
+    async def _do():
+        try:
+            from db.database import activity_session
+            from db.crud.execution import get_execution, update_execution
+            async with lock:
+                async with activity_session() as db:
+                    ex = await get_execution(db, execution_id)
+                    if ex is None:
+                        return
+                    meta = dict(ex.meta or {})
+                    ls = dict(meta.get("_loop_state") or {})
+                    prev_iter = ls.get("_loop_iter")
+                    # Advance-only: drop stale writes where next_iter would regress.
+                    if isinstance(prev_iter, int) and next_iter < prev_iter:
+                        return
+                    ls["_loop_iter"] = next_iter
+                    meta["_loop_state"] = ls
+                    await update_execution(db, execution_id, meta=meta)
+                    await db.commit()
+        except Exception as exc:
+            log.debug(f"loop_iter persist failed (non-fatal): {exc}")
+
+    def _on_done(fut):
+        exc = fut.exception()
+        if exc is not None:
+            log.warning(
+                "loop_iter future failed exec_id=%s iter=%s: %s",
+                execution_id, next_iter, exc,
+            )
+
+    try:
+        fut = asyncio.run_coroutine_threadsafe(_do(), loop)
+        fut.add_done_callback(_on_done)
+    except Exception as exc:
+        log.debug(f"loop_iter schedule failed (non-fatal): {exc}")
 
 
 @register_step("if")

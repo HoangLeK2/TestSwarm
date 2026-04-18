@@ -473,6 +473,19 @@ def _execute_tap(
     resolver = ElementResolver(phases=phases)
     result = resolver.resolve()
 
+    # F1.6 — if resolver missed AND the selector was real, force a fresh
+    # hierarchy dump and retry once. Handles the case where FB re-rendered
+    # between capture and tap, so the previous cached tree no longer has the
+    # target. Cheap (~200ms per retry), only fires on miss.
+    if not result.hit and has_selector:
+        try:
+            device.hierarchy_xml(force_refresh=True)
+        except Exception as exc:
+            log.debug(f"[{serial}] tap-retry force_refresh failed: {exc}")
+        result = resolver.resolve()
+        if result.hit:
+            log.info(f"[{serial}] tap: recovered after hierarchy refresh")
+
     if not result.hit:
         return False, f"selector {by}={value!r} not found, no fallback position", None
 

@@ -3,16 +3,62 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import importlib
 import json
 import logging
 import time
 import xml.etree.ElementTree as ET
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
+from tasks.scenario.failure_bundle import capture_failure_bundle
 from tasks.scenario.steps import register_step
 from tasks.scenario.context import ScenarioContext
 
 log = logging.getLogger(__name__)
+
+try:
+    _trace_log = importlib.import_module("structlog").get_logger("scenario_trace")
+except Exception:  # pragma: no cover — structlog optional
+    _trace_log = None
+
+
+def _emit_extraction_event(sc: ScenarioContext, step_idx: int, diagnostic: Dict[str, Any],
+                           posts_added: int, bundle_path: Optional[str] = None) -> None:
+    """Emit one structlog ``extraction_result`` event per extract step."""
+    if _trace_log is None:
+        return
+    try:
+        device = sc.device
+        last_frame_t = float(getattr(device, "_last_frame_time", 0.0) or 0.0)
+        frame_age_ms = int((time.monotonic() - last_frame_t) * 1000) if last_frame_t > 0 else None
+        u2_hb_age = None
+        try:
+            pool_mod = importlib.import_module("agent_boot.relay.u2_session_pool")
+            heartbeat_age_fn = getattr(pool_mod, "heartbeat_age_ms", None)
+            if callable(heartbeat_age_fn):
+                u2_hb_age = heartbeat_age_fn(sc.serial)
+        except Exception:
+            u2_hb_age = None
+        _trace_log.info(
+            "extraction_result",
+            serial=sc.serial,
+            step_idx=step_idx,
+            reason_code=diagnostic.get("reason_code", "unknown"),
+            posts_added=posts_added,
+            posts_returned=diagnostic.get("posts_returned", 0),
+            truncated=diagnostic.get("truncated_post_count", 0),
+            candidate_clusters=diagnostic.get("candidate_clusters", 0),
+            filtered_junk=diagnostic.get("filtered_junk_count", 0),
+            anchor_button_found=diagnostic.get("anchor_button_found"),
+            parse_ms=diagnostic.get("elapsed_ms"),
+            frame_age_ms=frame_age_ms,
+            u2_heartbeat_age_ms=u2_hb_age,
+            bundle_path=bundle_path,
+        )
+    except Exception as exc:  # pragma: no cover
+        log.debug("extraction_result event emit failed: %s", exc)
+
+
 
 
 @register_step("extract")
@@ -83,21 +129,108 @@ def handle_extract(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: 
         result["message"] = f"extract: unknown strategy {strategy!r}"
         return
 
-    # Inline auto-save
+    # Inline auto-save (F1.4 save-partial)
+    # Originally gated on result.ok=True so failed-step extractions never
+    # persisted. Now: save regardless, so partial progress survives scenario
+    # aborts (session-death, stale frame, scroll fail). Dedup by content_hash
+    # at content_store layer makes re-runs idempotent.
     _auto_save_coll = step.get("collection")
-    if _auto_save_coll and result.get("ok", True):
+    if _auto_save_coll:
         _do_inline_auto_save(sc, step, strategy, result, _auto_save_coll)
 
 
+def _parse_posts_with_diag(xml: str, source_index: int) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+   
+    from tasks.fb_extract import (
+        _hierarchy_is_fb_comment_sheet,
+        _parse_xml,
+        parse_fb_posts_from_xml,
+        parse_fb_posts_from_xml_with_diagnostic,
+        is_fb_post_truncated,
+    )
+    root = _parse_xml(xml)
+    if root is not None and _hierarchy_is_fb_comment_sheet(root):
+        return [], {
+            "reason_code": "wrong_screen_comment_sheet",
+            "posts_returned": 0,
+            "truncated_post_count": 0,
+            "candidate_clusters": 0,
+            "filtered_junk_count": 0,
+            "locale_tokens_hit": [],
+        }
+    posts = parse_fb_posts_from_xml(xml, source_index=source_index)
+    if posts:
+        return posts, {
+            "reason_code": "ok",
+            "posts_returned": len(posts),
+            "truncated_post_count": sum(1 for p in posts if is_fb_post_truncated(p)),
+            "candidate_clusters": len(posts),
+            "filtered_junk_count": 0,
+            "locale_tokens_hit": [],
+        }
+    _, diag = parse_fb_posts_from_xml_with_diagnostic(xml, source_index=source_index)
+    return posts, diag
+
+
+def _parse_comments_with_diag(
+    xml: str, parent_post_id: Optional[str], max_items: int,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Same adapter pattern for comments — preserves test mocks."""
+    from tasks.fb_extract import (
+        parse_fb_comments_from_xml,
+        parse_fb_comments_from_xml_with_diagnostic,
+    )
+    rows = parse_fb_comments_from_xml(xml, parent_post_id=parent_post_id, max_items=max_items)
+    if rows:
+        body_rows = [r for r in rows if r.get("_type") != "post_stats"]
+        return rows, {
+            "reason_code": "ok",
+            "comments_returned": len(body_rows),
+            "anchor_button_found": True,  # best-effort; real diag would confirm
+            "nodes_in_band": len(rows),
+            "candidate_clusters": len(rows),
+            "locale_tokens_hit": [],
+            "has_header_stats": any(r.get("_type") == "post_stats" for r in rows),
+        }
+    _, diag = parse_fb_comments_from_xml_with_diagnostic(
+        xml, parent_post_id=parent_post_id, max_items=max_items,
+    )
+    return rows, diag
+
+
 def _extract_fb_posts(sc, step, idx, result, xml, expand_see_more, completion_retries, _lazy_rounds, _lazy_scroll, stop_if_no_new, no_new_threshold):
-    from tasks.fb_extract import parse_fb_posts_from_xml, _dedup, is_fb_post_truncated, expand_see_more_with_lazy_hydration
+    from tasks.fb_extract import (
+        _dedup,
+        is_fb_post_truncated,
+        expand_see_more_with_lazy_hydration,
+    )
     from services.content_store import compute_content_hash
 
     serial = sc.serial
     device = sc.device
     ctx = sc.ctx
     scroll_idx = ctx.get("_loop_iter", 0)
-    new_posts = parse_fb_posts_from_xml(xml, source_index=scroll_idx)
+    new_posts, diagnostic = _parse_posts_with_diag(xml, source_index=scroll_idx)
+    reason_code = diagnostic.get("reason_code", "unknown")
+
+    # F1.8 session-death — short-circuit, do NOT treat as retriable empty feed.
+    if reason_code in ("login_screen", "rate_limited"):
+        ctx["_session_dead_reason"] = reason_code
+        ctx["_break"] = True
+        result["ok"] = False
+        result["reason_code"] = reason_code
+        result["message"] = f"extract fb_posts: {reason_code} detected — aborting scenario"
+        result["extract_diagnostic"] = diagnostic
+        execution_id = (sc.scenario or {}).get("_execution_id")
+        bundle = capture_failure_bundle(
+            device, ctx, execution_id, idx,
+            reason=reason_code, xml=xml, diagnostic=diagnostic,
+        )
+        if bundle:
+            result["failure_bundle"] = bundle
+        _emit_extraction_event(sc, idx, diagnostic, posts_added=0, bundle_path=bundle)
+        log.warning("[%s] %s", serial, result["message"])
+        return
 
     def _snapshot(posts: List[Dict[str, Any]]) -> Tuple[int, int]:
         unresolved = sum(1 for p in posts if is_fb_post_truncated(p))
@@ -111,7 +244,8 @@ def _extract_fb_posts(sc, step, idx, result, xml, expand_see_more, completion_re
             expand_see_more_with_lazy_hydration(device, max_rounds=max(2, min(_lazy_rounds, 5)), scroll_distance=max(0.12, _lazy_scroll))
             xml_h = device.hierarchy_xml(force_refresh=True)
             if xml_h:
-                new_posts = _dedup(new_posts + parse_fb_posts_from_xml(xml_h, source_index=scroll_idx))
+                retry_posts, _ = _parse_posts_with_diag(xml_h, source_index=scroll_idx)
+                new_posts = _dedup(new_posts + retry_posts)
         except Exception as exc:
             log.warning("[%s] extract: mid-parse expand failed: %s", serial, exc)
 
@@ -129,7 +263,7 @@ def _extract_fb_posts(sc, step, idx, result, xml, expand_see_more, completion_re
                 xml_retry = device.hierarchy_xml(force_refresh=True)
                 if not xml_retry:
                     break
-                retry_posts = parse_fb_posts_from_xml(xml_retry, source_index=scroll_idx)
+                retry_posts, _ = _parse_posts_with_diag(xml_retry, source_index=scroll_idx)
                 candidate_posts = _dedup(new_posts + (retry_posts or []))
                 curr_unresolved, curr_total_len = _snapshot(candidate_posts)
                 improved = curr_unresolved < prev_unresolved or curr_total_len > prev_total_len + 20
@@ -175,17 +309,37 @@ def _extract_fb_posts(sc, step, idx, result, xml, expand_see_more, completion_re
     else:
         ctx.pop("_fb_comment_parent_pid", None)
 
+    # F1.7 — only count "parser OK but feed returned nothing" toward no-new
+    # streak. If parser failed (anchor_not_found, no_candidates, etc), we
+    # should NOT exit the loop — those are retriable/diagnostic failures, not
+    # end-of-feed.
     if stop_if_no_new:
-        if added == 0:
+        if added == 0 and reason_code == "ok":
             _base_streak = ctx.get("_no_new_posts_streak", ctx.get("_no_new_streak", 0))
             ctx["_no_new_posts_streak"] = _base_streak + 1
             ctx["_no_new_streak"] = ctx["_no_new_posts_streak"]
             if ctx["_no_new_posts_streak"] >= no_new_threshold:
                 ctx["_break"] = True
                 result["message"] += f" — breaking (no new for {ctx['_no_new_posts_streak']} scrolls)"
-        else:
+        elif added > 0:
             ctx["_no_new_posts_streak"] = 0
             ctx["_no_new_streak"] = 0
+        # reason_code != "ok" and added == 0: do not touch streak.
+
+    # Failure bundle: any non-ok reason_code that didn't already capture above.
+    bundle_path: Optional[str] = None
+    if reason_code not in ("ok", "comment_sheet_no_posts_expected"):
+        execution_id = (sc.scenario or {}).get("_execution_id")
+        bundle_path = capture_failure_bundle(
+            device, ctx, execution_id, idx,
+            reason=reason_code, xml=xml, diagnostic=diagnostic,
+        )
+        if bundle_path:
+            result["failure_bundle"] = bundle_path
+
+    result["extract_diagnostic"] = diagnostic
+    result["reason_code"] = reason_code
+    _emit_extraction_event(sc, idx, diagnostic, posts_added=added, bundle_path=bundle_path)
 
 
 def _extract_text_nodes(sc, result, xml):
@@ -206,7 +360,11 @@ def _extract_text_nodes(sc, result, xml):
 
 
 def _extract_fb_comments(sc, step, idx, result, xml, stop_if_no_new, no_new_threshold):
-    from tasks.fb_extract import parse_fb_comments_from_xml, _dedup_comments, _is_junk_parsed_comment_row, _post_id_from_ctx
+    from tasks.fb_extract import (
+        _dedup_comments,
+        _is_junk_parsed_comment_row,
+        _post_id_from_ctx,
+    )
 
     serial = sc.serial
     ctx = sc.ctx
@@ -214,7 +372,28 @@ def _extract_fb_comments(sc, step, idx, result, xml, stop_if_no_new, no_new_thre
     parent_post_id_var = step.get("parent_post_id_var")
     max_items = int(step.get("max_items") or 50)
     parent_post_id = _post_id_from_ctx(ctx, parent_post_id_var)
-    raw_items = parse_fb_comments_from_xml(xml, parent_post_id=parent_post_id, max_items=max_items)
+    raw_items, cdiag = _parse_comments_with_diag(
+        xml, parent_post_id=parent_post_id, max_items=max_items,
+    )
+    creason = cdiag.get("reason_code", "unknown")
+
+    # F1.8 session-death — short-circuit on comment screen too.
+    if creason in ("login_screen", "rate_limited"):
+        ctx["_session_dead_reason"] = creason
+        ctx["_break"] = True
+        result["ok"] = False
+        result["reason_code"] = creason
+        result["message"] = f"extract fb_comments: {creason} detected — aborting scenario"
+        result["extract_diagnostic"] = cdiag
+        execution_id = (sc.scenario or {}).get("_execution_id")
+        bundle = capture_failure_bundle(
+            sc.device, ctx, execution_id, idx,
+            reason=creason, xml=xml, diagnostic=cdiag,
+        )
+        if bundle:
+            result["failure_bundle"] = bundle
+        log.warning("[%s] %s", serial, result["message"])
+        return
 
     post_stats = next((x for x in raw_items if x.get("_type") == "post_stats"), None)
     new_comments = [x for x in raw_items if x.get("_type") != "post_stats" and not _is_junk_parsed_comment_row(x)]
@@ -264,15 +443,27 @@ def _extract_fb_comments(sc, step, idx, result, xml, stop_if_no_new, no_new_thre
     result["message"] = f"extract fb_comments: +{added} new (total {len(ctx['comments'])}, post={parent_post_id})"
 
     if stop_if_no_new:
-        if added == 0:
+        if added == 0 and creason == "ok":
             ctx["_no_new_comments_streak"] = ctx.get("_no_new_comments_streak", 0) + 1
             ctx["_no_new_streak"] = ctx["_no_new_comments_streak"]
             if ctx["_no_new_comments_streak"] >= no_new_threshold:
                 ctx["_break"] = True
                 result["message"] += f" — breaking comments loop (no new for {ctx['_no_new_comments_streak']} scrolls)"
-        else:
+        elif added > 0:
             ctx["_no_new_comments_streak"] = 0
             ctx["_no_new_streak"] = 0
+
+    # Failure bundle for non-OK parse reasons.
+    if creason not in ("ok",):
+        execution_id = (sc.scenario or {}).get("_execution_id")
+        bundle_path = capture_failure_bundle(
+            sc.device, ctx, execution_id, idx,
+            reason=creason, xml=xml, diagnostic=cdiag,
+        )
+        if bundle_path:
+            result["failure_bundle"] = bundle_path
+    result["extract_diagnostic"] = cdiag
+    result["reason_code"] = creason
     log.info(f"[{serial}] {result['message']}")
 
 

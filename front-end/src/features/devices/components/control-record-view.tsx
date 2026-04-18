@@ -838,7 +838,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
         {/* ── COL 2: Phone screen (centered) ───────────────────────────── */}
         <div
           ref={mirrorColRef}
-          className='flex min-w-0 flex-1 flex-col items-center border-r border-border/60 bg-muted/20 overflow-y-auto'
+          className='flex w-[clamp(360px,34vw,520px)] shrink-0 flex-col items-center border-r border-border/60 bg-muted/20 overflow-y-auto'
         >
           {selectedDevice ? (
             <>
@@ -872,7 +872,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
         </div>
 
         {/* ── COL 3: Recording / scenario editor ───────────────────────── */}
-        <div className='flex w-[min(48vw,720px)] shrink-0 flex-col overflow-hidden'>
+        <div className='flex min-w-0 flex-1 flex-col overflow-hidden'>
 
           {playerMode && selectedDevice ? (
             /* Player mode */
@@ -1290,7 +1290,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                             })) as any
                           )
                         }
-                        maxHeight='100%'
+                        maxHeight='calc(100vh - 170px)'
                         selectorPickTarget={selectorPickTarget}
                         onSelectorPickTargetChange={setSelectorPickTarget}
                         coordinatePickTarget={coordinatePickTarget}

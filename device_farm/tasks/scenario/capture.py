@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from typing import Any, Dict, Optional, TYPE_CHECKING
 
@@ -9,6 +10,15 @@ if TYPE_CHECKING:
     from tasks.scenario.context import ScenarioContext
 
 log = logging.getLogger(__name__)
+
+
+class StaleFrameError(RuntimeError):
+    """Frame timestamp did not advance after settle-wait.
+
+    Raised from ``capture_post_step`` when the captured frame is older than
+    the step start AND the caller requested strict freshness. Scenario engine
+    handles this as retryable (F1.5) when the step is an extraction.
+    """
 
 
 def capture_pre_step(sc: "ScenarioContext", step: Dict[str, Any], step_idx: int, step_result: Dict[str, Any]) -> None:
@@ -53,6 +63,7 @@ def capture_post_step(
             time.sleep(sc.capture_settle_ms / 1000.0)
 
         # Poll for fresh frame
+        stale_after_wait = False
         if need_settle and sc.capture_stale_wait_s > 0:
             poll_deadline = time.monotonic() + sc.capture_stale_wait_s
             while time.monotonic() < poll_deadline:
@@ -63,11 +74,24 @@ def capture_post_step(
             else:
                 ft = float(getattr(sc.device, "_last_frame_time", 0.0) or 0.0)
                 if ft <= step_start_t:
+                    stale_after_wait = True
                     log.warning(
                         f"[{sc.serial}] POST step#{step_idx + 1} ({t}): "
-                        f"frame stale after {int(sc.capture_stale_wait_s * 1000)}ms wait "
-                        f"— capturing anyway (frame may duplicate PRE)"
+                        f"frame stale after {int(sc.capture_stale_wait_s * 1000)}ms wait"
                     )
+
+        # F1.3 — strict-freshness raise for extraction / assert-stable steps.
+        # Env opt-in so legacy flows keep log-and-continue behavior; extraction
+        # step opts in via ``step["require_fresh_frame"]=True`` which is promoted
+        # to ``_require_fresh_frame`` on the capture call below.
+        if stale_after_wait and (
+            os.environ.get("FB_STRICT_FRESH_FRAME", "0") == "1"
+            or step.get("require_fresh_frame") is True
+        ):
+            raise StaleFrameError(
+                f"frame stale after {int(sc.capture_stale_wait_s * 1000)}ms "
+                f"on step#{step_idx + 1} ({t})"
+            )
 
         # Build selector dict
         step_selector: Optional[Dict[str, str]] = None

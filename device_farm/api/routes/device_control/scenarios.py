@@ -11,7 +11,7 @@ import threading
 from uuid import uuid4
 from typing import Any, Callable, Dict, List, Optional
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 # Keyed by (serial, trace_id) with owner user_id so cancel routes must match
@@ -42,12 +42,12 @@ def _unregister_preview(serial: str, trace_id: str) -> None:
 def _get_preview_entry(serial: str, trace_id: str) -> Optional[dict]:
     with _ACTIVE_PREVIEWS_LOCK:
         return _ACTIVE_PREVIEWS.get((serial, trace_id))
-from jose import JWTError, jwt
-
+from api.auth import policy
+from api.auth.context import AuthContext
+from api.deps import caller_auth_from_request
 from api.schemas.device_control import ScenarioPreviewRequest
 from common.session_lock import SessionLockStore
 from core.config import Config
-from core.security import jwt_algorithm, jwt_secret_key
 from db import crud as repo
 from db.database import AsyncSessionLocal
 from runtime.core import DeviceManager
@@ -84,23 +84,10 @@ def run_scenario_on_device(
 
 
 def _resolve_user_id_from_request(request: Request) -> Optional[str]:
-    auth_header = (request.headers.get("authorization") or "").strip()
-    raw_token = ""
-    if auth_header.lower().startswith("bearer "):
-        raw_token = auth_header[7:].strip()
-    if not raw_token:
-        raw_token = str(request.query_params.get("token") or "").strip()
-    if not raw_token:
-        return None
-    try:
-        payload = jwt.decode(raw_token, jwt_secret_key(), algorithms=[jwt_algorithm()])
-        user_id = str(payload.get("sub") or "").strip()
-        token_type = payload.get("type")
-        if not user_id or token_type == "refresh":
-            return None
-        return user_id
-    except JWTError:
-        return None
+    """Delegates to the unified auth context. Preserves the legacy return
+    shape (Optional[str]) so existing callers don't need to change."""
+    ctx = caller_auth_from_request(request)
+    return ctx.user_id if ctx else None
 
 
 async def _execute_scenario_body(
@@ -268,14 +255,26 @@ def build_scenarios_router(
 
     @router.post("/sessions/{session_id}/scenario/run")
     async def api_sessions_scenario_run(session_id: str, body: ScenarioPreviewRequest, request: Request):
-        device_id = session_store.get_device_for_session(session_id)
-        if device_id is None and config.database.enabled:
-            async with AsyncSessionLocal() as db:
-                row = await repo.get_mcp_session(db, session_id)
-                if row and row.status == "active":
-                    device_id = row.device_serial
+        ctx = caller_auth_from_request(request)
+        if ctx is None:
+            return JSONResponse({"error": "Not authenticated"}, status_code=401)
+        if not config.database.enabled:
+            return JSONResponse(
+                {"error": "Session API requires database (multi-user) mode"},
+                status_code=501,
+            )
+        try:
+            device_id = await policy.assert_owns_session(ctx, session_id)
+        except HTTPException as exc:
+            return JSONResponse({"error": str(exc.detail)}, status_code=exc.status_code)
+        except Exception:
+            log.exception("sessions_scenario_run: assert_owns_session infra error")
+            return JSONResponse(
+                {"error": "Backend unavailable"}, status_code=503
+            )
         if not device_id:
             return JSONResponse({"error": "Session not found"}, status_code=404)
+        caller_id = ctx.user_id
         if not body.steps:
             return JSONResponse(
                 {"error": "steps must be a non-empty array"},
@@ -292,7 +291,6 @@ def build_scenarios_router(
             total_steps=len(body.steps),
             session_id=session_id,
         )
-        user_id = _resolve_user_id_from_request(request)
         fn = functools.partial(
             run_scenario_on_device,
             manager,
@@ -302,7 +300,7 @@ def build_scenarios_router(
             body.variables,
             trace_id,
             "api.session_run",
-            user_id,
+            caller_id,
         )
         result = await loop.run_in_executor(None, fn)
         if "error" in result:

@@ -1,13 +1,25 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 import logging
 import importlib
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 from uuid import uuid4
+
+# Shared, bounded executor for relay "attach scrcpy" events. Previous code
+# did `ThreadPoolExecutor(max_workers=1).submit(...)` on every relay event —
+# each instance leaks one idle worker thread until gc runs executor.shutdown
+# via atexit, and on a busy farm this piles up fast. A single pool keeps the
+# fire-and-forget semantics without creating a new executor per event.
+_RELAY_ATTACH_POOL = ThreadPoolExecutor(
+    max_workers=8, thread_name_prefix="relay-scrcpy-attach"
+)
+atexit.register(lambda: _RELAY_ATTACH_POOL.shutdown(wait=False))
 
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +33,7 @@ from api.deps import AdminUser
 from core.config import Config
 from db.database import init_db
 from runtime.core import DeviceManager, TaskQueue
+from runtime.lifecycle import LifecycleManager, LifecyclePhase
 from common.session_lock import SessionLockStore
 from .ws import WebSocketManager, DeviceAgentSession, get_ws_user_id, heartbeat
 
@@ -136,7 +149,16 @@ def create_app(
             event_recorder.set_event_loop(loop)
             _app.state.event_recorder = event_recorder
         log.info("Device Farm server started")
-        asyncio.create_task(heartbeat(manager))
+
+        # Single lifecycle owner for this app run. Every long-lived coroutine,
+        # subprocess, or async-closeable resource registers here so shutdown
+        # tears them down in reverse-phase order with per-entry timeout.
+        lifecycle = LifecycleManager()
+        _app.state.lifecycle = lifecycle
+
+        lifecycle.register_task(
+            LifecyclePhase.BACKGROUND, "heartbeat", lambda: heartbeat(manager),
+        )
 
         # ── Prometheus metrics collector (tạm tắt) ──
         # async def _metrics_collector() -> None:
@@ -178,7 +200,11 @@ def create_app(
                 while True:
                     await _aio.sleep(86400)  # 24h
                     await event_recorder.cleanup_old_events(keep_days=30)
-            asyncio.create_task(_event_cleanup_loop())
+            lifecycle.register_task(
+                LifecyclePhase.BACKGROUND,
+                "event-cleanup-loop",
+                _event_cleanup_loop,
+            )
         if config.database.enabled:
             try:
                 await init_db()
@@ -200,6 +226,16 @@ def create_app(
         # ── Redis shared state ──
         from services import redis_store
         await redis_store.init(config.redis)
+        lifecycle.register_resource(
+            LifecyclePhase.INFRA, "redis_store", redis_store.close,
+        )
+
+        # Dispose the main event loop's SQLAlchemy engine on shutdown so
+        # asyncpg's pool closes deterministically before uvicorn exits.
+        from db.database import dispose_loop_engine
+        lifecycle.register_resource(
+            LifecyclePhase.INFRA, "db_loop_engine", dispose_loop_engine,
+        )
         if redis_store.enabled():
             import json as _json
             try:
@@ -218,9 +254,15 @@ def create_app(
         if watchdog is not None:
             watchdog.start_watchdog()
             log.info("Watchdog started")
+            lifecycle.register_sync_resource(
+                LifecyclePhase.CONTROL, "watchdog", watchdog.stop_watchdog,
+            )
         if dispatcher is not None:
             dispatcher.start_dispatcher()
             log.info("Dispatcher started")
+            lifecycle.register_sync_resource(
+                LifecyclePhase.CONTROL, "dispatcher", dispatcher.stop_dispatcher,
+            )
 
         # ── Scheduler setup (DF-008) ──────────────────────────────────────
         temporal_client = None
@@ -249,6 +291,9 @@ def create_app(
             scheduler_engine = SchedulerEngine(queue=queue, manager=manager)
             scheduler_engine.start()
             log.info("SchedulerEngine (fallback) started")
+            lifecycle.register_resource(
+                LifecyclePhase.CONTROL, "scheduler_engine", scheduler_engine.stop,
+            )
 
         # ── ADB relay WebSocket + gRPC server ────────────────────────────────
         relay_manager = None
@@ -277,6 +322,16 @@ def create_app(
                     )
                     _app.state.grpc_server = grpc_server
                     log.info("gRPC relay server ready on port %d", grpc_port)
+
+                    async def _stop_grpc() -> None:
+                        try:
+                            await grpc_server.stop(grace=5)
+                        except Exception as exc:
+                            log.warning("gRPC relay stop error: %s", exc)
+
+                    lifecycle.register_resource(
+                        LifecyclePhase.TRANSPORT, "grpc_relay", _stop_grpc,
+                    )
                 except Exception as grpc_exc:
                     log.warning("gRPC relay server failed to start (WS fallback active): %s", grpc_exc)
 
@@ -360,8 +415,7 @@ def create_app(
                             getattr(_st, "auto_attach_scrcpy_on_relay_online", True)
                         )
                         if _relay_auto and _relay_db_allows_scrcpy(ws_device.serial):
-                            import concurrent.futures as _cf2
-                            _cf2.ThreadPoolExecutor(max_workers=1).submit(
+                            _RELAY_ATTACH_POOL.submit(
                                 ws_device.attach_scrcpy_stream,
                                 serial,
                                 None,
@@ -407,8 +461,7 @@ def create_app(
                     _st2 = getattr(_config_ref, "streaming", None)
                     _relay_auto2 = bool(getattr(_st2, "auto_attach_scrcpy_on_relay_online", True))
                     if _relay_auto2 and _relay_db_allows_scrcpy(serial):
-                        import concurrent.futures as _cf
-                        _cf.ThreadPoolExecutor(max_workers=1).submit(
+                        _RELAY_ATTACH_POOL.submit(
                             device.attach_scrcpy_stream,
                             serial,
                             None,
@@ -473,24 +526,25 @@ def create_app(
 
         # ── Shutdown ──
         log.info("Shutting down…")
-        await redis_store.close()
-        grpc_server = getattr(_app.state, "grpc_server", None)
-        if grpc_server is not None:
-            await grpc_server.stop(grace=5)
-        if scheduler_engine is not None:
-            await scheduler_engine.stop()
+
+        # Register ngrok teardown late so it runs in EGRESS (fired first).
         if ngrok_tunnel is not None:
-            try:
-                import pyngrok
-                pyngrok.ngrok.disconnect(ngrok_tunnel.public_url)
-                pyngrok.ngrok.kill()
-            except Exception:
-                pass
-        if watchdog is not None:
-            watchdog.stop_watchdog()
-        if dispatcher is not None:
-            dispatcher.stop_dispatcher()
-        manager.teardown_all()
+            def _kill_ngrok() -> None:
+                try:
+                    import pyngrok
+                    pyngrok.ngrok.disconnect(ngrok_tunnel.public_url)
+                    pyngrok.ngrok.kill()
+                except Exception:
+                    pass
+            lifecycle.register_sync_resource(
+                LifecyclePhase.EGRESS, "ngrok_tunnel", _kill_ngrok,
+            )
+
+        await lifecycle.shutdown()
+        try:
+            manager.teardown_all()
+        except Exception as exc:
+            log.warning("manager.teardown_all error: %s", exc)
         log.info("Shutdown complete.")
 
     app = FastAPI(

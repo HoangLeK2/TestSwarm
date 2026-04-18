@@ -24,10 +24,33 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import threading
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Dict, Optional
+
+from services.idempotency import (
+    claim_or_get_intent,
+    make_idempotency_key,
+    mark_intent_accepted,
+    mark_intent_failed,
+)
 
 log = logging.getLogger(__name__)
+
+# Per-schedule in-process locks. Even with atomic DB claim, a single process
+# that both polls AND receives trigger_now() can still race; the asyncio.Lock
+# serializes any concurrent execution path within one server.
+_SCHEDULE_LOCKS: Dict[str, asyncio.Lock] = {}
+_SCHEDULE_LOCKS_GUARD = threading.Lock()
+
+
+def _schedule_lock_for(schedule_id: str) -> asyncio.Lock:
+    with _SCHEDULE_LOCKS_GUARD:
+        lock = _SCHEDULE_LOCKS.get(schedule_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            _SCHEDULE_LOCKS[schedule_id] = lock
+        return lock
 
 _TEMPORAL_SCHEDULE_PREFIX = "df-schedule-"
 _TEMPORAL_WORKFLOW_PREFIX = "df-sched-run-"
@@ -250,12 +273,66 @@ class SchedulerService:
 
     async def _trigger_fallback(self, db, schedule) -> str:
         """Direct dispatch when Temporal is not available."""
-        from db.crud.schedule import create_schedule_run, update_schedule_run
+        from db.crud.schedule import create_schedule_run
+
+        # Serialize with SchedulerEngine's poll loop on this schedule_id to
+        # prevent manual trigger racing an in-flight fallback dispatch.
+        lock = _schedule_lock_for(schedule.id)
+        await lock.acquire()
+        try:
+            # Idempotency claim. Manual trigger uses a timestamp-bucketed key
+            # so two rapid-fire trigger clicks collapse, but distinct firings
+            # (minutes apart) each get their own intent.
+            now_bucket = datetime.now(timezone.utc).replace(second=0, microsecond=0).isoformat()
+            intent_source = f"schedule:{schedule.id}:trigger:{now_bucket}"
+            intent = None
+            try:
+                intent = await claim_or_get_intent(
+                    key=make_idempotency_key(intent_source, {"id": schedule.id}),
+                    source=intent_source,
+                    payload={"schedule_id": schedule.id, "bucket": now_bucket},
+                )
+                if intent.replay and intent.result_ref:
+                    log.info(
+                        "[scheduler] trigger_now schedule %s deduped — run=%s",
+                        schedule.id, intent.result_ref,
+                    )
+                    return intent.result_ref
+            except Exception as exc:
+                log.warning(
+                    "[scheduler] idempotency claim failed for trigger, proceeding: %s", exc
+                )
+
+            run = await create_schedule_run(db, schedule_id=schedule.id, status="running")
+            await db.commit()
+            try:
+                run_id = await self._trigger_fallback_body(db, schedule, run)
+                if intent is not None:
+                    try:
+                        await mark_intent_accepted(intent.id, result_ref=str(run.id))
+                    except Exception as mk_exc:
+                        log.warning("[scheduler] mark_intent_accepted failed: %s", mk_exc)
+                return run_id
+            except Exception as exc:
+                if intent is not None:
+                    try:
+                        await mark_intent_failed(intent.id, reason=str(exc))
+                    except Exception as mk_exc:
+                        log.warning("[scheduler] mark_intent_failed failed: %s", mk_exc)
+                raise
+        finally:
+            lock.release()
+
+    async def _trigger_fallback_body(self, db, schedule, run) -> str:
+        """Execute the dispatch and persist run state.
+
+        Re-raises on dispatch failure so the caller can mark the idempotency
+        intent as failed. The schedule_run row is updated in both paths so the
+        UI still reflects reality even when we re-raise.
+        """
+        from db.crud.schedule import update_schedule_run
         from db.crud.schedule import update_schedule_after_run
         from db.database import AsyncSessionLocal
-
-        run = await create_schedule_run(db, schedule_id=schedule.id, status="running")
-        await db.commit()
 
         cfg = {
             "id": schedule.id,
@@ -276,36 +353,16 @@ class SchedulerService:
             result = await _dispatch_schedule_config(
                 cfg, queue=self._queue, manager=self._manager,
             )
-            finished_at = datetime.now(timezone.utc)
-            async with AsyncSessionLocal() as udb:
-                await update_schedule_run(
-                    udb, run.id,
-                    status="completed",
-                    finished_at=finished_at,
-                    devices_dispatched=result.get("devices_dispatched", 0),
-                    task_ids=result.get("task_ids", []),
-                )
-                await update_schedule_after_run(
-                    udb, schedule.id,
-                    last_run_at=finished_at,
-                    next_run_at=compute_next_run(
-                        schedule.cron_expression, schedule.timezone, base=finished_at
-                    ),
-                )
-                await udb.commit()
         except Exception as exc:
             log.error("[scheduler] fallback dispatch error: %s", exc)
             failed_at = datetime.now(timezone.utc)
-            from db.database import AsyncSessionLocal as _ASL
-            async with _ASL() as udb:
+            async with AsyncSessionLocal() as udb:
                 await update_schedule_run(
                     udb, run.id,
                     status="failed",
                     finished_at=failed_at,
                     error_message=str(exc),
                 )
-                # Update next_run_at even on failure so the scheduler doesn't
-                # stall with a stale value from before this run started.
                 await update_schedule_after_run(
                     udb, schedule.id,
                     last_run_at=failed_at,
@@ -314,7 +371,25 @@ class SchedulerService:
                     ),
                 )
                 await udb.commit()
+            raise
 
+        finished_at = datetime.now(timezone.utc)
+        async with AsyncSessionLocal() as udb:
+            await update_schedule_run(
+                udb, run.id,
+                status="completed",
+                finished_at=finished_at,
+                devices_dispatched=result.get("devices_dispatched", 0),
+                task_ids=result.get("task_ids", []),
+            )
+            await update_schedule_after_run(
+                udb, schedule.id,
+                last_run_at=finished_at,
+                next_run_at=compute_next_run(
+                    schedule.cron_expression, schedule.timezone, base=finished_at
+                ),
+            )
+            await udb.commit()
         return run.id
 
     # ── Temporal Schedule sync ────────────────────────────────────────────────
@@ -468,11 +543,13 @@ class SchedulerEngine:
 
     async def _check_due_schedules(self) -> None:
         from db.database import AsyncSessionLocal
-        from db.crud.schedule import get_due_schedules
+        from db.crud.schedule import claim_due_schedules
 
         now = datetime.now(timezone.utc)
         async with AsyncSessionLocal() as db:
-            due = await get_due_schedules(db, now)
+            # Atomic claim — advances next_run_at under row lock so another
+            # poller (this process or peer) won't see the same row as due.
+            due = await claim_due_schedules(db, now)
 
         for schedule in due:
             # Fire each schedule as a separate task (non-blocking)
@@ -482,6 +559,12 @@ class SchedulerEngine:
             )
 
     async def _execute_schedule(self, schedule) -> None:
+        # Guard against any in-process concurrency (poll overlap, manual
+        # trigger_now) on the same schedule_id.
+        async with _schedule_lock_for(schedule.id):
+            await self._execute_schedule_locked(schedule)
+
+    async def _execute_schedule_locked(self, schedule) -> None:
         from db.database import AsyncSessionLocal
         from db.crud.schedule import (
             create_schedule_run,
@@ -492,10 +575,39 @@ class SchedulerEngine:
         now = datetime.now(timezone.utc)
         run_id = None
 
+        # Idempotency: tick-bucket the fire so replays (poll retry, concurrent
+        # process claiming the same row) fold into one intent. The bucket is
+        # the schedule's cron cadence — for fallback we approximate by rounding
+        # to the minute, which matches the 30s poll interval.
+        tick = now.replace(second=0, microsecond=0).isoformat()
+        intent_source = f"schedule:{schedule.id}:tick:{tick}"
+        intent = None
+        try:
+            intent = await claim_or_get_intent(
+                key=make_idempotency_key(intent_source, {"id": schedule.id}),
+                source=intent_source,
+                payload={"schedule_id": schedule.id, "tick": tick},
+            )
+            if intent.replay:
+                log.info(
+                    "[scheduler] schedule %s fire skipped — intent already accepted (%s)",
+                    schedule.id, intent.result_ref or "n/a",
+                )
+                return
+        except Exception as exc:
+            # If the idempotency layer is unavailable, fall back to best-effort
+            # dispatch (better to double-run than miss). The schedule lock +
+            # claim_due_schedules lease still give strong protection.
+            log.warning("[scheduler] idempotency claim failed, proceeding: %s", exc)
+
         async with AsyncSessionLocal() as db:
             run = await create_schedule_run(db, schedule_id=schedule.id, status="pending")
             run_id = run.id
             await db.commit()
+
+        # NOTE: intent stays in 'new' until dispatch actually succeeds below.
+        # Accepting too early would mark a fire successful even if enqueue
+        # subsequently raised, so replay logic would skip a real retry.
 
         # Apply random delay before executing
         delay_min = schedule.random_delay_min or 0
@@ -526,11 +638,21 @@ class SchedulerEngine:
             )
             status = "completed"
             error = None
+            if intent is not None:
+                try:
+                    await mark_intent_accepted(intent.id, result_ref=str(run_id))
+                except Exception as mk_exc:
+                    log.warning("[scheduler-engine] mark_intent_accepted failed: %s", mk_exc)
         except Exception as exc:
             log.error("[scheduler-engine] schedule %s failed: %s", schedule.id, exc)
             result = {"devices_dispatched": 0, "task_ids": []}
             status = "failed"
             error = str(exc)
+            if intent is not None:
+                try:
+                    await mark_intent_failed(intent.id, reason=str(exc))
+                except Exception as mk_exc:
+                    log.warning("[scheduler-engine] mark_intent_failed failed: %s", mk_exc)
 
         next_run = compute_next_run(schedule.cron_expression, schedule.timezone, now)
 
@@ -694,6 +816,8 @@ async def _dispatch_fleet(
     _user_id = cfg.get("user_id")
     if _user_id:
         _campaign_vars["__USER_ID__"] = str(_user_id)
+
+    now_bucket = datetime.now(timezone.utc).replace(second=0, microsecond=0).isoformat()
     for i, device in enumerate(devices):
         delay = i * stagger_interval if stagger else 0
         payload = {
@@ -702,20 +826,54 @@ async def _dispatch_fleet(
             "_campaign_vars": _campaign_vars,
             "_scenario_registry": registry,
         }
-        task = Task(
-            fn=lambda dev: None,
-            priority=5,
-            target=device.serial,
-            timeout=300,
-            max_retries=1,
-            name=f"schedule:{cfg['id']}:device:{device.serial}",
+
+        # Per-device idempotency. A retried fleet dispatch at the same
+        # minute-bucket collapses to one enqueue per device.
+        intent_source = (
+            f"fleet:{cfg.get('id', 'adhoc')}:dev:{device.serial}:bucket:{now_bucket}"
         )
-        task.fn = _make_staggered_task(
-            make_scenario_task(payload, cancel_event=task.cancel_event),
-            delay_seconds=float(delay),
-        )
-        queue.put(task)
+        try:
+            intent = await claim_or_get_intent(
+                key=make_idempotency_key(intent_source, payload),
+                source=intent_source,
+                payload={"serial": device.serial, "bucket": now_bucket},
+            )
+            if intent.replay and intent.result_ref:
+                task_ids.append(intent.result_ref)
+                continue
+        except Exception as exc:
+            log.warning("[fleet] idempotency claim failed for %s: %s", device.serial, exc)
+            intent = None
+
+        try:
+            task = Task(
+                fn=lambda dev: None,
+                priority=5,
+                target=device.serial,
+                timeout=300,
+                max_retries=1,
+                name=f"schedule:{cfg['id']}:device:{device.serial}",
+            )
+            task.fn = _make_staggered_task(
+                make_scenario_task(payload, cancel_event=task.cancel_event),
+                delay_seconds=float(delay),
+            )
+            queue.put(task)
+        except Exception as exc:
+            log.error("[fleet] enqueue failed for %s: %s", device.serial, exc)
+            if intent is not None:
+                try:
+                    await mark_intent_failed(intent.id, reason=f"enqueue: {exc}")
+                except Exception as mk_exc:
+                    log.warning("[fleet] mark_intent_failed failed: %s", mk_exc)
+            continue
+
         task_ids.append(task.id)
+        if intent is not None:
+            try:
+                await mark_intent_accepted(intent.id, result_ref=task.id)
+            except Exception as mk_exc:
+                log.warning("[fleet] mark_intent_accepted failed: %s", mk_exc)
 
     return {
         "devices_dispatched": len(devices),

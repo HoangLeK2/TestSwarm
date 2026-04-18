@@ -13,12 +13,10 @@ import uuid
 from typing import Any, Dict, Optional
 
 from fastapi import WebSocket, WebSocketDisconnect
-from jose import JWTError, jwt
 from starlette.websockets import WebSocketDisconnect as StarletteWSDisconnect
 
 from services import pairing as _pairing_mod
 from core.config import Config
-from core.security import jwt_algorithm, jwt_secret_key
 from db import crud as repo
 from db.database import AsyncSessionLocal
 from runtime.core import DeviceManager, DeviceState
@@ -130,22 +128,17 @@ async def heartbeat(manager: DeviceManager) -> None:
 
 
 async def get_ws_user_id(ws: WebSocket) -> Optional[str]:
+    """Extract user_id from JWT passed as ?token=... in the WebSocket URL.
+
+    WebSockets are the one place we accept a query-string token because
+    browsers cannot set custom headers on WS upgrades. The decode itself
+    goes through the unified AuthContext path so WS and HTTP share the
+    same token validation rules.
     """
-    Extract user_id from JWT passed as ?token=... in the WebSocket URL.
-    Returns None if token is missing/invalid; WS will behave as anonymous.
-    """
-    token = ws.query_params.get("token")
-    if not token:
-        return None
-    try:
-        payload = jwt.decode(token, jwt_secret_key(), algorithms=[jwt_algorithm()])
-        user_id: Optional[str] = payload.get("sub")
-        token_type: Optional[str] = payload.get("type")
-        if not user_id or token_type == "refresh":
-            return None
-        return str(user_id)
-    except JWTError:
-        return None
+    from api.auth.context import try_decode_access_token
+
+    ctx = try_decode_access_token(ws.query_params.get("token"))
+    return ctx.user_id if ctx else None
 
 
 class WebSocketManager:

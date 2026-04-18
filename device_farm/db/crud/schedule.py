@@ -5,10 +5,10 @@ All functions are async-compatible with AsyncSession.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.schedule import Schedule, ScheduleRun
@@ -119,7 +119,11 @@ async def delete_schedule(db: AsyncSession, schedule_id: str) -> bool:
 async def get_due_schedules(
     db: AsyncSession, now: Optional[datetime] = None
 ) -> list[Schedule]:
-    """Return enabled schedules whose next_run_at is <= now (due to fire)."""
+    """Return enabled schedules whose next_run_at is <= now (due to fire).
+
+    NOTE: Prefer `claim_due_schedules` for executor code paths — plain SELECT
+    here is non-atomic and will return the same row to concurrent pollers.
+    """
     if now is None:
         now = datetime.now(timezone.utc)
     result = await db.execute(
@@ -130,6 +134,43 @@ async def get_due_schedules(
         )
     )
     return list(result.scalars().all())
+
+
+async def claim_due_schedules(
+    db: AsyncSession,
+    now: Optional[datetime] = None,
+    lease_seconds: int = 300,
+) -> list[Schedule]:
+    """Atomically claim due schedules by advancing next_run_at to a lease.
+
+    Prevents double-dispatch under concurrent pollers (multi-instance or
+    overlapping poll cycles). Uses UPDATE … RETURNING which acquires a row
+    lock per match; the second poller sees the bumped next_run_at and skips.
+
+    The lease is a tentative placeholder — successful dispatch MUST call
+    update_schedule_after_run to replace it with the real cron-computed
+    next_run_at. If the process crashes mid-dispatch, the schedule stays
+    quiet until `lease_seconds` elapse, then gets claimed again.
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+    lease_until = now + timedelta(seconds=lease_seconds)
+
+    stmt = (
+        update(Schedule)
+        .where(
+            Schedule.is_enabled.is_(True),
+            Schedule.next_run_at <= now,
+            Schedule.next_run_at.is_not(None),
+        )
+        .values(next_run_at=lease_until, updated_at=_now())
+        .returning(Schedule)
+        .execution_options(synchronize_session=False)
+    )
+    result = await db.execute(stmt)
+    claimed = list(result.scalars().all())
+    await db.commit()
+    return claimed
 
 
 async def update_schedule_after_run(

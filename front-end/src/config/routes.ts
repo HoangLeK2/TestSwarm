@@ -38,6 +38,9 @@ export const ROUTES = {
   ACCOUNTS: {
     ROOT: '/dashboard/accounts'
   },
+  ACCOUNT_GROUPS: {
+    ROOT: '/dashboard/device-farm/account-groups'
+  },
   SCENARIO_TEMPLATES: {
     ROOT: '/dashboard/scenario-templates',
     FLOW: (id: string) => `/scenario-flow/${id}`,

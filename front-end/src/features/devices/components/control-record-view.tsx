@@ -91,6 +91,9 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { useControlRecord } from '../hooks/use-control-record';
+import { useScenarioTemplates } from '@/features/scenario-templates/hooks/use-scenario-templates';
+import type { ScenarioTemplateOut } from '@/features/scenario-templates/services/api';
+import { useAccountGroups } from '@/features/account-groups/hooks/use-account-groups';
 import { XmlTreeViewer } from './control-record/xml-tree-viewer';
 import { ScenarioPlayer } from './control-record/scenario-player';
 import { FlowEditor } from '@/features/campaigns/components/flow-editor';
@@ -137,13 +140,13 @@ function flattenVarDefs(vars: Record<string, any>): Record<string, any> {
   return out;
 }
 
-type Props = { initialSerial?: string | null; initialCampaignId?: string | null; initialScenarioId?: string | null };
+type Props = { initialSerial?: string | null; initialCampaignId?: string | null; initialScenarioId?: string | null; initialTemplateId?: string | null };
 
 const ENABLE_FLOWGRAM_CONTROL_UI = false;  // UI flowgram disabled 
 
-export function ControlRecordView({ initialSerial, initialCampaignId, initialScenarioId }: Props = {}) {
+export function ControlRecordView({ initialSerial, initialCampaignId, initialScenarioId, initialTemplateId }: Props = {}) {
   const t = useTranslations('devicesControlRecord.view');
-  const { error, device, record, steps, save, hierarchy, selector } = useControlRecord(initialSerial, initialCampaignId, initialScenarioId);
+  const { error, device, record, steps, save, hierarchy, selector } = useControlRecord(initialSerial, initialCampaignId, initialScenarioId, initialTemplateId);
   const { setSkipTapRecordingWhilePick } = record;
   const { read_only: safeReadOnly, stream_hierarchy: safeHierarchy } = useSafeMode();
 
@@ -164,6 +167,25 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
   const [flowCanvasKey, setFlowCanvasKey] = useState(0);
   const [flowSelectedFgId, setFlowSelectedFgId] = useState<string | null>(null);
   const [flowDetailStep, setFlowDetailStep] = useState<FlowStep | null>(null);
+
+  // Template picker: fetched lazily only when the empty-state view is shown
+  // (see below — hook is called unconditionally; React-Query is cheap to keep
+  // alive). `previewTemplate` holds the template being inspected before load.
+  const templatesQuery = useScenarioTemplates();
+  const [previewTemplate, setPreviewTemplate] = useState<ScenarioTemplateOut | null>(null);
+
+  // Account-group picker for the Save dialog. `'_none'` = do not bind.
+  // On open, we hydrate from editingContext so a user returning to edit a
+  // scenario sees the already-bound group pre-selected.
+  const { data: accountGroups = [] } = useAccountGroups();
+  const [saveAccountGroupId, setSaveAccountGroupId] = useState<string>('');
+  useEffect(() => {
+    if (save.editingContext?.accountGroupId) {
+      setSaveAccountGroupId(save.editingContext.accountGroupId);
+    } else {
+      setSaveAccountGroupId('');
+    }
+  }, [save.editingContext]);
   const [flowRunStates, setFlowRunStates] = useState<Record<string, FlowgramRunState>>({});
   const [flowCoordPick, setFlowCoordPick] = useState<null | { fgId: string; kind: 'tap' | 'swipe' }>(null);
   /** Flow mode: chọn selector từ mirror cho node đang chọn (giống pick trên danh sách). */
@@ -727,7 +749,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
   // anyway so user sees XML / mirror / scenario columns. Phone column shows
   // the existing "Chọn thiết bị từ thanh trên" placeholder when selectedDevice
   // is null.
-  if (device.connectedDevices.length === 0 && !save.editingContext) {
+  if (device.connectedDevices.length === 0 && !save.editingContext && !save.templateContext) {
     return (
       <div className='flex flex-col items-center justify-center rounded-lg border border-dashed border-border py-20 text-center'>
         <Video className='mb-3 size-10 text-muted-foreground/40' />
@@ -768,14 +790,25 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
         {/* Title */}
         <div className='min-w-0 flex-1'>
           <p className='truncate text-sm font-semibold leading-tight'>
-            {save.editingContext ? save.editingContext.name : t('pageTitle')}
+            {save.templateContext
+              ? save.templateContext.name
+              : save.editingContext
+                ? save.editingContext.name
+                : t('pageTitle')}
           </p>
-          <p className='text-[10px] text-muted-foreground'>{t('pageEyebrow')}</p>
+          <p className='text-[10px] text-muted-foreground'>
+            {save.templateContext ? t('templateEyebrow') : t('pageEyebrow')}
+          </p>
         </div>
 
         {save.editingContext && (
           <span className='shrink-0 inline-flex items-center rounded-full border border-amber-400/40 bg-amber-400/10 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300'>
             Đang chỉnh sửa
+          </span>
+        )}
+        {save.templateContext && (
+          <span className='shrink-0 inline-flex items-center rounded-full border border-emerald-400/40 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300'>
+            {t('templateBadge')}
           </span>
         )}
 
@@ -1026,6 +1059,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                 preloadedSteps={steps.items.length > 0 ? (steps.items as any[]) : undefined}
                 preloadedName={save.editingContext?.name}
                 preloadedVariables={scenarioVariables}
+                preloadedAccountGroupId={saveAccountGroupId || save.editingContext?.accountGroupId || null}
                 deviceBusy={(selectedDevice.state || '').replace('DeviceState.', '') === 'BUSY'}
               />
             </div>
@@ -1222,12 +1256,21 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                   size='sm'
                   variant='default'
                   className='h-7 shrink-0 gap-1 px-2 text-[10px]'
-                  onClick={steps.openSave}
-                  disabled={steps.items.length === 0 || safeReadOnly}
+                  onClick={() => {
+                    // Template mode: save back to the template directly (no campaign picker).
+                    if (save.templateContext) {
+                      save.saveToTemplate(scenarioVariables);
+                      return;
+                    }
+                    steps.openSave();
+                  }}
+                  disabled={steps.items.length === 0 || safeReadOnly || save.savingTemplate}
                   title={safeReadOnly ? 'Safe mode: không cho lưu' : undefined}
                 >
                   <Save className='size-3' />
-                  Lưu
+                  {save.templateContext
+                    ? (save.savingTemplate ? t('templateSaving') : t('templateSave'))
+                    : 'Lưu'}
                 </Button>
                 {/* Variables editor button */}
                 <Tooltip delayDuration={400}>
@@ -1351,6 +1394,59 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                               </div>
                             </div>
                           ))}
+
+                          {/* Templates section — includes both user-created and builtin/system templates. */}
+                          <div className='space-y-2.5'>
+                            <div className='flex items-center gap-2'>
+                              <span className='h-3.5 w-1 rounded-full bg-emerald-500' aria-hidden />
+                              <span className='text-xs font-semibold uppercase tracking-wide text-foreground/80'>
+                                {t('emptyNodePicker.sectionTemplate')}
+                              </span>
+                              <span className='ml-auto rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1 ring-inset bg-emerald-50 text-emerald-700 ring-emerald-200/60'>
+                                {templatesQuery.data?.length ?? 0}
+                              </span>
+                            </div>
+                            {templatesQuery.isLoading ? (
+                              <div className='rounded-lg border border-dashed border-border/60 bg-background px-3 py-4 text-center text-xs text-muted-foreground'>
+                                {t('emptyNodePicker.templateLoading')}
+                              </div>
+                            ) : (templatesQuery.data?.length ?? 0) === 0 ? (
+                              <div className='rounded-lg border border-dashed border-border/60 bg-background px-3 py-4 text-center text-xs text-muted-foreground'>
+                                {t('emptyNodePicker.templateEmpty')}
+                              </div>
+                            ) : (
+                              <div className='grid grid-cols-1 gap-2 sm:grid-cols-2'>
+                                {templatesQuery.data!.map((tpl) => (
+                                  <button
+                                    key={tpl.id}
+                                    type='button'
+                                    onClick={() => setPreviewTemplate(tpl)}
+                                    className='group flex items-start gap-2.5 rounded-lg border border-border/60 bg-background px-2.5 py-2 text-left transition hover:border-emerald-300 hover:bg-emerald-50/40 hover:shadow-sm'
+                                  >
+                                    <span className='mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md ring-1 ring-inset bg-emerald-50 text-emerald-600 ring-emerald-100 transition group-hover:scale-105'>
+                                      <List size={14} />
+                                    </span>
+                                    <span className='min-w-0 flex-1 space-y-0.5'>
+                                      <span className='flex items-center gap-1.5'>
+                                        <span className='truncate text-xs font-medium text-foreground/90'>
+                                          {tpl.name}
+                                        </span>
+                                        {tpl.is_builtin && (
+                                          <Badge variant='secondary' className='h-4 px-1 text-[9px] font-semibold uppercase tracking-wide'>
+                                            {t('emptyNodePicker.templateBuiltinBadge')}
+                                          </Badge>
+                                        )}
+                                      </span>
+                                      <span className='block truncate text-[10px] text-muted-foreground'>
+                                        {t('emptyNodePicker.templateStepCount', { count: Array.isArray(tpl.steps) ? tpl.steps.length : 0 })}
+                                        {tpl.description ? ` · ${tpl.description}` : ''}
+                                      </span>
+                                    </span>
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </div>
                     );
@@ -1509,21 +1605,23 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
 
       {/* ── Variables dialog ────────────────────────────────────────────────── */}
       <Dialog open={varDialogOpen} onOpenChange={setVarDialogOpen}>
-        <DialogContent className='max-w-xl'>
-          <DialogHeader>
+        <DialogContent className='max-h-[min(85dvh,720px)] max-w-xl gap-4 overflow-hidden !grid grid-rows-[auto_auto_minmax(0,1fr)]'>
+          <DialogHeader className='shrink-0'>
             <DialogTitle className='flex items-center gap-2 text-base'>
               <SlidersHorizontal className='size-4' />
               Biến kịch bản
             </DialogTitle>
           </DialogHeader>
-          <p className='text-[12px] text-muted-foreground -mt-1'>
+          <p className='shrink-0 text-[12px] text-muted-foreground -mt-1'>
             Đặt giá trị cho biến như <code className='rounded bg-muted px-1 font-mono'>{'${GROUP_NAME}'}</code>.
             Khi chạy thử bước, giá trị này sẽ thay thế tên biến.
           </p>
-          <VariableEditor
-            variables={scenarioVariables}
-            onChange={setScenarioVariables}
-          />
+          <div className='min-h-0 overflow-y-auto overscroll-y-contain pr-1 [-webkit-overflow-scrolling:touch]'>
+            <VariableEditor
+              variables={scenarioVariables}
+              onChange={setScenarioVariables}
+            />
+          </div>
         </DialogContent>
       </Dialog>
 
@@ -1573,8 +1671,8 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           if (!o) save.setSelectedCampaignId(null);
         }}
       >
-        <DialogContent>
-          <DialogHeader>
+        <DialogContent className='max-h-[min(85dvh,720px)] max-w-lg gap-4 overflow-hidden !grid grid-rows-[auto_minmax(0,1fr)]'>
+          <DialogHeader className='shrink-0'>
             <DialogTitle>
               {save.selectedCampaignId
                 ? t('chooseScenarioTitle', { name: save.campaigns.find((c) => c.id === save.selectedCampaignId)?.name ?? '' })
@@ -1582,6 +1680,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
             </DialogTitle>
           </DialogHeader>
 
+          <div className='min-h-0 overflow-y-auto overscroll-y-contain pr-1 [-webkit-overflow-scrolling:touch]'>
           {!save.selectedCampaignId && !save.editingContext ? (
             <div className='space-y-2'>
               <p className='text-xs text-muted-foreground'>{t('stepsRecorded', { count: steps.items.length })}</p>
@@ -1613,10 +1712,55 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                   {t('chooseCampaignAgain')}
                 </Button>
               )}
+
+              {/* Account-group picker — bound to the scenario on save. Empty
+                  means "do not use a pool; fall back to the device's primary
+                  account" (legacy behavior). */}
+              <div className='space-y-1 rounded-md border border-border/60 bg-muted/30 p-2'>
+                <p className='text-[11px] font-medium text-foreground/80'>
+                  {t('accountGroupLabel')}
+                </p>
+                <Select
+                  value={saveAccountGroupId || '_none'}
+                  onValueChange={(v) => setSaveAccountGroupId(v === '_none' ? '' : v)}
+                >
+                  <SelectTrigger className='h-8 text-xs'>
+                    <SelectValue />
+                  </SelectTrigger>
+                  {/* Dialog renders at z=10000; bump SelectContent above it so
+                      the dropdown is not clipped/hidden behind the modal. */}
+                  <SelectContent className='z-[10010]'>
+                    <SelectItem value='_none' className='text-xs'>
+                      {t('accountGroupNone')}
+                    </SelectItem>
+                    {accountGroups.map((g) => (
+                      <SelectItem key={g.id} value={g.id} className='text-xs'>
+                        {g.name} · {g.platform} · {g.member_count}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {saveAccountGroupId && (() => {
+                  const picked = accountGroups.find((g) => g.id === saveAccountGroupId);
+                  if (!picked) return null;
+                  return (
+                    <p className='text-[10px] text-muted-foreground'>
+                      {t('accountGroupCaption', {
+                        count: picked.member_count,
+                        strategy: picked.rotation_strategy,
+                      })}
+                    </p>
+                  );
+                })()}
+                <p className='text-[10px] text-muted-foreground'>
+                  {t('accountGroupHint')}
+                </p>
+              </div>
+
               <Button
                 variant='default'
                 className='w-full justify-start gap-2'
-                onClick={() => save.saveAsNew(save.selectedCampaignId!, scenarioVariables)}
+                onClick={() => save.saveAsNew(save.selectedCampaignId!, scenarioVariables, saveAccountGroupId || null)}
                 disabled={save.saving !== null}
               >
                 <Plus size={13} />
@@ -1630,7 +1774,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                       key={s.id}
                       variant='outline'
                       className='h-auto w-full flex-col items-start justify-start py-2 text-left'
-                      onClick={() => save.saveTo(save.selectedCampaignId!, s.id, scenarioVariables)}
+                      onClick={() => save.saveTo(save.selectedCampaignId!, s.id, scenarioVariables, saveAccountGroupId || null)}
                       disabled={save.saving !== null}
                     >
                       <span className='font-medium'>
@@ -1645,6 +1789,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
               )}
             </div>
           )}
+          </div>
         </DialogContent>
       </Dialog>
 
@@ -1672,6 +1817,90 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Template preview dialog — opened from the empty-state picker. */}
+      <Dialog
+        open={previewTemplate !== null}
+        onOpenChange={(o) => { if (!o) setPreviewTemplate(null); }}
+      >
+        <DialogContent className='max-w-xl'>
+          <DialogHeader>
+            <DialogTitle className='flex items-center gap-2'>
+              <List className='size-4 text-emerald-600' />
+              <span className='truncate'>{previewTemplate?.name ?? ''}</span>
+              {previewTemplate?.is_builtin && (
+                <Badge variant='secondary' className='h-5 px-1.5 text-[10px] font-semibold uppercase tracking-wide'>
+                  {t('emptyNodePicker.templateBuiltinBadge')}
+                </Badge>
+              )}
+            </DialogTitle>
+          </DialogHeader>
+          {previewTemplate && (
+            <div className='space-y-3'>
+              {previewTemplate.description && (
+                <p className='text-xs leading-relaxed text-muted-foreground'>
+                  {previewTemplate.description}
+                </p>
+              )}
+              <div className='flex items-center gap-2 text-xs text-muted-foreground'>
+                <span className='font-semibold text-foreground/80'>
+                  {t('emptyNodePicker.templateStepCount', { count: Array.isArray(previewTemplate.steps) ? previewTemplate.steps.length : 0 })}
+                </span>
+                {previewTemplate.category && <span>· {previewTemplate.category}</span>}
+              </div>
+              <div className='max-h-[50vh] overflow-y-auto rounded-md border border-border/60 bg-muted/30 p-2'>
+                {Array.isArray(previewTemplate.steps) && previewTemplate.steps.length > 0 ? (
+                  <ol className='space-y-1'>
+                    {previewTemplate.steps.map((step: any, i: number) => {
+                      const type = typeof step?.type === 'string' ? step.type : 'unknown';
+                      return (
+                        <li key={i} className='flex items-start gap-2 rounded border border-border/40 bg-background px-2 py-1.5 text-xs'>
+                          <span className='flex h-5 w-5 shrink-0 items-center justify-center rounded ring-1 ring-inset bg-indigo-50 text-indigo-600 ring-indigo-100'>
+                            <StepIcon type={type as any} size={12} />
+                          </span>
+                          <span className='min-w-0 flex-1'>
+                            <span className='mr-1 text-[10px] font-semibold uppercase text-muted-foreground'>#{i + 1}</span>
+                            <span className='font-medium text-foreground/90'>{type}</span>
+                            {(step?.name || step?.label) && (
+                              <span className='ml-1 text-muted-foreground'>· {String(step.name || step.label)}</span>
+                            )}
+                          </span>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                ) : (
+                  <p className='text-center text-xs text-muted-foreground py-4'>
+                    {t('emptyNodePicker.templateNoSteps')}
+                  </p>
+                )}
+              </div>
+              <div className='flex items-center justify-end gap-2 pt-1'>
+                <Button variant='outline' size='sm' onClick={() => setPreviewTemplate(null)}>
+                  {t('emptyNodePicker.templateCancel')}
+                </Button>
+                <Button
+                  size='sm'
+                  onClick={() => {
+                    const tpl = previewTemplate;
+                    if (!tpl) return;
+                    const n = steps.appendSteps(Array.isArray(tpl.steps) ? tpl.steps : []);
+                    setPreviewTemplate(null);
+                    if (n > 0) {
+                      toast.success(t('emptyNodePicker.templateLoaded', { name: tpl.name, count: n }));
+                    } else {
+                      toast.error(t('emptyNodePicker.templateEmptySteps'));
+                    }
+                  }}
+                  disabled={!Array.isArray(previewTemplate.steps) || previewTemplate.steps.length === 0}
+                >
+                  {t('emptyNodePicker.templateAppend')}
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

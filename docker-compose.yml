@@ -9,6 +9,7 @@
 #   frontend   — Next.js dashboard (port 3000)
 #   postgres   — PostgreSQL (host port 5443 → container 5432; avoid clash with local PG)
 #   temporal   — Temporal Server (port 7233, UI: 8233)
+#   redis-ui   — Redis web UI (port 5540 → browse keys / MONITOR-lite)
 #   minio — đã comment; bật lại khi cần S3 local (kèm volume minio_data).
 #
 # DB config (read from .env in this directory, all have fallbacks):
@@ -77,20 +78,32 @@ services:
     ports:
       - "8233:8080"   # Temporal UI at http://localhost:8233
 
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    env_file:
-      - ./.env
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
+  # redis:
+  #   image: redis:7-alpine
+  #   restart: unless-stopped
+  #   env_file:
+  #     - ./.env
+  #   extra_hosts:
+  #     - "host.docker.internal:host-gateway"
+  #   ports:
+  #     - "6379:6379"
+  #   healthcheck:
+  #     test: ["CMD", "redis-cli", "ping"]
+  #     interval: 5s
+  #     timeout: 3s
+  #     retries: 5
+
+  # redis-ui:
+  #   image: rediscommander/redis-commander:latest
+  #   platform: linux/amd64
+  #   restart: unless-stopped
+  #   depends_on:
+  #     redis:
+  #       condition: service_healthy
+  #   environment:
+  #     REDIS_HOSTS: local:redis:6379
+  #   ports:
+  #     - "${REDIS_UI_PORT:-5540}:8081"
 
   farm:
     build:
@@ -144,8 +157,7 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     volumes:
       - farm_captures:/app/captures
-    # /api/health runs full readiness (DB + relay) and can exceed probe time or stall
-    # if DB is slow/unreachable; /api/live only confirms the HTTP stack is up.
+      - ./device_farm/config.yaml:/app/config.yaml:ro
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8081/api/live"]
       interval: 15s

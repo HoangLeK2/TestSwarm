@@ -73,6 +73,15 @@ class Scenario(Base):
     nodes: Mapped[list] = mapped_column(JSON, default=list)
     edges: Mapped[list] = mapped_column(JSON, default=list)
     variables: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Optional link to an account_groups row. NULL means "use the device's
+    # primary account" (legacy path). When the group is deleted, the FK is
+    # set to NULL so the scenario still runs.
+    account_group_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("account_groups.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     order: Mapped[int] = mapped_column(default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(

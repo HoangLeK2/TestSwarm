@@ -9,6 +9,11 @@ from pydantic import BaseModel
 class ScenarioPreviewRequest(BaseModel):
     steps: List[Dict[str, Any]]
     variables: Dict[str, Any] = {}
+    # Optional account-group binding — when present, the preview endpoint picks
+    # one usable account from the group and injects the __ACCOUNT_* variables
+    # (including the decrypted password) so a scenario using ${__ACCOUNT_*} can
+    # be test-run from the Control Record UI without first being saved.
+    account_group_id: Optional[str] = None
 
 
 class TapRequest(BaseModel):

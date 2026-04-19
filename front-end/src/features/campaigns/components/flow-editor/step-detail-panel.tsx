@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { VariableEditor } from '@/components/variable-editor';
+import { RunScenarioFields, type RunScenarioCampaignOption } from '../scenario-steps/run-scenario-editor';
 import type { FlowStep } from '../scenario-steps/types';
 import { getStepTypeName } from './constants';
 import { StepIcon } from './step-icon';
@@ -21,6 +22,8 @@ interface Props {
   onRequestPickTapCoords?: () => void;
   /** Pick swipe segment on mirror (swipe_ratio). */
   onRequestPickSwipeCoords?: () => void;
+  /** Other scenarios in the campaign — for run_scenario picker (templates always loaded inside RunScenarioFields). */
+  campaignScenarios?: RunScenarioCampaignOption[];
 }
 
 const SELECTOR_OPTIONS = [
@@ -35,7 +38,17 @@ const SELECTOR_OPTIONS = [
 ] as const;
 
 function F({ label, children }: { label: string; children: React.ReactNode }) {
-  return <div className='space-y-1'><Label className='text-[11px]'>{label}</Label>{children}</div>;
+  return (
+    <div className='space-y-1.5'>
+      <Label className='text-xs font-medium leading-none text-foreground'>{label}</Label>
+      {children}
+    </div>
+  );
+}
+
+/** Value field + variable insert: stacks on narrow widths so the select never squeezes the input. */
+function valueInsertRowClassName() {
+  return 'flex min-w-0 flex-col gap-2 sm:flex-row sm:items-stretch sm:gap-2';
 }
 
 function JsonTextarea({
@@ -85,6 +98,14 @@ const BUILTIN_VARIABLE_TOKENS = [
   '${__RANDOM_INT_1_100__}',
   '${__RANDOM_UUID__}',
   '${__STEP_INDEX__}',
+  // Account rotation — injected when the scenario is bound to an account group.
+  // Password is resolved at Temporal runtime from __ACCOUNT_ID__ so plaintext
+  // never lands in the workflow event history.
+  '${__ACCOUNT_ID__}',
+  '${__ACCOUNT_USERNAME__}',
+  '${__ACCOUNT_PASSWORD__}',
+  '${__ACCOUNT_DISPLAY_NAME__}',
+  '${__ACCOUNT_PLATFORM__}',
 ] as const;
 
 function insertToken(raw: string, token: string): string {
@@ -108,7 +129,7 @@ function VariableInsertSelect({
   const [selection, setSelection] = useState('');
   return (
     <select
-      className='h-8 w-[180px] rounded border bg-background px-2 py-1.5 text-xs'
+      className='h-9 w-full shrink-0 rounded-md border border-input bg-background px-2 py-1.5 text-xs shadow-sm sm:w-[13rem]'
       value={selection}
       onChange={(e) => {
         const token = e.target.value;
@@ -170,8 +191,8 @@ function SelectorFields({ step, onChange, onRequestPickSelector, availableVariab
         </select>
       </F>
       <F label='Giá trị selector'>
-        <div className='flex items-center gap-2'>
-          <Input className='h-8 text-xs' value={step.value ?? ''} onChange={(e) => onChange({ ...step, value: e.target.value })} placeholder='VD: Đăng nhập hoặc com.app:id/btn' />
+        <div className={valueInsertRowClassName()}>
+          <Input className='h-9 min-w-0 flex-1 text-xs' value={step.value ?? ''} onChange={(e) => onChange({ ...step, value: e.target.value })} placeholder='VD: Đăng nhập hoặc com.app:id/btn' />
           <VariableInsertSelect
             availableVariables={availableVariables}
             t={t}
@@ -191,6 +212,7 @@ export function StepDetailPanel({
   onRequestPickSelector,
   onRequestPickTapCoords,
   onRequestPickSwipeCoords,
+  campaignScenarios = [],
 }: Props) {
   const t = useTranslations('campaignsFeature.stepEditor');
   const typeName = getStepTypeName(step.type);
@@ -219,22 +241,28 @@ export function StepDetailPanel({
 
   return (
     <div className='flex flex-col bg-card'>
-      <div className='flex items-center gap-2 border-b px-3 py-2'>
+      <div className='flex items-center gap-2.5 border-b px-3 py-2.5'>
         <StepIcon type={step.type} size={16} />
-        <span className='text-xs font-semibold'>{typeName}</span>
+        <span className='min-w-0 truncate text-sm font-semibold tracking-tight'>{typeName}</span>
       </div>
 
-      <div className='max-h-[70vh] space-y-3 overflow-y-auto p-3'>
+      <div className='max-h-[70vh] space-y-3 overflow-y-auto p-3 sm:p-4'>
         {/* Title & description — user-defined labels for any step */}
-        <F label='Tiêu đề (tuỳ chọn)'>
-          <Input className='h-8 text-xs' placeholder='VD: Đăng nhập, Mở trang chủ…'
+        <F label={t('common.titleOptional')}>
+          <Input
+            className='h-9 text-sm'
+            placeholder={t('common.titlePlaceholder')}
             value={(step as any).title ?? ''}
-            onChange={(e) => update({ title: e.target.value || undefined } as any)} />
+            onChange={(e) => update({ title: e.target.value || undefined } as any)}
+          />
         </F>
-        <F label='Mô tả (tuỳ chọn)'>
-          <Input className='h-8 text-xs' placeholder='Ghi chú thêm cho bước này'
+        <F label={t('common.descriptionOptional')}>
+          <Input
+            className='h-9 text-sm'
+            placeholder={t('common.descriptionPlaceholder')}
             value={(step as any).description ?? ''}
-            onChange={(e) => update({ description: e.target.value || undefined } as any)} />
+            onChange={(e) => update({ description: e.target.value || undefined } as any)}
+          />
         </F>
         {step.type === 'tap' && (
           <>
@@ -319,8 +347,8 @@ export function StepDetailPanel({
         {step.type === 'open_url' && (
           <>
             <F label='URL'>
-              <div className='flex items-center gap-2'>
-                <Input className='h-8 text-xs' value={step.url ?? ''} onChange={(e) => update({ url: e.target.value })} />
+              <div className={valueInsertRowClassName()}>
+                <Input className='h-9 min-w-0 flex-1 text-xs' value={step.url ?? ''} onChange={(e) => update({ url: e.target.value })} />
                 <VariableInsertSelect
                   availableVariables={availableVariables}
                   t={t}
@@ -483,13 +511,13 @@ export function StepDetailPanel({
         {step.type === 'scroll_down' && (
           <div className='space-y-2'>
             <div className='grid grid-cols-2 gap-2'>
-              <F label='Số lần cuộn'>
+              <F label={t('scrollDown.repeatsLabel')}>
                 <Input type='number' min={1} className='h-8 w-full text-xs' value={step.repeats ?? 1} onChange={(e) => update({ repeats: Number(e.target.value) })} />
               </F>
-              <F label='start_x_ratio (neo ngang)'>
+              <F label={t('scrollDown.startXRatioLabel')}>
                 <Input
                   className='h-8 w-full text-xs font-mono'
-                  placeholder='0.18 hoặc ${SCROLL_X_RATIO}'
+                  placeholder={t('scrollDown.startXRatioPlaceholder')}
                   value={step.start_x_ratio != null ? String(step.start_x_ratio) : ''}
                   onChange={(e) => {
                     const v = e.target.value.trim();
@@ -509,16 +537,16 @@ export function StepDetailPanel({
               </F>
             </div>
             <div className='grid grid-cols-2 gap-2'>
-              <F label='start_y_ratio'>
+              <F label={t('scrollDown.startYRatioLabel')}>
                 <Input type='number' min={0} max={1} step={0.01} className='h-8 w-full text-xs' value={step.start_y_ratio ?? 0.65} onChange={(e) => update({ start_y_ratio: Number(e.target.value) || 0 })} />
               </F>
-              <F label='end_y_ratio'>
+              <F label={t('scrollDown.endYRatioLabel')}>
                 <Input type='number' min={0} max={1} step={0.01} className='h-8 w-full text-xs' value={step.end_y_ratio ?? 0.47} onChange={(e) => update({ end_y_ratio: Number(e.target.value) || 0 })} />
               </F>
-              <F label='duration_ms'>
+              <F label={t('scrollDown.durationMsLabel')}>
                 <Input type='number' min={50} className='h-8 w-full text-xs' value={step.duration_ms ?? 520} onChange={(e) => update({ duration_ms: Number(e.target.value) || 0 })} />
               </F>
-              <F label='pause_seconds'>
+              <F label={t('scrollDown.pauseSecondsLabel')}>
                 <Input type='number' min={0} step={0.1} className='h-8 w-full text-xs' value={step.pause_seconds ?? 0.6} onChange={(e) => update({ pause_seconds: Number(e.target.value) || 0 })} />
               </F>
             </div>
@@ -632,8 +660,8 @@ export function StepDetailPanel({
               </select>
             </F>
             <F label='Giá trị'>
-              <div className='flex items-center gap-2'>
-                <Input className='h-8 text-xs' value={step.equals ?? step.not_equals ?? step.contains ?? step.greater_than ?? ''} onChange={(e) => { const op = step.equals != null ? 'equals' : step.not_equals != null ? 'not_equals' : step.contains != null ? 'contains' : 'greater_than'; update({ [op]: e.target.value }); }} />
+              <div className={valueInsertRowClassName()}>
+                <Input className='h-9 min-w-0 flex-1 text-xs' value={step.equals ?? step.not_equals ?? step.contains ?? step.greater_than ?? ''} onChange={(e) => { const op = step.equals != null ? 'equals' : step.not_equals != null ? 'not_equals' : step.contains != null ? 'contains' : 'greater_than'; update({ [op]: e.target.value }); }} />
                 <VariableInsertSelect
                   availableVariables={availableVariables}
                   t={t}
@@ -650,10 +678,22 @@ export function StepDetailPanel({
 
         {step.type === 'set_variable' && (
           <>
-            <F label='Tên biến'><Input className='h-8 text-xs font-mono' value={step.name ?? ''} onChange={(e) => update({ name: e.target.value })} placeholder='MY_VAR' /></F>
-            <F label='Giá trị'>
-              <div className='flex items-center gap-2'>
-                <Input className='h-8 text-xs' value={step.value ?? ''} onChange={(e) => update({ value: e.target.value })} placeholder='giá trị hoặc ${__BUILTIN__}' />
+            <F label={t('setVariable.varNameLabel')}>
+              <Input
+                className='h-9 font-mono text-sm'
+                value={step.name ?? ''}
+                onChange={(e) => update({ name: e.target.value })}
+                placeholder={t('setVariable.varNamePlaceholder')}
+              />
+            </F>
+            <F label={t('setVariable.valueLabel')}>
+              <div className={valueInsertRowClassName()}>
+                <Input
+                  className='h-9 min-w-0 flex-1 font-mono text-sm'
+                  value={step.value ?? ''}
+                  onChange={(e) => update({ value: e.target.value })}
+                  placeholder={t('setVariable.valuePlaceholder')}
+                />
                 <VariableInsertSelect
                   availableVariables={availableVariables}
                   t={t}
@@ -661,8 +701,33 @@ export function StepDetailPanel({
                 />
               </div>
             </F>
-            <F label='Danh sách random (phẩy ngăn cách)'><Input className='h-8 text-xs' value={(step.from_list ?? []).join(', ')} onChange={(e) => update({ from_list: e.target.value.split(',').map((s: string) => s.trim()).filter(Boolean) })} /></F>
-            <p className='text-[9px] text-muted-foreground'>{'${__NOW__} ${__DATE__} ${__DEVICE_SERIAL__} ${__RANDOM_INT_1_100__}'}</p>
+            <F label={t('setVariable.randomListLabel')}>
+              <Input
+                className='h-9 text-sm'
+                value={(step.from_list ?? []).join(', ')}
+                placeholder={t('setVariable.randomListPlaceholder')}
+                onChange={(e) =>
+                  update({
+                    from_list: e.target.value
+                      .split(',')
+                      .map((s: string) => s.trim())
+                      .filter(Boolean),
+                  })}
+              />
+            </F>
+            <div className='rounded-md border border-dashed border-border/70 bg-muted/25 px-2.5 py-2'>
+              <p className='mb-1.5 text-[11px] font-medium text-muted-foreground'>{t('setVariable.builtinHint')}</p>
+              <div className='flex flex-wrap gap-1'>
+                {BUILTIN_VARIABLE_TOKENS.map((token) => (
+                  <code
+                    key={token}
+                    className='rounded bg-background/80 px-1.5 py-0.5 font-mono text-[10px] text-foreground shadow-sm ring-1 ring-border/60'
+                  >
+                    {token}
+                  </code>
+                ))}
+              </div>
+            </div>
           </>
         )}
 
@@ -1154,11 +1219,24 @@ export function StepDetailPanel({
         )}
 
         {step.type === 'run_scenario' && (
-          <>
-            <F label='Tên kịch bản'><Input className='h-8 text-xs font-mono' value={step.scenario_name ?? ''} onChange={(e) => update({ scenario_name: e.target.value, scenario_id: undefined })} placeholder='login_facebook' /></F>
-            <F label='Hoặc ID kịch bản'><Input className='h-8 text-xs font-mono' value={step.scenario_id ?? ''} onChange={(e) => update({ scenario_id: e.target.value, scenario_name: undefined })} /></F>
-            <F label='Ghi đè biến'><VariableEditor variables={step.variables ?? {}} onChange={(vars) => update({ variables: vars } as any)} showBuiltins={false} /></F>
-          </>
+          <div className='space-y-3'>
+            <p className='rounded-md bg-muted/40 px-2.5 py-2 text-[11px] leading-relaxed text-muted-foreground'>
+              {t('runScenario.intro')}
+            </p>
+            <RunScenarioFields
+              layout='panel'
+              step={step}
+              campaignScenarios={campaignScenarios}
+              onPatch={(p) => {
+                const merged = { ...step } as Record<string, unknown>;
+                for (const [k, v] of Object.entries(p)) {
+                  if (v === undefined) delete merged[k];
+                  else merged[k] = v;
+                }
+                onChange(merged as FlowStep);
+              }}
+            />
+          </div>
         )}
       </div>
     </div>

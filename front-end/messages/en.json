@@ -136,6 +136,7 @@
       "emptyHintPrefix": "Use variables in scenarios with syntax",
       "addVariable": "Add variable",
       "builtinsTitle": "Built-in system variables",
+      "systemAccountHint": "Only set when the scenario is bound to an account group.",
       "builtins": {
         "now": "Current ISO timestamp",
         "date": "YYYY-MM-DD",
@@ -144,8 +145,19 @@
         "deviceModel": "Device model",
         "randomInt": "Random number 1-100",
         "randomUuid": "UUID v4",
-        "stepIndex": "Current step index"
+        "stepIndex": "Current step index",
+        "accountId": "Account id bound to the device",
+        "accountUsername": "Account username",
+        "accountPassword": "Account password",
+        "accountDisplayName": "Account display name",
+        "accountPlatform": "Account platform"
       }
+    },
+    "scenariosForm": {
+      "accountGroupLabel": "Account group",
+      "accountGroupNone": "— None —",
+      "accountGroupHint": "Each device in the campaign will use a different account from the pool.",
+      "accountGroupCaption": "{count} accounts · {strategy}"
     }
   },
   "navigation": {
@@ -192,6 +204,7 @@
     "schedules": "Schedules",
     "device_groups": "Device Groups",
     "accounts": "Accounts",
+    "account_groups": "Account groups",
     "scenario_templates": "Scenario Templates",
     "content": "Collected Results"
   },
@@ -322,6 +335,64 @@
       "assignError": "Failed to assign device"
     }
   },
+  "accountGroupsFeature": {
+    "pageTitle": "Account groups",
+    "pageSubtitle": "Pool multiple accounts into a group and rotate them across scenarios and campaigns.",
+    "emptyTitle": "No groups yet",
+    "emptyDescription": "No groups yet. Create a group to pool accounts and attach them to a scenario.",
+    "createButton": "Create account group",
+    "nameLabel": "Group name",
+    "namePlaceholder": "e.g. Facebook team A pool",
+    "platformLabel": "Platform",
+    "platformPlaceholder": "e.g. facebook, tiktok, zalo",
+    "rotationLabel": "Rotation strategy",
+    "rotationRoundRobin": "Round robin",
+    "rotationLeastRecent": "Least recent",
+    "rotationRoundRobinHint": "Cycle through accounts in insertion order. Each run picks the next one in the rotation.",
+    "rotationLeastRecentHint": "Prefer the account that has been idle the longest — spreads load when usage is uneven.",
+    "descriptionLabel": "Description",
+    "descriptionPlaceholder": "Optional notes about this group",
+    "manageMembers": "Manage",
+    "edit": "Edit",
+    "delete": "Delete",
+    "deleteConfirmTitle": "Delete account group?",
+    "deleteConfirmDesc": "Group \"{name}\" will be removed. Member accounts stay — only their membership is cleared.",
+    "deleteConfirmCancel": "Cancel",
+    "deleteConfirmOk": "Delete group",
+    "membersTitle": "Group members",
+    "membersCurrent": "Current members",
+    "membersEligible": "Add accounts to group",
+    "membersAddSelected": "Add selected",
+    "membersRemove": "Remove from group",
+    "membersNoEligible": "No eligible accounts on this platform.",
+    "membersNoCurrent": "This group has no members yet.",
+    "searchPlaceholder": "Search by name...",
+    "allPlatforms": "All platforms",
+    "createDialog": {
+      "title": "Create account group",
+      "submit": "Create group",
+      "cancel": "Cancel",
+      "submitting": "Creating..."
+    },
+    "editDialog": {
+      "title": "Edit account group",
+      "submit": "Save changes",
+      "submitting": "Saving..."
+    },
+    "columnName": "Name",
+    "columnPlatform": "Platform",
+    "columnMembers": "Members",
+    "columnStrategy": "Strategy",
+    "columnUpdated": "Updated",
+    "columnActions": "Actions",
+    "createSuccess": "Account group created",
+    "updateSuccess": "Account group updated",
+    "deleteSuccess": "Account group deleted",
+    "addedSuccess": "Added {count} account(s) to the group",
+    "removedSuccess": "Removed account from group",
+    "nameRequired": "Group name is required",
+    "platformRequired": "Platform is required"
+  },
   "scenarioTemplatesFeature": {
     "list": {
       "loading": "Loading templates...",
@@ -360,6 +431,8 @@
       "variablesLabel": "Variables",
       "creating": "Creating...",
       "submit": "Create",
+      "submitAndOpenControl": "Create + build in Control",
+      "openingControl": "Opening Control...",
       "createFailed": "Failed to create template"
     },
     "editDialog": {
@@ -524,7 +597,9 @@
       "trigger": "Scenarios ({scenarios} scenarios · {steps} steps)",
       "title": "Scenarios — {campaign}",
       "empty": "No scenarios yet. Add the first scenario.",
-      "addButton": "Add scenario"
+      "addButton": "Add scenario",
+      "reorderTitle": "Drag to reorder",
+      "reorderFailed": "Reorder failed"
     },
     "addDevices": {
       "addedMany": "Added {count} devices",
@@ -543,7 +618,60 @@
       "addOneTitle": "Add this device",
       "helper": "Single add: click plus button. Multi add: tick checkboxes then click \"Add selected\". \"Select all\" then add = add all."
     },
+    "flowBracket": {
+      "branchSummary": "{count, plural, one {# branch} other {# branches}}",
+      "emptyBranchTitle": "No steps yet",
+      "emptyBranchBody": "Use the + row above or below this area to add steps.",
+      "endBlock": "End · {title}",
+      "blockTitle": {
+        "loop": "Loop",
+        "repeat": "Repeat",
+        "repeat_until": "Repeat until",
+        "if_element": "If element",
+        "if_variable": "If variable",
+        "if": "Condition",
+        "random_pick": "Random branch",
+        "run_scenario": "Run sub-scenario"
+      },
+      "randomPick": {
+        "explainer": "Each run picks exactly one branch. Higher weight = more likely vs other branches. Put the steps that should run together inside each branch.",
+        "branchHeading": "Branch {letter}",
+        "weightLine": "Weight {weight}"
+      },
+      "runScenario": {
+        "cardPickHint": "No target — click and pick a template or another campaign scenario.",
+        "inlineCalls": "Calls: {ref}",
+        "inlineNotSet": "No sub-scenario selected"
+      }
+    },
     "stepEditor": {
+      "common": {
+        "titleOptional": "Title (optional)",
+        "titlePlaceholder": "e.g. Login, Open home…",
+        "descriptionOptional": "Description (optional)",
+        "descriptionPlaceholder": "Notes for this step"
+      },
+      "setVariable": {
+        "varNameLabel": "Variable name",
+        "varNamePlaceholder": "MY_VAR",
+        "valueLabel": "Value",
+        "valuePlaceholder": "Literal or ${VAR} / built-in",
+        "randomListLabel": "Random pick list (comma-separated)",
+        "randomListPlaceholder": "option_a, option_b, option_c",
+        "builtinHint": "Built-ins (use insert menu):"
+      },
+      "runScenario": {
+        "intro": "Pick a shared template or another scenario from this campaign. At runtime the worker resolves by scenario ID (campaign row) first, then by name (campaign name beats template name if both match)."
+      },
+      "scrollDown": {
+        "repeatsLabel": "Number of scrolls",
+        "startXRatioLabel": "Horizontal anchor (0–1 or variable)",
+        "startXRatioPlaceholder": "0.18 or ${SCROLL_X_RATIO}",
+        "startYRatioLabel": "Start Y (0–1)",
+        "endYRatioLabel": "End Y (0–1)",
+        "durationMsLabel": "Swipe duration (ms)",
+        "pauseSecondsLabel": "Pause between scrolls (s)"
+      },
       "variableInsert": {
         "placeholder": "Insert variable...",
         "availableVariables": "Available variables",
@@ -666,7 +794,10 @@
       "xmlReady": "XML ready — start recording",
       "xmlFetchFailedFallback": "Cannot fetch XML — will record tap_ratio",
       "loadedScenario": "Loaded {count} steps from \"{name}\"",
-      "loadScenarioFailed": "Failed to load scenario"
+      "loadScenarioFailed": "Failed to load scenario",
+      "loadedTemplate": "Loaded template \"{name}\" ({count} steps)",
+      "loadTemplateFailed": "Failed to load template",
+      "saveTemplateSuccess": "Template saved"
     },
     "view": {
       "noDeviceConnected": "No connected devices",
@@ -722,6 +853,14 @@
       "scenarioEmpty": "Scenario is empty",
       "pageEyebrow": "Control",
       "pageTitle": "Record scenario",
+      "templateEyebrow": "Scenario template",
+      "templateBadge": "Editing template",
+      "templateSave": "Save template",
+      "templateSaving": "Saving…",
+      "accountGroupLabel": "Account group",
+      "accountGroupNone": "— None —",
+      "accountGroupHint": "Each device in the campaign will use a different account from the group.",
+      "accountGroupCaption": "{count} accounts · {strategy}",
       "exitConfirmTitle": "Scenario still running",
       "exitConfirmDesc": "The preview scenario is still running on the device. Leaving will stop it. Continue?",
       "exitConfirmCancel": "Stay",
@@ -765,6 +904,7 @@
         "subtitle": "Add steps directly from here to start building the scenario.",
         "sectionInteraction": "Interaction",
         "sectionFlow": "Flow",
+        "sectionTemplate": "Scenario templates",
         "tapSelector": "Tap selector",
         "longTap": "Long tap",
         "inputText": "Input text",
@@ -778,7 +918,16 @@
         "ifElement": "If element",
         "ifVariable": "If variable",
         "repeatN": "Repeat N times",
-        "repeatUntil": "Repeat until"
+        "repeatUntil": "Repeat until",
+        "templateLoading": "Loading templates…",
+        "templateEmpty": "No templates yet. Create one on the Templates page to reuse it here.",
+        "templateBuiltinBadge": "Built-in",
+        "templateStepCount": "{count} steps",
+        "templateNoSteps": "This template has no steps.",
+        "templateCancel": "Cancel",
+        "templateAppend": "Append to scenario",
+        "templateLoaded": "Appended {count} steps from \"{name}\".",
+        "templateEmptySteps": "No valid steps to append."
       }
     },
     "controls": {
@@ -870,7 +1019,16 @@
       "description": "Open <strong>STFService</strong> app → paste the link below (or scan QR). After first time, the app reconnects automatically.",
       "copied": "Link copied",
       "qrAlt": "Connection QR",
-      "generatingQr": "Generating QR…"
+      "generatingQr": "Generating QR…",
+      "waiting": "Waiting for device to connect…",
+      "successTitle": "Connected successfully!",
+      "successMessage": "Device is ready to control.",
+      "successToast": "Device connected",
+      "infoSerial": "Serial",
+      "infoModel": "Model",
+      "infoAndroid": "Android",
+      "controlNow": "Control now",
+      "close": "Close"
     }
   },
   "deviceStf": {

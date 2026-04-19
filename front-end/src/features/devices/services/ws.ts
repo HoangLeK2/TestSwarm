@@ -73,6 +73,12 @@ const lastConfigBySerial = new Map<string, ArrayBuffer>();
 // wait up to 14 s for the next IDR before video appears. Caching the last IDR
 // lets us replay it immediately so jmuxer can initialise the SourceBuffer at once.
 const lastKeyBySerial = new Map<string, ArrayBuffer>();
+const lastKeyTsBySerial = new Map<string, number>();
+// Keyframes older than this are considered stale. Replaying a stale IDR while
+// live P-frames reference a newer one (arrived while tab hidden) drifts the
+// decoder into a black state. Skip replay when stale — server-side forced IDR
+// fills the gap within ~100ms.
+const STALE_KEY_MS = 5000;
 
 let sharedSocket: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -144,6 +150,7 @@ function connectShared() {
     sharedSocket = null;
     lastConfigBySerial.clear();
     lastKeyBySerial.clear(); // stale after disconnect — server will re-send bootstrap on reconnect
+    lastKeyTsBySerial.clear();
     broadcast({ type: 'ws_status', connected: false });
     if (listeners.size > 0 || binaryListeners.size > 0) {
       reconnectTimer = setTimeout(connectShared, 2000);
@@ -179,6 +186,7 @@ function connectShared() {
             if (buf.byteLength > doff && view.getUint8(doff) !== 0) { // is_key=1
               // Same ownership rule as config cache above.
               lastKeyBySerial.set(serial, buf.slice(0));
+              lastKeyTsBySerial.set(serial, Date.now());
             }
           }
         }
@@ -286,6 +294,36 @@ export function getLastConfigFrame(serial: string): ArrayBuffer | undefined {
 
 export function getLastKeyFrame(serial: string): ArrayBuffer | undefined {
   return lastKeyBySerial.get(serial) ?? undefined;
+}
+
+/**
+ * Age of the cached keyframe for a serial in ms. Returns Infinity if no key
+ * cached. Callers should treat values > STALE_KEY_MS as unsafe to replay.
+ */
+export function getLastKeyFrameAge(serial: string): number {
+  const ts = lastKeyTsBySerial.get(serial);
+  if (ts === undefined) return Infinity;
+  return Date.now() - ts;
+}
+
+export function isCachedKeyFrameStale(serial: string): boolean {
+  return getLastKeyFrameAge(serial) > STALE_KEY_MS;
+}
+
+/**
+ * Ask the server to force an IDR (keyframe) from the given device. Used on
+ * mount / reconnect / visibility return so the browser decoder recovers in
+ * ~100ms instead of waiting up to ~14s for the next natural keyframe.
+ */
+export function requestIdr(serial: string): void {
+  if (!serial) return;
+  if (sharedSocket?.readyState === WebSocket.OPEN) {
+    try {
+      sharedSocket.send(JSON.stringify({ type: 'request_idr', serial }));
+    } catch {
+      // socket raced into closing — next viewer event will retry
+    }
+  }
 }
 
 /** One browser-wide socket; multiple React trees/components share it. */

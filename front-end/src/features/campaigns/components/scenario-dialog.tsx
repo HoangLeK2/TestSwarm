@@ -44,6 +44,8 @@ import { applyStepsToFlowgramDocument } from '@/features/scenario-templates/comp
 import type { FlowgramRunState } from '@/features/scenario-templates/components/scenario-flow-editor/flowgram-scenario-context';
 import { DeviceControlEmbed } from '@/features/devices/components/device-control-embed';
 import { VariableEditor } from '@/components/variable-editor';
+import { useTranslations } from 'next-intl';
+import { useAccountGroups } from '@/features/account-groups/hooks/use-account-groups';
 import { FlowEditor } from './flow-editor';
 import { validateScenarioStepsForApi } from '../utils/validate-scenario-steps-for-api';
 import { stepsToGraph } from '../utils/steps-to-graph';
@@ -415,7 +417,10 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
   const [graphNodes, setGraphNodes] = useState<FlowNode[]>([]);
   const [graphEdges, setGraphEdges] = useState<FlowEdge[]>([]);
   const [variables, setVariables] = useState<Record<string, any>>({});
+  const [accountGroupId, setAccountGroupId] = useState<string>('');
   const [rawJson, setRawJson] = useState('');
+  const tScenarioForm = useTranslations('components.scenariosForm');
+  const { data: accountGroups = [] } = useAccountGroups();
   const [deviceModel, setDeviceModel] = useState('');
   const [androidVersion, setAndroidVersion] = useState('');
   const [browserApp, setBrowserApp] = useState('');
@@ -921,8 +926,10 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
       currentAndroidVersion = ctx.android_version ?? '';
       currentBrowserApp = ctx.browser_app ?? '';
       currentDeviceNotes = ctx.notes ?? '';
+      setAccountGroupId((effectiveRow as ScenarioOut).account_group_id ?? '');
     } else {
       currentVariables = campaign.variables ?? {};
+      setAccountGroupId('');
     }
 
     setInstructions(currentInstructions);
@@ -991,7 +998,19 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
     }
     if (useRowApi && effectiveRow?.id) {
       saveScenarioRow(
-        { campaignId: campaign.id, scenarioId: effectiveRow.id, data: { instructions, steps: sanitizedSteps, variables, nodes: graphNodes as any, edges: graphEdges as any } },
+        {
+          campaignId: campaign.id,
+          scenarioId: effectiveRow.id,
+          data: {
+            instructions,
+            steps: sanitizedSteps,
+            variables,
+            nodes: graphNodes as any,
+            edges: graphEdges as any,
+            // Empty string clears the binding on the backend.
+            account_group_id: accountGroupId ? accountGroupId : '',
+          },
+        },
         {
           onSuccess: () => { toast.success('Lưu kịch bản thành công'); setOpen(false); },
           onError: (err) => { toast.error(formatFarmApiError(err, 'Lưu kịch bản thất bại')); },
@@ -1156,6 +1175,19 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
   const loadableScenarios = useMemo(
     () => allScenarios.filter((s) => s.id !== effectiveRow?.id && Array.isArray(s.steps) && s.steps.length > 0),
     [allScenarios, effectiveRow?.id]
+  );
+
+  /** For run_scenario step picker: other scenarios in this campaign (templates are listed separately in UI). */
+  const runScenarioCampaignOptions = useMemo(
+    () =>
+      allScenarios
+        .filter((s) => s.id !== effectiveRow?.id)
+        .map((s) => ({
+          id: s.id,
+          name: s.name,
+          steps: Array.isArray(s.steps) ? s.steps : [],
+        })),
+    [allScenarios, effectiveRow?.id],
   );
 
   const handleLoadFromScenario = (scenarioId: string) => {
@@ -1376,6 +1408,44 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
             </div>
           </div>
 
+          {/* Account group picker — binds scenario to a pool of accounts for rotation */}
+          <div className="space-y-1">
+            <p className="text-xs font-medium">{tScenarioForm('accountGroupLabel')}</p>
+            <Select
+              value={accountGroupId || '_none'}
+              onValueChange={(v) => setAccountGroupId(v === '_none' ? '' : v)}
+            >
+              <SelectTrigger className="h-7 text-[11px] w-full max-w-sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="_none" className="text-[11px]">
+                  {tScenarioForm('accountGroupNone')}
+                </SelectItem>
+                {accountGroups.map((g) => (
+                  <SelectItem key={g.id} value={g.id} className="text-[11px]">
+                    {g.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {accountGroupId && (() => {
+              const picked = accountGroups.find((g) => g.id === accountGroupId);
+              if (!picked) return null;
+              return (
+                <p className="text-[10px] text-muted-foreground">
+                  {tScenarioForm('accountGroupCaption', {
+                    count: picked.member_count,
+                    strategy: picked.rotation_strategy,
+                  })}
+                </p>
+              );
+            })()}
+            <p className="text-[10px] text-muted-foreground">
+              {tScenarioForm('accountGroupHint')}
+            </p>
+          </div>
+
           {/* DF-001: Variables */}
           <div className="space-y-2">
             <details className="group">
@@ -1549,6 +1619,7 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
                   maxHeight="min(380px, 42vh)"
                   compact
                   nestedInDialog
+                  campaignScenarios={runScenarioCampaignOptions}
                   onRunStep={handleInlineRunStep}
                   stepRunStates={stepRunStates}
                   onStopInlineRun={hardStopPreview}

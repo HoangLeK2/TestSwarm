@@ -86,6 +86,7 @@ async def create_scenario(
     steps: list | None = None,
     variables: dict | None = None,
     order: int = 0,
+    account_group_id: str | None = None,
 ) -> Scenario:
     s = Scenario(
         campaign_id=campaign_id,
@@ -94,6 +95,7 @@ async def create_scenario(
         steps=steps or [],
         variables=variables or {},
         order=order,
+        account_group_id=account_group_id or None,
     )
     db.add(s)
     await db.flush()
@@ -120,4 +122,18 @@ async def update_scenario(db: AsyncSession, scenario_id: str, **kwargs) -> None:
 
 async def delete_scenario(db: AsyncSession, scenario_id: str) -> None:
     await db.execute(delete(Scenario).where(Scenario.id == scenario_id))
+
+
+async def reorder_scenarios(
+    db: AsyncSession, campaign_id: str, ordered_ids: list[str]
+) -> list[Scenario]:
+    existing = await list_scenarios(db, campaign_id)
+    existing_ids = {s.id for s in existing}
+    if len(ordered_ids) != len(existing_ids) or set(ordered_ids) != existing_ids:
+        raise ValueError("ordered_ids must contain exactly the campaign's scenario ids")
+    for idx, sid in enumerate(ordered_ids):
+        await db.execute(
+            update(Scenario).where(Scenario.id == sid).values(order=idx)
+        )
+    return await list_scenarios(db, campaign_id)
 

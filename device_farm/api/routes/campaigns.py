@@ -48,12 +48,29 @@ class CompileScenarioBody(BaseModel):
     ui_xml: str | None = None
     device_serial: str | None = None
     device_context: dict | None = None
+
+
+class ReorderScenariosBody(BaseModel):
+    ordered_ids: list[str]
     scenario_id: str | None = None  # if provided, save to specific scenario
 
 
 # ── Helper ──────────────────────────────────────────────────────────────────
 
-def _scenario_to_out(s) -> ScenarioOut:
+async def _lookup_account_group_name(db, group_id: str | None) -> str | None:
+    """Resolve a group's display name for ScenarioOut enrichment.
+
+    Returns None on miss so the response is still well-formed when the group
+    has been deleted (its FK on the scenario is set to NULL by the DB).
+    """
+    if not group_id:
+        return None
+    from db.crud.account_group import get_group as _get_group
+    grp = await _get_group(db, group_id)
+    return grp.name if grp is not None else None
+
+
+def _scenario_to_out(s, *, account_group_name: str | None = None) -> ScenarioOut:
     return ScenarioOut(
         id=s.id,
         campaign_id=s.campaign_id,
@@ -64,6 +81,8 @@ def _scenario_to_out(s) -> ScenarioOut:
         order=s.order,
         nodes=s.nodes or [],
         edges=s.edges or [],
+        account_group_id=getattr(s, "account_group_id", None),
+        account_group_name=account_group_name,
         created_at=s.created_at,
         updated_at=s.updated_at,
     )
@@ -519,6 +538,12 @@ async def create_scenario(campaign_id: str, body: ScenarioCreate, db: DB, user: 
     # auto-order: append after last
     existing = await repo.list_scenarios(db, campaign_id)
     order = body.order if body.order else len(existing)
+    # Validate account_group_id (must belong to the current user).
+    if body.account_group_id:
+        from db.crud.account_group import get_group as _get_group
+        grp = await _get_group(db, body.account_group_id, user_id=user.id)
+        if grp is None:
+            raise HTTPException(status_code=400, detail="Account group not found or not owned by user")
     s = await repo.create_scenario(
         db, campaign_id,
         name=body.name,
@@ -526,6 +551,7 @@ async def create_scenario(campaign_id: str, body: ScenarioCreate, db: DB, user: 
         steps=[],
         variables=body.variables,
         order=order,
+        account_group_id=body.account_group_id or None,
     )
     await db.flush()
     from common.graph_compiler import ensure_step_ids, steps_to_graph
@@ -535,7 +561,29 @@ async def create_scenario(campaign_id: str, body: ScenarioCreate, db: DB, user: 
     await repo.update_scenario(db, s.id, steps=saved_steps, nodes=nodes, edges=edges)
     await db.commit()
     s = await repo.get_scenario(db, s.id)
-    return _scenario_to_out(s)
+    return _scenario_to_out(
+        s,
+        account_group_name=await _lookup_account_group_name(db, s.account_group_id),
+    )
+
+
+@router.post("/{campaign_id}/scenarios/reorder", response_model=list[ScenarioOut])
+async def reorder_scenarios_route(
+    campaign_id: str, body: ReorderScenariosBody, db: DB, user: CurrentUser
+):
+    await _get_campaign_or_404(campaign_id, user.id, db)
+    try:
+        scenarios = await repo.reorder_scenarios(db, campaign_id, body.ordered_ids)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    await db.commit()
+    return [
+        _scenario_to_out(
+            s,
+            account_group_name=await _lookup_account_group_name(db, s.account_group_id),
+        )
+        for s in scenarios
+    ]
 
 
 @router.get("/{campaign_id}/scenarios/{scenario_id}", response_model=ScenarioOut)
@@ -544,7 +592,10 @@ async def get_scenario(campaign_id: str, scenario_id: str, db: DB, user: Current
     s = await repo.get_scenario(db, scenario_id)
     if not s or s.campaign_id != campaign_id:
         raise HTTPException(status_code=404, detail="Scenario not found")
-    return _scenario_to_out(s)
+    return _scenario_to_out(
+        s,
+        account_group_name=await _lookup_account_group_name(db, s.account_group_id),
+    )
 
 
 @router.patch("/{campaign_id}/scenarios/{scenario_id}", response_model=ScenarioOut)
@@ -556,6 +607,22 @@ async def update_scenario_route(
     if not s or s.campaign_id != campaign_id:
         raise HTTPException(status_code=404, detail="Scenario not found")
     updates = {k: v for k, v in body.model_dump(exclude_unset=True).items()}
+
+    # account_group_id: empty string clears the binding; a non-empty value must
+    # reference a group owned by the caller. None was already filtered out by
+    # exclude_unset above.
+    if "account_group_id" in updates:
+        agid = updates["account_group_id"]
+        if not agid:
+            updates["account_group_id"] = None
+        else:
+            from db.crud.account_group import get_group as _get_group
+            grp = await _get_group(db, agid, user_id=user.id)
+            if grp is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Account group not found or not owned by user",
+                )
 
     # Graph model: compile nodes+edges → steps for executor
     if "nodes" in updates:
@@ -572,7 +639,10 @@ async def update_scenario_route(
         await repo.update_scenario(db, scenario_id, **updates)
     await db.commit()
     s = await repo.get_scenario(db, scenario_id)
-    return _scenario_to_out(s)
+    return _scenario_to_out(
+        s,
+        account_group_name=await _lookup_account_group_name(db, s.account_group_id),
+    )
 
 
 @router.delete("/{campaign_id}/scenarios/{scenario_id}", status_code=204)

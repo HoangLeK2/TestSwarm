@@ -82,13 +82,20 @@ def _relay_enqueue(q: asyncio.Queue, frame: bytes, is_cfg: bool, is_key: bool) -
 # Outside the window, the counter resets — matches agent.py:SCRCPY_RESTART_WINDOW_SECONDS.
 _MAX_RECONNECTS = 10
 _RETRY_WINDOW   = 120.0  # seconds
-_RECONNECT_BASE = 2.0
-_RECONNECT_MAX  = 30.0
+_RECONNECT_BASE = float(os.environ.get("SCRCPY_RECONNECT_BASE_S", "2.0"))
+# Cap reconnect backoff so user-visible black screen after an idle stall is
+# short. Previous 30s default made a single encoder stall feel like the stream
+# was permanently dead. Tunable via env for fleet-wide overrides.
+_RECONNECT_MAX  = float(os.environ.get("SCRCPY_RECONNECT_MAX_S", "5.0"))
 
 # Frame timeout: socket.recv raises socket.timeout after this many seconds without
-# data. Catches hung streams where TCP is alive but the device encoder stalled.
-# Tuned via env: agent runs at 30fps so anything >5s is unambiguously dead.
-_FRAME_TIMEOUT = float(os.environ.get("SCRCPY_FRAME_TIMEOUT_S", "5.0"))
+# data. Catches hung streams where TCP is alive but the encoder truly stalled.
+# Idle static screens on Android emit zero frames until IDR is requested, and
+# the IDR response itself can take >5s on slow encoders (Vivo/Oppo Codec2 wrappers
+# especially). A too-tight timeout tears down healthy sessions and triggers the
+# reconnect-backoff loop, leaving the viewer black for 30s+. 20s is the sweet
+# spot: still catches truly dead streams, tolerates normal idle behavior.
+_FRAME_TIMEOUT = float(os.environ.get("SCRCPY_FRAME_TIMEOUT_S", "20.0"))
 
 # ── Tier 1 env overrides (agent-boot-stability-rollout Phase 5) ──────────────
 # Per-device encoder / codec pinning for OEMs whose default Codec2 wrapper
@@ -353,6 +360,7 @@ class ScrcpyRelaySession:
                         server_alive = True
 
                     # Connect sockets and stream until error or stop.
+                    stream_started = time.monotonic()
                     self._connect_and_stream()
 
                     # Clean exit — reset counters.
@@ -364,6 +372,14 @@ class ScrcpyRelaySession:
                 except Exception as exc:
                     if not self._running:
                         break
+
+                    # A session that streamed successfully for >10s then died is
+                    # a normal transient stall (idle encoder, WiFi blip). Reset
+                    # the backoff ladder so the viewer's black window is capped
+                    # at _RECONNECT_BASE, not the ramp-up 30s tail.
+                    session_lived_s = time.monotonic() - stream_started
+                    if session_lived_s > 10.0:
+                        delay = _RECONNECT_BASE
 
                     # Window-based budget: reset counter if we're past the window.
                     now = time.monotonic()

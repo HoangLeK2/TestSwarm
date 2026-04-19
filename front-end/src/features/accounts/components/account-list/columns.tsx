@@ -12,7 +12,6 @@ import { MoreHorizontal, Trash2 } from 'lucide-react';
 import type { ColumnDef } from '@tanstack/react-table';
 import type { AccountOut } from '../../services/api';
 import { EditAccountDialog } from '../edit-account-dialog';
-import { AccountDevicesDialog } from '../account-devices-dialog';
 
 type TFn = (key: string, values?: Record<string, any>) => string;
 
@@ -105,7 +104,6 @@ export function getAccountColumns(
         const account = row.original;
         return (
           <div className='flex items-center gap-1'>
-            <AccountDevicesDialog account={account} />
             <EditAccountDialog account={account} />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>

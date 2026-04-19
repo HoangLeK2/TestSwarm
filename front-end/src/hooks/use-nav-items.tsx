@@ -62,6 +62,11 @@ export function useNavItems(): {
           icon: 'user'
         },
         {
+          title: t('account_groups'),
+          url: ROUTES.ACCOUNT_GROUPS.ROOT,
+          icon: 'usersGroup'
+        },
+        {
           title: t('scenario_templates'),
           url: ROUTES.SCENARIO_TEMPLATES.ROOT,
           icon: 'template'

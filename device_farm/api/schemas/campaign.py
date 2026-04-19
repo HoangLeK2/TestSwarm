@@ -13,6 +13,10 @@ class ScenarioCreate(BaseModel):
     order: int = 0
     nodes: List[FlowNodeModel] = []
     edges: List[FlowEdgeModel] = []
+    # Optional account group binding. When set, the dispatcher rotates
+    # accounts across devices from this group instead of using each device's
+    # primary account.
+    account_group_id: Optional[str] = None
 
     @field_validator("steps")
     @classmethod
@@ -34,6 +38,9 @@ class ScenarioUpdate(BaseModel):
     order: int | None = None
     nodes: Optional[List[FlowNodeModel]] = None
     edges: Optional[List[FlowEdgeModel]] = None
+    # Use an empty string to explicitly clear an existing binding; None means
+    # "leave the existing value untouched" (standard PATCH semantics).
+    account_group_id: Optional[str] = None
 
     @field_validator("steps")
     @classmethod
@@ -57,6 +64,8 @@ class ScenarioOut(BaseModel):
     order: int
     nodes: list = []
     edges: list = []
+    account_group_id: Optional[str] = None
+    account_group_name: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

@@ -57,10 +57,7 @@ async def list_templates(
     category: str | None = None,
     tags: str | None = None,
 ) -> list[ScenarioTemplate]:
-    q = select(ScenarioTemplate).order_by(
-        ScenarioTemplate.is_builtin.desc(),
-        ScenarioTemplate.created_at.desc(),
-    )
+    q = select(ScenarioTemplate).order_by(ScenarioTemplate.created_at.desc())
     if category:
         q = q.where(ScenarioTemplate.category == category)
     if tags:

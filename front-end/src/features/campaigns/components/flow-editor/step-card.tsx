@@ -1,6 +1,7 @@
 'use client';
 
 import { Trash2, Play, Loader2, CheckCircle2, XCircle, Crosshair, MousePointerClick, Move, Square } from 'lucide-react';
+import { useTranslations } from 'next-intl';
 import { cn } from '@/lib/utils';
 import type { FlowStep } from '../scenario-steps/types';
 import { STEP_COLORS, getStepTypeName, getStepDisplay, getStepCategory } from './constants';
@@ -57,6 +58,7 @@ export function StepCard({
   onTogglePickTapCoords,
   onTogglePickSwipeCoords,
 }: Props) {
+  const tFlow = useTranslations('campaignsFeature.flowBracket');
   const colorCls = STEP_COLORS[step.type] ?? 'border-l-gray-400';
   const typeName = getStepTypeName(step.type);
   const { target, selectorBadge } = getStepDisplay(step);
@@ -65,6 +67,13 @@ export function StepCard({
   // User-defined title/description override auto-generated display
   const title = (step.title as string | undefined)?.trim() || undefined;
   const description = (step.description as string | undefined)?.trim() || undefined;
+  const runScenarioRef =
+    step.type === 'run_scenario'
+      ? String((step as any).scenario_name || (step as any).scenario_id || '').trim()
+      : '';
+  const runScenarioEmptyHint =
+    step.type === 'run_scenario' && !title && !runScenarioRef ? tFlow('runScenario.cardPickHint') : '';
+  const secondRowMain = title || target || runScenarioEmptyHint;
 
   return (
     <div
@@ -111,7 +120,14 @@ export function StepCard({
         <div className='min-w-0 flex-1 overflow-hidden'>
           {/* Row 1: type name + category badge */}
           <div className='flex items-center gap-1.5'>
-            <span className='text-[10px] font-bold uppercase tracking-wide text-muted-foreground leading-tight'>
+            <span
+              className={cn(
+                'text-[10px] leading-tight text-muted-foreground',
+                step.type === 'run_scenario'
+                  ? 'font-semibold tracking-tight normal-case'
+                  : 'font-bold uppercase tracking-wide',
+              )}
+            >
               {typeName}
             </span>
             <span className={cn(
@@ -125,7 +141,7 @@ export function StepCard({
           </div>
 
           {/* Row 2: title (user-defined) OR auto target + selector badge */}
-          {(title || target) && (
+          {secondRowMain && (
             <div className='mt-0.5 flex items-center gap-1 overflow-hidden'>
               {!title && selectorBadge && (
                 <span className='flex-shrink-0 rounded bg-muted px-1 py-px font-mono text-[9px] text-muted-foreground'>
@@ -135,11 +151,11 @@ export function StepCard({
               <span
                 className={cn(
                   'truncate text-[12px] font-medium leading-tight',
-                  title ? 'text-foreground' : 'text-foreground/80',
+                  title ? 'text-foreground' : runScenarioEmptyHint ? 'text-muted-foreground' : 'text-foreground/80',
                 )}
-                title={title || target}
+                title={title || target || runScenarioEmptyHint}
               >
-                {title || target}
+                {title || target || runScenarioEmptyHint}
               </span>
             </div>
           )}

@@ -122,6 +122,10 @@ export const scenariosApi = {
       .then((r) => r.data),
   delete: (campaignId: string, scenarioId: string) =>
     farmApi.delete(`/campaigns/${campaignId}/scenarios/${scenarioId}`).then((r) => r.data),
+  reorder: (campaignId: string, orderedIds: string[]) =>
+    farmApi
+      .post<ScenarioOut[]>(`/campaigns/${campaignId}/scenarios/reorder`, { ordered_ids: orderedIds })
+      .then((r) => r.data),
   compile: (
     campaignId: string,
     scenarioId: string,

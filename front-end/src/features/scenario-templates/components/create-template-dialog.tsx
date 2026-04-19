@@ -4,8 +4,9 @@ import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Plus } from 'lucide-react';
-import { useTranslations } from 'next-intl';
+import { Plus, ExternalLink } from 'lucide-react';
+import { useTranslations, useLocale } from 'next-intl';
+import { useRouter } from 'next/navigation';
 import { useCreateScenarioTemplate } from '../hooks/use-scenario-templates';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -41,7 +42,10 @@ export function CreateTemplateDialog() {
   const [open, setOpen] = useState(false);
   const [steps, setSteps] = useState<FlowStep[]>([]);
   const [variables, setVariables] = useState<Record<string, any>>({});
-  const { mutate, isPending, error } = useCreateScenarioTemplate();
+  const { mutate, mutateAsync, isPending, error } = useCreateScenarioTemplate();
+  const router = useRouter();
+  const locale = useLocale();
+  const [openingControl, setOpeningControl] = useState(false);
   const {
     register,
     handleSubmit,
@@ -69,6 +73,33 @@ export function CreateTemplateDialog() {
       }
     );
   };
+
+  // "Tạo + mở ở Control": create the template with current metadata (steps can
+  // be empty at this point) and immediately navigate to the control page with
+  // ?templateId=, where the user can record/edit steps on a real device and
+  // save back via the existing template update API.
+  const onSubmitAndOpenControl = handleSubmit(async (data) => {
+    setOpeningControl(true);
+    try {
+      const created = await mutateAsync({
+        name: data.name,
+        description: data.description,
+        category: data.category || 'general',
+        tags: data.tags,
+        steps,
+        variables,
+      });
+      reset();
+      setSteps([]);
+      setVariables({});
+      setOpen(false);
+      router.push(`/${locale}/dashboard/device-farm/control?templateId=${encodeURIComponent(created.id)}`);
+    } catch {
+      // error surfaced via the `error` render below
+    } finally {
+      setOpeningControl(false);
+    }
+  });
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -139,9 +170,21 @@ export function CreateTemplateDialog() {
               {formatFarmApiError(error, t('createFailed'))}
             </p>
           )}
-          <Button type='submit' className='w-full' disabled={isPending}>
-            {isPending ? t('creating') : t('submit')}
-          </Button>
+          <div className='flex flex-col gap-2 sm:flex-row'>
+            <Button
+              type='button'
+              variant='outline'
+              className='w-full sm:flex-1'
+              disabled={isPending || openingControl}
+              onClick={() => { void onSubmitAndOpenControl(); }}
+            >
+              <ExternalLink size={14} className='mr-1' />
+              {openingControl ? t('openingControl') : t('submitAndOpenControl')}
+            </Button>
+            <Button type='submit' className='w-full sm:flex-1' disabled={isPending || openingControl}>
+              {isPending ? t('creating') : t('submit')}
+            </Button>
+          </div>
         </form>
       </DialogContent>
     </Dialog>

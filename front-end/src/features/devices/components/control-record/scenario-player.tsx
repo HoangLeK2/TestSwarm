@@ -30,6 +30,10 @@ import {
 } from 'lucide-react';
 import { useCampaigns, useScenarios } from '@/features/campaigns/hooks/use-campaigns';
 import { cancelPreviewStream, previewScenarioStream, type PreviewStepResult } from '../../services/api';
+import { accountGroupsApi } from '@/features/account-groups/services/api';
+import { useAccountGroups } from '@/features/account-groups/hooks/use-account-groups';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { toast } from 'sonner';
 import type { ScenarioOut } from '@/features/campaigns/types';
 import {
   getStepTypeName,
@@ -143,6 +147,8 @@ interface ScenarioPlayerProps {
   preloadedName?: string;
   /** Variables for template substitution (e.g. APP_PACKAGE) when using preloadedSteps. */
   preloadedVariables?: Record<string, any>;
+  /** Optional account group to rotate accounts from on each preview run. */
+  preloadedAccountGroupId?: string | null;
   /** When true, device is running a campaign — block preview start. */
   deviceBusy?: boolean;
   /** Parent registers a stop handle so it can abort the preview from outside
@@ -151,7 +157,7 @@ interface ScenarioPlayerProps {
   registerStop?: (fn: (() => void) | null) => void;
 }
 
-export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedSteps, preloadedName, preloadedVariables, deviceBusy = false, registerStop }: ScenarioPlayerProps) {
+export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedSteps, preloadedName, preloadedVariables, preloadedAccountGroupId, deviceBusy = false, registerStop }: ScenarioPlayerProps) {
   const t = useTranslations('devicesControlRecord.scenarioPlayer');
   const { data: campaigns = [] } = useCampaigns();
   const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(null);
@@ -227,13 +233,67 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedStep
   const [stepCursor, setStepCursor] = useState(0); // next step to run
 
   const activeSteps = preloadedSteps ?? (selectedScenario?.steps as Array<Record<string, any>> | undefined);
-  const activeVariables: Record<string, any> = flattenVarDefs(
+  const baseActiveVariables: Record<string, any> = flattenVarDefs(
     preloadedVariables ?? (selectedScenario?.variables as Record<string, any> | undefined) ?? {}
+  );
+  // Let the Player mode override the account group without going back to the
+  // save dialog. Precedence: inline pick > caller preload > saved scenario.
+  const [overrideAccountGroupId, setOverrideAccountGroupId] = useState<string | null>(null);
+  const activeAccountGroupId: string | null =
+    overrideAccountGroupId
+    ?? preloadedAccountGroupId
+    ?? (selectedScenario?.account_group_id ?? null);
+
+  const { data: accountGroupsList = [] } = useAccountGroups();
+  const resolvedAccountGroup = accountGroupsList.find((g) => g.id === activeAccountGroupId) ?? null;
+
+  // Session-scoped account vars — resolved once on first play so that running
+  // the scenario step-by-step (or multiple loops) uses the SAME account for
+  // every step. Without this, each preview call would advance the rotation
+  // cursor and step 2 (username) + step 3 (password) would be satisfied from
+  // two different accounts → login failure.
+  const [sessionAccountVars, setSessionAccountVars] = useState<Record<string, any> | null>(null);
+  const resolvingAccountRef = useRef(false);
+
+  const ensureAccountVars = useCallback(async (): Promise<Record<string, any> | null> => {
+    if (sessionAccountVars) return sessionAccountVars;
+    if (!activeAccountGroupId) return null;
+    if (resolvingAccountRef.current) return null;
+    resolvingAccountRef.current = true;
+    try {
+      const res = await accountGroupsApi.resolve(activeAccountGroupId);
+      const vars = res.variables ?? {};
+      setSessionAccountVars(vars);
+      return vars;
+    } catch (e: any) {
+      const msg = e?.response?.data?.detail || e?.message || 'Không lấy được tài khoản';
+      toast.error(String(msg));
+      return null;
+    } finally {
+      resolvingAccountRef.current = false;
+    }
+  }, [sessionAccountVars, activeAccountGroupId]);
+
+  // Clear the cached account when the user switches scenarios or swaps the
+  // active account group — next play picks a fresh one.
+  useEffect(() => {
+    setSessionAccountVars(null);
+  }, [activeAccountGroupId, selectedScenario?.id]);
+
+  const buildVariables = useCallback(
+    (accountVars: Record<string, any> | null): Record<string, any> => {
+      if (!accountVars) return baseActiveVariables;
+      return { ...accountVars, ...baseActiveVariables };
+    },
+    [baseActiveVariables],
   );
 
   const handlePlay = useCallback(async () => {
     if (!activeSteps?.length || !serial) return;
     if (deviceBusy) return;
+    // Resolve the account once for this session; reuse across loops + steps.
+    const acctVars = await ensureAccountVars();
+    const mergedVars = buildVariables(acctVars);
     setPlaying(true);
     onPlayingChange?.(true);
     setResults([]);
@@ -276,7 +336,11 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedStep
             // 'done' and 'error' events handled by promise completion
           },
           ctrl.signal,
-          activeVariables,
+          // Session vars already include resolved __ACCOUNT_* (if any), so
+          // skip sending account_group_id to avoid a second cursor-advance
+          // on the server.
+          mergedVars,
+          null,
         );
       }
     } catch (e) {
@@ -290,7 +354,7 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedStep
       abortRef.current = null;
       activePreviewRef.current = null;
     }
-  }, [activeSteps, activeVariables, serial, loopCount, currentStepIndex, deviceBusy]);
+  }, [activeSteps, baseActiveVariables, serial, loopCount, currentStepIndex, deviceBusy, ensureAccountVars, buildVariables]);
 
   const handleStop = useCallback(() => {
     // Three-pronged stop: abort SSE fetch, hit explicit cancel route with
@@ -305,6 +369,11 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedStep
     const idx = stepCursor;
     if (idx >= activeSteps.length) return;
     const step = activeSteps[idx];
+    // Same-session account reuse: first run-one-step in this session resolves
+    // the account, subsequent runs receive the cached vars so every step in
+    // the session targets the same pool member.
+    const acctVars = await ensureAccountVars();
+    const mergedVars = buildVariables(acctVars);
     setPlaying(true);
     setCurrentStepIndex(idx);
     const ctrl = new AbortController();
@@ -328,7 +397,8 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedStep
           }
         },
         ctrl.signal,
-        activeVariables,
+        mergedVars,
+        null,
       );
     } catch (e) {
       if (!ctrl.signal.aborted) {
@@ -526,6 +596,44 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedStep
               </Button>
             )}
           </>
+        )}
+      </div>
+
+      {/* Account group picker — visible in Player mode so the user can pick a
+          pool without going back to the save dialog. Picking resets any
+          cached session account so the next Play/Step resolves a fresh one. */}
+      <div className='flex items-center gap-2 border-b border-border/60 px-3 py-1.5 text-[11px]'>
+        <span className='shrink-0 text-muted-foreground'>Nhóm tài khoản:</span>
+        <Select
+          value={activeAccountGroupId ?? '_none'}
+          onValueChange={(v) => {
+            const next = v === '_none' ? null : v;
+            setOverrideAccountGroupId(next);
+            setSessionAccountVars(null); // force re-resolve with the new pick
+          }}
+          disabled={playing}
+        >
+          <SelectTrigger className='h-7 min-w-[200px] text-[11px]'>
+            <SelectValue placeholder='— Không dùng —' />
+          </SelectTrigger>
+          <SelectContent className='z-[10010]'>
+            <SelectItem value='_none' className='text-xs'>— Không dùng —</SelectItem>
+            {accountGroupsList.map((g) => (
+              <SelectItem key={g.id} value={g.id} className='text-xs'>
+                {g.name} · {g.platform} · {g.member_count}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {resolvedAccountGroup && sessionAccountVars?.__ACCOUNT_USERNAME__ && (
+          <span className='truncate rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200/60'>
+            acc: {String(sessionAccountVars.__ACCOUNT_USERNAME__)}
+          </span>
+        )}
+        {resolvedAccountGroup && !sessionAccountVars && (
+          <span className='text-[10px] text-muted-foreground'>
+            chưa resolve · click Play/Step
+          </span>
         )}
       </div>
 

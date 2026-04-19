@@ -8,6 +8,7 @@ export default function DeviceControlRecordPage() {
   const serial = searchParams.get('serial') ?? undefined;
   const campaignId = searchParams.get('campaignId') ?? undefined;
   const scenarioId = searchParams.get('scenarioId') ?? undefined;
+  const templateId = searchParams.get('templateId') ?? undefined;
 
   return (
     <div>
@@ -16,6 +17,7 @@ export default function DeviceControlRecordPage() {
         initialSerial={serial}
         initialCampaignId={campaignId}
         initialScenarioId={scenarioId}
+        initialTemplateId={templateId}
       />
     </div>
   );

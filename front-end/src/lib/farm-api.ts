@@ -11,24 +11,53 @@ export const deviceFarmBackendBase =
 const backendBase = deviceFarmBackendBase;
 const API_BASE_URL = `${backendBase}/api`;
 
-function getBackendPort(): number {
-  try {
-    const u = new URL(backendBase);
-    return u.port ? parseInt(u.port, 10) : u.protocol === 'https:' ? 443 : 8081;
-  } catch {
-    return 8081;
-  }
-}
-
-
+/**
+ * Base URL the *phone* must reach for `/device-agent` WS (QR pairing).
+ *
+ * Resolution priority:
+ *   1. Host/port parsed from NEXT_PUBLIC_DEVICE_FARM_WS_URL — already pinned
+ *      to the deploy LAN IP (or public domain) by operators, and the phone
+ *      needs to reach the same backend. Ignored if that env points at
+ *      localhost/127.0.0.1 (useless to the phone).
+ *   2. Browser tab hostname + API port (e.g. opening the dashboard as
+ *      http://192.168.x.x:3000 yields ws://192.168.x.x:8081/...).
+ *   3. NEXT_PUBLIC_PRODUCT_API_URL as-is.
+ */
 function getDeviceBackendBase(): string {
-  if (backendBase) return backendBase;
-  if (typeof window !== 'undefined' && window.location?.hostname) {
-    const protocol = window.location.protocol;
-    const port = getBackendPort();
-    return `${protocol}//${window.location.hostname}:${port}`.replace(/\/+$/, '');
+  let api: URL;
+  try {
+    api = new URL(deviceFarmBackendBase);
+  } catch {
+    return backendBase.replace(/\/+$/, '');
   }
-  return backendBase;
+  const scheme = api.protocol;
+  const port = api.port || (api.protocol === 'https:' ? '443' : '80');
+  const portPart =
+    (scheme === 'http:' && port === '80') || (scheme === 'https:' && port === '443') ? '' : `:${port}`;
+
+  // Reuse the already-configured farm WS URL so operators don't need a second
+  // env var. The agent WS lives on the same host:port, just a different path.
+  const farmWsRaw = (process.env.NEXT_PUBLIC_DEVICE_FARM_WS_URL || '').trim();
+  if (farmWsRaw) {
+    try {
+      const farmUrl = new URL(
+        farmWsRaw.replace(/^ws:\/\//i, 'http://').replace(/^wss:\/\//i, 'https://'),
+      );
+      const h = farmUrl.hostname;
+      if (h && h !== 'localhost' && h !== '127.0.0.1') {
+        const outScheme = farmUrl.protocol === 'https:' ? 'https:' : 'http:';
+        return `${outScheme}//${farmUrl.host}`.replace(/\/+$/, '');
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  if (typeof window !== 'undefined' && window.location?.hostname) {
+    const host = window.location.hostname;
+    return `${scheme}//${host}${portPart}`.replace(/\/+$/, '');
+  }
+  return backendBase.replace(/\/+$/, '');
 }
 
 // Chỉ dùng cho các API call từ frontend (axios baseURL đã đúng). getRuntimeBase giữ cho tương thích nếu có chỗ dùng.

@@ -26,6 +26,7 @@ from .campaign import Campaign, CampaignDevice, Scenario
 from .mcp_session import McpSession
 from .scenario_template import ScenarioTemplate
 from .account import Account, DeviceAccount
+from .account_group import AccountGroup, AccountGroupMember
 from .content import ContentItem, ContentCollection, ContentExport
 from .schedule import Schedule, ScheduleRun
 from .execution import Execution, ExecutionDevice, ExecutionResult
@@ -49,6 +50,8 @@ __all__ = [
     "ScenarioTemplate",
     "Account",
     "DeviceAccount",
+    "AccountGroup",
+    "AccountGroupMember",
     "ContentItem",
     "ContentCollection",
     "ContentExport",

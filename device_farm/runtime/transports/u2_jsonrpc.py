@@ -1159,26 +1159,42 @@ class U2JsonRpcClient:
                 return
         except Exception:
             pass
-        # Fallback: IME-based injection (setFastInputText / sendKeys)
+        # Fallback: IME-based injection (setFastInputText / sendKeys).
+        # These take a single text argument and do not require a selector,
+        # so they survive scenarios where no element reports focus (e.g.
+        # WebView inputs, pre-focus races right after element_click).
         for method in ("setFastInputText", "sendKeys"):
             try:
                 self._rpc(method, text)
                 return
             except Exception:
                 pass
-        # Last resort: setText with null selector (original behaviour)
-        self._rpc("setText", None, text)
+        # Intentionally no `setText(null, text)` last-resort — it raises
+        # JSON-RPC -32602 "method parameters invalid" on every device we've
+        # seen and masks the real "no focused input" condition from the
+        # caller. Surface a RuntimeError instead so the scenario step reports
+        # actionable context rather than a cryptic JSON-RPC code.
+        raise RuntimeError("send_keys: no focused input field and IME injection failed")
 
     def clear_text(self) -> None:
+        """Clear the currently focused text field. No-op if nothing focused.
+
+        The old `clearTextField(null, 0, 9999)` fallback was what triggered
+        the u2 "JSON-RPC error -32602 method parameters invalid" on devices
+        where the post-click focus had not landed yet — `null` is not a
+        valid UiSelector for that JSON-RPC method. We now skip the fallback
+        entirely and let the caller proceed to `send_keys`, which has its
+        own selector-less IME-injection path that does work (setFastInputText).
+        """
         focused_selector = {"mask": _MASK_FOCUSED, "focused": True}
         try:
             info = self._rpc("objInfo", focused_selector)
             if info:
                 self._rpc("clearTextField", focused_selector, 0, 9999)
-                return
         except Exception:
+            # Nothing focused / no editable in focus — caller will retry
+            # the text entry via the IME fallback in send_keys().
             pass
-        self._rpc("clearTextField", None, 0, 9999)
 
     def set_clipboard(self, text: str) -> bool:
         """Set device clipboard text via uiautomator2 server. Returns True on success."""

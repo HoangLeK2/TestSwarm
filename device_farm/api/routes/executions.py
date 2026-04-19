@@ -176,17 +176,35 @@ async def list_dlq(
     db: DB,
     user: CurrentUser,
     status: _Optional[str] = None,
+    campaign_id: _Optional[str] = None,
     offset: int = 0,
     limit: int = 50,
 ):
-    """List dead-letter queue entries (failed executions)."""
+    """List dead-letter queue entries (failed executions).
+
+    Pass `campaign_id` to scope to a single campaign's failures.
+    Empty-string query values (e.g. `?campaign_id=` or `?status=`) are
+    coerced to `None` so they do not silently filter to zero rows.
+    """
     from db.crud.execution_dlq import list_dlq_entries_for_user
+
+    # Defensive coercion: FastAPI passes `?key=` as the empty string, not None.
+    # Without this, an accidentally-empty filter would WHERE column='' → []
+    # instead of falling back to the unfiltered view.
+    norm_status = status.strip() if status else None
+    norm_campaign = campaign_id.strip() if campaign_id else None
+    if norm_status == "":
+        norm_status = None
+    if norm_campaign == "":
+        norm_campaign = None
+
     entries = await list_dlq_entries_for_user(
         db,
         user_id=user.id,
-        status=status,
-        offset=offset,
-        limit=min(limit, 200),
+        status=norm_status,
+        campaign_id=norm_campaign,
+        offset=max(offset, 0),
+        limit=min(max(limit, 1), 200),
     )
     return [DLQEntryOut.model_validate(e) for e in entries]
 

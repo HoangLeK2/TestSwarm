@@ -104,6 +104,7 @@ async def list_dlq_entries_for_user(
     user_id: str,
     status: Optional[str] = None,
     execution_id: Optional[str] = None,
+    campaign_id: Optional[str] = None,
     offset: int = 0,
     limit: int = 50,
 ) -> list[ExecutionDLQ]:
@@ -117,6 +118,8 @@ async def list_dlq_entries_for_user(
         q = q.where(ExecutionDLQ.status == status)
     if execution_id is not None:
         q = q.where(ExecutionDLQ.execution_id == execution_id)
+    if campaign_id is not None:
+        q = q.where(Execution.campaign_id == campaign_id)
     result = await db.execute(q.offset(offset).limit(limit))
     return list(result.scalars().all())
 
@@ -161,7 +164,25 @@ async def begin_dlq_retry_for_user(
     """
     User-scoped idempotent retry transition.
 
-    Returns (entry, changed) and guarantees the row belongs to user_id.
+    Returns (entry, changed):
+      - changed=True  → row was 'pending' and is now 'retrying'; retry_count
+                        incremented; last_attempt_at updated.
+      - changed=False → row was already in a non-pending state (retrying,
+                        resolved, dismissed) — no field was modified by this
+                        call.
+
+    NOTE on retry_count semantics: this counter tracks **user-initiated retry
+    attempts**, not successful enqueues. If the route handler later bails
+    out (no campaign_id, Temporal unavailable, enqueue 4xx/5xx) the increment
+    is intentionally preserved on commit — the user did press retry, even if
+    the system could not satisfy the request. Failed attempts are
+    distinguishable from successes by `status` ('pending' with non-empty
+    `error` ⇒ retry attempted but failed; 'resolved' ⇒ at least one
+    successful enqueue).
+
+    Concurrency: the UPDATE is conditional on status='pending' so two
+    racing requests cannot both flip the row — the DB row lock guarantees
+    only one transaction returns changed=True.
     """
     now = datetime.now(timezone.utc)
     transition_stmt = (

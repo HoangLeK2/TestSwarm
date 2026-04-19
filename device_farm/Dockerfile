@@ -85,7 +85,7 @@ EXPOSE 8081
 # gRPC relay — agent-boot (local) connects inbound here
 EXPOSE 50051
 
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD curl -f http://localhost:8081/api/health || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=60s \
+    CMD curl -fsS http://localhost:8081/api/live || exit 1
 
 CMD ["python", "main.py"]

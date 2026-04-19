@@ -90,7 +90,8 @@ const BUILTIN_VARIABLE_TOKENS = [
 function insertToken(raw: string, token: string): string {
   const current = raw ?? '';
   if (!current.trim()) return token;
-  const existingTokens = current.match(/\$\{[^}]+\}/g) ?? [];
+  const m = current.match(/\$\{[^}]+\}/g);
+  const existingTokens: string[] = m ? [...m] : [];
   if (existingTokens.includes(token)) return current;
   return `${current} ${token}`.trim();
 }

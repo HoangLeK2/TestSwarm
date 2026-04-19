@@ -354,6 +354,18 @@ def create_app(
                             return await _repo.relay_scrcpy_auto_attach_allowed(db, serial_check)
 
                     try:
+                        running = asyncio.get_running_loop()
+                    except RuntimeError:
+                        running = None
+                    if running is ml:
+                        
+                        log.debug(
+                            "relay_scrcpy DB pref: skip blocking lookup (same event loop); "
+                            "default allow serial=%s",
+                            serial_check,
+                        )
+                        return True
+                    try:
                         # Startup (Temporal, migrations) can stall the event loop; 5s was
                         # too tight and caused spurious timeouts + duplicate attach churn.
                         return asyncio.run_coroutine_threadsafe(_q(), ml).result(timeout=15.0)

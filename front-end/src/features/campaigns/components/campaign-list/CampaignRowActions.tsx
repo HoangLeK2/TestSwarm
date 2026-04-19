@@ -1,7 +1,18 @@
 'use client';
 
 import { useState } from 'react';
-import { Play, Pause, Square, Trash2, Eye, MoreHorizontal, Smartphone, FileText, BarChart3, Activity } from 'lucide-react';
+import {
+  Play,
+  Pause,
+  Square,
+  Trash2,
+  Eye,
+  MoreHorizontal,
+  Smartphone,
+  FileText,
+  BarChart3,
+  MonitorPlay
+} from 'lucide-react';
 import { Link } from '@/i18n/navigation';
 import { toast } from 'sonner';
 import { useTranslations } from 'next-intl';
@@ -33,6 +44,7 @@ import { AddDevicesToCampaignDialog } from '../add-devices-dialog';
 import { ScenarioListDialog } from '../scenario-list-dialog';
 import { CampaignMonitorDialog } from '../campaign-monitor';
 import { ROUTES } from '@/config/routes';
+import { cn } from '@/lib/utils';
 import { CampaignRunProgress } from './CampaignRunProgress';
 import {
   useCampaignDevices,
@@ -134,41 +146,55 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
       : t('loading');
 
   return (
-    <div
-      className={
-        running
-          ? 'flex min-w-0 flex-col gap-2 rounded-lg border border-border/40 bg-muted/5 p-2.5'
-          : 'flex min-w-0 flex-col gap-2'
-      }
-    >
-      <div className='flex flex-wrap items-center justify-between gap-2'>
-        <div className='flex flex-wrap items-center gap-1.5'>
+    <div className='flex min-w-0 items-center justify-end'>
+      <div className='flex flex-wrap items-center justify-end gap-1.5'>
+        <div className='flex items-center gap-1.5'>
           <AddDevicesToCampaignDialog
             campaignId={campaign.id}
             campaignName={campaign.name}
             deviceCount={devices.length}
           >
-            <Button size='sm' variant='outline' className='h-7 gap-1.5 px-2.5 text-[11px]'>
+            <Button
+              size='sm'
+              variant='outline'
+              className='h-8 gap-1.5 px-2.5 text-xs'
+              title={`${devices.length} thiết bị`}
+            >
               <Smartphone size={13} />
               {devices.length}
             </Button>
           </AddDevicesToCampaignDialog>
 
           <ScenarioListDialog campaign={campaign}>
-            <Button size='sm' variant='outline' className='h-7 gap-1.5 px-2.5 text-[11px]'>
+            <Button
+              size='sm'
+              variant='outline'
+              className='h-8 gap-1.5 px-2.5 text-xs'
+              title={`${scenarios.length} kịch bản`}
+            >
               <FileText size={13} />
               {scenarios.length}
             </Button>
           </ScenarioListDialog>
 
-          <Button size='sm' variant='ghost' className='h-7 gap-1.5 px-2 text-[11px]' asChild>
-            <Link href={ROUTES.CONTENT.BY_CAMPAIGN(campaign.id)}>
-              <BarChart3 size={13} />
+          <Button
+            size='sm'
+            variant='ghost'
+            className='h-8 w-8 p-0'
+            asChild
+            title='Xem dữ liệu thu thập'
+          >
+            <Link href={ROUTES.CONTENT.BY_CAMPAIGN(campaign.id)} aria-label='Xem dữ liệu thu thập'>
+              <BarChart3 size={14} />
             </Link>
           </Button>
         </div>
 
-        <div className='flex flex-wrap items-center gap-1.5'>
+        <span className='mx-1 h-5 w-px bg-border' aria-hidden='true' />
+
+        <div className='flex items-center gap-1.5'>
+          <CampaignRunProgress campaignId={campaign.id} isRunning={running} />
+
           {isIdleStatus(campaign.status) && (
             <>
               <Tooltip>
@@ -176,7 +202,7 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
                   <Button
                     size='sm'
                     variant='default'
-                    className='h-7 gap-1.5 px-2.5 text-[11px]'
+                    className='h-8 gap-1.5 px-3 text-xs font-semibold'
                     disabled={disabledRun}
                     onClick={() => setRunDialogOpen(true)}
                   >
@@ -216,7 +242,7 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
             <Button
               size='sm'
               variant='outline'
-              className='h-7 gap-1.5 px-2.5 text-[11px]'
+              className='h-8 gap-1.5 px-3 text-xs'
               disabled={isPausing}
               onClick={handlePauseAll}
             >
@@ -228,7 +254,7 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
             <Button
               size='sm'
               variant='outline'
-              className='h-7 gap-1.5 px-2.5 text-[11px] text-green-600 hover:text-green-600'
+              className='h-8 gap-1.5 px-3 text-xs text-green-600 hover:text-green-600'
               disabled={isResuming || isPatchingCampaign}
               onClick={handleResumeAll}
             >
@@ -240,9 +266,11 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
             <Button
               size='sm'
               variant='ghost'
-              className='h-7 gap-1 px-2 text-[11px] text-destructive hover:text-destructive'
+              className='h-8 w-8 p-0 text-destructive hover:text-destructive'
               disabled={isCancelling}
               onClick={handleCancelAll}
+              title={t('titleCancel') ?? 'Huỷ'}
+              aria-label='Huỷ'
             >
               <Square size={13} />
             </Button>
@@ -250,7 +278,7 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
           {running && previewSerial && (
             <Dialog>
               <DialogTrigger asChild>
-                <Button size='sm' variant='ghost' className='h-7 gap-1.5 px-2 text-[11px]'>
+                <Button size='sm' variant='ghost' className='h-8 gap-1.5 px-2 text-xs'>
                   <Eye size={13} />
                   Live
                 </Button>
@@ -265,7 +293,7 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
                   </div>
                   <div className='flex min-w-0 flex-1 flex-col pl-3'>
                     <p className='mb-2 shrink-0 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>
-                      <List size={10} /> Các bước
+                      <List size={10} /> {t('monitorStepsHeading')}
                     </p>
                     <div className='flex-1 overflow-y-auto'>
                       <DeviceStepsPanel serial={previewSerial} />
@@ -276,15 +304,37 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
             </Dialog>
           )}
           <CampaignMonitorDialog campaign={campaign}>
-            <Button size='sm' variant='ghost' className='h-7 gap-1.5 px-2 text-[11px]'>
-              <Activity size={13} />
+            <Button
+              type='button'
+              size='sm'
+              variant='secondary'
+              className={cn(
+                'h-8 gap-2 border px-2.5 text-xs shadow-sm transition-colors duration-200',
+                'cursor-pointer hover:border-primary/30 hover:bg-primary/[0.06]',
+                running && 'border-primary/25 bg-primary/[0.07] text-primary'
+              )}
+            >
+              <span className='relative flex size-4 shrink-0 items-center justify-center'>
+                <MonitorPlay size={14} className='shrink-0' strokeWidth={2} aria-hidden />
+                {running && (
+                  <span
+                    className='absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-emerald-500 ring-2 ring-background'
+                    aria-hidden
+                  />
+                )}
+              </span>
               {t('titleMonitor')}
             </Button>
           </CampaignMonitorDialog>
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button size='sm' variant='ghost' className='h-7 w-7 p-0'>
+              <Button
+                size='sm'
+                variant='ghost'
+                className='h-8 w-8 p-0'
+                aria-label='Thêm hành động'
+              >
                 <MoreHorizontal size={14} />
               </Button>
             </DropdownMenuTrigger>
@@ -302,8 +352,6 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
           </DropdownMenu>
         </div>
       </div>
-
-      <CampaignRunProgress campaignId={campaign.id} isRunning={running} />
     </div>
   );
 }

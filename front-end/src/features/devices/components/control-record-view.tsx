@@ -722,12 +722,17 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
     );
   }
 
-  if (device.connectedDevices.length === 0) {
+  // When NOT editing and no device → keep original empty placeholder.
+  // When editing (campaignId+scenarioId in URL) → render the 3-column layout
+  // anyway so user sees XML / mirror / scenario columns. Phone column shows
+  // the existing "Chọn thiết bị từ thanh trên" placeholder when selectedDevice
+  // is null.
+  if (device.connectedDevices.length === 0 && !save.editingContext) {
     return (
       <div className='flex flex-col items-center justify-center rounded-lg border border-dashed border-border py-20 text-center'>
         <Video className='mb-3 size-10 text-muted-foreground/40' />
         <p className='mb-1 text-base font-medium'>{t('noDeviceConnected')}</p>
-        <p className='mb-4 text-sm text-muted-foreground'>Kết nối thiết bị Android qua USB hoặc Wi-Fi để bắt đầu</p>
+        <p className='mb-4 text-sm text-muted-foreground'>{t('noDeviceConnectMessage')}</p>
         <Button asChild size='sm' variant='outline'>
           <Link href={ROUTES.DEVICES.MANAGE}>
             <ArrowLeft className='mr-1.5 size-4' />
@@ -1108,18 +1113,20 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
               )}
 
               {/* Section header */}
-              <div className='flex shrink-0 items-center gap-2 border-b border-border/40 bg-muted/20 px-4 py-1.5'>
+              <div className='flex shrink-0 items-center gap-2 overflow-hidden border-b border-border/40 bg-muted/20 px-4 py-1.5'>
                 <Clapperboard className='size-3.5 shrink-0 text-muted-foreground' />
-                <span className='text-[11px] font-semibold text-foreground'>
+                <span className='shrink-0 text-[11px] font-semibold text-foreground'>
                   {showFlowUi ? 'Sơ đồ Flow' : t('editorSectionTitle')}
                 </span>
-                <div className='flex-1' />
-                <div className='hidden items-center gap-1 sm:flex'>
+                <div
+                  className='flex min-w-0 flex-1 items-center justify-end gap-1.5 overflow-x-auto whitespace-nowrap [scrollbar-width:thin] [&::-webkit-scrollbar]:h-1 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border'
+                >
+                <div className='hidden shrink-0 items-center gap-1 sm:flex'>
                   {record.pollingXml && <RefreshCw size={11} className='animate-spin text-red-500/70' />}
                   <Button
                     size='sm'
                     variant={record.recording ? 'destructive' : 'default'}
-                    className='h-7 gap-1.5 px-2 text-[10px]'
+                    className='h-7 shrink-0 gap-1.5 px-2 text-[10px]'
                     onClick={() => void record.toggleRecording()}
                     disabled={!selectedDevice}
                   >
@@ -1129,7 +1136,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                   <Button
                     size='sm'
                     variant='outline'
-                    className='h-7 gap-1.5 px-2 text-[10px]'
+                    className='h-7 shrink-0 gap-1.5 px-2 text-[10px]'
                     onClick={() => setPlayerMode(true)}
                     disabled={
                       !selectedDevice ||
@@ -1148,7 +1155,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                 </div>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button size='sm' variant='outline' className='h-7 gap-1 px-2 text-[10px]'>
+                    <Button size='sm' variant='outline' className='h-7 shrink-0 gap-1 px-2 text-[10px]'>
                       <Plus className='size-3' />
                       Luồng
                       <ChevronDown className='size-3' />
@@ -1188,7 +1195,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                 </DropdownMenu>
                 <Tooltip delayDuration={300}>
                   <TooltipTrigger asChild>
-                    <Button size='sm' variant='outline' className='h-7 gap-1 px-2 text-[10px]' onClick={() => setInstallDialogOpen(true)} disabled={!selectedDevice}>
+                    <Button size='sm' variant='outline' className='h-7 shrink-0 gap-1 px-2 text-[10px]' onClick={() => setInstallDialogOpen(true)} disabled={!selectedDevice}>
                       <PackagePlus className='size-3' />
                       APK
                     </Button>
@@ -1197,7 +1204,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                 </Tooltip>
                 <Tooltip delayDuration={300}>
                   <TooltipTrigger asChild>
-                    <Button size='sm' variant='ghost' className='h-7 w-7 p-0' onClick={() => setJsonDialogOpen(true)} disabled={steps.items.length === 0}>
+                    <Button size='sm' variant='ghost' className='h-7 w-7 shrink-0 p-0' onClick={() => setJsonDialogOpen(true)} disabled={steps.items.length === 0}>
                       <Code2 className='size-3.5' />
                     </Button>
                   </TooltipTrigger>
@@ -1205,7 +1212,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                 </Tooltip>
                 <Tooltip delayDuration={300}>
                   <TooltipTrigger asChild>
-                    <Button size='sm' variant='ghost' className='h-7 w-7 p-0' onClick={steps.copyJson} disabled={steps.items.length === 0}>
+                    <Button size='sm' variant='ghost' className='h-7 w-7 shrink-0 p-0' onClick={steps.copyJson} disabled={steps.items.length === 0}>
                       <Copy className='size-3.5' />
                     </Button>
                   </TooltipTrigger>
@@ -1214,7 +1221,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                 <Button
                   size='sm'
                   variant='default'
-                  className='h-7 gap-1 px-2 text-[10px]'
+                  className='h-7 shrink-0 gap-1 px-2 text-[10px]'
                   onClick={steps.openSave}
                   disabled={steps.items.length === 0 || safeReadOnly}
                   title={safeReadOnly ? 'Safe mode: không cho lưu' : undefined}
@@ -1229,7 +1236,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                       type='button'
                       onClick={() => setVarDialogOpen(true)}
                       className={cn(
-                        'flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors',
+                        'flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors',
                         Object.keys(scenarioVariables).length > 0
                           ? 'bg-primary/10 text-primary hover:bg-primary/20'
                           : 'text-muted-foreground hover:bg-muted',
@@ -1251,12 +1258,13 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
 
                 <Tooltip delayDuration={400}>
                   <TooltipTrigger asChild>
-                    <button type='button' className='rounded-full p-0.5 text-muted-foreground hover:bg-muted'>
+                    <button type='button' className='shrink-0 rounded-full p-0.5 text-muted-foreground hover:bg-muted'>
                       <HelpCircle className='size-3.5' />
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side='bottom' className='max-w-xs text-xs'>{t('tooltipScenarioSection')}</TooltipContent>
                 </Tooltip>
+                </div>
               </div>
 
               {/* Flow editor */}

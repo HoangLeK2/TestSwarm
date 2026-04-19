@@ -3,6 +3,9 @@
 import { DeviceFarm } from '@/features/devices/components/device-farm';
 
 export default function DeviceFarmPage() {
-  return <DeviceFarm />;
+  return (
+    <div>
+      <DeviceFarm />
+    </div>
+  );
 }
-

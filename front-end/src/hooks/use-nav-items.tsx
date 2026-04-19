@@ -11,7 +11,7 @@ export function useNavItems(): {
   const { currentOrg } = useOrganization();
   const baseItems: NavItem[] = [
     {
-      title: t('devices'),
+      title: t('nav_group_devices'),
       type: 'group',
       items: [
         {
@@ -30,6 +30,17 @@ export function useNavItems(): {
           icon: 'laptop'
         },
         {
+          title: t('device_groups'),
+          url: ROUTES.DEVICE_GROUPS.ROOT,
+          icon: 'folder'
+        }
+      ]
+    },
+    {
+      title: t('nav_group_automation'),
+      type: 'group',
+      items: [
+        {
           title: t('campaigns'),
           url: ROUTES.CAMPAIGNS.ROOT,
           icon: 'play'
@@ -38,12 +49,13 @@ export function useNavItems(): {
           title: t('schedules'),
           url: ROUTES.SCHEDULES.ROOT,
           icon: 'bell'
-        },
-        {
-          title: t('device_groups'),
-          url: ROUTES.DEVICE_GROUPS.ROOT,
-          icon: 'folder'
-        },
+        }
+      ]
+    },
+    {
+      title: t('nav_group_library'),
+      type: 'group',
+      items: [
         {
           title: t('accounts'),
           url: ROUTES.ACCOUNTS.ROOT,

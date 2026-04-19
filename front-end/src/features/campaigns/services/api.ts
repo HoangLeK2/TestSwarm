@@ -181,11 +181,12 @@ export const tasksApi = {
 };
 
 export const dlqApi = {
-  list: (params?: { status?: string; offset?: number; limit?: number }) =>
+  list: (params?: { status?: string; campaignId?: string; offset?: number; limit?: number }) =>
     farmApi
       .get<DlqEntry[]>('/executions/dlq', {
         params: {
           ...(params?.status ? { status: params.status } : {}),
+          ...(params?.campaignId ? { campaign_id: params.campaignId } : {}),
           ...(params?.offset != null ? { offset: params.offset } : {}),
           ...(params?.limit != null ? { limit: params.limit } : {}),
         },

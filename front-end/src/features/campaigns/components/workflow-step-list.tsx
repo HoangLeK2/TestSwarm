@@ -7,6 +7,7 @@
  */
 
 import { useQuery } from '@tanstack/react-query';
+import { useTranslations } from 'next-intl';
 import {
   AlertCircle,
   CheckCircle2,
@@ -50,10 +51,11 @@ export function StepRow({
   loopIter: number | null;
   isPending: boolean;
 }) {
+  const t = useTranslations('campaignsFeature.list');
   const type = stepDef?.type ?? logEntry?.step_type ?? (isCurrentlyRunning ? currentStepType : '');
   const userTitle = (stepDef as Record<string, unknown> | undefined)?.['title'] as string | undefined;
   const { target } = stepDef ? getStepDisplay(stepDef) : { target: '' };
-  const label = userTitle?.trim() || (type ? getStepTypeName(type) : `Bước ${index + 1}`);
+  const label = userTitle?.trim() || (type ? getStepTypeName(type) : t('monitorStepFallback', { n: index + 1 }));
   const sublabel = !userTitle?.trim() && target ? target : undefined;
   const depth = logEntry?.depth ?? 0;
 
@@ -114,7 +116,9 @@ export function StepRow({
           <div className='truncate text-[10px] italic text-primary/70' title={msg}>{msg}</div>
         )}
         {isCurrentlyRunning && loopIter !== null && (
-          <div className='text-[10px] text-primary/60'>Vòng #{loopIter + 1}</div>
+          <div className='text-[10px] text-primary/60'>
+            {t('monitorStepRowLoopRound', { n: loopIter + 1 })}
+          </div>
         )}
         {isFailed && msg && (
           <div className='truncate text-[10px] text-destructive/80' title={msg}>{msg}</div>
@@ -149,6 +153,7 @@ interface WorkflowStepListProps {
 }
 
 export function WorkflowStepList({ wf, maxHeight = '360px' }: WorkflowStepListProps) {
+  const t = useTranslations('campaignsFeature.list');
   const isActive = wf.status === 'RUNNING' || wf.status === 'PAUSED';
   const { campaignId, scenarioId } = parseWorkflowId(wf.workflow_id);
 
@@ -165,7 +170,7 @@ export function WorkflowStepList({ wf, maxHeight = '360px' }: WorkflowStepListPr
   if (logLoading || scenarioLoading) {
     return (
       <div className='flex items-center gap-2 py-4 text-xs text-muted-foreground'>
-        <Loader2 size={12} className='animate-spin' /> Đang tải...
+        <Loader2 size={12} className='animate-spin' /> {t('monitorStepListLoading')}
       </div>
     );
   }
@@ -233,19 +238,19 @@ export function WorkflowStepList({ wf, maxHeight = '360px' }: WorkflowStepListPr
           </div>
         </div>
       ) : (
-        <p className='py-4 text-center text-[11px] text-muted-foreground'>Chưa có dữ liệu bước.</p>
+        <p className='py-4 text-center text-[11px] text-muted-foreground'>{t('monitorStepListEmpty')}</p>
       )}
 
       {/* Summary */}
       {wf.status === 'COMPLETED' && (
         <div className='flex items-center gap-1.5 text-[11px] text-green-600 dark:text-green-400'>
-          <CheckCircle2 size={12} /> Hoàn thành {executedSteps.length} bước
+          <CheckCircle2 size={12} /> {t('monitorStepListCompletedSummary', { count: executedSteps.length })}
         </div>
       )}
       {wf.status === 'FAILED' && (
         <div className='flex items-center gap-1.5 text-[11px] text-destructive'>
           <AlertCircle size={12} />
-          {message || `Thất bại tại bước ${current + 1}`}
+          {message || t('monitorStepListFailedAt', { step: current + 1 })}
         </div>
       )}
     </div>

@@ -320,10 +320,10 @@ export function useStepAction(campaignId: string) {
   });
 }
 
-export function useDlqEntries(enabled: boolean, status?: string) {
+export function useDlqEntries(enabled: boolean, status?: string, campaignId?: string) {
   return useQuery({
-    queryKey: ['dlq-entries', status ?? 'all'],
-    queryFn: () => dlqApi.list({ status, limit: 100 }),
+    queryKey: ['dlq-entries', status ?? 'all', campaignId ?? 'global'],
+    queryFn: () => dlqApi.list({ status, campaignId, limit: 100 }),
     enabled,
     refetchInterval: enabled ? 5000 : false,
   });

@@ -4,7 +4,7 @@ import { CampaignList } from '@/features/campaigns/components/campaign-list';
 export default function CampaignsPage() {
   return (
     <div >
-      <div className='mx-auto max-w-7xl px-4 py-6'>
+      <div className=''>
         <div className='mb-4 flex items-center justify-between'>
           <div>
             <h1 className='text-xl font-bold tracking-tight text-foreground'>Campaigns</h1>

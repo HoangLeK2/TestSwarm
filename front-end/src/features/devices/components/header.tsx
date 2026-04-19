@@ -20,7 +20,7 @@ export function DeviceFarmHeader({
   const t = useTranslations('devicesFarm.header');
   return (
     <header className='border-b bg-background px-4 py-2.5'>
-      <div className='mx-auto flex max-w-7xl items-center gap-3'>
+      <div className='mx-auto flex'>
         <div className='flex flex-col gap-0.5 text-left'>
           <span className='text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground'>
             {t('eyebrow')}

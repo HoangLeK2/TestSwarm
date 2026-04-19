@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useForm } from 'react-hook-form';
+import { Controller, useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { Pencil } from 'lucide-react';
@@ -15,16 +15,22 @@ import { Textarea } from '@/components/ui/textarea';
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger
 } from '@/components/ui/dialog';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
+import { HexColorPopover, sanitizeHex } from '@/components/ui/hex-color-popover';
+import { DeviceGroupFormPreview } from './device-group-form-preview';
 
 type FormData = { name: string; description?: string; color?: string };
 
 export function EditDeviceGroupDialog({ group }: { group: DeviceGroupOut }) {
   const t = useTranslations('deviceGroupsFeature.editDialog');
+  const tCreate = useTranslations('deviceGroupsFeature.createDialog');
+  const tForm = useTranslations('deviceGroupsFeature.groupForm');
+  const tList = useTranslations('deviceGroupsFeature.list');
   const schema = z.object({
     name: z.string().min(1, t('nameRequired')),
     description: z.string().optional(),
@@ -34,6 +40,7 @@ export function EditDeviceGroupDialog({ group }: { group: DeviceGroupOut }) {
   const { mutate, isPending, error } = useUpdateDeviceGroup();
   const {
     register,
+    control,
     handleSubmit,
     reset,
     formState: { errors }
@@ -50,9 +57,20 @@ export function EditDeviceGroupDialog({ group }: { group: DeviceGroupOut }) {
     if (open) reset({ name: group.name, description: group.description, color: group.color });
   }, [open, group, reset]);
 
+  const name = useWatch({ control, name: 'name', defaultValue: group.name });
+  const description = useWatch({ control, name: 'description', defaultValue: group.description ?? '' });
+  const color = useWatch({ control, name: 'color', defaultValue: group.color ?? '#6366f1' });
+
   const onSubmit = (data: FormData) => {
     mutate(
-      { groupId: group.id, data: { name: data.name, description: data.description, color: data.color } },
+      {
+        groupId: group.id,
+        data: {
+          name: data.name,
+          description: data.description,
+          color: data.color ? sanitizeHex(data.color) : undefined
+        }
+      },
       { onSuccess: () => setOpen(false) }
     );
   };
@@ -60,37 +78,85 @@ export function EditDeviceGroupDialog({ group }: { group: DeviceGroupOut }) {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button size='icon' variant='ghost' className='size-8'>
+        <Button size='icon' variant='ghost' className='size-8 cursor-pointer' aria-label={t('title')}>
           <Pencil size={14} />
         </Button>
       </DialogTrigger>
-      <DialogContent className='z-[1000] max-w-md'>
-        <DialogHeader>
+      <DialogContent className='max-w-lg gap-0 overflow-hidden p-0 sm:max-w-xl'>
+        <DialogHeader className='space-y-2 px-6 pb-2 pt-6 text-left'>
           <DialogTitle>{t('title')}</DialogTitle>
+          <DialogDescription>{t('dialogDescription')}</DialogDescription>
         </DialogHeader>
-        <form onSubmit={handleSubmit(onSubmit)} className='space-y-4 pt-2'>
-          <div className='space-y-1'>
-            <Label>{t('nameLabel')}</Label>
-            <Input {...register('name')} />
-            {errors.name && <p className='text-xs text-destructive'>{errors.name.message}</p>}
-          </div>
-          <div className='space-y-1'>
-            <Label>{t('descriptionLabel')}</Label>
-            <Textarea {...register('description')} />
-          </div>
-          <div className='space-y-1'>
-            <Label>{t('colorLabel')}</Label>
-            <Input type='color' {...register('color')} className='h-10 w-20' />
-          </div>
-          {error && (
-            <p className='text-xs text-destructive'>
-              {formatFarmApiError(error, t('updateFailed'))}
-            </p>
-          )}
-          <Button type='submit' className='w-full' disabled={isPending}>
-            {isPending ? t('updating') : t('submit')}
-          </Button>
-        </form>
+
+        <div className='grid max-h-[min(85vh,720px)] auto-rows-min gap-6 overflow-y-auto px-6 pb-6 sm:grid-cols-[minmax(0,1fr)_min(240px,40%)] sm:items-start'>
+          <form onSubmit={handleSubmit(onSubmit)} className='flex min-w-0 flex-col gap-4'>
+            <div className='space-y-1.5'>
+              <Label htmlFor={`device-group-edit-name-${group.id}`}>{t('nameLabel')}</Label>
+              <Input
+                id={`device-group-edit-name-${group.id}`}
+                autoComplete='off'
+                placeholder={tCreate('namePlaceholder')}
+                className='transition-colors duration-200'
+                {...register('name')}
+              />
+              <p className='text-[11px] leading-snug text-muted-foreground'>{tForm('nameHint')}</p>
+              {errors.name && <p className='text-xs text-destructive'>{errors.name.message}</p>}
+            </div>
+
+            <div className='space-y-1.5'>
+              <Label htmlFor={`device-group-edit-description-${group.id}`}>{t('descriptionLabel')}</Label>
+              <Textarea
+                id={`device-group-edit-description-${group.id}`}
+                placeholder={tCreate('descriptionPlaceholder')}
+                rows={3}
+                className='min-h-[80px] resize-y transition-colors duration-200'
+                {...register('description')}
+              />
+              <p className='text-[11px] leading-snug text-muted-foreground'>{tForm('descriptionHint')}</p>
+            </div>
+
+            <div className='space-y-1.5'>
+              <Label>{t('colorLabel')}</Label>
+              <Controller
+                name='color'
+                control={control}
+                render={({ field }) => (
+                  <HexColorPopover
+                    value={field.value || '#6366f1'}
+                    onChange={field.onChange}
+                    aria-label={t('colorLabel')}
+                    className='cursor-pointer'
+                  />
+                )}
+              />
+              <p className='text-[11px] leading-snug text-muted-foreground'>{tForm('colorHint')}</p>
+            </div>
+
+            {error && (
+              <p className='text-xs text-destructive'>
+                {formatFarmApiError(error, t('updateFailed'))}
+              </p>
+            )}
+
+            <Button type='submit' className='w-full cursor-pointer' disabled={isPending}>
+              {isPending ? t('updating') : t('submit')}
+            </Button>
+          </form>
+
+          <aside className='sm:sticky sm:top-0 sm:self-start'>
+            <DeviceGroupFormPreview
+              name={name}
+              description={description}
+              color={color || '#6366f1'}
+              deviceCount={group.device_count}
+              title={tForm('previewTitle')}
+              caption={tForm('previewCaptionEdit')}
+              emptyNameLabel={tForm('previewNameEmpty')}
+              dashLabel={tForm('previewDash')}
+              devicesLabel={tList('colDeviceCount')}
+            />
+          </aside>
+        </div>
       </DialogContent>
     </Dialog>
   );

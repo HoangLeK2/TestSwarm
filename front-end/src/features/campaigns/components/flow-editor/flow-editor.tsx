@@ -23,6 +23,7 @@ import {
 } from '@dnd-kit/sortable';
 import { restrictToVerticalAxis } from '@dnd-kit/modifiers';
 import { isContainerType, type FlowStep } from '../scenario-steps/types';
+import type { RunScenarioCampaignOption } from '../scenario-steps/run-scenario-editor';
 import { StepCard } from './step-card';
 import { BracketBlock } from './bracket-block';
 import { InsertGap } from './insert-button';
@@ -62,6 +63,8 @@ interface Props {
   onStopInlineRun?: () => void;
   /** When FlowEditor is inside another Radix Dialog (e.g. template editor). */
   nestedInDialog?: boolean;
+  /** Other scenarios in the same campaign — powers run_scenario picker in the step panel. */
+  campaignScenarios?: RunScenarioCampaignOption[];
 }
 
 const ROOT_SORTABLE_ID = encodeFlowListRef({ kind: 'root' });
@@ -79,6 +82,7 @@ export function FlowEditor({
   stepRunStates = {},
   onStopInlineRun,
   nestedInDialog = false,
+  campaignScenarios = [],
 }: Props) {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const selectedStep = selectedIndex != null ? steps[selectedIndex] : null;
@@ -257,6 +261,7 @@ export function FlowEditor({
               onChange={(s) => updateAt(selectedIndex, s)}
               onClose={() => setSelectedIndex(null)}
               availableVariables={availableVariables}
+              campaignScenarios={campaignScenarios}
               onRequestPickSelector={
                 onSelectorPickTargetChange
                   ? () => {
@@ -343,6 +348,7 @@ export function FlowEditor({
                                   : undefined
                               }
                               onRunChild={onRunStep ? (s, k) => onRunStep(s, k) : undefined}
+                              campaignScenarios={campaignScenarios}
                             />
                           ) : (
                             <StepCard

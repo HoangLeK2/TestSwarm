@@ -90,6 +90,55 @@ def _resolve_user_id_from_request(request: Request) -> Optional[str]:
     return ctx.user_id if ctx else None
 
 
+async def _resolve_account_group_vars(
+    account_group_id: Optional[str],
+    user_id: Optional[str],
+) -> Dict[str, Any]:
+    """Pick one account from the group and return the ``__ACCOUNT_*`` vars
+    (including decrypted password) for a preview / test run.
+
+    Advances the group's rotation state just like a real dispatch — so
+    repeated "Run" clicks rotate through the pool rather than always hitting
+    the same account. Returns an empty dict on any failure (group missing,
+    empty pool, ownership mismatch) so the preview still runs, just without
+    account variables.
+    """
+    if not account_group_id:
+        return {}
+    try:
+        from db.crud.account_group import get_group, pick_next_batch
+        from common.crypto import decrypt_password
+    except Exception:
+        return {}
+    try:
+        async with AsyncSessionLocal() as db:
+            group = await get_group(db, account_group_id, user_id=user_id)
+            if group is None:
+                return {}
+            accounts = await pick_next_batch(db, account_group_id, 1)
+            if not accounts:
+                await db.commit()
+                return {}
+            account = accounts[0]
+            out: Dict[str, Any] = {
+                "__ACCOUNT_ID__": str(account.id),
+                "__ACCOUNT_USERNAME__": account.username,
+                "__ACCOUNT_DISPLAY_NAME__": account.display_name or "",
+                "__ACCOUNT_PLATFORM__": account.platform,
+            }
+            if account.password_encrypted:
+                try:
+                    out["__ACCOUNT_PASSWORD__"] = decrypt_password(account.password_encrypted)
+                except Exception:
+                    # Keep the preview running; executor will substitute empty.
+                    out["__ACCOUNT_PASSWORD__"] = ""
+            await db.commit()
+            return out
+    except Exception as exc:
+        log.warning("preview account_group resolve failed: %s", exc)
+        return {}
+
+
 async def _execute_scenario_body(
     manager: DeviceManager,
     serial: str,
@@ -142,6 +191,12 @@ def build_scenarios_router(
         if not device:
             return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
         user_id = _resolve_user_id_from_request(request)
+        # Inject __ACCOUNT_* vars from the bound account group (if any) so a
+        # test run can exercise login steps without first saving the scenario.
+        # Client-supplied variables still win on key collision.
+        acct_vars = await _resolve_account_group_vars(body.account_group_id, user_id)
+        if acct_vars:
+            body.variables = {**acct_vars, **(body.variables or {})}
         return await _execute_scenario_body(
             manager, serial, body, trace_source="api.preview", user_id=user_id
         )
@@ -167,6 +222,12 @@ def build_scenarios_router(
             total_steps=len(body.steps),
         )
         user_id = _resolve_user_id_from_request(request)
+
+        # Same account-group rotation hook as the non-stream preview. Keep
+        # upstream variables authoritative on collision.
+        acct_vars = await _resolve_account_group_vars(body.account_group_id, user_id)
+        if acct_vars:
+            body.variables = {**acct_vars, **(body.variables or {})}
 
         cancel_event = threading.Event()
         _register_preview(serial, trace_id, cancel_event, user_id=user_id)

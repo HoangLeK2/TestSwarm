@@ -4,19 +4,45 @@ import { useState } from 'react';
 import { Plus, FileText } from 'lucide-react';
 import { toast } from 'sonner';
 import { useTranslations } from 'next-intl';
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy
+} from '@dnd-kit/sortable';
+import { restrictToVerticalAxis } from '@dnd-kit/modifiers';
+import { useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { useCreateScenario, useScenarios } from '../../hooks/use-campaigns';
-import type { CampaignOut } from '../../types';
+import { useCreateScenario, useReorderScenarios, useScenarios } from '../../hooks/use-campaigns';
+import type { CampaignOut, ScenarioOut } from '../../types';
 import { ScenarioRow } from './ScenarioRow';
 
 export function ScenarioListDialog({ campaign, children }: { campaign: CampaignOut; children?: React.ReactNode }) {
   const t = useTranslations('campaignsFeature.scenarioList');
   const [open, setOpen] = useState(false);
+  const qc = useQueryClient();
   const { data: scenarios = [], refetch } = useScenarios(campaign.id);
   const { mutate: createScenario, isPending: isCreating } = useCreateScenario();
+  const { mutateAsync: reorderScenarios, isPending: isReordering } = useReorderScenarios();
 
   const totalSteps = scenarios.reduce((sum, s) => sum + s.steps.length, 0);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
+
+  const scenariosKey = ['campaigns', campaign.id, 'scenarios'];
 
   const handleAdd = () => {
     createScenario(
@@ -29,6 +55,27 @@ export function ScenarioListDialog({ campaign, children }: { campaign: CampaignO
         onError: () => toast.error(t('createFailed'))
       }
     );
+  };
+
+  const handleDragEnd = async (event: DragEndEvent) => {
+    if (isReordering) return;
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+
+    const oldIndex = scenarios.findIndex((s) => s.id === active.id);
+    const newIndex = scenarios.findIndex((s) => s.id === over.id);
+    if (oldIndex < 0 || newIndex < 0) return;
+
+    const reordered = arrayMove(scenarios, oldIndex, newIndex).map((s, idx) => ({ ...s, order: idx }));
+    await qc.cancelQueries({ queryKey: scenariosKey });
+    qc.setQueryData<ScenarioOut[]>(scenariosKey, reordered);
+
+    try {
+      await reorderScenarios({ campaignId: campaign.id, orderedIds: reordered.map((s) => s.id) });
+    } catch {
+      toast.error(t('reorderFailed'));
+      refetch();
+    }
   };
 
   return (
@@ -51,9 +98,26 @@ export function ScenarioListDialog({ campaign, children }: { campaign: CampaignO
           {scenarios.length === 0 ? (
             <p className='py-4 text-center text-sm text-muted-foreground'>{t('empty')}</p>
           ) : (
-            scenarios.map((s) => (
-              <ScenarioRow key={s.id} campaign={campaign} scenario={s} onDeleted={() => refetch()} />
-            ))
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              modifiers={[restrictToVerticalAxis]}
+              onDragEnd={handleDragEnd}
+            >
+              <SortableContext items={scenarios.map((s) => s.id)} strategy={verticalListSortingStrategy}>
+                <div className='flex flex-col gap-2'>
+                  {scenarios.map((s) => (
+                    <ScenarioRow
+                      key={s.id}
+                      campaign={campaign}
+                      scenario={s}
+                      onDeleted={() => refetch()}
+                      dragDisabled={isReordering}
+                    />
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
           )}
 
           <Button
@@ -71,4 +135,3 @@ export function ScenarioListDialog({ campaign, children }: { campaign: CampaignO
     </Dialog>
   );
 }
-

@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { devicesApi, type DeviceOut } from '@/features/devices/services/manage-api';
 import { useCampaignDevices, useAddDeviceToCampaign, useRemoveDeviceFromCampaign } from '../hooks/use-campaigns';
+import { useDeviceGroup, useDeviceGroups } from '@/features/device-groups/hooks/use-device-groups';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -14,7 +15,14 @@ import {
   DialogTrigger
 } from '@/components/ui/dialog';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Smartphone, Plus, CheckCheck, X } from 'lucide-react';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select';
+import { Smartphone, Plus, CheckCheck, X, Layers } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 
 function deviceLabel(d: { serial: string; name?: string | null }) {
@@ -35,12 +43,16 @@ export function AddDevicesToCampaignDialog({
   const t = useTranslations('campaignsFeature.addDevices');
   const [open, setOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [pickedGroupId, setPickedGroupId] = useState<string>('');
+  const [bulkAdding, setBulkAdding] = useState(false);
 
   const { data: campaignDevices = [], isLoading: loadingCampaign } = useCampaignDevices(campaignId);
   const { data: allDevices = [], isLoading: loadingAll } = useQuery({
     queryKey: ['devices'],
     queryFn: () => devicesApi.list()
   });
+  const { data: groups = [] } = useDeviceGroups();
+  const { data: pickedGroup } = useDeviceGroup(pickedGroupId);
   const { mutate: addDevice, mutateAsync: addDeviceAsync, isPending: adding } = useAddDeviceToCampaign();
   const { mutate: removeDevice, isPending: removing } = useRemoveDeviceFromCampaign();
 
@@ -87,10 +99,36 @@ export function AddDevicesToCampaignDialog({
   const onOpenChange = useCallback(
     (v: boolean) => {
       setOpen(v);
-      if (!v) setSelectedIds(new Set());
+      if (!v) {
+        setSelectedIds(new Set());
+        setPickedGroupId('');
+      }
     },
     []
   );
+
+  const groupNewDeviceIds = (pickedGroup?.devices ?? [])
+    .map((d) => d.id)
+    .filter((id) => !addedIds.has(id));
+
+  const addWholeGroup = useCallback(async () => {
+    if (groupNewDeviceIds.length === 0) return;
+    setBulkAdding(true);
+    let added = 0;
+    let failed = 0;
+    for (const deviceId of groupNewDeviceIds) {
+      try {
+        await addDeviceAsync({ campaignId, deviceId });
+        added += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+    setBulkAdding(false);
+    if (added > 0) toast.success(`Đã thêm ${added} thiết bị từ nhóm "${pickedGroup?.name ?? ''}"`);
+    if (failed > 0) toast.error(`${failed} thiết bị thêm thất bại`);
+    setPickedGroupId('');
+  }, [campaignId, groupNewDeviceIds, addDeviceAsync, pickedGroup?.name]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -140,6 +178,82 @@ export function AddDevicesToCampaignDialog({
               </ul>
             </div>
           )}
+
+          {/* Thêm cả nhóm thiết bị */}
+          <div className='rounded-lg border border-primary/20 bg-primary/[0.04] p-3'>
+            <div className='mb-2 flex items-center gap-1.5'>
+              <Layers size={13} className='text-primary' />
+              <p className='text-xs font-semibold text-foreground'>
+                Thêm cả nhóm thiết bị
+              </p>
+            </div>
+            {groups.length === 0 ? (
+              <p className='text-xs text-muted-foreground'>
+                Chưa có nhóm thiết bị nào. Tạo nhóm tại trang{' '}
+                <span className='font-medium text-foreground'>Device Groups</span>{' '}
+                trước khi dùng tính năng này.
+              </p>
+            ) : (
+              <div className='flex flex-wrap items-center gap-2'>
+                <div className='min-w-[180px] flex-1'>
+                  <Select
+                    value={pickedGroupId || '_none'}
+                    onValueChange={(v) =>
+                      setPickedGroupId(v === '_none' ? '' : v)
+                    }
+                  >
+                    <SelectTrigger className='h-9 text-sm'>
+                      <SelectValue placeholder='Chọn nhóm…' />
+                    </SelectTrigger>
+                    <SelectContent className='z-[10001]'>
+                      <SelectItem value='_none'>
+                        <span className='text-muted-foreground'>— Chọn nhóm —</span>
+                      </SelectItem>
+                      {groups.map((g) => (
+                        <SelectItem key={g.id} value={g.id}>
+                          <span className='flex items-center gap-2'>
+                            <span
+                              className='inline-block size-3 shrink-0 rounded-full'
+                              style={{ backgroundColor: g.color }}
+                            />
+                            <span>{g.name}</span>
+                            <span className='text-muted-foreground'>
+                              ({g.device_count})
+                            </span>
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button
+                  type='button'
+                  size='sm'
+                  className='h-9 gap-1.5 text-xs'
+                  disabled={
+                    !pickedGroupId ||
+                    bulkAdding ||
+                    adding ||
+                    groupNewDeviceIds.length === 0
+                  }
+                  onClick={addWholeGroup}
+                >
+                  <Plus size={13} />
+                  {bulkAdding
+                    ? 'Đang thêm…'
+                    : pickedGroupId
+                      ? `Thêm ${groupNewDeviceIds.length} thiết bị`
+                      : 'Thêm cả nhóm'}
+                </Button>
+              </div>
+            )}
+            {pickedGroupId && pickedGroup && groupNewDeviceIds.length === 0 && (
+              <p className='mt-2 text-xs text-muted-foreground'>
+                Tất cả thiết bị trong nhóm <span className='font-medium text-foreground'>{pickedGroup.name}</span>{' '}
+                đã có trong campaign.
+              </p>
+            )}
+          </div>
 
           {/* Có thể thêm: chọn 1 hoặc chọn hết */}
           <div>

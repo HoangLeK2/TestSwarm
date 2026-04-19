@@ -31,7 +31,7 @@ export function MonitorContent({ campaignId, isRunning }: Props) {
           {t('monitorNotRunningMessage')}
         </div>
         <ArtifactPanel campaignId={campaignId} />
-        <DlqPanel />
+        <DlqPanel campaignId={campaignId} />
       </div>
     );
   }
@@ -43,7 +43,7 @@ export function MonitorContent({ campaignId, isRunning }: Props) {
           {t('monitorTemporalUnavailableMessage')}
         </div>
         <ArtifactPanel campaignId={campaignId} />
-        <DlqPanel />
+        <DlqPanel campaignId={campaignId} />
       </div>
     );
   }
@@ -55,20 +55,20 @@ export function MonitorContent({ campaignId, isRunning }: Props) {
           {t('monitorNoRunningWorkflowsMessage')}
         </div>
         <ArtifactPanel campaignId={campaignId} />
-        <DlqPanel />
+        <DlqPanel campaignId={campaignId} />
       </div>
     );
   }
 
   return (
     <div>
-      <div className='max-h-[54vh] overflow-y-auto divide-y'>
+      <div className='divide-y'>
         {workflows.map((wf) => (
           <WorkflowProgressCard key={wf.workflow_id} wf={wf} campaignId={campaignId} />
         ))}
       </div>
       <ArtifactPanel campaignId={campaignId} />
-      <DlqPanel />
+      <DlqPanel campaignId={campaignId} />
     </div>
   );
 }

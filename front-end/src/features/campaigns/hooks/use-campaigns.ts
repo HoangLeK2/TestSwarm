@@ -216,6 +216,17 @@ export function useDeleteScenario() {
   });
 }
 
+export function useReorderScenarios() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ campaignId, orderedIds }: { campaignId: string; orderedIds: string[] }) =>
+      scenariosApi.reorder(campaignId, orderedIds),
+    onSuccess: (data, { campaignId }) => {
+      qc.setQueryData(KEYS.scenarios(campaignId), data);
+    },
+  });
+}
+
 export function useCompileScenario() {
   const qc = useQueryClient();
   return useMutation({
@@ -320,10 +331,10 @@ export function useStepAction(campaignId: string) {
   });
 }
 
-export function useDlqEntries(enabled: boolean, status?: string) {
+export function useDlqEntries(enabled: boolean, status?: string, campaignId?: string) {
   return useQuery({
-    queryKey: ['dlq-entries', status ?? 'all'],
-    queryFn: () => dlqApi.list({ status, limit: 100 }),
+    queryKey: ['dlq-entries', status ?? 'all', campaignId ?? 'global'],
+    queryFn: () => dlqApi.list({ status, campaignId, limit: 100 }),
     enabled,
     refetchInterval: enabled ? 5000 : false,
   });
@@ -422,6 +433,10 @@ export function useRunCampaign(onAllDone?: () => void, options?: RunCampaignOpti
     mutationFn: ({ id, deviceSerials }: { id: string; deviceSerials?: string[] }) =>
       campaignsApi.run(id, deviceSerials),
     onSuccess: async (data: CampaignRunResponse, { id }) => {
+      // TODO(account-groups): when backend surfaces a warning field for
+      // empty/exhausted account groups on CampaignRunResponse
+      // (e.g. data.warnings or data.account_group_warning), call
+      // toast.warning(...) here to surface it to the operator.
       clearPollTimer();
       qc.invalidateQueries({ queryKey: KEYS.list });
       qc.invalidateQueries({ queryKey: KEYS.detail(id) });

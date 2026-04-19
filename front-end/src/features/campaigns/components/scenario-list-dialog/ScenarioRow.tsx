@@ -1,9 +1,11 @@
 'use client';
 
 import Link from 'next/link';
-import { ChevronRight, FileText, Trash2 } from 'lucide-react';
+import { ChevronRight, FileText, GripVertical, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useTranslations } from 'next-intl';
+import { useSortable } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { Button } from '@/components/ui/button';
 import { ROUTES } from '@/config/routes';
 import type { CampaignOut, ScenarioOut } from '../../types';
@@ -12,14 +14,25 @@ import { useDeleteScenario } from '../../hooks/use-campaigns';
 export function ScenarioRow({
   campaign,
   scenario,
-  onDeleted
+  onDeleted,
+  dragDisabled = false
 }: {
   campaign: CampaignOut;
   scenario: ScenarioOut;
   onDeleted: () => void;
+  dragDisabled?: boolean;
 }) {
   const t = useTranslations('campaignsFeature.scenarioList');
   const { mutate: deleteScenario, isPending } = useDeleteScenario();
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: scenario.id,
+    disabled: dragDisabled
+  });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition: transition ?? undefined
+  };
 
   const handleDelete = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -38,7 +51,28 @@ export function ScenarioRow({
   };
 
   return (
-    <div className='flex items-center gap-2 rounded-md border px-3 py-2 text-sm hover:bg-muted/40'>
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`flex items-center gap-2 rounded-md border bg-background px-2 py-2 text-sm hover:bg-muted/40 ${
+        isDragging ? 'relative z-50 shadow-lg' : ''
+      }`}
+    >
+      <button
+        type='button'
+        disabled={dragDisabled}
+        {...attributes}
+        {...listeners}
+        tabIndex={-1}
+        title={t('reorderTitle')}
+        className={`flex shrink-0 items-center justify-center text-muted-foreground/40 ${
+          dragDisabled
+            ? 'cursor-not-allowed opacity-40'
+            : 'cursor-grab hover:text-muted-foreground active:cursor-grabbing'
+        }`}
+      >
+        <GripVertical size={14} />
+      </button>
       <FileText size={14} className='shrink-0 text-muted-foreground' />
       <div className='min-w-0 flex-1'>
         <div className='truncate font-medium'>{scenario.name}</div>
@@ -65,4 +99,3 @@ export function ScenarioRow({
     </div>
   );
 }
-

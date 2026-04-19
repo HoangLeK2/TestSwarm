@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useMemo, useState } from 'react';
+import { useTranslations } from 'next-intl';
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { ChevronDown, ChevronRight, Crosshair, Loader2, Play, Square, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -35,6 +36,7 @@ import {
 import { encodeFlowListRef, stableStepDnDId } from './flow-dnd-ids';
 import { SortableFlowRow } from './sortable-flow-row';
 import { encodeScenarioInlineRunKey } from './inline-run-key';
+import type { RunScenarioCampaignOption } from '../scenario-steps/run-scenario-editor';
 
 // ── Step mutation helpers ────────────────────────────────────────────────────
 
@@ -129,6 +131,7 @@ interface BracketBlockProps {
    * Empty array (default) = this IS a root step.
    */
   pathFromRoot?: Array<{ listKey: string; childIndex: number }>;
+  campaignScenarios?: RunScenarioCampaignOption[];
 }
 
 // ── ChildStepList ────────────────────────────────────────────────────────────
@@ -171,6 +174,7 @@ interface ChildStepListProps {
   nestedInDialog?: boolean;
   stepRunStates?: Record<string, 'idle' | 'running' | 'ok' | 'error'>;
   onStopInlineRun?: () => void;
+  campaignScenarios?: RunScenarioCampaignOption[];
 }
 
 function ChildStepList({
@@ -196,7 +200,9 @@ function ChildStepList({
   nestedInDialog,
   stepRunStates = {},
   onStopInlineRun,
+  campaignScenarios = [],
 }: ChildStepListProps) {
+  const tBracket = useTranslations('campaignsFeature.flowBracket');
   const pathKey = JSON.stringify(pathFromRoot ?? []);
   const sortableContainerId = useMemo(() => {
     const path = (JSON.parse(pathKey) || []) as Array<{ listKey: string; childIndex: number }>;
@@ -259,6 +265,7 @@ function ChildStepList({
                         stepRunStates={stepRunStates}
                         onStopInlineRun={onStopInlineRun}
                         onRunSelf={onRunChild ? () => onRunChild(child, bracketRunKey) : undefined}
+                        campaignScenarios={campaignScenarios}
                       />
                     </div>
                   </div>
@@ -335,7 +342,10 @@ function ChildStepList({
         <InsertGap onInsert={(s) => onInsertChild(listKey, steps.length, s)} />
       </SortableContext>
       {steps.length === 0 && (
-        <p className='py-1 text-center text-[10px] text-muted-foreground'>Trống</p>
+        <div className='rounded-md border border-dashed border-muted-foreground/25 bg-muted/20 px-2 py-2 text-center'>
+          <p className='text-[11px] font-medium text-muted-foreground'>{tBracket('emptyBranchTitle')}</p>
+          <p className='mt-0.5 text-[10px] leading-snug text-muted-foreground/90'>{tBracket('emptyBranchBody')}</p>
+        </div>
       )}
     </div>
   );
@@ -368,13 +378,41 @@ export function BracketBlock({
   onStopInlineRun,
   rootStepIndex,
   pathFromRoot,
+  campaignScenarios = [],
 }: BracketBlockProps) {
+  const tFlow = useTranslations('campaignsFeature.flowBracket');
   const [collapsed, setCollapsed] = useState(false);
   const [editingChildPath, setEditingChildPath] = useState<{ listKey: string; ci: number } | null>(null);
   const editingChild = editingChildPath ? getChildStep(step, editingChildPath.listKey, editingChildPath.ci) : null;
   const colors = BRACKET_COLORS[step.type] ?? BRACKET_COLORS.repeat;
-  const typeName = getStepTypeName(step.type);
-  const summary = getStepSummary(step);
+  const blockTitle = useMemo(() => {
+    switch (step.type) {
+      case 'loop':
+        return tFlow('blockTitle.loop');
+      case 'repeat':
+        return tFlow('blockTitle.repeat');
+      case 'repeat_until':
+        return tFlow('blockTitle.repeat_until');
+      case 'if_element':
+        return tFlow('blockTitle.if_element');
+      case 'if_variable':
+        return tFlow('blockTitle.if_variable');
+      case 'if':
+        return tFlow('blockTitle.if');
+      case 'random_pick':
+        return tFlow('blockTitle.random_pick');
+      case 'run_scenario':
+        return tFlow('blockTitle.run_scenario');
+      default:
+        return getStepTypeName(step.type);
+    }
+  }, [step.type, tFlow]);
+  const summary = useMemo(() => {
+    if (step.type === 'random_pick') {
+      return tFlow('branchSummary', { count: step.branches?.length ?? 0 });
+    }
+    return getStepSummary(step);
+  }, [step, tFlow]);
 
   // Effective root info — for nested blocks, rootStepIndex differs from stepIndex
   const effectiveRootIndex = rootStepIndex ?? stepIndex;
@@ -418,6 +456,7 @@ export function BracketBlock({
     nestedInDialog,
     stepRunStates,
     onStopInlineRun,
+    campaignScenarios,
   };
 
   return (
@@ -428,6 +467,7 @@ export function BracketBlock({
           step={editingChild}
           onChange={(s) => onUpdate(updateChildInStep(step, editingChildPath.listKey, editingChildPath.ci, s))}
           onClose={() => setEditingChildPath(null)}
+          campaignScenarios={campaignScenarios}
           onRequestPickSelector={onTogglePickSelector ? () => {
             const path: SelectorPickTarget = {
               rootIndex: effectiveRootIndex,
@@ -480,6 +520,7 @@ export function BracketBlock({
             step={editingChild}
             onChange={(s) => onUpdate(updateChildInStep(step, editingChildPath.listKey, editingChildPath.ci, s))}
             onClose={() => setEditingChildPath(null)}
+            campaignScenarios={campaignScenarios}
             onRequestPickSelector={onTogglePickSelector ? () => {
               const path: SelectorPickTarget = {
                 rootIndex: effectiveRootIndex,
@@ -538,7 +579,7 @@ export function BracketBlock({
           {collapsed ? <ChevronRight size={11} strokeWidth={2} /> : <ChevronDown size={11} strokeWidth={2} />}
         </button>
         <StepIcon type={step.type} size={12} />
-        <span className={cn('text-[11px] font-bold', colors.label)}>{typeName}</span>
+        <span className={cn('text-xs font-semibold tracking-tight normal-case', colors.label)}>{blockTitle}</span>
         <span className='min-w-0 flex-1 truncate text-[10px] text-muted-foreground'>{summary}</span>
 
         {/* Nesting depth badge — helps user track where they are */}
@@ -649,12 +690,23 @@ export function BracketBlock({
           })()}
 
           {step.type === 'random_pick' && (
-            <div className='space-y-1 pt-0.5'>
+            <div className='space-y-2 pt-0.5'>
+              <p className='rounded-md bg-muted/40 px-2 py-1.5 text-[10px] leading-relaxed text-muted-foreground'>
+                {tFlow('randomPick.explainer')}
+              </p>
               {(step.branches ?? []).map((branch: any, bi: number) => (
-                <div key={bi} className='rounded border border-dashed p-1.5'>
-                  <span className={cn('text-[9px] font-bold', colors.label)}>
-                    Nhánh {String.fromCharCode(65 + bi)} (w={branch.weight ?? 1})
-                  </span>
+                <div
+                  key={bi}
+                  className='space-y-1.5 rounded-md border border-dashed border-border/80 bg-background/40 p-2'
+                >
+                  <div className='flex flex-wrap items-baseline gap-x-2 gap-y-0.5'>
+                    <span className={cn('text-xs font-semibold', colors.label)}>
+                      {tFlow('randomPick.branchHeading', { letter: String.fromCharCode(65 + bi) })}
+                    </span>
+                    <span className='text-[10px] text-muted-foreground'>
+                      {tFlow('randomPick.weightLine', { weight: branch.weight ?? 1 })}
+                    </span>
+                  </div>
                   <ChildStepList
                     steps={branch.steps ?? []}
                     listKey={`branches.${bi}.steps`}
@@ -667,7 +719,15 @@ export function BracketBlock({
 
           {step.type === 'run_scenario' && (
             <p className='py-1 text-[10px] text-muted-foreground'>
-              Gọi: <span className='font-mono'>{step.scenario_name || step.scenario_id || '(chưa chọn)'}</span>
+              {step.scenario_name || step.scenario_id ? (
+                <>
+                  {tFlow('runScenario.inlineCalls', {
+                    ref: String(step.scenario_name || step.scenario_id),
+                  })}
+                </>
+              ) : (
+                tFlow('runScenario.inlineNotSet')
+              )}
             </p>
           )}
         </div>
@@ -675,9 +735,17 @@ export function BracketBlock({
 
       {/* End bar */}
       {!collapsed && (
-        <div className={cn('flex items-center gap-1 border-t px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest opacity-60', colors.bg, colors.label)}>
-          <span>└</span>
-          <span>KẾT THÚC {typeName}</span>
+        <div
+          className={cn(
+            'flex items-center gap-1.5 border-t px-2 py-1 text-[10px] font-medium normal-case opacity-80',
+            colors.bg,
+            colors.label,
+          )}
+        >
+          <span className='font-mono text-muted-foreground' aria-hidden>
+            └
+          </span>
+          <span>{tFlow('endBlock', { title: blockTitle })}</span>
         </div>
       )}
     </div>

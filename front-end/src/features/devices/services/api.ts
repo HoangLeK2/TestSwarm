@@ -381,6 +381,7 @@ export async function previewScenarioStream(
   onEvent: (event: { event: string; [key: string]: any }) => void,
   signal?: AbortSignal,
   variables?: Record<string, any>,
+  accountGroupId?: string | null,
 ): Promise<void> {
   // Use farmApi's baseURL for the SSE endpoint
   const baseUrl = farmApi.defaults.baseURL || '';
@@ -390,10 +391,13 @@ export async function previewScenarioStream(
   const rawToken = tokenStorage.getAuthToken();
   if (rawToken) headers['Authorization'] = `Bearer ${rawToken}`;
 
+  const body: Record<string, any> = { steps, variables: variables ?? {} };
+  if (accountGroupId) body.account_group_id = accountGroupId;
+
   const response = await fetch(url, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ steps, variables: variables ?? {} }),
+    body: JSON.stringify(body),
     signal,
   });
 

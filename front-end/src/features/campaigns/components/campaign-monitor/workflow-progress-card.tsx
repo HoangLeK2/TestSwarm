@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useTranslations } from 'next-intl';
 import { CheckCircle2, XCircle, Pause, Loader2, Clock, ChevronDown, ChevronRight, Smartphone, List, AlertTriangle, RefreshCw, SkipForward } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Progress } from '@/components/ui/progress';
@@ -26,41 +27,42 @@ function parseScenarioId(workflowId: string): string {
 // ── Status badge ─────────────────────────────────────────────────────────────
 
 function StatusBadge({ status }: { status: string }) {
+  const t = useTranslations('campaignsFeature.list');
   const cfg: Record<string, { icon: React.ReactNode; cls: string; label: string }> = {
     RUNNING: {
       icon: <Loader2 size={10} className='animate-spin' />,
       cls: 'bg-blue-500/15 text-blue-600 dark:text-blue-400',
-      label: 'Đang chạy',
+      label: t('monitorWfStatusRunning'),
     },
     COMPLETED: {
       icon: <CheckCircle2 size={10} />,
       cls: 'bg-green-500/15 text-green-600 dark:text-green-400',
-      label: 'Hoàn thành',
+      label: t('monitorWfStatusCompleted'),
     },
     FAILED: {
       icon: <XCircle size={10} />,
       cls: 'bg-red-500/15 text-red-600 dark:text-red-400',
-      label: 'Thất bại',
+      label: t('monitorWfStatusFailed'),
     },
     PAUSED: {
       icon: <Pause size={10} />,
       cls: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
-      label: 'Tạm dừng',
+      label: t('monitorWfStatusPaused'),
     },
     paused_on_error: {
       icon: <AlertTriangle size={10} />,
       cls: 'bg-orange-500/15 text-orange-600 dark:text-orange-400 animate-pulse',
-      label: 'Lỗi — chờ xử lý',
+      label: t('monitorWfStatusPausedOnError'),
     },
     CANCELLED: {
       icon: <XCircle size={10} />,
       cls: 'bg-muted text-muted-foreground',
-      label: 'Đã hủy',
+      label: t('monitorWfStatusCancelled'),
     },
     TERMINATED: {
       icon: <XCircle size={10} />,
       cls: 'bg-muted text-muted-foreground',
-      label: 'Kết thúc',
+      label: t('monitorWfStatusTerminated'),
     },
   };
   const c = cfg[status] ?? { icon: <Clock size={10} />, cls: 'bg-muted text-muted-foreground', label: status };
@@ -107,6 +109,7 @@ interface Props {
 }
 
 export function WorkflowProgressCard({ wf, campaignId }: Props) {
+  const t = useTranslations('campaignsFeature.list');
   const [expanded, setExpanded] = useState(false);
   const [dismissed, setDismissed] = useState(false);
 
@@ -196,7 +199,7 @@ export function WorkflowProgressCard({ wf, campaignId }: Props) {
               </span>
             )}
             {loopIter !== null && (
-              <span className='text-[9px]'>vòng #{loopIter + 1}</span>
+              <span className='text-[9px]'>{t('monitorWfLoopRound', { n: loopIter + 1 })}</span>
             )}
             {message && (
               <span className='truncate flex-1 italic' title={message}>{message}</span>
@@ -212,7 +215,7 @@ export function WorkflowProgressCard({ wf, campaignId }: Props) {
 
         {isPausedOnError && errorMessage && (
           <p className='mt-1 pl-[26px] text-[10px] text-orange-600 dark:text-orange-400 truncate' title={errorMessage}>
-            Lỗi: {errorMessage}
+            {t('monitorWfErrorPrefix')} {errorMessage}
           </p>
         )}
       </button>
@@ -222,7 +225,7 @@ export function WorkflowProgressCard({ wf, campaignId }: Props) {
         <div className='flex items-center gap-2 px-4 py-2 border-t bg-orange-500/5'>
           <AlertTriangle size={11} className='text-orange-500 shrink-0' />
           <span className='text-[10px] text-orange-600 dark:text-orange-400 flex-1'>
-            Workflow đang chờ — chọn hành động:
+            {t('monitorWfPausedPrompt')}
           </span>
           <Button
             size='sm'
@@ -238,7 +241,7 @@ export function WorkflowProgressCard({ wf, campaignId }: Props) {
             }}
           >
             <RefreshCw size={10} className={stepAction.isPending ? 'animate-spin' : ''} />
-            Thử lại
+            {t('monitorActionRetry')}
           </Button>
           <Button
             size='sm'
@@ -254,7 +257,7 @@ export function WorkflowProgressCard({ wf, campaignId }: Props) {
             }}
           >
             <SkipForward size={10} />
-            Bỏ qua
+            {t('monitorActionDismiss')}
           </Button>
         </div>
       )}
@@ -268,7 +271,7 @@ export function WorkflowProgressCard({ wf, campaignId }: Props) {
             </div>
             <div className='min-w-0 flex-1 px-3 py-3'>
               <p className='mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>
-                <List size={10} /> Các bước
+                <List size={10} /> {t('monitorStepsHeading')}
               </p>
               <WorkflowStepList wf={wf} maxHeight='400px' />
             </div>

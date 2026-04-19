@@ -17,23 +17,85 @@ log = logging.getLogger(__name__)
 _CAMPAIGN_ID_RE = re.compile(r'^[\w\-]{1,128}$')
 
 
-async def _get_device_account_vars(
-    device_id: str,
-    platform: str,
-    db,
-) -> Dict[str, Any]:
-  
-    from db.crud.account import get_primary_account_for_device
+def _account_to_vars(account) -> Dict[str, Any]:
+    """Common ``__ACCOUNT_*`` variable shape injected into scenario runs.
 
-    account = await get_primary_account_for_device(db, device_id, platform)
-    if not account:
-        return {}
+    Password is NOT included here — Temporal activities resolve it at runtime
+    via ``__ACCOUNT_ID__`` so plaintext never hits Temporal's event history.
+    """
     return {
         "__ACCOUNT_ID__": str(account.id),
         "__ACCOUNT_USERNAME__": account.username,
         "__ACCOUNT_DISPLAY_NAME__": account.display_name or "",
         "__ACCOUNT_PLATFORM__": account.platform,
     }
+
+
+async def _get_device_account_vars(
+    device_id: str,
+    platform: str,
+    db,
+) -> Dict[str, Any]:
+    from db.crud.account import get_primary_account_for_device
+
+    account = await get_primary_account_for_device(db, device_id, platform)
+    if not account:
+        return {}
+    return _account_to_vars(account)
+
+
+async def _build_per_scenario_device_vars(
+    db,
+    scenarios: list,
+    devices: list,
+    *,
+    platform: str,
+) -> Dict[str, Dict[str, Dict[str, Any]]]:
+    """Pre-compute ``{scenario_id: {device_id: __ACCOUNT_* vars}}`` for a dispatch.
+
+    Scenarios bound to an ``account_group_id`` get a single batch pick so
+    every device receives a distinct account from the pool. Unbound
+    scenarios fall back to the primary-per-device lookup (legacy path).
+
+    This avoids N*M round-trips (N devices × M scenarios) by picking once
+    per scenario. The per-device primary lookup is also cached per device
+    so a campaign with K unbound scenarios does not repeat the same query.
+    """
+    from db.crud.account_group import pick_next_batch
+
+    # Cache primary-account lookups per device — used for unbound scenarios.
+    primary_cache: Dict[str, Dict[str, Any]] = {}
+
+    async def _primary_for(device_id: str) -> Dict[str, Any]:
+        if device_id in primary_cache:
+            return primary_cache[device_id]
+        vars_ = await _get_device_account_vars(device_id, platform, db)
+        primary_cache[device_id] = vars_
+        return vars_
+
+    out: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    for scen in scenarios:
+        per_device: Dict[str, Dict[str, Any]] = {}
+        group_id = getattr(scen, "account_group_id", None)
+        if group_id:
+            accounts = await pick_next_batch(db, group_id, len(devices))
+            granted = len(accounts)
+            log.info(
+                "account_group.pick scenario=%s group=%s requested=%d granted=%d",
+                scen.id, group_id, len(devices), granted,
+            )
+            for idx, device in enumerate(devices):
+                if idx < granted:
+                    per_device[device.id] = _account_to_vars(accounts[idx])
+                else:
+                    # Group exhausted for this device — leave vars empty so the
+                    # scenario can detect and abort if it references __ACCOUNT_*.
+                    per_device[device.id] = {}
+        else:
+            for device in devices:
+                per_device[device.id] = await _primary_for(device.id)
+        out[scen.id] = per_device
+    return out
 
 
 def _build_scenario_registry(
@@ -183,14 +245,20 @@ async def enqueue_campaign_run_temporal(
 
         await db.commit()
 
-    # Resolve per-device account vars
+    # Resolve per-(scenario, device) account vars. Scenarios bound to an
+    # account group get a rotated pick; unbound scenarios use the device's
+    # primary account (existing behavior).
     campaign_platform: str = (campaign.variables or {}).get("__PLATFORM__", "facebook")
     async with AsyncSessionLocal() as account_db:
-        device_account_vars: Dict[str, Dict[str, Any]] = {}
-        for d in devices:
-            device_account_vars[d.id] = await _get_device_account_vars(
-                d.id, campaign_platform, account_db
-            )
+        per_scenario_device_vars = await _build_per_scenario_device_vars(
+            account_db,
+            scenarios=scenarios,
+            devices=devices,
+            platform=campaign_platform,
+        )
+        # Commit so rotation cursor/last_used_at updates land before workflow
+        # start — if a later dispatch happens, it must see the advanced cursor.
+        await account_db.commit()
 
     task_queue = TASK_QUEUE_NAME
     if temporal_config:
@@ -199,10 +267,10 @@ async def enqueue_campaign_run_temporal(
     workflow_ids: list[str] = []
 
     for d in devices:
-        acct_vars = device_account_vars.get(d.id, {})
         for scen in scenarios:
             if not scen.steps:
                 continue
+            acct_vars = per_scenario_device_vars.get(scen.id, {}).get(d.id, {})
             wf_id = f"campaign:{campaign_id}:device:{d.serial}:scenario:{scen.id}"
             try:
                 from temporalio.common import WorkflowIDReusePolicy

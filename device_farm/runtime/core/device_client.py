@@ -61,6 +61,8 @@ class DeviceState(str, Enum):
 LOW_BW_MODE = os.environ.get("LOW_BW_MODE", "").lower() in {"1", "true", "yes"}
 LOW_BW_FRAME_SKIP = max(1, int(os.environ.get("LOW_BW_FRAME_SKIP", "10")))
 U2_FORCE_RELAY = os.environ.get("U2_FORCE_RELAY", "").lower() in {"1", "true", "yes"}
+SCRCPY_AUTO_STOP_IDLE_S = max(0.0, float(os.environ.get("SCRCPY_AUTO_STOP_IDLE_S", "30")))
+SCRCPY_STOP_GRACE_S = max(0.0, float(os.environ.get("SCRCPY_STOP_GRACE_S", "12")))
 
 
 class LatestFrameStore:
@@ -204,6 +206,7 @@ class DeviceClient:
         # Stored args so scrcpy can be restarted on demand after auto-stop
         self._scrcpy_params:    Optional[tuple] = None  # (device_ip, adb_port, enable_control)
         self._scrcpy_stop_task: Optional[asyncio.Task] = None  # debounced auto-stop task
+        self._scrcpy_attached_at: float = 0.0
         # Pending relay attach: cancel on detach so 30s retry does not override user "stream off".
         self._scrcpy_pending_registered_ip: Optional[str] = None
         self._scrcpy_attach_retry_task: Optional[asyncio.Task] = None
@@ -1654,19 +1657,17 @@ class DeviceClient:
 
     def hit_test_selector(self, x: int, y: int) -> Optional[Dict[str, str]]:
         """
-        Given screen coordinates (x, y), try to infer a stable selector
-        from the current UI hierarchy XML.
+        Infer stable selector at pixel (x, y) from current UI XML.
 
-        Selector priority (most stable → least stable):
-          1. resource-id  — stable across runs, ignores locale/position changes
-          2. text         — visible label; works well for buttons/links
-          3. content-desc — accessibility label; good for icon-only buttons
-          4. xpath        — fragile structural path; last resort
-
-        Finds the smallest-area node containing (x, y) — most specific element.
-        Returns {"by": ..., "value": ...} or None.
+        Strategy:
+          1. Collect all nodes whose bounds contain (x,y), enabled!=false.
+          2. Prefer clickable=true self; else promote to nearest clickable ancestor.
+          3. Among candidates, pick smallest area.
+          4. Selector priority:
+             unique resource-id > unique text > unique content-desc
+             > non-unique rid → xpath with clickable + instance
+             > class name (non-container) | xpath pinned by class + bounds.
         """
-        # Try cached first (fast), fall back to force-refresh if cache is empty
         xml = self.hierarchy_xml(force_refresh=False)
         if not xml:
             xml = self.hierarchy_xml(force_refresh=True)
@@ -1675,52 +1676,165 @@ class DeviceClient:
 
         import re as _re
 
-        best: Optional[Dict[str, str]] = None
-        best_area = float("inf")
-
         BOUNDS_RE = _re.compile(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]")
+        CONTAINER_CLASSES = {
+            "android.widget.FrameLayout",
+            "android.widget.LinearLayout",
+            "android.widget.RelativeLayout",
+            "android.view.View",
+            "android.view.ViewGroup",
+            "androidx.constraintlayout.widget.ConstraintLayout",
+            "android.widget.ScrollView",
+            "androidx.recyclerview.widget.RecyclerView",
+        }
 
         try:
             root = parse_xml(xml)
         except XML_PARSE_ERRORS:
             return None
 
-        for node in root.iter():
-            bounds_str = node.get("bounds", "")
-            m = BOUNDS_RE.search(bounds_str)
+        all_nodes = list(root.iter())
+
+        # Uniqueness maps
+        rid_count: Dict[str, int] = {}
+        text_count: Dict[str, int] = {}
+        desc_count: Dict[str, int] = {}
+        for n in all_nodes:
+            rid = (n.get("resource-id") or "").strip()
+            t = (n.get("text") or "").strip()
+            d = (n.get("content-desc") or "").strip()
+            if rid:
+                rid_count[rid] = rid_count.get(rid, 0) + 1
+            if t and len(t) < 80:
+                text_count[t] = text_count.get(t, 0) + 1
+            if d and len(d) < 80:
+                desc_count[d] = desc_count.get(d, 0) + 1
+
+        # Parent map (ElementTree has no parent refs)
+        parent_of: Dict[int, Optional[object]] = {id(root): None}
+        for p in all_nodes:
+            for c in list(p):
+                parent_of[id(c)] = p
+
+        def clickable_self_or_ancestor(n):
+            cur = n
+            while cur is not None:
+                if (cur.get("clickable") or "").strip() == "true":
+                    return cur
+                cur = parent_of.get(id(cur))
+            return None
+
+        # Ambiguous launcher detector (mirrors frontend hierarchy-tree.ts)
+        AMBIG_RID_RE = _re.compile(
+            r":id/(icon|label|title|icon_text|text|name|bubble_text)$", _re.I
+        )
+        AMBIG_PREFIXES = (
+            "com.sec.android.app.launcher",
+            "com.android.launcher",
+            "com.google.android.apps.nexuslauncher",
+            "com.miui.home",
+            "com.huawei.android.launcher",
+            "com.oppo.launcher",
+            "com.vivo.launcher",
+        )
+
+        def is_ambiguous_launcher(rid: str, pkg: str) -> bool:
+            if not rid or "/" not in rid:
+                return False
+            if not AMBIG_RID_RE.search(rid):
+                return False
+            return any(pkg.startswith(p) or rid.startswith(p + ":") for p in AMBIG_PREFIXES)
+
+        # Step 1: collect candidates
+        candidates = []
+        for node in all_nodes:
+            m = BOUNDS_RE.search(node.get("bounds") or "")
             if not m:
                 continue
             x1, y1, x2, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
             if not (x1 <= x <= x2 and y1 <= y <= y2):
                 continue
-            area = (x2 - x1) * (y2 - y1)
-            if area >= best_area:
+            if (node.get("enabled") or "").strip() == "false":
                 continue
+            if x2 <= x1 or y2 <= y1:
+                continue
+            candidates.append({
+                "node": node, "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                "area": (x2 - x1) * (y2 - y1),
+                "clickable": (node.get("clickable") or "").strip() == "true",
+            })
+        if not candidates:
+            return None
 
-            # Pick selector: text > resource-id (in-app) > content-desc → xpath > resource-id (launcher)
-            rid = (node.get("resource-id") or "").strip()
-            text = (node.get("text") or "").strip()
-            desc = (node.get("content-desc") or "").strip()
+        # Step 2: prefer clickable; else promote to clickable ancestors
+        clickable_self = [c for c in candidates if c["clickable"]]
+        if clickable_self:
+            pool = clickable_self
+        else:
+            seen = set()
+            promoted = []
+            for c in candidates:
+                anc = clickable_self_or_ancestor(c["node"])
+                if anc is not None and id(anc) not in seen:
+                    mm = BOUNDS_RE.search(anc.get("bounds") or "")
+                    if mm:
+                        ax1, ay1, ax2, ay2 = (int(mm.group(i)) for i in (1, 2, 3, 4))
+                        promoted.append({
+                            "node": anc, "x1": ax1, "y1": ay1, "x2": ax2, "y2": ay2,
+                            "area": (ax2 - ax1) * (ay2 - ay1), "clickable": True,
+                        })
+                        seen.add(id(anc))
+            pool = promoted or candidates
 
-            sel: Optional[Dict[str, str]] = None
-            if text and len(text) < 80:
-                # Visible label — portable across devices and locales as long as text matches
-                sel = {"by": "text", "value": text}
-            elif rid and "/" in rid:
-                # In-app resource-id (stable within the same app version)
-                sel = {"by": "resource-id", "value": rid}
-            elif desc and len(desc) < 80:
-                # Accessibility label — map to native u2 "description" (content-desc)
-                sel = {"by": "description", "value": desc}
-            elif rid:
-                # Launcher/system resource-id — least portable but better than nothing
-                sel = {"by": "resource-id", "value": rid}
+        pool.sort(key=lambda c: c["area"])
+        chosen = pool[0]
+        node = chosen["node"]
+        x1, y1, x2, y2 = chosen["x1"], chosen["y1"], chosen["x2"], chosen["y2"]
 
-            if sel:
-                best = sel
-                best_area = area
+        rid = (node.get("resource-id") or "").strip()
+        text = (node.get("text") or "").strip()
+        desc = (node.get("content-desc") or "").strip()
+        cls = (node.get("class") or "").strip()
+        pkg = (node.get("package") or "").strip()
 
-        return best
+        ambiguous = is_ambiguous_launcher(rid, pkg)
+        rid_unique = bool(rid) and not ambiguous and rid_count.get(rid, 0) == 1
+        text_unique = bool(text) and len(text) < 80 and text_count.get(text, 0) == 1
+        desc_unique = bool(desc) and len(desc) < 80 and desc_count.get(desc, 0) == 1
+
+        if ambiguous and text and len(text) < 120:
+            return {"by": "text", "value": text}
+        if ambiguous and desc and len(desc) < 80:
+            return {"by": "description", "value": desc}
+        if rid_unique:
+            return {"by": "resource-id", "value": rid}
+        if desc_unique:
+            return {"by": "description", "value": desc}
+        if text_unique:
+            return {"by": "text", "value": text}
+        if rid and "/" in rid:
+            same = [n for n in all_nodes if (n.get("resource-id") or "") == rid]
+            clickable_same = [n for n in same if (n.get("clickable") or "") == "true"]
+            if node in clickable_same:
+                idx = clickable_same.index(node)
+                return {
+                    "by": "xpath",
+                    "value": f'(//*[@resource-id="{rid}" and @clickable="true"])[{idx + 1}]',
+                }
+            idx = same.index(node) if node in same else 0
+            return {"by": "xpath", "value": f'(//*[@resource-id="{rid}"])[{idx + 1}]'}
+        if desc:
+            return {"by": "description", "value": desc}
+        if text and len(text) < 80:
+            return {"by": "text", "value": text}
+        if cls:
+            if cls in CONTAINER_CLASSES:
+                return {
+                    "by": "xpath",
+                    "value": f'//*[@class="{cls}" and @bounds="[{x1},{y1}][{x2},{y2}]"]',
+                }
+            return {"by": "class name", "value": cls}
+        return None
 
     def _cancel_scrcpy_pending_attach(self) -> None:
         """Clear relay pending callback + 30s retry task (user detach must stop background re-attach)."""
@@ -1838,7 +1952,7 @@ class DeviceClient:
                 _skip_detach = True
 
         if not locals().get("_skip_detach"):
-            self.detach_scrcpy_stream()
+            self.detach_scrcpy_stream(reason="attach_scrcpy_stream:replace_previous_receiver")
         else:
             # Restart path: still cancel stale pending/retry from a prior failed attach.
             self._cancel_scrcpy_pending_attach()
@@ -1968,11 +2082,17 @@ class DeviceClient:
                     # but crashes MediaCodec on Android 14+ (API 34+). Safe on API ≤ 33.
                     _sdk = int(self.sdk_version or 0)
                     _low_latency = 0 < _sdk < 34
+                    # In control mode, prioritize real device width to avoid tiny
+                    # 216x480 stream on high-res phones when stale config lingers.
+                    _cfg_max_width = int(self.config.device.scrcpy_max_width or 0)
+                    _start_max_width = _cfg_max_width
+                    if enable_control and self.screen_width:
+                        _start_max_width = max(_cfg_max_width, int(self.screen_width))
                     asyncio.run_coroutine_threadsafe(
                         relay.start_scrcpy(
                             serial=actual_serial,
                             max_fps=self.config.device.scrcpy_max_fps,
-                            max_width=self.config.device.scrcpy_max_width,
+                            max_width=_start_max_width,
                             enable_control=enable_control,
                             port=scrcpy_port,
                             bitrate=self.config.device.scrcpy_relay_bitrate,
@@ -1990,6 +2110,7 @@ class DeviceClient:
 
                 self._scrcpy_receiver = receiver
                 self._scrcpy_active = True
+                self._scrcpy_attached_at = time.monotonic()
                 # Mark device as READY so the frontend shows it and plays video
                 if self.state == DeviceState.DISCONNECTED:
                     self.state = DeviceState.READY
@@ -2112,9 +2233,10 @@ class DeviceClient:
                 pass
             self._scrcpy_stop_task = None
 
-    def detach_scrcpy_stream(self) -> None:
+    def detach_scrcpy_stream(self, reason: str = "unspecified") -> None:
         """Stop scrcpy receiver (+ control) and resume MediaProjection frames.
         For relay receivers, also sends SCRCPY_STOP to the relay agent."""
+        self._log(f"detach_scrcpy_stream: reason={reason}", level=logging.INFO)
         if self._scrcpy_receiver is not None:
             serial = getattr(self._scrcpy_receiver, "serial", None)
             try:
@@ -2137,12 +2259,13 @@ class DeviceClient:
                             reg = relay.get_scrcpy_receiver(serial)
                             if reg is self._scrcpy_receiver:
                                 asyncio.run_coroutine_threadsafe(
-                                    relay.stop_scrcpy(serial), self._loop
+                                    relay.stop_scrcpy(serial, reason=reason), self._loop
                                 )
                 except Exception:
                     pass
             self._scrcpy_receiver = None
         self._scrcpy_active = False
+        self._scrcpy_attached_at = 0.0
         self._cancel_scrcpy_pending_attach()
 
     _BY_MAP = {
@@ -2969,14 +3092,39 @@ class DeviceClient:
             is_empty = len(self._frame_queues) == 0
 
         # Auto-stop scrcpy after debounce when no viewers remain — saves device CPU + bandwidth.
-        # 30s debounce avoids restart churn on page refresh.
+        # Tunable via SCRCPY_AUTO_STOP_IDLE_S to avoid manual_stop churn on unstable dashboards.
         if is_empty and self._scrcpy_receiver is not None and self._loop:
             async def _debounced_stop() -> None:
-                await asyncio.sleep(30)
+                await asyncio.sleep(SCRCPY_AUTO_STOP_IDLE_S)
                 with self._frame_lock:
                     if len(self._frame_queues) == 0:
-                        self.detach_scrcpy_stream()
-                        self._logger.info("scrcpy auto-stopped (no viewers for 30s)")
+                        _now = time.monotonic()
+                        if (
+                            self._scrcpy_attached_at > 0
+                            and (_now - self._scrcpy_attached_at) < SCRCPY_STOP_GRACE_S
+                        ):
+                            _remain = SCRCPY_STOP_GRACE_S - (_now - self._scrcpy_attached_at)
+                            self._logger.info(
+                                "scrcpy auto-stop skipped (within grace %.1fs < %.1fs)",
+                                (_now - self._scrcpy_attached_at),
+                                SCRCPY_STOP_GRACE_S,
+                            )
+                            if _remain > 0:
+                                await asyncio.sleep(_remain)
+                            with self._frame_lock:
+                                if len(self._frame_queues) != 0:
+                                    return
+                            self.detach_scrcpy_stream(reason="unsubscribe_frames:post_grace_idle")
+                            self._logger.info(
+                                "scrcpy auto-stopped after grace window (%.1fs)",
+                                SCRCPY_STOP_GRACE_S,
+                            )
+                            return
+                        self.detach_scrcpy_stream(reason="unsubscribe_frames:idle_no_viewers")
+                        self._logger.info(
+                            "scrcpy auto-stopped (no viewers for %.1fs)",
+                            SCRCPY_AUTO_STOP_IDLE_S,
+                        )
 
             task = asyncio.run_coroutine_threadsafe(_debounced_stop(), self._loop)
             # Store as a cancellable Future (not asyncio.Task, but cancel() works the same)
@@ -3273,7 +3421,7 @@ class DeviceClient:
             self._stf_service = None
         self._u2 = None
         if stop_scrcpy:
-            self.detach_scrcpy_stream()
+            self.detach_scrcpy_stream(reason="_teardown_tools")
 
     # ── Internal ──────────────────────────────────────────────────────────────
 

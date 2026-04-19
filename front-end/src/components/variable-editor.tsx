@@ -23,14 +23,19 @@ type VarEntry = {
 
 
 const BUILTINS = [
-  { name: '${__NOW__}', descKey: 'builtins.now' },
-  { name: '${__DATE__}', descKey: 'builtins.date' },
-  { name: '${__TIME__}', descKey: 'builtins.time' },
-  { name: '${__DEVICE_SERIAL__}', descKey: 'builtins.deviceSerial' },
-  { name: '${__DEVICE_MODEL__}', descKey: 'builtins.deviceModel' },
-  { name: '${__RANDOM_INT_1_100__}', descKey: 'builtins.randomInt' },
-  { name: '${__RANDOM_UUID__}', descKey: 'builtins.randomUuid' },
-  { name: '${__STEP_INDEX__}', descKey: 'builtins.stepIndex' },
+  { name: '${__NOW__}', descKey: 'builtins.now', group: 'system' },
+  { name: '${__DATE__}', descKey: 'builtins.date', group: 'system' },
+  { name: '${__TIME__}', descKey: 'builtins.time', group: 'system' },
+  { name: '${__DEVICE_SERIAL__}', descKey: 'builtins.deviceSerial', group: 'system' },
+  { name: '${__DEVICE_MODEL__}', descKey: 'builtins.deviceModel', group: 'system' },
+  { name: '${__RANDOM_INT_1_100__}', descKey: 'builtins.randomInt', group: 'system' },
+  { name: '${__RANDOM_UUID__}', descKey: 'builtins.randomUuid', group: 'system' },
+  { name: '${__STEP_INDEX__}', descKey: 'builtins.stepIndex', group: 'system' },
+  { name: '${__ACCOUNT_ID__}', descKey: 'builtins.accountId', group: 'account' },
+  { name: '${__ACCOUNT_USERNAME__}', descKey: 'builtins.accountUsername', group: 'account' },
+  { name: '${__ACCOUNT_PASSWORD__}', descKey: 'builtins.accountPassword', group: 'account' },
+  { name: '${__ACCOUNT_DISPLAY_NAME__}', descKey: 'builtins.accountDisplayName', group: 'account' },
+  { name: '${__ACCOUNT_PLATFORM__}', descKey: 'builtins.accountPlatform', group: 'account' },
 ] as const;
 
 function toEntries(vars: Record<string, any>): VarEntry[] {
@@ -216,12 +221,53 @@ export function VariableEditor({ variables, onChange, disabled, showBuiltins = t
   const copyToken = useCallback(async (key: string) => {
     if (!key.trim()) return;
     const token = `\${${key}}`;
-    try {
-      await navigator.clipboard.writeText(token);
+    const markCopied = () => {
       setCopiedKey(key);
       window.setTimeout(() => setCopiedKey((current) => (current === key ? null : current)), 1200);
+    };
+    try {
+      await navigator.clipboard.writeText(token);
+      markCopied();
     } catch {
-      // Ignore clipboard failures to keep editor interactions simple.
+      // Fallback for contexts without Clipboard API (mirrors use-control-record.ts::copyJson).
+      try {
+        const el = document.createElement('textarea');
+        el.value = token;
+        el.style.cssText = 'position:fixed;opacity:0;top:0;left:0';
+        document.body.appendChild(el);
+        el.focus();
+        el.select();
+        document.execCommand('copy');
+        document.body.removeChild(el);
+        markCopied();
+      } catch {
+        // Ignore clipboard failures to keep editor interactions simple.
+      }
+    }
+  }, []);
+
+  const copyBuiltin = useCallback(async (name: string) => {
+    const markCopied = () => {
+      setCopiedKey(name);
+      window.setTimeout(() => setCopiedKey((current) => (current === name ? null : current)), 1200);
+    };
+    try {
+      await navigator.clipboard.writeText(name);
+      markCopied();
+    } catch {
+      try {
+        const el = document.createElement('textarea');
+        el.value = name;
+        el.style.cssText = 'position:fixed;opacity:0;top:0;left:0';
+        document.body.appendChild(el);
+        el.focus();
+        el.select();
+        document.execCommand('copy');
+        document.body.removeChild(el);
+        markCopied();
+      } catch {
+        // swallow
+      }
     }
   }, []);
 
@@ -362,13 +408,29 @@ export function VariableEditor({ variables, onChange, disabled, showBuiltins = t
             <span className='font-medium'>{t('builtinsTitle')}</span>
           </button>
           {builtinsOpen && (
-            <div className='grid grid-cols-2 gap-x-4 gap-y-1 border-t px-3 py-2'>
-              {BUILTINS.map((b) => (
-                <div key={b.name} className='flex flex-col'>
-                  <code className='text-[10px] font-mono text-primary'>{b.name}</code>
-                  <span className='text-[10px] text-muted-foreground'>{t(b.descKey)}</span>
-                </div>
-              ))}
+            <div className='space-y-2 border-t px-3 py-2'>
+              <div className='grid grid-cols-2 gap-x-4 gap-y-1'>
+                {BUILTINS.map((b) => (
+                  <button
+                    key={b.name}
+                    type='button'
+                    onClick={() => copyBuiltin(b.name)}
+                    className='flex flex-col items-start rounded px-1 py-0.5 text-left hover:bg-muted/60 focus:bg-muted/60 focus:outline-none'
+                    title={`Copy ${b.name}`}
+                  >
+                    <span className='flex items-center gap-1'>
+                      {copiedKey === b.name ? (
+                        <Check size={10} className='text-green-600' />
+                      ) : (
+                        <Copy size={10} className='text-muted-foreground' />
+                      )}
+                      <code className='text-[10px] font-mono text-primary'>{b.name}</code>
+                    </span>
+                    <span className='pl-3.5 text-[10px] text-muted-foreground'>{t(b.descKey)}</span>
+                  </button>
+                ))}
+              </div>
+              <p className='text-[10px] text-muted-foreground'>{t('systemAccountHint')}</p>
             </div>
           )}
         </div>

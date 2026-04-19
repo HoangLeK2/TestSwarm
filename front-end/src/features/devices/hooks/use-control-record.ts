@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { campaignsApi, scenariosApi } from '@/features/campaigns/services/api';
+import { scenarioTemplatesApi } from '@/features/scenario-templates/services/api';
 import type { ScenarioOut } from '@/features/campaigns/types';
 import type { ScenarioStep } from '../types/scenario';
 import { scenarioToJson } from '../types/scenario';
@@ -105,7 +106,12 @@ function sanitizeScenarioStepsForApi(input: unknown): any[] {
   return input.map(sanitizeScenarioStep);
 }
 
-export function useControlRecord(initialSerial?: string | null, initialCampaignId?: string | null, initialScenarioId?: string | null) {
+export function useControlRecord(
+  initialSerial?: string | null,
+  initialCampaignId?: string | null,
+  initialScenarioId?: string | null,
+  initialTemplateId?: string | null,
+) {
   const t = useTranslations('devicesControlRecord');
   const errorPrefix = t('errorPrefix');
   const {
@@ -413,6 +419,20 @@ export function useControlRecord(initialSerial?: string | null, initialCampaignI
     setSteps((s) => [...s, { ...createDefaultStep(type), _id: nextStepId() } as StepWithId]);
   }, []);
 
+  // Append an array of steps loaded from a template. Each step gets a fresh
+  // internal id so React keys stay unique across multiple loads of the same
+  // template. Invalid or non-object entries are dropped defensively — template
+  // data may come from the server in a shape that predates the current schema.
+  const appendSteps = useCallback((incoming: any[]) => {
+    if (!Array.isArray(incoming) || incoming.length === 0) return 0;
+    const mapped = incoming
+      .filter((s) => s && typeof s === 'object')
+      .map((s) => ({ ...(s as ScenarioStep), _id: nextStepId() }) as StepWithId);
+    if (mapped.length === 0) return 0;
+    setSteps((prev) => [...prev, ...mapped]);
+    return mapped.length;
+  }, []);
+
   const cleanSteps = useCallback(() => steps.map(({ _id, ...rest }) => rest), [steps]);
 
   const copyJson = useCallback(() => {
@@ -446,7 +466,22 @@ export function useControlRecord(initialSerial?: string | null, initialCampaignI
     scenarioId: string;
     name: string;
     variables?: Record<string, any>;
+    /** Pre-loaded binding from the scenario so `saveTo` can round-trip it back. */
+    accountGroupId?: string | null;
   } | null>(null);
+
+  // Template editing context — separate from campaign/scenario. Only one of
+  // the two is active at a time; the page-level URL params route the user
+  // into exactly one mode (campaignId+scenarioId OR templateId).
+  const [templateContext, setTemplateContext] = useState<{
+    templateId: string;
+    name: string;
+    description: string;
+    category: string;
+    tags: string;
+    variables?: Record<string, any>;
+  } | null>(null);
+  const [savingTemplate, setSavingTemplate] = useState(false);
 
   useEffect(() => {
     if (!initialCampaignId || !initialScenarioId) return;
@@ -470,12 +505,72 @@ export function useControlRecord(initialSerial?: string | null, initialCampaignI
         scenarioId: initialScenarioId,
         name: sc.name,
         variables: mergedVars,
+        accountGroupId: (sc as { account_group_id?: string | null }).account_group_id ?? null,
       });
       if (loaded.length > 0) toast.info(t('toast.loadedScenario', { name: sc.name, count: loaded.length }));
     }).catch(() => toast.error(t('toast.loadScenarioFailed')));
   // intentionally runs once on mount
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Load scenario template when ?templateId=... is present in the URL.
+  // Mutually exclusive with campaign/scenario — the UI should only expose
+  // one save target per session.
+  useEffect(() => {
+    if (!initialTemplateId) return;
+    if (initialCampaignId || initialScenarioId) return;
+    scenarioTemplatesApi.get(initialTemplateId).then((tpl) => {
+      const loaded = Array.isArray(tpl.steps)
+        ? tpl.steps.map((s: any) => ({ ...s, _id: nextStepId() }) as StepWithId)
+        : [];
+      setSteps(loaded);
+      setTemplateContext({
+        templateId: tpl.id,
+        name: tpl.name,
+        description: tpl.description ?? '',
+        category: tpl.category ?? '',
+        tags: tpl.tags ?? '',
+        variables: tpl.variables ?? {},
+      });
+      if (loaded.length > 0) toast.info(t('toast.loadedTemplate', { name: tpl.name, count: loaded.length }));
+    }).catch(() => toast.error(t('toast.loadTemplateFailed')));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const saveToTemplate = useCallback(
+    async (variables?: Record<string, any>) => {
+      if (!templateContext) return;
+      if (pendingScreenshotCount > 0) {
+        toast.info(t('toast.waitingScreenshotBeforeSave', { count: pendingScreenshotCount }));
+      }
+      const ready = await waitForPendingScreenshots();
+      if (!ready) {
+        toast.warning(t('toast.waitingScreenshotTimeout'));
+        return;
+      }
+      const payloadSteps = sanitizeScenarioStepsForApi(cleanSteps());
+      const check = validateScenarioStepsForApi(payloadSteps);
+      if (!check.ok) {
+        toast.error(check.message);
+        return;
+      }
+      setSavingTemplate(true);
+      try {
+        await scenarioTemplatesApi.update(templateContext.templateId, {
+          steps: payloadSteps,
+          variables: variables ?? templateContext.variables ?? {},
+        });
+        toast.success(t('toast.saveTemplateSuccess'));
+      } catch (err) {
+        toast.error(formatFarmApiError(err, t('toast.saveFailed')));
+      } finally {
+        setSavingTemplate(false);
+      }
+    },
+    // cleanSteps closes over `steps` — eslint is happy once it's listed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [templateContext, pendingScreenshotCount, t, waitForPendingScreenshots, cleanSteps],
+  );
 
   // ── Save dialog ──────────────────────────────────────────────────────────
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
@@ -508,7 +603,12 @@ export function useControlRecord(initialSerial?: string | null, initialCampaignI
   }, []);
 
   const saveToScenario = useCallback(
-    async (campaignId: string, scenarioId: string, variables?: Record<string, any>) => {
+    async (
+      campaignId: string,
+      scenarioId: string,
+      variables?: Record<string, any>,
+      accountGroupIdOverride?: string | null,
+    ) => {
       if (pendingScreenshotCount > 0) {
         toast.info(t('toast.waitingScreenshotBeforeSave', { count: pendingScreenshotCount }));
       }
@@ -524,16 +624,35 @@ export function useControlRecord(initialSerial?: string | null, initialCampaignI
         return;
       }
       setSavingCampaignId(scenarioId);
-      scenariosApi.update(campaignId, scenarioId, { steps: payloadSteps, variables })
+      // account_group_id resolution:
+      // - override provided → use it (empty string clears the binding)
+      // - else editingContext for this scenario → preserve existing value
+      // - else do not send the field (unrelated save)
+      let accountGroupForEdit: string | undefined;
+      if (accountGroupIdOverride !== undefined) {
+        accountGroupForEdit = accountGroupIdOverride ?? '';
+      } else if (editingContext && editingContext.scenarioId === scenarioId) {
+        accountGroupForEdit = editingContext.accountGroupId ?? '';
+      }
+      const payload: Parameters<typeof scenariosApi.update>[2] = {
+        steps: payloadSteps,
+        variables,
+        ...(accountGroupForEdit !== undefined ? { account_group_id: accountGroupForEdit } : {}),
+      };
+      scenariosApi.update(campaignId, scenarioId, payload)
         .then(() => { toast.success(t('toast.saveStepsSuccess')); setSaveDialogOpen(false); setSelectedCampaignId(null); })
         .catch((err) => toast.error(formatFarmApiError(err, t('toast.saveFailed'))))
         .finally(() => setSavingCampaignId(null));
     },
-    [cleanSteps, pendingScreenshotCount, t, waitForPendingScreenshots]
+    [cleanSteps, pendingScreenshotCount, t, waitForPendingScreenshots, editingContext]
   );
 
   const saveAsNewScenario = useCallback(
-    async (campaignId: string, variables?: Record<string, any>) => {
+    async (
+      campaignId: string,
+      variables?: Record<string, any>,
+      accountGroupIdOverride?: string | null,
+    ) => {
       if (pendingScreenshotCount > 0) {
         toast.info(t('toast.waitingScreenshotBeforeSave', { count: pendingScreenshotCount }));
       }
@@ -549,11 +668,13 @@ export function useControlRecord(initialSerial?: string | null, initialCampaignI
         return;
       }
       setSavingCampaignId('new');
-      scenariosApi.create(campaignId, {
+      const createBody: Parameters<typeof scenariosApi.create>[1] = {
         name: t('newScenarioName', { time: new Date().toLocaleTimeString('vi-VN') }),
         steps: payloadSteps,
         variables,
-      })
+        ...(accountGroupIdOverride ? { account_group_id: accountGroupIdOverride } : {}),
+      };
+      scenariosApi.create(campaignId, createBody)
         .then(() => { toast.success(t('toast.createScenarioSuccess')); setSaveDialogOpen(false); setSelectedCampaignId(null); })
         .catch((err) => toast.error(formatFarmApiError(err, t('toast.createScenarioFailed'))))
         .finally(() => setSavingCampaignId(null));
@@ -719,6 +840,7 @@ export function useControlRecord(initialSerial?: string | null, initialCampaignI
       setItems: setSteps,
       addWait: addWaitStep,
       addFlow: addFlowStep,
+      appendSteps,
       copyJson,
       openSave: openSaveDialog,
     },
@@ -735,6 +857,9 @@ export function useControlRecord(initialSerial?: string | null, initialCampaignI
       saveTo: saveToScenario,
       saveAsNew: saveAsNewScenario,
       editingContext,
+      templateContext,
+      savingTemplate,
+      saveToTemplate,
     },
 
     hierarchy: {

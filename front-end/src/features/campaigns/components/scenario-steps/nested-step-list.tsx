@@ -26,7 +26,7 @@ import {
   IfVariableFields,
   RandomPickFields
 } from './control-flow-editors';
-import { RunScenarioFields } from './run-scenario-editor';
+import { RunScenarioFields, type RunScenarioFieldPatch } from './run-scenario-editor';
 
 // ─── Step field inline editor (for action steps) ─────────────────────────────
 
@@ -162,6 +162,18 @@ function StepRow({
         delete (next as Record<string, unknown>)[field];
       }
       onUpdate(next);
+    },
+    [step, onUpdate]
+  );
+
+  const patchRunScenario = useCallback(
+    (patch: RunScenarioFieldPatch) => {
+      const next = { ...step } as Record<string, unknown>;
+      for (const [k, v] of Object.entries(patch)) {
+        if (v === undefined) delete next[k];
+        else next[k] = v;
+      }
+      onUpdate(next as FlowStep);
     },
     [step, onUpdate]
   );
@@ -323,7 +335,7 @@ function StepRow({
           {/* run_scenario → picker + variable overrides + preview */}
           {step.type === 'run_scenario' && (
             <div className='pt-2'>
-              <RunScenarioFields step={step} onChange={updateField} />
+              <RunScenarioFields step={step} onPatch={patchRunScenario} />
             </div>
           )}
 

@@ -438,19 +438,23 @@ class WebSocketManager:
         lag_sum_ms = 0.0
         last_stats_ts = time.monotonic()
 
-        def _request_idr_recover() -> None:
-            """Throttled IDR request — heals decoder reference chain after any drop.
+        def _request_idr_recover(*, force: bool = False) -> None:
+            """IDR request — heals decoder reference chain after any drop.
 
-            Throttled at scrcpy_control._idr_min_interval_s (default 1.0s) so
-            N concurrent connections / drop bursts produce at most 1 IDR/sec.
-            Without throttle, multi-viewer reconnect storms or congestion
-            cascades amplify into back-to-back keyframes that worsen congestion.
+            force=False (default): throttled at scrcpy_control._idr_min_interval_s
+            (default 1.0s) so N concurrent drop bursts produce at most 1 IDR/sec.
+            force=True: bypass throttle. Used on new-sender bootstrap so every
+            new viewer is guaranteed one IDR request regardless of throttle
+            window from prior viewers.
             """
             recv = getattr(device, "_scrcpy_receiver", None)
             ctrl = getattr(recv, "control", None) if recv is not None else None
             if ctrl is None:
                 return
-            fn = getattr(ctrl, "_request_idr_throttled", None) or getattr(ctrl, "request_idr", None)
+            if force:
+                fn = getattr(ctrl, "request_idr", None)
+            else:
+                fn = getattr(ctrl, "_request_idr_throttled", None) or getattr(ctrl, "request_idr", None)
             if fn is None:
                 return
             try:
@@ -459,7 +463,11 @@ class WebSocketManager:
                 pass
 
         # Freeze bootstrap refs and send under the same lock used by live sends.
-        cfg_ref, key_ref = device.get_stream_bootstrap(max_key_age_s=2.0)
+        # max_key_age_s=60 — accept stale IDR. Even a stale keyframe unblocks
+        # the browser decoder (waitIdr=true) so subsequent live P-frames are
+        # dropped cleanly instead of leaving decoder null. The forced IDR below
+        # then replaces it with a fresh keyframe within ~100ms.
+        cfg_ref, key_ref = device.get_stream_bootstrap(max_key_age_s=60.0)
         try:
             async with ws_send_lock:
                 if cfg_ref:
@@ -473,15 +481,40 @@ class WebSocketManager:
         except Exception:
             return
 
-        # No fresh keyframe in cache → static screen. Request IDR (throttled)
-        # so decoder has something to start with. Without this, browser stays
-        # black until user moves screen (motion → natural IDR, up to ~14s).
-        if key_ref is None:
-            _request_idr_recover()
+        # New sender attach — always force one IDR (bypass throttle) so every
+        # new viewer gets a fresh keyframe within ~100ms regardless of whether
+        # a stale key was cached. Without force, a recent throttle window from
+        # another viewer would block the request and leave browser black until
+        # the next natural IDR (~14s) or until user refresh.
+        _request_idr_recover(force=True)
+
+        # Retry until first keyframe is actually sent. The first force above
+        # can silently no-op if scrcpy handshake isn't complete yet (ctrl=None)
+        # or if MSG_RESET_VIDEO was dropped. Without retry, the browser stays
+        # black until the user moves the screen (natural IDR on scene change).
+        saw_key_sent = False
+        last_force_idr_ts = time.monotonic()
 
         while True:
+            # Periodic kick: if no keyframe sent yet, keep forcing IDR every
+            # ~0.5s. Covers two cases that the one-shot force above misses:
+            # (a) scrcpy handshake still in progress (ctrl=None at attach);
+            # (b) only P-frames arriving so browser's waitIdr=true drops them.
+            # Shorter interval trades a few extra MSG_RESET_VIDEO sends for
+            # faster cold-start first-frame latency (user-visible black time).
+            if not saw_key_sent:
+                now_ts = time.monotonic()
+                if (now_ts - last_force_idr_ts) >= 0.5:
+                    _request_idr_recover(force=True)
+                    last_force_idr_ts = now_ts
             try:
-                await device.wait_for_stream_update(last_version)
+                await asyncio.wait_for(
+                    device.wait_for_stream_update(last_version),
+                    timeout=1.5,
+                )
+            except asyncio.TimeoutError:
+                continue
+            try:
                 frame, version, frame_ts, is_key = device.get_stream_snapshot()
                 if frame is None:
                     # No frame payload yet (e.g. only version bootstrap state).
@@ -538,6 +571,8 @@ class WebSocketManager:
                 last_version = version
                 sent_total += 1
                 lag_sum_ms += lag_ms
+                if is_key:
+                    saw_key_sent = True
 
                 # Cooperative yield for fairness under multi-device load.
                 await asyncio.sleep(0)
@@ -635,6 +670,22 @@ class WebSocketManager:
             # immediately loops back to receive_json() for the next message.
             # Commands execute in background threads; scrcpy socket lock serializes concurrent sends.
             # Exceptions in executor tasks without await are silently dropped (OK for input).
+
+            if msg_type == "request_idr":
+                # Viewer-driven keyframe request. Used on mount / reconnect /
+                # tab visibility return so the browser decoder recovers in
+                # ~100ms instead of waiting up to ~14s for a natural IDR.
+                # Not gated by write-frame rules — this is a stream-level
+                # recovery hint, not a device input mutation.
+                recv = getattr(device, "_scrcpy_receiver", None)
+                ctrl = getattr(recv, "control", None) if recv is not None else None
+                fn = getattr(ctrl, "request_idr", None) if ctrl is not None else None
+                if fn is not None:
+                    try:
+                        loop.run_in_executor(None, fn)
+                    except Exception:
+                        pass
+                continue
 
             if msg_type == "tap":
                 x, y = int(data.get("x", 0)), int(data.get("y", 0))

@@ -21,6 +21,8 @@ export type ScenarioOut = {
   order: number;
   nodes: FlowNode[];
   edges: FlowEdge[];
+  account_group_id?: string | null;
+  account_group_name?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -33,6 +35,8 @@ export type ScenarioCreate = {
   order?: number;
   nodes?: FlowNode[];
   edges?: FlowEdge[];
+  /** Empty string clears the binding. */
+  account_group_id?: string | null;
 };
 
 export type ScenarioUpdate = Partial<ScenarioCreate>;

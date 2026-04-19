@@ -561,12 +561,13 @@ class AdbRelayManager:
     def is_scrcpy_running(self, serial: str) -> bool:
         return serial in self._scrcpy_running
 
-    async def stop_scrcpy(self, serial: str) -> None:
+    async def stop_scrcpy(self, serial: str, reason: str = "unspecified") -> None:
         self._scrcpy_running.discard(serial)
         conn = self.relay_for_serial(serial)
         if conn is not None:
-            msg = json.dumps({"type": "scrcpy_stop", "serial": serial})
+            msg = json.dumps({"type": "scrcpy_stop", "serial": serial, "reason": reason})
             await conn._write_queue.put(msg)
+            logger.info("scrcpy_stop → relay=%s serial=%s reason=%s", conn.relay_id, serial, reason)
         self.unregister_scrcpy_receiver(serial)
 
     async def send_scrcpy_control(self, serial: str, data: bytes) -> None:

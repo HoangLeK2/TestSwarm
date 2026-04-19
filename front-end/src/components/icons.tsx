@@ -48,7 +48,8 @@ import {
   IconDeviceMobile,
   IconPlayerPlay,
   IconFolder,
-  IconTemplate
+  IconTemplate,
+  IconUsersGroup
 } from '@tabler/icons-react';
 
 export type Icon = React.ComponentType<IconProps>;
@@ -103,5 +104,6 @@ export const Icons = {
   smartphone: IconDeviceMobile,
   play: IconPlayerPlay,
   folder: IconFolder,
-  template: IconTemplate
+  template: IconTemplate,
+  usersGroup: IconUsersGroup
 };

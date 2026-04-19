@@ -671,9 +671,9 @@ def create_app(
     capture_store.init(_captures_dir)
     minio_store.init(config.object_storage)
     app.mount("/captures", StaticFiles(directory=str(_captures_dir)), name="captures")
-    _screenshots_dir = Path("screenshots")
-    _screenshots_dir.mkdir(exist_ok=True)
-    app.mount("/screenshots", StaticFiles(directory=str(_screenshots_dir)), name="screenshots")
+    # _screenshots_dir = Path("screenshots")
+    # _screenshots_dir.mkdir(exist_ok=True)
+    # app.mount("/screenshots", StaticFiles(directory=str(_screenshots_dir)), name="screenshots")
 
     assets_dir = Path(front_end_dist) / "assets" if front_end_dist else None
     if assets_dir and assets_dir.exists():

@@ -60,10 +60,10 @@ export function ScenarioRow({
     >
       <button
         type='button'
-        tabIndex={-1}
         disabled={dragDisabled}
         {...attributes}
         {...listeners}
+        tabIndex={-1}
         title={t('reorderTitle')}
         className={`flex shrink-0 items-center justify-center text-muted-foreground/40 ${
           dragDisabled

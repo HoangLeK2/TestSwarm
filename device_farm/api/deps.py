@@ -136,13 +136,34 @@ def make_device_auth_dependency(db_enabled: bool):
         request: Request,
         credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     ) -> None:
-        # Header-only bearer; query tokens leak via logs/referrer/proxy caches.
-        if not credentials:
+        # Prefer Authorization header. For image-tag media routes (/stream, /screenshot),
+        # browsers cannot set custom headers, so we allow `?token=` as fallback.
+        # Keep this fallback tightly scoped to media GET endpoints only.
+        _raw_token = credentials.credentials if credentials else ""
+        if not _raw_token:
+            _path = request.url.path or ""
+            _allow_query_token = (
+                request.method == "GET"
+                and (
+                    _path.startswith("/stream/")
+                    or _path.startswith("/screenshot/")
+                    or _path.startswith("/screenshot-b64/")
+                )
+            )
+            if _allow_query_token:
+                _raw_token = (request.query_params.get("token") or "").strip()
+        if not _raw_token:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Not authenticated",
             )
-        ctx = _auth_context_from_creds(credentials)
+        try:
+            ctx = decode_access_token(_raw_token)
+        except AuthError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired token",
+            ) from exc
 
         # Serial ownership check: if the route declares {serial}, require
         # the authenticated caller to own it. Centralized in policy.py.

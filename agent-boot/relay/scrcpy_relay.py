@@ -108,6 +108,15 @@ _FRAME_TIMEOUT = float(os.environ.get("SCRCPY_FRAME_TIMEOUT_S", "20.0"))
 # Per-serial form: SCRCPY_VIDEO_ENCODER__10AE7S00HD002JK=...  (double underscore)
 _VIDEO_ENCODER_DEFAULT = os.environ.get("SCRCPY_VIDEO_ENCODER", "").strip()
 _VIDEO_CODEC_DEFAULT   = os.environ.get("SCRCPY_VIDEO_CODEC", "h264").strip() or "h264"
+_VIDEO_CODEC_GLOBAL_EXPLICIT = bool(os.environ.get("SCRCPY_VIDEO_CODEC", "").strip())
+_HEVC_OEM_ALLOWLIST = {
+    s.strip().lower()
+    for s in os.environ.get(
+        "SCRCPY_HEVC_OEM_ALLOWLIST",
+        "vivo,oppo,realme,oneplus",
+    ).split(",")
+    if s.strip()
+}
 
 
 def _per_serial_env(base: str, serial: str, fallback: str) -> str:
@@ -119,6 +128,18 @@ def _per_serial_env(base: str, serial: str, fallback: str) -> str:
     safe = serial.replace(":", "_").replace(".", "_")
     key = f"{base}__{safe}"
     return os.environ.get(key, fallback).strip()
+
+
+def _codec_explicit_for_serial(serial: str) -> bool:
+    """
+    True when codec is explicitly pinned by env (global or per-serial).
+    We only auto-fallback to HEVC when user did not pin codec.
+    """
+    if _VIDEO_CODEC_GLOBAL_EXPLICIT:
+        return True
+    safe = serial.replace(":", "_").replace(".", "_")
+    key = f"SCRCPY_VIDEO_CODEC__{safe}"
+    return bool(os.environ.get(key, "").strip())
 
 # Soft IDR threshold: if we go this many seconds without a frame, request an
 # IDR keyframe from scrcpy-server before hitting the hard frame timeout. This
@@ -267,6 +288,8 @@ class ScrcpyRelaySession:
         self._device_width:  int = 0
         self._device_height: int = 0
         self._on_fatal = on_fatal
+        self._oem_hint: str = ""
+        self._model_hint: str = ""
 
     # ── Public API ───────────────────────────────────────────────────────────
 
@@ -444,6 +467,20 @@ class ScrcpyRelaySession:
         p = self._server_proc
         return p is not None and p.poll() is None
 
+    def _load_device_oem_hints(self) -> tuple[str, str]:
+        """Best-effort OEM/model detection (cached per session)."""
+        if self._oem_hint and self._model_hint:
+            return self._oem_hint, self._model_hint
+        oem = ""
+        model = ""
+        out_oem, _ = _adb("shell", "getprop ro.product.brand", serial=self._serial, timeout=4)
+        out_model, _ = _adb("shell", "getprop ro.product.model", serial=self._serial, timeout=4)
+        oem = (out_oem or "").strip().splitlines()[-1].strip().lower() if out_oem.strip() else ""
+        model = (out_model or "").strip().splitlines()[-1].strip().lower() if out_model.strip() else ""
+        self._oem_hint = oem
+        self._model_hint = model
+        return self._oem_hint, self._model_hint
+
     def _ensure_server_jar_on_device(self) -> None:
         """Push scrcpy-server JAR if missing OR size doesn't match bundled copy.
 
@@ -526,6 +563,23 @@ class ScrcpyRelaySession:
         # override lets scrcpy auto-pick.
         codec = _per_serial_env("SCRCPY_VIDEO_CODEC", self._serial, _VIDEO_CODEC_DEFAULT)
         encoder = _per_serial_env("SCRCPY_VIDEO_ENCODER", self._serial, _VIDEO_ENCODER_DEFAULT)
+        # Vivo/Oppo/Realme/OnePlus on newer Android + Codec2 frequently stall on
+        # static screens with H264. If user did not pin codec/encoder, prefer HEVC.
+        if (
+            codec == "h264"
+            and not encoder
+            and _HEVC_OEM_ALLOWLIST
+            and not _codec_explicit_for_serial(self._serial)
+        ):
+            oem, model = self._load_device_oem_hints()
+            if oem in _HEVC_OEM_ALLOWLIST:
+                codec = "h265"
+                logger.info(
+                    "[%s] auto codec fallback: h264 -> h265 (oem=%s model=%s)",
+                    self._serial,
+                    oem or "?",
+                    model or "?",
+                )
         encoder_arg = f" video_encoder={encoder}" if encoder else ""
         if encoder or codec != "h264":
             logger.info(

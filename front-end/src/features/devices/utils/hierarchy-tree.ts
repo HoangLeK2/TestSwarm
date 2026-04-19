@@ -128,12 +128,27 @@ export function searchTree(
 }
 
 /**
- * Find the smallest node whose bounds contain the given relative position (rx, ry ∈ [0,1]).
- * Screen dimensions are inferred from the root node's bounds.
- * Returns the node ID, or null if nothing found.
+ * Find the node at relative position (rx, ry ∈ [0,1]) that matches the
+ * selector picker (control-record-xml.ts:findSelectorInXml) so the tree
+ * highlight lands on the same node the recorder will target.
+ *
+ * Picking rule (mirror of findSelectorInXml):
+ *   1. Collect nodes whose bounds contain the point.
+ *   2. Prefer clickable-self; else promote to nearest clickable ancestor.
+ *   3. Smallest-area wins within the chosen pool.
  */
 export function findNodeIdAtRatio(root: HierarchyTreeNode, rx: number, ry: number): number | null {
-  const screenBounds = root.bounds;
+  // Prefer root bounds. If synthetic wrapper (null bounds), infer from largest child.
+  let screenBounds = root.bounds;
+  if (!screenBounds) {
+    let bestArea = 0;
+    for (const c of root.children) {
+      if (!c.bounds) continue;
+      const [x1, y1, x2, y2] = c.bounds;
+      const a = (x2 - x1) * (y2 - y1);
+      if (a > bestArea) { bestArea = a; screenBounds = c.bounds; }
+    }
+  }
   if (!screenBounds) return null;
   const dw = screenBounds[2];
   const dh = screenBounds[3];
@@ -141,19 +156,54 @@ export function findNodeIdAtRatio(root: HierarchyTreeNode, rx: number, ry: numbe
   const px = rx * dw;
   const py = ry * dh;
 
+  type Cand = { node: HierarchyTreeNode; area: number; clickableAncestor: HierarchyTreeNode | null };
+  const candidates: Cand[] = [];
+
+  function walk(node: HierarchyTreeNode, nearestClickableAnc: HierarchyTreeNode | null) {
+    const ownClickable = node.clickable ? node : nearestClickableAnc;
+    if (!node.bounds) {
+      node.children.forEach((c) => walk(c, ownClickable));
+      return;
+    }
+    const [x1, y1, x2, y2] = node.bounds;
+    if (!(x1 <= px && px <= x2 && y1 <= py && py <= y2)) return;
+    if (x2 <= x1 || y2 <= y1) return;
+    candidates.push({
+      node,
+      area: (x2 - x1) * (y2 - y1),
+      clickableAncestor: ownClickable,
+    });
+    node.children.forEach((c) => walk(c, ownClickable));
+  }
+  walk(root, null);
+
+  if (candidates.length === 0) return null;
+
+  const clickableSelf = candidates.filter((c) => c.node.clickable);
+  let pool: HierarchyTreeNode[];
+  if (clickableSelf.length > 0) {
+    pool = clickableSelf.map((c) => c.node);
+  } else {
+    const seen = new Set<number>();
+    const promoted: HierarchyTreeNode[] = [];
+    for (const c of candidates) {
+      const a = c.clickableAncestor;
+      if (a && !seen.has(a.id)) {
+        promoted.push(a);
+        seen.add(a.id);
+      }
+    }
+    pool = promoted.length > 0 ? promoted : candidates.map((c) => c.node);
+  }
+
   let bestId: number | null = null;
   let bestArea = Infinity;
-
-  function walk(node: HierarchyTreeNode) {
-    if (!node.bounds) { node.children.forEach(walk); return; }
-    const [x1, y1, x2, y2] = node.bounds;
-    if (x1 <= px && px <= x2 && y1 <= py && py <= y2) {
-      const area = (x2 - x1) * (y2 - y1);
-      if (area < bestArea) { bestArea = area; bestId = node.id; }
-      node.children.forEach(walk);
-    }
+  for (const n of pool) {
+    if (!n.bounds) continue;
+    const [x1, y1, x2, y2] = n.bounds;
+    const area = (x2 - x1) * (y2 - y1);
+    if (area < bestArea) { bestArea = area; bestId = n.id; }
   }
-  walk(root);
   return bestId;
 }
 

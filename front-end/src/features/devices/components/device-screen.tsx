@@ -126,6 +126,7 @@ export function DeviceScreen({
   /** Subscribe relay H.264 + honor server detach; MJPEG below stays on so you always see picture. */
   const relayH264Allowed =
     streamingFlags === null || !isContinuous || screenStreamOn;
+  const h264PrimaryMode = isContinuous && relayH264Allowed;
 
   const onScreenStreamChange = useCallback(
     async (checked: boolean) => {
@@ -160,13 +161,13 @@ export function DeviceScreen({
     [device.serial, isActive, isContinuous, t]
   );
 
-  // Always show MJPEG as baseline — it's hidden (opacity-0) once H264 starts playing
+  // In continuous mode, prioritize H264 path and avoid MJPEG baseline contention.
   const mjpegUrl = React.useMemo(() => {
-    if (!isActive || !mjpegEnabled) return null;
+    if (!isActive || !mjpegEnabled || h264PrimaryMode) return null;
     const base = `${deviceFarmBackendBase}/stream/${encodeURIComponent(device.serial)}?fps=30`;
     const token = tokenStorage.getAuthToken();
     return token ? `${base}&token=${encodeURIComponent(token)}` : base;
-  }, [isActive, mjpegEnabled, device.serial]);
+  }, [isActive, mjpegEnabled, device.serial, h264PrimaryMode]);
 
   useEffect(() => {
     setMjpegFailed(false);
@@ -196,9 +197,19 @@ export function DeviceScreen({
           setH264Active(true);
         }
 
-        if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
-        h264TimeoutRef.current = setTimeout(() => setH264Active(false), 8000);
-      }, [hasFrame, h264Active]),
+        // In H264-primary mode, keep showing the last decoded frame on static scenes.
+        // Some devices emit very few frames while idle; timing out to "inactive"
+        // causes a false black screen even though stream is still healthy.
+        if (h264PrimaryMode) {
+          if (h264TimeoutRef.current) {
+            clearTimeout(h264TimeoutRef.current);
+            h264TimeoutRef.current = null;
+          }
+        } else {
+          if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
+          h264TimeoutRef.current = setTimeout(() => setH264Active(false), 8000);
+        }
+      }, [hasFrame, h264Active, h264PrimaryMode]),
     }
   );
 
@@ -214,6 +225,10 @@ export function DeviceScreen({
   // Once H264 stays healthy for a while, stop MJPEG network fetches entirely.
   // If H264 drops, MJPEG is re-enabled immediately as fallback.
   useEffect(() => {
+    if (h264PrimaryMode) {
+      setMjpegEnabled(false);
+      return;
+    }
     if (!isActive) {
       setMjpegEnabled(false);
       return;
@@ -235,7 +250,7 @@ export function DeviceScreen({
     return () => {
       if (h264StableTimerRef.current) clearTimeout(h264StableTimerRef.current);
     };
-  }, [isActive, h264Active, relayH264Allowed]);
+  }, [isActive, h264Active, relayH264Allowed, h264PrimaryMode]);
 
   // Track shared WS connectivity so loading UI can distinguish
   // "socket not up yet" vs "stream waiting first frame".

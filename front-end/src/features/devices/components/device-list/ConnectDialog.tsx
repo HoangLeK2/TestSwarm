@@ -31,6 +31,7 @@ export function ConnectDialog({
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [connectedDevice, setConnectedDevice] = useState<DeviceOut | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const openedAtRef = useRef<number>(0);
 
   const stopPolling = () => {
     if (pollRef.current) {
@@ -45,8 +46,10 @@ export function ConnectDialog({
       stopPolling();
       setConnectedDevice(null);
       setQrDataUrl('');
+      openedAtRef.current = 0;
       return;
     }
+    openedAtRef.current = Date.now();
     if (!device?.device_key) {
       setQrDataUrl('');
       return;
@@ -66,6 +69,13 @@ export function ConnectDialog({
         const list = await devicesApi.list();
         const found = list.find((d) => d.id === device.id);
         if (found && !isPendingDevice(found)) {
+          const sessions = await devicesApi.sessions(found.id);
+          const hasFreshActiveSession = sessions.some((session) => {
+            if (session.disconnected_at) return false;
+            const connectedAtTs = Date.parse(session.connected_at);
+            return Number.isFinite(connectedAtTs) && connectedAtTs >= openedAtRef.current;
+          });
+          if (!hasFreshActiveSession) return;
           stopPolling();
           setConnectedDevice(found);
           toast.success(t('successToast'));

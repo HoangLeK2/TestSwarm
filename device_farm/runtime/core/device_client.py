@@ -2085,9 +2085,9 @@ class DeviceClient:
                     # In control mode, prioritize real device width to avoid tiny
                     # 216x480 stream on high-res phones when stale config lingers.
                     _cfg_max_width = int(self.config.device.scrcpy_max_width or 0)
+                    # Respect configured cap so operators can lower stream cost.
+                    # Do not auto-upscale to native width in control mode.
                     _start_max_width = _cfg_max_width
-                    if enable_control and self.screen_width:
-                        _start_max_width = max(_cfg_max_width, int(self.screen_width))
                     asyncio.run_coroutine_threadsafe(
                         relay.start_scrcpy(
                             serial=actual_serial,

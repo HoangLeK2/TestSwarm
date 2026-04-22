@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Play,
   Pause,
@@ -64,6 +65,7 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
   const t = useTranslations('campaignsFeature.list');
   const tAdd = useTranslations('campaignsFeature.addDevices');
   const tScenario = useTranslations('campaignsFeature.scenarioList');
+  const router = useRouter();
 
   const [runDialogOpen, setRunDialogOpen] = useState(false);
 
@@ -206,7 +208,6 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
                     disabled={disabledRun}
                     onClick={() => setRunDialogOpen(true)}
                   >
-                    <Play size={13} />
                     {t('titleRun')}
                   </Button>
                 </TooltipTrigger>
@@ -225,6 +226,14 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
                 onConfirm={(deviceSerials) => {
                   setRunDialogOpen(false);
                   runCampaign({ id: campaign.id, deviceSerials }, {
+                    onSuccess: () => {
+                      const count = deviceSerials?.length ?? devices.length;
+                      toast.success(
+                        t('runStarted', { count }),
+                        { description: campaign.name, duration: 4000 }
+                      );
+                      router.push(ROUTES.DEVICES.ROOT);
+                    },
                     onError: (err: unknown) => {
                       const msg =
                         err && typeof err === 'object' && 'response' in err

@@ -664,6 +664,16 @@ class WebSocketManager:
                         "ws drop write frame type=%s serial=%s (busy_state=%s scenario_active=%s)",
                         msg_type, serial, is_busy_state, scenario_active,
                     )
+                    reason = "busy_state" if is_busy_state else "scenario_active"
+                    try:
+                        await ws.send_json({
+                            "type": "device_busy",
+                            "serial": serial,
+                            "reason": reason,
+                            "scenario_active": scenario_active,
+                        })
+                    except Exception:
+                        pass
                     continue
 
             # Fire-and-forget all input commands — don't await executor so the receiver

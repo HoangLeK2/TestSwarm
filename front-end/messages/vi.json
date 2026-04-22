@@ -473,6 +473,7 @@
       "engineTemporal": "Engine: Temporal",
       "engineTaskQueue": "Engine: Hàng đợi trong process",
       "temporalFallback": "Không kết nối Temporal — đang chạy bằng hàng đợi trong process.",
+      "runStarted": "Đang chạy kịch bản trên {count} thiết bị",
       "campaignDone": "Campaign đã chạy xong",
       "fleetDone": "Fleet xong: {done}/{total} thiết bị",
       "deleteConfirm": "Xoá campaign này? Các task lịch sử sẽ vẫn giữ trong logs, nhưng campaign sẽ biến mất khỏi danh sách.",
@@ -771,6 +772,9 @@
       "loadedTemplate": "Đã tải mẫu \"{name}\" ({count} bước)",
       "loadTemplateFailed": "Không tải được mẫu kịch bản",
       "saveTemplateSuccess": "Đã lưu mẫu kịch bản"
+    },
+    "takeover": {
+      "campaignRunning": "Đang chạy campaign — thao tác thủ công bị chặn"
     },
     "view": {
       "noDeviceConnected": "Chưa có thiết bị nào kết nối",

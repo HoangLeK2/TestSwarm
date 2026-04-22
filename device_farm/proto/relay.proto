@@ -33,3 +33,69 @@ service RelayService {
   // Agent sends AgentMsgs (video + JSON); farm sends ControlMsgs (control + JSON commands).
   rpc Stream(stream AgentMsg) returns (stream ControlMsg);
 }
+
+// ── Control plane (separate stream, low-volume) ───────────────────────────────
+// Runs on the same gRPC port as RelayService but as an independent HTTP/2 stream.
+// This keeps identity + command traffic off the high-throughput video stream.
+
+service AgentControlService {
+  rpc ControlStream(stream AgentControlMsg) returns (stream ServerControlMsg);
+}
+
+// Agent → Server
+message AgentControlMsg {
+  oneof payload {
+    RegisterMsg      register  = 1;
+    HeartbeatMsg     heartbeat = 2;
+    CommandResultMsg result    = 3;
+  }
+}
+
+message RegisterMsg {
+  string          relay_id      = 1;
+  repeated string serials       = 2;
+  string          hostname      = 3;
+  string          ip            = 4;
+  string          agent_version = 5;
+}
+
+message HeartbeatMsg {
+  string          relay_id = 1;
+  repeated string serials  = 2;
+  repeated DeviceCaps caps = 3;
+}
+
+message DeviceCaps {
+  string serial          = 1;
+  string android_version = 2;
+  int32  sdk             = 3;
+  string brand           = 4;
+  string model           = 5;
+  bool   has_u2          = 6;
+  bool   has_stf         = 7;
+}
+
+message CommandResultMsg {
+  string msg_id    = 1;
+  bool   ok        = 2;
+  int32  exit_code = 3;
+  string output    = 4;
+  string error     = 5;
+}
+
+// Server → Agent
+message ServerControlMsg {
+  oneof payload {
+    RegisterAck    ack         = 1;
+    BootstrapCmd   bootstrap   = 2;
+    RestartU2Cmd   restart_u2  = 3;
+    RestartAtxCmd  restart_atx = 4;
+    ShellCmd       shell       = 5;
+  }
+}
+
+message RegisterAck   { string message = 1; }
+message BootstrapCmd  { string msg_id = 1; string serial = 2; int32 timeout = 3; }
+message RestartU2Cmd  { string msg_id = 1; string serial = 2; int32 timeout = 3; }
+message RestartAtxCmd { string msg_id = 1; string serial = 2; int32 timeout = 3; }
+message ShellCmd      { string msg_id = 1; string serial = 2; string cmd = 3; int32 timeout = 4; }

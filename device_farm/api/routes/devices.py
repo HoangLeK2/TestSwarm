@@ -254,6 +254,65 @@ async def device_sessions(device_id: str, db: DB, user: CurrentUser):
     ]
 
 
+# ── Relay control endpoints ───────────────────────────────────────────────────
+
+from api.schemas.relay_agent import RelayCommandOut  # noqa: E402
+
+
+def _get_ctrl_servicer():
+    from runtime.transports.agent_control_servicer import get_control_servicer
+    svc = get_control_servicer()
+    if svc is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="control servicer not available (gRPC relay not started)",
+        )
+    return svc
+
+
+async def _resolve_ctrl_serial(db, device_id: str, user_id: str, ctrl) -> str:
+    """Return the serial string the control servicer actually has a channel for."""
+    device = await repo.get_device(db, device_id)
+    if not device or device.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Device not found")
+    if device.serial.startswith("pending-"):
+        raise HTTPException(status_code=409, detail="Device not yet paired")
+    # Try USB serial first
+    if ctrl.conn_for_serial(device.serial):
+        return device.serial
+    # Fall back to TCP serial (adb_ip:adb_port) — relay may have connected via WiFi
+    if getattr(device, "adb_ip", None):
+        tcp_serial = f"{device.adb_ip}:{getattr(device, 'adb_port', 5555)}"
+        if ctrl.conn_for_serial(tcp_serial):
+            return tcp_serial
+    # Neither found — return USB serial so error message is meaningful
+    return device.serial
+
+
+@router.post("/{device_id}/bootstrap", response_model=RelayCommandOut)
+async def bootstrap_device(device_id: str, db: DB, user: CurrentUser):
+    ctrl   = _get_ctrl_servicer()
+    serial = await _resolve_ctrl_serial(db, device_id, user.id, ctrl)
+    res    = await ctrl.bootstrap(serial, timeout=180.0)
+    return RelayCommandOut(**res)
+
+
+@router.post("/{device_id}/restart-u2", response_model=RelayCommandOut)
+async def restart_u2(device_id: str, db: DB, user: CurrentUser):
+    ctrl   = _get_ctrl_servicer()
+    serial = await _resolve_ctrl_serial(db, device_id, user.id, ctrl)
+    res    = await ctrl.restart_u2(serial, timeout=60.0)
+    return RelayCommandOut(**res)
+
+
+@router.post("/{device_id}/restart-atx", response_model=RelayCommandOut)
+async def restart_atx(device_id: str, db: DB, user: CurrentUser):
+    ctrl   = _get_ctrl_servicer()
+    serial = await _resolve_ctrl_serial(db, device_id, user.id, ctrl)
+    res    = await ctrl.restart_atx(serial, timeout=30.0)
+    return RelayCommandOut(**res)
+
+
 def _to_out(d) -> DeviceOut:
     return DeviceOut(
         id=d.id, serial=d.serial, name=d.name,

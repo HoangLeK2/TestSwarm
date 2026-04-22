@@ -54,3 +54,54 @@ export const devicesApi = {
   connectByIp: (ip: string, port = 5555) =>
     farmApi.post<{ ok: boolean; serial: string }>('/devices/connect-adb', { ip, port }).then((r) => r.data)
 };
+
+// ── Relay agent types ─────────────────────────────────────────────────────────
+
+export type RelayAgentOut = {
+  relay_id:          string;
+  hostname:          string;
+  ip:                string;
+  version:           string;
+  serials:           string[];
+  status:            'online' | 'offline';
+  connected_at:      string;
+  last_heartbeat_at: string | null;
+  disconnected_at:   string | null;
+};
+
+export type RelayCommandOut = {
+  ok:        boolean;
+  output:    string;
+  exit_code: number;
+  error:     string;
+};
+
+export type BootstrapAllResult = {
+  relay_id: string;
+  total:    number;
+  ok:       number;
+  failed:   number;
+  results:  Array<{ serial: string; ok: boolean; output: string; error: string }>;
+};
+
+// ── Relay agents API ──────────────────────────────────────────────────────────
+
+export const relayAgentsApi = {
+  list: () =>
+    farmApi.get<RelayAgentOut[]>('/relay-agents').then((r) => r.data),
+  get: (relayId: string) =>
+    farmApi.get<RelayAgentOut>(`/relay-agents/${relayId}`).then((r) => r.data),
+  bootstrapAll: (relayId: string) =>
+    farmApi.post<BootstrapAllResult>(`/relay-agents/${relayId}/bootstrap-all`).then((r) => r.data),
+};
+
+// ── Device relay control API ──────────────────────────────────────────────────
+
+export const deviceControlApi = {
+  bootstrap:  (deviceId: string) =>
+    farmApi.post<RelayCommandOut>(`/devices/${deviceId}/bootstrap`).then((r) => r.data),
+  restartU2:  (deviceId: string) =>
+    farmApi.post<RelayCommandOut>(`/devices/${deviceId}/restart-u2`).then((r) => r.data),
+  restartAtx: (deviceId: string) =>
+    farmApi.post<RelayCommandOut>(`/devices/${deviceId}/restart-atx`).then((r) => r.data),
+};

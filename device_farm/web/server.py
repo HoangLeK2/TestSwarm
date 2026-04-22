@@ -223,6 +223,21 @@ def create_app(
             except Exception as rec_exc:
                 log.warning("crash recovery failed (non-fatal): %s", rec_exc)
 
+            # Phase 2 — relay agent reconciliation: previous crash may have left
+            # relay_agents rows with status='online'. Mark them offline so the UI
+            # shows accurate state until agents reconnect.
+            try:
+                from db.database import AsyncSessionLocal as _AslRec
+                from sqlalchemy import text as _text
+                async with _AslRec() as _db:
+                    await _db.execute(_text(
+                        "UPDATE relay_agents SET status='offline', disconnected_at=NOW() "
+                        "WHERE status='online'"
+                    ))
+                    await _db.commit()
+            except Exception as _rec_exc:
+                log.warning("relay agent reconciliation failed (non-fatal): %s", _rec_exc)
+
         # ── Redis shared state ──
         from services import redis_store
         await redis_store.init(config.redis)
@@ -334,6 +349,49 @@ def create_app(
                     )
                 except Exception as grpc_exc:
                     log.warning("gRPC relay server failed to start (WS fallback active): %s", grpc_exc)
+
+                # ── Persistence callbacks for AgentControlServicer ─────────────
+                if config.database.enabled:
+                    try:
+                        from runtime.transports.agent_control_servicer import get_control_servicer
+                        from db import crud as _ctrl_repo
+                        from db.database import AsyncSessionLocal as _AslCtrl
+
+                        async def _on_ctrl_register(payload: dict) -> None:
+                            async with _AslCtrl() as _db:
+                                try:
+                                    await _ctrl_repo.upsert_relay_agent(_db, **payload)
+                                    await _db.commit()
+                                except Exception as _exc:
+                                    await _db.rollback()
+                                    log.warning("relay upsert failed: %s", _exc)
+
+                        async def _on_ctrl_heartbeat(payload: dict) -> None:
+                            async with _AslCtrl() as _db:
+                                try:
+                                    await _ctrl_repo.update_relay_heartbeat(_db, **payload)
+                                    await _db.commit()
+                                except Exception as _exc:
+                                    await _db.rollback()
+                                    log.debug("relay heartbeat update failed: %s", _exc)
+
+                        async def _on_ctrl_offline(relay_id: str) -> None:
+                            async with _AslCtrl() as _db:
+                                try:
+                                    await _ctrl_repo.mark_relay_offline(_db, relay_id)
+                                    await _db.commit()
+                                except Exception as _exc:
+                                    await _db.rollback()
+                                    log.warning("relay offline mark failed: %s", _exc)
+
+                        _ctrl_svc = get_control_servicer()
+                        if _ctrl_svc is not None:
+                            _ctrl_svc.set_persistence_callbacks(
+                                _on_ctrl_register, _on_ctrl_heartbeat, _on_ctrl_offline
+                            )
+                            log.info("AgentControlServicer persistence callbacks wired")
+                    except Exception as _cb_exc:
+                        log.warning("Could not wire control servicer callbacks: %s", _cb_exc)
 
                 # Auto-attach scrcpy whenever a relay agent reports a new device.
                 _relay_mgr_ref = relay_manager

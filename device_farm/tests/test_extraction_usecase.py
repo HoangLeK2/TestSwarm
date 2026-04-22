@@ -49,10 +49,29 @@ async def test_persist_data_items_malformed_list_marks_error() -> None:
 def test_resolve_comment_parent_hash_prefers_pid_map() -> None:
     ctx = {
         "_post_id_map": {"pid1": "hash_from_pid"},
-        "_first_new_post_hash": "fallback_hash",
+        "_active_comment_parent_hash": "explicit_tap_hash",
+        "_first_new_post_hash": "stale_legacy_hash",
     }
+    # Direct pid map hit — always preferred.
     assert resolve_comment_parent_hash(ctx, "pid1") == "hash_from_pid"
-    assert resolve_comment_parent_hash(ctx, "pid2") == "fallback_hash"
+    # Miss on pid map → fall back to explicit hash set by tap_fb_comment_button.
+    assert resolve_comment_parent_hash(ctx, "pid2") == "explicit_tap_hash"
+
+
+def test_resolve_comment_parent_hash_returns_none_without_explicit_tap() -> None:
+    """Old behavior silently fell back to _first_new_post_hash (top-of-feed at
+    last extract, NOT the actually-tapped post) when pid was missing from the
+    map — this was the root cause of comments being attached to the wrong
+    post. New behavior returns None so the caller can treat parent as unknown
+    instead of guessing.
+    """
+    ctx = {
+        "_post_id_map": {"pid1": "hash_from_pid"},
+        # _first_new_post_hash is NOT a valid fallback anymore.
+        "_first_new_post_hash": "stale_legacy_hash",
+    }
+    assert resolve_comment_parent_hash(ctx, "pid_missing") is None
+    assert resolve_comment_parent_hash(ctx, None) is None
 
 
 @pytest.mark.asyncio

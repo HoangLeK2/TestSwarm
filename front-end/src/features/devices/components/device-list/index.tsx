@@ -2,7 +2,9 @@
 
 import { useMemo, useState } from 'react';
 import { Smartphone } from 'lucide-react';
-import type { DeviceOut } from '../../services/manage-api';
+import { useQuery } from '@tanstack/react-query';
+import type { DeviceOut, RelayAgentOut } from '../../services/manage-api';
+import { relayAgentsApi } from '../../services/manage-api';
 import { useDevices } from '../../hooks/use-devices';
 import { RegisterDeviceDialog } from '../register-device-dialog';
 import { DataTable } from '@/components/ui/table/data-table';
@@ -17,6 +19,28 @@ export function DeviceList() {
   const [connectDevice, setConnectDevice] = useState<DeviceOut | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
+  const { data: relayAgents } = useQuery<RelayAgentOut[]>({
+    queryKey: ['relay-agents'],
+    queryFn:  relayAgentsApi.list,
+    staleTime:       15_000,
+    refetchInterval: 30_000,
+  });
+
+  const relayMap = useMemo(() => {
+    const m: Record<string, RelayAgentOut> = {};
+    for (const agent of relayAgents ?? []) {
+      for (const serial of agent.serials) {
+        m[serial] = agent;
+        // TCP serial "ip:port" → also index by ip alone so USB-serial devices match
+        const colonIdx = serial.lastIndexOf(':');
+        if (colonIdx > 0) {
+          m[serial.slice(0, colonIdx)] = agent;
+        }
+      }
+    }
+    return m;
+  }, [relayAgents]);
+
   const data: DeviceOut[] = devices ?? [];
 
   const columns = useMemo(
@@ -25,9 +49,10 @@ export function DeviceList() {
         t,
         deletingId,
         setDeletingId,
-        setConnectDevice
+        setConnectDevice,
+        relayMap
       }),
-    [deletingId, t]
+    [deletingId, t, relayMap]
   );
 
   const { table } = useDataTable<DeviceOut>({

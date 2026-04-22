@@ -34,6 +34,7 @@ from .scenario_version import ScenarioVersion
 from .execution_dlq import ExecutionDLQ
 from .u2_recovery import U2RecoveryEvent
 from .device_event import DeviceEvent
+from .relay_agent import RelayAgent
 
 __all__ = [
     "User",
@@ -64,5 +65,6 @@ __all__ = [
     "ExecutionDLQ",
     "U2RecoveryEvent",
     "DeviceEvent",
+    "RelayAgent",
 ]
 

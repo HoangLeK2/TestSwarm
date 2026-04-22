@@ -243,7 +243,13 @@ function ChildStepList({
                         pathFromRoot={nestedPath}
                         selected={false}
                         selectedChild={null}
-                        onSelectSelf={() => onSelectChild(startIndex + ci)}
+                        onSelectSelf={() => {
+                          if (onEditChild) {
+                            onEditChild(listKey, ci);
+                            return;
+                          }
+                          onSelectChild(startIndex + ci);
+                        }}
                         onSelectChild={() => {}}
                         onUpdate={(newChild) => onUpdateChild(listKey, ci, newChild)}
                         onRemove={() => onRemoveChild(listKey, ci)}

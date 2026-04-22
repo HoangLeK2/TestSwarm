@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0brelay.proto\x12\ndevicefarm\"|\n\nVideoFrame\x12\x0e\n\x06serial\x18\x01 \x01(\t\x12\x0c\n\x04\x64\x61ta\x18\x02 \x01(\x0c\x12\x11\n\tis_config\x18\x03 \x01(\x08\x12\x0e\n\x06is_key\x18\x04 \x01(\x08\x12\x0e\n\x06pts_us\x18\x05 \x01(\x03\x12\r\n\x05width\x18\x06 \x01(\r\x12\x0e\n\x06height\x18\x07 \x01(\r\";\n\nControlMsg\x12\x0e\n\x06serial\x18\x01 \x01(\t\x12\x0c\n\x04\x64\x61ta\x18\x02 \x01(\x0c\x12\x0f\n\x07is_json\x18\x03 \x01(\x08\"N\n\x08\x41gentMsg\x12\'\n\x05video\x18\x01 \x01(\x0b\x32\x16.devicefarm.VideoFrameH\x00\x12\x0e\n\x04meta\x18\x02 \x01(\x0cH\x00\x42\t\n\x07payload2J\n\x0cRelayService\x12:\n\x06Stream\x12\x14.devicefarm.AgentMsg\x1a\x16.devicefarm.ControlMsg(\x01\x30\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0brelay.proto\x12\ndevicefarm\"|\n\nVideoFrame\x12\x0e\n\x06serial\x18\x01 \x01(\t\x12\x0c\n\x04\x64\x61ta\x18\x02 \x01(\x0c\x12\x11\n\tis_config\x18\x03 \x01(\x08\x12\x0e\n\x06is_key\x18\x04 \x01(\x08\x12\x0e\n\x06pts_us\x18\x05 \x01(\x03\x12\r\n\x05width\x18\x06 \x01(\r\x12\x0e\n\x06height\x18\x07 \x01(\r\";\n\nControlMsg\x12\x0e\n\x06serial\x18\x01 \x01(\t\x12\x0c\n\x04\x64\x61ta\x18\x02 \x01(\x0c\x12\x0f\n\x07is_json\x18\x03 \x01(\x08\"N\n\x08\x41gentMsg\x12\'\n\x05video\x18\x01 \x01(\x0b\x32\x16.devicefarm.VideoFrameH\x00\x12\x0e\n\x04meta\x18\x02 \x01(\x0cH\x00\x42\t\n\x07payload\"\xa8\x01\n\x0f\x41gentControlMsg\x12+\n\x08register\x18\x01 \x01(\x0b\x32\x17.devicefarm.RegisterMsgH\x00\x12-\n\theartbeat\x18\x02 \x01(\x0b\x32\x18.devicefarm.HeartbeatMsgH\x00\x12.\n\x06result\x18\x03 \x01(\x0b\x32\x1c.devicefarm.CommandResultMsgH\x00\x42\t\n\x07payload\"e\n\x0bRegisterMsg\x12\x10\n\x08relay_id\x18\x01 \x01(\t\x12\x0f\n\x07serials\x18\x02 \x03(\t\x12\x10\n\x08hostname\x18\x03 \x01(\t\x12\n\n\x02ip\x18\x04 \x01(\t\x12\x15\n\ragent_version\x18\x05 \x01(\t\"W\n\x0cHeartbeatMsg\x12\x10\n\x08relay_id\x18\x01 \x01(\t\x12\x0f\n\x07serials\x18\x02 \x03(\t\x12$\n\x04\x63\x61ps\x18\x03 \x03(\x0b\x32\x16.devicefarm.DeviceCaps\"\x81\x01\n\nDeviceCaps\x12\x0e\n\x06serial\x18\x01 \x01(\t\x12\x17\n\x0f\x61ndroid_version\x18\x02 \x01(\t\x12\x0b\n\x03sdk\x18\x03 \x01(\x05\x12\r\n\x05\x62rand\x18\x04 \x01(\t\x12\r\n\x05model\x18\x05 \x01(\t\x12\x0e\n\x06has_u2\x18\x06 \x01(\x08\x12\x0f\n\x07has_stf\x18\x07 \x01(\x08\"`\n\x10\x43ommandResultMsg\x12\x0e\n\x06msg_id\x18\x01 \x01(\t\x12\n\n\x02ok\x18\x02 \x01(\x08\x12\x11\n\texit_code\x18\x03 \x01(\x05\x12\x0e\n\x06output\x18\x04 \x01(\t\x12\r\n\x05\x65rror\x18\x05 \x01(\t\"\xfd\x01\n\x10ServerControlMsg\x12&\n\x03\x61\x63k\x18\x01 \x01(\x0b\x32\x17.devicefarm.RegisterAckH\x00\x12-\n\tbootstrap\x18\x02 \x01(\x0b\x32\x18.devicefarm.BootstrapCmdH\x00\x12.\n\nrestart_u2\x18\x03 \x01(\x0b\x32\x18.devicefarm.RestartU2CmdH\x00\x12\x30\n\x0brestart_atx\x18\x04 \x01(\x0b\x32\x19.devicefarm.RestartAtxCmdH\x00\x12%\n\x05shell\x18\x05 \x01(\x0b\x32\x14.devicefarm.ShellCmdH\x00\x42\t\n\x07payload\"\x1e\n\x0bRegisterAck\x12\x0f\n\x07message\x18\x01 \x01(\t\"?\n\x0c\x42ootstrapCmd\x12\x0e\n\x06msg_id\x18\x01 \x01(\t\x12\x0e\n\x06serial\x18\x02 \x01(\t\x12\x0f\n\x07timeout\x18\x03 \x01(\x05\"?\n\x0cRestartU2Cmd\x12\x0e\n\x06msg_id\x18\x01 \x01(\t\x12\x0e\n\x06serial\x18\x02 \x01(\t\x12\x0f\n\x07timeout\x18\x03 \x01(\x05\"@\n\rRestartAtxCmd\x12\x0e\n\x06msg_id\x18\x01 \x01(\t\x12\x0e\n\x06serial\x18\x02 \x01(\t\x12\x0f\n\x07timeout\x18\x03 \x01(\x05\"H\n\x08ShellCmd\x12\x0e\n\x06msg_id\x18\x01 \x01(\t\x12\x0e\n\x06serial\x18\x02 \x01(\t\x12\x0b\n\x03\x63md\x18\x03 \x01(\t\x12\x0f\n\x07timeout\x18\x04 \x01(\x05\x32J\n\x0cRelayService\x12:\n\x06Stream\x12\x14.devicefarm.AgentMsg\x1a\x16.devicefarm.ControlMsg(\x01\x30\x01\x32\x65\n\x13\x41gentControlService\x12N\n\rControlStream\x12\x1b.devicefarm.AgentControlMsg\x1a\x1c.devicefarm.ServerControlMsg(\x01\x30\x01\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -37,6 +37,30 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_CONTROLMSG']._serialized_end=212
   _globals['_AGENTMSG']._serialized_start=214
   _globals['_AGENTMSG']._serialized_end=292
-  _globals['_RELAYSERVICE']._serialized_start=294
-  _globals['_RELAYSERVICE']._serialized_end=368
+  _globals['_AGENTCONTROLMSG']._serialized_start=295
+  _globals['_AGENTCONTROLMSG']._serialized_end=463
+  _globals['_REGISTERMSG']._serialized_start=465
+  _globals['_REGISTERMSG']._serialized_end=566
+  _globals['_HEARTBEATMSG']._serialized_start=568
+  _globals['_HEARTBEATMSG']._serialized_end=655
+  _globals['_DEVICECAPS']._serialized_start=658
+  _globals['_DEVICECAPS']._serialized_end=787
+  _globals['_COMMANDRESULTMSG']._serialized_start=789
+  _globals['_COMMANDRESULTMSG']._serialized_end=885
+  _globals['_SERVERCONTROLMSG']._serialized_start=888
+  _globals['_SERVERCONTROLMSG']._serialized_end=1141
+  _globals['_REGISTERACK']._serialized_start=1143
+  _globals['_REGISTERACK']._serialized_end=1173
+  _globals['_BOOTSTRAPCMD']._serialized_start=1175
+  _globals['_BOOTSTRAPCMD']._serialized_end=1238
+  _globals['_RESTARTU2CMD']._serialized_start=1240
+  _globals['_RESTARTU2CMD']._serialized_end=1303
+  _globals['_RESTARTATXCMD']._serialized_start=1305
+  _globals['_RESTARTATXCMD']._serialized_end=1369
+  _globals['_SHELLCMD']._serialized_start=1371
+  _globals['_SHELLCMD']._serialized_end=1443
+  _globals['_RELAYSERVICE']._serialized_start=1445
+  _globals['_RELAYSERVICE']._serialized_end=1519
+  _globals['_AGENTCONTROLSERVICE']._serialized_start=1521
+  _globals['_AGENTCONTROLSERVICE']._serialized_end=1622
 # @@protoc_insertion_point(module_scope)

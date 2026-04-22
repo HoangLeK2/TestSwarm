@@ -1911,6 +1911,17 @@ class DeviceClient:
                         f"scrcpy already streaming for {device_ip} — skipping reattach",
                         level=logging.DEBUG,
                     )
+                    # Force IDR so the browser decoder resyncs immediately after
+                    # a phone-WS drop/reconnect. Without this, the encoder may be
+                    # paused on a static screen and the natural keyframe interval
+                    # (up to 14s, or never on idle) leaves the dashboard black.
+                    ctrl = getattr(self._scrcpy_receiver, "control", None)
+                    if ctrl is not None and hasattr(ctrl, "request_idr"):
+                        try:
+                            ctrl.request_idr()
+                            self._log("request_idr after attach-skip (WS reconnect)", level=logging.DEBUG)
+                        except Exception:
+                            pass
                     return
                 # If we are still receiving frames recently, treat this as a transient
                 # relay flap / false negative and do not restart immediately.
@@ -3211,6 +3222,7 @@ class DeviceClient:
             "u2_ready":         u2_ok,
             "touch_method":     touch_method,
             "stf_connected":    self._stf_service is not None and self._stf_service.connected,
+            "scenario_active":  int(getattr(self, "_scenario_active", 0) or 0),
         }
 
     def get_log_lines(self) -> List[str]:
@@ -3293,12 +3305,11 @@ class DeviceClient:
                 last = float(getattr(self, "_stf_heal_requested_at", 0.0) or 0.0)
                 if (now - last) < 20.0:
                     return
-                self._log("STFService socket refused — requesting STF app restart via agent shell", level=logging.WARNING)
+                self._log("STFService socket refused — requesting WsAgentService restart", level=logging.WARNING)
                 try:
-                    self._send_to_agent({"type": "shell", "cmd": "am force-stop jp.co.cyberagent.stf || true"})
                     self._send_to_agent({
                         "type": "shell",
-                        "cmd": "am start -n jp.co.cyberagent.stf/.IdentityActivity -a android.intent.action.MAIN",
+                        "cmd": "am start-foreground-service -n jp.co.cyberagent.stf/.WsAgentService -a jp.co.cyberagent.stf.ws.START",
                     })
                     setattr(self, "_stf_heal_requested_at", now)
                 except Exception as shell_exc:

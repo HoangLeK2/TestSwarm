@@ -76,12 +76,10 @@
           "tags": "group,crawl,${GROUP_NAME}"
         },
 
-        { "_comment": "Vào comment bài viết đầu tiên hiển thị → extract comment + lấy like count" },
+        { "_comment": "Atomic resolve+tap Bình luận — link comment đúng bài (không còn 'láy sai tè le'). then[] chạy khi tap thành công." },
         {
-          "type": "if_element", "by": "text", "value": "Bình luận", "timeout": 3,
-          "ignore_error": true,
+          "type": "tap_fb_comment_button", "timeout": 6,
           "then": [
-            { "type": "tap_selector", "by": "text", "value": "Bình luận", "timeout": 3 },
             { "type": "wait_stable", "timeout": 6, "stable_duration": 0.5 },
 
             { "_comment": "Lần 1: extract comment + lưu (parent từ _active_comment_parent_hash)" },

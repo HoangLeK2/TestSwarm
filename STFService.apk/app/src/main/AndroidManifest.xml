@@ -15,6 +15,7 @@
     <!-- MediaProjection FGS — chỉ cần khi WsAgentService.USE_MEDIA_PROJECTION = true -->
     <!-- <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"/> -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"/>
     <uses-permission android:name="android.permission.CAMERA"/>
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
@@ -37,7 +38,7 @@
         <!-- WsAgent: WebSocket agent; MJPEG qua MediaProjection hoặc video ngoài (scrcpy) — xem USE_MEDIA_PROJECTION -->
         <service android:name=".WsAgentService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="connectedDevice|dataSync" />
         <service android:name=".TouchAccessibilityService"
             android:exported="false"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">

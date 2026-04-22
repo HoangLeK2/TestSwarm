@@ -45,8 +45,26 @@ def resolve_comment_parent_hash(
     ctx: dict[str, Any],
     parent_post_id: str | None,
 ) -> str | None:
-    pid_key = parent_post_id
-    return (ctx.get("_post_id_map", {}).get(pid_key) or ctx.get("_first_new_post_hash"))
+    """Resolve the parent post's content_hash for a comment batch.
+
+    Returns None when we cannot positively map ``parent_post_id`` to a post
+    hash. Callers must treat None as "unknown parent" (save with parent_id=None)
+    instead of silently attaching comments to a guessed post — this was the
+    root cause of the "láy sai tè le" mismatch where ``_first_new_post_hash``
+    (top-of-feed at last extract, NOT the actually-tapped post) was used as a
+    fallback and linked comments to the wrong post.
+    """
+    pid_map = ctx.get("_post_id_map") or {}
+    if parent_post_id and parent_post_id in pid_map:
+        return pid_map[parent_post_id]
+    # Legacy key — only trust when it was written by ``tap_fb_comment_button``
+    # (guaranteed to match the tapped post). Other writers set this to the
+    # top-of-batch hash which may diverge from the tapped post, so when there's
+    # any ambiguity we return None.
+    explicit = ctx.get("_active_comment_parent_hash")
+    if explicit:
+        return explicit
+    return None
 
 
 async def update_parent_stats_if_available(
@@ -62,6 +80,7 @@ async def update_parent_stats_if_available(
             content_hash=content_hash,
             likes_count=_safe_int(post_stats.get("reactions")),
             shares_count=_safe_int(post_stats.get("shares")),
+            comments_count=_safe_int(post_stats.get("comments")),
         )
         if updated:
             await db.commit()

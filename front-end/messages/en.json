@@ -500,6 +500,7 @@
       "engineTemporal": "Engine: Temporal",
       "engineTaskQueue": "Engine: In-process queue",
       "temporalFallback": "Temporal unavailable — using in-process task queue.",
+      "runStarted": "Running scenario on {count} device(s)",
       "campaignDone": "Campaign finished",
       "fleetDone": "Fleet done: {done}/{total} devices",
       "deleteConfirm": "Delete this campaign? Historical tasks remain in logs, but campaign will be removed from list.",
@@ -798,6 +799,9 @@
       "loadedTemplate": "Loaded template \"{name}\" ({count} steps)",
       "loadTemplateFailed": "Failed to load template",
       "saveTemplateSuccess": "Template saved"
+    },
+    "takeover": {
+      "campaignRunning": "Campaign running — manual input blocked"
     },
     "view": {
       "noDeviceConnected": "No connected devices",

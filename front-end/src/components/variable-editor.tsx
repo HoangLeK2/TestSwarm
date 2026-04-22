@@ -295,80 +295,89 @@ export function VariableEditor({ variables, onChange, disabled, showBuiltins = t
         </p>
       </div>
 
-      {/* Header row */}
+      {/* Header row — hidden on narrow; labels duplicated inline on small screens below */}
       {entries.length > 0 && (
-        <div className='flex gap-2 px-0.5'>
-          <span className='w-[130px] text-[10px] font-medium uppercase tracking-wide text-muted-foreground'>{t('columns.variableName')}</span>
-          <span className='w-[100px] text-[10px] font-medium uppercase tracking-wide text-muted-foreground'>{t('columns.type')}</span>
-          <span className='flex-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground'>{t('columns.value')}</span>
+        <div className='hidden gap-2 px-0.5 lg:flex'>
+          <span className='min-w-[200px] flex-[2] text-[10px] font-medium uppercase tracking-wide text-muted-foreground'>{t('columns.variableName')}</span>
+          <span className='w-[110px] text-[10px] font-medium uppercase tracking-wide text-muted-foreground'>{t('columns.type')}</span>
+          <span className='flex-[3] text-[10px] font-medium uppercase tracking-wide text-muted-foreground'>{t('columns.value')}</span>
           <span className='w-7' />
         </div>
       )}
 
-      {/* Rows */}
+      {/* Rows — stack vertically on narrow panels so full variable name never gets cropped */}
       {entries.map((entry, i) => (
-        <div key={i} className='flex items-start gap-2'>
+        <div
+          key={i}
+          className='flex flex-col gap-2 rounded-md border border-transparent p-2 hover:border-muted lg:flex-row lg:items-start lg:gap-2 lg:border-0 lg:p-0 lg:hover:border-transparent'
+        >
           {/* Key */}
-          <div className='w-[130px] shrink-0 space-y-1'>
+          <div className='min-w-0 flex-1 space-y-1 lg:min-w-[200px] lg:flex-[2]'>
             <Input
               value={entry.key}
               onChange={(e) => update(i, { key: e.target.value })}
               placeholder={t('keyPlaceholder')}
               disabled={disabled}
-              className='h-8 font-mono text-xs'
+              title={entry.key}
+              className='h-8 w-full font-mono text-xs'
             />
             {entry.key.trim() && (
               <button
                 type='button'
-                className='flex items-center gap-1 text-[10px] text-primary hover:underline'
+                className='flex max-w-full items-center gap-1 truncate text-[10px] text-primary hover:underline'
                 onClick={() => copyToken(entry.key)}
+                title={`Copy \${${entry.key}}`}
               >
-                {copiedKey === entry.key ? <Check size={10} /> : <Copy size={10} />}
-                <code className='font-mono'>{`\${${entry.key}}`}</code>
+                {copiedKey === entry.key ? <Check size={10} className='shrink-0' /> : <Copy size={10} className='shrink-0' />}
+                <code className='truncate font-mono'>{`\${${entry.key}}`}</code>
               </button>
             )}
           </div>
 
-          {/* Type */}
-          <TypeSelect
-            value={entry.type}
-            onChange={(t) => update(i, { type: t, strVal: '', listVal: [] })}
-            disabled={disabled}
-            t={t}
-          />
+          {/* Type + Value + Delete — in a row on narrow so they fit one line */}
+          <div className='flex items-start gap-2 lg:contents'>
+            <TypeSelect
+              value={entry.type}
+              onChange={(t) => update(i, { type: t, strVal: '', listVal: [] })}
+              disabled={disabled}
+              t={t}
+            />
 
-          {/* Value */}
-          <div className='flex-1'>
-            {entry.type === 'list' ? (
-              <ListTagInput
-                tags={entry.listVal}
-                onChange={(tags) => update(i, { listVal: tags })}
-                disabled={disabled}
-                t={t}
-              />
-            ) : (
-              <Input
-                type={entry.type === 'number' ? 'number' : 'text'}
-                value={entry.strVal}
-                onChange={(e) => update(i, { strVal: e.target.value })}
-                placeholder={getValuePlaceholder(entry)}
-                disabled={disabled}
-                className='h-8 text-xs'
-              />
-            )}
+            {/* Value */}
+            <div className='min-w-0 flex-1 lg:flex-[3]'>
+              {entry.type === 'list' ? (
+                <ListTagInput
+                  tags={entry.listVal}
+                  onChange={(tags) => update(i, { listVal: tags })}
+                  disabled={disabled}
+                  t={t}
+                />
+              ) : (
+                <Input
+                  type={entry.type === 'number' ? 'number' : 'text'}
+                  value={entry.strVal}
+                  onChange={(e) => update(i, { strVal: e.target.value })}
+                  placeholder={getValuePlaceholder(entry)}
+                  disabled={disabled}
+                  title={entry.strVal}
+                  className='h-8 w-full text-xs'
+                />
+              )}
+            </div>
+
+            {/* Delete */}
+            <Button
+              type='button'
+              size='icon'
+              variant='ghost'
+              className='mt-0.5 size-7 shrink-0 text-muted-foreground hover:text-destructive'
+              disabled={disabled}
+              onClick={() => remove(i)}
+              title={t('addVariable')}
+            >
+              <Trash2 size={12} />
+            </Button>
           </div>
-
-          {/* Delete */}
-          <Button
-            type='button'
-            size='icon'
-            variant='ghost'
-            className='mt-0.5 size-7 shrink-0 text-muted-foreground hover:text-destructive'
-            disabled={disabled}
-            onClick={() => remove(i)}
-          >
-            <Trash2 size={12} />
-          </Button>
         </div>
       ))}
 

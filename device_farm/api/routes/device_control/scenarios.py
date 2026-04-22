@@ -72,13 +72,15 @@ def run_scenario_on_device(
         return {"error": f"Device {serial} not found"}
     if not steps:
         return {"error": "steps must be a non-empty array"}
+    run_id = uuid4().hex
     scenario: Dict[str, Any] = {
         "instructions": "",
         "steps": steps,
         "variables": variables or {},
-        "_trace_id": trace_id or f"scn-{uuid4().hex[:10]}",
+        "_trace_id": trace_id or f"scn-{run_id[:10]}",
         "_trace_source": trace_source,
         "_campaign_vars": {"__USER_ID__": str(user_id)} if user_id else {},
+        "_run_hash_scope": run_id,
     }
     return run_scenario_task(device, scenario, on_step_done=on_step_done, cancel_event=cancel_event)
 

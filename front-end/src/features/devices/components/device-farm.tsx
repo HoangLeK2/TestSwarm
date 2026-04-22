@@ -89,10 +89,10 @@ export function DeviceFarm() {
             <p className='mb-1 text-sm font-medium text-foreground'>{t('noConnectedDevices')}</p>
             <p className='mb-5 text-xs text-muted-foreground'>{t('noConnectedDevicesHint')}</p>
             <div className='flex flex-wrap items-center justify-center gap-2'>
-              <Button size='sm' onClick={() => setConnectDialogOpen(true)}>
+              {/* <Button size='sm' onClick={() => setConnectDialogOpen(true)}>
                 <QrCode size={14} className='mr-1.5' />
                 {t('connectDevice')}
-              </Button>
+              </Button> */}
               <Button asChild size='sm' variant='outline'>
                 <Link href={ROUTES.DEVICES.MANAGE}>
                   <Plus size={14} className='mr-1.5' />

@@ -112,11 +112,12 @@ async def update_content_stats(
     content_hash: str,
     likes_count: int | None = None,
     shares_count: int | None = None,
+    comments_count: int | None = None,
 ) -> bool:
-    """Update likes_count / shares_count for a post identified by content_hash.
+    """Update likes_count / shares_count / comments_count for a post identified by content_hash.
 
     Called after opening a post's comment section where Facebook shows the
-    exact reaction/share counts (more accurate than feed-level counts).
+    exact engagement counts (more accurate than feed-level counts).
     Only updates fields that are provided (not None).
     Returns True if a row was updated.
     """
@@ -125,6 +126,8 @@ async def update_content_stats(
         values["likes_count"] = likes_count
     if shares_count is not None:
         values["shares_count"] = shares_count
+    if comments_count is not None:
+        values["comments_count"] = comments_count
     if not values:
         return False
     result = await db.execute(

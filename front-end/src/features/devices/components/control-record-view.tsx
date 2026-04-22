@@ -824,6 +824,11 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
             {device.connectedDevices.map((d) => (
               <SelectItem key={d.serial} value={d.serial} className='text-xs'>
                 {d.brand} {d.model} — {d.serial.slice(0, 10)}
+                {(d.scenario_active ?? 0) > 0 && (
+                  <span className='ml-1.5 rounded bg-amber-400/20 px-1 py-0.5 text-[9px] font-medium text-amber-700 dark:text-amber-300'>
+                    campaign
+                  </span>
+                )}
               </SelectItem>
             ))}
           </SelectContent>
@@ -1016,6 +1021,11 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
         >
           {selectedDevice ? (
             <>
+              {(selectedDevice.scenario_active ?? 0) > 0 && (
+                <div className='flex w-full items-center gap-2 border-b border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300'>
+                  <span>{t('takeover.campaignRunning')}</span>
+                </div>
+              )}
               <div className='w-full max-w-[460px] p-3'>
                 <DeviceTile
                   device={selectedDevice}

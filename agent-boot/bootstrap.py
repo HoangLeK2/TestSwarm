@@ -17,6 +17,7 @@ import tarfile
 import threading
 import time
 import urllib.request
+import os
 from pathlib import Path
 
 from rich.console import Console
@@ -63,6 +64,15 @@ TOTAL_STEPS = 7
 
 _print_lock = threading.Lock()
 console = Console()
+
+
+def _auto_open_stf_enabled() -> bool:
+    """
+    Whether bootstrap should auto-launch STFService UI.
+    Default OFF to avoid unexpectedly hijacking the device screen.
+    Enable via AUTO_OPEN_STF_APP=1.
+    """
+    return os.environ.get("AUTO_OPEN_STF_APP", "").strip().lower() in {"1", "true", "yes"}
 
 
 # ── ADB helpers ───────────────────────────────────────────────────────────────
@@ -571,6 +581,9 @@ def step_open_app(serial: str, skip: bool) -> None:
     _step_header(7, "Open STFService")
     if skip:
         console.print("    [dim]Skipped (--skip-stf)[/dim]")
+        return
+    if not _auto_open_stf_enabled():
+        console.print("    [dim]Skipped auto-open (set AUTO_OPEN_STF_APP=1 to enable)[/dim]")
         return
     _adb("shell", "am", "start", "-n", f"{_STF_PKG}/.IdentityActivity",
          "-a", "android.intent.action.MAIN", serial=serial, check=False, timeout=10)

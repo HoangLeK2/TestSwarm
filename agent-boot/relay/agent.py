@@ -265,7 +265,9 @@ class RelayAgent:
 
     async def _connect_and_stream_grpc(self) -> None:
         """gRPC mode: bidirectional stream with HTTP/2 multiplexing."""
+        from grpc import aio as grpc_aio
         from relay.grpc_client import GrpcRelayClient
+        from relay.control_client import AgentControlClient
 
         send_queue: asyncio.Queue = asyncio.Queue(maxsize=8)
         loop = asyncio.get_running_loop()
@@ -274,73 +276,96 @@ class RelayAgent:
 
         logger.info("gRPC connecting → %s (relay_id=%s)", self._grpc_addr, self._relay_id)
 
-        client = GrpcRelayClient(
-            server_addr=self._grpc_addr,
-            api_key=self._api_key,
-            agent_id=self._relay_id,
-            send_queue=send_queue,
-            loop=loop,
-        )
+        # Shared channel — HTTP/2 multiplexes video stream + control stream
+        # over a single TCP connection; the two streams are fully independent.
+        async with grpc_aio.insecure_channel(
+            self._grpc_addr,
+            options=[
+                ("grpc.keepalive_time_ms",               10_000),
+                ("grpc.keepalive_timeout_ms",              5_000),
+                ("grpc.keepalive_permit_without_calls",        1),
+                ("grpc.http2.max_pings_without_data",          0),
+                ("grpc.http2.min_time_between_pings_ms",   5_000),
+                ("grpc.initial_reconnect_backoff_ms",      1_000),
+                ("grpc.max_reconnect_backoff_ms",         30_000),
+                ("grpc.max_send_message_length",    4 * 1024 * 1024),
+                ("grpc.max_receive_message_length", 4 * 1024 * 1024),
+            ],
+        ) as channel:
+            client = GrpcRelayClient(
+                server_addr=self._grpc_addr,
+                api_key=self._api_key,
+                agent_id=self._relay_id,
+                send_queue=send_queue,
+                loop=loop,
+                channel=channel,
+            )
 
-        # ── Register ──────────────────────────────────────────────────────────
-        serials = self._registry.online_serials or _list_serials()
-        register_msg = json.dumps({
-            "type":     "register",
-            "relay_id": self._relay_id,
-            "serials":  serials,
-            "version":  "2.0.0",
-        })
-        await send_queue.put(register_msg)
-        await self._resume_desired_scrcpy_sessions(send_queue, loop, source="grpc-connected")
+            # Channel 2: control plane (register/heartbeat/commands) — runs
+            # independently; a 180s bootstrap never blocks video frames.
+            ctrl_client = AgentControlClient(channel, self._api_key, self)
+            ctrl_task = asyncio.create_task(ctrl_client.run(), name="grpc-ctrl-client")
 
-        # ── Device watcher + heartbeat ────────────────────────────────────────
-        watcher = AdbDeviceWatcher(
-            on_device_event=lambda s, st: self._on_device_event(s, st, send_queue),
-        )
-        watcher_task = asyncio.create_task(watcher.run(), name="device-watcher-grpc")
-        hb_task = asyncio.create_task(
-            self._periodic_heartbeat(send_queue), name="relay-heartbeat-grpc"
-        )
+            # ── Register on Channel 1 (video stream) for backward compat ──────
+            # Channel 2 also sends register; server uses whichever arrives first.
+            serials = self._registry.online_serials or _list_serials()
+            register_msg = json.dumps({
+                "type":     "register",
+                "relay_id": self._relay_id,
+                "serials":  serials,
+                "version":  "2.0.0",
+            })
+            await send_queue.put(register_msg)
+            await self._resume_desired_scrcpy_sessions(send_queue, loop, source="grpc-connected")
 
-        # ── ControlMsg consumer: routes server msgs to sessions ───────────────
-        async def _consume_ctrl() -> None:
-            while True:
-                ctrl_msg = await client.ctrl_q.get()
-                if ctrl_msg is None:
-                    return
-                if ctrl_msg.is_json:
-                    try:
-                        msg = json.loads(ctrl_msg.data.decode("utf-8", errors="replace"))
-                        await self._handle_server_msg(msg, send_queue, loop)
-                    except Exception as exc:
-                        logger.debug("gRPC JSON msg error: %s", exc)
-                else:
-                    # Binary scrcpy control → route to session
-                    self._scrcpy_mgr.send_control(
-                        self._scrcpy_device_serial(ctrl_msg.serial),
-                        ctrl_msg.data,
-                    )
+            # ── Device watcher + heartbeat ────────────────────────────────────
+            watcher = AdbDeviceWatcher(
+                on_device_event=lambda s, st: self._on_device_event(s, st, send_queue),
+            )
+            watcher_task = asyncio.create_task(watcher.run(), name="device-watcher-grpc")
+            hb_task = asyncio.create_task(
+                self._periodic_heartbeat(send_queue), name="relay-heartbeat-grpc"
+            )
 
-        ctrl_task = asyncio.create_task(_consume_ctrl(), name="grpc-ctrl-consumer")
+            # ── ControlMsg consumer: routes server msgs to sessions ───────────
+            async def _consume_ctrl() -> None:
+                while True:
+                    ctrl_msg = await client.ctrl_q.get()
+                    if ctrl_msg is None:
+                        return
+                    if ctrl_msg.is_json:
+                        try:
+                            msg = json.loads(ctrl_msg.data.decode("utf-8", errors="replace"))
+                            await self._handle_server_msg(msg, send_queue, loop)
+                        except Exception as exc:
+                            logger.debug("gRPC JSON msg error: %s", exc)
+                    else:
+                        # Binary scrcpy control → route to session
+                        self._scrcpy_mgr.send_control(
+                            self._scrcpy_device_serial(ctrl_msg.serial),
+                            ctrl_msg.data,
+                        )
 
-        try:
-            # client.start() blocks and reconnects internally — run it directly
-            # (the outer run() loop handles top-level reconnect/backoff)
-            await client._stream_once()
-        finally:
-            client.stop()
-            watcher_task.cancel()
-            hb_task.cancel()
-            ctrl_task.cancel()
-            await send_queue.put(None)
-            self._cancel_scrcpy_restart_tasks()
-            if self._active_send_queue is send_queue:
-                self._active_send_queue = None
-                self._active_loop = None
-            # Keep scrcpy sessions alive across transport reconnects.
-            # Transient WS/gRPC reconnects are common on unstable networks; stopping
-            # all sessions here causes 2-5s black/freeze gaps on every reconnect.
-            # Sessions are explicitly cleaned up on scrcpy_stop or full agent shutdown.
+            consume_task = asyncio.create_task(_consume_ctrl(), name="grpc-ctrl-consumer")
+
+            try:
+                await client._stream_once(channel)
+            finally:
+                client.stop()
+                ctrl_client.stop()
+                watcher_task.cancel()
+                hb_task.cancel()
+                consume_task.cancel()
+                ctrl_task.cancel()
+                await send_queue.put(None)
+                self._cancel_scrcpy_restart_tasks()
+                if self._active_send_queue is send_queue:
+                    self._active_send_queue = None
+                    self._active_loop = None
+                # Keep scrcpy sessions alive across transport reconnects.
+                # Transient WS/gRPC reconnects are common on unstable networks; stopping
+                # all sessions here causes 2-5s black/freeze gaps on every reconnect.
+                # Sessions are explicitly cleaned up on scrcpy_stop or full agent shutdown.
 
     async def _handle_binary(self, data: bytes, send_queue: asyncio.Queue) -> None:
         """Handle binary frame from server (currently: scrcpy control 0x43)."""
@@ -1122,21 +1147,30 @@ class RelayAgent:
         loop: asyncio.AbstractEventLoop,
         source: str,
     ) -> None:
-        # NOTE: "device_offline" is deliberately NOT in this set. When a device
-        # disappears we already teardown scrcpy via stop_all_for_serial; the
-        # ONLINE transition's _resume_desired_scrcpy_sessions path brings it
-        # back up. Restarting from the stop callback would race the reconnect.
+        # The reason filter only applies to the session-stopped callback path,
+        # where we must avoid double-restarting after a clean/manual stop. All
+        # other sources (device-online, ws-connected, grpc-connected, supervisor)
+        # are recovery triggers — they must resume regardless of last reason
+        # (including "device_offline", "cleanup_idle", "manual_stop" from pair
+        # switchover, etc.), otherwise the stream will never come back after a
+        # phone WiFi drop / reconnect cycle.
         abnormal_reasons = {"zombie_thread", "runtime_error", "startup_failure"}
+        only_abnormal = source == "session-stopped"
         for logical, state in list(self._scrcpy_desired.items()):
             if not state.get("desired", False):
                 continue
             if state.get("manual_stop", False):
                 continue
-            if state.get("last_stop_reason") not in abnormal_reasons:
+            if only_abnormal and state.get("last_stop_reason") not in abnormal_reasons:
                 continue
             restart_task = state.get("restart_task")
             if restart_task and not restart_task.done():
                 continue
+            # Recovery trigger: reset retry budget so the device gets a fresh
+            # attempt window after a genuine availability change.
+            if not only_abnormal:
+                state["retry_count"] = 0
+                state["retry_window_start"] = 0.0
             task = asyncio.create_task(
                 self._restart_with_backoff(logical, send_queue, loop, source=source),
                 name=f"scrcpy-restart-{logical}",

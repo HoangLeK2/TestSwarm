@@ -137,53 +137,13 @@
           "seconds": 1
         },
         {
-          "type": "if_element",
-          "by": "text",
-          "value": "Bình luận",
+          "type": "tap_fb_comment_button",
           "timeout": 6,
-          "ignore_error": true,
           "then": [
             {
-              "type": "tap_selector",
-              "by": "text",
-              "value": "Bình luận",
-              "timeout": 5
-            },
-            {
               "type": "wait_stable",
-              "timeout": 6,
-              "stable_duration": 0.5
-            },
-            {
-              "type": "if_element",
-              "by": "xpath",
-              "value": "//*[contains(@text,'Phù hợp nhất') and contains(@text,'bình luận')]",
-              "timeout": 2,
-              "ignore_error": true,
-              "then": [
-                {
-                  "type": "tap_selector",
-                  "by": "xpath",
-                  "value": "//*[contains(@text,'Phù hợp nhất') and contains(@text,'bình luận')]",
-                  "timeout": 3,
-                  "ignore_error": true
-                },
-                {
-                  "type": "wait",
-                  "seconds": 1
-                },
-                {
-                  "type": "tap_selector",
-                  "by": "xpath",
-                  "value": "//*[contains(@text,'Tất cả') and contains(@text,'bình luận')] | //*[contains(@content-desc,'Tất cả bình luận')]",
-                  "timeout": 3,
-                  "ignore_error": true
-                },
-                {
-                  "type": "wait",
-                  "seconds": 1
-                }
-              ]
+              "timeout": 3,
+              "stable_duration": 0.4
             },
             {
               "type": "loop",

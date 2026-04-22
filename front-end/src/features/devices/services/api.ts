@@ -443,3 +443,11 @@ export async function cancelPreviewStream(serial: string, traceId: string): Prom
   }
 }
 
+/** Cancel all running scenarios on a device so the user can take manual control. */
+export async function interruptDevice(serial: string): Promise<{ ok: boolean; cancelled_workflows: string[] }> {
+  const { data } = await farmApi.post<{ ok: boolean; cancelled_workflows: string[] }>(
+    `/devices/${encodeURIComponent(serial)}/interrupt`,
+  );
+  return data;
+}
+

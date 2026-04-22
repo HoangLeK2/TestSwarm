@@ -296,11 +296,13 @@ def _extract_fb_posts(sc, step, idx, result, xml, expand_see_more, completion_re
 
     if new_posts:
         ctx["_first_new_post_hash"] = compute_content_hash(new_posts[0], dedupe_field="post_key")
-        pid_map = {}
+        # Accumulate pid→hash across batches so tap_fb_comment_button (or a
+        # late tap on a cached post) can still resolve the parent hash.
+        pid_map = ctx.setdefault("_post_id_map", {})
         for p in new_posts:
-            if p.get("_pid"):
-                pid_map[p["_pid"]] = compute_content_hash(p, dedupe_field="post_key")
-        ctx["_post_id_map"] = pid_map
+            _pid = p.get("_pid")
+            if _pid:
+                pid_map[_pid] = compute_content_hash(p, dedupe_field="post_key")
         _tpid = new_posts[0].get("_pid")
         if _tpid:
             ctx["_fb_comment_parent_pid"] = _tpid
@@ -417,10 +419,16 @@ def _extract_fb_comments(sc, step, idx, result, xml, stop_if_no_new, no_new_thre
                             _db, content_hash=_ph,
                             likes_count=_safe_int(_ps.get("reactions")),
                             shares_count=_safe_int(_ps.get("shares")),
+                            comments_count=_safe_int(_ps.get("comments")),
                         )
                         if updated:
                             await _db.commit()
-                            log.info(f"[{_serial}] post stats updated: hash={_ph[:12]} reactions={_ps.get('reactions')} shares={_ps.get('shares')}")
+                            log.info(
+                                f"[{_serial}] post stats updated: hash={_ph[:12]} "
+                                f"reactions={_ps.get('reactions')} "
+                                f"shares={_ps.get('shares')} "
+                                f"comments={_ps.get('comments')}"
+                            )
 
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                     pool.submit(asyncio.run, _do_update_stats()).result(timeout=10)
@@ -494,16 +502,35 @@ def _do_inline_auto_save(sc, step, strategy, result, collection):
         level = int(step.get("item_level") or 0)
         dserial = sc.device.serial
         user_id = (sc.scenario.get("_campaign_vars") or {}).get("__USER_ID__")
+        execution_id = sc.scenario.get("_execution_id")   # real DB FK — only set by Temporal
+        run_hash_scope = sc.scenario.get("_run_hash_scope") or execution_id  # per-run dedup scope, no FK
+        campaign_id = sc.scenario.get("_campaign_id")
         snap = list(batch)
 
+        async def _resolve_user_id() -> str | None:
+            """Fallback to device owner when no auth context, to avoid orphaned data."""
+            if user_id:
+                return user_id
+            try:
+                from db.database import activity_session
+                from db.crud.device import get_device_by_serial
+                async with activity_session() as db:
+                    dev = await get_device_by_serial(db, dserial)
+                    return dev.user_id if dev else None
+            except Exception:
+                return None
+
         async def _auto_save_all():
+            resolved_uid = await _resolve_user_id()
             sv = dp = er = pc = 0
             for it in snap:
                 try:
                     r = await save_content_item(
                         data=it, collection=coll, platform=plat, content_type=ctype,
                         dedupe_field=dedup, tags=tags, device_serial=dserial,
-                        parent_id=parent_id, item_level=level, user_id=user_id,
+                        parent_id=parent_id, item_level=level, user_id=resolved_uid,
+                        campaign_id=campaign_id, execution_id=execution_id,
+                        hash_scope=run_hash_scope,
                     )
                     if r.get("saved"):
                         sv += 1

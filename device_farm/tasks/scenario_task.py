@@ -1043,6 +1043,16 @@ class ScenarioCancelled(Exception):
     pass
 
 
+def _try_publish_status(device: "DeviceClient") -> None:
+    """Best-effort: push a status update so frontend sees scenario_active change."""
+    try:
+        fn = getattr(device, "_publish_status", None)
+        if fn is not None:
+            fn()
+    except Exception:
+        pass
+
+
 def run_scenario_task(
     device: "DeviceClient",
     scenario: Dict[str, Any],
@@ -1098,6 +1108,7 @@ def run_scenario_task(
             lock = device._scenario_active_lock
         with lock:
             device._scenario_active = int(getattr(device, "_scenario_active", 0)) + 1
+        _try_publish_status(device)
     try:
         return ScenarioExecutor(sc).run()
     finally:
@@ -1110,6 +1121,7 @@ def run_scenario_task(
             else:
                 # Lock disappeared somehow — best-effort reset
                 device._scenario_active = 0
+            _try_publish_status(device)
 
 
 def _run_scenario_task_legacy(
@@ -2240,17 +2252,17 @@ def _run_scenario_task_legacy(
                         ctx["_first_new_post_hash"] = compute_content_hash(
                             new_posts[0], dedupe_field="post_key"
                         )
-                        # Build _pid → content_hash map so fb_comments can reliably
-                        # link post_stats to the correct post regardless of scroll position.
-                        pid_map = {}
+                        # Accumulate pid→hash across batches so tap_fb_comment_button
+                        # (or a late tap on a cached post) can still resolve the parent.
+                        # Previous behavior overwrote each batch, dropping older pids.
+                        pid_map = ctx.setdefault("_post_id_map", {})
                         for _p in new_posts:
-                            if _p.get("_pid"):
-                                pid_map[_p["_pid"]] = compute_content_hash(_p, dedupe_field="post_key")
-                        # Keep only current viewport map to avoid stale collisions.
-                        ctx["_post_id_map"] = pid_map
-                        # Top-of-feed _pid for tap_selector("Bình luận") — pass via
-                        # parent_post_id_var on extract fb_comments. Header-based
-                        # _compute_post_id_from_nodes() is often None on VN comment UIs.
+                            _p_pid = _p.get("_pid")
+                            if _p_pid:
+                                pid_map[_p_pid] = compute_content_hash(_p, dedupe_field="post_key")
+                        # Top-of-feed _pid fallback. Still useful when tap_fb_comment_button
+                        # is not used, but is OVERRIDDEN by that step on success to match
+                        # the actual tapped post.
                         _tpid = new_posts[0].get("_pid")
                         if _tpid:
                             ctx["_fb_comment_parent_pid"] = _tpid
@@ -2339,6 +2351,7 @@ def _run_scenario_task_legacy(
                                             content_hash=_ph,
                                             likes_count=_safe_int(_ps.get("reactions")),
                                             shares_count=_safe_int(_ps.get("shares")),
+                                            comments_count=_safe_int(_ps.get("comments")),
                                         )
                                         if updated:
                                             await _db.commit()

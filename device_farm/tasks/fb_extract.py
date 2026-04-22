@@ -117,9 +117,14 @@ _NOISE_TEXTS = frozenset({
 })
 
 # Comment-button exact-label tokens used as anchor by comment-region resolver.
-# Widened from literal "Bình luận" to cover EN locale devices. Keep this small
-# and exact-match only — loose widening risks matching nav-bar badges.
-_COMMENT_BUTTON_TOKENS = frozenset({"Bình luận", "Comment", "Comments"})
+# Exact-match tokens for the comment action button across FB versions/locales.
+# Prefer exact-match over contains() to avoid matching nav-bar badges/counts.
+# Extend here when a new locale or FB version surfaces a different label.
+_COMMENT_BUTTON_TOKENS = frozenset({
+    "Bình luận",        # VN
+    "Comment",          # EN singular (some FB builds)
+    "Comments",         # EN plural (most FB builds)
+})
 
 _NOISE_PREFIXES = (
     "lựa chọn khác cho bài viết",
@@ -2197,12 +2202,15 @@ def _compute_post_id_from_nodes(nodes: List[Dict[str, Any]]) -> Optional[str]:
 
 
 def _find_binh_luan_button_in_element(element) -> Optional[Tuple[int, int, int]]:
-    """Topmost ``Bình luận`` Button in subtree → (y1, y2, y_mid)."""
+    """Topmost ``Bình luận`` Button in subtree → (y1, y2, y_mid).
+
+    Primary: Button class + token text. Fallback: clickable="true" + token text.
+    """
     best: Optional[Tuple[int, int, int]] = None
     best_y1 = 10**9
+    fallback: Optional[Tuple[int, int, int]] = None
+    fallback_y1 = 10**9
     for node in element.iter():
-        if "Button" not in (node.get("class") or ""):
-            continue
         t = (node.get("text") or "").strip()
         d = (node.get("content-desc") or "").strip()
         if t not in _COMMENT_BUTTON_TOKENS and d not in _COMMENT_BUTTON_TOKENS:
@@ -2212,10 +2220,14 @@ def _find_binh_luan_button_in_element(element) -> Optional[Tuple[int, int, int]]
             continue
         y1, y2 = int(m.group(2)), int(m.group(4))
         y_mid = (y1 + y2) // 2
-        if y1 < best_y1:
-            best_y1 = y1
-            best = (y1, y2, y_mid)
-    return best
+        if "Button" in (node.get("class") or ""):
+            if y1 < best_y1:
+                best_y1 = y1
+                best = (y1, y2, y_mid)
+        elif node.get("clickable") == "true" and y1 < fallback_y1:
+            fallback_y1 = y1
+            fallback = (y1, y2, y_mid)
+    return best or fallback
 
 
 def _legacy_last_binh_luan_anchors(root) -> Tuple[Optional[int], Optional[int], Optional[int]]:
@@ -2297,6 +2309,102 @@ def _resolve_comment_region_anchors(
         return y2, y_mid, cbot
 
     return _legacy_last_binh_luan_anchors(root)
+
+
+def _find_binh_luan_button_bounds_in_element(
+    element,
+) -> Optional[Tuple[int, int, int, int]]:
+    """Topmost ``Bình luận`` Button bounds → (x1, y1, x2, y2).
+
+    Primary: node with ``Button`` in class + text/content-desc in tokens.
+    Fallback: any ``clickable="true"`` node matching tokens (handles FB class renames).
+    """
+    best: Optional[Tuple[int, int, int, int]] = None
+    best_y1 = 10**9
+    fallback: Optional[Tuple[int, int, int, int]] = None
+    fallback_y1 = 10**9
+    for node in element.iter():
+        t = (node.get("text") or "").strip()
+        d = (node.get("content-desc") or "").strip()
+        if t not in _COMMENT_BUTTON_TOKENS and d not in _COMMENT_BUTTON_TOKENS:
+            continue
+        m = re.match(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", node.get("bounds") or "")
+        if not m:
+            continue
+        x1, y1, x2, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+        if "Button" in (node.get("class") or ""):
+            if y1 < best_y1:
+                best_y1 = y1
+                best = (x1, y1, x2, y2)
+        elif node.get("clickable") == "true" and y1 < fallback_y1:
+            fallback_y1 = y1
+            fallback = (x1, y1, x2, y2)
+    return best or fallback
+
+
+def resolve_topmost_comment_target_from_xml(
+    xml: str,
+) -> Tuple[Optional[Dict[str, Any]], Optional[Tuple[int, int, int, int]]]:
+    """Pick the topmost feed row that owns a visible ``Bình luận`` button.
+
+    Returns ``(post, button_bounds)`` where ``post`` is the ``_extract_post``
+    dict for that row (carries ``_pid``, ``_pkey``, ``post_key``…) and
+    ``button_bounds`` = ``(x1, y1, x2, y2)`` of the comment button on screen.
+
+    Used by the ``tap_fb_comment_button`` scenario step to guarantee the tapped
+    post matches the ``_fb_comment_parent_pid`` written into ctx. Avoids the
+    race where ``_fb_comment_parent_pid = new_posts[0]._pid`` diverges from the
+    actually-tapped button (e.g. topmost post is long, button off-screen, so
+    ``tap_selector`` taps a later post's button).
+
+    Returns ``(None, None)`` when no visible button / no feed container.
+    """
+    root = _parse_xml(xml)
+    if root is None:
+        return None, None
+
+    containers = root.xpath(_XPATH_RECYCLER) or root.xpath(_XPATH_LIST)
+    feed_children = []
+    if containers:
+        feed = _pick_feed_container(containers, root)
+        feed_children = feed.findall("node")
+
+    # Fallback: treat entire screen as one "row" when feed container not found.
+    # Handles FB layout changes (ViewPager2, custom containers, etc.).
+    scan_candidates: List[Tuple[int, Any]] = (
+        [(i, c) for i, c in enumerate(feed_children) if not _is_ad_container(c)]
+        if feed_children
+        else [(0, root)]
+    )
+
+    best: Optional[Tuple[int, Dict[str, Any], Tuple[int, int, int, int]]] = None
+    for feed_item_index, candidate in scan_candidates:
+        btn = _find_binh_luan_button_bounds_in_element(candidate)
+        if not btn:
+            continue
+        nodes = _collect_text_nodes(candidate, toolbar_cutoff_y=0)
+        if not nodes:
+            continue
+        fb_pid, fb_gid, perms = _extract_fb_link_meta(candidate)
+        post = _extract_post(
+            nodes, 0,
+            structural_type_hint=_structural_post_type_hint(candidate),
+            resource_id_media_hint=_resource_id_media_hint(candidate),
+            fb_post_id=fb_pid,
+            fb_group_id=fb_gid,
+            permalink_candidates=perms,
+            feed_item_index=feed_item_index,
+        )
+        if not post or not post.get("_pid"):
+            continue
+        y_top = btn[1]
+        if best is None or y_top < best[0]:
+            best = (y_top, post, btn)
+
+    if best is None:
+        return None, None
+    _yt, post, btn = best
+    return post, btn
 
 
 def parse_fb_comments_from_xml_with_diagnostic(
@@ -2403,15 +2511,19 @@ def parse_fb_comments_from_xml_with_diagnostic(
         last_kept_body = comment
 
     # Prepend post-level stats from the comment view header (reactions, shares)
-    # so the executor can update the parent post's stats in the DB.
-    header_stats = _extract_header_stats(root)
+    # so the executor can update the parent post's stats in the DB. Use the
+    # resolved action-button row (first comment boundary) as the upper y cutoff
+    # — the hardcoded y<260 cap missed reactions on high-DPI phones and on the
+    # modal comment sheet (FB re-renders the post header inside the sheet).
+    header_stats = _extract_header_stats(root, y_max=action_btn_y2)
     if header_stats:
         result.insert(0, header_stats)
 
     # Denormalize parent post engagement onto each comment row.
     _pr = header_stats.get("reactions") if header_stats else None
     _ps = header_stats.get("shares") if header_stats else None
-    if _pr is not None or _ps is not None:
+    _pc = header_stats.get("comments") if header_stats else None
+    if _pr is not None or _ps is not None or _pc is not None:
         for c in result:
             if c.get("_type") == "post_stats":
                 continue
@@ -2419,6 +2531,8 @@ def parse_fb_comments_from_xml_with_diagnostic(
                 c["post_reactions"] = _pr
             if _ps is not None:
                 c["post_shares"] = _ps
+            if _pc is not None:
+                c["post_comments"] = _pc
 
     if not result:
         return [], _diag(
@@ -2702,43 +2816,60 @@ def prefetch_viewport_scrolls(
         time.sleep(pause_s)
 
 
-def _extract_header_stats(root) -> Optional[Dict[str, Any]]:
-    """Extract post-level stats from the comment view header area (y < 250).
+def _extract_header_stats(
+    root,
+    y_max: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
+    """Extract post-level stats from the comment view header area.
 
-    When a post's comment section is open, Facebook shows a header row with:
-    - Reactions count: a Button with text="83" (numeric only)
-    - Shares count: a Button with text="42 lượt chia sẻ"
+    When a post's comment section is open (or the dedicated comment sheet),
+    Facebook shows a header row above the comment list with:
+    - Reactions count: a Button with ``text="83"`` (numeric only) or a
+      content-desc like ``"1.200 lượt thích. Nút Thích."``
+    - Shares count: a Button with ``text="42 lượt chia sẻ"``
+    - Comments count: often the view title ``"N bình luận"``
 
-    These nodes sit above toolbar_cutoff_y=200, so they're invisible to the
-    normal comment extractor. This function scans for them explicitly.
+    Previously we hardcoded ``y < 260`` which missed the row on high-DPI
+    phones and on the modal comment sheet (where FB re-renders the post
+    header inside the sheet, pushing the reactions row to y≈400–700).
+
+    Fix: accept a dynamic ``y_max`` (resolved from the first-comment anchor
+    when the caller knows it) and scan all nodes above that boundary. When
+    ``y_max`` is None, fall back to a generous half-screen cap.
     """
+    # Resolve upper bound. Cap at half the inferred screen height when the
+    # caller can't give us a better anchor.
+    screen_w, screen_h = _infer_screen_size(root)
+    if y_max is None or y_max <= 0:
+        y_max = max(400, int(screen_h * 0.55))
+
     reactions: Optional[str] = None
     shares: Optional[str] = None
-    for node in root.iter():
-        bounds = _parse_bounds(node)
-        if not bounds:
-            continue
-        # Only consider nodes completely above y=260 (header area)
-        if bounds[1] > 260:
-            continue
-        cls = node.get("class", "")
-        if "Button" not in cls:
-            continue
-        text = (node.get("text") or "").strip()
-        desc = (node.get("content-desc") or "").strip()
-        t = text or desc
+    comments_count: Optional[str] = None
+
+    def _consume(t: str) -> None:
+        nonlocal reactions, shares, comments_count
         if not t:
-            continue
-        # Numeric-only → reactions count (e.g. "83")
+            return
+        # Like-button content-desc: "1.200 lượt thích. Nút Thích."
+        m_like = _RE_LIKE_BTN_DESC.match(t)
+        if m_like and reactions is None:
+            reactions = m_like.group(1)
+            return
+        # Pure numeric → reactions count (e.g. "83", "1,2K")
         if re.match(r"^\d[\d.,]*[KMkm]?$", t) and reactions is None:
             reactions = t
-            continue
-        # "N lượt chia sẻ" → shares count
-        m = _RE_SHARES.search(t)
-        if m and shares is None:
-            shares = m.group(1)
-            continue
-        # EN / combined labels (e.g. "1,2K lượt thích. Nút Thích.")
+            return
+        # "N lượt chia sẻ" / "N shares"
+        m_sh = _RE_SHARES.search(t)
+        if m_sh and shares is None:
+            shares = m_sh.group(1)
+            return
+        # "N bình luận" / "N comments" (comment-sheet title usually)
+        m_cm = re.search(r"(\d[\d.,]*[KMkm]?)\s*(bình luận|comments?)", t, re.IGNORECASE)
+        if m_cm and comments_count is None:
+            comments_count = m_cm.group(1)
+        # Generic combined-stats parser (last resort)
         if reactions is None or shares is None:
             st = _parse_stats(t)
             if reactions is None and st.get("reactions"):
@@ -2746,6 +2877,46 @@ def _extract_header_stats(root) -> Optional[Dict[str, Any]]:
             if shares is None and st.get("shares"):
                 shares = st["shares"]
 
-    if reactions is None and shares is None:
+    # Pass 1 — Button/clickable nodes carry the authoritative counts.
+    for node in root.iter():
+        bounds = _parse_bounds(node)
+        if not bounds or bounds[1] > y_max:
+            continue
+        cls = node.get("class", "")
+        clickable = (node.get("clickable") or "").lower() == "true"
+        if "Button" not in cls and not clickable:
+            continue
+        text = (node.get("text") or "").strip()
+        desc = (node.get("content-desc") or "").strip()
+        _consume(text)
+        _consume(desc)
+        if reactions is not None and shares is not None:
+            break
+
+    # Pass 2 — sweep any remaining TextView in the header band. Catches the
+    # standalone "N bình luận" title and old layouts where reactions live in a
+    # plain TextView next to the reaction icon.
+    if reactions is None or shares is None or comments_count is None:
+        for node in root.iter():
+            bounds = _parse_bounds(node)
+            if not bounds or bounds[1] > y_max:
+                continue
+            cls = node.get("class", "")
+            if "TextView" not in cls and "Button" not in cls:
+                continue
+            text = (node.get("text") or "").strip()
+            if text:
+                _consume(text)
+            if reactions is not None and shares is not None and comments_count is not None:
+                break
+
+    if reactions is None and shares is None and comments_count is None:
         return None
-    return {"_type": "post_stats", "reactions": reactions, "shares": shares}
+    stats: Dict[str, Any] = {"_type": "post_stats"}
+    if reactions is not None:
+        stats["reactions"] = reactions
+    if shares is not None:
+        stats["shares"] = shares
+    if comments_count is not None:
+        stats["comments"] = comments_count
+    return stats

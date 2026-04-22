@@ -48,7 +48,8 @@ export type ControlFlowType =
   | 'break_if'
   | 'random_pick'
   | 'run_scenario'
-  | 'loop';
+  | 'loop'
+  | 'tap_fb_comment_button';
 
 export type ActionType =
   | 'launch_app'
@@ -93,7 +94,7 @@ export type FlowStep = {
 };
 
 export function isControlFlow(type: string): type is ControlFlowType {
-  return ['repeat', 'repeat_until', 'if_element', 'if_variable', 'if', 'break_if', 'random_pick', 'run_scenario', 'loop'].includes(type);
+  return ['repeat', 'repeat_until', 'if_element', 'if_variable', 'if', 'break_if', 'random_pick', 'run_scenario', 'loop', 'tap_fb_comment_button'].includes(type);
 }
 
 export function getStepIcon(type: string): LucideIcon {
@@ -124,6 +125,8 @@ export function getStepIcon(type: string): LucideIcon {
     case 'tap_selector':
     case 'double_tap':
       return MousePointerClick;
+    case 'tap_fb_comment_button':
+      return GitBranch;
     case 'swipe_ratio': return MoveRight;
     case 'input_text':
     case 'input_selector':
@@ -180,6 +183,11 @@ export function getStepLabel(step: FlowStep): string {
     case 'wait': return `wait ${step.seconds ?? 0}s`;
     case 'tap_ratio': return `tap (${step.x}, ${step.y})`;
     case 'tap_selector': return `tap [${step.by}="${step.value}"]`;
+    case 'tap_fb_comment_button': {
+      const thenN = Array.isArray(step.then) ? step.then.length : 0;
+      const elseN = Array.isArray(step.else) ? step.else.length : 0;
+      return `Bấm Bình luận (OK: ${thenN} bước${elseN ? `, Không thấy: ${elseN} bước` : ''})`;
+    }
     case 'input_selector': return `input [${step.by}="${step.value}"] "${step.text}"`;
     case 'input_text': return `input_text "${step.text}"`;
     case 'set_variable': return `set ${step.name}=${step.value ?? step.from_list ? 'list' : '?'}`;
@@ -203,6 +211,7 @@ export const ALL_STEP_TYPES: { value: string; label: string; group: 'action' | '
   { value: 'wait', label: 'wait', group: 'action' },
   { value: 'tap_ratio', label: 'tap_ratio', group: 'action' },
   { value: 'tap_selector', label: 'tap_selector', group: 'action' },
+  { value: 'tap_fb_comment_button', label: 'Bấm nút Bình luận (FB) — có nhánh OK / Không thấy', group: 'control' },
   { value: 'tap_position', label: 'tap_position', group: 'action' },
   { value: 'swipe_ratio', label: 'swipe_ratio', group: 'action' },
   { value: 'input_text', label: 'input_text', group: 'action' },
@@ -269,6 +278,7 @@ export function createDefaultStep(type: string, afterOrder?: string | null, befo
     case 'wait': return { ...base, type: 'wait', seconds: 1 };
     case 'tap_ratio': return { ...base, type: 'tap_ratio', x: 0.5, y: 0.5 };
     case 'tap_selector': return { ...base, type: 'tap_selector', by: 'text', value: '', timeout: 8, fallback_rx: 0.5, fallback_ry: 0.5 };
+    case 'tap_fb_comment_button': return { ...base, type: 'tap_fb_comment_button', timeout: 6, poll: 0.4, dedupe_field: 'post_key', switch_to_all_comments: true, post_tap_wait_s: 0.8, ignore_error: true, pre_scroll: false, pre_scroll_distance: 0.24, then: [], else: [] };
     case 'tap_position': return { ...base, type: 'tap_position', pos: 'middle_center' };
     case 'swipe_ratio': return { ...base, type: 'swipe_ratio', x1: 0.5, y1: 0.8, x2: 0.5, y2: 0.2, duration_ms: 300 };
     case 'input_text': return { ...base, type: 'input_text', via: 'u2', text: '' };
@@ -317,6 +327,54 @@ export function createDefaultStep(type: string, afterOrder?: string | null, befo
         platform: 'facebook',
         content_type: 'group_post',
         dedupe_field: 'text',
+      };
+    // Shortcut — creates an `extract` step preset for FB comments. Mirrors what
+    // fb_group_1h templates use inside `tap_fb_comment_button.then`. User can
+    // still tweak any field in the detail panel afterwards.
+    case 'extract_fb_comments':
+      return {
+        ...base,
+        type: 'extract',
+        strategy: 'fb_comments',
+        parent_post_id_var: '_fb_comment_parent_pid',
+        expand_see_more: true,
+        expand_see_more_max_passes: 6,
+        expand_see_more_scroll: true,
+        expand_see_more_scroll_distance: 0.2,
+        max_items: '${MAX_COMMENTS_PER_POST}',
+        comment_scroll_passes: '${MAX_COMMENT_SCROLLS}',
+        comment_scroll_distance: 0.4,
+        comment_scroll_pause_s: 1.0,
+        comment_no_growth_break: '${COMMENT_NO_NEW_THRESHOLD}',
+        min_comment_scan_passes: '${MIN_COMMENT_SCAN_PASSES}',
+        stop_if_no_new: false,
+        no_new_threshold: 4,
+        collection: '${SAVE_COLLECTION}',
+        platform: 'facebook',
+        content_type: 'comment',
+        dedupe_field: 'comment_key',
+        tags: 'group,comment,${GROUP_NAME}',
+        save_parent_id_var: '_active_comment_parent_hash',
+        item_level: 1,
+      };
+    // Shortcut — creates an `extract` step preset for FB posts (group feed).
+    case 'extract_fb_posts':
+      return {
+        ...base,
+        type: 'extract',
+        strategy: 'fb_posts',
+        expand_see_more: true,
+        expand_see_more_max_passes: 4,
+        expand_see_more_scroll: true,
+        expand_see_more_scroll_distance: 0.25,
+        expand_completion_retries: 4,
+        max_items: 50,
+        stop_if_no_new: false,
+        collection: '${SAVE_COLLECTION}',
+        platform: 'facebook',
+        content_type: 'group_post',
+        dedupe_field: 'post_key',
+        tags: 'group,crawl,${GROUP_NAME}',
       };
     case 'save_extraction':
       return {

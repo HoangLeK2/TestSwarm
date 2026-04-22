@@ -21,10 +21,11 @@ function fgIdFromStep(step: FlowStep): string {
 function stepToNode(step: FlowStep): FlowNodeJSON {
   const id = fgIdFromStep(step);
 
-  // Condition (if_element / if_variable)
-  if (step.type === 'if_element' || step.type === 'if_variable') {
+  // Condition (if_element / if_variable / tap_fb_comment_button — control with then/else)
+  if (step.type === 'if_element' || step.type === 'if_variable' || step.type === 'tap_fb_comment_button') {
     const thenNodes = stepsToNodes((step as any).then ?? []);
     const elseNodes = stepsToNodes((step as any).else ?? []);
+    const isFbTap = step.type === 'tap_fb_comment_button';
     return {
       id,
       type: 'condition',
@@ -33,13 +34,13 @@ function stepToNode(step: FlowStep): FlowNodeJSON {
         {
           id: `${id}_then`,
           type: 'block',
-          data: { title: 'Nếu đúng (then)' },
+          data: { title: isFbTap ? 'Khi bấm được nút Bình luận' : 'Nếu đúng (then)' },
           blocks: thenNodes,
         },
         {
           id: `${id}_else`,
           type: 'block',
-          data: { title: 'Nếu sai (else)' },
+          data: { title: isFbTap ? 'Khi không thấy nút Bình luận' : 'Nếu sai (else)' },
           blocks: elseNodes,
         },
       ],
@@ -124,7 +125,7 @@ function nodeToStep(node: FlowNodeJSON): FlowStep | null {
   if (!step) return null;
 
   // Reconstruct nested steps from blocks
-  if (step.type === 'if_element' || step.type === 'if_variable') {
+  if (step.type === 'if_element' || step.type === 'if_variable' || step.type === 'tap_fb_comment_button') {
     const thenBlock = node.blocks?.[0];
     const elseBlock = node.blocks?.[1];
     return withFgId(node.id, {

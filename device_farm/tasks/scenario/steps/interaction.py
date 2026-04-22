@@ -304,3 +304,5 @@ def handle_take_screenshot(sc: ScenarioContext, step: Dict[str, Any], idx: int, 
     except Exception as exc:
         result["ok"] = False
         result["message"] = f"take_screenshot failed: {exc}"
+
+

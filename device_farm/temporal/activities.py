@@ -614,14 +614,16 @@ class DeviceActivities:
                         compute_content_hash(new_posts[0], dedupe_field="post_key"),
                         inp.execution_id or inp.run_id,
                     )
-                    pid_map = {}
+                    # Accumulate pid→hash across batches to support tap_fb_comment_button
+                    # and late taps on previously-cached posts.
+                    pid_map = ctx.setdefault("_post_id_map", {})
                     for _p in new_posts:
-                        if _p.get("_pid"):
-                            pid_map[_p["_pid"]] = scope_content_hash(
+                        _p_pid = _p.get("_pid")
+                        if _p_pid:
+                            pid_map[_p_pid] = scope_content_hash(
                                 compute_content_hash(_p, dedupe_field="post_key"),
                                 inp.execution_id or inp.run_id,
                             )
-                    ctx["_post_id_map"] = pid_map
                     _tpid = new_posts[0].get("_pid")
                     if _tpid:
                         ctx["_fb_comment_parent_pid"] = _tpid
@@ -658,7 +660,7 @@ class DeviceActivities:
 
             elif strategy == "fb_comments":
                 from tasks.fb_extract import (
-                    parse_fb_comments_from_xml,
+                    parse_fb_comments_from_xml_with_diagnostic,
                     _dedup_comments,
                     _is_junk_parsed_comment_row,
                     _post_id_from_ctx,
@@ -685,8 +687,21 @@ class DeviceActivities:
                 min_comment_scan_passes = int(step.get("min_comment_scan_passes") or 0)
                 parent_post_id = _post_id_from_ctx(ctx, parent_post_id_var)
 
-                def _parse_comment_frame(frame_xml: str) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
-                    raw_items = parse_fb_comments_from_xml(
+                # Reason codes that mean "comment screen is gone" (popup closed, back to feed,
+                # session dead, etc.). If we hit one of these mid-scroll we must STOP immediately,
+                # otherwise we keep swiping aggressively on the wrong screen.
+                _OFF_COMMENT_SCREEN_REASONS = {
+                    "xml_parse_error",
+                    "no_text_nodes",
+                    "anchor_not_found",
+                    "login_screen",
+                    "rate_limited",
+                }
+
+                def _parse_comment_frame(
+                    frame_xml: str,
+                ) -> tuple[dict[str, Any] | None, list[dict[str, Any]], str]:
+                    raw_items, diag = parse_fb_comments_from_xml_with_diagnostic(
                         frame_xml,
                         parent_post_id=parent_post_id,
                         max_items=max_items,
@@ -698,10 +713,10 @@ class DeviceActivities:
                         if x.get("_type") != "post_stats"
                         and not _is_junk_parsed_comment_row(x)
                     ]
-                    return frame_post_stats, frame_comments
+                    return frame_post_stats, frame_comments, str(diag.get("reason_code") or "")
 
                 # Parse current viewport first, then scroll several passes to collect more comments.
-                post_stats, new_comments = _parse_comment_frame(xml)
+                post_stats, new_comments, first_reason = _parse_comment_frame(xml)
                 def _comment_identity(row: dict[str, Any]) -> str:
                     return str(
                         row.get("comment_key")
@@ -710,7 +725,10 @@ class DeviceActivities:
                 seen_comment_keys = {_comment_identity(c) for c in new_comments}
                 scanned_frames = 1
                 growthless_streak = 0
+                screen_left_comment = first_reason in _OFF_COMMENT_SCREEN_REASONS
                 for pass_idx in range(max(0, comment_scroll_passes)):
+                    if screen_left_comment:
+                        break
                     if len(new_comments) >= max_items:
                         break
                     await _to_thread_with_heartbeat(
@@ -723,7 +741,16 @@ class DeviceActivities:
                     if not xml_next:
                         break
                     scanned_frames += 1
-                    frame_stats, frame_comments = _parse_comment_frame(xml_next)
+                    frame_stats, frame_comments, frame_reason = _parse_comment_frame(xml_next)
+                    # Comment popup/screen is gone — abort scroll loop NOW to avoid
+                    # aggressive swipes on feed/home after popup dismissal.
+                    if frame_reason in _OFF_COMMENT_SCREEN_REASONS:
+                        screen_left_comment = True
+                        log.info(
+                            f"[{inp.device_serial}] fb_comments: screen departed (reason={frame_reason}), "
+                            f"breaking scroll loop at pass {pass_idx}"
+                        )
+                        break
                     if frame_stats:
                         post_stats = frame_stats
                     prev_len = len(new_comments)
@@ -746,23 +773,48 @@ class DeviceActivities:
                 # Final safety dedup (single pass), avoids repeated N^2-ish dedup per frame.
                 new_comments = _dedup_comments(new_comments)
 
-                # Update parent post reaction/share counts with more accurate comment-view values
+                # Update parent post reaction/share/comments counts with the
+                # accurate values visible in the comment-sheet header. These
+                # counts are more reliable than what the feed card shows (feed
+                # truncates to "1,2K" while the sheet shows "1.234").
                 if post_stats:
                     ctx["_comment_view_stats"] = post_stats
                     parent_hash = resolve_comment_parent_hash(ctx, parent_post_id)
                     if parent_hash:
                         ctx["_active_comment_parent_hash"] = parent_hash
                         try:
-                            await update_parent_stats_if_available(
+                            updated_ok = await update_parent_stats_if_available(
                                 content_hash=parent_hash,
                                 post_stats=post_stats,
                             )
+                            log.info(
+                                f"[{inp.device_serial}] post stats update: "
+                                f"hash={parent_hash[:12]} "
+                                f"reactions={post_stats.get('reactions')} "
+                                f"shares={post_stats.get('shares')} "
+                                f"comments={post_stats.get('comments')} "
+                                f"applied={updated_ok}"
+                            )
                         except Exception as exc:
                             log.warning(f"update_content_stats failed: {exc}")
+                    else:
+                        log.warning(
+                            f"[{inp.device_serial}] post stats extracted "
+                            f"(reactions={post_stats.get('reactions')}, "
+                            f"shares={post_stats.get('shares')}, "
+                            f"comments={post_stats.get('comments')}) "
+                            f"but parent_hash unresolved (pid={parent_post_id}). "
+                            "Counts are denormalized onto comment rows but the "
+                            "parent post row won't be updated."
+                        )
                 else:
                     parent_hash = resolve_comment_parent_hash(ctx, parent_post_id)
                     if parent_hash:
                         ctx["_active_comment_parent_hash"] = parent_hash
+                    log.debug(
+                        f"[{inp.device_serial}] no post_stats found in comment-sheet "
+                        "header (header parser returned None)."
+                    )
 
                 ctx.setdefault("comments", [])
                 prev_count = len(ctx["comments"])

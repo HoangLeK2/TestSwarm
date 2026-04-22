@@ -465,4 +465,38 @@ def build_campaign_fleet_router(
                 {"error": f"Failed to cancel: {exc}"}, status_code=500,
             )
 
+    @router.post("/devices/{serial}/interrupt")
+    async def api_device_interrupt(serial: str):
+        """Cancel all running scenarios on a device to allow manual takeover.
+
+        Cancels every matching Temporal workflow, then force-resets the
+        in-process _scenario_active counter so the WebSocket input gate opens
+        immediately without waiting for the activity to acknowledge cancellation.
+        """
+        device = manager.get_device(serial)
+        if not device:
+            return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
+
+        cancelled: list[str] = []
+        if config.temporal.enabled:
+            try:
+                client = await get_temporal_client(config.temporal)
+                safe_serial = serial.replace('"', "").replace("\\", "")
+                needle = f":device:{safe_serial}:"
+                async for wf in client.list_workflows('ExecutionStatus = "Running"'):
+                    if needle not in wf.id:
+                        continue
+                    try:
+                        await client.get_workflow_handle(wf.id).cancel()
+                        cancelled.append(wf.id)
+                    except Exception as exc:
+                        log.warning("interrupt: failed to cancel %s: %s", wf.id, exc)
+            except Exception as exc:
+                log.warning("interrupt: temporal unavailable for %s: %s", serial, exc)
+
+        # Force-reset so ws gate opens immediately (activity cancel is async)
+        device._scenario_active = 0
+
+        return {"ok": True, "serial": serial, "cancelled_workflows": cancelled}
+
     return router

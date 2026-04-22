@@ -224,9 +224,13 @@ async def save_content_item(
     parent_id: str | None = None,
     item_level: int = 0,
     user_id: str | None = None,
+    hash_scope: str | None = None,
 ) -> dict[str, Any]:
     """
     Save extracted content to database with deduplication.
+
+    hash_scope: used only for per-run dedup scoping; NOT stored as FK.
+                Falls back to execution_id when absent.
 
     Returns {"saved": True, "id": ...} or {"saved": False, "reason": "duplicate", "id": ...}
     """
@@ -236,9 +240,10 @@ async def save_content_item(
         get_or_create_collection, increment_collection_count,
     )
 
+    scope = hash_scope or execution_id
     base_hash = compute_content_hash(data, dedupe_field)
-    content_hash = scope_content_hash(base_hash, execution_id)
-    scoped_parent_id = scope_content_hash(parent_id, execution_id) if parent_id else None
+    content_hash = scope_content_hash(base_hash, scope)
+    scoped_parent_id = scope_content_hash(parent_id, scope) if parent_id else None
 
     # Phase 5 — Bloom filter fast path. Skips DB when probably duplicate.
     # Graceful no-op when Redis/RedisBloom unavailable. False positives
@@ -250,7 +255,7 @@ async def save_content_item(
             async with activity_session() as db:
                 existing = await get_content_by_hash(
                     db, content_hash, collection,
-                    user_id=user_id, execution_id=execution_id,
+                    user_id=user_id, execution_id=scope,
                 )
                 if existing:
                     return {"saved": False, "reason": "duplicate", "id": existing.id, "via": "bloom"}
@@ -264,7 +269,7 @@ async def save_content_item(
             content_hash,
             collection,
             user_id=user_id,
-            execution_id=execution_id,
+            execution_id=scope,
         )
         if existing:
             return {"saved": False, "reason": "duplicate", "id": existing.id}

@@ -214,7 +214,11 @@ export function DeviceTilePreview({
       <CardContent className='flex flex-1 flex-col gap-2 px-3 pb-3 pt-3'>
         <div className='flex flex-col items-center gap-2'>
           <div className='mx-auto'>
-            <DeviceAndroidFrame screenWidth={previewMockupScreenWidth}>
+            <DeviceAndroidFrame
+              screenWidth={previewMockupScreenWidth}
+              deviceWidth={device.screen_width}
+              deviceHeight={device.screen_height}
+            >
               <div
                 ref={previewZoneRef}
                 className='relative h-full w-full overflow-hidden bg-black'

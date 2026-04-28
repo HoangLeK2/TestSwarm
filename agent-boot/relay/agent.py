@@ -45,13 +45,14 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _RELAY_ID_FILE = os.path.join(os.path.dirname(_HERE), ".relay_id")
 
 # CMD_TYPE constants — must match adb_relay_server.py
-CMD_SHELL        = 0
-CMD_RESTART_U2   = 1
-CMD_ADB_CONNECT  = 2
-CMD_RESTART_ATX  = 3
-CMD_BOOTSTRAP    = 4  # push binaries + install APKs + start atx-agent + u2
-CMD_SCREENCAP    = 5  # adb exec-out screencap -p → base64 PNG
-CMD_PROBE_CAPS   = 6  # _probe_capabilities() → JSON dict in output
+CMD_SHELL           = 0
+CMD_RESTART_U2      = 1
+CMD_ADB_CONNECT     = 2
+CMD_RESTART_ATX     = 3
+CMD_BOOTSTRAP       = 4  # push binaries + install APKs + start atx-agent + u2
+CMD_SCREENCAP       = 5  # adb exec-out screencap -p → base64 PNG
+CMD_PROBE_CAPS      = 6  # _probe_capabilities() → JSON dict in output
+CMD_RESTART_SCRCPY  = 7  # stop + resume scrcpy session for a device
 
 
 def _load_or_create_relay_id() -> str:
@@ -1036,6 +1037,8 @@ class RelayAgent:
                 import json as _json
                 caps = _probe_capabilities(serial)
                 output, rc = _json.dumps(caps), 0
+            elif cmd_type == CMD_RESTART_SCRCPY:
+                output, rc = self._restart_scrcpy_sync(serial, timeout)
             else:
                 output, rc = _adb_shell(serial, cmd, timeout=timeout)
 
@@ -1094,6 +1097,32 @@ class RelayAgent:
             )
 
         loop.call_soon_threadsafe(_schedule_resume)
+
+    def _restart_scrcpy_sync(self, serial: str, timeout: int) -> tuple[str, int]:
+        """Stop + resume scrcpy for serial. Called from thread pool (_execute_command)."""
+        loop  = self._active_loop
+        queue = self._active_send_queue
+        if loop is None or queue is None:
+            return "no active transport", -1
+
+        adb_serial = self._scrcpy_device_serial(serial)
+        logical    = self._logical_serial_for_adb(adb_serial)
+
+        async def _do_restart():
+            await self._scrcpy_mgr.stop_session(adb_serial, reason="manual_restart")
+            state = self._scrcpy_desired.get(logical) or self._scrcpy_desired.get(serial)
+            if state:
+                state["desired"]     = True
+                state["manual_stop"] = False
+                state["last_stop_reason"] = ""
+            await self._resume_desired_scrcpy_sessions(queue, loop, source="restart_scrcpy_cmd")
+
+        fut = asyncio.run_coroutine_threadsafe(_do_restart(), loop)
+        try:
+            fut.result(timeout=float(timeout))
+            return "scrcpy restarted", 0
+        except Exception as exc:
+            return str(exc), -1
 
     def _logical_serial_for_adb(self, adb_serial: str) -> str:
         for logical, mapped in self._scrcpy_logical_to_adb.items():

@@ -86,16 +86,18 @@ message CommandResultMsg {
 // Server → Agent
 message ServerControlMsg {
   oneof payload {
-    RegisterAck    ack         = 1;
-    BootstrapCmd   bootstrap   = 2;
-    RestartU2Cmd   restart_u2  = 3;
-    RestartAtxCmd  restart_atx = 4;
-    ShellCmd       shell       = 5;
+    RegisterAck      ack            = 1;
+    BootstrapCmd     bootstrap      = 2;
+    RestartU2Cmd     restart_u2     = 3;
+    RestartAtxCmd    restart_atx    = 4;
+    ShellCmd         shell          = 5;
+    RestartScrcpyCmd restart_scrcpy = 6;
   }
 }
 
-message RegisterAck   { string message = 1; }
-message BootstrapCmd  { string msg_id = 1; string serial = 2; int32 timeout = 3; }
-message RestartU2Cmd  { string msg_id = 1; string serial = 2; int32 timeout = 3; }
-message RestartAtxCmd { string msg_id = 1; string serial = 2; int32 timeout = 3; }
-message ShellCmd      { string msg_id = 1; string serial = 2; string cmd = 3; int32 timeout = 4; }
+message RegisterAck      { string message = 1; }
+message BootstrapCmd     { string msg_id = 1; string serial = 2; int32 timeout = 3; }
+message RestartU2Cmd     { string msg_id = 1; string serial = 2; int32 timeout = 3; }
+message RestartAtxCmd    { string msg_id = 1; string serial = 2; int32 timeout = 3; }
+message ShellCmd         { string msg_id = 1; string serial = 2; string cmd = 3; int32 timeout = 4; }
+message RestartScrcpyCmd { string msg_id = 1; string serial = 2; int32 timeout = 3; }

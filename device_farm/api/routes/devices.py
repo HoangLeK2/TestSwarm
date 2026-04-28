@@ -285,6 +285,11 @@ async def _resolve_ctrl_serial(db, device_id: str, user_id: str, ctrl) -> str:
         tcp_serial = f"{device.adb_ip}:{getattr(device, 'adb_port', 5555)}"
         if ctrl.conn_for_serial(tcp_serial):
             return tcp_serial
+        # mDNS wireless debug uses a dynamic port — match any registered serial with same IP
+        device_ip = device.adb_ip
+        matched = ctrl.find_serial_by_ip(device_ip)
+        if matched:
+            return matched
     # Neither found — return USB serial so error message is meaningful
     return device.serial
 
@@ -310,6 +315,14 @@ async def restart_atx(device_id: str, db: DB, user: CurrentUser):
     ctrl   = _get_ctrl_servicer()
     serial = await _resolve_ctrl_serial(db, device_id, user.id, ctrl)
     res    = await ctrl.restart_atx(serial, timeout=30.0)
+    return RelayCommandOut(**res)
+
+
+@router.post("/{device_id}/restart-scrcpy", response_model=RelayCommandOut)
+async def restart_scrcpy(device_id: str, db: DB, user: CurrentUser):
+    ctrl   = _get_ctrl_servicer()
+    serial = await _resolve_ctrl_serial(db, device_id, user.id, ctrl)
+    res    = await ctrl.restart_scrcpy(serial, timeout=30.0)
     return RelayCommandOut(**res)
 
 

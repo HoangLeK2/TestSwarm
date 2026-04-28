@@ -44,6 +44,7 @@ function DeviceActionsCell({
         <>
           <DeviceCmdButton device={device} cmd='bootstrap' />
           <DeviceCmdButton device={device} cmd='restart_u2' />
+          <DeviceCmdButton device={device} cmd='restart_scrcpy' />
         </>
       )}
       <Button size='sm' variant='outline' onClick={() => setConnectDevice(device)}>

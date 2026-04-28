@@ -1888,10 +1888,12 @@ class DeviceClient:
         # causes video freeze for 2-5s per reconnect.
         # The relay scrcpy session is independent of the APK WS lifecycle — keep it alive.
         if self._scrcpy_active and self._scrcpy_receiver is not None:
-            # RelayScrcpyReceiver.serial is "ip:port"; extract IP for comparison
+            # RelayScrcpyReceiver.serial is "ip:port"; extract IP for comparison.
+            # device_ip may be a full serial ("ip:port") or bare IP — normalise both.
             existing_serial = getattr(self._scrcpy_receiver, "serial", "") or ""
             existing_ip = existing_serial.rsplit(":", 1)[0] if ":" in existing_serial else existing_serial
-            if existing_ip == device_ip:
+            device_ip_norm = device_ip.rsplit(":", 1)[0] if ":" in device_ip else device_ip
+            if existing_ip == device_ip_norm:
                 # Also check if the relay session is still alive.  When gRPC reconnects,
                 # stop_all_sessions() kills scrcpy on agent-boot and clears _scrcpy_running.
                 # Detect this by asking the relay manager — if the session is gone,

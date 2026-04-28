@@ -31,11 +31,12 @@ logger = logging.getLogger("relay.control_client")
 _AGENT_VERSION = "2.1.0"
 
 # CMD_TYPE constants — must match agent.py / adb_relay_server.py
-_CMD_SHELL      = 0
-_CMD_RESTART_U2 = 1
-_CMD_RESTART_ATX = 3
-_CMD_BOOTSTRAP  = 4
-_CMD_SHELL_VAL  = 0
+_CMD_SHELL           = 0
+_CMD_RESTART_U2      = 1
+_CMD_RESTART_ATX     = 3
+_CMD_BOOTSTRAP       = 4
+_CMD_SHELL_VAL       = 0
+_CMD_RESTART_SCRCPY  = 7
 
 
 def _primary_lan_ip() -> str:
@@ -152,15 +153,16 @@ class AgentControlClient:
             logger.info("control channel registered: %s", msg.ack.message)
             return
 
-        if kind not in ("bootstrap", "restart_u2", "restart_atx", "shell"):
+        if kind not in ("bootstrap", "restart_u2", "restart_atx", "shell", "restart_scrcpy"):
             return
 
         cmd = getattr(msg, kind)
         cmd_type_map = {
-            "bootstrap":   _CMD_BOOTSTRAP,
-            "restart_u2":  _CMD_RESTART_U2,
-            "restart_atx": _CMD_RESTART_ATX,
-            "shell":       _CMD_SHELL_VAL,
+            "bootstrap":      _CMD_BOOTSTRAP,
+            "restart_u2":     _CMD_RESTART_U2,
+            "restart_atx":    _CMD_RESTART_ATX,
+            "shell":          _CMD_SHELL_VAL,
+            "restart_scrcpy": _CMD_RESTART_SCRCPY,
         }
         cmd_type = cmd_type_map[kind]
         raw_cmd  = getattr(cmd, "cmd", "")

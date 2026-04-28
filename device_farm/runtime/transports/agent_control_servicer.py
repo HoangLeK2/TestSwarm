@@ -173,6 +173,16 @@ class AgentControlServicer:
         rid = self._serial_index.get(serial)
         return self._conns.get(rid) if rid else None
 
+    def find_serial_by_ip(self, ip: str) -> Optional[str]:
+        """Return first registered serial whose IP part matches, ignoring port.
+        Used when mDNS connects on a dynamic port different from what's in the DB.
+        """
+        for serial in self._serial_index:
+            serial_ip = serial.split(":")[0] if ":" in serial else serial
+            if serial_ip == ip:
+                return serial
+        return None
+
     def conn_for_relay(self, relay_id: str) -> Optional[ControlConnection]:
         return self._conns.get(relay_id)
 
@@ -188,6 +198,9 @@ class AgentControlServicer:
     async def restart_atx(self, serial: str, timeout: float = 30.0) -> dict:
         return await self._send(serial, "restart_atx", timeout)
 
+    async def restart_scrcpy(self, serial: str, timeout: float = 30.0) -> dict:
+        return await self._send(serial, "restart_scrcpy", timeout)
+
     async def _send(self, serial: str, kind: str, timeout: float) -> dict:
         from .grpc_gen import relay_pb2
 
@@ -197,9 +210,10 @@ class AgentControlServicer:
 
         msg_id   = str(uuid.uuid4())
         cmd_map  = {
-            "bootstrap":   relay_pb2.BootstrapCmd,
-            "restart_u2":  relay_pb2.RestartU2Cmd,
-            "restart_atx": relay_pb2.RestartAtxCmd,
+            "bootstrap":      relay_pb2.BootstrapCmd,
+            "restart_u2":     relay_pb2.RestartU2Cmd,
+            "restart_atx":    relay_pb2.RestartAtxCmd,
+            "restart_scrcpy": relay_pb2.RestartScrcpyCmd,
         }
         cmd_cls  = cmd_map[kind]
         ctrl_msg = relay_pb2.ServerControlMsg(**{

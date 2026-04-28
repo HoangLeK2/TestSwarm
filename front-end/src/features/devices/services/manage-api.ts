@@ -98,10 +98,12 @@ export const relayAgentsApi = {
 // ── Device relay control API ──────────────────────────────────────────────────
 
 export const deviceControlApi = {
-  bootstrap:  (deviceId: string) =>
+  bootstrap:     (deviceId: string) =>
     farmApi.post<RelayCommandOut>(`/devices/${deviceId}/bootstrap`).then((r) => r.data),
-  restartU2:  (deviceId: string) =>
+  restartU2:     (deviceId: string) =>
     farmApi.post<RelayCommandOut>(`/devices/${deviceId}/restart-u2`).then((r) => r.data),
-  restartAtx: (deviceId: string) =>
+  restartAtx:    (deviceId: string) =>
     farmApi.post<RelayCommandOut>(`/devices/${deviceId}/restart-atx`).then((r) => r.data),
+  restartScrcpy: (deviceId: string) =>
+    farmApi.post<RelayCommandOut>(`/devices/${deviceId}/restart-scrcpy`).then((r) => r.data),
 };

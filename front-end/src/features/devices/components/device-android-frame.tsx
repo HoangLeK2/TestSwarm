@@ -6,6 +6,10 @@ import { cn } from '@/lib/utils';
 
 type Props = {
   screenWidth: number;
+  /** Actual device stream dimensions — used to constrain content height to the real
+   * device aspect ratio so object-cover never clips the horizontal axis. */
+  deviceWidth?: number;
+  deviceHeight?: number;
   children: React.ReactNode;
   className?: string;
 };
@@ -23,10 +27,22 @@ function screenContentInsetPx(screenWidth: number): number {
 }
 
 /** Android phone frame for farm tiles — stream fills the mock screen (status/nav hidden). */
-export function DeviceAndroidFrame({ screenWidth, className, children }: Props) {
+export function DeviceAndroidFrame({ screenWidth, deviceWidth, deviceHeight, className, children }: Props) {
   const clipRadius = useMemo(() => mockupInnerCornerRadiusPx(screenWidth), [screenWidth]);
   const inset = useMemo(() => screenContentInsetPx(screenWidth), [screenWidth]);
   const innerRadius = useMemo(() => Math.max(2, clipRadius - inset), [clipRadius, inset]);
+
+  // Constrain content height to device's real aspect ratio so object-cover never
+  // over-scales and clips the horizontal axis. The mockup lib uses ~9:20 internally;
+  // devices are typically 9:16–9:19.5 — the mismatch causes left/right clipping.
+  const contentWidth = screenWidth - 2 * inset;
+  const streamHeight = useMemo(
+    () =>
+      deviceWidth && deviceHeight && deviceWidth > 0
+        ? Math.round(contentWidth * (deviceHeight / deviceWidth))
+        : undefined,
+    [contentWidth, deviceWidth, deviceHeight],
+  );
 
   return (
     <AndroidMockup
@@ -43,12 +59,15 @@ export function DeviceAndroidFrame({ screenWidth, className, children }: Props) 
       )}
     >
       <div
-        className='relative isolate box-border flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden bg-black'
+        className='relative isolate box-border flex h-full min-h-0 w-full flex-col items-start overflow-hidden bg-black'
         style={{ borderRadius: clipRadius, padding: inset }}
       >
         <div
-          className='flex h-full min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden bg-black'
-          style={{ borderRadius: innerRadius }}
+          className='w-full min-w-0 flex-shrink-0 overflow-hidden bg-black'
+          style={{
+            borderRadius: innerRadius,
+            height: streamHeight !== undefined ? `${streamHeight}px` : '100%',
+          }}
         >
           {children}
         </div>

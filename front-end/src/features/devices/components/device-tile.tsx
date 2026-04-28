@@ -98,7 +98,11 @@ export function DeviceTile({
       <CardContent className={compact ? 'flex flex-1 flex-col gap-1.5 px-2 pb-2 pt-2' : `flex flex-1 flex-col gap-2 px-3 pb-3 ${hideHeader ? 'pt-2' : 'pt-3'}`}>
         <div className='flex flex-col items-center gap-2'>
           <div className='mx-auto flex flex-col items-center gap-1'>
-            <DeviceAndroidFrame screenWidth={mockupScreenWidth}>
+            <DeviceAndroidFrame
+              screenWidth={mockupScreenWidth}
+              deviceWidth={device.screen_width}
+              deviceHeight={device.screen_height}
+            >
               <div className='flex h-full min-h-0 w-full flex-col'>
                 {isActive ? (
                   <DeviceScreen

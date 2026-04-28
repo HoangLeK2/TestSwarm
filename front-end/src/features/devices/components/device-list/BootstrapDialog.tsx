@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { RefreshCw, Zap } from 'lucide-react';
+import { RefreshCw, Video, Zap } from 'lucide-react';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -19,20 +19,26 @@ import { toast } from 'sonner';
 import type { DeviceOut } from '../../services/manage-api';
 import { deviceControlApi } from '../../services/manage-api';
 
-type Cmd = 'bootstrap' | 'restart_u2';
+type Cmd = 'bootstrap' | 'restart_u2' | 'restart_scrcpy';
 
 const CMD_CONFIG: Record<Cmd, { label: string; icon: React.ReactNode; description: string; timeout: number }> = {
   bootstrap: {
     label: 'Bootstrap',
     icon: <Zap size={12} />,
-    description: 'Cài đặt ATX Agent, uiautomator2 và các thư viện cần thiết lên thiết bị. Có thể mất đến 3 phút.',
-    timeout: 180,
+    description: 'Các thao tác cần thiết để thiết bị có thể hoạt động.',
+    timeout: 60,
   },
   restart_u2: {
     label: 'Restart u2',
     icon: <RefreshCw size={12} />,
     description: 'Khởi động lại uiautomator2 server trên thiết bị.',
-    timeout: 60,
+    timeout: 30,
+  },
+  restart_scrcpy: {
+    label: 'Restart Stream',
+    icon: <Video size={12} />,
+    description: 'Dừng và khởi động lại luồng truyền hình cho thiết bị.',
+    timeout: 20,
   },
 };
 
@@ -74,7 +80,12 @@ export function DeviceCmdButton({
     setRunning(true);
     const toastId = toast.loading(`${cfg.label}: đang chạy…`);
     try {
-      const fn = cmd === 'bootstrap' ? deviceControlApi.bootstrap : deviceControlApi.restartU2;
+      const fnMap: Record<Cmd, (id: string) => Promise<any>> = {
+        bootstrap:      deviceControlApi.bootstrap,
+        restart_u2:     deviceControlApi.restartU2,
+        restart_scrcpy: deviceControlApi.restartScrcpy,
+      };
+      const fn = fnMap[cmd];
       const res = await fn(device.id);
       if (res.ok) {
         toast.success(`${cfg.label}: thành công`, { id: toastId });

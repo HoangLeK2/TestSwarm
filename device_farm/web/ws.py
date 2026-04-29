@@ -532,18 +532,19 @@ class WebSocketManager:
                 version_gap = version - last_version - 1
                 if version_gap > 0:
                     dropped_version_total += version_gap
+                    if not is_key:
+                        # Any skipped P-frame breaks the browser decoder reference chain → freeze.
+                        # Request IDR immediately regardless of congestion state.
+                        _request_idr_recover()
                 lag_ms = max(0.0, (time.monotonic() - frame_ts) * 1000.0)
                 if not congestion and (lag_ms > 100.0 or version_gap > 4):
                     congestion = True
                 elif congestion and lag_ms < 50.0:
                     congestion = False
 
-                # In congestion, prefer skipping non-key deltas when version gaps are large.
+                # In congestion with large gaps, skip non-key deltas (IDR already requested above).
                 if congestion and version_gap > 8 and not is_key:
                     last_version = version
-                    # Dropped non-key → reference chain broken on browser. Ask encoder
-                    # for fresh IDR so decoder can re-sync without showing corrupt frames.
-                    _request_idr_recover()
                     continue
 
                 send_started = time.monotonic()
@@ -659,6 +660,19 @@ class WebSocketManager:
                     continue
                 is_busy_state = getattr(device, "state", None) == DeviceState.BUSY
                 scenario_active = int(getattr(device, "_scenario_active", 0) or 0) > 0
+                if not scenario_active:
+                    # Cross-process guard: Temporal workers may run in a separate process.
+                    # In-memory _scenario_active is process-local, so fall back to Redis.
+                    try:
+                        from services import redis_store
+
+                        if redis_store.enabled():
+                            r = redis_store.client()
+                            if r is not None:
+                                v = await r.get(redis_store.key(f"device:{serial}:scenario_active"))
+                                scenario_active = int(v or "0") > 0
+                    except Exception:
+                        pass
                 if is_busy_state or scenario_active:
                     log.info(
                         "ws drop write frame type=%s serial=%s (busy_state=%s scenario_active=%s)",

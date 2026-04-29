@@ -6,7 +6,7 @@ import logging
 import random
 import threading
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from tasks.scenario.steps import register_step
 from tasks.scenario.context import ScenarioContext
@@ -491,7 +491,8 @@ def handle_tap_fb_comment_button(
 
     timeout = float(step.get("timeout", 6.0) or 6.0)
     poll = max(0.1, float(step.get("poll", 0.4) or 0.4))
-    dedupe_field = str(step.get("dedupe_field") or "post_key")
+    dedupe_field = str(step.get("dedupe_field") or sc.ctx.get("_fb_posts_dedupe_field") or "post_key")
+    enter_comment_sheet_timeout = float(step.get("enter_comment_sheet_timeout", 1.8) or 1.8)
     ignore_error = bool(step.get("ignore_error", True))
     switch_filter = bool(step.get("switch_to_all_comments", True))
     post_tap_wait_s = float(step.get("post_tap_wait_s", 0.8) or 0.8)
@@ -530,23 +531,49 @@ def handle_tap_fb_comment_button(
     if post and btn and post.get("_pid"):
         pid = post["_pid"]
         post_hash = compute_content_hash(post, dedupe_field=dedupe_field)
-        pid_map = ctx.setdefault("_post_id_map", {})
-        pid_map[pid] = post_hash
-        ctx["_fb_comment_parent_pid"] = pid
-        ctx["_active_comment_parent_hash"] = post_hash
-        ctx["_first_new_post_hash"] = post_hash
         x1, y1, x2, y2 = btn
         cx = (x1 + x2) // 2
         cy = (y1 + y2) // 2
         try:
             device.tap(cx, cy)
-            tapped = True
+            # Confirm we actually entered the comment sheet; in real devices
+            # the tap may hit but transition can fail/lag and we remain on feed.
+            try:
+                from tasks.fb_extract import _hierarchy_is_fb_comment_sheet, _parse_xml
+
+                deadline_enter = time.monotonic() + max(0.5, enter_comment_sheet_timeout)
+                while time.monotonic() < deadline_enter:
+                    _xml = device.hierarchy_xml(force_refresh=True)
+                    _root = _parse_xml(_xml) if _xml else None
+                    if _root is not None and _hierarchy_is_fb_comment_sheet(_root):
+                        tapped = True
+                        break
+                    time.sleep(0.15)
+            except Exception:
+                # Fallback to previous behavior if classifier fails.
+                tapped = True
+            if tapped:
+                pid_map = ctx.setdefault("_post_id_map", {})
+                pid_map[pid] = post_hash
+                ctx["_fb_comment_parent_pid"] = pid
+                ctx["_active_comment_parent_hash"] = post_hash
+                ctx["_first_new_post_hash"] = post_hash
+                # Keep a richer post anchor so downstream comment extraction can
+                # still map parent hash when pid-based linkage is missing.
+                ctx["_active_comment_parent_anchor"] = {
+                    "post_key": post.get("post_key"),
+                    "stable_post_id": post.get("stable_post_id"),
+                    "fb_post_id": post.get("fb_post_id"),
+                    "author": post.get("author"),
+                    "timestamp": post.get("timestamp"),
+                    "text_prefix": str(post.get("text") or "")[:220],
+                }
             result["_pid"] = pid
             result["_bounds"] = [x1, y1, x2, y2]
             result["tapped_at"] = [cx, cy]
             log.info(
                 f"[{sc.serial}] tap_fb_comment_button: pid={pid} "
-                f"hash={post_hash[:12]} at ({cx},{cy})"
+                f"hash={post_hash[:12]} at ({cx},{cy}) entered_sheet={tapped}"
             )
             time.sleep(0.3)
         except Exception as exc:

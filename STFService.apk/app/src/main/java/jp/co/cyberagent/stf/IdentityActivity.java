@@ -67,6 +67,7 @@ public class IdentityActivity extends AppCompatActivity {
 
     public static final String ACTION_IDENTITY = "jp.co.cyberagent.stf.ACTION_IDENTIFY";
     public static final String EXTRA_SERIAL = "serial";
+    public static final String EXTRA_QR_CONTENT = "qr_content";
 
     // UI states
     private static final int STATE_DISCONNECTED = 0;
@@ -227,36 +228,7 @@ public class IdentityActivity extends AppCompatActivity {
             }
             if (isFinishing() || isDestroyed())
                 return;
-
-            Log.d(TAG, "QR result received, connecting: " + content.substring(0, Math.min(content.length(), 60)) + "...");
-            if (content.startsWith("ws://") || content.startsWith("wss://")) {
-                pendingWsUrl = content;
-                if (WsAgentService.USE_MEDIA_PROJECTION) {
-                    applyState(STATE_CONNECTING, "Requesting screen permission…");
-                    MediaProjectionManager mpm = (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
-                    if (mpm != null) {
-                        projectionLauncher.launch(mpm.createScreenCaptureIntent());
-                    } else {
-                        pendingWsUrl = null;
-                        applyState(STATE_ERROR, "Screen capture not available");
-                        Toast.makeText(this, "Screen capture not available on this device", Toast.LENGTH_LONG).show();
-                    }
-                } else {
-                    getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
-                            .putString(PREF_WS_URL, pendingWsUrl).apply();
-                    WsAgentService.start(this, pendingWsUrl, 0, null);
-                    serviceRunning = true;
-                    String hostPort = formatHostPort(pendingWsUrl);
-                    applyState(STATE_CONNECTING, hostPort != null ? "Đang kết nối " + hostPort + "…" : "Đang kết nối…");
-                }
-            } else if (content.trim().startsWith("{")) {
-                // ADB connect-by-QR: payload { "registerUrl": "http://..." } → POST device IP to backend
-                handleAdbRegisterQr(content);
-            } else {
-                Toast.makeText(this,
-                        "Invalid QR — expected ws:// or wss:// or JSON with registerUrl",
-                        Toast.LENGTH_LONG).show();
-            }
+            handleQrContent(content);
         });
 
         // ── Button ─────────────────────────────────────────────────────
@@ -319,6 +291,22 @@ public class IdentityActivity extends AppCompatActivity {
             if (jsonPayload != null) {
                 handleAdbRegisterQr(jsonPayload);
             }
+        }
+
+        // Intent-injected QR (e.g. from adb shell am start --es qr_content "ws://...")
+        String injectedQr = getIntent().getStringExtra(EXTRA_QR_CONTENT);
+        if (injectedQr != null && !injectedQr.isEmpty()) {
+            handleQrContent(injectedQr);
+        }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        String injectedQr = intent.getStringExtra(EXTRA_QR_CONTENT);
+        if (injectedQr != null && !injectedQr.isEmpty()) {
+            handleQrContent(injectedQr);
         }
     }
 
@@ -458,6 +446,39 @@ public class IdentityActivity extends AppCompatActivity {
      * ADB connect-by-QR: QR payload is JSON { "registerUrl": "http://host:port/api/connect/register" }.
      * Get this device's WiFi IP and POST it to registerUrl so the backend can connect via ADB.
      */
+
+    private void handleQrContent(String content) {
+        Log.d(TAG, "handleQrContent: " + content.substring(0, Math.min(content.length(), 60)));
+        if (content.startsWith("ws://") || content.startsWith("wss://")) {
+            pendingWsUrl = content;
+            if (WsAgentService.USE_MEDIA_PROJECTION) {
+                applyState(STATE_CONNECTING, "Requesting screen permission…");
+                MediaProjectionManager mpm = (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
+                if (mpm != null) {
+                    projectionLauncher.launch(mpm.createScreenCaptureIntent());
+                } else {
+                    pendingWsUrl = null;
+                    applyState(STATE_ERROR, "Screen capture not available");
+                    Toast.makeText(this, "Screen capture not available on this device", Toast.LENGTH_LONG).show();
+                }
+            } else {
+                getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                        .putString(PREF_WS_URL, pendingWsUrl).apply();
+                WsAgentService.start(this, pendingWsUrl, 0, null);
+                serviceRunning = true;
+                String hostPort = formatHostPort(pendingWsUrl);
+                applyState(STATE_CONNECTING, hostPort != null ? "Đang kết nối " + hostPort + "…" : "Đang kết nối…");
+            }
+        } else if (content.trim().startsWith("{")) {
+            handleAdbRegisterQr(content);
+        } else {
+            Toast.makeText(this,
+                    "Invalid QR — expected ws:// or wss:// or JSON with registerUrl",
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /** Build JSON payload for reusing saved ADB registration settings. */
     private String buildAdbRegisterPayload(String registerUrl, String deviceKey) {
         try {
             JSONObject obj = new JSONObject();

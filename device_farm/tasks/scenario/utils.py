@@ -50,6 +50,7 @@ _POPUP_DISMISS_PATTERNS: Sequence[Tuple[str, str]] = (
     ("text", "No thanks"), ("text", "Không, cảm ơn"),
     ("text", "Dismiss"),  ("text", "Close"),  ("text", "Got it"),  ("text", "Understood"),
     ("text", "Continue"), ("text", "Tiếp tục"),
+    ("text", "Đóng"),
     ("content-desc", "Close"), ("content-desc", "Dismiss"), ("content-desc", "Đóng"),
 )
 

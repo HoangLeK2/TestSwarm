@@ -15,16 +15,13 @@ const routeMapping: Record<string, string[]> = {
     'navigation.organization'
   ],
   '/dashboard/faq': ['navigation.faq'],
-  '/dashboard/api-keys': ['navigation.dashboard', 'navigation.api_keys'],
   '/dashboard/flow': ['navigation.dashboard', 'navigation.flow-vc'],
   '/dashboard/settings': ['navigation.settings'],
   '/dashboard/inventory': ['navigation.dashboard', 'navigation.inventory'],
   '/dashboard/product/sync': ['navigation.sync'],
   '/dashboard/org/:id/member': ['navigation.members'],
   '/dashboard/org/:id': ['navigation.organization_general'],
-  '/dashboard/org/:id/api-keys': ['navigation.api_keys'],
-  '/dashboard/gln': ['navigation.dashboard', 'navigation.gln'],
-  '/dashboard/org/:id/totp': ['navigation.totp']
+  '/dashboard/gln': ['navigation.dashboard', 'navigation.gln']
 };
 
 export function useBreadcrumbs() {
@@ -89,7 +86,6 @@ export function useBreadcrumbs() {
         else if (segment === 'batches') title = t('navigation.batches');
         else if (segment === 'sgtin') title = t('navigation.sgtin');
         else if (segment === 'faq') title = t('navigation.faq');
-        else if (segment === 'api-keys') title = t('navigation.api_keys');
         else if (segment === 'flow') title = t('navigation.flow');
         else if (segment === 'settings') title = t('navigation.settings');
         else if (segment === 'member') title = t('navigation.members');

@@ -59,18 +59,23 @@ def _is_idr(data: bytes) -> bool:
     return False
 
 
-def _relay_enqueue(q: asyncio.Queue, frame: bytes, is_cfg: bool, is_key: bool) -> None:
+def _relay_enqueue(q: asyncio.Queue, frame: bytes, is_cfg: bool, is_key: bool, on_p_drop=None) -> None:
     """Module-level enqueue — avoids closure allocation per frame at 30fps.
 
     Called via call_soon_threadsafe from the relay thread.
     Drop-oldest strategy: P-frames silently dropped when queue full;
     IDR/config frames evict the oldest entry to guarantee delivery.
+    on_p_drop: optional callable invoked when a P-frame is dropped so the
+    relay thread can immediately request an IDR — limits decoder freeze to
+    ~100ms instead of waiting up to 1s for the next natural IDR interval.
     """
     try:
         q.put_nowait(frame)
     except asyncio.QueueFull:
         if not is_cfg and not is_key:
-            return  # P-frame: drop silently, decoder resyncs on next IDR
+            if on_p_drop is not None:
+                on_p_drop()  # signal relay thread to request IDR
+            return  # P-frame: drop, IDR will follow shortly
         try:
             q.get_nowait()   # evict oldest to make room for IDR/config
             q.put_nowait(frame)
@@ -290,6 +295,11 @@ class ScrcpyRelaySession:
         self._on_fatal = on_fatal
         self._oem_hint: str = ""
         self._model_hint: str = ""
+        # Set to True (from asyncio thread) when a P-frame is dropped from the
+        # send queue. The relay thread reads and resets this flag to request an
+        # IDR immediately — caps decoder freeze at ~100ms vs 1s IDR interval.
+        self._need_idr: bool = False
+        self._last_idr_request_t: float = 0.0  # rate-limit to 1 IDR per 0.5s
 
     # ── Public API ───────────────────────────────────────────────────────────
 
@@ -347,6 +357,11 @@ class ScrcpyRelaySession:
         bundled scrcpy-server version — see _BUNDLED_JAR_VERSION.
         """
         self.send_control(bytes([_SC_CTRL_RESET_VIDEO]))
+
+    def _mark_idr_needed(self) -> None:
+        """Called from asyncio thread when a P-frame is dropped from send_queue.
+        Relay thread reads this flag and requests an IDR keyframe immediately."""
+        self._need_idr = True
 
     def is_alive(self) -> bool:
         """True while relay thread is running (not zombie)."""
@@ -733,6 +748,17 @@ class ScrcpyRelaySession:
                     continue
 
         while self._running:
+            # If a P-frame was dropped from the send queue (set by asyncio thread),
+            # request an IDR keyframe so the browser decoder recovers in ~100ms
+            # rather than waiting up to 1s for the next natural IDR interval.
+            if self._need_idr:
+                self._need_idr = False
+                now = time.monotonic()
+                if now - self._last_idr_request_t >= 0.5:
+                    self._last_idr_request_t = now
+                    self._request_idr()
+                    logger.debug("[%s] IDR requested after P-frame queue drop", self._serial)
+
             header = _read_header_or_idr()
             pts_raw, size = struct.unpack(">QI", header)
             try:
@@ -768,9 +794,10 @@ class ScrcpyRelaySession:
                 + data
             )
 
-            # Dispatch via module-level function (no closure allocation per frame).
+            # Dispatch via module-level function. Pass _mark_idr_needed so the
+            # asyncio thread can signal back when a P-frame is dropped.
             self._loop.call_soon_threadsafe(
-                _relay_enqueue, self._send_queue, frame, is_cfg, is_key
+                _relay_enqueue, self._send_queue, frame, is_cfg, is_key, self._mark_idr_needed
             )
 
     def _connect_with_retry(self, host: str, port: int, timeout: float) -> socket.socket:

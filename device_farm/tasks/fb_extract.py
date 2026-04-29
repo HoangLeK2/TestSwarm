@@ -464,14 +464,27 @@ def _is_junk_recycler_post(post: Dict[str, Any]) -> bool:
         "đỏ đậm", "in đậm", "in nghiêng", "gạch chân", "màu nền",
         "bold", "italic", "underline", "background color",
     )
+    has_time_anchor = bool(str(post.get("timestamp") or "").strip())
     tb_hits = sum(1 for tok in _TOOLBAR_TOKENS if tok in tl)
-    if tb_hits >= 2 and len(text) < 160:
+    # Guard against over-dropping real posts: when author+timestamp are
+    # already resolved, toolbar tokens in subtree text can be incidental.
+    if tb_hits >= 2 and len(text) < 160 and not has_time_anchor:
         return True
     # Even on longer bodies, if the body STARTS with two toolbar tokens in the
     # first 40 chars, it's the formatting-chip row leaking in.
     head = tl[:40]
     head_hits = sum(1 for tok in _TOOLBAR_TOKENS if tok in head)
-    if head_hits >= 2:
+    if head_hits >= 2 and not has_time_anchor:
+        return True
+    # Newer composer leakage: toolbar chips become the parsed author while
+    # the actual post body is parsed as ``text`` (e.g. "Đỏ đậm, màu nền").
+    # Filter these before they hit DB as fake posts.
+    author_tb_hits = sum(1 for tok in _TOOLBAR_TOKENS if tok in al)
+    if (
+        author_tb_hits >= 2
+        and (post.get("reactions") is None and post.get("comments") is None and post.get("shares") is None)
+        and not _RE_TS.search(author)
+    ):
         return True
 
     # Album / reaction count chip mis-read as author (e.g. "+3", "12")
@@ -1157,17 +1170,38 @@ def _extract_post(
 
 
 def _hierarchy_is_fb_comment_sheet(root) -> bool:
-    """Thread / reply sheet: nút ``Đóng`` + RecyclerView không full màn — không phải feed bài viết."""
-    has_dong = False
+    """Best-effort detect FB comment/thread sheet on newer Katana layouts.
+
+    Older builds exposed the close affordance as ``content-desc="Đóng"`` and the
+    comment list ended well above the bottom edge. Newer builds often render the
+    close button as visible text, plus a composer/filter footer makes the
+    RecyclerView occupy more vertical space. We therefore accept either
+    text/content-desc for close, and relax the height guard when we also see
+    comment-sheet-only cues like the composer placeholder or sort filter chip.
+    """
+    has_close = False
+    composer_top: Optional[int] = None
+    filter_top: Optional[int] = None
     for node in root.iter():
         if (node.get("package") or "") != "com.facebook.katana":
             continue
+        text = _normalize_fb_ui_spacing(node.get("text") or "")
         desc = (node.get("content-desc") or "").strip()
         cls = node.get("class") or ""
-        if desc == "Đóng" and "Button" in cls:
-            has_dong = True
-            break
-    if not has_dong:
+        lowered = f"{text} {desc}".lower()
+        bounds = _parse_bounds(node)
+        if "Button" in cls and (text in {"Đóng", "Close"} or desc in {"Đóng", "Close"}):
+            has_close = True
+        if (
+            "autocomplete" in cls.lower()
+            and ("viết bình luận" in lowered or "write a public comment" in lowered or "write a comment" in lowered)
+        ):
+            if bounds:
+                composer_top = bounds[1] if composer_top is None else min(composer_top, bounds[1])
+        if "phù hợp nhất" in lowered or "most relevant" in lowered or "all comments" in lowered or "tất cả bình luận" in lowered:
+            if bounds:
+                filter_top = bounds[1] if filter_top is None else min(filter_top, bounds[1])
+    if not has_close:
         return False
     containers = root.xpath(_XPATH_RECYCLER) or root.xpath(_XPATH_LIST)
     if not containers:
@@ -1180,7 +1214,17 @@ def _hierarchy_is_fb_comment_sheet(root) -> bool:
     _, screen_h = _infer_screen_size(root)
     if screen_h < 400:
         return False
-    return y2 <= int(screen_h * 0.78)
+    if y2 <= int(screen_h * 0.78):
+        return True
+    # Newer FB sheets often leave only a slim footer for the composer, so the
+    # list can extend much lower than the original 78% heuristic. Relax only
+    # when we have strong sheet-only evidence near the list edge, not merely
+    # comment-related text somewhere else in the tree.
+    if composer_top is not None and composer_top >= y2 - 40:
+        return True
+    if filter_top is not None and y2 <= int(screen_h * 0.86):
+        return True
+    return False
 
 
 def _feed_comment_y_max(root, action_btn_y_mid: Optional[int]) -> Optional[int]:
@@ -1208,8 +1252,7 @@ def _extract_posts_from_recycler(root, source_index: int) -> Optional[List[Dict[
     containers = root.xpath(_XPATH_RECYCLER) or root.xpath(_XPATH_LIST)
     if not containers:
         return None
-    if _hierarchy_is_fb_comment_sheet(root):
-        return []
+    in_comment_sheet = _hierarchy_is_fb_comment_sheet(root)
     feed = _pick_feed_container(containers, root)
     candidates = feed.findall("node")
     if not candidates:
@@ -1219,6 +1262,25 @@ def _extract_posts_from_recycler(root, source_index: int) -> Optional[List[Dict[
     for feed_item_index, candidate in enumerate(candidates):
         if _is_ad_container(candidate):
             continue
+        if in_comment_sheet:
+            # Comment sheets may contain many comment rows; only keep rows that
+            # look like the embedded parent post card.
+            has_post_menu = False
+            has_share_action = False
+            for n in candidate.iter():
+                t = (n.get("text") or "").strip()
+                d = (n.get("content-desc") or "").strip()
+                merged = f"{t} {d}".strip().lower()
+                if not merged:
+                    continue
+                if "lựa chọn khác cho bài viết" in merged or "other options for post" in merged:
+                    has_post_menu = True
+                if "nút chia sẻ" in merged or merged == "chia sẻ":
+                    has_share_action = True
+                if has_post_menu and has_share_action:
+                    break
+            if not (has_post_menu or has_share_action):
+                continue
         nodes = _collect_text_nodes(candidate, toolbar_cutoff_y=0)
         fb_pid, fb_gid, perms = _extract_fb_link_meta(candidate)
         media_artifacts = _extract_media_artifacts(candidate)

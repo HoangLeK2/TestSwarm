@@ -12,10 +12,12 @@ Steps per device:
 """
 from __future__ import annotations
 
+import json
 import subprocess
 import tarfile
 import threading
 import time
+import urllib.error
 import urllib.request
 import os
 from pathlib import Path
@@ -603,11 +605,37 @@ def step_open_app(serial: str, skip: bool) -> None:
 
 # ── Per-device orchestration ──────────────────────────────────────────────────
 
+def step_auto_connect(serial: str, ws_url: str, skip: bool) -> None:
+    """Inject QR content via ADB intent — STFService connects without manual scan.
+
+    NOTE: This intentionally re-sends the intent even if STFService is already
+    streaming. The Android side (handleQrContent) will restart WsAgentService
+    on the new URL. Run only on idle devices to avoid interrupting active sessions.
+    """
+    if skip or not ws_url:
+        return
+    if not (ws_url.startswith("ws://") or ws_url.startswith("wss://")):
+        console.print(f"    [red]✗[/red] Auto-connect skipped — ws_url must be ws:// or wss:// (got: {ws_url[:60]!r})")
+        return
+    if not _is_pkg_installed(_STF_PKG, serial):
+        console.print("    [dim]Auto-connect skipped — STFService not installed[/dim]")
+        return
+    _adb(
+        "shell", "am", "start",
+        "-n", f"{_STF_PKG}/.IdentityActivity",
+        "-a", "android.intent.action.MAIN",
+        "--es", "qr_content", ws_url,
+        serial=serial, check=False, timeout=10,
+    )
+    console.print(f"    [green]✓[/green] Auto-connect → {ws_url[:70]}")
+
+
 def boot_device(serial: str, stf_apk: Path | None, *,
                 skip_tcpip: bool = False, tcpip_port: int = 5555,
                 use_bundle: bool = False,
                 skip_u2: bool = False, skip_atx: bool = False,
-                skip_stf: bool = False) -> bool:
+                skip_stf: bool = False,
+                ws_url: str = "") -> bool:
     sdk   = _get_sdk(serial)
     model = _adb_shell("getprop ro.product.model", serial=serial)
 
@@ -649,6 +677,7 @@ def boot_device(serial: str, stf_apk: Path | None, *,
         # sets ONLY the STF service. Running our settings after it guarantees
         # the u2 AccessibilityService survives the rebind.
         _ensure_stability_settings(active)
+        step_auto_connect(active, ws_url, skip=skip_stf)
 
         # u2 + atx-agent are required for device control
         critical_ok = skip_u2 or (u2_ok and atx_ok)
@@ -665,16 +694,74 @@ def boot_device(serial: str, stf_apk: Path | None, *,
         return False
 
 
-def run_bootstrap(serials: list[str], stf_apk: Path | None, **kwargs) -> dict[str, bool]:
+def _ws_to_http_base(ws_url: str) -> str:
+    """ws://host:8081/path → http://host:8081  |  wss:// → https://"""
+    if ws_url.startswith("wss://"):
+        rest = ws_url[6:]
+        scheme = "https"
+    elif ws_url.startswith("ws://"):
+        rest = ws_url[5:]
+        scheme = "http"
+    else:
+        return ""
+    host_port = rest.split("/")[0]
+    return f"{scheme}://{host_port}"
+
+
+def _fetch_pair_urls(ws_url: str, serials: list[str], relay_id: str, api_key: str) -> dict[str, str]:
+    """Call /api/relay-agents/{relay_id}/pair-bulk → {serial: ws_url_with_pair}.
+
+    Returns empty dict on any error (bootstrap falls back to bare ws_url).
+    """
+    if not serials or not ws_url or not relay_id or not api_key:
+        return {}
+    http_base = _ws_to_http_base(ws_url)
+    if not http_base:
+        return {}
+    endpoint = f"{http_base}/api/relay-agents/{relay_id}/pair-bulk"
+    payload = json.dumps({"serials": serials}).encode()
+    req = urllib.request.Request(
+        endpoint,
+        data=payload,
+        headers={"Content-Type": "application/json", "X-Relay-Api-Key": api_key},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+            return data.get("pairings", {})
+    except (urllib.error.URLError, OSError, json.JSONDecodeError, KeyError) as exc:
+        console.print(f"[yellow]⚠[/yellow] pair-bulk failed ({exc}), using bare ws_url")
+        return {}
+
+
+def run_bootstrap(
+    serials: list[str],
+    stf_apk: Path | None,
+    *,
+    relay_id: str = "",
+    api_key: str = "",
+    **kwargs,
+) -> dict[str, bool]:
     """Bootstrap all serials in parallel. Returns {serial: success}."""
+    # Fetch per-device pairing URLs so each STFService gets a unique token.
+    ws_url = kwargs.get("ws_url", "")
+    pair_urls = _fetch_pair_urls(ws_url, serials, relay_id, api_key) if ws_url else {}
+
+    def _boot(serial: str) -> bool:
+        kw = dict(kwargs)
+        if pair_urls:
+            kw["ws_url"] = pair_urls.get(serial, ws_url)
+        return boot_device(serial, stf_apk, **kw)
+
     results: dict[str, bool] = {}
 
     if len(serials) == 1:
-        results[serials[0]] = boot_device(serials[0], stf_apk, **kwargs)
+        results[serials[0]] = _boot(serials[0])
     else:
         threads = [
             threading.Thread(
-                target=lambda s=s: results.__setitem__(s, boot_device(s, stf_apk, **kwargs)),
+                target=lambda s=s: results.__setitem__(s, _boot(s)),
                 daemon=True,
             )
             for s in serials

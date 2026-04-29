@@ -2330,6 +2330,7 @@ class DeviceClient:
             return
 
         if self._batch_enabled():
+            _t0 = time.perf_counter()
             self._log(
                 f"tap_selector route=agent_boot_batch_flow by={by} value={value!r}",
                 level=logging.INFO,
@@ -2344,10 +2345,12 @@ class DeviceClient:
                     },
                     timeout=15.0,
                 )
+                _elapsed_ms = (time.perf_counter() - _t0) * 1000
                 if result.get("found"):
+                    self._log(f"tap_selector batch ok elapsed={_elapsed_ms:.0f}ms", level=logging.DEBUG)
                     self.hierarchy_invalidate_cache()
                     return
-                self._log(f"tap_selector: not found via flow {by}={value!r}", level=logging.DEBUG)
+                self._log(f"tap_selector: not found via flow {by}={value!r} elapsed={_elapsed_ms:.0f}ms", level=logging.DEBUG)
             except Exception as exc:
                 self._log(f"tap_selector flow error: {exc} — falling back", level=logging.WARNING)
 
@@ -2859,7 +2862,7 @@ class DeviceClient:
                         self._loop is not None
                         and _rm is not None
                         and _rm.relay_for_serial(_relay_serial)
-                        and os.getenv("U2_BATCH_ENABLED", "").lower() in ("1", "true")
+                        and os.getenv("U2_BATCH_ENABLED", "true").lower() in ("1", "true")
                     ):
                         _actual = _rm.resolve_serial(_relay_serial)
                         self._u2_batch = _BatchRelaySession(_rm, _actual, self._loop)

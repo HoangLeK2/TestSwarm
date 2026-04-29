@@ -267,9 +267,11 @@ export default function AppSidebar() {
   const { user } = useUser();
   const router = useRouter();
   const pathname = usePathname();
-  const isSettingsPage = pathname.includes(
-    ROUTES.DASHBOARD.ORGANIZATION_SETTINGS('')
-  );
+  const _SETTINGS_PREFIXES = [
+    ROUTES.DASHBOARD.ORGANIZATION_SETTINGS(''),
+    ROUTES.RELAY_AGENTS.ROOT,
+  ];
+  const isSettingsPage = _SETTINGS_PREFIXES.some(p => pathname.includes(p));
   const { open } = useSidebar();
   return (
     <Sidebar collapsible='icon'>

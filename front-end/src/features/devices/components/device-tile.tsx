@@ -28,6 +28,12 @@ interface DeviceTileProps {
   hideStepMonitor?: boolean;
   /** Ẩn toàn bộ header tên/model/serial ở đầu thẻ */
   hideHeader?: boolean;
+  /** Ẩn cụm điều khiển phía dưới màn hình thiết bị. */
+  hideControls?: boolean;
+  /** Ẩn panel chức năng thiết bị (STF panel). */
+  hideDeviceFunctions?: boolean;
+  /** Chỉ xem, không gửi thao tác điều khiển vào thiết bị. */
+  readOnlyPreview?: boolean;
 }
 
 export function DeviceTile({
@@ -44,6 +50,9 @@ export function DeviceTile({
   compact = false,
   hideStepMonitor = false,
   hideHeader = false,
+  hideControls = false,
+  hideDeviceFunctions = false,
+  readOnlyPreview = false,
 }: DeviceTileProps) {
   const t = useTranslations('devicesFarm');
   const id = serialToId(device.serial);
@@ -115,6 +124,7 @@ export function DeviceTile({
                     highlightBounds={highlightBounds}
                     gestureMode={gestureMode}
                     captionBelowFrame
+                    interactive={!readOnlyPreview}
                   />
                 ) : (
                   <div className='flex h-full w-full items-center justify-center bg-zinc-900 text-[11px] text-muted-foreground'>
@@ -134,22 +144,24 @@ export function DeviceTile({
             )}
           </div>
         </div>
-        <DeviceControls
-          serial={device.serial}
-          mode={mode}
-          onToggleMode={() => onToggleMode(device.serial)}
-          onKey={(key) => wsSend({ type: 'key', serial: device.serial, key })}
-          onRestart={() => onRestart(device.serial)}
-          compact={compact}
-          gestureMode={gestureMode}
-          onGestureMode={setGestureMode}
-          onPinch={handlePinch}
-          onSwipeExt={handleSwipeExt}
-          onScreenOn={handleScreenOn}
-          onScreenOff={handleScreenOff}
-          onUnlock={handleUnlock}
-        />
-        {isActive && <DeviceSTFPanel serial={device.serial} />}
+        {!hideControls && (
+          <DeviceControls
+            serial={device.serial}
+            mode={mode}
+            onToggleMode={() => onToggleMode(device.serial)}
+            onKey={(key) => wsSend({ type: 'key', serial: device.serial, key })}
+            onRestart={() => onRestart(device.serial)}
+            compact={compact}
+            gestureMode={gestureMode}
+            onGestureMode={setGestureMode}
+            onPinch={handlePinch}
+            onSwipeExt={handleSwipeExt}
+            onScreenOn={handleScreenOn}
+            onScreenOff={handleScreenOff}
+            onUnlock={handleUnlock}
+          />
+        )}
+        {isActive && !hideDeviceFunctions && <DeviceSTFPanel serial={device.serial} />}
       </CardContent>
     </Card>
   );

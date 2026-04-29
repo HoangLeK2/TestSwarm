@@ -98,24 +98,13 @@ export function useNavItems(): {
       ]
     },
     {
-      title: t('developer'),
+      title: t('infrastructure'),
       type: 'group',
       items: [
         {
-          title: t('api_keys'),
-          url: ROUTES.DASHBOARD.API_KEYS(currentOrg?.id || ''),
-          icon: 'key'
-        }
-      ]
-    },
-    {
-      title: t('totp'),
-      type: 'group',
-      items: [
-        {
-          title: t('totp'),
-          url: ROUTES.DASHBOARD.TOTP(currentOrg?.id || ''),
-          icon: 'settings'
+          title: t('relay_agents'),
+          url: ROUTES.RELAY_AGENTS.ROOT,
+          icon: 'server'
         }
       ]
     }

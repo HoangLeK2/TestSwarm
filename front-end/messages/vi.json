@@ -163,12 +163,39 @@
     }
   },
   "navigation": {
+    "general": "Chung",
     "dashboard": "Trang điều khiển",
     "overview": "Tổng quan hệ thống",
+    "products": "Sản phẩm",
+    "profile": "Hồ sơ",
+    "logout": "Đăng xuất",
+    "statistic": "Thống kê",
+    "admin": "Quản trị",
+    "organizations": "Tổ chức",
+    "organization": "Tổ chức",
+    "batches": "NDATrace UID",
+    "vc_release": "Quản lý VC",
+    "sgtin": "Danh sách SGTIN",
+    "faq": "FAQ",
+    "help": "Trợ giúp",
+    "api_keys": "API Keys",
+    "inventory": "Quản lý tồn kho",
+    "flow": "Quản lý luồng",
+    "flow-vc": "Quản lý luồng phát hành VC",
+    "vc-release": "Phát hành VC",
+    "settings": "Cài đặt",
+    "developer": "Nhà phát triển",
+    "sync": "Đồng bộ sản phẩm",
+    "quick_action": {
+      "sync_product": "Đồng bộ sản phẩm",
+      "vc_release": "Phát hành VC"
+    },
+    "members": "Thành viên",
     "organization_general": "Tổng quan tổ chức",
     "nav_group_devices": "Thiết bị",
     "nav_group_automation": "Chiến dịch & lịch chạy",
     "nav_group_library": "Tài khoản, kịch bản & kết quả",
+    "activity_history": "Lịch sử hoạt động",
     "devices": "Danh sách thiết bị",
     "device_farm": "Xem thiết bị",
     "devices_manage": "Quản trị thiết bị",
@@ -179,7 +206,19 @@
     "accounts": "Danh sách tài khoản",
     "account_groups": "Nhóm tài khoản",
     "scenario_templates": "Mẫu kịch bản",
-    "content": "Kết quả thu thập"
+    "content": "Kết quả thu thập",
+    "infrastructure": "Hạ tầng",
+    "relay_agents": "Relay Agents"
+  },
+  "relayAgentsFeature": {
+    "title": "Relay Agents",
+    "onlineSummary": "{online}/{total} đang online",
+    "loading": "Đang tải...",
+    "empty": "Chưa có Relay Agent nào kết nối",
+    "bootstrapAll": "Khởi động tất cả",
+    "noDevices": "Chưa có thiết bị",
+    "moreDevices": "+{count} thiết bị",
+    "lastHeartbeat": "Lần heartbeat cuối: {time}"
   },
   "deviceGroupsFeature": {
     "list": {
@@ -774,9 +813,12 @@
       "saveTemplateSuccess": "Đã lưu mẫu kịch bản"
     },
     "takeover": {
-      "campaignRunning": "Đang chạy campaign — thao tác thủ công bị chặn"
+      "manualControlBlocked": "Thiết bị đang bận hoặc đang chạy campaign — thao tác thủ công bị chặn"
     },
     "view": {
+      "takeover": {
+        "manualControlBlocked": "Thiết bị đang bận hoặc đang chạy campaign — thao tác thủ công bị chặn"
+      },
       "noDeviceConnected": "Chưa có thiết bị nào kết nối",
       "addDevice": "Thêm thiết bị",
       "selectDevice": "Chọn thiết bị",

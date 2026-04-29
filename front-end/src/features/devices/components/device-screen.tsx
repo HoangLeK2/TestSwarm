@@ -32,6 +32,8 @@ interface DeviceScreenProps {
   captionBelowFrame?: boolean;
   /** Must match Tailwind object-* on img/canvas so taps map to the visible crop. */
   streamCoverAlign?: 'center' | 'bottom';
+  /** Read-only preview: disable all interactions with device. */
+  interactive?: boolean;
 }
 
 export function DeviceScreen({
@@ -45,6 +47,7 @@ export function DeviceScreen({
   gestureMode,
   captionBelowFrame = false,
   streamCoverAlign = 'bottom',
+  interactive = true,
 }: DeviceScreenProps) {
   const t = useTranslations('devicesFarm');
   const wrapRef    = useRef<HTMLDivElement>(null);
@@ -389,12 +392,13 @@ export function DeviceScreen({
   return (
     <div className='flex h-full min-h-0 w-full flex-col'>
       <div
-        {...bind()}
+        {...(interactive ? bind() : {})}
         ref={wrapRef}
-        onClick={handleClick}
-        onDoubleClick={handleDoubleClick}
-        onWheel={handleWheel}
+        onClick={interactive ? handleClick : undefined}
+        onDoubleClick={interactive ? handleDoubleClick : undefined}
+        onWheel={interactive ? handleWheel : undefined}
         className={`relative min-h-0 w-full flex-1 overflow-hidden bg-black ${
+          !interactive ? 'cursor-default' :
           gestureMode === 'double_tap' ? 'cursor-cell' :
           gestureMode === 'drag' ? 'cursor-grab' :
           mode === 'swipe' ? 'cursor-crosshair' : 'cursor-pointer'

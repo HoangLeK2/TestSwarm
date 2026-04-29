@@ -50,7 +50,7 @@ export function CampaignMonitorDialog({ campaign, children }: Props) {
         </TooltipContent>
       </Tooltip>
 
-      <DialogContent className='flex max-h-[min(85vh,720px)] max-w-2xl flex-col gap-0 overflow-hidden p-0'>
+      <DialogContent className='flex h-[95dvh] max-h-[980px] min-w-[800px] flex-col gap-0 overflow-hidden p-0'>
         <DialogHeader className='shrink-0 border-b px-4 py-3 pr-14'>
           <div className='flex min-w-0 items-center gap-2'>
             <MonitorPlay size={15} className='shrink-0 text-primary' />

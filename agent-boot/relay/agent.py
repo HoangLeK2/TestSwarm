@@ -117,7 +117,7 @@ class RelayAgent:
         self._active_send_queue: Optional[asyncio.Queue] = None
         self._active_loop: Optional[asyncio.AbstractEventLoop] = None
 
-        self._u2_batch_enabled = os.getenv("U2_BATCH_ENABLED", "").lower() in ("1", "true")
+        self._u2_batch_enabled = os.getenv("U2_BATCH_ENABLED", "true").lower() in ("1", "true")
         self._u2_pool: Optional[U2SessionPool] = None
         self._u2_executor: Optional[Any] = None
         # A11y control-plane workers
@@ -187,10 +187,11 @@ class RelayAgent:
             headers["x-relay-api-key"] = self._api_key
 
         # send_queue: str for JSON text frames, bytes for binary frames
-        # maxsize=8: larger buffer absorbs IDR burst (1 large keyframe ~30-80KB)
-        # without dropping the following P-frames. Drains instantly on LAN.
-        # P-frames are dropped when full (decoder resyncs on next IDR).
-        send_queue: asyncio.Queue = asyncio.Queue(maxsize=8)
+        # maxsize=30: ~1s buffer at 30fps. Absorbs WiFi jitter spikes without
+        # dropping P-frames. IDR-on-drop (scrcpy_relay.py) limits freeze to
+        # ~150ms; larger queue reduces drop frequency at the cost of ~33ms extra
+        # worst-case latency (acceptable for device farm use).
+        send_queue: asyncio.Queue = asyncio.Queue(maxsize=30)
         loop = asyncio.get_running_loop()
         self._active_send_queue = send_queue
         self._active_loop = loop
@@ -270,7 +271,7 @@ class RelayAgent:
         from relay.grpc_client import GrpcRelayClient
         from relay.control_client import AgentControlClient
 
-        send_queue: asyncio.Queue = asyncio.Queue(maxsize=8)
+        send_queue: asyncio.Queue = asyncio.Queue(maxsize=30)
         loop = asyncio.get_running_loop()
         self._active_send_queue = send_queue
         self._active_loop = loop

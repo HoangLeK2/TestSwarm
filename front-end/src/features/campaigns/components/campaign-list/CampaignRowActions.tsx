@@ -284,7 +284,7 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
               <Square size={13} />
             </Button>
           )}
-          {running && previewSerial && (
+          {/* {running && previewSerial && (
             <Dialog>
               <DialogTrigger asChild>
                 <Button size='sm' variant='ghost' className='h-8 gap-1.5 px-2 text-xs'>
@@ -311,7 +311,7 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
                 </div>
               </DialogContent>
             </Dialog>
-          )}
+          )} */}
           <CampaignMonitorDialog campaign={campaign}>
             <Button
               type='button'

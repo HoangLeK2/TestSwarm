@@ -32,21 +32,11 @@ export function useH264Video(
   const workerRef  = useRef<Worker | null>(null);
   const rendererRef = useRef<WebGLRenderer | null>(null);
   const rafRef     = useRef<number | null>(null);
-  const latestFrameRef = useRef<VideoFrame | null>(null);
-  const latestSizeRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
 
-  // Drop any in-memory VideoFrame and tell worker the slot is free. Call on
-  // every decoder reset. Without this, a frame that was pending when the tab
-  // went hidden stays in ref — its underlying GPU buffer may be invalidated
-  // when Chrome suspends the page, so drawLatest silently fails on return,
-  // while the worker's frameInFlight stays true → no new frames pumped → black.
+  // Unblock the worker's frameInFlight gate on decoder reset. Push model renders
+  // immediately so there is no pending VideoFrame in a ref; this just resets the
+  // worker's in-flight flag so it resumes pumping after a reset/reconnect.
   const clearLatestFrame = () => {
-    const pending = latestFrameRef.current;
-    if (pending && typeof pending.close === 'function') {
-      try { pending.close(); } catch { /* already closed */ }
-    }
-    latestFrameRef.current = null;
-    latestSizeRef.current = { w: 0, h: 0 };
     workerRef.current?.postMessage({ type: 'frame-consumed' });
   };
   const onFrameRef = useRef(opts?.onFrame);
@@ -71,54 +61,36 @@ export function useH264Video(
       return;
     }
 
-    const worker = new Worker('/h264-worker.js?v=19');
+    const worker = new Worker('/h264-worker.js?v=21');
     workerRef.current = worker;
 
-    const drawLatest = () => {
+    worker.postMessage({ type: 'init' });
+
+    // Render frame immediately when worker pushes it — no 1-tick RAF delay.
+    const renderFrame = (frame: VideoFrame, w: number, h: number) => {
       const canvas = canvasRef.current;
-      const frame = latestFrameRef.current;
-      if (canvas && frame) {
-        try {
-          let renderer = rendererRef.current;
-          if (!renderer) {
-            renderer = new WebGLRenderer(canvas);
-            rendererRef.current = renderer;
-          }
-          if (renderer) {
-            const { w, h } = latestSizeRef.current;
-            // texImage2D can throw InvalidStateError when the VideoFrame's
-            // underlying GPU buffer was invalidated by the browser (e.g. the
-            // page was suspended while hidden). Swallow so the RAF chain
-            // keeps turning — the next decoded frame will render fine.
-            try {
-              renderer.render(frame, w, h);
-              onFrameRef.current?.();
-            } catch (err) {
-              console.debug('[H264] render skipped (invalidated frame):', err);
-            }
-          }
-        } finally {
-          if (typeof frame.close === 'function') {
-            try { frame.close(); } catch { /* already closed */ }
-          }
-          latestFrameRef.current = null;
-          workerRef.current?.postMessage({ type: 'frame-consumed' });
+      if (!canvas) { try { frame.close(); } catch { /* ok */ } return; }
+      try {
+        let renderer = rendererRef.current;
+        if (!renderer) { renderer = new WebGLRenderer(canvas); rendererRef.current = renderer; }
+        try { renderer.render(frame, w, h); onFrameRef.current?.(); } catch (err) {
+          console.debug('[H264] render skipped:', err);
         }
-      }
-      // Hard-sync decode handoff with display loop: pull at most one frame per RAF tick.
-      workerRef.current?.postMessage({ type: 'pull-frame' });
-      rafRef.current = requestAnimationFrame(drawLatest);
+      } finally { try { frame.close(); } catch { /* ok */ } }
     };
-    rafRef.current = requestAnimationFrame(drawLatest);
+
+    // RAF sends pull-frame as fallback for missed pushes (decoder reset, tab restore).
+    const keepalive = () => {
+      workerRef.current?.postMessage({ type: 'pull-frame' });
+      rafRef.current = requestAnimationFrame(keepalive);
+    };
+    rafRef.current = requestAnimationFrame(keepalive);
 
     worker.onmessage = ({ data }) => {
-      if (data.type === 'error') console.error('[H264] worker reported error:', data.message);
+      if (data.type === 'error') console.error('[H264] worker error:', data.message);
       if (data.type === 'frame' && data.frame) {
-        // Latest-frame-only mode: replace pending frame, close old one.
-        const prev = latestFrameRef.current;
-        if (prev && typeof prev.close === 'function') prev.close();
-        latestFrameRef.current = data.frame as VideoFrame;
-        latestSizeRef.current = { w: data.width as number, h: data.height as number };
+        renderFrame(data.frame as VideoFrame, data.width as number, data.height as number);
+        worker.postMessage({ type: 'frame-consumed' });
       }
       if (data.type === 'stats') {
         onStatsRef.current?.({
@@ -127,17 +99,11 @@ export function useH264Video(
           decodedFrames: Number(data.decodedFrames ?? 0),
           accel: String(data.accel ?? ''),
         });
-        // Useful for diagnosing browser decode bottlenecks in production logs.
-        console.debug(
-          '[H264] stats',
-          `q=${data.decodeQueueSize} dropped=${data.droppedDelta} decoded=${data.decodedFrames} accel=${data.accel}`
-        );
+        console.debug('[H264] stats',
+          `q=${data.decodeQueueSize} dropped=${data.droppedDelta} decoded=${data.decodedFrames} accel=${data.accel}`);
       }
     };
     worker.onerror = (e) => console.error('[H264] worker load error:', e.message);
-
-    // Worker only decodes and sends VideoFrame; drawing is done by main-thread RAF loop.
-    worker.postMessage({ type: 'init' });
 
     // Subscribe to binary frames synchronously.
     // ws.ts replays cached config + keyframe via queueMicrotask so they land
@@ -188,9 +154,7 @@ export function useH264Video(
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
       }
-      const pending = latestFrameRef.current;
-      if (pending && typeof pending.close === 'function') pending.close();
-      latestFrameRef.current = null;
+      // Push model: frames are rendered and closed immediately — no pending ref to clean up.
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -313,14 +277,8 @@ export function useH264Video(
       if (!w || !s) return;
       w.postMessage({ type: 'reset' });
       clearLatestFrame();
-      // Kick the RAF chain in case the browser didn't resume it cleanly
-      // (extreme cases after long hide windows).
-      if (rafRef.current == null) {
-        // Guard: drawLatest is hoisted inside the mount effect. We can't
-        // reach it from here. Re-posting pull-frame unblocks the worker,
-        // and the next natural RAF tick will resume drawing.
-        workerRef.current?.postMessage({ type: 'pull-frame' });
-      }
+      // Push model: worker pumps frames on its own. frame-consumed unblocks
+      // the worker's frameInFlight gate in case it stalled while hidden.
       setTimeout(() => {
         replayCachedBootstrap(w, s);
         requestIdr(s);

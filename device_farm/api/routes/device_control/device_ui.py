@@ -9,6 +9,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from api.schemas.device_control import HitTestRequest, TapSelectorRequest
+from api.routes.device_control.guards import reject_manual_control_if_busy
 from runtime.core import DeviceManager
 from runtime.xml_utils import XML_PARSE_ERRORS, parse_xml
 
@@ -121,6 +122,8 @@ def build_device_ui_router(manager: DeviceManager) -> APIRouter:
         device = manager.get_device(serial)
         if not device:
             return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
+        if blocked := await reject_manual_control_if_busy(device):
+            return blocked
         loop = asyncio.get_running_loop()
         try:
             await loop.run_in_executor(None, device.tap_selector, body.by, body.value)

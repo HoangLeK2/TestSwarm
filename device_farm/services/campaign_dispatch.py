@@ -266,11 +266,14 @@ async def enqueue_campaign_run_temporal(
 
     workflow_ids: list[str] = []
 
-    for d in devices:
+    for slot_idx, d in enumerate(devices):
         for scen in scenarios:
             if not scen.steps:
                 continue
             acct_vars = per_scenario_device_vars.get(scen.id, {}).get(d.id, {})
+            # Inject per-device slot so scenarios can branch on DEVICE_INDEX
+            # without manual override (e.g. fb_multi_account_groups template).
+            slot_vars: Dict[str, Any] = {"DEVICE_INDEX": str(slot_idx)}
             wf_id = f"campaign:{campaign_id}:device:{d.serial}:scenario:{scen.id}"
             try:
                 from temporalio.common import WorkflowIDReusePolicy
@@ -285,7 +288,7 @@ async def enqueue_campaign_run_temporal(
                         campaign_id=campaign_id,
                         device_serial=d.serial,
                         steps=scen.steps,
-                        variables={**_sc_vars, **acct_vars},
+                        variables={**_sc_vars, **slot_vars, **acct_vars},
                         campaign_vars=_campaign_vars,
                         scenario_registry=registry,
                         run_id=execution_id,

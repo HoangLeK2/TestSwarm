@@ -1,13 +1,13 @@
 'use strict';
-console.log('[H264Worker] LOADED v18');
+console.log('[H264Worker] LOADED v21');
 /**
- * H264 VideoDecoder — Web Worker + OffscreenCanvas, zero-buffering.
+ * H264 VideoDecoder — Web Worker, push-model rendering.
  *
  * Strategy:
- *   1. Try hardware decode (prefer-hardware) — fast, low-latency.
+ *   1. prefer-hardware first — fast, low-latency.
  *   2. On async error → flag hardware as broken, reinit with software (no-preference).
- *   3. Low-latency mode: drop delta frames only when queue/latency crosses thresholds.
- *      This favors freshness over completeness (less "khung khung"/rubber-band lag).
+ *   3. Push frame to main thread immediately on decode output.
+ *   4. Drop delta frames only when queue/latency crosses thresholds.
  */
 
 let decoder       = null;
@@ -19,11 +19,11 @@ let decodedFrames = 0;
 let t0Us          = 0;      // local monotonic origin for chunk timestamps
 let lastTsUs      = 0;      // strictly increasing chunk timestamp guard
 let lastDecodeTsUs = 0;     // timestamp of last chunk accepted by decoder
-let pendingFrame = null;    // latest frame waiting to be sent
+let pendingFrame = null;    // latest frame waiting to be sent (VideoFrame path)
 let frameInFlight = false;  // one frame has been sent but not consumed by main
 let lastOutputMs = 0;
 let decodeFps = 15;
-let targetFps = 15;  // default matches config.yaml scrcpy_max_fps; updated via 'set-target-fps'
+let targetFps = 15;  // updated via 'set-target-fps'
 let flushInFlight = false;
 let needKeyframe = false;
 const MAX_DRIFT_US = 500000;
@@ -199,7 +199,8 @@ function initDecoder(avccRecord) {
         try { pendingFrame.close(); } catch (_) {}
       }
       pendingFrame = frame;
-      // Pull-model: main thread requests frame on RAF; worker does not push eagerly.
+      // Push: send immediately if slot free; pull-frame in RAF is fallback.
+      tryPostPendingFrame();
       if ((decodedFrames & 15) === 0) {
         self.postMessage({ type: 'fps' });
       }
@@ -261,6 +262,7 @@ self.onmessage = function(event) {
     case 'init':
       console.log('[H264Worker] init');
       break;
+
 
     case 'config': {
       var avcc = new Uint8Array(data.avcc);

@@ -206,7 +206,19 @@
     "accounts": "Accounts",
     "account_groups": "Account groups",
     "scenario_templates": "Scenario Templates",
-    "content": "Collected Results"
+    "content": "Collected Results",
+    "infrastructure": "Infrastructure",
+    "relay_agents": "Relay Agents"
+  },
+  "relayAgentsFeature": {
+    "title": "Relay Agents",
+    "onlineSummary": "{online}/{total} online",
+    "loading": "Loading...",
+    "empty": "No relay agents connected",
+    "bootstrapAll": "Bootstrap All",
+    "noDevices": "No devices",
+    "moreDevices": "+{count} more",
+    "lastHeartbeat": "Last heartbeat: {time}"
   },
   "deviceGroupsFeature": {
     "list": {
@@ -801,9 +813,12 @@
       "saveTemplateSuccess": "Template saved"
     },
     "takeover": {
-      "campaignRunning": "Campaign running — manual input blocked"
+      "manualControlBlocked": "Device busy or campaign running — manual input blocked"
     },
     "view": {
+      "takeover": {
+        "manualControlBlocked": "Device busy or campaign running — manual input blocked"
+      },
       "noDeviceConnected": "No connected devices",
       "addDevice": "Add device",
       "selectDevice": "Select device",

@@ -12,6 +12,7 @@ from tasks.fb_extract import (
     _cluster_into_posts,
     _comment_line_is_badge,
     _is_comment_row_parse_noise,
+    _hierarchy_is_fb_comment_sheet,
     _extract_comment,
     _extract_post,
     parse_fb_posts_from_xml,
@@ -299,6 +300,48 @@ def test_parse_noise_drops_timestamp_leak_in_comment_body() -> None:
 def test_parse_noise_drops_badge_duplicate_author_body() -> None:
     c = {"author": "Người đóng góp nổi bật", "text": "Người đóng góp nổi bật"}
     assert _is_comment_row_parse_noise(c) is True
+
+
+def test_comment_sheet_detects_text_close_plus_composer_footer() -> None:
+    from lxml import etree
+
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy>
+  <node package="com.facebook.katana" class="android.widget.FrameLayout" bounds="[0,0][1080,2400]">
+    <node package="com.facebook.katana" class="android.widget.Button" text="Đóng" bounds="[40,120][180,180]"/>
+    <node package="com.facebook.katana" class="android.widget.Button" text="Đang hiển thị Phù hợp nhất bình luận" bounds="[300,640][980,710]"/>
+    <node package="com.facebook.katana" class="androidx.recyclerview.widget.RecyclerView" scrollable="true" bounds="[0,720][1080,2130]">
+      <node package="com.facebook.katana" class="android.view.ViewGroup" bounds="[0,760][1080,980]">
+        <node package="com.facebook.katana" class="android.widget.TextView" text="Nguyen Van A" bounds="[210,790][470,835]"/>
+        <node package="com.facebook.katana" class="android.widget.TextView" text="Comment body here" bounds="[210,845][860,910]"/>
+      </node>
+    </node>
+    <node package="com.facebook.katana" class="android.widget.AutoCompleteTextView" text="Viết bình luận..." bounds="[120,2170][980,2260]"/>
+  </node>
+</hierarchy>"""
+    root = etree.fromstring(xml.encode("utf-8"))
+    assert _hierarchy_is_fb_comment_sheet(root) is True
+
+
+def test_comment_sheet_does_not_misclassify_feed_with_close_and_inline_comment_ui() -> None:
+    from lxml import etree
+
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy>
+  <node package="com.facebook.katana" class="android.widget.FrameLayout" bounds="[0,0][1080,2400]">
+    <node package="com.facebook.katana" class="android.widget.Button" text="Đóng" bounds="[40,120][180,180]"/>
+    <node package="com.facebook.katana" class="androidx.recyclerview.widget.RecyclerView" scrollable="true" bounds="[0,200][1080,2360]">
+      <node package="com.facebook.katana" class="android.view.ViewGroup" bounds="[0,280][1080,1180]">
+        <node package="com.facebook.katana" class="android.widget.TextView" text="Tac Gia" bounds="[40,320][280,365]"/>
+        <node package="com.facebook.katana" class="android.widget.TextView" text="Noi dung bai viet rat dai de parse feed" bounds="[40,410][980,520]"/>
+        <node package="com.facebook.katana" class="android.widget.Button" text="Đang hiển thị Phù hợp nhất bình luận" bounds="[320,890][980,960]"/>
+        <node package="com.facebook.katana" class="android.widget.AutoCompleteTextView" text="Viết bình luận..." bounds="[120,980][980,1060]"/>
+      </node>
+    </node>
+  </node>
+</hierarchy>"""
+    root = etree.fromstring(xml.encode("utf-8"))
+    assert _hierarchy_is_fb_comment_sheet(root) is False
 
 
 # ── extract_post link classification ─────────────────────────────────────────

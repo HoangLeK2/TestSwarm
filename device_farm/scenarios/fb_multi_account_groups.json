@@ -1,0 +1,138 @@
+{
+  "instructions": "Nhiều tài khoản vào nhiều nhóm FB — mỗi thiết bị nhận tập nhóm riêng, không trùng nhau.\n\nDEVICE_INDEX tự inject theo thứ tự thiết bị trong campaign (0, 1, 2…) — không cần override thủ công.\n\nCách cấu hình:\n  1. Thêm thiết bị vào campaign theo thứ tự muốn đánh số.\n  2. Điền nhóm: GROUP_0=[...], GROUP_COUNT_0=N cho device 0; GROUP_1=[...] cho device 1; v.v.\n  3. Thêm device thứ N: copy block if_variable DEVICE_INDEX equals 'N', thêm GROUP_N + GROUP_COUNT_N.\n  4. Nhóm/device > 5: thêm if_variable GROUP_IDX equals 'K' trong loop.",
+  "variables": {
+    "DEVICE_INDEX": "0",
+
+    "GROUP_0":       ["Nhóm A1", "Nhóm A2", "Nhóm A3"],
+    "GROUP_COUNT_0": 3,
+
+    "GROUP_1":       ["Nhóm B1", "Nhóm B2", "Nhóm B3"],
+    "GROUP_COUNT_1": 3,
+
+    "GROUP_2":       ["Nhóm C1", "Nhóm C2", "Nhóm C3"],
+    "GROUP_COUNT_2": 3,
+
+    "GROUP_3":       ["Nhóm D1", "Nhóm D2", "Nhóm D3"],
+    "GROUP_COUNT_3": 3,
+
+    "GROUP_4":       ["Nhóm E1", "Nhóm E2", "Nhóm E3"],
+    "GROUP_COUNT_4": 3,
+
+    "GROUP_5":       ["Nhóm F1", "Nhóm F2", "Nhóm F3"],
+    "GROUP_COUNT_5": 3,
+
+    "MAX_SCROLLS": 8
+  },
+  "steps": [
+    {
+      "type": "if_variable", "name": "DEVICE_INDEX", "equals": "0",
+      "then": [
+        { "type": "set_variable", "name": "MY_GROUPS",   "value": "${GROUP_0}" },
+        { "type": "set_variable", "name": "GROUP_COUNT", "value": "${GROUP_COUNT_0}" }
+      ]
+    },
+    {
+      "type": "if_variable", "name": "DEVICE_INDEX", "equals": "1",
+      "then": [
+        { "type": "set_variable", "name": "MY_GROUPS",   "value": "${GROUP_1}" },
+        { "type": "set_variable", "name": "GROUP_COUNT", "value": "${GROUP_COUNT_1}" }
+      ]
+    },
+    {
+      "type": "if_variable", "name": "DEVICE_INDEX", "equals": "2",
+      "then": [
+        { "type": "set_variable", "name": "MY_GROUPS",   "value": "${GROUP_2}" },
+        { "type": "set_variable", "name": "GROUP_COUNT", "value": "${GROUP_COUNT_2}" }
+      ]
+    },
+    {
+      "type": "if_variable", "name": "DEVICE_INDEX", "equals": "3",
+      "then": [
+        { "type": "set_variable", "name": "MY_GROUPS",   "value": "${GROUP_3}" },
+        { "type": "set_variable", "name": "GROUP_COUNT", "value": "${GROUP_COUNT_3}" }
+      ]
+    },
+    {
+      "type": "if_variable", "name": "DEVICE_INDEX", "equals": "4",
+      "then": [
+        { "type": "set_variable", "name": "MY_GROUPS",   "value": "${GROUP_4}" },
+        { "type": "set_variable", "name": "GROUP_COUNT", "value": "${GROUP_COUNT_4}" }
+      ]
+    },
+    {
+      "type": "if_variable", "name": "DEVICE_INDEX", "equals": "5",
+      "then": [
+        { "type": "set_variable", "name": "MY_GROUPS",   "value": "${GROUP_5}" },
+        { "type": "set_variable", "name": "GROUP_COUNT", "value": "${GROUP_COUNT_5}" }
+      ]
+    },
+
+    { "type": "open_url", "url": "https://www.facebook.com" },
+    { "type": "wait_stable", "timeout": 6, "stable_duration": 0.5 },
+    { "type": "dismiss_popup", "retries": 2 },
+
+    { "type": "set_variable", "name": "GROUP_IDX", "value": 0 },
+
+    {
+      "type": "loop",
+      "count": "${GROUP_COUNT}",
+      "steps": [
+        { "type": "set_variable", "name": "GROUP_IDX", "increment": 1 },
+
+        { "type": "if_variable", "name": "GROUP_IDX", "equals": "1",
+          "then": [{ "type": "set_variable", "name": "GROUP_NAME", "from_list": "${MY_GROUPS}" }] },
+        { "type": "if_variable", "name": "GROUP_IDX", "equals": "2",
+          "then": [{ "type": "set_variable", "name": "GROUP_NAME", "from_list": "${MY_GROUPS}" }] },
+        { "type": "if_variable", "name": "GROUP_IDX", "equals": "3",
+          "then": [{ "type": "set_variable", "name": "GROUP_NAME", "from_list": "${MY_GROUPS}" }] },
+        { "type": "if_variable", "name": "GROUP_IDX", "equals": "4",
+          "then": [{ "type": "set_variable", "name": "GROUP_NAME", "from_list": "${MY_GROUPS}" }] },
+        { "type": "if_variable", "name": "GROUP_IDX", "equals": "5",
+          "then": [{ "type": "set_variable", "name": "GROUP_NAME", "from_list": "${MY_GROUPS}" }] },
+
+        {
+          "type": "if_element", "by": "content-desc", "value": "Tìm kiếm", "timeout": 4,
+          "then": [{ "type": "tap_selector", "by": "content-desc", "value": "Tìm kiếm", "timeout": 4 }],
+          "else": [{ "type": "tap_ratio", "x": 0.87, "y": 0.035 }]
+        },
+        { "type": "wait_stable", "timeout": 4, "stable_duration": 0.4 },
+        { "type": "input_text", "text": "${GROUP_NAME}", "via": "u2" },
+        { "type": "wait", "seconds": 2 },
+
+        {
+          "type": "if_element", "by": "text", "value": "Nhóm", "timeout": 4,
+          "then": [
+            { "type": "tap_selector", "by": "text", "value": "Nhóm", "timeout": 3 },
+            { "type": "wait_stable", "timeout": 3, "stable_duration": 0.4 }
+          ]
+        },
+
+        {
+          "type": "if_element", "by": "text", "value": "${GROUP_NAME}", "timeout": 5,
+          "then": [{ "type": "tap_selector", "by": "text", "value": "${GROUP_NAME}", "timeout": 4 }],
+          "else": [{ "type": "tap_ratio", "x": 0.5, "y": 0.25 }]
+        },
+        { "type": "wait_stable", "timeout": 5, "stable_duration": 0.5 },
+        { "type": "dismiss_popup", "retries": 2 },
+
+        {
+          "type": "repeat",
+          "count": "${MAX_SCROLLS}",
+          "steps": [
+            { "type": "scroll_down", "start_x_ratio": 0.3, "start_y_ratio": 0.65, "end_y_ratio": 0.35 },
+            { "type": "set_variable", "name": "_W", "from_list": [1, 1.5, 2, 2, 2.5] },
+            { "type": "wait", "seconds": "${_W}" }
+          ]
+        },
+
+        { "type": "key", "key": "back" },
+        { "type": "wait", "seconds": 1 },
+        { "type": "key", "key": "back" },
+        { "type": "wait", "seconds": 1 },
+        { "type": "dismiss_popup", "retries": 1 }
+      ]
+    },
+
+    { "type": "key", "key": "home" }
+  ]
+}

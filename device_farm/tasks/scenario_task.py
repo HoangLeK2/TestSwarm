@@ -1053,6 +1053,44 @@ def _try_publish_status(device: "DeviceClient") -> None:
         pass
 
 
+def _try_publish_scenario_active_redis(device: "DeviceClient") -> None:
+    """Best-effort: publish scenario_active to Redis for cross-process WS/API gates.
+
+    This is needed when Temporal activities run in a separate worker process:
+    in-memory ``device._scenario_active`` is process-local, so the web process
+    must consult Redis to know the device is still under automation.
+    """
+    try:
+        from services import redis_store
+
+        if not redis_store.enabled():
+            return
+        r = redis_store.client()
+        if r is None:
+            return
+        serial = getattr(device, "serial", "")
+        if not serial:
+            return
+        n = int(getattr(device, "_scenario_active", 0) or 0)
+        key = redis_store.key(f"device:{serial}:scenario_active")
+        loop = getattr(device, "_loop", None)
+        if loop is None:
+            return
+
+        async def _set() -> None:
+            if n > 0:
+                # TTL prevents stale locks if the worker crashes mid-run.
+                await r.setex(key, 300, str(n))
+            else:
+                await r.delete(key)
+
+        import asyncio as _aio
+
+        _aio.run_coroutine_threadsafe(_set(), loop)
+    except Exception:
+        pass
+
+
 def run_scenario_task(
     device: "DeviceClient",
     scenario: Dict[str, Any],
@@ -1109,6 +1147,7 @@ def run_scenario_task(
         with lock:
             device._scenario_active = int(getattr(device, "_scenario_active", 0)) + 1
         _try_publish_status(device)
+        _try_publish_scenario_active_redis(device)
     try:
         return ScenarioExecutor(sc).run()
     finally:
@@ -1122,6 +1161,7 @@ def run_scenario_task(
                 # Lock disappeared somehow — best-effort reset
                 device._scenario_active = 0
             _try_publish_status(device)
+            _try_publish_scenario_active_redis(device)
 
 
 def _run_scenario_task_legacy(
@@ -2248,9 +2288,11 @@ def _run_scenario_task_legacy(
                     # Uses new_posts[0] (topmost post on screen), NOT the first "new" post,
                     # because tap_selector("Bình luận") taps the topmost button on screen.
                     # Even if new_posts[0] is a duplicate, its content_hash exists in DB.
+                    _post_dedupe_field = str(step.get("dedupe_field") or "post_key")
+                    ctx["_fb_posts_dedupe_field"] = _post_dedupe_field
                     if new_posts:
                         ctx["_first_new_post_hash"] = compute_content_hash(
-                            new_posts[0], dedupe_field="post_key"
+                            new_posts[0], dedupe_field=_post_dedupe_field
                         )
                         # Accumulate pid→hash across batches so tap_fb_comment_button
                         # (or a late tap on a cached post) can still resolve the parent.
@@ -2259,7 +2301,7 @@ def _run_scenario_task_legacy(
                         for _p in new_posts:
                             _p_pid = _p.get("_pid")
                             if _p_pid:
-                                pid_map[_p_pid] = compute_content_hash(_p, dedupe_field="post_key")
+                                pid_map[_p_pid] = compute_content_hash(_p, dedupe_field=_post_dedupe_field)
                         # Top-of-feed _pid fallback. Still useful when tap_fb_comment_button
                         # is not used, but is OVERRIDDEN by that step on success to match
                         # the actual tapped post.

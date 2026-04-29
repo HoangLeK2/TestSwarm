@@ -148,15 +148,7 @@ def _parse_posts_with_diag(xml: str, source_index: int) -> Tuple[List[Dict[str, 
         is_fb_post_truncated,
     )
     root = _parse_xml(xml)
-    if root is not None and _hierarchy_is_fb_comment_sheet(root):
-        return [], {
-            "reason_code": "wrong_screen_comment_sheet",
-            "posts_returned": 0,
-            "truncated_post_count": 0,
-            "candidate_clusters": 0,
-            "filtered_junk_count": 0,
-            "locale_tokens_hit": [],
-        }
+    is_comment_sheet = bool(root is not None and _hierarchy_is_fb_comment_sheet(root))
     posts = parse_fb_posts_from_xml(xml, source_index=source_index)
     if posts:
         return posts, {
@@ -166,6 +158,20 @@ def _parse_posts_with_diag(xml: str, source_index: int) -> Tuple[List[Dict[str, 
             "candidate_clusters": len(posts),
             "filtered_junk_count": 0,
             "locale_tokens_hit": [],
+            "comment_sheet": is_comment_sheet,
+        }
+    if is_comment_sheet:
+        # Expanded Facebook views can be rendered as "comment sheet" while still
+        # containing a valid post body. We now let parser attempt extraction first;
+        # if nothing is found, treat as expected empty instead of hard wrong-screen.
+        return [], {
+            "reason_code": "comment_sheet_no_posts_expected",
+            "posts_returned": 0,
+            "truncated_post_count": 0,
+            "candidate_clusters": 0,
+            "filtered_junk_count": 0,
+            "locale_tokens_hit": [],
+            "comment_sheet": True,
         }
     _, diag = parse_fb_posts_from_xml_with_diagnostic(xml, source_index=source_index)
     return posts, diag

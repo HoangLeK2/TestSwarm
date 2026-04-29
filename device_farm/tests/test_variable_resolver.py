@@ -120,7 +120,7 @@ def test_campaign_used_when_no_scenario_var():
 
 def test_env_fallback(monkeypatch):
     monkeypatch.setenv("MY_FARM_VAR", "from_env")
-    ctx = VariableContext()
+    ctx = VariableContext(env_whitelist=frozenset({"MY_FARM_VAR"}))
     assert ctx.resolve("${MY_FARM_VAR}") == "from_env"
 
 

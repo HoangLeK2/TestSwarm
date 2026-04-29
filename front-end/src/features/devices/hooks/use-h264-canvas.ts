@@ -20,7 +20,9 @@ export function useH264Video(
   serial: string,
   canvasRef: React.RefObject<HTMLCanvasElement | null>,
   opts?: {
+    restartKey?: number;
     onFrame?: () => void;
+    onStall?: (reason: 'no_packets' | 'decoder_stalled') => void;
     onStats?: (stats: {
       decodeQueueSize: number;
       droppedDelta: number;
@@ -29,9 +31,14 @@ export function useH264Video(
     }) => void;
   }
 ) {
+  const restartKey = opts?.restartKey ?? 0;
   const workerRef  = useRef<Worker | null>(null);
   const rendererRef = useRef<WebGLRenderer | null>(null);
   const rafRef     = useRef<number | null>(null);
+  const mountedAtRef = useRef(0);
+  const lastVideoPacketAtRef = useRef(0);
+  const lastRenderedFrameAtRef = useRef(0);
+  const lastRecoveryAtRef = useRef(0);
 
   // Unblock the worker's frameInFlight gate on decoder reset. Push model renders
   // immediately so there is no pending VideoFrame in a ref; this just resets the
@@ -40,6 +47,7 @@ export function useH264Video(
     workerRef.current?.postMessage({ type: 'frame-consumed' });
   };
   const onFrameRef = useRef(opts?.onFrame);
+  const onStallRef = useRef(opts?.onStall);
   const onStatsRef = useRef(opts?.onStats);
   const serialRef  = useRef(serial);
   const wsConnectedRef = useRef(false);
@@ -50,12 +58,20 @@ export function useH264Video(
   const everDisconnectedRef = useRef(false);
 
   onFrameRef.current = opts?.onFrame;
+  onStallRef.current = opts?.onStall;
   onStatsRef.current = opts?.onStats;
   serialRef.current  = serial;
 
   // ── Main lifecycle: spawn worker + subscribe to frames ───────────────────
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    if (!serial) {
+      mountedAtRef.current = 0;
+      lastVideoPacketAtRef.current = 0;
+      lastRenderedFrameAtRef.current = 0;
+      lastRecoveryAtRef.current = 0;
+      return;
+    }
     if (!('VideoDecoder' in window)) {
       console.warn('[H264] WebCodecs not supported in this browser');
       return;
@@ -63,6 +79,7 @@ export function useH264Video(
 
     const worker = new Worker('/h264-worker.js?v=21');
     workerRef.current = worker;
+    mountedAtRef.current = Date.now();
 
     worker.postMessage({ type: 'init' });
 
@@ -73,7 +90,11 @@ export function useH264Video(
       try {
         let renderer = rendererRef.current;
         if (!renderer) { renderer = new WebGLRenderer(canvas); rendererRef.current = renderer; }
-        try { renderer.render(frame, w, h); onFrameRef.current?.(); } catch (err) {
+        try {
+          renderer.render(frame, w, h);
+          lastRenderedFrameAtRef.current = Date.now();
+          onFrameRef.current?.();
+        } catch (err) {
           console.debug('[H264] render skipped:', err);
         }
       } finally { try { frame.close(); } catch { /* ok */ } }
@@ -120,6 +141,7 @@ export function useH264Video(
       }
       const frameType = view.getUint8(0);
       if (frameType !== 0x10 && frameType !== 0x11) return;
+      if (frameType === 0x11) lastVideoPacketAtRef.current = Date.now();
 
       const slen = view.getUint8(1);
       if (buf.byteLength < 2 + slen + 4) return;
@@ -143,6 +165,7 @@ export function useH264Video(
 
     return () => {
       unsubscribe();
+      mountedAtRef.current = 0;
       worker.postMessage({ type: 'reset' });
       worker.terminate();
       workerRef.current = null;
@@ -156,8 +179,7 @@ export function useH264Video(
       }
       // Push model: frames are rendered and closed immediately — no pending ref to clean up.
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [serial, restartKey]);
 
   // ── Reset when serial changes, then immediately replay cached config+IDR ──
   // Without replay, the worker sits with decoder=null until the next live IDR
@@ -223,6 +245,10 @@ export function useH264Video(
     const w = workerRef.current;
     if (!w) return;
 
+    lastVideoPacketAtRef.current = 0;
+    lastRenderedFrameAtRef.current = 0;
+    lastRecoveryAtRef.current = 0;
+    mountedAtRef.current = Date.now();
     w.postMessage({ type: 'reset' });
     clearLatestFrame();
     if (!serial) return;
@@ -232,7 +258,7 @@ export function useH264Video(
     // be stale or missing; the server-forced IDR lands within ~100ms and
     // guarantees decoder sync even if no prior viewer primed the cache.
     requestIdr(serial);
-  }, [serial]);
+  }, [serial, restartKey]);
 
   // Reconnect warm-up: WS reconnect often leaves decoder on stale refs.
   // Refresh worked because it recreated hook+worker; do that automatically.
@@ -286,5 +312,57 @@ export function useH264Video(
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
+  }, []);
+
+  // Runtime freeze recovery: the WS can stay open and keep receiving H264
+  // packets while WebCodecs stops producing frames (bad P-frame chain, decoder
+  // hiccup, GPU/context stall). In that state the canvas keeps showing the last
+  // good frame forever, so periodically ask for a fresh IDR and reset decoder.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const s = serialRef.current;
+      const w = workerRef.current;
+      if (!s || !w) return;
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+
+      const now = Date.now();
+      const mountedAt = mountedAtRef.current;
+      const lastPacketAt = lastVideoPacketAtRef.current;
+      const lastRenderedAt = lastRenderedFrameAtRef.current;
+      if (!lastPacketAt) {
+        if (mountedAt && now - mountedAt > 6000 && now - lastRecoveryAtRef.current > 6000) {
+          lastRecoveryAtRef.current = now;
+          onStallRef.current?.('no_packets');
+          requestIdr(s);
+        }
+        return;
+      }
+
+      const packetAgeMs = now - lastPacketAt;
+      const renderedAgeMs = lastRenderedAt ? now - lastRenderedAt : Infinity;
+
+      // If no video packets are arriving, this is likely a transport/agent stall;
+      // an IDR request is cheap and avoids waiting for the next user interaction.
+      if (packetAgeMs > 8000 && now - lastRecoveryAtRef.current > 8000) {
+        lastRecoveryAtRef.current = now;
+        onStallRef.current?.('no_packets');
+        requestIdr(s);
+        return;
+      }
+
+      // Packets are arriving but no frame has rendered recently: reset the
+      // browser decoder and request a keyframe to rebuild the reference chain.
+      if (packetAgeMs < 2500 && renderedAgeMs > 5000 && now - lastRecoveryAtRef.current > 5000) {
+        lastRecoveryAtRef.current = now;
+        onStallRef.current?.('decoder_stalled');
+        w.postMessage({ type: 'reset' });
+        clearLatestFrame();
+        setTimeout(() => {
+          replayCachedBootstrap(w, s);
+          requestIdr(s);
+        }, 30);
+      }
+    }, 2000);
+    return () => clearInterval(timer);
   }, []);
 }

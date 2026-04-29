@@ -41,15 +41,17 @@ def test_comment_button_tokens_include_vn_and_en():
 
 def test_author_prefix_matches_vn_and_en():
     assert _author_prefix_match("ảnh đại diện của nguyễn a") is not None
+    assert _author_prefix_match("lựa chọn khác cho bài viết của nguyễn a") is not None
     assert _author_prefix_match("profile picture of john doe") is not None
     assert _author_prefix_match("profile photo of jane") is not None
     assert _author_prefix_match("some other content") is None
 
 
-def test_author_prefixes_frozen_vn_en_only():
+def test_author_prefixes_frozen_vn_en_only_with_vn_overflow_menu():
     # Red-team: do NOT add JA/ZH tokens without a capture that forces them.
     assert set(_AUTHOR_PREFIXES) == {
         "ảnh đại diện của",
+        "lựa chọn khác cho bài viết của",
         "profile picture of",
         "profile photo of",
     }

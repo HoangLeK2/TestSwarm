@@ -9,7 +9,7 @@ import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 import { tokenStorage } from '@/lib/token-storage';
 import { useH264Video } from '../hooks/use-h264-canvas';
-import { subscribeDeviceFarm } from '../services/ws';
+import { reconnectDeviceFarmSocket, subscribeDeviceFarm } from '../services/ws';
 import { useTranslations } from 'next-intl';
 import { SHOW_RELAY_SCRCPY_UI_TOGGLE } from '../streaming-ui-flags';
 
@@ -75,7 +75,10 @@ export function DeviceScreen({
   const h264TimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const h264StableTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const h264WarmupRef = React.useRef<{ startedAt: number; frames: number }>({ startedAt: 0, frames: 0 });
+  const h264RecoveryBurstRef = React.useRef<{ firstAt: number; count: number }>({ firstAt: 0, count: 0 });
   const [mjpegEnabled, setMjpegEnabled] = useState(true);
+  const [h264Stalled, setH264Stalled] = useState(false);
+  const [h264RestartKey, setH264RestartKey] = useState(0);
 
   const [streamingFlags, setStreamingFlags] = useState<{
     mode: string;
@@ -145,8 +148,12 @@ export function DeviceScreen({
         if (!checked) {
           setHasFrame(false);
           setH264Active(false);
+          setH264Stalled(false);
+          setH264RestartKey((key) => key + 1);
           setMjpegEnabled(false);
         } else {
+          setH264Stalled(false);
+          setH264RestartKey((key) => key + 1);
           setMjpegEnabled(true);
         }
       } catch (err) {
@@ -164,13 +171,16 @@ export function DeviceScreen({
     [device.serial, isActive, isContinuous, t]
   );
 
-  // In continuous mode, prioritize H264 path and avoid MJPEG baseline contention.
+  // In continuous mode, keep MJPEG visible until H264 is actually rendering.
+  // Otherwise the canvas can be black during decoder warm-up or IDR recovery.
   const mjpegUrl = React.useMemo(() => {
-    if (!isActive || !mjpegEnabled || h264PrimaryMode) return null;
-    const base = `${deviceFarmBackendBase}/stream/${encodeURIComponent(device.serial)}?fps=30`;
+    if (!isActive || !mjpegEnabled) return null;
+    if (h264PrimaryMode && h264Active && !h264Stalled) return null;
+    const fps = h264PrimaryMode ? 5 : 30;
+    const base = `${deviceFarmBackendBase}/stream/${encodeURIComponent(device.serial)}?fps=${fps}${h264Stalled ? '&fresh=1' : ''}`;
     const token = tokenStorage.getAuthToken();
     return token ? `${base}&token=${encodeURIComponent(token)}` : base;
-  }, [isActive, mjpegEnabled, device.serial, h264PrimaryMode]);
+  }, [isActive, mjpegEnabled, device.serial, h264PrimaryMode, h264Active, h264Stalled]);
 
   useEffect(() => {
     setMjpegFailed(false);
@@ -182,12 +192,13 @@ export function DeviceScreen({
     isActive && relayH264Allowed ? device.serial : '',
     canvasRef,
     {
+      restartKey: h264RestartKey,
       onFrame: useCallback(() => {
         if (!hasFrame) setHasFrame(true);
 
-        // Warm-up gate: avoid switching to H264 on the very first decoded frame.
-        // The first 1-2 frames after connect/reconnect are often unstable and
-        // cause visible "giat" when we fade out MJPEG too early.
+        // Once a frame has rendered, the canvas is no longer black. Switch back
+        // to H264 immediately; staying on low-FPS MJPEG makes the stream feel
+        // frozen even though the decoder has recovered.
         const now = Date.now();
         const warm = h264WarmupRef.current;
         if (warm.startedAt === 0 || (now - warm.startedAt) > 1500) {
@@ -196,8 +207,9 @@ export function DeviceScreen({
         } else {
           warm.frames += 1;
         }
-        if (!h264Active && warm.frames >= 4) {
+        if (!h264Active && warm.frames >= 1) {
           setH264Active(true);
+          if (h264Stalled) setH264Stalled(false);
         }
 
         // In H264-primary mode, keep showing the last decoded frame on static scenes.
@@ -212,24 +224,48 @@ export function DeviceScreen({
           if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
           h264TimeoutRef.current = setTimeout(() => setH264Active(false), 8000);
         }
-      }, [hasFrame, h264Active, h264PrimaryMode]),
+      }, [hasFrame, h264Active, h264PrimaryMode, h264Stalled]),
+      onStall: useCallback(() => {
+        const now = Date.now();
+        const burst = h264RecoveryBurstRef.current;
+        if (burst.firstAt === 0 || now - burst.firstAt > 45_000) {
+          burst.firstAt = now;
+          burst.count = 1;
+        } else {
+          burst.count += 1;
+        }
+        setH264Active(false);
+        setH264Stalled(true);
+        h264WarmupRef.current = { startedAt: 0, frames: 0 };
+        setH264RestartKey((key) => key + 1);
+        setHasFrame(false);
+        setMjpegEnabled(true);
+        if (burst.count >= 3) {
+          burst.firstAt = now;
+          burst.count = 0;
+          reconnectDeviceFarmSocket('repeated_h264_stall');
+        }
+      }, []),
     }
   );
 
   // Reset h264Active when device changes or goes offline
   useEffect(() => {
     setH264Active(false);
+    setH264Stalled(false);
+    h264RecoveryBurstRef.current = { firstAt: 0, count: 0 };
+    setH264RestartKey((key) => key + 1);
     setMjpegEnabled(true);
     h264WarmupRef.current = { startedAt: 0, frames: 0 };
     if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
     if (h264StableTimerRef.current) clearTimeout(h264StableTimerRef.current);
   }, [device.serial, isActive, relayH264Allowed]);
 
-  // Once H264 stays healthy for a while, stop MJPEG network fetches entirely.
-  // If H264 drops, MJPEG is re-enabled immediately as fallback.
+  // Once H264 is rendering, stop MJPEG network fetches entirely. Until then,
+  // MJPEG remains the visible baseline so the user does not see a black canvas.
   useEffect(() => {
     if (h264PrimaryMode) {
-      setMjpegEnabled(false);
+      setMjpegEnabled(!h264Active || h264Stalled);
       return;
     }
     if (!isActive) {
@@ -253,7 +289,7 @@ export function DeviceScreen({
     return () => {
       if (h264StableTimerRef.current) clearTimeout(h264StableTimerRef.current);
     };
-  }, [isActive, h264Active, relayH264Allowed, h264PrimaryMode]);
+  }, [isActive, h264Active, relayH264Allowed, h264PrimaryMode, h264Stalled]);
 
   // Track shared WS connectivity so loading UI can distinguish
   // "socket not up yet" vs "stream waiting first frame".
@@ -281,18 +317,39 @@ export function DeviceScreen({
   /** `object-cover`: fill view, crop — map pointer to device pixels. */
   const clientToDevice = useCallback(
     (displayX: number, displayY: number, displayW: number, displayH: number) => {
-      if (displayW <= 0 || displayH <= 0 || dw <= 0 || dh <= 0) return { x: 0, y: 0 };
-      const scale = Math.max(displayW / dw, displayH / dh);
-      const drawnW = dw * scale;
-      const drawnH = dh * scale;
+      const srcW = dw;
+      const srcH = dh;
+      if (displayW <= 0 || displayH <= 0 || srcW <= 0 || srcH <= 0) {
+        const rx = 0.5;
+        const ry = 0.5;
+        return {
+          x: Math.max(0, Math.min(Math.round(rx * dw), dw - 1)),
+          y: Math.max(0, Math.min(Math.round(ry * dh), dh - 1)),
+          rx,
+          ry,
+          srcW,
+          srcH,
+        };
+      }
+
+      // Both MJPEG <img> and H264 <canvas> use the same object-cover classes.
+      // Pointer mapping must mirror that crop math exactly.
+      const scale = Math.max(displayW / srcW, displayH / srcH);
+      const drawnW = srcW * scale;
+      const drawnH = srcH * scale;
       const ox = (displayW - drawnW) / 2;
-      const oy =
-        streamCoverAlign === 'bottom' ? displayH - drawnH : (displayH - drawnH) / 2;
-      const x = (displayX - ox) / scale;
-      const y = (displayY - oy) / scale;
+      const oy = streamCoverAlign === 'bottom' ? displayH - drawnH : (displayH - drawnH) / 2;
+      const xDev = (displayX - ox) / scale;
+      const yDev = (displayY - oy) / scale;
+      const rx = xDev / dw;
+      const ry = yDev / dh;
       return {
-        x: Math.max(0, Math.min(Math.round(x), dw - 1)),
-        y: Math.max(0, Math.min(Math.round(y), dh - 1)),
+        x: Math.max(0, Math.min(Math.round(xDev), dw - 1)),
+        y: Math.max(0, Math.min(Math.round(yDev), dh - 1)),
+        rx: Math.max(0, Math.min(rx, 1)),
+        ry: Math.max(0, Math.min(ry, 1)),
+        srcW,
+        srcH,
       };
     },
     [dw, dh, streamCoverAlign]
@@ -315,10 +372,10 @@ export function DeviceScreen({
           if (!r) return;
           const p1 = clientToDevice(initial[0] - r.left, initial[1] - r.top, r.width, r.height);
           const p2 = clientToDevice(xy[0] - r.left, xy[1] - r.top, r.width, r.height);
-          const rx1 = parseFloat((p1.x / dw).toFixed(4));
-          const ry1 = parseFloat((p1.y / dh).toFixed(4));
-          const rx2 = parseFloat((p2.x / dw).toFixed(4));
-          const ry2 = parseFloat((p2.y / dh).toFixed(4));
+          const rx1 = parseFloat((p1.rx ?? (p1.x / dw)).toFixed(4));
+          const ry1 = parseFloat((p1.ry ?? (p1.y / dh)).toFixed(4));
+          const rx2 = parseFloat((p2.rx ?? (p2.x / dw)).toFixed(4));
+          const ry2 = parseFloat((p2.ry ?? (p2.y / dh)).toFixed(4));
           if (gestureMode === 'drag') {
             const ms = 1000;
             wsSend({ type: 'drag', serial: device.serial, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, ms });
@@ -358,8 +415,8 @@ export function DeviceScreen({
       const allowTap = mode === 'tap' || !!onTap;
       if (!allowTap) return;
       wsSend({ type: 'tap', serial: device.serial, x: p.x, y: p.y });
-      if (onTap && dw > 0 && dh > 0) {
-        onTap(p.x / dw, p.y / dh);
+      if (onTap) {
+        onTap(p.rx, p.ry);
       }
     },
     [mode, gestureMode, clientToDevice, wsSend, device.serial, onTap]
@@ -411,13 +468,16 @@ export function DeviceScreen({
             src={mjpegUrl}
             alt={`${device.brand} ${device.model}`}
             className={`absolute inset-0 h-full w-full ${streamObjectClass} transition-opacity duration-500 ${h264Active ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
-            onLoad={() => { setHasFrame(true); }}
+            onLoad={() => {
+              setHasFrame(true);
+            }}
             onError={() => setMjpegFailed(true)}
             draggable={false}
           />
         )}
         {/* H264 live canvas — WebCodecs decode, zero MSE buffering latency */}
         <canvas
+          key={`h264-${device.serial}-${h264RestartKey}`}
           ref={canvasRef}
           className={`pointer-events-none absolute inset-0 h-full w-full ${streamObjectClass} transition-opacity duration-500 ${h264Active ? 'opacity-100' : 'opacity-0'}`}
         />

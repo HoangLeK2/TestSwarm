@@ -84,6 +84,7 @@ let sharedSocket: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 let idleCloseTimer: ReturnType<typeof setTimeout> | undefined;
 let lastMessageTime = 0;
+let lastForcedReconnectAt = 0;
 
 // Reconnect stale WebSocket on page focus (NAT timeout, server restart, etc.)
 if (typeof window !== 'undefined') {
@@ -323,6 +324,28 @@ export function requestIdr(serial: string): void {
     } catch {
       // socket raced into closing — next viewer event will retry
     }
+  }
+}
+
+export function reconnectDeviceFarmSocket(reason = 'stream_recovery'): void {
+  const now = Date.now();
+  if (now - lastForcedReconnectAt < 30_000) return;
+  lastForcedReconnectAt = now;
+  if (
+    sharedSocket?.readyState === WebSocket.OPEN ||
+    sharedSocket?.readyState === WebSocket.CONNECTING
+  ) {
+    try {
+      console.debug('[DeviceFarm WS] forced reconnect:', reason);
+      sharedSocket.close();
+      return;
+    } catch {
+      sharedSocket = null;
+    }
+  }
+  console.debug('[DeviceFarm WS] forced reconnect:', reason);
+  if (listeners.size > 0 || binaryListeners.size > 0) {
+    connectShared();
   }
 }
 

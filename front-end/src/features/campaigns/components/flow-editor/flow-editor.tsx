@@ -145,6 +145,36 @@ export function FlowEditor({
     [onCoordinatePickTargetChange, coordinatePickTarget, onSelectorPickTargetChange],
   );
 
+  const handleLeafStepCardClick = useCallback(
+    (i: number) => {
+      if (compact) return;
+      const isSelPick =
+        onSelectorPickTargetChange &&
+        selectorPickTarget &&
+        selectorPickTarget.rootIndex === i &&
+        (selectorPickTarget.path ?? []).length === 0;
+      const isCoordPick =
+        onCoordinatePickTargetChange &&
+        coordinatePickTarget &&
+        coordinatePickTarget.rootIndex === i &&
+        (coordinatePickTarget.path ?? []).length === 0;
+
+      // UX promise: click the same step again to cancel the active pick.
+      if (isSelPick) onSelectorPickTargetChange(null);
+      if (isCoordPick) onCoordinatePickTargetChange(null);
+
+      setSelectedIndex(selectedIndex === i ? null : i);
+    },
+    [
+      compact,
+      onSelectorPickTargetChange,
+      selectorPickTarget,
+      onCoordinatePickTargetChange,
+      coordinatePickTarget,
+      selectedIndex,
+    ],
+  );
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && selectorPickTarget && onSelectorPickTargetChange) {
@@ -356,7 +386,7 @@ export function FlowEditor({
                               index={i}
                               selected={!compact && selectedIndex === i}
                               compact={compact}
-                              onClick={() => !compact && setSelectedIndex(selectedIndex === i ? null : i)}
+                              onClick={() => handleLeafStepCardClick(i)}
                               onRemove={() => removeAt(i)}
                               onRun={
                                 onRunStep

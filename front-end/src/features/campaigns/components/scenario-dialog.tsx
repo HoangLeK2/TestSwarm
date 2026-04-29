@@ -858,7 +858,7 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
         const synced = applyStepsToFlowgramDocument(ctx, merged);
         replaceStepsAndGraph(synced as Step[]);
         setFlowCoordPick(null);
-        toast.success(`Đã gán swipe_ratio cho node`, { duration: 2000 });
+        toast.success(`Đã gán swipe_ratio cho node: (${x1},${y1})→(${x2},${y2})`, { duration: 2500 });
         setTimeout(() => void refreshRecordXml(serial), 800);
         return;
       }

@@ -245,6 +245,23 @@ def test_expand_see_more_prefers_inner_button_over_wrapping_post_body():
     assert device.taps[0] == (1000, 335)
 
 
+def test_collect_see_more_ignores_top_tab_xem_them_prefers_post_caption_expand():
+    """Two 'Xem thêm': top tab-strip and post-caption expand; only caption target should remain."""
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy>
+  <node class="android.view.ViewGroup" clickable="true" text="Tất cả Ảnh Reels Xem thêm" bounds="[0,220][1260,320]">
+    <node class="android.widget.Button" clickable="true" text="Xem thêm" bounds="[900,230][1180,300]"/>
+  </node>
+  <node class="android.view.ViewGroup" clickable="true" text="Singapore welcomes ... Xem thêm" bounds="[42,1000][1218,1280]">
+    <node class="android.widget.Button" clickable="true" text="Xem thêm" bounds="[930,1190][1201,1260]"/>
+  </node>
+</hierarchy>"""
+    root = _parse_xml(xml)
+    assert root is not None
+    plan = _collect_see_more_tap_plan(root)
+    assert plan == [(930, 1190, 1201, 1260)]
+
+
 def test_dedup_prefers_expanded_post_over_truncated_preview():
     truncated = {
         "author": "Huyền Lê",

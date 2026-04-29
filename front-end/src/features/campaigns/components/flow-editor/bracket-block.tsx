@@ -315,7 +315,13 @@ function ChildStepList({
                       step={child}
                       index={startIndex + ci}
                       selected={selectedChild === startIndex + ci}
-                      onClick={() => onEditChild ? onEditChild(listKey, ci) : onSelectChild(startIndex + ci)}
+                      onClick={() => {
+                        // UX promise: click the same step again to cancel active pick mode.
+                        if (isPickTarget && onTogglePickSelector) onTogglePickSelector(childPickPath);
+                        if (coordPickActive === 'tap_point' && onToggleCoordinatePick) onToggleCoordinatePick(childTapCoord);
+                        if (coordPickActive === 'swipe_segment' && onToggleCoordinatePick) onToggleCoordinatePick(childSwipeCoord);
+                        onEditChild ? onEditChild(listKey, ci) : onSelectChild(startIndex + ci);
+                      }}
                       onRemove={() => onRemoveChild(listKey, ci)}
                       onRun={onRunChild ? () => onRunChild(child, leafRunKey) : undefined}
                       runState={stepRunStates[leafRunKey] ?? 'idle'}

@@ -553,10 +553,10 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
   ]);
 
   const applySelectorPick = useCallback(
-    (by: string, value: string) => {
+    (by: string, value: string, fallback?: { rx: number; ry: number } | null) => {
       if (!selectorPickTarget) return;
       const raw = steps.items as FlowStep[];
-      const next = applySelectorToSteps(raw, selectorPickTarget, by, value);
+      const next = applySelectorToSteps(raw, selectorPickTarget, by, value, fallback ?? null);
       if (next === raw) {
         toast.warning(t('pickSelectorNoElement'));
         return;
@@ -570,7 +570,13 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
       selector.setBy(by as typeof selector.by);
       selector.setValue(value);
       setSelectorPickTarget(null);
-      toast.success(t('pickSelectorApplied', { by, value: value.slice(0, 48) }));
+      if (fallback) {
+        toast.success(
+          `${t('pickSelectorApplied', { by, value: value.slice(0, 48) })} · fallback=(${fallback.rx.toFixed(3)}, ${fallback.ry.toFixed(3)})`,
+        );
+      } else {
+        toast.success(t('pickSelectorApplied', { by, value: value.slice(0, 48) }));
+      }
     },
     [selectorPickTarget, steps, selector, t],
   );
@@ -600,7 +606,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           toast.error(`Canvas: ${String(e)}`);
         }
         setFlowCoordPick(null);
-        toast.success('Đã gán swipe_ratio cho node', { duration: 2000 });
+        toast.success(`Đã gán swipe_ratio: (${x1}, ${y1}) → (${x2}, ${y2})`, { duration: 2500 });
         return;
       }
 
@@ -617,7 +623,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           })) as any,
         );
         setCoordinatePickTarget(null);
-        toast.success('Đã cập nhật đoạn vuốt');
+        toast.success(`Đã cập nhật đoạn vuốt: (${x1}, ${y1}) → (${x2}, ${y2})`, { duration: 2500 });
       }
     },
     [coordinatePickTarget, showFlowUi, flowCoordPick, steps, device.selectedDevice, hierarchy],
@@ -705,7 +711,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
             })) as any,
           );
           setCoordinatePickTarget(null);
-          toast.success('Đã cập nhật tọa độ chạm');
+          toast.success(`Đã cập nhật tọa độ chạm: (${rx3}, ${ry3})`, { duration: 2500 });
         }
         return;
       }
@@ -713,7 +719,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
       if (selectorPickTarget) {
         const sel = findSelectorInXml(hierarchy.xml, rx, ry);
         if (sel?.value) {
-          applySelectorPick(sel.by, sel.value);
+          applySelectorPick(sel.by, sel.value, { rx: rx3, ry: ry3 });
         } else {
           toast.warning(t('pickSelectorNoElement'));
         }

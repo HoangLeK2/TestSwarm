@@ -43,6 +43,8 @@ _RE_TS = re.compile(
     r"|(hôm qua|yesterday|just now|vừa xong|bây giờ|now)"
     r"|(T\d,\s*\d{1,2}/\d{1,2}/\d{4})"
     r"|(\d{1,2}/\d{1,2}/\d{4})"
+    r"|(\d{1,2}\s*thg\s*\d{1,2}(?:,\s*\d{4})?)"
+    r"|(\d{1,2}\s*tháng\s*\d{1,2}(?:,\s*\d{4})?)"
     r"|(\d{4}-\d{2}-\d{2})",
     re.IGNORECASE,
 )
@@ -142,6 +144,7 @@ _AUTHOR_PREFIXES: Tuple[str, ...] = (
     "ảnh đại diện của",
     "profile picture of",
     "profile photo of",
+    "lựa chọn khác cho bài viết của",
 )
 _AUTHOR_PREFIX = _AUTHOR_PREFIXES[0]  # backward-compat for any external users
 
@@ -336,250 +339,36 @@ def _post_body_has_comment_thread_a11y(text: str) -> bool:
 
 def _maybe_fix_merged_feed_caption(post: Dict[str, Any]) -> None:
     """Two feed previews glued with ``**`` + second post's time row — keep first caption."""
-    body = post.get("text") or ""
-    if "**" not in body:
-        return
-    main = re.split(r"\s*\*\*\s*", body, maxsplit=1)[0].strip()
-    if re.search(r"Xem thêm\s+\d+\s*(?:ngày|giờ|phút)\s*•", main, re.I):
-        main = re.sub(
-            r"(Xem thêm)\s+\d+\s*(?:ngày|giờ|phút)\s*•.*$",
-            r"\1",
-            main,
-            flags=re.I,
-        )
-    post["text"] = main
+    from .post_extractor import _maybe_fix_merged_feed_caption as _impl
+    return _impl(post)
 
 
 def _refresh_post_derived_hashes(post: Dict[str, Any]) -> None:
     """Recompute _pid / stable_post_id / post_key after mutating author or body."""
-    author = post.get("author") or ""
-    body = post.get("text") or ""
-    image_desc = post.get("image_desc")
-    comment_preview = post.get("comment_preview")
-    _pid_raw = f"{author or ''}\x00{body[:120]}"
-    post["_pid"] = hashlib.md5(_pid_raw.encode()).hexdigest()[:16]
-    _stable_prefix = unicodedata.normalize("NFC", re.sub(r"\s+", " ", body.lower()).strip())
-    _stable_prefix = _stable_prefix.replace("…", "").replace("...", "")
-    for _mk in _TRUNCATION_MARKERS:
-        _stable_prefix = _stable_prefix.replace(_mk, "")
-    _stable_prefix = _stable_prefix.strip()[:100]
-    _sid_author = unicodedata.normalize("NFC", (author or "").strip().lower())
-    _sid_img = unicodedata.normalize("NFC", (str(image_desc or "")).strip().lower())[:40]
-    _sid_raw = f"{_sid_author}\x00{_stable_prefix}\x00{_sid_img}"
-    post["stable_post_id"] = hashlib.sha1(_sid_raw.encode("utf-8")).hexdigest()
-    _pk_raw = f"{author or ''}\x00{body}\x00{image_desc or ''}\x00{comment_preview or ''}"
-    post["post_key"] = hashlib.sha1(_pk_raw.encode("utf-8")).hexdigest()
+    from .post_extractor import _refresh_post_derived_hashes as _impl
+    return _impl(post)
 
 
 # F2.5 — when set, posts that match ``_is_junk_recycler_post`` are KEPT with
 # ``_soft_junk: True`` rather than silently dropped, so operators can audit
 # whether the junk heuristic is over-eager and dropping real posts.
 def _keep_soft_junk() -> bool:
-    import os
-    return os.environ.get("FB_KEEP_SOFT_JUNK", "0") == "1"
+    from .filters import _keep_soft_junk as _impl
+    return _impl()
 
 
 def _is_junk_recycler_post(post: Dict[str, Any]) -> bool:
     """Rows from comment sheets / thread chips / composer saved as feed posts — drop."""
-    author = (post.get("author") or "").strip()
-    text = (post.get("text") or "").strip()
-    al = author.lower()
-    tl = text.lower()
-    combined_lc = f"{al} {tl}"
-
-    # Live-run 2026-04-18: group header card saved as a post.
-    # "Ảnh bìa của nhóm OpenClaw VN..." / "OpenClaw VN, Nhóm Công khai · N thành viên ..."
-    # Also catch the group-suggestion variant ("<Group>, Công khai · N thành viên / Tham gia")
-    if (
-        al.startswith("ảnh bìa của nhóm")
-        or al.startswith("cover photo of group")
-        or "nhóm công khai · " in tl
-        or "nhóm riêng tư · " in tl
-        or ", công khai · " in al and "thành viên" in al
-        or ", công khai · " in tl and "thành viên" in tl
-        or "public group · " in tl
-        or "private group · " in tl
-        or "thành viên đã tham gia nhóm" in tl
-        or "members have joined" in tl
-    ):
-        return True
-
-    # Feed suggestion rows — Facebook injects "Made for you" / "People you may
-    # know" / "Suggested groups" cards in group feeds; parser clusters them as
-    # posts. Drop by author token.
-    _SUGGESTION_AUTHORS = (
-        "dành cho bạn", "suggested for you", "made for you",
-        "xem tất cả những người bạn có thể biết",
-        "những người bạn có thể biết",
-        "people you may know",
-        "gợi ý cho bạn",
-        "nhóm gợi ý", "suggested groups",
-    )
-    if any(al.startswith(tok) or al == tok for tok in _SUGGESTION_AUTHORS):
-        return True
-    if any(tok in al for tok in ("những người bạn có thể biết", "people you may know")):
-        return True
-
-    # Overflow menu ("Lựa chọn khác về <group>" / "More options for <group>")
-    if al.startswith("lựa chọn khác về") or al.startswith("more options for"):
-        return True
-
-    # Device-farm own UI leaking through (when FB not focused / pairing screen).
-    # Example: "Device Farm Agent / Identity and Pairing DEVICE DETAILS Serial".
-    if (
-        al.startswith("device farm agent")
-        or "identity and pairing" in tl
-        or "device details serial" in tl
-        or al == "pair device"
-    ):
-        return True
-
-    # Composer prompt leaking in as post 1.
-    # "Hiển thị trang cá nhân / Bạn viết gì đi... Cảm xúc Check in Thăm dò"
-    # "Đi tới trang cá nhân / Bạn đang nghĩ gì?" (newer FB composer wording)
-    if (
-        "bạn viết gì đi" in tl
-        or "bạn đang nghĩ gì" in tl
-        or "what's on your mind" in tl
-        or al.startswith("hiển thị trang cá nhân")
-        or al.startswith("đi tới trang cá nhân")
-        or al.startswith("go to profile")
-    ):
-        return True
-
-    # Stories strip ("Khay tin / Tạo tin" = story tray + create-story).
-    if (
-        al.startswith("khay tin")
-        or "khay tin" in tl
-        or al == "tạo tin"
-        or "your story" in tl and "stories" in tl
-    ):
-        return True
-
-    # Text-formatting toolbar chips ("Đỏ đậm, màu nền" / "Bold, Italic, Background")
-    # that appear when the composer is focused. ≥ 2 toolbar tokens OR ≥ 2 tokens
-    # at the START of body — covers both "Đỏ đậm, màu nền" alone and the longer
-    # "Đỏ đậm, màu nền <then search suggestions>" form.
-    _TOOLBAR_TOKENS = (
-        "đỏ đậm", "in đậm", "in nghiêng", "gạch chân", "màu nền",
-        "bold", "italic", "underline", "background color",
-    )
-    has_time_anchor = bool(str(post.get("timestamp") or "").strip())
-    tb_hits = sum(1 for tok in _TOOLBAR_TOKENS if tok in tl)
-    # Guard against over-dropping real posts: when author+timestamp are
-    # already resolved, toolbar tokens in subtree text can be incidental.
-    if tb_hits >= 2 and len(text) < 160 and not has_time_anchor:
-        return True
-    # Even on longer bodies, if the body STARTS with two toolbar tokens in the
-    # first 40 chars, it's the formatting-chip row leaking in.
-    head = tl[:40]
-    head_hits = sum(1 for tok in _TOOLBAR_TOKENS if tok in head)
-    if head_hits >= 2 and not has_time_anchor:
-        return True
-    # Newer composer leakage: toolbar chips become the parsed author while
-    # the actual post body is parsed as ``text`` (e.g. "Đỏ đậm, màu nền").
-    # Filter these before they hit DB as fake posts.
-    author_tb_hits = sum(1 for tok in _TOOLBAR_TOKENS if tok in al)
-    if (
-        author_tb_hits >= 2
-        and (post.get("reactions") is None and post.get("comments") is None and post.get("shares") is None)
-        and not _RE_TS.search(author)
-    ):
-        return True
-
-    # Album / reaction count chip mis-read as author (e.g. "+3", "12")
-    if re.match(r"^\+?\d{1,3}$", author) and len(text) < 64:
-        return True
-    if al == "video sound toggle":
-        return True
-    # Like-button a11y leaked into post body
-    if "nút thích." in tl and ("nhấn đúp" in tl or "double tap" in tl or "double-tap" in tl):
-        return True
-    # Caption bị gán nhầm: một câu có dấu phẩy làm author, không còn body
-    if author and (not text or not text.strip()) and "," in author and len(author) > 22:
-        return True
-    # Chỉ còn tên + chip ảnh / không có nội dung thật (không carousel / preview)
-    if (
-        author
-        and (not text or not text.strip())
-        and not (post.get("image_desc") or "").strip()
-        and not (post.get("media_artifacts") or [])
-        and not (post.get("comment_preview") or "").strip()
-        and post.get("reactions") is None
-        and post.get("comments") is None
-    ):
-        return True
-    # Author rỗng, body giống tên người (1–4 từ) — thường là đảo trường
-    if (
-        not author
-        and text
-        and len(text) < 50
-        and 1 <= text.count(" ") <= 4
-        and "http" not in tl
-        and "•" not in text
-        and not _RE_TS.search(text)
-    ):
-        return True
-    if (
-        text
-        and _RE_IMAGE_TYPE.match(tl)
-        and len(text) < 20
-        and len(author) > 6
-        and not (post.get("image_desc") or "").strip()
-    ):
-        return True
-
-    if al.startswith("viết bình luận") or "viết bình luận công khai" in combined_lc:
-        return True
-    if al == "đóng":
-        return True
-    if _RE_SHARES_COUNT_LABEL.match(author):
-        return True
-    if _RE_COMMENT_REACTIONS_LABEL.match(author):
-        return True
-    if _RE_NUMERIC_SHORT.match(author) and (
-        "bộ lọc bình luận" in tl
-        or "phù hợp nhất" in tl
-        or "đang hiển thị" in tl
-    ):
-        return True
-    if re.search(r"^xem\s+\d+\s+phản hồi", author, re.I):
-        return True
-    if author.endswith(" hóng") and len(text) < 4:
-        return True
-    if "người đóng góp nổi bật" in al and _post_body_has_comment_thread_a11y(text):
-        return True
-    if author == "Ảnh" and _post_body_has_comment_thread_a11y(text):
-        return True
-    if _is_hashtag_chip(author) and not text:
-        return True
-    if not author and tl.startswith("nút thích.") and "bình luận" in tl and len(text) < 220:
-        return True
-    # Real feed rows often include comment-preview a11y under the fold — do not drop those.
-    if _post_body_has_comment_thread_a11y(text) and len(text) < 420 and "http" not in tl:
-        if "xem thêm" not in tl and "see more" not in tl:
-            return True
-    return False
+    from .filters import _is_junk_recycler_post as _impl
+    return _impl(post)
 
 
 def _is_duplicate_short_author_footer_row(
     c: Dict[str, Any], prev_body: Optional[Dict[str, Any]],
 ) -> bool:
     """Orphan footer-only row: like/reply a11y gives short name ⊆ previous full display name."""
-    if not prev_body:
-        return False
-    if c.get("_type") == "post_stats" or prev_body.get("_type") == "post_stats":
-        return False
-    t = (c.get("text") or "").strip()
-    if t:
-        return False
-    ca = (c.get("author") or "").strip().lower()
-    pa = (prev_body.get("author") or "").strip().lower()
-    if not ca or not pa or len(ca) < 6:
-        return False
-    if ca == pa:
-        return False
-    return bool(pa.endswith(ca) or ca in pa)
+    from .filters import _is_duplicate_short_author_footer_row as _impl
+    return _impl(c, prev_body)
 
 
 def _is_comment_row_parse_noise(c: Dict[str, Any]) -> bool:
@@ -588,97 +377,14 @@ def _is_comment_row_parse_noise(c: Dict[str, Any]) -> bool:
     Hàng chỉ có tên (body rỗng) vẫn **giữ** ở đây để test/corpus đếm thread; lúc lưu DB
     dùng ``_is_junk_parsed_comment_row`` (thêm rule body bắt buộc).
     """
-    if c.get("_type") == "post_stats":
-        return False
-    author_raw = (c.get("author") or "").strip()
-    text_raw = (c.get("text") or "").strip()
-    author = author_raw.lower()
-    text = text_raw.lower()
-    combined = f"{author} {text}"
-    if author == "đóng":
-        return True
-    if author in ("xem thêm", "see more"):
-        return True
-    if "lựa chọn khác cho bài viết" in author or "lựa chọn khác cho bài viết" in text:
-        return True
-    if "tìm kiếm trong" in author or "tìm kiếm trong" in text:
-        return True
-    if "công cụ khác cho thành viên" in combined:
-        return True
-    if "kết quả tìm kiếm" in author or "kết quả tìm kiếm" in text:
-        return True
-    if "video sound toggle" in author or "video sound toggle" in text:
-        return True
-    if _RE_SHARES_COUNT_LABEL.match(author):
-        return True
-    if "open features menu" in text or "use voice typing" in text:
-        return True
-    if author.startswith("viết bình luận") or text.startswith("viết bình luận"):
-        return True
-    if author.startswith("write a comment") or text.startswith("write a comment"):
-        return True
-    if author.startswith("write a public comment") or text.startswith("write a public comment"):
-        return True
-    if text_raw and _looks_like_comment_timestamp_row(text_raw):
-        return True
-    if author_raw and _looks_like_comment_timestamp_row(author_raw):
-        return True
-    if author_raw and _RE_CMT_REACTIONS.match(author_raw.strip()) and not text_raw:
-        return True
-    if author_raw and author_raw.strip().lower() in {"cảm xúc", "gỡ", "remove"}:
-        return True
-    if author == "you" and text in ("to", "to.", "tới"):
-        return True
-    if "mở tìm kiếm tệp" in author or "mở tìm kiếm tệp" in text:
-        return True
-    if "nhãn dán avatar" in text or ("sticker" in text and "avatar" in text):
-        return True
-    if "\n" in author_raw or "\n" in text_raw:
-        return True
-    if len(author_raw) > 72:
-        return True
-    if "http://" in author_raw or "https://" in author_raw:
-        return True
-    if (
-        author_raw
-        and text_raw
-        and author == text
-        and len(author) < 120
-        and (
-            "người đóng góp" in author
-            or _comment_line_is_badge(author_raw)
-            or author in {x.lower() for x in _CMT_EMPTY_BODY_JUNK_AUTHOR}
-        )
-    ):
-        return True
-    if not text_raw:
-        alo = author_raw.lower()
-        if alo in {x.lower() for x in _CMT_EMPTY_BODY_JUNK_AUTHOR}:
-            return True
-        if "bạn viết gì đi" in alo:
-            return True
-        norm_a = unicodedata.normalize("NFC", author_raw.strip())
-        if _RE_LEAKED_REL_TIME_AS_LABEL.match(norm_a):
-            return True
-        if (
-            author_raw
-            and 1 <= len(author_raw) <= 22
-            and " " not in author_raw
-            and not _comment_line_is_badge(author_raw)
-        ):
-            return True
-    return False
+    from .filters import _is_comment_row_parse_noise as _impl
+    return _impl(c)
 
 
 def _is_junk_parsed_comment_row(c: Dict[str, Any]) -> bool:
     """Hàng không nên lưu DB / không nên gộp vào ctx scenario (đủ author + body sạch)."""
-    if c.get("_type") == "post_stats":
-        return False
-    if _is_comment_row_parse_noise(c):
-        return True
-    if not (c.get("text") or "").strip():
-        return True
-    return False
+    from .filters import _is_junk_parsed_comment_row as _impl
+    return _impl(c)
 
 
 def _find_post_time_anchor(cluster: List[Dict[str, Any]]) -> Tuple[int, str]:
@@ -690,6 +396,11 @@ def _find_post_time_anchor(cluster: List[Dict[str, Any]]) -> Tuple[int, str]:
     for i, n in enumerate(cluster):
         raw = n["text"].strip()
         if len(raw) > _MAX_TS_ANCHOR_NODE_LEN:
+            continue
+        # Avoid promo copy that contains relative-time words as plain text,
+        # e.g. "Chỉ 3 ngày duy nhất" inside event cards.
+        raw_l = raw.lower()
+        if "duy nhất" in raw_l and "trước" not in raw_l and "ago" not in raw_l:
             continue
         if _RE_TS.search(raw):
             return i, raw
@@ -858,17 +569,14 @@ def _merge_post_type(
     has_fb_link: bool,
     body_len: int,
 ) -> str:
-    out = text_type
-    if rid_hint == "reel" or structural == "reel":
-        out = "reel"
-    elif rid_hint == "video" or structural == "video":
-        if out != "reel":
-            out = "video"
-    elif structural == "photo" and out == "text":
-        out = "photo"
-    if has_fb_link and out == "text" and body_len < 56:
-        out = "link"
-    return out
+    from .post_extractor import _merge_post_type as _impl
+    return _impl(
+        text_type,
+        structural,
+        rid_hint,
+        has_fb_link=has_fb_link,
+        body_len=body_len,
+    )
 
 
 def _collect_text_nodes(element, toolbar_cutoff_y: int = 200) -> List[Dict[str, Any]]:
@@ -999,6 +707,10 @@ def _extract_post(
     image_desc: Optional[str] = None
     comment_preview_parts: List[str] = []
     stats_seen: bool = False
+    first_author_idx = next(
+        (i for i, n in enumerate(cluster) if n.get("is_author_hint")),
+        None,
+    )
 
     for i, node in enumerate(cluster):
         t = node["text"].strip()
@@ -1041,6 +753,8 @@ def _extract_post(
         # Include i==0: single-card post views often expose one huge ViewGroup text
         # as the only pre-anchor node (no timestamp row → anchor_idx == len(cluster)).
         if i < anchor_idx and t != author:
+            if first_author_idx is not None and i < first_author_idx:
+                continue
             if image_desc is None and _RE_IMAGE_TYPE.match(t_lower) and 8 < len(t) < 300:
                 image_desc = t
                 continue
@@ -1055,6 +769,8 @@ def _extract_post(
             # Katana often has no combined "1K · 5 bình luận" line — only a11y button rows.
             # Stop appending caption once we hit Thích / Bình luận / Chia sẻ on the *post*.
             if _is_post_action_delimiter(t):
+                if first_author_idx is not None and i < first_author_idx:
+                    continue
                 stats_seen = True
                 continue
 
@@ -1074,6 +790,8 @@ def _extract_post(
                 matched_stat = True
 
             if matched_stat:
+                if first_author_idx is not None and i < first_author_idx:
+                    continue
                 stats_seen = True
             elif not _is_noise_text(t):
                 if stats_seen:
@@ -1307,6 +1025,38 @@ def _extract_posts_from_recycler(root, source_index: int) -> Optional[List[Dict[
                     posts.append(post)
                 continue
             posts.append(post)
+    # Comment-sheet fallback:
+    # Some expanded "Xem thêm" layouts flatten one post into many direct RecyclerView
+    # children (avatar row, body node, CTA row, composer row). Per-child extraction
+    # can skip all fragments even though a valid post is visible. If that happens,
+    # parse the whole feed container as one logical post candidate.
+    if in_comment_sheet and not posts:
+        nodes = _collect_text_nodes(feed, toolbar_cutoff_y=0)
+        fb_pid, fb_gid, perms = _extract_fb_link_meta(feed)
+        media_artifacts = _extract_media_artifacts(feed)
+        post = _extract_post(
+            nodes,
+            source_index,
+            structural_type_hint=_structural_post_type_hint(feed),
+            resource_id_media_hint=_resource_id_media_hint(feed),
+            fb_post_id=fb_pid,
+            fb_group_id=fb_gid,
+            permalink_candidates=perms,
+            feed_item_index=0,
+        )
+        if post:
+            _maybe_fix_merged_feed_caption(post)
+            _refresh_post_derived_hashes(post)
+            if media_artifacts:
+                post["media_artifacts"] = media_artifacts
+                if post.get("post_type") == "text":
+                    post["post_type"] = "photo"
+            if _is_junk_recycler_post(post):
+                if _keep_soft_junk():
+                    post["_soft_junk"] = True
+                    posts.append(post)
+            else:
+                posts.append(post)
     return posts
 
 
@@ -1317,29 +1067,8 @@ def _should_merge_post_nodes_despite_vertical_gap(
     gap_threshold: float,
 ) -> bool:
     """Hai node text dài cùng lề — hay là hai đoạn một bài bị layout tách xa dọc."""
-    if gap <= gap_threshold:
-        return False
-    max_relax = min(540, int(gap_threshold * 2.4))
-    if gap > max_relax:
-        return False
-    pt = prev["text"].strip()
-    nt = nxt["text"].strip()
-    tl = nt.lower()
-    if len(pt) < 32 or len(nt) < 24:
-        return False
-    # Dòng tên ngắn (một token) — thường là đầu bài kế, không gộp
-    if len(nt) <= 26 and " " not in nt and "http" not in tl:
-        return False
-    # Hàng giờ tương đối ngắn — ranh giới bài / stats
-    if len(nt) <= 44 and _RE_TS.search(nt) and "http" not in tl:
-        return False
-    px, nx = prev["bounds"][0], nxt["bounds"][0]
-    if abs(px - nx) > 52:
-        return False
-    plow = pt.lower()
-    if any(plow.startswith(p) for p in _NOISE_PREFIXES):
-        return False
-    return True
+    from .clustering import _should_merge_post_nodes_despite_vertical_gap as _impl
+    return _impl(prev, nxt, gap, gap_threshold)
 
 
 def _cluster_into_posts(
@@ -1347,40 +1076,8 @@ def _cluster_into_posts(
     *,
     screen_height: int = 2200,
 ) -> List[List[Dict[str, Any]]]:
-    if not nodes:
-        return []
-    # Scale with viewport; clamp — tăng nhẹ để ít tách đoạn body dài (FB tách nhiều ViewGroup).
-    GAP_THRESHOLD = max(120, min(290, int(screen_height * 0.076)))
-    ts_gap_split = max(18, GAP_THRESHOLD // 5)
-    clusters: List[List[Dict]] = []
-    current: List[Dict] = [nodes[0]]
-    prev_cy = nodes[0]["cy"]
-    current_has_ts = bool(_RE_TS.search(nodes[0]["text"]))
-    for node in nodes[1:]:
-        gap = node["cy"] - prev_cy
-        is_ts = bool(_RE_TS.search(node["text"]))
-        prev_node = current[-1]
-        merge_despite_gap = gap > GAP_THRESHOLD and _should_merge_post_nodes_despite_vertical_gap(
-            prev_node, node, gap, GAP_THRESHOLD,
-        )
-        if merge_despite_gap:
-            current.append(node)
-            if is_ts:
-                current_has_ts = True
-            prev_cy = node["cy"]
-            continue
-        if gap > GAP_THRESHOLD or (current_has_ts and is_ts and gap > ts_gap_split):
-            clusters.append(current)
-            current = [node]
-            current_has_ts = is_ts
-        else:
-            current.append(node)
-            if is_ts:
-                current_has_ts = True
-        prev_cy = node["cy"]
-    if current:
-        clusters.append(current)
-    return clusters
+    from .clustering import _cluster_into_posts as _impl
+    return _impl(nodes, screen_height=screen_height)
 
 
 def _parse_xml(xml: str) -> Optional[Any]:
@@ -1575,72 +1272,9 @@ def parse_fb_posts_from_xml(xml: str, source_index: int = 0) -> List[Dict[str, A
 
 
 def _dedup(posts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Deduplicate feed posts while preferring the richer/fuller version.
-
-    Key keeps compatibility with historical behavior:
-    same author + timestamp + text-prefix[:60] is considered the same post.
-
-    Important: when both truncated and expanded versions appear, keep the one
-    with longer body and richer metadata (stats/image/comment preview).
-    """
-    by_key: Dict[Tuple[str, str], Dict[str, Any]] = {}
-    order: List[Tuple[str, str]] = []
-
-    def _quality(post: Dict[str, Any]) -> Tuple[int, int, int]:
-        text = str(post.get("text") or "")
-        stats_count = sum(
-            1
-            for k in ("reactions", "comments", "shares", "views", "image_desc", "comment_preview")
-            if post.get(k)
-        )
-        unresolved = int(any(mk in text.lower() for mk in _TRUNCATION_MARKERS))
-        # Prefer resolved/non-truncated text first, then length, then richer metadata.
-        return (-unresolved, len(text), stats_count)
-
-    def _norm_text(value: str) -> str:
-        t = unicodedata.normalize("NFC", (value or "").lower())
-        t = re.sub(r"\s+", " ", t).strip()
-        for mk in _TRUNCATION_MARKERS:
-            t = t.replace(mk, "")
-        return re.sub(r"\s+", " ", t).strip()
-
-    def _likely_same_logical_post(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
-        ta = _norm_text(str(a.get("text") or ""))
-        tb = _norm_text(str(b.get("text") or ""))
-        if not ta or not tb:
-            return True
-        # Truncated/expanded variants usually keep one body as prefix of the other.
-        return ta.startswith(tb) or tb.startswith(ta)
-
-    for p in posts:
-        stable_post_id = str(p.get("stable_post_id") or "")
-        timestamp = str(p.get("timestamp") or "")
-        if stable_post_id:
-            key = ("sid", stable_post_id)
-        else:
-            # Backward compatibility fallback for old records without stable_post_id.
-            author = str(p.get("author") or "")
-            text = str(p.get("text") or "")
-            key = ("legacy", f"{author}\x00{timestamp}\x00{text[:60]}")
-
-        existing = by_key.get(key)
-        if existing is None:
-            by_key[key] = p
-            order.append(key)
-            continue
-
-        # Guard against stable-id collisions (same sid but clearly different bodies).
-        if key[0] == "sid" and not _likely_same_logical_post(existing, p):
-            collision_key = ("sid-collision", f"{stable_post_id}\x00{p.get('post_key') or p.get('_pid') or len(order)}")
-            if collision_key not in by_key:
-                by_key[collision_key] = p
-                order.append(collision_key)
-            continue
-
-        if _quality(p) > _quality(existing):
-            by_key[key] = p
-
-    return [by_key[k] for k in order]
+    # Responsibility split: dedup implementation lives in `tasks.fb_extract.dedup`.
+    from .dedup import _dedup as _impl
+    return _impl(posts)
 
 
 # ── Comment-like button patterns (from real UIAutomator XML) ─────────────────
@@ -1659,8 +1293,8 @@ _RE_CMT_REACTIONS_EN = re.compile(r"^(\d[\d.,]*[KMkm]?)\s+reactions?\s*$", re.IG
 
 def _is_comment_reaction_count_row(text: str) -> bool:
     """Right-aligned chip ``N cảm xúc`` / ``N reactions`` (x often past comment_x_max)."""
-    t = (text or "").strip()
-    return bool(_RE_CMT_REACTIONS.match(t) or _RE_CMT_REACTIONS_EN.match(t))
+    from .filters import _is_comment_reaction_count_row as _impl
+    return _impl(text)
 
 
 # Timestamp or post-share suffix that can appear in comment timestamp field
@@ -1743,22 +1377,8 @@ _CMT_BADGE_LABELS = frozenset({
 
 def _comment_line_is_badge(text: str) -> bool:
     """VN/EN badge chip under commenter name (exact or contains a long known label)."""
-    tl = text.strip().lower()
-    if len(tl) < 2 or len(tl) > 72:
-        return False
-    if tl in _CMT_BADGE_LABELS:
-        return True
-    # Substring only for multi-char labels (avoid "admin" ⊂ unrelated short text).
-    if any(b in tl for b in _CMT_BADGE_LABELS if len(b) >= 10):
-        return True
-    # Cụm chip dạng "Top …" / "Visual …" (FB đôi khi ghép nhãn dài).
-    if tl.startswith("top ") and "fan" in tl:
-        return True
-    if tl.startswith("siêu fan") or tl.startswith("fan cứng"):
-        return True
-    if tl.startswith("fan cuồng"):
-        return True
-    return False
+    from .filters import _comment_line_is_badge as _impl
+    return _impl(text)
 
 
 _RE_COMMENT_NAME_DOT_SUFFIX = re.compile(r"^(.{2,60}?)\s*[•·]\s*(.+)$")
@@ -1768,30 +1388,8 @@ def _refine_comment_author_from_cluster(
     cluster: List[Dict[str, Any]], author: Optional[str],
 ) -> Optional[str]:
     """Nút Thích/Trả lời đôi khi có họ tên đầy đủ hơn dòng tên bị cắt (vd. Van → Van Nguyen)."""
-    if not author:
-        return author
-    au = unicodedata.normalize("NFC", author.strip())
-    au_l = au.lower()
-    best = ""
-    for node in cluster:
-        t = node["text"].strip()
-        m = _RE_CMT_LIKE_BTN.match(t)
-        if m:
-            cand = m.group(1).strip()
-            if len(cand) > len(best):
-                best = cand
-        m = _RE_CMT_REPLY_BTN.match(t)
-        if m:
-            cand = m.group(1).strip()
-            if len(cand) > len(best):
-                best = cand
-    if not best:
-        return author
-    best = unicodedata.normalize("NFC", best)
-    bl = best.lower()
-    if len(best) > len(au) and bl.startswith(au_l):
-        return best
-    return author
+    from .post_extractor import _refine_comment_author_from_cluster as _impl
+    return _impl(cluster, author)
 
 
 def _is_cmt_chrome_search_or_post_menu_text(text: str) -> bool:
@@ -1823,46 +1421,14 @@ def _is_cmt_chrome_search_or_post_menu_text(text: str) -> bool:
 
 
 def _is_cmt_noise(text: str) -> bool:
-    t = text.strip()
-    tl = t.lower()
-    if not tl or tl in _CMT_NOISE_TEXTS:
-        return True
-    if _is_cmt_chrome_search_or_post_menu_text(t):
-        return True
-    if _RE_SHARES_COUNT_LABEL.match(t.strip()):
-        return True
-    if tl == "đóng":
-        return True
-    if "đang hiển thị" in tl and "bình luận" in tl:
-        return True
-    if tl.startswith("nút thích bình luận"):
-        return True
-    if tl.startswith("trả lời bình luận"):
-        return True
-    if tl == "tham gia":
-        return True
-    if tl.startswith("viết bình luận"):
-        return True
-    if tl.startswith("write a comment") or tl.startswith("write public comment"):
-        return True
-    if tl.startswith("write a public comment"):
-        return True
-    if tl.startswith("add a comment"):
-        return True
-    return False
+    from .filters import _is_cmt_noise as _impl
+    return _impl(text)
 
 
 def _looks_like_comment_timestamp_row(text: str) -> bool:
     """Dòng giờ / chia sẻ của bài viết — không gộp vào cluster comment."""
-    t = text.strip()
-    if len(t) > 96:
-        return False
-    tl = t.lower()
-    if "chia sẻ với" in tl:
-        return True
-    if ("•" in t or "·" in t) and _RE_TS.search(t):
-        return True
-    return False
+    from .filters import _looks_like_comment_timestamp_row as _impl
+    return _impl(text)
 
 
 def _is_comment_image_placeholder_text(text: str) -> bool:
@@ -1914,89 +1480,8 @@ def _should_merge_split_comment_nodes(
     prev: Dict[str, Any], nxt: Dict[str, Any], gap: float,
 ) -> bool:
     """Gộp hai node liên tiếp bị FB tách theo chiều dọc (tên/badge/body, hoặc body nhiều đoạn)."""
-    pt = prev["text"].strip()
-    nt = nxt["text"].strip()
-    if not pt or not nt:
-        return False
-    pl, nl = len(pt), len(nt)
-    px, nx = prev["bounds"][0], nxt["bounds"][0]
-
-    # Large vertical gap: image-only tile (a11y text "Ảnh") under badge or name row.
-    if _comment_line_is_badge(pt) and _is_comment_image_placeholder_text(nt) and gap <= 1400:
-        return True
-    if (
-        2 <= pl <= 100
-        and not _comment_line_is_badge(pt)
-        and _is_comment_image_placeholder_text(nt)
-        and gap < 1400
-    ):
-        return True
-
-    # Image tile then footer rows (timestamp / like) — still same comment, gap often 400–900.
-    if _is_comment_image_placeholder_text(pt) and gap < 900:
-        if len(nt) <= _MAX_TS_ANCHOR_NODE_LEN and _RE_TS.search(nt):
-            return True
-        if _looks_like_comment_timestamp_row(nt):
-            return True
-        if _RE_CMT_LIKE_BTN.match(nt) or _RE_CMT_REPLY_BTN.match(nt):
-            return True
-
-    if gap <= 80 or gap > 720:
-        return False
-    if abs(px - nx) > 120:
-        # Name on left avatar column (x<150) + badge row in main column are far apart horizontally.
-        if not (
-            2 <= pl <= 100
-            and not _comment_line_is_badge(pt)
-            and _comment_line_is_badge(nt)
-            and int(prev["bounds"][0]) < 150
-        ):
-            return False
-
-    if _looks_like_comment_timestamp_row(pt) or _looks_like_comment_timestamp_row(nt):
-        return False
-    if _RE_CMT_LIKE_BTN.match(nt) or _RE_CMT_REPLY_BTN.match(nt):
-        return False
-    if _is_cmt_noise(nt):
-        return False
-
-    plow = pt.lower()
-    if "http" in plow or "www." in plow:
-        return False
-    if plow.startswith("nút ") or plow.startswith("trả lời"):
-        return False
-
-    # Tên ngắn + badge (chip dưới tên)
-    if 2 <= pl <= 100 and _comment_line_is_badge(nt):
-        return True
-
-    # Tên / avatar label + badge phía dưới (FB tách dọc)
-    if 2 <= pl <= 100 and not _comment_line_is_badge(pt) and _comment_line_is_badge(nt) and gap < 420:
-        return True
-
-    # Badge + phần nội dung
-    if _comment_line_is_badge(pt) and nl >= 12 and not _comment_line_is_badge(nt):
-        return True
-
-    # Tên + body (nới: body ngắn hơn, khe dọc lớn hơn)
-    if 2 <= pl <= 100:
-        if "•" in pt and pl > 40 and "chia sẻ" not in plow:
-            return False
-        min_nl = 12 if (" " in nt or nl >= 18) else 22
-        if nl >= min_nl:
-            if nl < 30 and " " not in nt:
-                return False
-            return True
-
-    # Hai khối body dài liền nhau (FB tách ViewGroup)
-    if pl >= 28 and nl >= 28 and gap <= 300:
-        if _RE_CMT_LIKE_BTN.match(pt) or _RE_CMT_REPLY_BTN.match(pt):
-            return False
-        if " " not in nt and nl < 45:
-            return False
-        return True
-
-    return False
+    from .clustering import _should_merge_split_comment_nodes as _impl
+    return _impl(prev, nxt, gap)
 
 
 def _cluster_into_comments(nodes: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
@@ -2010,68 +1495,8 @@ def _cluster_into_comments(nodes: List[Dict[str, Any]]) -> List[List[Dict[str, A
     - After the like row, Katana often emits Trả lời + ``N cảm xúc`` on the same band;
       keep them in the same cluster so reaction counts parse into ``likes``.
     """
-    if not nodes:
-        return []
-    GAP = 80
-    clusters: List[List[Dict]] = []
-    current: List[Dict] = [nodes[0]]
-    prev_cy = nodes[0]["cy"]
-    pending_footer = False
-
-    def _inline_comment_footer_row(text: str, footer_gap: float) -> bool:
-        tt = text.strip()
-        if footer_gap >= 200:
-            return False
-        if _RE_CMT_REPLY_BTN.match(tt):
-            return True
-        if _is_comment_reaction_count_row(tt):
-            return True
-        if len(tt) <= _MAX_TS_ANCHOR_NODE_LEN and _RE_TS.search(tt):
-            return True
-        return False
-
-    for node in nodes[1:]:
-        gap = node["cy"] - prev_cy
-        t = node["text"].strip()
-        is_end_marker = bool(_RE_CMT_LIKE_BTN.match(t))
-
-        if pending_footer:
-            if _inline_comment_footer_row(t, gap):
-                current.append(node)
-                prev_cy = node["cy"]
-                continue
-            clusters.append(current)
-            current = [node]
-            prev_cy = node["cy"]
-            pending_footer = False
-            continue
-
-        merge_name_body = (
-            not is_end_marker
-            and gap > GAP
-            and bool(current)
-            and _should_merge_split_comment_nodes(current[-1], node, gap)
-        )
-        if merge_name_body:
-            current.append(node)
-            prev_cy = node["cy"]
-            continue
-        if gap > GAP or is_end_marker:
-            if is_end_marker:
-                current.append(node)
-                pending_footer = True
-                prev_cy = node["cy"]
-                continue
-            if current:
-                clusters.append(current)
-            current = [node]
-        else:
-            current.append(node)
-        prev_cy = node["cy"]
-
-    if current:
-        clusters.append(current)
-    return clusters
+    from .clustering import _cluster_into_comments as _impl
+    return _impl(nodes)
 
 
 def _extract_comment(
@@ -2633,15 +2058,9 @@ def parse_fb_comments_from_xml(
 
 
 def _dedup_comments(comments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Deduplicate comments: same author + text[:60] = same comment."""
-    seen: set = set()
-    out: List[Dict[str, Any]] = []
-    for c in comments:
-        key = c.get("comment_key") or (c["author"], c["text"][:60])
-        if key not in seen:
-            seen.add(key)
-            out.append(c)
-    return out
+    # Responsibility split: dedup implementation lives in `tasks.fb_extract.dedup`.
+    from .dedup import _dedup_comments as _impl
+    return _impl(comments)
 
 
 def _post_id_from_ctx(ctx: Dict[str, Any], post_id_var: Optional[str]) -> Optional[str]:
@@ -2711,11 +2130,46 @@ def _collect_see_more_tap_plan(root) -> List[Tuple[int, int, int, int]]:
     """Ordered tap targets: prefer Button, then smallest area; skip wrapper rows."""
     if root is None:
         return []
+
+    def _in_tabstrip_context(node) -> bool:
+        cur = node
+        for _ in range(5):
+            cur = cur.getparent()
+            if cur is None:
+                break
+            t = _normalize_fb_ui_spacing(cur.get("text") or "")
+            d = _normalize_fb_ui_spacing(cur.get("content-desc") or "")
+            merged = f"{t} {d}".strip().lower()
+            if not merged or "xem thêm" not in merged:
+                continue
+            if "…" in merged or "..." in merged:
+                return False
+            if any(tab_kw in merged for tab_kw in ("tất cả", "ảnh", "reels", "all", "photos", "trong số", " of ")):
+                return True
+        return False
+
     nodes = root.xpath('//node[@text or @content-desc]')
     candidates: List[Tuple[int, int, Tuple[int, int, int, int]]] = []
     for node in nodes:
         txt = ((node.get("text") or "") + " " + (node.get("content-desc") or "")).strip().lower()
         if not txt or not any(k in txt for k in _SEE_MORE_EXPAND_PHRASES):
+            continue
+        txt_norm = _normalize_fb_ui_spacing(txt)
+        if txt_norm in {"xem thêm, 4 trong số 4", "see more, 4 of 4"}:
+            continue
+        if (
+            ("xem thêm" in txt_norm and "trong số" in txt_norm)
+            or ("see more" in txt_norm and " of " in txt_norm)
+        ):
+            continue
+        if (
+            "xem thêm" in txt_norm
+            and "…" not in txt_norm
+            and "..." not in txt_norm
+            and any(tab_kw in txt_norm for tab_kw in ("tất cả", "ảnh", "reels", "all", "photos"))
+        ):
+            continue
+        if "xem thêm" in txt_norm and _in_tabstrip_context(node):
             continue
         b = _resolve_expand_clickable_bounds(node)
         if not b:

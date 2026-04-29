@@ -27,23 +27,14 @@ from jose import jwt
 _SECRET = "test-secret-key-long-enough-for-hs256-tests"
 _ALG = "HS256"
 
-# Patch targets (where the names are *used*, not where they live)
-_JWT_KEY_TARGETS = [
-    "api.routes.public.jwt_secret_key",
-    "api.routes.public.jwt_algorithm",
-    "api.deps.jwt_secret_key",
-    "api.deps.jwt_algorithm",
-]
-
-
 @contextmanager
 def _jwt_patch():
     """Patch jwt_secret_key / jwt_algorithm in all consumer modules."""
     with (
         patch("api.routes.public.jwt_secret_key", return_value=_SECRET),
         patch("api.routes.public.jwt_algorithm", return_value=_ALG),
-        patch("api.deps.jwt_secret_key", return_value=_SECRET),
-        patch("api.deps.jwt_algorithm", return_value=_ALG),
+        patch("api.auth.context.jwt_secret_key", return_value=_SECRET),
+        patch("api.auth.context.jwt_algorithm", return_value=_ALG),
     ):
         yield
 
@@ -124,11 +115,16 @@ def _db_patch(db_devices: list[_FakeDevice]):
             return list(db_devices)
         return [d for d in db_devices if d.user_id == user_id]
 
+    async def fake_assert_owns_device(ctx, serial: str):
+        allowed = {d.serial for d in db_devices if d.user_id == ctx.user_id}
+        if serial not in allowed:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=403, detail="Not authorized for this device")
+
     with (
         patch("api.routes.public.AsyncSessionLocal", mock_session_cls),
         patch("api.routes.public.repo.list_devices", side_effect=fake_list_devices),
-        patch("api.deps.AsyncSessionLocal", mock_session_cls),
-        patch("api.deps.repo.list_devices", side_effect=fake_list_devices),
+        patch("api.deps.policy.assert_owns_device", side_effect=fake_assert_owns_device),
     ):
         yield
 

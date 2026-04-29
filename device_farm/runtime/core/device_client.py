@@ -654,8 +654,7 @@ class DeviceClient:
             return
         # Mark that scrcpy has started delivering — APK JPEG fallback will stop now.
         first_frame = self._last_frame_time == 0
-        if first_frame:
-            self._last_frame_time = time.monotonic()
+        self._last_frame_time = time.monotonic()
         w = max(0, min(self.screen_width, 0xFFFF))
         h = max(0, min(self.screen_height, 0xFFFF))
         pts_hi = (pts_us >> 32) & 0xFFFFFFFF
@@ -777,23 +776,26 @@ class DeviceClient:
         quality: int = 70,
         max_width: int = 800,
         allow_ws_u2_fallback: bool = False,
+        skip_cache: bool = False,
     ) -> Optional[bytes]:
         """
         On-demand screenshot with fallback chain:
-          1. Cached _latest_jpeg (from scrcpy or agent frame stream) — always preferred
+          1. Cached _latest_jpeg (from scrcpy or agent frame stream) unless skip_cache=True
           2. U2 HTTP /screenshot/0 (ADB mode only — avoids tunnel contention in agent mode)
           3. ADB shell screencap (ADB mode only)
         Updates _latest_jpeg with the result.
 
         IMPORTANT: When scrcpy is active, ONLY return cached frame. U2 screenshot
         requests hammer the WS tunnel and starve scrcpy bandwidth.
+        For low-FPS recovery paths, skip_cache=True bypasses stale cached frames
+        and returns only an actual fresh capture source such as relay screencap.
         """
         jpeg = None
 
         # When scrcpy is active OR WS agent mode: always use cached frame.
         # U2 screenshot through WS tunnel causes massive tunnel thrashing that
         # kills scrcpy FPS (drops from 30fps to 1fps).
-        if self._scrcpy_active or self._agent_send is not None:
+        if not skip_cache and (self._scrcpy_active or self._agent_send is not None):
             with self._latest_jpeg_lock:
                 jpeg = self._latest_jpeg
             if jpeg is not None:
@@ -837,14 +839,14 @@ class DeviceClient:
                 self._log(f"capture_screenshot relay error: {exc}", level=logging.DEBUG)
 
         # Fallback: cached frame
-        if jpeg is None:
+        if jpeg is None and not skip_cache:
             with self._latest_jpeg_lock:
                 jpeg = self._latest_jpeg
 
         # Update cache — only for ADB mode (u2 is primary source) or scrcpy frames.
         # WS u2 fallback (allow_ws_u2_fallback=True) must NOT update cache, otherwise
         # take_screenshot() returns the stale fallback frame and MJPEG freezes.
-        if jpeg is not None and not allow_ws_u2_fallback:
+        if jpeg is not None and not allow_ws_u2_fallback and not skip_cache:
             with self._latest_jpeg_lock:
                 self._latest_jpeg = jpeg
 

@@ -48,6 +48,27 @@ def _pn(
 # ── merge_post_type ──────────────────────────────────────────────────────────
 
 
+def test_parse_posts_entrypoint_delegates_to_refactored_clusterer(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: List[Dict[str, Any]] = []
+
+    def fake_cluster(nodes: List[Dict[str, Any]], *, screen_height: int = 2200) -> List[List[Dict[str, Any]]]:
+        calls.append({"nodes": nodes, "screen_height": screen_height})
+        return []
+
+    monkeypatch.setattr("tasks.fb_extract.clustering._cluster_into_posts", fake_cluster)
+
+    xml = """
+    <hierarchy rotation="0">
+      <node class="android.widget.TextView" text="Author" bounds="[20,300][220,340]" />
+      <node class="android.widget.TextView" text="Body" bounds="[20,360][420,420]" />
+    </hierarchy>
+    """
+
+    assert parse_fb_posts_from_xml(xml) == []
+    assert len(calls) == 1
+    assert [node["text"] for node in calls[0]["nodes"]] == ["Author", "Body"]
+
+
 def test_merge_post_type_short_body_plus_permalink_is_link() -> None:
     assert _merge_post_type("text", None, None, has_fb_link=True, body_len=12) == "link"
     assert _merge_post_type("text", None, None, has_fb_link=True, body_len=55) == "link"

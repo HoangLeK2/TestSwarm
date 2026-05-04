@@ -12,7 +12,15 @@
 
 - Register asyncio loop with `DeviceManager`.
 - Start periodic **heartbeat** task.
-- If `database.enabled` in config: `init_db()` (PostgreSQL). On failure the app still runs without DB features.
+- If `database.enabled` in config: `init_db()` (PostgreSQL). Startup fails if DB init or migrations fail.
+
+### Database migrations
+
+- Migration files live in `db/migrations/[0-9]*.py` and run in filename order.
+- Applied migrations are recorded in PostgreSQL table `schema_migrations` with a SHA-256 checksum.
+- Already-applied files are skipped on later startups. If an applied migration file changes, startup fails; add a new migration instead of editing production history.
+- Destructive migrations must validate legacy data before dropping columns/tables. For example, migration 019 aborts if any `content_items.run_id` row cannot be mapped to `execution_id`.
+- SQLAlchemy `Base.metadata.create_all()` is disabled by default when `DEVICE_FARM_ENV` is `production`, `prod`, or `staging`. Set `FARM_DB_AUTO_CREATE_SCHEMA=1` only for an intentional bootstrap of an empty environment.
 
 ## HTTP surface
 
@@ -58,6 +66,7 @@ Canonical getters for the **server process** live in `core/env.py`. Below is the
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `DATABASE_URL` | from `config.yaml` | Async SQLAlchemy DSN (see `db/database.py`) |
+| `FARM_DB_AUTO_CREATE_SCHEMA` | off in production/staging, on elsewhere | Allow SQLAlchemy `create_all()` before migrations |
 
 ### Agents / local tools (scripts, not all via `core/env`)
 

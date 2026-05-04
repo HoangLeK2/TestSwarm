@@ -191,6 +191,34 @@ def test_migration_019_contains_unmapped_guardrail():
     migration = Path(__file__).resolve().parents[1] / "db" / "migrations" / "019_merge_campaign_runs_into_executions.py"
     content = migration.read_text(encoding="utf-8")
     assert "rows with run_id remain unmapped" in content
+    assert "RAISE EXCEPTION" in content
+    assert "refusing to drop campaign_runs/content_items.run_id" in content
+    assert "Time-nearest fallback" not in content
+
+
+def test_migration_runner_records_applied_files_and_checksums():
+    from pathlib import Path
+
+    runner = Path(__file__).resolve().parents[1] / "db" / "migrations" / "__init__.py"
+    content = runner.read_text(encoding="utf-8")
+    assert "CREATE TABLE IF NOT EXISTS schema_migrations" in content
+    assert "checksum" in content
+    assert "checksum mismatch" in content
+    assert "_record_applied_migration" in content
+
+
+def test_production_disables_sqlalchemy_create_all_by_default(monkeypatch):
+    from db.database import _auto_create_schema_enabled
+
+    monkeypatch.setenv("DEVICE_FARM_ENV", "production")
+    monkeypatch.delenv("FARM_DB_AUTO_CREATE_SCHEMA", raising=False)
+    assert _auto_create_schema_enabled() is False
+
+    monkeypatch.setenv("FARM_DB_AUTO_CREATE_SCHEMA", "1")
+    assert _auto_create_schema_enabled() is True
+
+    monkeypatch.setenv("FARM_DB_AUTO_CREATE_SCHEMA", "0")
+    assert _auto_create_schema_enabled() is False
 
 
 @pytest.mark.asyncio

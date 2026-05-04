@@ -16,7 +16,7 @@ async def upgrade(conn) -> None:
     # Legacy-safe strategy:
     #   A) Ensure one execution exists per campaign_run id (reuse id = run_id)
     #   B) Map run_id -> execution_id directly
-    #   C) Fallback by campaign/time for any remaining rows
+    #   C) Fail fast before destructive drops if any row remains unmapped
     await conn.execute(
         """
         DO $$
@@ -71,29 +71,19 @@ async def upgrade(conn) -> None:
                   AND ci.execution_id IS NULL
                   AND EXISTS (SELECT 1 FROM executions e WHERE e.id = ci.run_id);
 
-                -- C) Time-nearest fallback by campaign (for dirty legacy data)
-                UPDATE content_items ci
-                SET execution_id = (
-                    SELECT e.id FROM executions e
-                    WHERE e.campaign_id = ci.campaign_id
-                      AND e.run_type = 'campaign_run'
-                    ORDER BY ABS(EXTRACT(EPOCH FROM (e.created_at - ci.created_at)))
-                    LIMIT 1
-                )
-                WHERE ci.run_id IS NOT NULL
-                  AND ci.execution_id IS NULL
-                  AND ci.campaign_id IS NOT NULL;
             END IF;
         END $$;
         """
     )
 
-    # Guardrail (soft): keep a log signal for operators, but do not abort startup.
+    # Guardrail (hard): do not drop legacy columns/tables while rows with
+    # run_id remain unmapped. Aborting here keeps the migration transaction
+    # intact so operators can inspect and repair legacy data before retrying.
     await conn.execute(
         """
         DO $$
         DECLARE
-            orphan_count BIGINT := 0;
+            unmapped_count BIGINT := 0;
         BEGIN
             IF to_regclass('campaign_runs') IS NOT NULL
                AND EXISTS (
@@ -101,15 +91,15 @@ async def upgrade(conn) -> None:
                    WHERE table_name = 'content_items' AND column_name = 'run_id'
                ) THEN
                 SELECT COUNT(*)
-                INTO orphan_count
+                INTO unmapped_count
                 FROM content_items ci
                 WHERE ci.run_id IS NOT NULL
                   AND ci.execution_id IS NULL;
 
-                IF orphan_count > 0 THEN
-                    RAISE NOTICE
-                        'Migration 019: % legacy content_items rows still unmapped (execution_id IS NULL). Proceeding with drop.',
-                        orphan_count;
+                IF unmapped_count > 0 THEN
+                    RAISE EXCEPTION
+                        'Migration 019 aborted: % rows with run_id remain unmapped; refusing to drop campaign_runs/content_items.run_id. Repair legacy data and retry.',
+                        unmapped_count;
                 END IF;
             END IF;
         END $$;

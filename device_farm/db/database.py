@@ -12,6 +12,8 @@ Usage in Temporal activities (separate thread/loop):
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
 import threading
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -27,6 +29,8 @@ from sqlalchemy.orm import DeclarativeBase
 
 from core.config import load_config
 from core.env import farm_config_path
+
+log = logging.getLogger(__name__)
 
 
 def _build_url() -> str:
@@ -147,15 +151,30 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def init_db() -> None:
-    """Create all tables then run incremental migrations on startup."""
+    """Initialize database schema and run incremental migrations on startup."""
     from db import models  # noqa: F401 — ensure models are registered
     from db.migrations import run_migrations
 
     async with engine.begin() as conn:
-        await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn))
+        if _auto_create_schema_enabled():
+            await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn))
+        else:
+            log.info(
+                "Skipping SQLAlchemy create_all in production/staging; "
+                "schema changes must come from migrations."
+            )
         await run_migrations(conn)
 
     # Seed builtin scenario templates (idempotent)
     async with AsyncSessionLocal() as seed_db:
         from db.seeds.scenario_templates import seed_builtin_templates
         await seed_builtin_templates(seed_db)
+
+
+def _auto_create_schema_enabled() -> bool:
+    raw = os.environ.get("FARM_DB_AUTO_CREATE_SCHEMA")
+    if raw is not None and raw.strip() != "":
+        return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+    env_name = os.environ.get("DEVICE_FARM_ENV", "").strip().lower()
+    return env_name not in {"prod", "production", "staging"}

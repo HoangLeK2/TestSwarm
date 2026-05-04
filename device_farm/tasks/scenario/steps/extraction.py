@@ -182,16 +182,26 @@ def _parse_comments_with_diag(
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Same adapter pattern for comments — preserves test mocks."""
     from tasks.fb_extract import (
+        _parse_xml,
+        _resolve_comment_region_anchors,
         parse_fb_comments_from_xml,
         parse_fb_comments_from_xml_with_diagnostic,
     )
     rows = parse_fb_comments_from_xml(xml, parent_post_id=parent_post_id, max_items=max_items)
     if rows:
+        anchor_found = False
+        root = _parse_xml(xml)
+        if root is not None:
+            action_btn_y2, _action_btn_y_mid, _comment_y_max = _resolve_comment_region_anchors(
+                root,
+                parent_post_id,
+            )
+            anchor_found = action_btn_y2 is not None
         body_rows = [r for r in rows if r.get("_type") != "post_stats"]
         return rows, {
             "reason_code": "ok",
             "comments_returned": len(body_rows),
-            "anchor_button_found": True,  # best-effort; real diag would confirm
+            "anchor_button_found": anchor_found,
             "nodes_in_band": len(rows),
             "candidate_clusters": len(rows),
             "locale_tokens_hit": [],

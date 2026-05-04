@@ -1,11 +1,18 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Dict, List
 
-from . import _impl
+from .constants import (
+    _MAX_TS_ANCHOR_NODE_LEN,
+    _NOISE_PREFIXES,
+    _RE_CMT_LIKE_BTN,
+    _RE_CMT_REPLY_BTN,
+    _RE_TS,
+)
 from .filters import (
     _comment_line_is_badge,
     _is_cmt_noise,
+    _is_comment_image_placeholder_text,
     _is_comment_reaction_count_row,
     _looks_like_comment_timestamp_row,
 )
@@ -13,15 +20,6 @@ from .filters import (
 
 # Responsibility: nodes -> clusters (feed posts + comment bodies) and
 # merge/split heuristics.
-
-_RE_TS = _impl._RE_TS
-_MAX_TS_ANCHOR_NODE_LEN = _impl._MAX_TS_ANCHOR_NODE_LEN
-_NOISE_PREFIXES = _impl._NOISE_PREFIXES
-
-_RE_CMT_LIKE_BTN = _impl._RE_CMT_LIKE_BTN
-_RE_CMT_REPLY_BTN = _impl._RE_CMT_REPLY_BTN
-_is_comment_image_placeholder_text = _impl._is_comment_image_placeholder_text
-
 
 def _should_merge_post_nodes_despite_vertical_gap(
     prev: Dict[str, Any],

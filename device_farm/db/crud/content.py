@@ -7,7 +7,7 @@ from typing import Any, Optional
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models.content import ContentCollection, ContentExport, ContentItem
+from db.models.content import ContentCollection, ContentItem
 
 
 async def get_content_by_hash(
@@ -225,42 +225,6 @@ async def increment_collection_count(
     await db.execute(
         stmt.values(item_count=ContentCollection.item_count + 1)
     )
-
-
-# ── Exports ───────────────────────────────────────────────────────────────────
-
-
-async def create_export(db: AsyncSession, **kwargs) -> ContentExport:
-    export = ContentExport(**kwargs)
-    db.add(export)
-    await db.flush()
-    return export
-
-
-async def get_export(db: AsyncSession, export_id: str, *, user_id: str | None = None) -> Optional[ContentExport]:
-    stmt = select(ContentExport).where(ContentExport.id == export_id)
-    if user_id:
-        stmt = stmt.where(ContentExport.user_id == user_id)
-    result = await db.execute(
-        stmt
-    )
-    return result.scalar_one_or_none()
-
-
-async def update_export(db: AsyncSession, export_id: str, **kwargs) -> None:
-    await db.execute(
-        update(ContentExport).where(ContentExport.id == export_id).values(**kwargs)
-    )
-
-
-async def list_exports(db: AsyncSession, *, user_id: str, limit: int = 20) -> list[ContentExport]:
-    result = await db.execute(
-        select(ContentExport)
-        .where(ContentExport.user_id == user_id)
-        .order_by(ContentExport.created_at.desc())
-        .limit(limit)
-    )
-    return list(result.scalars().all())
 
 
 # ── Stats ─────────────────────────────────────────────────────────────────────

@@ -5,24 +5,22 @@ import re
 import unicodedata
 from typing import Any, Dict, Optional
 
-from . import _impl
+from .constants import (
+    _CMT_BADGE_LABELS,
+    _CMT_EMPTY_BODY_JUNK_AUTHOR,
+    _CMT_NOISE_TEXTS,
+    _RE_CMT_REACTIONS,
+    _RE_CMT_REACTIONS_EN,
+    _RE_CMT_TS_SHARE,
+    _RE_COMMENT_REACTIONS_LABEL,
+    _RE_IMAGE_TYPE,
+    _RE_LEAKED_REL_TIME_AS_LABEL,
+    _RE_NUMERIC_SHORT,
+    _RE_SHARES_COUNT_LABEL,
+    _RE_TS,
+)
 
 # Responsibility: junk/noise filters for parsed feed/comment rows.
-
-_RE_TS = _impl._RE_TS
-_RE_IMAGE_TYPE = _impl._RE_IMAGE_TYPE
-_RE_SHARES_COUNT_LABEL = _impl._RE_SHARES_COUNT_LABEL
-_RE_COMMENT_REACTIONS_LABEL = _impl._RE_COMMENT_REACTIONS_LABEL
-_RE_NUMERIC_SHORT = _impl._RE_NUMERIC_SHORT
-_RE_CMT_REACTIONS = _impl._RE_CMT_REACTIONS
-_RE_CMT_REACTIONS_EN = _impl._RE_CMT_REACTIONS_EN
-_RE_CMT_TS_SHARE = _impl._RE_CMT_TS_SHARE
-_RE_LEAKED_REL_TIME_AS_LABEL = _impl._RE_LEAKED_REL_TIME_AS_LABEL
-
-_CMT_NOISE_TEXTS = _impl._CMT_NOISE_TEXTS
-_CMT_EMPTY_BODY_JUNK_AUTHOR = _impl._CMT_EMPTY_BODY_JUNK_AUTHOR
-_CMT_BADGE_LABELS = _impl._CMT_BADGE_LABELS
-
 
 def _keep_soft_junk() -> bool:
     return os.environ.get("FB_KEEP_SOFT_JUNK", "0") == "1"
@@ -329,6 +327,48 @@ def _is_comment_reaction_count_row(text: str) -> bool:
     return bool(_RE_CMT_REACTIONS.match(t) or _RE_CMT_REACTIONS_EN.match(t))
 
 
+def _is_comment_image_placeholder_text(text: str) -> bool:
+    tl = (text or "").strip().lower()
+    return tl in ("ảnh", "photo", "image", "hình ảnh", "picture")
+
+
+def _is_compact_comment_action_label(text: str, bounds: list[int]) -> bool:
+    t = (text or "").strip().lower()
+    if t not in ("thích", "trả lời", "like", "reply"):
+        return False
+    if len(bounds) < 4:
+        return False
+    return (int(bounds[2]) - int(bounds[0])) < 220
+
+
+def _is_comment_left_avatar_name_strip(n: Dict[str, Any]) -> bool:
+    b = n.get("bounds") or []
+    if len(b) < 4:
+        return False
+    x0, _, x1, _ = int(b[0]), int(b[1]), int(b[2]), int(b[3])
+    if x0 < 28 or x0 >= 150:
+        return False
+    if x1 > 230:
+        return False
+    t = (n.get("text") or "").strip()
+    if not (2 <= len(t) <= 90):
+        return False
+    if _comment_line_is_badge(t):
+        return False
+    if _is_comment_image_placeholder_text(t):
+        return False
+    if _looks_like_comment_timestamp_row(t):
+        return False
+    if _is_cmt_noise(t):
+        return False
+    tl = t.lower()
+    if tl.startswith("nút ") or "bình luận của" in tl:
+        return False
+    if re.search(r"\d", t) and len(t) <= 6 and " " not in t:
+        return False
+    return True
+
+
 def _is_comment_row_parse_noise(c: Dict[str, Any]) -> bool:
     """Nhiễu UI / parse vỡ rõ ràng — bỏ khỏi output `parse_fb_comments_from_xml`."""
     if c.get("_type") == "post_stats":
@@ -437,6 +477,9 @@ __all__ = [
     "_looks_like_comment_timestamp_row",
     "_comment_line_is_badge",
     "_is_comment_reaction_count_row",
+    "_is_comment_image_placeholder_text",
+    "_is_compact_comment_action_label",
+    "_is_comment_left_avatar_name_strip",
     "_is_duplicate_short_author_footer_row",
 ]
 

@@ -879,10 +879,13 @@ class DeviceClient:
 
     def _try_u2_tap(self, action: "Callable[[], None]") -> bool:
         """Run touch action via u2. On failure: null _u2, reconnect once, retry."""
-        # Do NOT wait for U2 if it isn't ready — fall through to scrcpy immediately.
-        # The old 5×500ms wait (2.5s blocking) caused the first tap after connect to
-        # freeze the receiver for 2.5s. Scrcpy is a faster fallback when U2 is initializing.
-        if not self.ensure_u2_healthy() or self._u2 is None:
+        # Do NOT reconnect U2 inline from the manual input path. A reconnect can
+        # block for 3-12s and makes the control UI feel frozen. Keepalive/recovery
+        # owns reconnects; manual input uses U2 only when a live client is already
+        # present, then falls through to the next route if it is not.
+        if self._u2 is None:
+            return False
+        if not self.ensure_u2_healthy(ping_timeout=0.8) or self._u2 is None:
             return False
         return self._try_u2_tap_impl(action)
 
@@ -899,7 +902,7 @@ class DeviceClient:
         # Don't reconnect inline — let keepalive handle it in background.
         # Inline reconnect blocks the touch caller for 3-12s (tunnel churn)
         # and starves the event loop. Return False → caller falls through to
-        # scrcpy control (much faster, no tunnel overhead).
+        # the next input route.
         return False
 
     def _get_scrcpy_control(self) -> Optional[ScrcpyControl]:
@@ -945,8 +948,11 @@ class DeviceClient:
     def _resolve_relay_serial(self) -> str:
         """Return the best adb serial for relay calls.
 
-        Priority: cached _adb_serial → resolve_serial(self.serial) → single-
-        device fallback (when only one device is online in the relay).
+        Priority:
+          1) cached _adb_serial
+          2) resolve by device serial
+          3) resolve by known device IP (_u2_host) when available
+          4) single-device fallback (only when target IP matches)
         """
         if self._adb_serial:
             return self._adb_serial
@@ -958,6 +964,16 @@ class DeviceClient:
         if relay.relay_for_serial(resolved):
             self._adb_serial = resolved
             return resolved
+        # Prefer explicit device IP mapping when this DeviceClient originated from
+        # WS-agent serials (e.g. eae...): it avoids binding to a wrong relay serial
+        # during startup races where only one relay device is visible momentarily.
+        if self._u2_host:
+            ip_target = self._u2_host.strip()
+            if ip_target:
+                by_ip = relay.resolve_serial(f"{ip_target}:5555")
+                if relay.relay_for_serial(by_ip):
+                    self._adb_serial = by_ip
+                    return by_ip
         # Single-device fallback: if only one device online, use it
         try:
             all_serials: list[str] = []
@@ -965,6 +981,11 @@ class DeviceClient:
                 all_serials.extend(serials)
             uniq = sorted(set(all_serials))
             if len(uniq) == 1:
+                if ":" in self.serial:
+                    serial_ip = self.serial.rsplit(":", 1)[0]
+                    only_ip = uniq[0].rsplit(":", 1)[0] if ":" in uniq[0] else uniq[0]
+                    if only_ip != serial_ip:
+                        return self.serial
                 self._adb_serial = uniq[0]
                 return uniq[0]
         except Exception:
@@ -1578,11 +1599,21 @@ class DeviceClient:
         Fallback: a11y path (gRPC query / WS direct) when u2 is unavailable.
         """
         now = time.time()
+        if force_refresh and self._hierarchy_cache is not None:
+            ts, xml = self._hierarchy_cache
+            if now - ts < self._HIERARCHY_FORCE_DEBOUNCE_S and xml:
+                return xml
         if not force_refresh and self._hierarchy_cache is not None:
             ts, xml = self._hierarchy_cache
             if now - ts < self._hierarchy_cache_ttl and xml:
                 return xml  # fast path: no lock needed for cache read
-        with self._hierarchy_lock:
+        if not self._hierarchy_lock.acquire(timeout=self._HIERARCHY_LOCK_WAIT_S):
+            if self._hierarchy_cache is not None:
+                _, xml = self._hierarchy_cache
+                if xml:
+                    return xml
+            return None
+        try:
             now = time.time()
             if not force_refresh and self._hierarchy_cache is not None:
                 ts, xml = self._hierarchy_cache
@@ -1599,7 +1630,7 @@ class DeviceClient:
             # Always retry when agent channel exists so we can auto-recover
             # after transient a11y/u2 outages without requiring reconnect.
             if self._agent_send is not None:
-                xml = self._hierarchy_via_ws(timeout=5.0)
+                xml = self._hierarchy_via_ws(timeout=self._A11Y_HIERARCHY_TIMEOUT)
                 if xml and not self._is_empty_hierarchy(xml):
                     self._log(f"hierarchy: route=a11y bytes={len(xml)}", level=logging.DEBUG)
                     self._hierarchy_cache = (now, xml)
@@ -1607,6 +1638,8 @@ class DeviceClient:
 
             self._log("hierarchy: route=u2->a11y failed", level=logging.WARNING)
             return None
+        finally:
+            self._hierarchy_lock.release()
 
     @staticmethod
     def _is_empty_hierarchy(s: str) -> bool:
@@ -1623,7 +1656,10 @@ class DeviceClient:
     # compressed=True cuts dump time from 3-10 s to 1-3 s on complex Samsung screens
     # because dumpWindowHierarchy skips off-screen/invisible view sub-trees.
     _U2_HIERARCHY_COMPRESSED = True
-    _U2_HIERARCHY_TIMEOUT    = 6.0   # seconds; fail fast rather than blocking 10 s
+    _U2_HIERARCHY_TIMEOUT    = 2.5   # seconds; keep input path responsive
+    _A11Y_HIERARCHY_TIMEOUT  = 1.5   # seconds; avoid long fallback stalls
+    _HIERARCHY_LOCK_WAIT_S   = 0.15  # seconds; fail fast when another dump is running
+    _HIERARCHY_FORCE_DEBOUNCE_S = 0.35  # seconds; collapse refresh storms
 
     def _hierarchy_xml_u2_impl(self, now: float) -> Optional[str]:
         if not self.ensure_u2_healthy() or self._u2 is None:
@@ -1872,14 +1908,16 @@ class DeviceClient:
         enable_control: bool = True,
     ) -> None:
         """
-        Attach scrcpy screen streaming + control to a WS-Agent device (Mode A hybrid).
+        Attach scrcpy screen streaming to a WS-Agent device (Mode A hybrid).
 
         Routing:
           - Cloud deployment (relay available): frames travel device → agent-boot → gRPC → cloud.
             No local adb binary needed.
           - Local / single-machine (no relay): ScrcpyReceiver uses local adb directly (fallback).
 
-        When enable_control=True, scrcpy also provides touch/key input.
+        When enable_control=True, scrcpy also opens its control channel for
+        stream recovery/keyframe requests. Touch/key input still uses the
+        DeviceClient priority order and does not route through scrcpy_control.
         """
         # Store params so subscribe_frames can restart scrcpy after an auto-stop
         self._scrcpy_params = (device_ip, adb_port, enable_control)

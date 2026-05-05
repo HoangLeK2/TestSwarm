@@ -161,7 +161,7 @@ export function DeviceTile({
             onUnlock={handleUnlock}
           />
         )}
-        {isActive && !hideDeviceFunctions && <DeviceSTFPanel serial={device.serial} />}
+        {/* {isActive && !hideDeviceFunctions && <DeviceSTFPanel serial={device.serial} />} */}
       </CardContent>
     </Card>
   );

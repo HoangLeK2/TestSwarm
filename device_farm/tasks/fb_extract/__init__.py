@@ -17,7 +17,7 @@ from .comment_pipeline import (
     parse_fb_comments_from_xml_with_diagnostic,
     resolve_topmost_comment_target_from_xml,
 )
-from .constants import _AUTHOR_PREFIXES, _COMMENT_BUTTON_TOKENS, _RE_LINK_TYPE, _RE_POST_RESHARE_HEADER, _author_prefix_match
+from .constants import _AUTHOR_PREFIXES, _RE_LINK_TYPE, _RE_POST_RESHARE_HEADER, _author_prefix_match
 from .dedup import _dedup, _dedup_comments
 from .expansion_runtime import _expand_see_more, expand_see_more_with_lazy_hydration, prefetch_viewport_scrolls
 from .feed_pipeline import (
@@ -67,6 +67,7 @@ from .post_extractor import (
     _resource_id_media_hint,
     _structural_post_type_hint,
 )
+from .shared import COMMENT_BUTTON_TOKENS as _COMMENT_BUTTON_TOKENS
 from .ui_expansion import _collect_see_more_tap_plan
 
 __all__ = [k for k in globals().keys() if not k.startswith("__")]

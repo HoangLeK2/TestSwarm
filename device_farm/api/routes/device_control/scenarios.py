@@ -50,6 +50,8 @@ from common.session_lock import SessionLockStore
 from core.config import Config
 from db import crud as repo
 from db.database import AsyncSessionLocal
+from db.crud.scenario_device_variable import get_scenario_device_variables
+from common.variable_resolver import device_vars_to_tokens
 from runtime.core import DeviceManager
 
 log = logging.getLogger(__name__)
@@ -141,6 +143,37 @@ async def _resolve_account_group_vars(
         return {}
 
 
+async def _resolve_device_runtime_vars(
+    serial_or_device_id: str,
+    user_id: Optional[str],
+    scenario_id: Optional[str] = None,
+    inline_device_vars: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    inline_tokens = device_vars_to_tokens(inline_device_vars or {})
+    if not scenario_id:
+        return inline_tokens
+    try:
+        from db.crud.device import get_device, get_device_by_serial
+    except Exception:
+        return {}
+    try:
+        async with AsyncSessionLocal() as db:
+            device = await get_device_by_serial(db, serial_or_device_id)
+            if not device:
+                device = await get_device(db, serial_or_device_id)
+            if not device:
+                return {}
+            if user_id and getattr(device, "user_id", None) != user_id:
+                return {}
+            raw = await get_scenario_device_variables(db, scenario_id, device.id)
+            db_tokens = device_vars_to_tokens(raw)
+            # Inline draft vars win over persisted vars for preview ergonomics.
+            return {**db_tokens, **inline_tokens}
+    except Exception as exc:
+        log.warning("preview device vars resolve failed: %s", exc)
+        return inline_tokens
+
+
 async def _execute_scenario_body(
     manager: DeviceManager,
     serial: str,
@@ -193,12 +226,19 @@ def build_scenarios_router(
         if not device:
             return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
         user_id = _resolve_user_id_from_request(request)
+        device_vars = await _resolve_device_runtime_vars(
+            serial,
+            user_id,
+            body.scenario_id,
+            body.scenario_device_vars,
+        )
         # Inject __ACCOUNT_* vars from the bound account group (if any) so a
         # test run can exercise login steps without first saving the scenario.
         # Client-supplied variables still win on key collision.
         acct_vars = await _resolve_account_group_vars(body.account_group_id, user_id)
-        if acct_vars:
-            body.variables = {**acct_vars, **(body.variables or {})}
+        merged = {**device_vars, **acct_vars}
+        if merged:
+            body.variables = {**merged, **(body.variables or {})}
         return await _execute_scenario_body(
             manager, serial, body, trace_source="api.preview", user_id=user_id
         )
@@ -224,12 +264,19 @@ def build_scenarios_router(
             total_steps=len(body.steps),
         )
         user_id = _resolve_user_id_from_request(request)
+        device_vars = await _resolve_device_runtime_vars(
+            serial,
+            user_id,
+            body.scenario_id,
+            body.scenario_device_vars,
+        )
 
         # Same account-group rotation hook as the non-stream preview. Keep
         # upstream variables authoritative on collision.
         acct_vars = await _resolve_account_group_vars(body.account_group_id, user_id)
-        if acct_vars:
-            body.variables = {**acct_vars, **(body.variables or {})}
+        merged = {**device_vars, **acct_vars}
+        if merged:
+            body.variables = {**merged, **(body.variables or {})}
 
         cancel_event = threading.Event()
         _register_preview(serial, trace_id, cancel_event, user_id=user_id)
@@ -312,6 +359,14 @@ def build_scenarios_router(
         if not device:
             return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
         user_id = _resolve_user_id_from_request(request)
+        device_vars = await _resolve_device_runtime_vars(
+            serial,
+            user_id,
+            body.scenario_id,
+            body.scenario_device_vars,
+        )
+        if device_vars:
+            body.variables = {**device_vars, **(body.variables or {})}
         return await _execute_scenario_body(
             manager, serial, body, trace_source="api.run", user_id=user_id
         )
@@ -338,6 +393,14 @@ def build_scenarios_router(
         if not device_id:
             return JSONResponse({"error": "Session not found"}, status_code=404)
         caller_id = ctx.user_id
+        device_vars = await _resolve_device_runtime_vars(
+            device_id,
+            caller_id,
+            body.scenario_id,
+            body.scenario_device_vars,
+        )
+        if device_vars:
+            body.variables = {**device_vars, **(body.variables or {})}
         if not body.steps:
             return JSONResponse(
                 {"error": "steps must be a non-empty array"},

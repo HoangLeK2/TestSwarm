@@ -110,7 +110,7 @@ export function CreateCampaignDialog() {
         </Button>
       </DialogTrigger>
 
-      <DialogContent className='max-w-lg p-0 gap-0'>
+      <DialogContent className='max-w-lg p-0 gap-0  max-h-[90vh]  overflow-y-auto'>
         <DialogHeader className='border-b px-5 py-4'>
           <div className='flex items-center gap-2'>
             <Layers size={15} className='text-primary' />

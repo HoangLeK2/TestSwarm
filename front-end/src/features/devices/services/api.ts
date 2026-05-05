@@ -382,6 +382,8 @@ export async function previewScenarioStream(
   signal?: AbortSignal,
   variables?: Record<string, any>,
   accountGroupId?: string | null,
+  scenarioId?: string | null,
+  scenarioDeviceVars?: Record<string, any> | null,
 ): Promise<void> {
   // Use farmApi's baseURL for the SSE endpoint
   const baseUrl = farmApi.defaults.baseURL || '';
@@ -393,6 +395,10 @@ export async function previewScenarioStream(
 
   const body: Record<string, any> = { steps, variables: variables ?? {} };
   if (accountGroupId) body.account_group_id = accountGroupId;
+  if (scenarioId) body.scenario_id = scenarioId;
+  if (scenarioDeviceVars && Object.keys(scenarioDeviceVars).length > 0) {
+    body.scenario_device_vars = scenarioDeviceVars;
+  }
 
   const response = await fetch(url, {
     method: 'POST',

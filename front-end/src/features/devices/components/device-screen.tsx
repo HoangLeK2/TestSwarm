@@ -9,7 +9,7 @@ import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 import { tokenStorage } from '@/lib/token-storage';
 import { useH264Video } from '../hooks/use-h264-canvas';
-import { reconnectDeviceFarmSocket, subscribeDeviceFarm } from '../services/ws';
+import { reconnectDeviceFarmSocket, requestIdr, subscribeDeviceFarm } from '../services/ws';
 import { useTranslations } from 'next-intl';
 import { SHOW_RELAY_SCRCPY_UI_TOGGLE } from '../streaming-ui-flags';
 
@@ -74,11 +74,13 @@ export function DeviceScreen({
   const [h264Active, setH264Active] = useState(false);
   const h264TimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const h264StableTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const h264StallFallbackTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const h264WarmupRef = React.useRef<{ startedAt: number; frames: number }>({ startedAt: 0, frames: 0 });
   const h264RecoveryBurstRef = React.useRef<{ firstAt: number; count: number }>({ firstAt: 0, count: 0 });
   const [mjpegEnabled, setMjpegEnabled] = useState(true);
   const [h264Stalled, setH264Stalled] = useState(false);
   const [h264RestartKey, setH264RestartKey] = useState(0);
+  const lastInputIdrRef = useRef(0);
 
   const [streamingFlags, setStreamingFlags] = useState<{
     mode: string;
@@ -177,7 +179,7 @@ export function DeviceScreen({
     if (!isActive || !mjpegEnabled) return null;
     if (h264PrimaryMode && h264Active && !h264Stalled) return null;
     const fps = h264PrimaryMode ? 5 : 30;
-    const base = `${deviceFarmBackendBase}/stream/${encodeURIComponent(device.serial)}?fps=${fps}${h264Stalled ? '&fresh=1' : ''}`;
+    const base = `${deviceFarmBackendBase}/stream/${encodeURIComponent(device.serial)}?fps=${fps}`;
     const token = tokenStorage.getAuthToken();
     return token ? `${base}&token=${encodeURIComponent(token)}` : base;
   }, [isActive, mjpegEnabled, device.serial, h264PrimaryMode, h264Active, h264Stalled]);
@@ -193,7 +195,17 @@ export function DeviceScreen({
     canvasRef,
     {
       restartKey: h264RestartKey,
-      onFrame: useCallback(() => {
+      onFrame: useCallback((frame?: { mostlyBlack: boolean }) => {
+        if (h264StallFallbackTimerRef.current) {
+          clearTimeout(h264StallFallbackTimerRef.current);
+          h264StallFallbackTimerRef.current = null;
+        }
+        if (frame?.mostlyBlack) {
+          setH264Active(false);
+          setH264Stalled(true);
+          h264WarmupRef.current = { startedAt: 0, frames: 0 };
+          return;
+        }
         if (!hasFrame) setHasFrame(true);
 
         // Once a frame has rendered, the canvas is no longer black. Switch back
@@ -225,7 +237,7 @@ export function DeviceScreen({
           h264TimeoutRef.current = setTimeout(() => setH264Active(false), 8000);
         }
       }, [hasFrame, h264Active, h264PrimaryMode, h264Stalled]),
-      onStall: useCallback(() => {
+      onStall: useCallback((reason: 'no_packets' | 'decoder_stalled') => {
         const now = Date.now();
         const burst = h264RecoveryBurstRef.current;
         if (burst.firstAt === 0 || now - burst.firstAt > 45_000) {
@@ -233,6 +245,26 @@ export function DeviceScreen({
           burst.count = 1;
         } else {
           burst.count += 1;
+        }
+        if (reason === 'decoder_stalled' && hasFrame) {
+          // The hook already resets WebCodecs and requests a fresh IDR. Keep the
+          // last good canvas visible so recovery does not flash between H264/MJPEG.
+          setH264Stalled(true);
+          h264WarmupRef.current = { startedAt: 0, frames: 0 };
+          setMjpegEnabled(true);
+          if (h264StallFallbackTimerRef.current) {
+            clearTimeout(h264StallFallbackTimerRef.current);
+          }
+          h264StallFallbackTimerRef.current = setTimeout(() => {
+            setH264Active(false);
+            setHasFrame(false);
+          }, 3000);
+          if (burst.count >= 3) {
+            burst.firstAt = now;
+            burst.count = 0;
+            reconnectDeviceFarmSocket('repeated_h264_stall');
+          }
+          return;
         }
         setH264Active(false);
         setH264Stalled(true);
@@ -245,7 +277,7 @@ export function DeviceScreen({
           burst.count = 0;
           reconnectDeviceFarmSocket('repeated_h264_stall');
         }
-      }, []),
+      }, [hasFrame]),
     }
   );
 
@@ -259,6 +291,7 @@ export function DeviceScreen({
     h264WarmupRef.current = { startedAt: 0, frames: 0 };
     if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
     if (h264StableTimerRef.current) clearTimeout(h264StableTimerRef.current);
+    if (h264StallFallbackTimerRef.current) clearTimeout(h264StallFallbackTimerRef.current);
   }, [device.serial, isActive, relayH264Allowed]);
 
   // Once H264 is rendering, stop MJPEG network fetches entirely. Until then,
@@ -358,6 +391,14 @@ export function DeviceScreen({
   const streamObjectClass =
     streamCoverAlign === 'bottom' ? 'object-cover object-bottom' : 'object-cover object-center';
 
+  const requestStreamRefreshAfterInput = useCallback(() => {
+    if (!isActive || !relayH264Allowed) return;
+    const now = Date.now();
+    if (now - lastInputIdrRef.current < 900) return;
+    lastInputIdrRef.current = now;
+    requestIdr(device.serial, 0);
+  }, [device.serial, isActive, relayH264Allowed]);
+
   const bind = useGesture(
     {
       onDrag: (state) => {
@@ -379,10 +420,12 @@ export function DeviceScreen({
           if (gestureMode === 'drag') {
             const ms = 1000;
             wsSend({ type: 'drag', serial: device.serial, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, ms });
+            requestStreamRefreshAfterInput();
             onDragGestureRef.current?.(rx1, ry1, rx2, ry2, ms);
           } else {
             const ms = Math.max(300, Math.min(elapsed, 1000));
             wsSend({ type: 'swipe', serial: device.serial, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, ms });
+            requestStreamRefreshAfterInput();
             onSwipeRef.current?.(rx1, ry1, rx2, ry2, ms);
           }
         }
@@ -395,6 +438,7 @@ export function DeviceScreen({
         const p = clientToDevice(origin[0] - r.left, origin[1] - r.top, r.width, r.height);
         const scale = (state as { offset?: [number, number] }).offset?.[0] ?? 1;
         wsSend({ type: 'pinch', serial: device.serial, cx: p.x, cy: p.y, scale, ms: 400 });
+        requestStreamRefreshAfterInput();
       },
     },
     { drag: { threshold: 5 }, pointer: { touch: true }, event: { passive: false } }
@@ -409,17 +453,19 @@ export function DeviceScreen({
 
       if (gestureMode === 'double_tap') {
         wsSend({ type: 'double_tap', serial: device.serial, x: p.x, y: p.y });
+        requestStreamRefreshAfterInput();
         return;
       }
       // Recording (`onTap`): still perform tap + capture ratios even if tile mode is "swipe"
       const allowTap = mode === 'tap' || !!onTap;
       if (!allowTap) return;
       wsSend({ type: 'tap', serial: device.serial, x: p.x, y: p.y });
+      requestStreamRefreshAfterInput();
       if (onTap) {
         onTap(p.rx, p.ry);
       }
     },
-    [mode, gestureMode, clientToDevice, wsSend, device.serial, onTap]
+    [mode, gestureMode, clientToDevice, wsSend, device.serial, onTap, requestStreamRefreshAfterInput]
   );
 
   const handleDoubleClick = useCallback(
@@ -429,8 +475,9 @@ export function DeviceScreen({
       const rect = el.getBoundingClientRect();
       const p    = clientToDevice(e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height);
       wsSend({ type: 'double_tap', serial: device.serial, x: p.x, y: p.y });
+      requestStreamRefreshAfterInput();
     },
-    [mode, gestureMode, clientToDevice, wsSend, device.serial]
+    [mode, gestureMode, clientToDevice, wsSend, device.serial, requestStreamRefreshAfterInput]
   );
 
   const handleWheel = useCallback(
@@ -442,8 +489,9 @@ export function DeviceScreen({
       const p    = clientToDevice(e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height);
       const scale = e.deltaY < 0 ? 2.0 : 0.5; // scroll up = zoom in, down = zoom out
       wsSend({ type: 'pinch', serial: device.serial, cx: p.x, cy: p.y, scale, ms: 400 });
+      requestStreamRefreshAfterInput();
     },
-    [clientToDevice, wsSend, device.serial]
+    [clientToDevice, wsSend, device.serial, requestStreamRefreshAfterInput]
   );
 
   return (

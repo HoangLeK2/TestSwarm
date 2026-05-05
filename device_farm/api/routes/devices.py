@@ -10,7 +10,11 @@ from fastapi.responses import FileResponse
 
 from api.deps import CurrentUser, DB
 from runtime.core import DeviceManager
-from api.schemas.device import DeviceCreate, DeviceOut, SessionOut
+from api.schemas.device import (
+    DeviceCreate,
+    DeviceOut,
+    SessionOut,
+)
 from api.schemas.device_group import UpdateTagsBody
 from db import crud as repo
 from db.crud.device_group import update_device_tags

@@ -48,7 +48,6 @@ class Device(Base):
     sessions: Mapped[list["DeviceSession"]] = relationship(
         "DeviceSession", back_populates="device"
     )
-
     def __repr__(self) -> str:  # pragma: no cover - repr
         return f"<Device {self.serial} model={self.brand}/{self.model}>"
 

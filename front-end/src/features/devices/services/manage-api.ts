@@ -52,7 +52,7 @@ export const devicesApi = {
     farmApi.get<PairPollOut>(`/devices/pair/${pairingId}`).then((r) => r.data),
   /** Backend chủ động kết nối tới thiết bị qua ADB TCP. Không cần QR. */
   connectByIp: (ip: string, port = 5555) =>
-    farmApi.post<{ ok: boolean; serial: string }>('/devices/connect-adb', { ip, port }).then((r) => r.data)
+    farmApi.post<{ ok: boolean; serial: string }>('/devices/connect-adb', { ip, port }).then((r) => r.data),
 };
 
 // ── Relay agent types ─────────────────────────────────────────────────────────

@@ -58,6 +58,11 @@ export function DeviceTilePreview({
   }, []);
 
   const [loadStream, setLoadStream] = useState(false);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [h264Active, setH264Active] = useState(false);
+  const h264TimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const h264WarmupRef = useRef<{ startedAt: number; frames: number }>({ startedAt: 0, frames: 0 });
+
   useEffect(() => {
     if (!inView) {
       const t = window.setTimeout(() => setLoadStream(false), 700);
@@ -68,9 +73,9 @@ export function DeviceTilePreview({
   }, [inView]);
 
   const previewFps = useMemo(() => {
-    const raw = Number(process.env.NEXT_PUBLIC_DEVICE_FARM_PREVIEW_FPS ?? 8);
-    if (!Number.isFinite(raw)) return 8;
-    return Math.max(1, Math.min(15, Math.round(raw)));
+    const raw = Number(process.env.NEXT_PUBLIC_DEVICE_FARM_PREVIEW_FPS ?? 4);
+    if (!Number.isFinite(raw)) return 4;
+    return Math.max(1, Math.min(8, Math.round(raw)));
   }, []);
 
   const mjpegUrl = useMemo(() => {
@@ -82,7 +87,7 @@ export function DeviceTilePreview({
 
   const showMjpeg =
     Boolean(mjpegUrl) &&
-    serverAllowPreviewMjpeg &&
+    (serverAllowPreviewMjpeg || !h264Active) &&
     loadStream;
 
   /** Grid preview — target ~282px outer after lib bezel + side padding. */
@@ -92,10 +97,6 @@ export function DeviceTilePreview({
     streamingConfig !== null && streamingConfig.mode === 'continuous';
   const [relayStreamOn, setRelayStreamOn] = useState(true);
   const [relayStreamBusy, setRelayStreamBusy] = useState(false);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [h264Active, setH264Active] = useState(false);
-  const h264TimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const h264WarmupRef = useRef<{ startedAt: number; frames: number }>({ startedAt: 0, frames: 0 });
 
   const allowH264 =
     isActive &&
@@ -149,7 +150,12 @@ export function DeviceTilePreview({
     allowH264 ? device.serial : '',
     canvasRef,
     {
-      onFrame: useCallback(() => {
+      onFrame: useCallback((frame?: { mostlyBlack: boolean }) => {
+        if (frame?.mostlyBlack) {
+          setH264Active(false);
+          h264WarmupRef.current = { startedAt: 0, frames: 0 };
+          return;
+        }
         const now = Date.now();
         const warm = h264WarmupRef.current;
         if (warm.startedAt === 0 || (now - warm.startedAt) > 1500) {

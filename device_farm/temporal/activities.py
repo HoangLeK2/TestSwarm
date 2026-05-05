@@ -673,11 +673,23 @@ class DeviceActivities:
                     or step.get("scroll_passes")
                     or 0
                 )
-                comment_scroll_distance = float(
+                # Keep comment-sheet scrolling gentle by default. A large distance can
+                # cause momentum-like overscroll on some devices and "throw" the sheet.
+                _scroll_distance_raw = (
                     step.get("comment_scroll_distance")
-                    or step.get("scroll_distance")
-                    or 0.45
+                    if step.get("comment_scroll_distance") is not None
+                    else step.get("scroll_distance")
                 )
+                comment_scroll_distance = float(
+                    _scroll_distance_raw if _scroll_distance_raw is not None else 0.32
+                )
+                comment_scroll_distance = max(0.18, min(0.40, comment_scroll_distance))
+                comment_scroll_duration_ms = int(
+                    step.get("comment_scroll_duration_ms")
+                    or step.get("scroll_duration_ms")
+                    or 620
+                )
+                comment_scroll_duration_ms = max(220, min(1200, comment_scroll_duration_ms))
                 comment_scroll_pause_s = float(
                     step.get("comment_scroll_pause_s")
                     or step.get("scroll_pause_s")
@@ -735,6 +747,7 @@ class DeviceActivities:
                         device.scroll,
                         "down",
                         max(0.1, min(0.9, comment_scroll_distance)),
+                        duration_ms=comment_scroll_duration_ms,
                     )
                     await asyncio.sleep(max(0.1, comment_scroll_pause_s))
                     xml_next = await _to_thread_with_heartbeat(device.hierarchy_xml, force_refresh=True)
@@ -827,6 +840,8 @@ class DeviceActivities:
                 details["comment_scan"] = {
                     "frames": scanned_frames,
                     "scroll_passes": comment_scroll_passes,
+                    "scroll_distance": comment_scroll_distance,
+                    "scroll_duration_ms": comment_scroll_duration_ms,
                     "max_items": max_items,
                     "growthless_streak": growthless_streak,
                     "min_scan_passes": min_comment_scan_passes,

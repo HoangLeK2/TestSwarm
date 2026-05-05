@@ -1,6 +1,7 @@
 from datetime import datetime
-from typing import List, Optional
-from pydantic import BaseModel, field_validator
+from typing import Any, List, Optional
+import re
+from pydantic import BaseModel, Field, field_validator
 
 from api.schemas.scenario import FlowNodeModel, FlowEdgeModel
 
@@ -96,3 +97,27 @@ class CampaignDeviceOut(BaseModel):
     id: str
     serial: str
     name: str
+
+
+_SCENARIO_DEVICE_VARIABLE_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
+
+
+class ScenarioDeviceVariablesBody(BaseModel):
+    vars: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("vars")
+    @classmethod
+    def _validate_keys(cls, value: dict[str, Any]) -> dict[str, Any]:
+        for key in value.keys():
+            if not _SCENARIO_DEVICE_VARIABLE_KEY_RE.match(key):
+                raise ValueError(
+                    f"invalid variable key: {key!r} "
+                    "(must match ^[A-Za-z][A-Za-z0-9_]{0,63}$)"
+                )
+        return value
+
+
+class ScenarioDeviceVariablesOut(BaseModel):
+    scenario_id: str
+    device_id: str
+    vars: dict[str, Any]

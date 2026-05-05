@@ -175,9 +175,9 @@ export function DeviceSTFPanel({ serial, refreshInterval = 5000 }: DeviceSTFPane
         onClick={() => setExpanded(true)}
         className='mt-1.5 flex w-full items-center justify-center gap-1 rounded-md border border-dashed border-border/60 py-1.5 text-[10px] text-muted-foreground hover:border-border hover:bg-muted/30'
       >
-        <Signal className='size-3' />
+        {/* <Signal className='size-3' />
         {t('showPanel')}
-        <ChevronDown className='size-3' />
+        <ChevronDown className='size-3' /> */}
       </button>
     );
   }

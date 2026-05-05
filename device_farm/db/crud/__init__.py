@@ -20,4 +20,5 @@ from .content import *  # noqa: F401,F403
 from .schedule import *  # noqa: F401,F403
 from .execution import *  # noqa: F401,F403
 from .relay_agent import *  # noqa: F401,F403
+from .scenario_device_variable import *  # noqa: F401,F403
 

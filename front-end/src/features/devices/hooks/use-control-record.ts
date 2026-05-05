@@ -127,6 +127,7 @@ export function useControlRecord(
 
   // ── Device ───────────────────────────────────────────────────────────────
   const [selectedSerial, setSelectedSerial] = useState<string | null>(null);
+  const initialSerialAppliedRef = useRef(false);
 
   const connectedDevices = useMemo(
     () => devices.filter((d) => ['READY', 'BUSY'].includes((d.state ?? '').toUpperCase())),
@@ -140,8 +141,16 @@ export function useControlRecord(
 
   useEffect(() => {
     if (connectedDevices.length === 0) return;
-    if (initialSerial && connectedDevices.some((d) => d.serial === initialSerial)) {
+    // Apply initialSerial only once on first hydrated device list.
+    // Otherwise each WS device refresh would force selection back and
+    // user could not switch to another device from the dropdown.
+    if (
+      !initialSerialAppliedRef.current &&
+      initialSerial &&
+      connectedDevices.some((d) => d.serial === initialSerial)
+    ) {
       setSelectedSerial(initialSerial);
+      initialSerialAppliedRef.current = true;
       return;
     }
     if (!selectedSerial) setSelectedSerial(connectedDevices[0].serial);
@@ -640,7 +649,20 @@ export function useControlRecord(
         ...(accountGroupForEdit !== undefined ? { account_group_id: accountGroupForEdit } : {}),
       };
       scenariosApi.update(campaignId, scenarioId, payload)
-        .then(() => { toast.success(t('toast.saveStepsSuccess')); setSaveDialogOpen(false); setSelectedCampaignId(null); })
+        .then((updated) => {
+          setEditingContext({
+            campaignId,
+            scenarioId: updated.id,
+            name: updated.name,
+            variables: {
+              ...(variables ?? {}),
+            },
+            accountGroupId: (updated as { account_group_id?: string | null }).account_group_id ?? null,
+          });
+          toast.success(t('toast.saveStepsSuccess'));
+          setSaveDialogOpen(false);
+          setSelectedCampaignId(null);
+        })
         .catch((err) => toast.error(formatFarmApiError(err, t('toast.saveFailed'))))
         .finally(() => setSavingCampaignId(null));
     },
@@ -675,7 +697,20 @@ export function useControlRecord(
         ...(accountGroupIdOverride ? { account_group_id: accountGroupIdOverride } : {}),
       };
       scenariosApi.create(campaignId, createBody)
-        .then(() => { toast.success(t('toast.createScenarioSuccess')); setSaveDialogOpen(false); setSelectedCampaignId(null); })
+        .then((created) => {
+          setEditingContext({
+            campaignId,
+            scenarioId: created.id,
+            name: created.name,
+            variables: {
+              ...(variables ?? {}),
+            },
+            accountGroupId: (created as { account_group_id?: string | null }).account_group_id ?? null,
+          });
+          toast.success(t('toast.createScenarioSuccess'));
+          setSaveDialogOpen(false);
+          setSelectedCampaignId(null);
+        })
         .catch((err) => toast.error(formatFarmApiError(err, t('toast.createScenarioFailed'))))
         .finally(() => setSavingCampaignId(null));
     },

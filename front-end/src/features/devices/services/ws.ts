@@ -85,6 +85,7 @@ let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 let idleCloseTimer: ReturnType<typeof setTimeout> | undefined;
 let lastMessageTime = 0;
 let lastForcedReconnectAt = 0;
+const lastIdrRequestBySerial = new Map<string, number>();
 
 // Reconnect stale WebSocket on page focus (NAT timeout, server restart, etc.)
 if (typeof window !== 'undefined') {
@@ -316,10 +317,14 @@ export function isCachedKeyFrameStale(serial: string): boolean {
  * mount / reconnect / visibility return so the browser decoder recovers in
  * ~100ms instead of waiting up to ~14s for the next natural keyframe.
  */
-export function requestIdr(serial: string): void {
+export function requestIdr(serial: string, minIntervalMs = 700): void {
   if (!serial) return;
+  const now = Date.now();
+  const last = lastIdrRequestBySerial.get(serial) ?? 0;
+  if (minIntervalMs > 0 && now - last < minIntervalMs) return;
   if (sharedSocket?.readyState === WebSocket.OPEN) {
     try {
+      lastIdrRequestBySerial.set(serial, now);
       sharedSocket.send(JSON.stringify({ type: 'request_idr', serial }));
     } catch {
       // socket raced into closing — next viewer event will retry

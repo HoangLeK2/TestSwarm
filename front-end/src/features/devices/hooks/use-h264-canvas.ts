@@ -14,14 +14,13 @@
 
 import { useEffect, useRef } from 'react';
 import { subscribeBinaryFrames, getLastConfigFrame, getLastKeyFrame, subscribeDeviceFarm, requestIdr, isCachedKeyFrameStale } from '../services/ws';
-import { WebGLRenderer } from '../lib/webgl-renderer';
 
 export function useH264Video(
   serial: string,
   canvasRef: React.RefObject<HTMLCanvasElement | null>,
   opts?: {
     restartKey?: number;
-    onFrame?: () => void;
+    onFrame?: (frame?: { mostlyBlack: boolean }) => void;
     onStall?: (reason: 'no_packets' | 'decoder_stalled') => void;
     onStats?: (stats: {
       decodeQueueSize: number;
@@ -33,7 +32,6 @@ export function useH264Video(
 ) {
   const restartKey = opts?.restartKey ?? 0;
   const workerRef  = useRef<Worker | null>(null);
-  const rendererRef = useRef<WebGLRenderer | null>(null);
   const rafRef     = useRef<number | null>(null);
   const mountedAtRef = useRef(0);
   const lastVideoPacketAtRef = useRef(0);
@@ -77,26 +75,33 @@ export function useH264Video(
       return;
     }
 
-    const worker = new Worker('/h264-worker.js?v=21');
+    const worker = new Worker('/h264-worker.js?v=25');
     workerRef.current = worker;
     mountedAtRef.current = Date.now();
 
     worker.postMessage({ type: 'init' });
 
-    // Render frame immediately when worker pushes it — no 1-tick RAF delay.
+    // Render frame immediately when worker pushes it. Use 2D canvas instead of
+    // WebGL: WebCodecs VideoFrame -> WebGL texture is GPU/driver-sensitive and
+    // can silently produce a black canvas on some Chrome/macOS combinations.
     const renderFrame = (frame: VideoFrame, w: number, h: number) => {
       const canvas = canvasRef.current;
       if (!canvas) { try { frame.close(); } catch { /* ok */ } return; }
       try {
-        let renderer = rendererRef.current;
-        if (!renderer) { renderer = new WebGLRenderer(canvas); rendererRef.current = renderer; }
-        try {
-          renderer.render(frame, w, h);
-          lastRenderedFrameAtRef.current = Date.now();
-          onFrameRef.current?.();
-        } catch (err) {
-          console.debug('[H264] render skipped:', err);
+        const width = Math.max(1, Math.floor(w || frame.displayWidth || 1));
+        const height = Math.max(1, Math.floor(h || frame.displayHeight || 1));
+        if (canvas.width !== width || canvas.height !== height) {
+          canvas.width = width;
+          canvas.height = height;
         }
+        const ctx = canvas.getContext('2d', { alpha: false });
+        if (!ctx) return;
+        ctx.drawImage(frame, 0, 0, width, height);
+        const mostlyBlack = isCanvasMostlyBlack(ctx, width, height);
+        lastRenderedFrameAtRef.current = Date.now();
+        onFrameRef.current?.({ mostlyBlack });
+      } catch (err) {
+        console.debug('[H264] render skipped:', err);
       } finally { try { frame.close(); } catch { /* ok */ } }
     };
 
@@ -109,6 +114,19 @@ export function useH264Video(
 
     worker.onmessage = ({ data }) => {
       if (data.type === 'error') console.error('[H264] worker error:', data.message);
+      if (data.type === 'decoder-error') {
+        const now = Date.now();
+        const s = serialRef.current;
+        const w = workerRef.current;
+        if (s && w && now - lastRecoveryAtRef.current > 700) {
+          lastRecoveryAtRef.current = now;
+          onStallRef.current?.('decoder_stalled');
+          w.postMessage({ type: 'reset' });
+          clearLatestFrame();
+          setTimeout(() => requestIdr(s, 0), 30);
+        }
+        return;
+      }
       if (data.type === 'frame' && data.frame) {
         renderFrame(data.frame as VideoFrame, data.width as number, data.height as number);
         worker.postMessage({ type: 'frame-consumed' });
@@ -169,10 +187,6 @@ export function useH264Video(
       worker.postMessage({ type: 'reset' });
       worker.terminate();
       workerRef.current = null;
-      if (rendererRef.current) {
-        rendererRef.current.dispose();
-        rendererRef.current = null;
-      }
       if (rafRef.current != null) {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
@@ -210,7 +224,7 @@ export function useH264Video(
     // IDR that arrived while the tab was hidden, so replaying it drifts the
     // decoder. The server-side forced IDR (requested below) fills the gap.
     if (isCachedKeyFrameStale(serialValue)) {
-      requestIdr(serialValue);
+      requestIdr(serialValue, 0);
       return;
     }
     const keyBuf = getLastKeyFrame(serialValue);
@@ -257,7 +271,7 @@ export function useH264Video(
     // The bootstrap cache covers fast path (~50ms replay), but the cache may
     // be stale or missing; the server-forced IDR lands within ~100ms and
     // guarantees decoder sync even if no prior viewer primed the cache.
-    requestIdr(serial);
+    requestIdr(serial, 0);
   }, [serial, restartKey]);
 
   // Reconnect warm-up: WS reconnect often leaves decoder on stale refs.
@@ -284,7 +298,7 @@ export function useH264Video(
       // Allow ws.ts cache replay microtask to settle before bootstrap replay.
       setTimeout(() => {
         replayCachedBootstrap(w, s);
-        requestIdr(s);
+        requestIdr(s, 0);
       }, 30);
     });
     return () => unsub();
@@ -307,7 +321,7 @@ export function useH264Video(
       // the worker's frameInFlight gate in case it stalled while hidden.
       setTimeout(() => {
         replayCachedBootstrap(w, s);
-        requestIdr(s);
+        requestIdr(s, 0);
       }, 30);
     };
     document.addEventListener('visibilitychange', onVisible);
@@ -330,10 +344,10 @@ export function useH264Video(
       const lastPacketAt = lastVideoPacketAtRef.current;
       const lastRenderedAt = lastRenderedFrameAtRef.current;
       if (!lastPacketAt) {
-        if (mountedAt && now - mountedAt > 6000 && now - lastRecoveryAtRef.current > 6000) {
+        if (mountedAt && now - mountedAt > 3000 && now - lastRecoveryAtRef.current > 3000) {
           lastRecoveryAtRef.current = now;
           onStallRef.current?.('no_packets');
-          requestIdr(s);
+          requestIdr(s, 0);
         }
         return;
       }
@@ -343,26 +357,52 @@ export function useH264Video(
 
       // If no video packets are arriving, this is likely a transport/agent stall;
       // an IDR request is cheap and avoids waiting for the next user interaction.
-      if (packetAgeMs > 8000 && now - lastRecoveryAtRef.current > 8000) {
+      // Do not mark the stream stalled when a valid frame is already visible:
+      // scrcpy may emit very few frames on a static screen.
+      if (packetAgeMs > 3000 && now - lastRecoveryAtRef.current > 3000) {
         lastRecoveryAtRef.current = now;
-        onStallRef.current?.('no_packets');
-        requestIdr(s);
+        requestIdr(s, 0);
+        if (!lastRenderedAt) {
+          onStallRef.current?.('no_packets');
+        }
         return;
       }
 
       // Packets are arriving but no frame has rendered recently: reset the
       // browser decoder and request a keyframe to rebuild the reference chain.
-      if (packetAgeMs < 2500 && renderedAgeMs > 5000 && now - lastRecoveryAtRef.current > 5000) {
+      if (packetAgeMs < 2000 && renderedAgeMs > 1800 && now - lastRecoveryAtRef.current > 1500) {
         lastRecoveryAtRef.current = now;
         onStallRef.current?.('decoder_stalled');
         w.postMessage({ type: 'reset' });
         clearLatestFrame();
         setTimeout(() => {
           replayCachedBootstrap(w, s);
-          requestIdr(s);
+          requestIdr(s, 0);
         }, 30);
       }
-    }, 2000);
+    }, 1000);
     return () => clearInterval(timer);
   }, []);
+}
+
+function isCanvasMostlyBlack(ctx: CanvasRenderingContext2D, width: number, height: number): boolean {
+  const sampleW = Math.min(32, width);
+  const sampleH = Math.min(32, height);
+  const x = Math.max(0, Math.floor((width - sampleW) / 2));
+  const y = Math.max(0, Math.floor((height - sampleH) / 2));
+  let data: Uint8ClampedArray;
+  try {
+    data = ctx.getImageData(x, y, sampleW, sampleH).data;
+  } catch {
+    return false;
+  }
+  let dark = 0;
+  let lit = 0;
+  const total = sampleW * sampleH;
+  for (let i = 0; i < data.length; i += 4) {
+    const luma = (data[i] * 0.2126) + (data[i + 1] * 0.7152) + (data[i + 2] * 0.0722);
+    if (luma < 8) dark += 1;
+    if (luma > 24) lit += 1;
+  }
+  return dark / total > 0.985 && lit / total < 0.01;
 }

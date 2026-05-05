@@ -1144,7 +1144,7 @@
     "backendErrorTitle": "Không kết nối được backend.",
     "backendErrorHint": "Backend đang chạy trên port 8081?",
     "streamConnecting": "Đang kết nối màn hình...",
-    "streamWaitingFirstFrame": "Đang chờ khung hình đầu tiên...",
+    "streamWaitingFirstFrame": "Đang ổn định màn hình...",
     "streamOffline": "Mất kết nối",
     "screenStream": "Luồng màn hình",
     "screenStreamHint": "Bật/tắt scrcpy qua API farm (relay). Tắt để giảm tải agent-boot.",

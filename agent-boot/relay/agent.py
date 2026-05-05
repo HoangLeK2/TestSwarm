@@ -116,6 +116,7 @@ class RelayAgent:
         self._scrcpy_desired: dict[str, dict[str, Any]] = {}
         self._active_send_queue: Optional[asyncio.Queue] = None
         self._active_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._scrcpy_auto_resume_enabled = os.getenv("SCRCPY_AUTO_RESUME", "true").lower() in ("1", "true", "yes", "on")
 
         self._u2_batch_enabled = os.getenv("U2_BATCH_ENABLED", "true").lower() in ("1", "true")
         self._u2_pool: Optional[U2SessionPool] = None
@@ -130,6 +131,35 @@ class RelayAgent:
         self._scrcpy_logical_to_adb: dict[str, str] = {}
         # USB serial → LAN IP for atx-agent HTTP (u2 proxy); filled from TCP suppress map or adb probe.
         self._atx_lan_host_cache: dict[str, str] = {}
+
+    def _ensure_default_scrcpy_desired(self) -> None:
+        """
+        Ensure every currently online device has a desired scrcpy state.
+        This enables "auto open screen" even on fresh startup before any
+        explicit scrcpy_start command has ever been received.
+        """
+        for serial in self._registry.online_serials:
+            state = self._scrcpy_desired.get(serial)
+            if state:
+                continue
+            self._scrcpy_desired[serial] = {
+                "desired": True,
+                "manual_stop": False,
+                "last_stop_reason": "",
+                "cfg": {
+                    "max_fps": 30,
+                    "max_width": 800,
+                    "enable_control": True,
+                    "port": 27183,
+                    "bitrate": 2_000_000,
+                    "low_latency": False,
+                },
+                "adb_serial": serial,
+                "retry_count": 0,
+                "retry_window_start": 0.0,
+                "restart_task": None,
+                "last_started_at": 0.0,
+            }
 
     async def run(self) -> None:
         zc = start_mdns_discovery()
@@ -214,7 +244,9 @@ class RelayAgent:
                 "version":  "2.0.0",
             }))
             logger.info("register sent: relay_id=%s serials=%s", self._relay_id, serials)
-            await self._resume_desired_scrcpy_sessions(send_queue, loop, source="ws-connected")
+            if self._scrcpy_auto_resume_enabled:
+                self._ensure_default_scrcpy_desired()
+                await self._resume_desired_scrcpy_sessions(send_queue, loop, source="ws-connected")
 
             # ── Device watcher + heartbeat ────────────────────────────────────
             watcher = AdbDeviceWatcher(
@@ -318,7 +350,9 @@ class RelayAgent:
                 "version":  "2.0.0",
             })
             await send_queue.put(register_msg)
-            await self._resume_desired_scrcpy_sessions(send_queue, loop, source="grpc-connected")
+            if self._scrcpy_auto_resume_enabled:
+                self._ensure_default_scrcpy_desired()
+                await self._resume_desired_scrcpy_sessions(send_queue, loop, source="grpc-connected")
 
             # ── Device watcher + heartbeat ────────────────────────────────────
             watcher = AdbDeviceWatcher(
@@ -465,7 +499,9 @@ class RelayAgent:
                     self._atx_lan_host_cache[usb_s] = tcp_s.rsplit(":", 1)[0]
             for tcp_s, _usb_s in pairs or []:
                 await self._scrcpy_mgr.stop_session(tcp_s, reason="manual_stop")
-            await self._resume_desired_scrcpy_sessions(send_queue, loop, source="device-online")
+            if self._scrcpy_auto_resume_enabled:
+                self._ensure_default_scrcpy_desired()
+                await self._resume_desired_scrcpy_sessions(send_queue, loop, source="device-online")
 
         if ctx.state == DeviceState.RECONNECTING and ":" in serial:
             usb_anchor = self._tcp_suppressed_for_usb.get(serial)
@@ -1081,6 +1117,9 @@ class RelayAgent:
         if reason not in abnormal_reasons:
             logger.info("auto-resume skipped %s: non-abnormal reason=%s", logical, reason)
             return
+        if not self._scrcpy_auto_resume_enabled:
+            logger.info("auto-resume disabled, skip %s (reason=%s)", logical, reason)
+            return
         logger.info("auto-resume flagged %s: reason=%s", logical, reason)
         if self._active_send_queue is None or self._active_loop is None:
             return
@@ -1116,7 +1155,7 @@ class RelayAgent:
                 state["desired"]     = True
                 state["manual_stop"] = False
                 state["last_stop_reason"] = ""
-            await self._resume_desired_scrcpy_sessions(queue, loop, source="restart_scrcpy_cmd")
+            await self._start_desired_scrcpy(logical, queue, loop)
 
         fut = asyncio.run_coroutine_threadsafe(_do_restart(), loop)
         try:

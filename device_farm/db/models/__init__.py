@@ -36,6 +36,7 @@ from .u2_recovery import U2RecoveryEvent
 from .device_event import DeviceEvent
 from .relay_agent import RelayAgent
 from .scenario_device_variable import ScenarioDeviceVariable
+from .notification import Notification, NotificationChannel
 
 __all__ = [
     "User",
@@ -67,5 +68,6 @@ __all__ = [
     "DeviceEvent",
     "RelayAgent",
     "ScenarioDeviceVariable",
+    "Notification",
+    "NotificationChannel",
 ]
-

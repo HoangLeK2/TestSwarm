@@ -5,7 +5,7 @@ import { Separator } from '../ui/separator';
 import { SidebarTrigger } from '../ui/sidebar';
 import { ModeToggle } from './ThemeToggle/theme-toggle';
 import { UserNav } from './user-nav';
-import { DeviceEventNotifications } from '@/features/devices/components/device-event-notifications';
+import { NotificationBell } from '@/features/notifications/components/notification-bell';
 
 export default function Header({
   className
@@ -28,7 +28,7 @@ export default function Header({
         </div>
 
         <div className='flex items-center gap-2 px-4'>
-          <DeviceEventNotifications />
+          <NotificationBell />
           <LanguageSwitcher />
           <ModeToggle />
           <UserNav />

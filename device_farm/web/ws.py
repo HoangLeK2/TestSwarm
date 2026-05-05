@@ -190,6 +190,16 @@ class WebSocketManager:
             except Exception:
                 pass
 
+    async def send_to_user(self, user_id: str, msg: dict) -> None:
+        """Queue one JSON message to every connected frontend for a user."""
+        for conn_id, ctrl_q in list(self._ctrl_queues.items()):
+            if self._db_enabled and self._user_ids.get(conn_id) != user_id:
+                continue
+            try:
+                ctrl_q.put_nowait(msg)
+            except Exception:
+                pass
+
     async def _load_allowed_serials(self, user_id: Optional[str]) -> Optional[set[str]]:
         """
         Per-connection serial allowlist.
@@ -1513,4 +1523,3 @@ class DeviceAgentSession:
                 "[DEVICE-WS] Device disconnected: serial=%s ip=%s duration=%s",
                 serial or "unknown", client_addr, dur_str,
             )
-

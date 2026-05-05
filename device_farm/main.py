@@ -215,9 +215,16 @@ def main() -> None:
 
         # ── Phase 2: relay daemon (background) ───────────────────────────────
         try:
-            # Relay is WebSocket on the main HTTP port (/relay-agent), not gRPC :relay.port.
-            _default_ws_relay = f"localhost:{config.web.port}"
-            relay_server = os.getenv("RELAY_SERVER", _default_ws_relay).strip()
+            # Choose relay endpoint default based on transport mode.
+            # - ws   -> main HTTP port (/relay-agent)
+            # - grpc -> dedicated gRPC relay port
+            relay_mode = os.getenv("RELAY_MODE", "ws").strip().lower()
+            if relay_mode == "grpc":
+                default_relay_server = f"localhost:{getattr(config.relay, 'port', 50051)}"
+            else:
+                default_relay_server = f"localhost:{config.web.port}"
+
+            relay_server = os.getenv("RELAY_SERVER", default_relay_server).strip()
             relay_api_key = os.getenv("RELAY_API_KEY", getattr(config.relay, "api_key", "") or "").strip()
             _start_agent_boot_relay_bg(relay_server, relay_api_key)
         except Exception as e:

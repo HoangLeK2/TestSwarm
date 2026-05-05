@@ -56,6 +56,9 @@ export const ROUTES = {
     /** Jump to content page pre-filtered by campaign */
     BY_CAMPAIGN: (campaignId: string) => `/dashboard/content?campaign_id=${encodeURIComponent(campaignId)}`,
   },
+  NOTIFICATIONS: {
+    ROOT: '/dashboard/notifications'
+  },
   DASHBOARD: {
     ROOT: '/dashboard',
     ORGANIZATION: '/dashboard/settings/organization',

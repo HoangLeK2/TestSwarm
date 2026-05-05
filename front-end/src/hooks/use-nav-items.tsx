@@ -105,6 +105,11 @@ export function useNavItems(): {
           title: t('relay_agents'),
           url: ROUTES.RELAY_AGENTS.ROOT,
           icon: 'server'
+        },
+        {
+          title: t('notifications'),
+          url: ROUTES.NOTIFICATIONS.ROOT,
+          icon: 'bell'
         }
       ]
     }

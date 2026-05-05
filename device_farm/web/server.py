@@ -148,6 +148,12 @@ def create_app(
         if event_recorder is not None:
             event_recorder.set_event_loop(loop)
             _app.state.event_recorder = event_recorder
+        notification_service = getattr(_app.state, "notification_service", None)
+        if notification_service is not None:
+            try:
+                notification_service.set_event_loop(loop)
+            except Exception:
+                pass
         log.info("Device Farm server started")
 
         # Single lifecycle owner for this app run. Every long-lived coroutine,
@@ -753,8 +759,19 @@ def create_app(
         db_enabled=db_enabled,
         read_only=config.safe_mode.read_only,
     )
+    app.state.ws_manager = ws_manager
     if event_recorder is not None:
         ws_manager.bind_event_recorder(event_recorder)
+    if db_enabled:
+        try:
+            from services.notification_service import NotificationService
+
+            notification_service = NotificationService(ws_manager)
+            if event_recorder is not None:
+                notification_service.bind_device_events(event_recorder)
+            app.state.notification_service = notification_service
+        except Exception as exc:
+            log.warning("notification service failed to initialize: %s", exc)
     agent_session = DeviceAgentSession(manager, ws_manager, config)
 
     @app.websocket("/ws")

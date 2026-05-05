@@ -208,7 +208,8 @@
     "scenario_templates": "Mẫu kịch bản",
     "content": "Kết quả thu thập",
     "infrastructure": "Hạ tầng",
-    "relay_agents": "Relay Agents"
+    "relay_agents": "Relay Agents",
+    "notifications": "Thông báo"
   },
   "relayAgentsFeature": {
     "title": "Relay Agents",
@@ -1556,6 +1557,69 @@
       "deleteConfirm": "Xóa lịch chạy \"{name}\"?",
       "deleteSuccess": "Đã xóa lịch chạy",
       "deleteFailed": "Xóa lịch chạy thất bại"
+    }
+  },
+  "notificationsFeature": {
+    "title": "Thông báo",
+    "subtitle": "Quản lý kênh thông báo trong web, Telegram và webhook",
+    "loading": "Đang tải",
+    "loadingChannels": "Đang tải kênh thông báo",
+    "empty": "Chưa có thông báo",
+    "noChannels": "Chưa có kênh thông báo",
+    "manageChannels": "Quản lý kênh",
+    "addChannel": "Thêm kênh",
+    "createChannel": "Tạo kênh",
+    "editChannel": "Chỉnh sửa kênh",
+    "testTitle": "Thông báo thử",
+    "testBody": "Kênh thông báo Device Farm đang hoạt động.",
+    "types": {
+      "in_app": "Trong web",
+      "telegram": "Telegram",
+      "webhook": "Webhook"
+    },
+    "fields": {
+      "name": "Tên",
+      "type": "Loại",
+      "enabled": "Bật",
+      "events": "Sự kiện",
+      "actions": "Thao tác",
+      "botToken": "Bot token",
+      "chatId": "Chat ID",
+      "webhookUrl": "Webhook URL",
+      "headersJson": "Headers JSON"
+    },
+    "actions": {
+      "cancel": "Hủy",
+      "save": "Lưu"
+    },
+    "status": {
+      "on": "Bật",
+      "off": "Tắt"
+    },
+    "eventTitles": {
+      "deviceDisconnect": "Thiết bị {label} mất kết nối",
+      "deviceReconnect": "Thiết bị {label} đã kết nối lại",
+      "deviceError": "Thiết bị {label} báo lỗi"
+    },
+    "eventBodies": {
+      "deviceDisconnect": "Thiết bị mất kết nối",
+      "deviceReconnect": "{serial} đang online",
+      "deviceError": "Thiết bị chuyển sang trạng thái lỗi"
+    },
+    "toasts": {
+      "channelCreated": "Đã tạo kênh",
+      "channelUpdated": "Đã cập nhật kênh",
+      "channelDeleted": "Đã xóa kênh",
+      "testSent": "Đã gửi thông báo thử"
+    },
+    "errors": {
+      "nameRequired": "Tên kênh là bắt buộc",
+      "eventRequired": "Vui lòng chọn ít nhất một sự kiện",
+      "saveFailed": "Lưu kênh thất bại",
+      "invalidConfig": "Cấu hình kênh không hợp lệ",
+      "loadChannels": "Không tải được kênh thông báo",
+      "testFailed": "Gửi thử thất bại",
+      "deleteFailed": "Xóa kênh thất bại"
     }
   },
   "errors": {

@@ -11,6 +11,7 @@ from api.routes.content import router as content_router
 from api.routes.schedules import router as schedules_router
 from api.routes.executions import router as executions_router
 from api.routes.relay_agents import router as relay_agents_router
+from api.routes.notifications import router as notifications_router
 
 api_router = APIRouter()
 
@@ -27,3 +28,4 @@ api_router.include_router(content_router)
 api_router.include_router(schedules_router)
 api_router.include_router(executions_router)
 api_router.include_router(relay_agents_router)
+api_router.include_router(notifications_router)

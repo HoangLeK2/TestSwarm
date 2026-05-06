@@ -23,6 +23,23 @@ from runtime.core import DeviceManager, DeviceState
 
 log = logging.getLogger(__name__)
 
+# Frontend stream sender tuning. H.264 is reference-frame based: sending old
+# P-frames after the client/server has fallen behind produces visible bursty
+# playback. Prefer dropping stale deltas and forcing a fresh IDR so viewers stay
+# close to live.
+STREAM_STALE_DELTA_DROP_MS = max(
+    0.0,
+    float(os.environ.get("STREAM_STALE_DELTA_DROP_MS", "180.0")),
+)
+STREAM_WS_LOCK_WAIT_MS = max(
+    1.0,
+    float(os.environ.get("STREAM_WS_LOCK_WAIT_MS", "60.0")),
+)
+STREAM_WS_SEND_TIMEOUT_MS = max(
+    50.0,
+    float(os.environ.get("STREAM_WS_SEND_TIMEOUT_MS", "250.0")),
+)
+
 
 def _bind_pending_kw_only(meta: Dict[str, Any]) -> Dict[str, Any]:
     """Only pass kwargs that bind_pending_device accepts (older images may lack adb_*)."""
@@ -560,6 +577,19 @@ class WebSocketManager:
                 elif congestion and lag_ms < 50.0:
                     congestion = False
 
+                # If the latest snapshot is already old, sending a delta frame
+                # makes the browser decode history and then stutter back to live.
+                # Drop stale deltas, request an IDR, and wait for a keyframe.
+                if (
+                    STREAM_STALE_DELTA_DROP_MS > 0
+                    and lag_ms > STREAM_STALE_DELTA_DROP_MS
+                    and not is_key
+                ):
+                    dropped_version_total += 1
+                    last_version = version
+                    _request_idr_recover()
+                    continue
+
                 # In congestion with large gaps, skip non-key deltas (IDR already requested above).
                 if congestion and version_gap > 8 and not is_key:
                     last_version = version
@@ -570,7 +600,10 @@ class WebSocketManager:
                 # if another sender currently owns the socket, drop this stale frame
                 # and wait for a fresher snapshot instead of blocking.
                 try:
-                    await asyncio.wait_for(ws_send_lock.acquire(), timeout=0.1)
+                    await asyncio.wait_for(
+                        ws_send_lock.acquire(),
+                        timeout=STREAM_WS_LOCK_WAIT_MS / 1000.0,
+                    )
                 except asyncio.TimeoutError:
                     last_version = version
                     # Drop on lock contention. Always recover — if we drop a
@@ -579,7 +612,10 @@ class WebSocketManager:
                     _request_idr_recover()
                     continue
                 try:
-                    await asyncio.wait_for(ws.send_bytes(frame), timeout=0.25)
+                    await asyncio.wait_for(
+                        ws.send_bytes(frame),
+                        timeout=STREAM_WS_SEND_TIMEOUT_MS / 1000.0,
+                    )
                 except asyncio.TimeoutError:
                     _request_idr_recover()
                     raise

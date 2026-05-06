@@ -178,6 +178,7 @@ class RelayConnection:
         msg: dict,
         reply_id: str,
         timeout: float = 30.0,
+        timeout_grace: float = 10.0,
     ) -> dict:
         """Send a JSON message and await a matching reply by id."""
         loop = asyncio.get_running_loop()
@@ -187,7 +188,10 @@ class RelayConnection:
         await self._write_queue.put(json.dumps(msg))
 
         try:
-            return await asyncio.wait_for(asyncio.shield(future), timeout=timeout + 10.0)
+            return await asyncio.wait_for(
+                asyncio.shield(future),
+                timeout=max(0.1, timeout + timeout_grace),
+            )
         except asyncio.TimeoutError:
             self._pending.pop(reply_id, None)
             return {"ok": False, "error": f"relay timeout ({timeout}s)"}
@@ -987,9 +991,13 @@ class AdbRelayManager:
             },
             reply_id=req_id,
             timeout=timeout,
+            timeout_grace=0.0,
         )
         if result.get("type") != "a11y_result":
-            return {"ok": False, "error": "invalid_result"}
+            return {
+                "ok": False,
+                "error": str(result.get("error") or result.get("body") or "invalid_result"),
+            }
         return result
 
     async def broadcast_adb_connect(self, ip_port: str, timeout: float = 15.0) -> None:

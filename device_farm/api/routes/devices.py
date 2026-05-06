@@ -27,7 +27,25 @@ _ROOT_DIR = Path(__file__).resolve().parents[2]
 _APK_CANDIDATES = [
     # Preferred: pre-bundled APK in device_farm/bundle/apks/STFService.apk
     _ROOT_DIR / "bundle" / "apks" / "STFService.apk",
-    # Fallback: local Gradle release build from ../STFService.apk Android project
+    # Fallback: local Gradle release builds from ../STFService.apk Android project
+    _ROOT_DIR.parent
+    / "STFService.apk"
+    / "app"
+    / "build"
+    / "outputs"
+    / "apk"
+    / "lite"
+    / "release"
+    / "app-lite-release.apk",
+    _ROOT_DIR.parent
+    / "STFService.apk"
+    / "app"
+    / "build"
+    / "outputs"
+    / "apk"
+    / "full"
+    / "release"
+    / "app-full-release.apk",
     _ROOT_DIR.parent
     / "STFService.apk"
     / "app"

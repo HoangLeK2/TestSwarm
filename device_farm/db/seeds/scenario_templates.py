@@ -759,9 +759,6 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
 
             # ── Phase 2: Khởi động app ──────────────────────────────────────
             {"type": "launch_app", "package": "com.facebook.katana", "title": "mở fb"},
-            {"type": "dismiss_popup", "retries": 3},
-            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
-
             # ── Phase 3: Crawl group riêng của thiết bị hiện tại ────────────
             {
                 "type": "if_variable",

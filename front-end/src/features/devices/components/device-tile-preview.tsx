@@ -17,6 +17,34 @@ import { DeviceStepMonitor } from './device-step-monitor';
 import { SHOW_RELAY_SCRCPY_UI_TOGGLE } from '../streaming-ui-flags';
 import { useH264Video } from '../hooks/use-h264-canvas';
 
+const gridH264Slots = new Set<string>();
+const gridH264SlotListeners = new Set<() => void>();
+
+function notifyGridH264SlotListeners() {
+  gridH264SlotListeners.forEach((fn) => {
+    try {
+      fn();
+    } catch {
+      // isolate listener errors
+    }
+  });
+}
+
+function claimGridH264Slot(serial: string, limit: number): boolean {
+  if (!serial || limit <= 0) return false;
+  if (gridH264Slots.has(serial)) return true;
+  if (gridH264Slots.size >= limit) return false;
+  gridH264Slots.add(serial);
+  notifyGridH264SlotListeners();
+  return true;
+}
+
+function releaseGridH264Slot(serial: string) {
+  if (gridH264Slots.delete(serial)) {
+    notifyGridH264SlotListeners();
+  }
+}
+
 interface DeviceTilePreviewProps {
   device: Device;
   /** Server allows MJPEG on grid (/api/config). */
@@ -60,6 +88,7 @@ export function DeviceTilePreview({
   const [loadStream, setLoadStream] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [h264Active, setH264Active] = useState(false);
+  const [hasH264Slot, setHasH264Slot] = useState(false);
   const h264TimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const h264WarmupRef = useRef<{ startedAt: number; frames: number }>({ startedAt: 0, frames: 0 });
 
@@ -98,10 +127,37 @@ export function DeviceTilePreview({
   const [relayStreamOn, setRelayStreamOn] = useState(true);
   const [relayStreamBusy, setRelayStreamBusy] = useState(false);
 
-  const allowH264 =
+  const gridH264Limit = useMemo(() => {
+    const raw = Number(process.env.NEXT_PUBLIC_DEVICE_FARM_GRID_H264_LIMIT ?? 1);
+    if (!Number.isFinite(raw)) return 1;
+    return Math.max(0, Math.min(4, Math.round(raw)));
+  }, []);
+
+  const wantsH264 =
     isActive &&
     loadStream &&
     (streamingConfig === null || streamingConfig.mode !== 'continuous' || relayStreamOn);
+
+  useEffect(() => {
+    if (!wantsH264) {
+      releaseGridH264Slot(device.serial);
+      setHasH264Slot(false);
+      return undefined;
+    }
+
+    const syncSlot = () => {
+      setHasH264Slot(claimGridH264Slot(device.serial, gridH264Limit));
+    };
+    gridH264SlotListeners.add(syncSlot);
+    syncSlot();
+
+    return () => {
+      gridH264SlotListeners.delete(syncSlot);
+      releaseGridH264Slot(device.serial);
+    };
+  }, [device.serial, gridH264Limit, wantsH264]);
+
+  const allowH264 = wantsH264 && hasH264Slot;
 
   useLayoutEffect(() => {
     if (!streamingConfig || streamingConfig.mode !== 'continuous') return;

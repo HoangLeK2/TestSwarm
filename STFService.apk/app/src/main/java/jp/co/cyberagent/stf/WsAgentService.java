@@ -65,6 +65,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import android.view.accessibility.AccessibilityNodeInfo;
 import jp.co.cyberagent.stf.compat.InputManagerWrapper;
@@ -99,6 +100,8 @@ public class WsAgentService extends android.app.Service {
     private static final String TAG = "WsAgentService";
     private static final String CHANNEL_ID = "ws_agent";
     private static final int NOTIF_ID = 0x2;
+    private static final String PREFS_NAME = "stf_prefs";
+    private static final String PREF_WS_URL = "ws_url";
     private static final int CAPTURE_WIDTH       = 1080; // max width; scales down if screen smaller
     private static final int TARGET_FPS          = 10;   // MJPEG target frame rate (low for perf)
     private static final int JPEG_QUALITY        = 75;   // JPEG compression (0-100)
@@ -168,6 +171,15 @@ public class WsAgentService extends android.app.Service {
     private volatile int reconnectAttempt = 0;
     private static final long RECONNECT_BASE_MS = 1000L;
     private static final long RECONNECT_MAX_MS  = 30000L;
+    private final AtomicInteger connectionGeneration = new AtomicInteger(0);
+    private final Runnable reconnectRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!destroyed && wsUrl != null && !wsUrl.isEmpty()) {
+                connectWebSocket(wsUrl);
+            }
+        }
+    };
 
     // Device info
     private String serial;
@@ -256,9 +268,7 @@ public class WsAgentService extends android.app.Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        if (intent == null)
-            return START_NOT_STICKY;
-        String action = intent.getAction();
+        String action = intent != null ? intent.getAction() : ACTION_START;
 
         if (ACTION_STOP.equals(action)) {
             stopSelf();
@@ -266,16 +276,20 @@ public class WsAgentService extends android.app.Service {
         }
 
         if (ACTION_START.equals(action)) {
-            String wsUrl = intent.getStringExtra(EXTRA_WS_URL);
+            String wsUrl = intent != null ? intent.getStringExtra(EXTRA_WS_URL) : null;
             if (wsUrl == null || wsUrl.isEmpty()) {
-                SharedPreferences prefs = getSharedPreferences("stf_prefs", Context.MODE_PRIVATE);
-                wsUrl = prefs.getString("ws_url", null);
+                SharedPreferences prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+                wsUrl = prefs.getString(PREF_WS_URL, null);
                 Log.i(TAG, "onStartCommand: wsUrl from SharedPreferences=" + wsUrl);
             }
-            Intent projData = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
-                    ? intent.getParcelableExtra(EXTRA_PROJECTION_DATA, Intent.class)
-                    : intent.getParcelableExtra(EXTRA_PROJECTION_DATA);
-            int projCode = intent.getIntExtra(EXTRA_PROJECTION_CODE, -1);
+            Intent projData = null;
+            int projCode = -1;
+            if (intent != null) {
+                projData = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                        ? intent.getParcelableExtra(EXTRA_PROJECTION_DATA, Intent.class)
+                        : intent.getParcelableExtra(EXTRA_PROJECTION_DATA);
+                projCode = intent.getIntExtra(EXTRA_PROJECTION_CODE, -1);
+            }
 
             Log.i(TAG, "onStartCommand: wsUrl=" + wsUrl
                     + " projCode=" + projCode
@@ -330,6 +344,9 @@ public class WsAgentService extends android.app.Service {
 
             if (wsUrl != null && !wsUrl.isEmpty()) {
                 this.wsUrl = wsUrl;
+                getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+                        .putString(PREF_WS_URL, wsUrl)
+                        .apply();
                 connectWebSocket(wsUrl);
             }
         }
@@ -341,6 +358,7 @@ public class WsAgentService extends android.app.Service {
     public void onDestroy() {
         super.onDestroy();
         destroyed = true;
+        connectionGeneration.incrementAndGet();
         mainHandler.removeCallbacksAndMessages(null);
         stopAll();  // release MediaProjection token on full shutdown
         for (ServiceTunnel t : serviceTunnels.values()) t.close();
@@ -459,10 +477,19 @@ public class WsAgentService extends android.app.Service {
     }
 
     private void connectWebSocket(String wsUrl) {
-        wsManager = new WebSocketManager();
-        wsManager.setCallback(new WebSocketManager.Callback() {
+        mainHandler.removeCallbacks(reconnectRunnable);
+        WebSocketManager oldManager = wsManager;
+        if (oldManager != null) {
+            oldManager.shutdown();
+        }
+
+        final int generation = connectionGeneration.incrementAndGet();
+        WebSocketManager manager = new WebSocketManager();
+        wsManager = manager;
+        manager.setCallback(new WebSocketManager.Callback() {
             @Override
             public void onConnected(String url) {
+                if (generation != connectionGeneration.get()) return;
                 Log.i(TAG, "WebSocket connected: " + url);
                 reconnectAttempt = 0;
                 Intent connected = new Intent(ACTION_CONNECTED);
@@ -498,11 +525,13 @@ public class WsAgentService extends android.app.Service {
 
             @Override
             public void onMessage(String text) {
+                if (generation != connectionGeneration.get()) return;
                 handleCommand(text);
             }
 
             @Override
             public void onDisconnected(String reason) {
+                if (generation != connectionGeneration.get()) return;
                 Log.i(TAG, "WebSocket disconnected: " + reason);
                 stopCapture();  // stop loop + VirtualDisplay, keep mediaProjection for reconnect
                 scheduleReconnect();
@@ -510,6 +539,7 @@ public class WsAgentService extends android.app.Service {
 
             @Override
             public void onError(String error) {
+                if (generation != connectionGeneration.get()) return;
                 Log.w(TAG, "WebSocket error: " + error);
                 Intent err = new Intent(ACTION_CONNECTION_FAILED);
                 err.putExtra("message", error != null ? error : "Connection failed");
@@ -518,7 +548,7 @@ public class WsAgentService extends android.app.Service {
                 scheduleReconnect();
             }
         });
-        wsManager.connect(wsUrl);
+        manager.connect(wsUrl);
         Log.i(TAG, "Connecting to " + wsUrl);
     }
 
@@ -528,11 +558,8 @@ public class WsAgentService extends android.app.Service {
                 RECONNECT_BASE_MS * (1L << Math.min(reconnectAttempt, 5)));
         reconnectAttempt++;
         Log.i(TAG, "Reconnecting in " + delay + "ms (attempt " + reconnectAttempt + ")");
-        mainHandler.postDelayed(() -> {
-            if (!destroyed && wsUrl != null) {
-                connectWebSocket(wsUrl);
-            }
-        }, delay);
+        mainHandler.removeCallbacks(reconnectRunnable);
+        mainHandler.postDelayed(reconnectRunnable, delay);
     }
 
    

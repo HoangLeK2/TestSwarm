@@ -26,7 +26,7 @@ MSG_INJECT_SCROLL      = 3
 # SC_CONTROL_MSG_TYPE_RESET_VIDEO (scrcpy v3.2+): 1-byte message that tells the
 # encoder to output an IDR (keyframe) immediately. Safe to send on older versions
 # — unknown type is silently ignored by the server.
-MSG_RESET_VIDEO        = 16
+MSG_RESET_VIDEO        = 17
 
 DEFAULT_IDR_MIN_INTERVAL_S = 0.5
 

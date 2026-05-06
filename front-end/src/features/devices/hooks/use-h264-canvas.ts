@@ -13,7 +13,7 @@
  */
 
 import { useEffect, useRef } from 'react';
-import { subscribeBinaryFrames, getLastConfigFrame, getLastKeyFrame, subscribeDeviceFarm, requestIdr, isCachedKeyFrameStale } from '../services/ws';
+import { subscribeBinaryFrames, getLastConfigFrame, getLastKeyFrame, subscribeDeviceFarm, requestIdr, isCachedKeyFrameStale, notifyDecoderBackpressure } from '../services/ws';
 
 export function useH264Video(
   serial: string,
@@ -75,7 +75,7 @@ export function useH264Video(
       return;
     }
 
-    const worker = new Worker('/h264-worker.js?v=25');
+    const worker = new Worker('/h264-worker.js?v=26');
     workerRef.current = worker;
     mountedAtRef.current = Date.now();
 
@@ -124,6 +124,13 @@ export function useH264Video(
           w.postMessage({ type: 'reset' });
           clearLatestFrame();
           setTimeout(() => requestIdr(s, 0), 30);
+        }
+        return;
+      }
+      if (data.type === 'decoder-backpressure') {
+        const s = serialRef.current;
+        if (s) {
+          notifyDecoderBackpressure(s, 500);
         }
         return;
       }

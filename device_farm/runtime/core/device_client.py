@@ -252,11 +252,14 @@ class DeviceClient:
         # (_hash_hierarchy, _auto_dismiss_popup, stability checks all share one dump).
         self._hierarchy_cache: Optional[tuple[float, str]] = None
         self._hierarchy_cache_ttl = 2.0
+        self._hierarchy_failure_until: float = 0.0
+        self._hierarchy_failure_reason: str = ""
 
         # Reconnect tracking
         self.reconnect_attempts: int = 0
         self._u2_reconnect_failed_at: float = 0.0    # monotonic time of last full-cycle failure
         self._u2_last_ok_at: float = 0.0             # monotonic time of last confirmed-live ping
+        self._u2_start_services_requested_at: float = 0.0
         self._atx_restart_triggered_at: float = float("-inf") # dedup guard; -inf = never triggered
         self._atx_grace_given_at: float = float("-inf")      # time first timeout was seen; -inf = no grace in progress
         self._recovery_started_at: float = 0.0
@@ -1081,8 +1084,6 @@ class DeviceClient:
         """Return True when this device should run U2 through agent-boot relay."""
         if U2_FORCE_RELAY:
             return True
-        if not getattr(getattr(self.config, "device", None), "u2_always_tunnel", False):
-            return False
         try:
             from runtime.transports.adb_relay_server import get_relay_manager
 
@@ -1090,9 +1091,7 @@ class DeviceClient:
             if relay is None:
                 return False
 
-            # Docker/cloud mode should use agent-boot relay when this device is
-            # actually resolvable to a relay serial. If no relay owns it, callers
-            # can still fall back to the legacy WS tunnel.
+            # Force relay only when this device is actually resolvable to a relay serial.
             for hint in (self._adb_serial, self.serial):
                 h = str(hint or "").strip()
                 if not h:
@@ -1553,6 +1552,31 @@ class DeviceClient:
             raise RuntimeError(f"open_url failed: {err or 'agent reported failure'}")
 
 
+    _U2_START_SERVICES_THROTTLE_S = 12.0
+
+    def _request_u2_start_services(self, reason: str, *, force: bool = False) -> bool:
+        """Ask the APK to start/reconnect u2, deduped across hierarchy and keepalive paths."""
+        if self._agent_send is None:
+            return False
+        now = time.monotonic()
+        if not force:
+            with self._u2_lock:
+                if (now - self._u2_start_services_requested_at) < self._U2_START_SERVICES_THROTTLE_S:
+                    self._log(
+                        f"u2 start_services skipped ({reason}): throttled",
+                        level=logging.DEBUG,
+                    )
+                    return False
+                self._u2_start_services_requested_at = now
+        try:
+            self._send_to_agent({"type": "start_services", "services": ["u2"]})
+            self._log(f"u2 start_services requested ({reason})", level=logging.INFO)
+            return True
+        except Exception as exc:
+            self._log(f"u2 start_services failed ({reason}): {exc}", level=logging.WARNING)
+            return False
+
+
     def on_agent_hierarchy_response(self, xml: Optional[str], error: Optional[str] = None) -> None:
         """Called when agent responds to dump_hierarchy WS command."""
         self._ws_hierarchy_xml = xml
@@ -1568,11 +1592,7 @@ class DeviceClient:
                 last_req = float(getattr(self, "_a11y_recover_requested_at", 0.0) or 0.0)
                 if (now_mono - last_req) >= 10.0:
                     setattr(self, "_a11y_recover_requested_at", now_mono)
-                    try:
-                        self._send_to_agent({"type": "start_services", "services": ["u2"]})
-                        self._log("a11y unavailable: requested agent start_services[u2]", level=logging.INFO)
-                    except Exception as exc:
-                        self._log(f"a11y unavailable: start_services[u2] request failed: {exc}", level=logging.WARNING)
+                    self._request_u2_start_services("a11y_unavailable")
         elif xml:
             self._ws_hierarchy_a11y_available = True  # re-enable if it starts working
         self._ws_hierarchy_event.set()
@@ -1599,34 +1619,19 @@ class DeviceClient:
         self._ws_hierarchy_error = None
         self._ws_hierarchy_event.clear()
         self._log(f"hierarchy_via_ws: sending dump_hierarchy (agent_send={'SET' if self._agent_send else 'NULL'})", level=logging.DEBUG)
-        for attempt in range(2):
-            self._send_to_agent({"type": "dump_hierarchy"})
-            if not self._ws_hierarchy_event.wait(timeout=timeout):
-                self._log(
-                    f"hierarchy_via_ws: timeout ({timeout:.1f}s) attempt={attempt + 1}/2",
-                    level=logging.WARNING,
-                )
-            elif self._ws_hierarchy_error:
-                self._log(
-                    f"hierarchy_via_ws error: {self._ws_hierarchy_error} attempt={attempt + 1}/2",
-                    level=logging.WARNING,
-                )
-            else:
-                xml = self._ws_hierarchy_xml
-                if xml:
-                    self._log(f"hierarchy_via_ws: OK ({len(xml)} bytes)", level=logging.DEBUG)
-                    return xml
-                self._log("hierarchy_via_ws: agent returned null xml", level=logging.WARNING)
-            if attempt == 0:
-                self._ws_hierarchy_xml = None
-                self._ws_hierarchy_error = None
-                self._ws_hierarchy_event.clear()
-                try:
-                    self._send_to_agent({"type": "start_services", "services": ["u2"]})
-                except Exception:
-                    pass
-                time.sleep(0.08)
-        return None
+        self._send_to_agent({"type": "dump_hierarchy"})
+        if not self._ws_hierarchy_event.wait(timeout=timeout):
+            self._log(f"hierarchy_via_ws: timeout ({timeout:.1f}s)", level=logging.WARNING)
+            return None
+        if self._ws_hierarchy_error:
+            self._log(f"hierarchy_via_ws error: {self._ws_hierarchy_error}", level=logging.WARNING)
+            return None
+        xml = self._ws_hierarchy_xml
+        if xml:
+            self._log(f"hierarchy_via_ws: OK ({len(xml)} bytes)", level=logging.DEBUG)
+        else:
+            self._log("hierarchy_via_ws: agent returned null xml", level=logging.WARNING)
+        return xml
 
     def hierarchy_xml(self, force_refresh: bool = False) -> Optional[str]:
         """
@@ -1636,6 +1641,16 @@ class DeviceClient:
         Fallback: a11y path (gRPC query / WS direct) when u2 is unavailable.
         """
         now = time.time()
+        if now < self._hierarchy_failure_until:
+            if self._hierarchy_cache is not None:
+                ts, xml = self._hierarchy_cache
+                if xml and (now - ts) < self._HIERARCHY_STALE_CACHE_TTL_S:
+                    return xml
+            self._log(
+                f"hierarchy: short-circuit after recent failure ({self._hierarchy_failure_reason})",
+                level=logging.DEBUG,
+            )
+            return None
         if force_refresh and self._hierarchy_cache is not None:
             ts, xml = self._hierarchy_cache
             if now - ts < self._HIERARCHY_FORCE_DEBOUNCE_S and xml:
@@ -1646,8 +1661,8 @@ class DeviceClient:
                 return xml  # fast path: no lock needed for cache read
         if not self._hierarchy_lock.acquire(timeout=self._HIERARCHY_LOCK_WAIT_S):
             if self._hierarchy_cache is not None:
-                ts, xml = self._hierarchy_cache
-                if xml and (now - ts) < self._HIERARCHY_STALE_CACHE_TTL_S:
+                _, xml = self._hierarchy_cache
+                if xml:
                     return xml
             return None
         try:
@@ -1683,6 +1698,8 @@ class DeviceClient:
                     return cached_xml
 
             self._log("hierarchy: route=u2->a11y failed", level=logging.WARNING)
+            self._note_hierarchy_failure("route_failed")
+            self._request_u2_start_services("hierarchy_route_failed")
             return None
         finally:
             self._hierarchy_lock.release()
@@ -1706,7 +1723,12 @@ class DeviceClient:
     _A11Y_HIERARCHY_TIMEOUT  = 1.5   # seconds; avoid long fallback stalls
     _HIERARCHY_LOCK_WAIT_S   = 0.15  # seconds; fail fast when another dump is running
     _HIERARCHY_FORCE_DEBOUNCE_S = 0.35  # seconds; collapse refresh storms
-    _HIERARCHY_STALE_CACHE_TTL_S = 20.0  # seconds; soften transient relay/u2/a11y outages
+    _HIERARCHY_STALE_CACHE_TTL_S = 20.0  # soften transient relay/u2/a11y outages
+    _HIERARCHY_FAILURE_BACKOFF_S = 2.5  # collapse repeated 503 polling during recovery
+
+    def _note_hierarchy_failure(self, reason: str) -> None:
+        self._hierarchy_failure_until = time.time() + self._HIERARCHY_FAILURE_BACKOFF_S
+        self._hierarchy_failure_reason = reason
 
     def _hierarchy_xml_u2_impl(self, now: float) -> Optional[str]:
         if not self.ensure_u2_healthy() or self._u2 is None:
@@ -2701,7 +2723,7 @@ class DeviceClient:
             # Binary restart only happens when atx-agent is frozen (read timeout),
             # which is detected and handled in _connect_u2_via_atx_agent.
             self._log("u2 recovery: sending start_services to APK (atx-agent path)", level=logging.DEBUG)
-            self._send_to_agent({"type": "start_services", "services": ["u2"]})
+            self._request_u2_start_services("recover_atx")
             return
 
         # ── Legacy: no atx-agent — ADB restart ───────────────────────────────
@@ -2716,8 +2738,7 @@ class DeviceClient:
                 self._log(f"u2 recovery: cooldown {remaining:.0f}s remaining", level=logging.DEBUG)
                 return
             self._u2_adb_restart_at = now
-        self._send_to_agent({"type": "start_services", "services": ["u2"]})
-        self._log("u2 recovery: sent start_services to APK")
+        self._request_u2_start_services("recover_legacy")
 
         # ── Try gRPC relay first (works in cloud, no local adb needed) ──────────
         try:
@@ -2820,7 +2841,7 @@ class DeviceClient:
                                 f"u2 recovery: :{self._u2_probe_port} ready — reconnecting now"
                             )
                             self._u2_reconnect_failed_at = 0.0
-                            self._send_to_agent({"type": "start_services", "services": ["u2"]})
+                            self._request_u2_start_services("recover_legacy_after_adb", force=True)
                             # Reconnect immediately instead of waiting for next keepalive cycle
                             self._reconnect_u2()
                             return
@@ -2909,18 +2930,16 @@ class DeviceClient:
         self._u2_reconnect_failed_at = time.monotonic()
         return False
 
-    def _select_u2_relay_serial(self, relay: Any, host: str = "") -> Optional[str]:
-        """Resolve the relay serial for U2, preferring the bound adb serial."""
-        if relay is None:
+    def _select_u2_relay_serial(self, relay: Any, host: str) -> Optional[str]:
+        """Resolve the relay serial for the current U2 host without trusting stale _adb_serial."""
+        if relay is None or not host:
             return None
 
         hints: list[str] = []
         adb_serial = str(self._adb_serial or "")
         if adb_serial:
             hints.append(adb_serial)
-        host = str(host or "").strip()
-        if host:
-            hints.extend([f"{host}:5555", host])
+        hints.extend([f"{host}:5555", host])
 
         for hint in dict.fromkeys(hints):
             actual = relay.resolve_serial(hint)
@@ -2975,12 +2994,11 @@ class DeviceClient:
             d_rpc.implicitly_wait(cfg.implicitly_wait)
             d_rpc.settings["wait_timeout"] = cfg.wait_timeout
 
-            # In relay-required mode the farm server cannot reach device_ip:7912
-            # directly. Swap the requests.Session for a _RelaySession that
-            # proxies calls through the relay stream (agent-boot -> device_ip:7912).
+            # In relay mode the farm server cannot reach device_ip:7912 directly.
+            # Swap the requests.Session for a _RelaySession that proxies calls
+            # through the gRPC relay stream (agent-boot → device_ip:7912 locally).
             relay_attached = False
-            force_u2_relay = self._should_force_u2_relay()
-            if force_u2_relay and self._loop is not None:
+            if self._loop is not None:
                 try:
                     from runtime.transports.adb_relay_server import get_relay_manager
                     from runtime.transports.u2_jsonrpc import _RelaySession
@@ -2998,7 +3016,7 @@ class DeviceClient:
 
             # Force mode: only allow u2 over agent-boot relay.
             # If relay is not attached, skip local direct-HTTP u2 path.
-            if force_u2_relay and not relay_attached:
+            if self._should_force_u2_relay() and not relay_attached:
                 self._log(
                     "u2 ATX: relay-only mode enabled, skipping local u2 session (no relay attached)",
                     level=logging.WARNING,

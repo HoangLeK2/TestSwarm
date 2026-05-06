@@ -63,6 +63,7 @@ function buildDeviceFarmWsUrl(): string {
 const listeners = new Set<(msg: WsMessage) => void>();
 type BinaryListener = { fn: (buf: ArrayBuffer) => void; serial?: string };
 const binaryListeners = new Set<BinaryListener>();
+const textDecoder = typeof TextDecoder !== 'undefined' ? new TextDecoder() : null;
 
 // Cache last H264 config frame (0x10) per serial so late-arriving binary listeners
 // (hooks that mount after the WS was already open) get the SPS/PPS immediately.
@@ -74,6 +75,7 @@ const lastConfigBySerial = new Map<string, ArrayBuffer>();
 // lets us replay it immediately so jmuxer can initialise the SourceBuffer at once.
 const lastKeyBySerial = new Map<string, ArrayBuffer>();
 const lastKeyTsBySerial = new Map<string, number>();
+const waitForKeyBySerial = new Set<string>();
 // Keyframes older than this are considered stale. Replaying a stale IDR while
 // live P-frames reference a newer one (arrived while tab hidden) drifts the
 // decoder into a black state. Skip replay when stale — server-side forced IDR
@@ -86,6 +88,16 @@ let idleCloseTimer: ReturnType<typeof setTimeout> | undefined;
 let lastMessageTime = 0;
 let lastForcedReconnectAt = 0;
 const lastIdrRequestBySerial = new Map<string, number>();
+
+function decodeSerial(buf: ArrayBuffer, slen: number): string {
+  if (!textDecoder || slen <= 0 || buf.byteLength < 2 + slen) return '';
+  return textDecoder.decode(new Uint8Array(buf, 2, slen));
+}
+
+function isH264KeyFrame(view: DataView, buf: ArrayBuffer, slen: number): boolean {
+  const doff = 2 + slen + 4;
+  return buf.byteLength > doff && view.getUint8(doff) !== 0;
+}
 
 // Reconnect stale WebSocket on page focus (NAT timeout, server restart, etc.)
 if (typeof window !== 'undefined') {
@@ -176,7 +188,7 @@ function connectShared() {
         const ft = view.getUint8(0);
         const slen = view.getUint8(1);
         if (slen > 0 && buf.byteLength >= 2 + slen) {
-          const serial = new TextDecoder().decode(new Uint8Array(buf, 2, slen));
+          const serial = decodeSerial(buf, slen);
           if (ft === 0x10) {
             // Keep cache ownership stable: listeners may transfer incoming buffers
             // to workers, which detaches them.
@@ -184,11 +196,13 @@ function connectShared() {
           } else if (ft === 0x11) {
             // Cache keyframes so late-subscribing jmuxer hooks get an IDR immediately
             // instead of waiting up to 14 s for the next one.
-            const doff = 2 + slen + 4; // skip serial + w/h
-            if (buf.byteLength > doff && view.getUint8(doff) !== 0) { // is_key=1
+            if (isH264KeyFrame(view, buf, slen)) {
               // Same ownership rule as config cache above.
               lastKeyBySerial.set(serial, buf.slice(0));
               lastKeyTsBySerial.set(serial, Date.now());
+              waitForKeyBySerial.delete(serial);
+            } else if (waitForKeyBySerial.has(serial)) {
+              return;
             }
           }
         }
@@ -199,7 +213,7 @@ function connectShared() {
           const view = new DataView(buf);
           const slen = view.getUint8(1);
           if (slen > 0 && buf.byteLength >= 2 + slen) {
-            parsedSerial = new TextDecoder().decode(new Uint8Array(buf, 2, slen));
+            parsedSerial = decodeSerial(buf, slen);
           }
         }
         binaryListeners.forEach(({ fn, serial }) => {
@@ -330,6 +344,12 @@ export function requestIdr(serial: string, minIntervalMs = 700): void {
       // socket raced into closing — next viewer event will retry
     }
   }
+}
+
+export function notifyDecoderBackpressure(serial: string, minIntervalMs = 500): void {
+  if (!serial) return;
+  waitForKeyBySerial.add(serial);
+  requestIdr(serial, minIntervalMs);
 }
 
 export function reconnectDeviceFarmSocket(reason = 'stream_recovery'): void {

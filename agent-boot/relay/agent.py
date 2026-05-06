@@ -36,10 +36,20 @@ from relay.supervisor     import RelaySupervisor
 from relay.u2_session_pool import U2SessionPool
 
 logger = logging.getLogger("relay.agent")
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except Exception:
+        return default
+
+
 SCRCPY_RESTART_WINDOW_SECONDS = 120.0
 SCRCPY_RESTART_MAX_ATTEMPTS = 5
 SCRCPY_RESTART_MAX_BACKOFF_SECONDS = 15.0
 SCRCPY_STABLE_RESET_SECONDS = 30.0
+RELAY_SEND_QUEUE_MAX = max(4, _env_int("RELAY_SEND_QUEUE_MAX", 12))
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _RELAY_ID_FILE = os.path.join(os.path.dirname(_HERE), ".relay_id")
@@ -243,12 +253,11 @@ class RelayAgent:
         if self._api_key:
             headers["x-relay-api-key"] = self._api_key
 
-        # send_queue: str for JSON text frames, bytes for binary frames
-        # maxsize=30: ~1s buffer at 30fps. Absorbs WiFi jitter spikes without
-        # dropping P-frames. IDR-on-drop (scrcpy_relay.py) limits freeze to
-        # ~150ms; larger queue reduces drop frequency at the cost of ~33ms extra
-        # worst-case latency (acceptable for device farm use).
-        send_queue: asyncio.Queue = asyncio.Queue(maxsize=30)
+        # send_queue: str for JSON text frames, bytes for binary frames.
+        # Keep this shallow for interactive streaming. If transport stalls, old
+        # P-frames are worse than useless: they make the viewer decode history
+        # in bursts. scrcpy_relay.py drops deltas on overflow and requests IDR.
+        send_queue: asyncio.Queue = asyncio.Queue(maxsize=RELAY_SEND_QUEUE_MAX)
         loop = asyncio.get_running_loop()
         self._active_send_queue = send_queue
         self._active_loop = loop
@@ -330,7 +339,7 @@ class RelayAgent:
         from relay.grpc_client import GrpcRelayClient
         from relay.control_client import AgentControlClient
 
-        send_queue: asyncio.Queue = asyncio.Queue(maxsize=30)
+        send_queue: asyncio.Queue = asyncio.Queue(maxsize=RELAY_SEND_QUEUE_MAX)
         loop = asyncio.get_running_loop()
         self._active_send_queue = send_queue
         self._active_loop = loop

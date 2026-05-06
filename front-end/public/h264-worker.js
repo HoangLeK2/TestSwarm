@@ -1,5 +1,5 @@
 'use strict';
-console.log('[H264Worker] LOADED v25');
+console.log('[H264Worker] LOADED v26');
 /**
  * H264 VideoDecoder — Web Worker, push-model rendering.
  *
@@ -34,6 +34,13 @@ let lastDecoderErrorMsg = '';
 let decoderInitToken = 0;
 let decoderConfiguring = false;
 let pendingKeyChunk = null;
+let lastBackpressurePostAt = 0;
+
+// Keep the stream live-first. Once WebCodecs has this much pending decode work,
+// decoding more P-frames only makes the visible stream play old frames in bursts.
+// Drop deltas, request a fresh IDR from the main thread, and resume from that IDR.
+const DELTA_DROP_QUEUE_SIZE = 3;
+const KEY_RESET_QUEUE_SIZE = 6;
 
 function logDecoderError(accel, msg) {
   var now = Date.now();
@@ -60,6 +67,18 @@ function postDecoderError(accel, msg) {
     type: 'decoder-error',
     accel: String(accel || ''),
     message: String(msg || 'unknown'),
+  });
+}
+
+function postBackpressure(reason) {
+  var now = Date.now();
+  if (now - lastBackpressurePostAt < 500) return;
+  lastBackpressurePostAt = now;
+  self.postMessage({
+    type: 'decoder-backpressure',
+    reason: String(reason || 'decode_queue'),
+    decodeQueueSize: decoder ? (decoder.decodeQueueSize || 0) : 0,
+    droppedDelta,
   });
 }
 
@@ -311,6 +330,22 @@ function decodeChunk(isKey, ptsUs, frameData) {
     return;
   }
   if (decoder.state === 'closed') { closeDecoder(); return; }
+
+  var decodeQueueSize = decoder.decodeQueueSize || 0;
+  if (!isKey && decodeQueueSize >= DELTA_DROP_QUEUE_SIZE) {
+    droppedDelta++;
+    waitIdr = true;
+    postBackpressure('decode_queue_delta_drop');
+    return;
+  }
+  if (isKey && decodeQueueSize >= KEY_RESET_QUEUE_SIZE && lastAvcc) {
+    // A fresh IDR is more valuable than draining stale queued deltas. Resetting
+    // drops browser-side backlog and starts the decoder from the newest keyframe.
+    pendingKeyChunk = { isKey: true, ptsUs: ptsUs, frameData: frameData };
+    initDecoder(lastAvcc);
+    postBackpressure('decode_queue_key_reset');
+    return;
+  }
 
   if (waitIdr) {
     if (!isKey) return;

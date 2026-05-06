@@ -37,6 +37,7 @@ from .device_event import DeviceEvent
 from .relay_agent import RelayAgent
 from .scenario_device_variable import ScenarioDeviceVariable
 from .notification import Notification, NotificationChannel
+from .activity import ActivityLog
 
 __all__ = [
     "User",
@@ -70,4 +71,5 @@ __all__ = [
     "ScenarioDeviceVariable",
     "Notification",
     "NotificationChannel",
+    "ActivityLog",
 ]

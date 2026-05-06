@@ -163,7 +163,10 @@ export function NotificationBell() {
           ) : null}
         </Button>
       </PopoverTrigger>
-      <PopoverContent align='end' className='w-[360px] p-0'>
+      <PopoverContent
+        align='end'
+        className='flex h-[min(480px,calc(100vh-2rem))] w-[360px] flex-col overflow-hidden p-0'
+      >
         <div className='flex items-center justify-between border-b px-3 py-2'>
           <div className='flex items-center gap-2 text-sm font-medium'>
             <Bell size={14} />
@@ -186,7 +189,7 @@ export function NotificationBell() {
             </Button>
           </div>
         </div>
-        <ScrollArea className='max-h-[360px]'>
+        <ScrollArea className='min-h-0 flex-1'>
           <div className='p-1'>
             {isLoading ? (
               <div className='flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground'>

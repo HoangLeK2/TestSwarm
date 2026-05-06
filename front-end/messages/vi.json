@@ -1559,6 +1559,34 @@
       "deleteFailed": "Xóa lịch chạy thất bại"
     }
   },
+  "analyticsFeature": {
+    "dashboard": {
+      "title": "Nhật ký hoạt động",
+      "subtitle": "Theo dõi các sự kiện thiết bị và tác vụ gần đây trong hệ thống."
+    },
+    "activity": {
+      "title": "Activity log",
+      "subtitle": "Tự động làm mới mỗi 5 giây",
+      "refresh": "Làm mới",
+      "loading": "Đang tải hoạt động",
+      "loadError": "Không tải được nhật ký hoạt động",
+      "empty": "Chưa có hoạt động nào",
+      "unknownDevice": "Thiết bị",
+      "task": "Tác vụ",
+      "deviceSerial": "Thiết bị {serial}",
+      "duration": "{seconds}s",
+      "titles": {
+        "deviceConnect": "{device} đã kết nối",
+        "deviceDisconnect": "{device} mất kết nối",
+        "deviceError": "{device} báo lỗi",
+        "taskDone": "{task} hoàn tất",
+        "taskFailed": "{task} thất bại",
+        "campaignRun": "Chiến dịch được chạy",
+        "campaignComplete": "Chiến dịch hoàn tất",
+        "scheduleTriggered": "Lịch chạy được kích hoạt"
+      }
+    }
+  },
   "notificationsFeature": {
     "title": "Thông báo",
     "subtitle": "Quản lý kênh thông báo trong web, Telegram và webhook",

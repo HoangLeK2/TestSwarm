@@ -9,6 +9,7 @@ Health checks:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import socket
 import threading
@@ -160,7 +161,7 @@ class WatchdogThread(threading.Thread):
         self._track_bad_state(device)
 
     def _check_atx_agent(self, device: DeviceClient, host: str) -> None:
-        """TCP probe port 7912 — detect frozen atx-agent before u2 RPCs time out.
+        """Probe atx-agent port 7912 before u2 RPCs time out.
 
         A frozen atx-agent keeps the port open (connect succeeds) but never responds
         to HTTP — that's caught by the u2 stale-ping in device_client.  This probe
@@ -168,38 +169,68 @@ class WatchdogThread(threading.Thread):
         fully closed (Connection refused).  Two consecutive misses trigger a restart.
         """
         serial = device.serial
+        if self._probe_atx_agent_alive(device, host):
+            self._atx_miss_count.pop(serial, None)
+            return
+
+        miss = self._atx_miss_count.get(serial, 0) + 1
+        self._atx_miss_count[serial] = miss
+        log.warning("[%s] atx-agent probe failed (%d/%d)", serial, miss, _ATX_MAX_MISS)
+        if miss >= _ATX_MAX_MISS:
+            self._atx_miss_count.pop(serial, None)
+            now = time.monotonic()
+            last = self._atx_last_restart.get(serial, 0.0)
+            if now - last >= _ATX_RESTART_COOLDOWN:
+                self._atx_last_restart[serial] = now
+                log.warning("[%s] atx-agent unresponsive — triggering restart", serial)
+                # Only null u2 and set backoff if no restart is already in-flight.
+                # If _trigger_atx_restart_async was recently called (< 15s), a
+                # _poll_atx_recovery thread is already running and will clear the
+                # backoff when port 7912 comes back.  Resetting backoff here would
+                # undo that and add 30s downtime on top of a recovery already underway.
+                restart_in_flight = (
+                    now - getattr(device, "_atx_restart_triggered_at", float("-inf")) < 15.0
+                )
+                if not restart_in_flight:
+                    with device._u2_lock:
+                        device._u2 = None
+                    device._u2_reconnect_failed_at = time.monotonic()
+                device._trigger_atx_restart_async(host)
+            else:
+                remaining = _ATX_RESTART_COOLDOWN - (now - last)
+                log.info("[%s] atx restart cooldown %.0fs remaining", serial, remaining)
+
+    def _probe_atx_agent_alive(self, device: DeviceClient, host: str) -> bool:
+        """Prefer relay /ping probe in Docker; fallback to direct TCP for local LAN."""
+        loop = getattr(device, "_loop", None)
+        if loop:
+            try:
+                from runtime.transports.adb_relay_server import get_relay_manager
+
+                relay = get_relay_manager()
+                actual = None
+                if relay is not None:
+                    selector = getattr(device, "_select_u2_relay_serial", None)
+                    if callable(selector):
+                        actual = selector(relay, host)
+                    else:
+                        hint = f"{host}:5555"
+                        actual = relay.resolve_serial(hint) if relay.relay_for_serial(hint) else None
+                if relay is not None and actual:
+                    fut = asyncio.run_coroutine_threadsafe(
+                        relay.u2_http(actual, "GET", "/ping", timeout=2.0),
+                        loop,
+                    )
+                    result = fut.result(timeout=5.0)
+                    return bool(result.get("ok"))
+            except Exception as exc:
+                log.debug("[%s] atx-agent relay probe failed: %s", device.serial, exc)
+
         try:
             with socket.create_connection((host, 7912), timeout=0.5):
-                pass
-            # Port alive — clear miss counter
-            self._atx_miss_count.pop(serial, None)
+                return True
         except Exception:
-            miss = self._atx_miss_count.get(serial, 0) + 1
-            self._atx_miss_count[serial] = miss
-            log.warning("[%s] atx-agent TCP probe failed (%d/%d)", serial, miss, _ATX_MAX_MISS)
-            if miss >= _ATX_MAX_MISS:
-                self._atx_miss_count.pop(serial, None)
-                now = time.monotonic()
-                last = self._atx_last_restart.get(serial, 0.0)
-                if now - last >= _ATX_RESTART_COOLDOWN:
-                    self._atx_last_restart[serial] = now
-                    log.warning("[%s] atx-agent unresponsive — triggering restart", serial)
-                    # Only null u2 and set backoff if no restart is already in-flight.
-                    # If _trigger_atx_restart_async was recently called (< 15s), a
-                    # _poll_atx_recovery thread is already running and will clear the
-                    # backoff when port 7912 comes back.  Resetting backoff here would
-                    # undo that and add 30s downtime on top of a recovery already underway.
-                    restart_in_flight = (
-                        now - getattr(device, "_atx_restart_triggered_at", float("-inf")) < 15.0
-                    )
-                    if not restart_in_flight:
-                        with device._u2_lock:
-                            device._u2 = None
-                        device._u2_reconnect_failed_at = time.monotonic()
-                    device._trigger_atx_restart_async(host)
-                else:
-                    remaining = _ATX_RESTART_COOLDOWN - (now - last)
-                    log.info("[%s] atx restart cooldown %.0fs remaining", serial, remaining)
+            return False
 
     def _track_bad_state(self, device: DeviceClient) -> None:
         """Track how long a device has been in a bad state; mark DEAD if too long."""

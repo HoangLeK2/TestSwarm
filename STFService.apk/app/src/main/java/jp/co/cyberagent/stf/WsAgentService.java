@@ -541,6 +541,10 @@ public class WsAgentService extends android.app.Service {
             JSONObject m = new JSONObject();
             m.put("type", "hello");
             m.put("serial", serial);
+            String adbSerial = getAdbSerialHint();
+            if (adbSerial != null && !adbSerial.isEmpty()) {
+                m.put("adb_serial", adbSerial);
+            }
             // STFService: u2, stfservice, optional mjpeg, minitouch
             JSONArray caps = new JSONArray();
             caps.put("u2");
@@ -559,6 +563,19 @@ public class WsAgentService extends android.app.Service {
         } catch (Exception e) {
             Log.w(TAG, "sendHello: " + e);
         }
+    }
+
+    private String getAdbSerialHint() {
+        try {
+            Process p = Runtime.getRuntime().exec(new String[]{"sh", "-c", "getprop ro.serialno"});
+            byte[] out = p.getInputStream().readAllBytes();
+            p.waitFor();
+            String v = new String(out).trim();
+            if (!v.isEmpty() && !"unknown".equalsIgnoreCase(v)) {
+                return v;
+            }
+        } catch (Exception ignored) {}
+        return "";
     }
 
     private void sendStatus() {

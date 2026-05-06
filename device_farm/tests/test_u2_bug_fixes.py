@@ -18,6 +18,9 @@ from unittest.mock import MagicMock, Mock, call, patch
 
 import pytest
 
+from core.config import Config
+from runtime.core.device_client import DeviceClient
+from runtime.core.watchdog import WatchdogThread
 from runtime.transports.u2_jsonrpc import (
     U2JsonRpcClient,
     _WatcherContext,
@@ -60,6 +63,27 @@ def _err_response(status: int = 500) -> Mock:
     resp.status_code = status
     resp.text = "server error"
     return resp
+
+
+class _FakeRelay:
+    def __init__(self, serials: list[str]) -> None:
+        self._serials = list(serials)
+
+    def relay_for_serial(self, serial: str):
+        resolved = self.resolve_serial(serial)
+        return object() if resolved in self._serials else None
+
+    def resolve_serial(self, serial: str) -> str:
+        if serial in self._serials:
+            return serial
+        ip = serial.rsplit(":", 1)[0] if ":" in serial else serial
+        for known in self._serials:
+            if ":" in known and known.rsplit(":", 1)[0] == ip:
+                return known
+        return serial
+
+    def registered_relays(self) -> dict[str, list[str]]:
+        return {"relay": list(self._serials)}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -143,6 +167,90 @@ class TestXpathWaitTimeout:
         result = c._find_element_xpath('//*[@text="Home"]', timeout=2.0)
         assert result is not None
         assert attempt["n"] >= 2
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# U2 relay selection: current host must beat stale _adb_serial
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestDeviceClientU2RelaySelection:
+    """U2 relay routing must not follow stale _adb_serial across phones."""
+
+    def _device(self) -> DeviceClient:
+        return DeviceClient(serial="logical-serial", index=0, config=Config())
+
+    def test_prefers_adb_serial_over_current_u2_host(self):
+        d = self._device()
+        d._adb_serial = "172.16.0.86:5555"
+        relay = _FakeRelay(["172.16.0.83:5555", "172.16.0.86:5555"])
+
+        assert d._select_u2_relay_serial(relay, "172.16.0.83") == "172.16.0.86:5555"
+
+    def test_uses_adb_serial_when_host_has_no_relay_and_multiple_devices_online(self):
+        d = self._device()
+        d._adb_serial = "172.16.0.86:5555"
+        relay = _FakeRelay(["172.16.0.85:5555", "172.16.0.86:5555"])
+
+        assert d._select_u2_relay_serial(relay, "172.16.0.83") == "172.16.0.86:5555"
+
+    def test_allows_nat_adb_serial_when_it_is_the_only_online_relay(self):
+        d = self._device()
+        d._adb_serial = "172.16.0.86:5555"
+        relay = _FakeRelay(["172.16.0.86:5555"])
+
+        assert d._select_u2_relay_serial(relay, "203.0.113.10") == "172.16.0.86:5555"
+
+    def test_resolve_relay_serial_prefers_adb_serial_over_host(self):
+        d = self._device()
+        d._u2_host = "172.16.0.83"
+        d._adb_serial = "172.16.0.86:5555"
+        relay = _FakeRelay(["172.16.0.83:5555", "172.16.0.86:5555"])
+
+        with patch("runtime.transports.adb_relay_server.get_relay_manager", return_value=relay):
+            assert d._resolve_relay_serial() == "172.16.0.86:5555"
+        assert d._adb_serial == "172.16.0.86:5555"
+
+    def test_local_config_does_not_force_u2_relay_when_relay_is_available(self):
+        d = self._device()
+        d.config.device.u2_always_tunnel = False
+        d._u2_host = "172.16.0.83"
+        d._adb_serial = "172.16.0.83:5555"
+        relay = _FakeRelay(["172.16.0.83:5555"])
+
+        with patch("runtime.transports.adb_relay_server.get_relay_manager", return_value=relay):
+            assert d._should_force_u2_relay() is False
+
+    def test_docker_tunnel_config_forces_u2_relay_when_relay_is_available(self):
+        d = self._device()
+        d.config.device.u2_always_tunnel = True
+        d._u2_host = "203.0.113.10"
+        d._adb_serial = "172.16.0.83:5555"
+        relay = _FakeRelay(["172.16.0.83:5555"])
+
+        with patch("runtime.transports.adb_relay_server.get_relay_manager", return_value=relay):
+            assert d._should_force_u2_relay() is True
+
+
+class TestWatchdogAtxProbe:
+    """Docker/agent-boot watchdog probes must use relay before direct TCP."""
+
+    def test_relay_probe_success_does_not_mark_atx_miss(self):
+        d = DeviceClient(serial="logical-serial", index=0, config=Config())
+        d._adb_serial = "172.16.0.86:5555"
+        d._loop = object()
+        relay = _FakeRelay(["172.16.0.83:5555", "172.16.0.86:5555"])
+        relay.u2_http = Mock(return_value={"ok": True})
+
+        wd = WatchdogThread(manager=Mock(), config=Config())
+        future = Mock()
+        future.result.return_value = {"ok": True}
+
+        with patch("runtime.transports.adb_relay_server.get_relay_manager", return_value=relay), \
+                patch("runtime.core.watchdog.asyncio.run_coroutine_threadsafe", return_value=future), \
+                patch("runtime.core.watchdog.socket.create_connection") as connect:
+            assert wd._probe_atx_agent_alive(d, "172.16.0.83") is True
+
+        connect.assert_not_called()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

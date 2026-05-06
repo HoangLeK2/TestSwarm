@@ -1850,8 +1850,10 @@ def _run_scenario_task_legacy(
                             from runtime.transports.adb_relay_server import get_relay_manager
                             relay = get_relay_manager()
                             loop = getattr(device, "_loop", None)
+                            resolver = getattr(device, "_resolve_relay_serial", None)
                             target_serial = (
-                                getattr(device, "_adb_serial", None)
+                                resolver() if callable(resolver)
+                                else getattr(device, "_adb_serial", None)
                                 or getattr(device, "serial", None)
                                 or serial
                             )
@@ -3214,4 +3216,3 @@ def make_scenario_task(
 
     _task.__name__ = "run_scenario"
     return _task
-

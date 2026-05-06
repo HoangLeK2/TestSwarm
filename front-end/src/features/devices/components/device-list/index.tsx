@@ -29,6 +29,7 @@ export function DeviceList() {
   const relayMap = useMemo(() => {
     const m: Record<string, RelayAgentOut> = {};
     for (const agent of relayAgents ?? []) {
+      m[agent.relay_id] = agent;
       for (const serial of agent.serials) {
         m[serial] = agent;
         // TCP serial "ip:port" → also index by ip alone so USB-serial devices match

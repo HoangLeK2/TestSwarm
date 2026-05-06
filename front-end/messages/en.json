@@ -1981,6 +1981,34 @@
       "deleteFailed": "Delete schedule failed"
     }
   },
+  "analyticsFeature": {
+    "dashboard": {
+      "title": "Activity Log",
+      "subtitle": "Track recent device and task activity across the system."
+    },
+    "activity": {
+      "title": "Activity log",
+      "subtitle": "Auto-refreshes every 5 seconds",
+      "refresh": "Refresh",
+      "loading": "Loading activity",
+      "loadError": "Could not load activity log",
+      "empty": "No activity yet",
+      "unknownDevice": "Device",
+      "task": "Task",
+      "deviceSerial": "Device {serial}",
+      "duration": "{seconds}s",
+      "titles": {
+        "deviceConnect": "{device} connected",
+        "deviceDisconnect": "{device} disconnected",
+        "deviceError": "{device} reported an error",
+        "taskDone": "{task} completed",
+        "taskFailed": "{task} failed",
+        "campaignRun": "Campaign started",
+        "campaignComplete": "Campaign completed",
+        "scheduleTriggered": "Schedule triggered"
+      }
+    }
+  },
   "notificationsFeature": {
     "title": "Notifications",
     "subtitle": "Manage in-app, Telegram and webhook notification channels",

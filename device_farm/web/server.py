@@ -154,6 +154,12 @@ def create_app(
                 notification_service.set_event_loop(loop)
             except Exception:
                 pass
+        activity_logger = getattr(_app.state, "activity_logger", None)
+        if activity_logger is not None:
+            try:
+                activity_logger.set_event_loop(loop)
+            except Exception:
+                pass
         log.info("Device Farm server started")
 
         # Single lifecycle owner for this app run. Every long-lived coroutine,
@@ -485,6 +491,25 @@ def create_app(
                                 ws_device.serial,
                             )
                     if ws_device is not None:
+                        current_adb_serial = str(getattr(ws_device, "_adb_serial", "") or "")
+                        # Sticky mapping: when one WS device is "lone match" for multiple
+                        # relay serials (e.g. dual devices .83/.86), do not thrash scrcpy
+                        # attach between serials. Keep whichever relay serial is already
+                        # selected on the device unless this is the first bind.
+                        if current_adb_serial and current_adb_serial != serial:
+                            log.info(
+                                "relay device online %s — skip reattach for WS device %s "
+                                "(sticky _adb_serial=%s)",
+                                serial,
+                                ws_device.serial,
+                                current_adb_serial,
+                            )
+                            return
+                        if not current_adb_serial:
+                            try:
+                                ws_device._adb_serial = serial
+                            except Exception:
+                                pass
                         ws_device.set_event_loop(asyncio.get_event_loop())
                         _st = getattr(_config_ref, "streaming", None)
                         _relay_auto = bool(
@@ -765,13 +790,19 @@ def create_app(
     if db_enabled:
         try:
             from services.notification_service import NotificationService
+            from services.activity_logger import ActivityLogger
 
             notification_service = NotificationService(ws_manager)
             if event_recorder is not None:
                 notification_service.bind_device_events(event_recorder)
             app.state.notification_service = notification_service
+
+            activity_logger = ActivityLogger()
+            if event_recorder is not None:
+                activity_logger.bind_device_events(event_recorder)
+            app.state.activity_logger = activity_logger
         except Exception as exc:
-            log.warning("notification service failed to initialize: %s", exc)
+            log.warning("notification/activity service failed to initialize: %s", exc)
     agent_session = DeviceAgentSession(manager, ws_manager, config)
 
     @app.websocket("/ws")

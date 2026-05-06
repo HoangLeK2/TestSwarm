@@ -46,6 +46,11 @@ const ALLOWED_SELECTOR_BY: readonly SelectorBy[] = [
   'descriptionStartsWith',
 ];
 
+const HIERARCHY_INTERACTION_PULSE_THROTTLE_MS = 3500;
+const HIERARCHY_INTERACTION_FETCH_COOLDOWN_MS = 3500;
+const RECORD_XML_POLL_INTERVAL_MS = 1200;
+const RECORD_XML_POLL_TIMEOUT_MS = 4800;
+
 function normalizeSelectorBy(by: unknown, fallback: SelectorBy = 'text'): SelectorBy {
   const raw = String(by ?? '').trim();
   if (!raw) return fallback;
@@ -191,7 +196,7 @@ export function useControlRecord(
   const pulseHierarchyRefresh = useCallback(() => {
     const now = Date.now();
     // Collapse burst actions (tap/swipe spam) into one refresh pulse.
-    if (now - lastHierarchyPulseAtRef.current < 1500) return;
+    if (now - lastHierarchyPulseAtRef.current < HIERARCHY_INTERACTION_PULSE_THROTTLE_MS) return;
     lastHierarchyPulseAtRef.current = now;
     setHierarchyRefreshPulse((v) => v + 1);
   }, []);
@@ -375,7 +380,12 @@ export function useControlRecord(
             const oldHash = hashXml(xml);
             pollingXmlRef.current = true;
             setPollingXml(true);
-            pollUntilUiChange(selectedDevice.serial, oldHash).then((newXml) => {
+            pollUntilUiChange(
+              selectedDevice.serial,
+              oldHash,
+              RECORD_XML_POLL_INTERVAL_MS,
+              RECORD_XML_POLL_TIMEOUT_MS
+            ).then((newXml) => {
               if (!recordingRef.current) return;
               if (newXml) { setRecordXml(newXml); recordXmlRef.current = newXml; }
               pollingXmlRef.current = false;
@@ -799,7 +809,7 @@ export function useControlRecord(
     if (!autoRefreshHierarchy || !selectedHierarchySerial || hierarchyPaused) return;
     if (hierarchyRefreshPulse <= 0) return;
     const now = Date.now();
-    if (now - lastHierarchyFetchAtRef.current < 1200) return;
+    if (now - lastHierarchyFetchAtRef.current < HIERARCHY_INTERACTION_FETCH_COOLDOWN_MS) return;
     const tid = setTimeout(() => {
       hierarchyQuery.refetch()
         .then(() => {

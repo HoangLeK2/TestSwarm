@@ -236,6 +236,13 @@ class Dispatcher(threading.Thread):
 
             # NOTE: Campaign status is currently updated explicitly via the API.
             # Dispatcher only manages per-device task lifecycle.
+            if self.config.database.enabled and task.status in (TaskStatus.DONE, TaskStatus.FAILED):
+                try:
+                    from services.activity_logger import log_task_activity_sync
+
+                    log_task_activity_sync(task, serial, elapsed)
+                except Exception as exc:
+                    log.warning("[%s] activity log write skipped for task %s: %s", serial, task.id, exc)
 
     # ── Rate Limiting ────────────────────────────────────────────────────────
 

@@ -34,7 +34,11 @@ function DeviceActionsCell({
     }
   };
 
-  const hasRelay = !!(relayMap[device.serial] ?? (device.adb_ip ? relayMap[device.adb_ip] : undefined));
+  const hasRelay = !!(
+    (device.relay_id ? relayMap[device.relay_id] : undefined) ??
+    relayMap[device.serial] ??
+    (device.adb_ip ? relayMap[device.adb_ip] : undefined)
+  );
 
   return (
     <div className='flex items-center justify-end gap-1'>
@@ -177,7 +181,10 @@ export function getDeviceColumns({
       header: 'Relay',
       cell: ({ row }) => {
         const d = row.original;
-        const relay = relayMap[d.serial] ?? (d.adb_ip ? relayMap[d.adb_ip] : undefined);
+        const relay =
+          (d.relay_id ? relayMap[d.relay_id] : undefined) ??
+          relayMap[d.serial] ??
+          (d.adb_ip ? relayMap[d.adb_ip] : undefined);
         if (!relay) return <span className='text-[11px] text-muted-foreground'>—</span>;
         return (
           <div className='flex items-center gap-1'>

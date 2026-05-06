@@ -75,6 +75,11 @@ export function useNavItems(): {
           title: t('content'),
           url: ROUTES.CONTENT.ROOT,
           icon: 'stats'
+        },
+        {
+          title: t('activity_history'),
+          url: ROUTES.DASHBOARD.ACTIVITY_HISTORY.ROOT,
+          icon: 'history'
         }
       ]
     }

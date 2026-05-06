@@ -285,6 +285,38 @@ async def enqueue_campaign_run_temporal(
         # start — if a later dispatch happens, it must see the advanced cursor.
         await account_db.commit()
 
+    # Guardrail: fb_groups_per_device requires unique per-device "group" value
+    # from scenario_device_variables (mapped to __DEVICE_GROUP__ token).
+    for scen in scenarios:
+        if getattr(scen, "name", "") != "fb_groups_per_device":
+            continue
+        token_map = per_scenario_device_runtime_vars.get(scen.id, {})
+        missing_serials: list[str] = []
+        group_to_serials: dict[str, list[str]] = {}
+        for d in devices:
+            vars_for_device = token_map.get(d.id, {})
+            raw_group = str(vars_for_device.get("__DEVICE_GROUP__", "")).strip()
+            if not raw_group:
+                missing_serials.append(d.serial)
+                continue
+            key = raw_group.lower()
+            group_to_serials.setdefault(key, []).append(d.serial)
+        duplicate_groups = {
+            group: serials for group, serials in group_to_serials.items() if len(serials) > 1
+        }
+        if missing_serials or duplicate_groups:
+            return {
+                "error": "Invalid device vars for fb_groups_per_device",
+                "scenario_id": scen.id,
+                "scenario_name": scen.name,
+                "missing_group_devices": missing_serials,
+                "duplicate_groups": duplicate_groups,
+                "hint": (
+                    "Set unique 'group' per device in scenario device variables "
+                    "(token: ${__DEVICE_GROUP__})."
+                ),
+            }, 400
+
     task_queue = TASK_QUEUE_NAME
     if temporal_config:
         task_queue = temporal_config.task_queue or task_queue

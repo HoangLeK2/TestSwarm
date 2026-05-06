@@ -138,6 +138,33 @@ class RelayAgent:
         This enables "auto open screen" even on fresh startup before any
         explicit scrcpy_start command has ever been received.
         """
+        base_port = 27183
+        used_ports: set[int] = set()
+
+        def _next_free_port() -> int:
+            p = base_port
+            while p in used_ports:
+                p += 1
+            used_ports.add(p)
+            return p
+
+        # Normalize online devices first: avoid duplicate local forward ports
+        # (two scrcpy sessions sharing one local tcp port causes EOF/reset loops).
+        for serial in self._registry.online_serials:
+            state = self._scrcpy_desired.get(serial)
+            if not state:
+                continue
+            cfg = state.get("cfg") or {}
+            try:
+                port = int(cfg.get("port", 0) or 0)
+            except Exception:
+                port = 0
+            if port <= 0 or port in used_ports:
+                cfg["port"] = _next_free_port()
+            else:
+                used_ports.add(port)
+            state["cfg"] = cfg
+
         for serial in self._registry.online_serials:
             state = self._scrcpy_desired.get(serial)
             if state:
@@ -150,7 +177,7 @@ class RelayAgent:
                     "max_fps": 30,
                     "max_width": 800,
                     "enable_control": True,
-                    "port": 27183,
+                    "port": _next_free_port(),
                     "bitrate": 2_000_000,
                     "low_latency": False,
                 },

@@ -30,7 +30,6 @@ from typing import Any, Dict, List
 _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
 
 
-
     {
         "name": "fb_group_1h",
         "is_builtin": False,

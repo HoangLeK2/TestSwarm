@@ -29,6 +29,7 @@ SCENARIO_STEP_TYPES = [
     "repeat_until",
     "if_element",
     "if_variable",
+    "tap_fb_comment_button",
     "random_pick",
     "run_scenario",
     "extract",
@@ -252,6 +253,25 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "Điều kiện: equals | not_equals | contains | greater_than. "
             "Nếu không có điều kiện → branch theo truthy (var có giá trị). "
             "then: steps chạy khi đúng. else: steps chạy khi sai (optional)."
+        ),
+    },
+    "tap_fb_comment_button": {
+        "required": [],
+        "optional": [
+            "timeout",
+            "poll",
+            "dedupe_field",
+            "ignore_error",
+            "switch_to_all_comments",
+            "post_tap_wait_s",
+            "then",
+            "else",
+        ],
+        "description": (
+            "Atomic step: tìm + tap nút 'Bình luận' topmost trong feed Facebook, "
+            "tự set parent context cho extract fb_comments. "
+            "then: steps chạy khi tap thành công. else: chạy khi không tap được. "
+            "switch_to_all_comments=true (default) sẽ tự chuyển filter sang 'All comments'."
         ),
     },
     "random_pick": {

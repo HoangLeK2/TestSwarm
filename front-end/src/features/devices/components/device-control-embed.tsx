@@ -8,6 +8,8 @@ type Props = {
   initialSerial: string;
   compact?: boolean;
   hideStepMonitor?: boolean;
+  /** Render as monitor-only preview: no controls, no interactions. */
+  readOnlyPreview?: boolean;
   onTap?: (serial: string, rx: number, ry: number) => void;
   onSwipe?: (
     serial: string,
@@ -31,6 +33,7 @@ export function DeviceControlEmbed({
   initialSerial,
   compact = true,
   hideStepMonitor = false,
+  readOnlyPreview = false,
   onTap,
   onSwipe,
   onDragGesture,
@@ -110,6 +113,9 @@ export function DeviceControlEmbed({
         }
         compact={compact}
         hideStepMonitor={hideStepMonitor}
+        hideControls={readOnlyPreview}
+        hideDeviceFunctions={readOnlyPreview}
+        readOnlyPreview={readOnlyPreview}
       />
     </div>
   );

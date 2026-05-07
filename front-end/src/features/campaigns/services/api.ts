@@ -40,6 +40,16 @@ export type StepActionResponse = {
   total: number;
 };
 
+export type ScenarioDeviceVariablesOut = {
+  scenario_id: string;
+  device_id: string;
+  vars: Record<string, unknown>;
+};
+
+export type ScenarioDeviceVariablesBody = {
+  vars: Record<string, unknown>;
+};
+
 export const campaignsApi = {
   list: () => farmApi.get<CampaignOut[]>('/campaigns').then((r) => r.data),
   create: (data: CampaignCreate) =>
@@ -106,7 +116,25 @@ export const campaignsApi = {
         ...(options?.deviceSerial ? { device_serial: options.deviceSerial } : {}),
         ...(options?.deviceContext ? { device_context: options.deviceContext } : {})
       })
-      .then((r) => r.data)
+      .then((r) => r.data),
+  getScenarioDeviceVariables: (campaignId: string, scenarioId: string, deviceId: string) =>
+    farmApi
+      .get<ScenarioDeviceVariablesOut>(
+        `/campaigns/${campaignId}/scenarios/${scenarioId}/devices/${deviceId}/variables`,
+      )
+      .then((r) => r.data),
+  replaceScenarioDeviceVariables: (
+    campaignId: string,
+    scenarioId: string,
+    deviceId: string,
+    body: ScenarioDeviceVariablesBody,
+  ) =>
+    farmApi
+      .put<ScenarioDeviceVariablesOut>(
+        `/campaigns/${campaignId}/scenarios/${scenarioId}/devices/${deviceId}/variables`,
+        body,
+      )
+      .then((r) => r.data),
 };
 
 export const scenariosApi = {

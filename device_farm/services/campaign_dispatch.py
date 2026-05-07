@@ -8,6 +8,8 @@ from typing import Any, Dict, Tuple
 from db.database import AsyncSessionLocal
 from db import crud as repo
 from db.crud.default_scenario import DEVICE_CONTEXT_KEY
+from db.crud.scenario_device_variable import get_scenario_device_variables
+from common.variable_resolver import device_vars_to_tokens
 
 log = logging.getLogger(__name__)
 
@@ -77,7 +79,7 @@ async def _build_per_scenario_device_vars(
     for scen in scenarios:
         per_device: Dict[str, Dict[str, Any]] = {}
         group_id = getattr(scen, "account_group_id", None)
-        if group_id:
+        if isinstance(group_id, str) and group_id:
             accounts = await pick_next_batch(db, group_id, len(devices))
             granted = len(accounts)
             log.info(
@@ -94,6 +96,24 @@ async def _build_per_scenario_device_vars(
         else:
             for device in devices:
                 per_device[device.id] = await _primary_for(device.id)
+        out[scen.id] = per_device
+    return out
+
+
+async def _build_per_scenario_device_runtime_vars(
+    db,
+    scenarios: list,
+    devices: list,
+) -> Dict[str, Dict[str, Dict[str, str]]]:
+    out: Dict[str, Dict[str, Dict[str, str]]] = {}
+    for scen in scenarios:
+        per_device: Dict[str, Dict[str, str]] = {}
+        for device in devices:
+            try:
+                raw = await get_scenario_device_variables(db, scen.id, device.id)
+            except Exception:
+                raw = {}
+            per_device[device.id] = device_vars_to_tokens(raw)
         out[scen.id] = per_device
     return out
 
@@ -256,9 +276,46 @@ async def enqueue_campaign_run_temporal(
             devices=devices,
             platform=campaign_platform,
         )
+        per_scenario_device_runtime_vars = await _build_per_scenario_device_runtime_vars(
+            account_db,
+            scenarios=scenarios,
+            devices=devices,
+        )
         # Commit so rotation cursor/last_used_at updates land before workflow
         # start — if a later dispatch happens, it must see the advanced cursor.
         await account_db.commit()
+
+    # Guardrail: fb_groups_per_device requires unique per-device "group" value
+    # from scenario_device_variables (mapped to __DEVICE_GROUP__ token).
+    for scen in scenarios:
+        if getattr(scen, "name", "") != "fb_groups_per_device":
+            continue
+        token_map = per_scenario_device_runtime_vars.get(scen.id, {})
+        missing_serials: list[str] = []
+        group_to_serials: dict[str, list[str]] = {}
+        for d in devices:
+            vars_for_device = token_map.get(d.id, {})
+            raw_group = str(vars_for_device.get("__DEVICE_GROUP__", "")).strip()
+            if not raw_group:
+                missing_serials.append(d.serial)
+                continue
+            key = raw_group.lower()
+            group_to_serials.setdefault(key, []).append(d.serial)
+        duplicate_groups = {
+            group: serials for group, serials in group_to_serials.items() if len(serials) > 1
+        }
+        if missing_serials or duplicate_groups:
+            return {
+                "error": "Invalid device vars for fb_groups_per_device",
+                "scenario_id": scen.id,
+                "scenario_name": scen.name,
+                "missing_group_devices": missing_serials,
+                "duplicate_groups": duplicate_groups,
+                "hint": (
+                    "Set unique 'group' per device in scenario device variables "
+                    "(token: ${__DEVICE_GROUP__})."
+                ),
+            }, 400
 
     task_queue = TASK_QUEUE_NAME
     if temporal_config:
@@ -266,11 +323,17 @@ async def enqueue_campaign_run_temporal(
 
     workflow_ids: list[str] = []
 
-    for d in devices:
+    for slot_idx, d in enumerate(devices):
         for scen in scenarios:
             if not scen.steps:
                 continue
             acct_vars = per_scenario_device_vars.get(scen.id, {}).get(d.id, {})
+            device_runtime_vars = (
+                per_scenario_device_runtime_vars.get(scen.id, {}).get(d.id, {})
+            )
+            # Inject per-device slot so scenarios can branch on DEVICE_INDEX
+            # without manual override (e.g. fb_multi_account_groups template).
+            slot_vars: Dict[str, Any] = {"DEVICE_INDEX": str(slot_idx)}
             wf_id = f"campaign:{campaign_id}:device:{d.serial}:scenario:{scen.id}"
             try:
                 from temporalio.common import WorkflowIDReusePolicy
@@ -285,7 +348,7 @@ async def enqueue_campaign_run_temporal(
                         campaign_id=campaign_id,
                         device_serial=d.serial,
                         steps=scen.steps,
-                        variables={**_sc_vars, **acct_vars},
+                        variables={**_sc_vars, **slot_vars, **device_runtime_vars, **acct_vars},
                         campaign_vars=_campaign_vars,
                         scenario_registry=registry,
                         run_id=execution_id,

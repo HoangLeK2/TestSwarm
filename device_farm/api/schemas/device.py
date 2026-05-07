@@ -23,9 +23,11 @@ class DeviceOut(BaseModel):
     screen_height: int
     last_seen: Optional[datetime]
     created_at: datetime
+    adb_serial: Optional[str] = None
     adb_ip: Optional[str] = None
     adb_port: int = 5555
     tags: str = ""  # DF-004: comma-separated device tags
+    relay_id: Optional[str] = None
 
 
 class SessionOut(BaseModel):

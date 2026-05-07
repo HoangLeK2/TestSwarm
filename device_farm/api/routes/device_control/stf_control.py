@@ -9,6 +9,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from api.routes.device_control.guards import reject_manual_control_if_busy
 from runtime.core import DeviceManager
 
 
@@ -77,6 +78,8 @@ def build_stf_control_router(manager: DeviceManager) -> APIRouter:
         device, err = _get_device(manager, serial)
         if err:
             return err
+        if blocked := await reject_manual_control_if_busy(device):
+            return blocked
         loop = asyncio.get_running_loop()
         ok = await loop.run_in_executor(None, device.stf_set_clipboard, body.text)
         return {"ok": ok}
@@ -86,6 +89,8 @@ def build_stf_control_router(manager: DeviceManager) -> APIRouter:
         device, err = _get_device(manager, serial)
         if err:
             return err
+        if blocked := await reject_manual_control_if_busy(device):
+            return blocked
         loop = asyncio.get_running_loop()
         ok = await loop.run_in_executor(None, device.stf_set_wifi, body.enabled)
         return {"ok": ok}
@@ -95,6 +100,8 @@ def build_stf_control_router(manager: DeviceManager) -> APIRouter:
         device, err = _get_device(manager, serial)
         if err:
             return err
+        if blocked := await reject_manual_control_if_busy(device):
+            return blocked
         loop = asyncio.get_running_loop()
         ok = await loop.run_in_executor(None, device.stf_set_bluetooth, body.enabled)
         return {"ok": ok}
@@ -104,6 +111,8 @@ def build_stf_control_router(manager: DeviceManager) -> APIRouter:
         device, err = _get_device(manager, serial)
         if err:
             return err
+        if blocked := await reject_manual_control_if_busy(device):
+            return blocked
         loop = asyncio.get_running_loop()
         ok = await loop.run_in_executor(None, device.stf_set_keyguard, body.enabled)
         return {"ok": ok}
@@ -113,6 +122,8 @@ def build_stf_control_router(manager: DeviceManager) -> APIRouter:
         device, err = _get_device(manager, serial)
         if err:
             return err
+        if blocked := await reject_manual_control_if_busy(device):
+            return blocked
         loop = asyncio.get_running_loop()
         ok = await loop.run_in_executor(None, device.stf_set_wake_lock, body.enabled)
         return {"ok": ok}
@@ -122,6 +133,8 @@ def build_stf_control_router(manager: DeviceManager) -> APIRouter:
         device, err = _get_device(manager, serial)
         if err:
             return err
+        if blocked := await reject_manual_control_if_busy(device):
+            return blocked
         loop = asyncio.get_running_loop()
         ok = await loop.run_in_executor(None, device.stf_set_ringer_mode, body.mode)
         return {"ok": ok}
@@ -131,6 +144,8 @@ def build_stf_control_router(manager: DeviceManager) -> APIRouter:
         device, err = _get_device(manager, serial)
         if err:
             return err
+        if blocked := await reject_manual_control_if_busy(device):
+            return blocked
         loop = asyncio.get_running_loop()
         ok = await loop.run_in_executor(None, device.stf_set_master_mute, body.enabled)
         return {"ok": ok}
@@ -140,6 +155,8 @@ def build_stf_control_router(manager: DeviceManager) -> APIRouter:
         device, err = _get_device(manager, serial)
         if err:
             return err
+        if blocked := await reject_manual_control_if_busy(device):
+            return blocked
         loop = asyncio.get_running_loop()
         ok = await loop.run_in_executor(None, device.stf_identify)
         return {"ok": ok}

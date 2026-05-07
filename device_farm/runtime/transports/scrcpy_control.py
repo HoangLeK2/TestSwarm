@@ -26,7 +26,9 @@ MSG_INJECT_SCROLL      = 3
 # SC_CONTROL_MSG_TYPE_RESET_VIDEO (scrcpy v3.2+): 1-byte message that tells the
 # encoder to output an IDR (keyframe) immediately. Safe to send on older versions
 # — unknown type is silently ignored by the server.
-MSG_RESET_VIDEO        = 16
+MSG_RESET_VIDEO        = 17
+
+DEFAULT_IDR_MIN_INTERVAL_S = 0.5
 
 # ── Android MotionEvent actions ───────────────────────────────────────────────
 ACTION_DOWN = 0
@@ -88,7 +90,7 @@ class ScrcpyControl:
         self.serial = serial
         self._logger = logging.getLogger(f"scrcpy_ctrl.{serial}")
         self._last_idr_request_at = 0.0
-        self._idr_min_interval_s = 1.0
+        self._idr_min_interval_s = DEFAULT_IDR_MIN_INTERVAL_S
         # TCP_NODELAY: disable Nagle algorithm so each 32-byte touch event is sent
         # immediately without waiting for a full segment or ACK. Without this,
         # rapid tap/swipe sequences can be delayed up to 40ms per packet.
@@ -292,7 +294,7 @@ class RelayScrcpyControl:
         self.serial = serial
         self._logger = logging.getLogger(f"relay_ctrl.{serial}")
         self._last_idr_request_at = 0.0
-        self._idr_min_interval_s = 1.0
+        self._idr_min_interval_s = DEFAULT_IDR_MIN_INTERVAL_S
 
     @property
     def is_connected(self) -> bool:

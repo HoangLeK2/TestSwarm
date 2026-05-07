@@ -8,6 +8,7 @@ import android.content.ActivityNotFoundException;
 import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.os.Handler;
 import android.os.Looper;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
@@ -41,6 +42,8 @@ import androidx.core.app.NotificationCompat;
 import android.net.Uri;
 import android.net.LocalSocket;
 import android.net.LocalSocketAddress;
+import android.net.wifi.WifiManager;
+import android.os.PowerManager;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -62,6 +65,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import android.view.accessibility.AccessibilityNodeInfo;
 import jp.co.cyberagent.stf.compat.InputManagerWrapper;
@@ -96,6 +100,8 @@ public class WsAgentService extends android.app.Service {
     private static final String TAG = "WsAgentService";
     private static final String CHANNEL_ID = "ws_agent";
     private static final int NOTIF_ID = 0x2;
+    private static final String PREFS_NAME = "stf_prefs";
+    private static final String PREF_WS_URL = "ws_url";
     private static final int CAPTURE_WIDTH       = 1080; // max width; scales down if screen smaller
     private static final int TARGET_FPS          = 10;   // MJPEG target frame rate (low for perf)
     private static final int JPEG_QUALITY        = 75;   // JPEG compression (0-100)
@@ -155,6 +161,26 @@ public class WsAgentService extends android.app.Service {
     private ExecutorService  executor;
     private final AtomicBoolean capturing = new AtomicBoolean(false);
 
+    // Wake locks — keep CPU + WiFi radio awake during Doze / screen-off so WS
+    // read loop can service pings. Without these, vivo/oppo/xiaomi drop socket
+    // after ~30min screen-off.
+    private PowerManager.WakeLock cpuWakeLock;
+    private WifiManager.WifiLock  wifiLock;
+
+    // Exponential backoff for reconnect (1s → 2 → 4 → 8 → 16 → cap 30s).
+    private volatile int reconnectAttempt = 0;
+    private static final long RECONNECT_BASE_MS = 1000L;
+    private static final long RECONNECT_MAX_MS  = 30000L;
+    private final AtomicInteger connectionGeneration = new AtomicInteger(0);
+    private final Runnable reconnectRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!destroyed && wsUrl != null && !wsUrl.isEmpty()) {
+                connectWebSocket(wsUrl);
+            }
+        }
+    };
+
     // Device info
     private String serial;
     private String brand;
@@ -172,6 +198,29 @@ public class WsAgentService extends android.app.Service {
     public void onCreate() {
         super.onCreate();
         executor = Executors.newCachedThreadPool();
+
+        try {
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            if (pm != null) {
+                cpuWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,
+                        "DeviceFarm:WsAgentCpu");
+                cpuWakeLock.setReferenceCounted(false);
+                cpuWakeLock.acquire();
+            }
+            WifiManager wm = (WifiManager) getApplicationContext()
+                    .getSystemService(WIFI_SERVICE);
+            if (wm != null) {
+                wifiLock = wm.createWifiLock(
+                        WifiManager.WIFI_MODE_FULL_HIGH_PERF,
+                        "DeviceFarm:WsAgentWifi");
+                wifiLock.setReferenceCounted(false);
+                wifiLock.acquire();
+            }
+            Log.i(TAG, "WakeLocks acquired cpu=" + (cpuWakeLock != null)
+                    + " wifi=" + (wifiLock != null));
+        } catch (Exception e) {
+            Log.w(TAG, "WakeLock acquire failed: " + e.getMessage());
+        }
 
         // Input injection (used by minitouch / InputManager gestures).
         try {
@@ -219,9 +268,7 @@ public class WsAgentService extends android.app.Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        if (intent == null)
-            return START_NOT_STICKY;
-        String action = intent.getAction();
+        String action = intent != null ? intent.getAction() : ACTION_START;
 
         if (ACTION_STOP.equals(action)) {
             stopSelf();
@@ -229,11 +276,20 @@ public class WsAgentService extends android.app.Service {
         }
 
         if (ACTION_START.equals(action)) {
-            String wsUrl = intent.getStringExtra(EXTRA_WS_URL);
-            Intent projData = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
-                    ? intent.getParcelableExtra(EXTRA_PROJECTION_DATA, Intent.class)
-                    : intent.getParcelableExtra(EXTRA_PROJECTION_DATA);
-            int projCode = intent.getIntExtra(EXTRA_PROJECTION_CODE, -1);
+            String wsUrl = intent != null ? intent.getStringExtra(EXTRA_WS_URL) : null;
+            if (wsUrl == null || wsUrl.isEmpty()) {
+                SharedPreferences prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+                wsUrl = prefs.getString(PREF_WS_URL, null);
+                Log.i(TAG, "onStartCommand: wsUrl from SharedPreferences=" + wsUrl);
+            }
+            Intent projData = null;
+            int projCode = -1;
+            if (intent != null) {
+                projData = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                        ? intent.getParcelableExtra(EXTRA_PROJECTION_DATA, Intent.class)
+                        : intent.getParcelableExtra(EXTRA_PROJECTION_DATA);
+                projCode = intent.getIntExtra(EXTRA_PROJECTION_CODE, -1);
+            }
 
             Log.i(TAG, "onStartCommand: wsUrl=" + wsUrl
                     + " projCode=" + projCode
@@ -288,6 +344,9 @@ public class WsAgentService extends android.app.Service {
 
             if (wsUrl != null && !wsUrl.isEmpty()) {
                 this.wsUrl = wsUrl;
+                getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+                        .putString(PREF_WS_URL, wsUrl)
+                        .apply();
                 connectWebSocket(wsUrl);
             }
         }
@@ -299,6 +358,7 @@ public class WsAgentService extends android.app.Service {
     public void onDestroy() {
         super.onDestroy();
         destroyed = true;
+        connectionGeneration.incrementAndGet();
         mainHandler.removeCallbacksAndMessages(null);
         stopAll();  // release MediaProjection token on full shutdown
         for (ServiceTunnel t : serviceTunnels.values()) t.close();
@@ -307,6 +367,14 @@ public class WsAgentService extends android.app.Service {
             wsManager.shutdown();
         if (executor != null)
             executor.shutdownNow();
+        try {
+            if (cpuWakeLock != null && cpuWakeLock.isHeld()) cpuWakeLock.release();
+        } catch (Exception ignored) {}
+        try {
+            if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
+        } catch (Exception ignored) {}
+        cpuWakeLock = null;
+        wifiLock = null;
         Log.i(TAG, "WsAgentService destroyed");
     }
 
@@ -338,9 +406,11 @@ public class WsAgentService extends android.app.Service {
                 .setOngoing(true)
                 .build();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // connectedDevice: no 6h/day cap (dataSync has one on Android 14+),
+            // matches actual use-case (LAN device bridge).
             int fgsType = USE_MEDIA_PROJECTION
                     ? ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-                    : ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
+                    : ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE;
             startForeground(NOTIF_ID, notif, fgsType);
         } else {
             startForeground(NOTIF_ID, notif);
@@ -407,11 +477,21 @@ public class WsAgentService extends android.app.Service {
     }
 
     private void connectWebSocket(String wsUrl) {
-        wsManager = new WebSocketManager();
-        wsManager.setCallback(new WebSocketManager.Callback() {
+        mainHandler.removeCallbacks(reconnectRunnable);
+        WebSocketManager oldManager = wsManager;
+        if (oldManager != null) {
+            oldManager.shutdown();
+        }
+
+        final int generation = connectionGeneration.incrementAndGet();
+        WebSocketManager manager = new WebSocketManager();
+        wsManager = manager;
+        manager.setCallback(new WebSocketManager.Callback() {
             @Override
             public void onConnected(String url) {
+                if (generation != connectionGeneration.get()) return;
                 Log.i(TAG, "WebSocket connected: " + url);
+                reconnectAttempt = 0;
                 Intent connected = new Intent(ACTION_CONNECTED);
                 connected.putExtra("url", url);
                 LocalBroadcastManager.getInstance(WsAgentService.this).sendBroadcast(connected);
@@ -445,11 +525,13 @@ public class WsAgentService extends android.app.Service {
 
             @Override
             public void onMessage(String text) {
+                if (generation != connectionGeneration.get()) return;
                 handleCommand(text);
             }
 
             @Override
             public void onDisconnected(String reason) {
+                if (generation != connectionGeneration.get()) return;
                 Log.i(TAG, "WebSocket disconnected: " + reason);
                 stopCapture();  // stop loop + VirtualDisplay, keep mediaProjection for reconnect
                 scheduleReconnect();
@@ -457,6 +539,7 @@ public class WsAgentService extends android.app.Service {
 
             @Override
             public void onError(String error) {
+                if (generation != connectionGeneration.get()) return;
                 Log.w(TAG, "WebSocket error: " + error);
                 Intent err = new Intent(ACTION_CONNECTION_FAILED);
                 err.putExtra("message", error != null ? error : "Connection failed");
@@ -465,18 +548,18 @@ public class WsAgentService extends android.app.Service {
                 scheduleReconnect();
             }
         });
-        wsManager.connect(wsUrl);
+        manager.connect(wsUrl);
         Log.i(TAG, "Connecting to " + wsUrl);
     }
 
     private void scheduleReconnect() {
         if (destroyed || wsUrl == null) return;
-        Log.i(TAG, "Reconnecting in 3s...");
-        mainHandler.postDelayed(() -> {
-            if (!destroyed && wsUrl != null) {
-                connectWebSocket(wsUrl);
-            }
-        }, 3000);
+        long delay = Math.min(RECONNECT_MAX_MS,
+                RECONNECT_BASE_MS * (1L << Math.min(reconnectAttempt, 5)));
+        reconnectAttempt++;
+        Log.i(TAG, "Reconnecting in " + delay + "ms (attempt " + reconnectAttempt + ")");
+        mainHandler.removeCallbacks(reconnectRunnable);
+        mainHandler.postDelayed(reconnectRunnable, delay);
     }
 
    
@@ -485,6 +568,10 @@ public class WsAgentService extends android.app.Service {
             JSONObject m = new JSONObject();
             m.put("type", "hello");
             m.put("serial", serial);
+            String adbSerial = getAdbSerialHint();
+            if (adbSerial != null && !adbSerial.isEmpty()) {
+                m.put("adb_serial", adbSerial);
+            }
             // STFService: u2, stfservice, optional mjpeg, minitouch
             JSONArray caps = new JSONArray();
             caps.put("u2");
@@ -503,6 +590,19 @@ public class WsAgentService extends android.app.Service {
         } catch (Exception e) {
             Log.w(TAG, "sendHello: " + e);
         }
+    }
+
+    private String getAdbSerialHint() {
+        try {
+            Process p = Runtime.getRuntime().exec(new String[]{"sh", "-c", "getprop ro.serialno"});
+            byte[] out = p.getInputStream().readAllBytes();
+            p.waitFor();
+            String v = new String(out).trim();
+            if (!v.isEmpty() && !"unknown".equalsIgnoreCase(v)) {
+                return v;
+            }
+        } catch (Exception ignored) {}
+        return "";
     }
 
     private void sendStatus() {

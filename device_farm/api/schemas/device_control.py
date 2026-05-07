@@ -9,6 +9,11 @@ from pydantic import BaseModel
 class ScenarioPreviewRequest(BaseModel):
     steps: List[Dict[str, Any]]
     variables: Dict[str, Any] = {}
+    scenario_id: Optional[str] = None
+    # Inline per-device vars for preview/run. Useful before scenario is saved:
+    # frontend can send draft vars directly and backend will convert to
+    # __DEVICE_* tokens at runtime.
+    scenario_device_vars: Dict[str, Any] = {}
     # Optional account-group binding — when present, the preview endpoint picks
     # one usable account from the group and injects the __ACCOUNT_* variables
     # (including the decrypted password) so a scenario using ${__ACCOUNT_*} can

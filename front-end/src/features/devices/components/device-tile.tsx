@@ -28,6 +28,12 @@ interface DeviceTileProps {
   hideStepMonitor?: boolean;
   /** Ẩn toàn bộ header tên/model/serial ở đầu thẻ */
   hideHeader?: boolean;
+  /** Ẩn cụm điều khiển phía dưới màn hình thiết bị. */
+  hideControls?: boolean;
+  /** Ẩn panel chức năng thiết bị (STF panel). */
+  hideDeviceFunctions?: boolean;
+  /** Chỉ xem, không gửi thao tác điều khiển vào thiết bị. */
+  readOnlyPreview?: boolean;
 }
 
 export function DeviceTile({
@@ -44,6 +50,9 @@ export function DeviceTile({
   compact = false,
   hideStepMonitor = false,
   hideHeader = false,
+  hideControls = false,
+  hideDeviceFunctions = false,
+  readOnlyPreview = false,
 }: DeviceTileProps) {
   const t = useTranslations('devicesFarm');
   const id = serialToId(device.serial);
@@ -98,7 +107,11 @@ export function DeviceTile({
       <CardContent className={compact ? 'flex flex-1 flex-col gap-1.5 px-2 pb-2 pt-2' : `flex flex-1 flex-col gap-2 px-3 pb-3 ${hideHeader ? 'pt-2' : 'pt-3'}`}>
         <div className='flex flex-col items-center gap-2'>
           <div className='mx-auto flex flex-col items-center gap-1'>
-            <DeviceAndroidFrame screenWidth={mockupScreenWidth}>
+            <DeviceAndroidFrame
+              screenWidth={mockupScreenWidth}
+              deviceWidth={device.screen_width}
+              deviceHeight={device.screen_height}
+            >
               <div className='flex h-full min-h-0 w-full flex-col'>
                 {isActive ? (
                   <DeviceScreen
@@ -111,6 +124,7 @@ export function DeviceTile({
                     highlightBounds={highlightBounds}
                     gestureMode={gestureMode}
                     captionBelowFrame
+                    interactive={!readOnlyPreview}
                   />
                 ) : (
                   <div className='flex h-full w-full items-center justify-center bg-zinc-900 text-[11px] text-muted-foreground'>
@@ -130,22 +144,24 @@ export function DeviceTile({
             )}
           </div>
         </div>
-        <DeviceControls
-          serial={device.serial}
-          mode={mode}
-          onToggleMode={() => onToggleMode(device.serial)}
-          onKey={(key) => wsSend({ type: 'key', serial: device.serial, key })}
-          onRestart={() => onRestart(device.serial)}
-          compact={compact}
-          gestureMode={gestureMode}
-          onGestureMode={setGestureMode}
-          onPinch={handlePinch}
-          onSwipeExt={handleSwipeExt}
-          onScreenOn={handleScreenOn}
-          onScreenOff={handleScreenOff}
-          onUnlock={handleUnlock}
-        />
-        {isActive && <DeviceSTFPanel serial={device.serial} />}
+        {!hideControls && (
+          <DeviceControls
+            serial={device.serial}
+            mode={mode}
+            onToggleMode={() => onToggleMode(device.serial)}
+            onKey={(key) => wsSend({ type: 'key', serial: device.serial, key })}
+            onRestart={() => onRestart(device.serial)}
+            compact={compact}
+            gestureMode={gestureMode}
+            onGestureMode={setGestureMode}
+            onPinch={handlePinch}
+            onSwipeExt={handleSwipeExt}
+            onScreenOn={handleScreenOn}
+            onScreenOff={handleScreenOff}
+            onUnlock={handleUnlock}
+          />
+        )}
+        {/* {isActive && !hideDeviceFunctions && <DeviceSTFPanel serial={device.serial} />} */}
       </CardContent>
     </Card>
   );

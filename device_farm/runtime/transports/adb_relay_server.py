@@ -178,6 +178,7 @@ class RelayConnection:
         msg: dict,
         reply_id: str,
         timeout: float = 30.0,
+        timeout_grace: float = 10.0,
     ) -> dict:
         """Send a JSON message and await a matching reply by id."""
         loop = asyncio.get_running_loop()
@@ -187,7 +188,10 @@ class RelayConnection:
         await self._write_queue.put(json.dumps(msg))
 
         try:
-            return await asyncio.wait_for(asyncio.shield(future), timeout=timeout + 10.0)
+            return await asyncio.wait_for(
+                asyncio.shield(future),
+                timeout=max(0.1, timeout + timeout_grace),
+            )
         except asyncio.TimeoutError:
             self._pending.pop(reply_id, None)
             return {"ok": False, "error": f"relay timeout ({timeout}s)"}
@@ -496,6 +500,50 @@ class AdbRelayManager:
     def unregister_scrcpy_receiver(self, serial: str) -> None:
         self._scrcpy_receivers.pop(serial, None)
 
+    def _resolve_receiver_for_frame(self, serial: str) -> Any:
+        """Best-effort receiver lookup for transient serial/key mismatches.
+
+        During reconnect handoff, relay can emit frames under one serial while
+        receiver is still registered under another equivalent serial key.
+        """
+        receiver = self._scrcpy_receivers.get(serial)
+        if receiver is not None:
+            return receiver
+
+        # 1) Try canonical serial resolution first.
+        resolved = self.resolve_serial(serial)
+        if resolved != serial:
+            receiver = self._scrcpy_receivers.get(resolved)
+            if receiver is not None:
+                # Self-heal alias so next frame is O(1).
+                self._scrcpy_receivers[serial] = receiver
+                logger.info(
+                    "scrcpy receiver remap: incoming=%s resolved=%s",
+                    serial,
+                    resolved,
+                )
+                return receiver
+
+        # 2) Fallback by IP prefix only when the match is unique.
+        ip = serial.rsplit(":", 1)[0] if ":" in serial else serial
+        matches = [
+            key for key in self._scrcpy_receivers
+            if (key.rsplit(":", 1)[0] if ":" in key else key) == ip
+        ]
+        if len(matches) == 1:
+            key = matches[0]
+            receiver = self._scrcpy_receivers.get(key)
+            if receiver is not None:
+                self._scrcpy_receivers[serial] = receiver
+                logger.info(
+                    "scrcpy receiver remap by ip: incoming=%s mapped=%s",
+                    serial,
+                    key,
+                )
+                return receiver
+
+        return None
+
     def dispatch_scrcpy_frame(
         self, serial: str, data: bytes, pts_raw: int, width: int, height: int,
         is_config: bool = False, is_keyframe: bool = False, pts: int = 0,
@@ -505,23 +553,56 @@ class AdbRelayManager:
         if not is_config and not is_keyframe and pts == 0 and pts_raw:
             is_config = bool(pts_raw & 0x8000_0000_0000_0000)
             pts = int(pts_raw & ~0x8000_0000_0000_0000)
+        receiver = self._resolve_receiver_for_frame(serial)
         if is_config:
             logger.info(
                 "dispatch_scrcpy_frame: CONFIG serial=%s data_len=%d w=%d h=%d receiver=%s",
                 serial, len(data), width, height,
-                "present" if serial in self._scrcpy_receivers else "MISSING",
+                "present" if receiver is not None else "MISSING",
             )
-        receiver = self._scrcpy_receivers.get(serial)
         if receiver is None:
+            # Self-heal race: relay may start streaming before the WS side finishes
+            # attach_scrcpy_stream registration. If a pending callback exists for
+            # this device IP, trigger it now so receiver binding catches up.
+            ip = serial.rsplit(":", 1)[0] if ":" in serial else serial
+            cb = self._pending_scrcpy.get(ip)
+            if cb is not None:
+                try:
+                    cb(serial)
+                except Exception as exc:
+                    logger.debug("pending scrcpy callback error (frame race) ip=%s: %s", ip, exc)
+                receiver = self._resolve_receiver_for_frame(serial)
+                if receiver is not None:
+                    self._pending_scrcpy.pop(ip, None)
+                    try:
+                        receiver.push_frame(
+                            data,
+                            pts_raw,
+                            width,
+                            height,
+                            is_config=is_config,
+                            is_keyframe=is_keyframe,
+                            pts=pts,
+                        )
+                    except Exception as exc:
+                        logger.warning("scrcpy push_frame error serial=%s: %s", serial, exc)
+                    return
             if not hasattr(self, "_no_receiver_log_count"):
                 self._no_receiver_log_count = {}
             cnt = self._no_receiver_log_count.get(serial, 0) + 1
             self._no_receiver_log_count[serial] = cnt
             if cnt <= 3 or cnt % 300 == 0:
-                logger.warning(
-                    "dispatch_scrcpy_frame: no receiver for serial=%s (frame #%d) — registered: %s",
-                    serial, cnt, list(self._scrcpy_receivers.keys()),
-                )
+                if not self._scrcpy_receivers:
+                    logger.debug(
+                        "dispatch_scrcpy_frame: no receiver for serial=%s (frame #%d) — no active consumers",
+                        serial,
+                        cnt,
+                    )
+                else:
+                    logger.warning(
+                        "dispatch_scrcpy_frame: no receiver for serial=%s (frame #%d) — registered: %s",
+                        serial, cnt, list(self._scrcpy_receivers.keys()),
+                    )
             return
         try:
             receiver.push_frame(data, pts_raw, width, height,
@@ -585,9 +666,19 @@ class AdbRelayManager:
 
     def _resolve_serial_by_ip(self, serial: str) -> Optional[str]:
         ip = serial.rsplit(":", 1)[0] if ":" in serial else serial
-        for known in self._serial_index:
-            if ":" in known and known.rsplit(":", 1)[0] == ip:
-                return known
+        matches = [
+            known
+            for known in self._serial_index
+            if ":" in known and known.rsplit(":", 1)[0] == ip
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            logger.warning(
+                "resolve_serial_by_ip ambiguous for ip=%s matches=%s; refusing IP-only resolution",
+                ip,
+                matches,
+            )
         return None
 
     def resolve_serial(self, serial: str) -> str:
@@ -900,9 +991,13 @@ class AdbRelayManager:
             },
             reply_id=req_id,
             timeout=timeout,
+            timeout_grace=0.0,
         )
         if result.get("type") != "a11y_result":
-            return {"ok": False, "error": "invalid_result"}
+            return {
+                "ok": False,
+                "error": str(result.get("error") or result.get("body") or "invalid_result"),
+            }
         return result
 
     async def broadcast_adb_connect(self, ip_port: str, timeout: float = 15.0) -> None:

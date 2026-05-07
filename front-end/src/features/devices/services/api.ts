@@ -19,6 +19,10 @@ export interface AppConfig {
   wifi_densepose_url?: string;
 }
 
+const hierarchyInFlight = new Map<string, Promise<string>>();
+const hierarchyFailureUntil = new Map<string, number>();
+const HIERARCHY_503_COOLDOWN_MS = 2500;
+
 export async function fetchDevices(): Promise<Device[]> {
   const { data } = await farmApi.get<Device[]>('/devices');
   return data;
@@ -100,25 +104,41 @@ export async function restartDevice(serial: string): Promise<unknown> {
 
 /** UI hierarchy XML (uiautomator2 page source). refresh=true skips backend cache (force fresh dump). On 503 returns "". */
 export async function fetchHierarchy(serial: string, refresh = false): Promise<string> {
+  const key = serial;
+  const now = Date.now();
+  if ((hierarchyFailureUntil.get(key) ?? 0) > now) return '';
+  const pending = hierarchyInFlight.get(key);
+  if (pending) return pending;
+
   // Respect safe-mode: if the backend has stream_hierarchy=false, skip the
   // request entirely so we don't spam the network with 503s.
-  try {
-    const { isHierarchyEnabled } = await import('@/features/core/services/safe-mode');
-    if (!isHierarchyEnabled()) return '';
-  } catch {
-    /* module not available — fall through */
-  }
-  const url = refresh
-    ? `/devices/${encodeURIComponent(serial)}/hierarchy?refresh=1`
-    : `/devices/${encodeURIComponent(serial)}/hierarchy`;
-  try {
-    const { data } = await farmApi.get<string>(url, { responseType: 'text' });
-    return typeof data === 'string' ? data : '';
-  } catch (err: unknown) {
-    const status = (err as { response?: { status?: number } })?.response?.status;
-    if (status === 503) return '';
-    throw err;
-  }
+  const task = (async () => {
+    try {
+      const { isHierarchyEnabled } = await import('@/features/core/services/safe-mode');
+      if (!isHierarchyEnabled()) return '';
+    } catch {
+      /* module not available — fall through */
+    }
+    const url = refresh
+      ? `/devices/${encodeURIComponent(serial)}/hierarchy?refresh=1`
+      : `/devices/${encodeURIComponent(serial)}/hierarchy`;
+    try {
+      const { data } = await farmApi.get<string>(url, { responseType: 'text' });
+      hierarchyFailureUntil.delete(key);
+      return typeof data === 'string' ? data : '';
+    } catch (err: unknown) {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      if (status === 503) {
+        hierarchyFailureUntil.set(key, Date.now() + HIERARCHY_503_COOLDOWN_MS);
+        return '';
+      }
+      throw err;
+    } finally {
+      hierarchyInFlight.delete(key);
+    }
+  })();
+  hierarchyInFlight.set(key, task);
+  return task;
 }
 
 /** Fetch full screenshot as base64 for visual anchoring. */
@@ -382,6 +402,8 @@ export async function previewScenarioStream(
   signal?: AbortSignal,
   variables?: Record<string, any>,
   accountGroupId?: string | null,
+  scenarioId?: string | null,
+  scenarioDeviceVars?: Record<string, any> | null,
 ): Promise<void> {
   // Use farmApi's baseURL for the SSE endpoint
   const baseUrl = farmApi.defaults.baseURL || '';
@@ -393,6 +415,10 @@ export async function previewScenarioStream(
 
   const body: Record<string, any> = { steps, variables: variables ?? {} };
   if (accountGroupId) body.account_group_id = accountGroupId;
+  if (scenarioId) body.scenario_id = scenarioId;
+  if (scenarioDeviceVars && Object.keys(scenarioDeviceVars).length > 0) {
+    body.scenario_device_vars = scenarioDeviceVars;
+  }
 
   const response = await fetch(url, {
     method: 'POST',
@@ -443,3 +469,10 @@ export async function cancelPreviewStream(serial: string, traceId: string): Prom
   }
 }
 
+/** Cancel all running scenarios on a device so the user can take manual control. */
+export async function interruptDevice(serial: string): Promise<{ ok: boolean; cancelled_workflows: string[] }> {
+  const { data } = await farmApi.post<{ ok: boolean; cancelled_workflows: string[] }>(
+    `/devices/${encodeURIComponent(serial)}/interrupt`,
+  );
+  return data;
+}

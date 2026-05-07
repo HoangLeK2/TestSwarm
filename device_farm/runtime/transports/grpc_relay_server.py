@@ -258,6 +258,12 @@ async def start_grpc_server(
     relay_pb2_grpc.add_RelayServiceServicer_to_server(
         RelayServicer(relay_manager, api_key), server
     )
+
+    # ── AgentControlService (control plane — separate from video stream) ────
+    from .agent_control_servicer import AgentControlServicer, set_control_servicer
+    ctrl_servicer = AgentControlServicer()
+    set_control_servicer(ctrl_servicer)
+    relay_pb2_grpc.add_AgentControlServiceServicer_to_server(ctrl_servicer, server)
     env_name = os.environ.get("DEVICE_FARM_ENV", "").strip().lower()
     is_prod_like = env_name in {"prod", "production", "staging"}
     tls_ready = bool(tls_cert_file and tls_key_file)

@@ -266,14 +266,14 @@ export function WorkflowProgressCard({ wf, campaignId }: Props) {
       {expanded && (
         <div className='border-t bg-card overflow-hidden'>
           <div className='flex min-h-0 divide-x overflow-x-auto'>
-            <div className='w-[220px] shrink-0 p-2'>
-              <DeviceControlEmbed initialSerial={serial} compact hideStepMonitor />
+            <div className='w-[320px] shrink-0 p-2 md:w-[420px]'>
+              <DeviceControlEmbed initialSerial={serial} compact hideStepMonitor readOnlyPreview />
             </div>
             <div className='min-w-0 flex-1 px-3 py-3'>
               <p className='mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>
                 <List size={10} /> {t('monitorStepsHeading')}
               </p>
-              <WorkflowStepList wf={wf} maxHeight='400px' />
+              <WorkflowStepList wf={wf} maxHeight='min(560px, calc(90dvh - 320px))' />
             </div>
           </div>
         </div>

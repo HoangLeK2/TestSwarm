@@ -10,6 +10,8 @@ import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 log = logging.getLogger(__name__)
 
 try:
@@ -224,9 +226,14 @@ async def save_content_item(
     parent_id: str | None = None,
     item_level: int = 0,
     user_id: str | None = None,
+    hash_scope: str | None = None,
+    db: AsyncSession | None = None,
 ) -> dict[str, Any]:
     """
     Save extracted content to database with deduplication.
+
+    hash_scope: used only for per-run dedup scoping; NOT stored as FK.
+                Falls back to execution_id when absent.
 
     Returns {"saved": True, "id": ...} or {"saved": False, "reason": "duplicate", "id": ...}
     """
@@ -236,9 +243,10 @@ async def save_content_item(
         get_or_create_collection, increment_collection_count,
     )
 
+    scope = hash_scope or execution_id
     base_hash = compute_content_hash(data, dedupe_field)
-    content_hash = scope_content_hash(base_hash, execution_id)
-    scoped_parent_id = scope_content_hash(parent_id, execution_id) if parent_id else None
+    content_hash = scope_content_hash(base_hash, scope)
+    scoped_parent_id = scope_content_hash(parent_id, scope) if parent_id else None
 
     # Phase 5 — Bloom filter fast path. Skips DB when probably duplicate.
     # Graceful no-op when Redis/RedisBloom unavailable. False positives
@@ -250,28 +258,30 @@ async def save_content_item(
             async with activity_session() as db:
                 existing = await get_content_by_hash(
                     db, content_hash, collection,
-                    user_id=user_id, execution_id=execution_id,
+                    user_id=user_id, execution_id=scope,
                 )
                 if existing:
                     return {"saved": False, "reason": "duplicate", "id": existing.id, "via": "bloom"}
     except Exception as exc:
         log.debug("bloom fast path skipped (%s)", exc)
 
-    async with activity_session() as db:
+    owns_session = db is None
+
+    async def _save_with_session(db_session: AsyncSession, *, owns_session: bool) -> dict[str, Any]:
         # Dedup check
         existing = await get_content_by_hash(
-            db,
+            db_session,
             content_hash,
             collection,
             user_id=user_id,
-            execution_id=execution_id,
+            execution_id=scope,
         )
         if existing:
             return {"saved": False, "reason": "duplicate", "id": existing.id}
 
         # Ensure collection exists
         await get_or_create_collection(
-            db,
+            db_session,
             collection,
             platform=platform,
             content_type=content_type,
@@ -319,7 +329,7 @@ async def save_content_item(
         )
 
         item = await create_content_item(
-            db,
+            db_session,
             collection=collection,
             platform=platform,
             content_type=content_type,
@@ -347,8 +357,9 @@ async def save_content_item(
             user_id=user_id,
         )
 
-        await increment_collection_count(db, collection, user_id=user_id)
-        await db.commit()
+        await increment_collection_count(db_session, collection, user_id=user_id)
+        if owns_session:
+            await db_session.commit()
 
         # Phase 5 — record in Bloom filter so future checks fast-path.
         try:
@@ -359,6 +370,11 @@ async def save_content_item(
 
         log.info(f"Content saved: id={item.id} collection={collection} hash={content_hash[:12]}")
         return {"saved": True, "id": item.id}
+
+    if owns_session:
+        async with activity_session() as db_session:
+            return await _save_with_session(db_session, owns_session=True)
+    return await _save_with_session(db, owns_session=False)
 
 
 def _save_screenshot(data: bytes, content_hash: str) -> str:

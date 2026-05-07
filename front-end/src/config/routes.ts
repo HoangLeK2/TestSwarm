@@ -48,10 +48,16 @@ export const ROUTES = {
   SCHEDULES: {
     ROOT: '/dashboard/schedules'
   },
+  RELAY_AGENTS: {
+    ROOT: '/dashboard/relay-agents'
+  },
   CONTENT: {
     ROOT: '/dashboard/content',
     /** Jump to content page pre-filtered by campaign */
     BY_CAMPAIGN: (campaignId: string) => `/dashboard/content?campaign_id=${encodeURIComponent(campaignId)}`,
+  },
+  NOTIFICATIONS: {
+    ROOT: '/dashboard/notifications'
   },
   DASHBOARD: {
     ROOT: '/dashboard',
@@ -59,8 +65,6 @@ export const ROUTES = {
     ORGANIZATION_MEMBER: (id: string) => `/dashboard/org/${id}/member`,
     ORGANIZATION_SETTINGS: (id: string) => `/dashboard/org/${id}`,
     ORGANIZATION_EDIT: (id: string) => `/dashboard/settings/organization/${id}`,
-    API_KEYS: (id: string) => `/dashboard/org/${id}/api-keys`,
-    TOTP: (id: string) => `/dashboard/org/${id}/totp`,
     PRODUCT: {
       ROOT: '/dashboard/product',
       CREATE: '/dashboard/product/create',
@@ -113,11 +117,6 @@ export const ROUTES = {
       },
       SUMMARY: '/dashboard/inventory/summary',
       STATISTICS: '/dashboard/inventory/statistics'
-    },
-    SETTINGS: {
-      ORGANIZATION: '/dashboard/settings',
-      API_KEYS: '/dashboard/settings/api-keys',
-      TOTP: '/dashboard/settings/totp'
     }
   },
   ERROR: {

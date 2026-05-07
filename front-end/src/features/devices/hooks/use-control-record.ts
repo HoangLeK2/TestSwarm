@@ -46,6 +46,11 @@ const ALLOWED_SELECTOR_BY: readonly SelectorBy[] = [
   'descriptionStartsWith',
 ];
 
+const HIERARCHY_INTERACTION_PULSE_THROTTLE_MS = 3500;
+const HIERARCHY_INTERACTION_FETCH_COOLDOWN_MS = 3500;
+const RECORD_XML_POLL_INTERVAL_MS = 1200;
+const RECORD_XML_POLL_TIMEOUT_MS = 4800;
+
 function normalizeSelectorBy(by: unknown, fallback: SelectorBy = 'text'): SelectorBy {
   const raw = String(by ?? '').trim();
   if (!raw) return fallback;
@@ -127,6 +132,7 @@ export function useControlRecord(
 
   // ── Device ───────────────────────────────────────────────────────────────
   const [selectedSerial, setSelectedSerial] = useState<string | null>(null);
+  const initialSerialAppliedRef = useRef(false);
 
   const connectedDevices = useMemo(
     () => devices.filter((d) => ['READY', 'BUSY'].includes((d.state ?? '').toUpperCase())),
@@ -140,8 +146,16 @@ export function useControlRecord(
 
   useEffect(() => {
     if (connectedDevices.length === 0) return;
-    if (initialSerial && connectedDevices.some((d) => d.serial === initialSerial)) {
+    // Apply initialSerial only once on first hydrated device list.
+    // Otherwise each WS device refresh would force selection back and
+    // user could not switch to another device from the dropdown.
+    if (
+      !initialSerialAppliedRef.current &&
+      initialSerial &&
+      connectedDevices.some((d) => d.serial === initialSerial)
+    ) {
       setSelectedSerial(initialSerial);
+      initialSerialAppliedRef.current = true;
       return;
     }
     if (!selectedSerial) setSelectedSerial(connectedDevices[0].serial);
@@ -182,7 +196,7 @@ export function useControlRecord(
   const pulseHierarchyRefresh = useCallback(() => {
     const now = Date.now();
     // Collapse burst actions (tap/swipe spam) into one refresh pulse.
-    if (now - lastHierarchyPulseAtRef.current < 1500) return;
+    if (now - lastHierarchyPulseAtRef.current < HIERARCHY_INTERACTION_PULSE_THROTTLE_MS) return;
     lastHierarchyPulseAtRef.current = now;
     setHierarchyRefreshPulse((v) => v + 1);
   }, []);
@@ -366,7 +380,12 @@ export function useControlRecord(
             const oldHash = hashXml(xml);
             pollingXmlRef.current = true;
             setPollingXml(true);
-            pollUntilUiChange(selectedDevice.serial, oldHash).then((newXml) => {
+            pollUntilUiChange(
+              selectedDevice.serial,
+              oldHash,
+              RECORD_XML_POLL_INTERVAL_MS,
+              RECORD_XML_POLL_TIMEOUT_MS
+            ).then((newXml) => {
               if (!recordingRef.current) return;
               if (newXml) { setRecordXml(newXml); recordXmlRef.current = newXml; }
               pollingXmlRef.current = false;
@@ -640,7 +659,20 @@ export function useControlRecord(
         ...(accountGroupForEdit !== undefined ? { account_group_id: accountGroupForEdit } : {}),
       };
       scenariosApi.update(campaignId, scenarioId, payload)
-        .then(() => { toast.success(t('toast.saveStepsSuccess')); setSaveDialogOpen(false); setSelectedCampaignId(null); })
+        .then((updated) => {
+          setEditingContext({
+            campaignId,
+            scenarioId: updated.id,
+            name: updated.name,
+            variables: {
+              ...(variables ?? {}),
+            },
+            accountGroupId: (updated as { account_group_id?: string | null }).account_group_id ?? null,
+          });
+          toast.success(t('toast.saveStepsSuccess'));
+          setSaveDialogOpen(false);
+          setSelectedCampaignId(null);
+        })
         .catch((err) => toast.error(formatFarmApiError(err, t('toast.saveFailed'))))
         .finally(() => setSavingCampaignId(null));
     },
@@ -675,7 +707,20 @@ export function useControlRecord(
         ...(accountGroupIdOverride ? { account_group_id: accountGroupIdOverride } : {}),
       };
       scenariosApi.create(campaignId, createBody)
-        .then(() => { toast.success(t('toast.createScenarioSuccess')); setSaveDialogOpen(false); setSelectedCampaignId(null); })
+        .then((created) => {
+          setEditingContext({
+            campaignId,
+            scenarioId: created.id,
+            name: created.name,
+            variables: {
+              ...(variables ?? {}),
+            },
+            accountGroupId: (created as { account_group_id?: string | null }).account_group_id ?? null,
+          });
+          toast.success(t('toast.createScenarioSuccess'));
+          setSaveDialogOpen(false);
+          setSelectedCampaignId(null);
+        })
         .catch((err) => toast.error(formatFarmApiError(err, t('toast.createScenarioFailed'))))
         .finally(() => setSavingCampaignId(null));
     },
@@ -764,7 +809,7 @@ export function useControlRecord(
     if (!autoRefreshHierarchy || !selectedHierarchySerial || hierarchyPaused) return;
     if (hierarchyRefreshPulse <= 0) return;
     const now = Date.now();
-    if (now - lastHierarchyFetchAtRef.current < 1200) return;
+    if (now - lastHierarchyFetchAtRef.current < HIERARCHY_INTERACTION_FETCH_COOLDOWN_MS) return;
     const tid = setTimeout(() => {
       hierarchyQuery.refetch()
         .then(() => {

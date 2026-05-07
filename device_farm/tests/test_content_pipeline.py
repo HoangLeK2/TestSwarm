@@ -10,15 +10,7 @@ Tests cover:
 """
 from __future__ import annotations
 
-import csv
 from datetime import datetime, timezone
-import io
-import json
-import os
-import tempfile
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
 
 from services.content_store import (
     _first_present,
@@ -165,60 +157,6 @@ class TestFieldHelpers:
         assert out == ["https://a.example/x.jpg", "https://b.example/y.jpg"]
 
 
-# ── Content Export CSV/JSON Writing ───────────────────────────────────────────
-
-
-class TestExportWriting:
-    def test_write_csv(self):
-        from services.content_export import _write_csv
-
-        # Create mock items with to_dict
-        items = [
-            MagicMock(to_dict=lambda: {
-                "id": "1", "collection": "test", "platform": "facebook",
-                "content_type": "post", "author": "John", "title": "",
-                "body": "Hello world", "url": "", "likes_count": 10,
-                "comments_count": 5, "shares_count": 0, "views_count": 100,
-                "tags": "test", "device_serial": "dev1", "campaign_id": None,
-                "extracted_at": "2026-03-28T12:00:00",
-            }),
-        ]
-
-        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w") as f:
-            path = f.name
-        try:
-            _write_csv(path, items)
-            with open(path, "r") as f:
-                reader = csv.DictReader(f)
-                rows = list(reader)
-            assert len(rows) == 1
-            assert rows[0]["platform"] == "facebook"
-            assert rows[0]["body"] == "Hello world"
-            assert rows[0]["likes_count"] == "10"
-        finally:
-            os.unlink(path)
-
-    def test_write_json(self):
-        from services.content_export import _write_json
-
-        items = [
-            MagicMock(to_dict=lambda: {
-                "id": "1", "platform": "tiktok", "body": "Video content",
-            }),
-        ]
-
-        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
-            path = f.name
-        try:
-            _write_json(path, items)
-            with open(path, "r") as f:
-                data = json.load(f)
-            assert len(data) == 1
-            assert data[0]["platform"] == "tiktok"
-        finally:
-            os.unlink(path)
-
-
 # ── Schema Validation ─────────────────────────────────────────────────────────
 
 
@@ -232,12 +170,6 @@ class TestContentSchemas:
         )
         assert body.collection == "fb_posts"
         assert body.content_type == "post"  # default
-
-    def test_export_request(self):
-        from api.schemas.content import ExportRequest
-        req = ExportRequest(collection="test", format="csv")
-        assert req.format == "csv"
-        assert req.filters == {}
 
     def test_content_query_defaults(self):
         from api.schemas.content import ContentQueryParams

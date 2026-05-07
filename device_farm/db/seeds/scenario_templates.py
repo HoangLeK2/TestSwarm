@@ -27,571 +27,7 @@ Design rules:
 
 from typing import Any, Dict, List
 
-_GENERIC_TEMPLATES: List[Dict[str, Any]] = [
-    {
-        "name": "scroll_feed_generic",
-        "category": "general",
-        "description": "Scroll down N times with randomized delays between scrolls.",
-        "tags": "scroll,feed,utility",
-        "variables": {"SCROLL_COUNT": 5, "MIN_DELAY": 1, "MAX_DELAY": 3},
-        "steps": [
-            {
-                "type": "repeat",
-                "count": "${SCROLL_COUNT}",
-                "steps": [
-                    {"type": "scroll_down"},
-                    {
-                        "type": "set_variable",
-                        "name": "_DELAY",
-                        "from_list": [1, 1.5, 2, 2.5, 3],
-                    },
-                    {"type": "wait", "seconds": "${_DELAY}"},
-                ],
-            }
-        ],
-    },
-    {
-        "name": "dismiss_all_popups",
-        "category": "utility",
-        "description": "Dismiss popups 3 times with waits between attempts.",
-        "tags": "popup,utility,cleanup",
-        "variables": {},
-        "steps": [
-            {
-                "type": "repeat",
-                "count": 3,
-                "steps": [
-                    {"type": "dismiss_popup"},
-                    {"type": "wait", "seconds": 1},
-                ],
-            }
-        ],
-    },
-    {
-        "name": "warm_up_device",
-        "category": "utility",
-        "description": "Open home screen, dismiss popups, then wait for UI to settle.",
-        "tags": "warmup,utility,startup",
-        "variables": {},
-        "steps": [
-            {"type": "key", "key": "home"},
-            {"type": "wait_stable", "timeout": 3.0, "stable_duration": 0.4},
-            {"type": "dismiss_popup", "retries": 2},
-        ],
-    },
-    {
-        "name": "scroll_and_like_feed",
-        "category": "general",
-        "description": "Scroll feed N times, optionally tapping a like button by selector.",
-        "tags": "scroll,like,feed,social",
-        "variables": {
-            "SCROLL_COUNT": 5,
-            "LIKE_BTN_TEXT": "Like",
-        },
-        "steps": [
-            {
-                "type": "repeat",
-                "count": "${SCROLL_COUNT}",
-                "steps": [
-                    {"type": "scroll_down"},
-                    {"type": "wait_stable", "timeout": 2.0, "stable_duration": 0.3},
-                    {
-                        "type": "if_element",
-                        "by": "text",
-                        "value": "${LIKE_BTN_TEXT}",
-                        "timeout": 1.5,
-                        "then": [
-                            {"type": "tap_selector", "by": "text", "value": "${LIKE_BTN_TEXT}"},
-                        ],
-                    },
-                ],
-            }
-        ],
-    },
-]
-
-# ─────────────────────────────────────────────────────────────────────────────
-# DF-006: Facebook Templates
-# ─────────────────────────────────────────────────────────────────────────────
-
 _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
-
-
-    # ── fb_group_crawl_engage ──────────────────────────────────────────────
-    {
-        "name": "fb_group_crawl_engage",
-        "category": "facebook",
-        "description": (
-            "Crawl + tương tác Facebook Group trong một lượt: "
-            "cuộn feed, extract bài viết (tác giả, nội dung, lượt thích/bình luận/chia sẻ, "
-            "timestamp), đồng thời like (LIKE_WEIGHT%) và share (SHARE_WEIGHT%) ngẫu nhiên. "
-            "Selector dựa trên content-desc thực của app (kiểm tra từ UIAutomator XML). "
-            "\n"
-            "GROUP_NAME: tên group Facebook. "
-            "MAX_SCROLLS: số lần scroll tối đa (default 40). "
-            "LIKE_WEIGHT: xác suất like mỗi bài (0-100, default 30). "
-            "SHARE_WEIGHT: xác suất chia sẻ mỗi bài (0-100, default 0). "
-            "SAVE_COLLECTION: collection lưu kết quả."
-        ),
-        "tags": "facebook,crawl,extract,group,like,share,engage,author,content",
-        "variables": {
-            "GROUP_NAME": "OpenClaw VN",
-            "APP_PACKAGE": "com.facebook.katana",
-            "MAX_SCROLLS": 40,
-            "LIKE_WEIGHT": 30,
-            "SHARE_WEIGHT": 0,
-            "SAVE_COLLECTION": "fb_group_posts",
-        },
-        "steps": [
-            # ── Phase 1: Launch & warm-up ────────────────────────────────
-            {"type": "launch_app", "package": "${APP_PACKAGE}", "wait_after": 5},
-            {"type": "dismiss_popup", "retries": 3},
-            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
-
-            # ── Phase 2: Navigate to group ───────────────────────────────
-            # Tap search button (content-desc xác nhận từ UIAutomator XML thực tế)
-            {
-                "type": "if_element",
-                "by": "content-desc",
-                "value": "Tìm kiếm",
-                "timeout": 5,
-                "then": [
-                    {"type": "tap_selector", "by": "content-desc", "value": "Tìm kiếm", "timeout": 4},
-                ],
-                "else": [
-                    # Fallback: vị trí tương đối của nút search trên top bar
-                    {"type": "tap_ratio", "x": 0.87, "y": 0.035},
-                ],
-            },
-            {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
-
-            # Gõ tên group
-            {"type": "input_text", "text": "${GROUP_NAME}", "via": "u2"},
-            {"type": "wait", "seconds": 2},
-
-            # Tap gợi ý autocomplete (content-desc hoặc text)
-            {
-                "type": "if_element",
-                "by": "content-desc",
-                "value": "${GROUP_NAME}",
-                "timeout": 3,
-                "then": [
-                    {"type": "tap_selector", "by": "content-desc", "value": "${GROUP_NAME}", "timeout": 3},
-                ],
-                "else": [
-                    {
-                        "type": "if_element",
-                        "by": "text",
-                        "value": "${GROUP_NAME}",
-                        "timeout": 3,
-                        "then": [
-                            {"type": "tap_selector", "by": "text", "value": "${GROUP_NAME}", "timeout": 3},
-                        ],
-                        "else": [
-                            # Không có autocomplete → Enter → search results → tab Nhóm
-                            {"type": "key", "key": "enter"},
-                            {"type": "wait", "seconds": 2},
-                            {
-                                "type": "if_element",
-                                "by": "text", "value": "Nhóm", "timeout": 3,
-                                "then": [{"type": "tap_selector", "by": "text", "value": "Nhóm", "timeout": 3}],
-                                "else": [
-                                    {
-                                        "type": "if_element",
-                                        "by": "text", "value": "Groups", "timeout": 3,
-                                        "then": [{"type": "tap_selector", "by": "text", "value": "Groups", "timeout": 3}],
-                                    },
-                                ],
-                            },
-                            {"type": "wait", "seconds": 2},
-                            {
-                                "type": "if_element",
-                                "by": "text", "value": "${GROUP_NAME}", "timeout": 5,
-                                "then": [{"type": "tap_selector", "by": "text", "value": "${GROUP_NAME}", "timeout": 4}],
-                                "else": [
-                                    {
-                                        "type": "if_element",
-                                        "by": "content-desc", "value": "${GROUP_NAME}", "timeout": 3,
-                                        "then": [{"type": "tap_selector", "by": "content-desc", "value": "${GROUP_NAME}", "timeout": 3}],
-                                    },
-                                ],
-                            },
-                        ],
-                    },
-                ],
-            },
-            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
-            {"type": "scroll_down", "repeats": 2, "start_y_ratio": 0.65, "end_y_ratio": 0.47},
-            {"type": "wait_stable", "timeout": 3, "stable_duration": 0.4},
-
-            # ── Phase 3: Crawl + engage loop ─────────────────────────────
-            {
-                "type": "repeat",
-                "count": "${MAX_SCROLLS}",
-                "steps": [
-                    # Extract bài viết đang hiển thị (author, text, timestamp,
-                    # reactions, comments, shares — xử lý bởi fb_extract.py)
-                    {
-                        "type": "extract",
-                        "strategy": "fb_posts",
-                        "expand_see_more": True,
-                        "collection": "${SAVE_COLLECTION}",
-                        "platform": "facebook",
-                        "content_type": "group_post",
-                        "dedupe_field": "post_key",
-                        "tags": "group,crawl,${GROUP_NAME}",
-                    },
-
-                    {
-                        "type": "random_pick",
-                        "branches": [
-                            {
-                                "weight": "${LIKE_WEIGHT}",
-                                "steps": [
-                                    {
-                                        "type": "if_element",
-                                        "by": "descriptionStartsWith",
-                                        "value": "Nút Thích.",
-                                        "timeout": 2,
-                                        "then": [
-                                            {
-                                                "type": "tap_selector",
-                                                "by": "descriptionStartsWith",
-                                                "value": "Nút Thích.",
-                                                "timeout": 3,
-                                            },
-                                            {"type": "wait", "seconds": 1},
-                                        ],
-                                    },
-                                ],
-                            },
-                            {"weight": 100, "steps": []},
-                        ],
-                    },
-
-                    # Share ngẫu nhiên theo SHARE_WEIGHT%
-                    # Selector: content-desc="Nút Chia sẻ. ..." (xác nhận từ XML thực)
-                    {
-                        "type": "random_pick",
-                        "branches": [
-                            {
-                                "weight": "${SHARE_WEIGHT}",
-                                "steps": [
-                                    {
-                                        "type": "if_element",
-                                        "by": "descriptionStartsWith",
-                                        "value": "Nút Chia sẻ.",
-                                        "timeout": 2,
-                                        "then": [
-                                            {
-                                                "type": "tap_selector",
-                                                "by": "descriptionStartsWith",
-                                                "value": "Nút Chia sẻ.",
-                                                "timeout": 3,
-                                            },
-                                            {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
-                                            # Tap "Chia sẻ ngay" / "Share now" trong dialog
-                                            {
-                                                "type": "if_element",
-                                                "by": "text", "value": "Chia sẻ ngay", "timeout": 3,
-                                                "then": [
-                                                    {"type": "tap_selector", "by": "text", "value": "Chia sẻ ngay", "timeout": 3},
-                                                ],
-                                                "else": [
-                                                    {
-                                                        "type": "if_element",
-                                                        "by": "text", "value": "Share now", "timeout": 2,
-                                                        "then": [
-                                                            {"type": "tap_selector", "by": "text", "value": "Share now", "timeout": 2},
-                                                        ],
-                                                        "else": [
-                                                            {"type": "key", "key": "back"},
-                                                        ],
-                                                    },
-                                                ],
-                                            },
-                                            {"type": "wait", "seconds": 2},
-                                        ],
-                                    },
-                                ],
-                            },
-                            {"weight": 100, "steps": []},
-                        ],
-                    },
-
-                    # Scroll + đọc tự nhiên
-                    {"type": "set_variable", "name": "_S", "from_list": [1, 1, 2, 2, 3]},
-                    {"type": "scroll_down", "repeats": "${_S}", "start_y_ratio": 0.65, "end_y_ratio": 0.47},
-                    {"type": "set_variable", "name": "_READ", "from_list": [2, 2.5, 3, 4, 5]},
-                    {"type": "wait", "seconds": "${_READ}"},
-                    {"type": "dismiss_popup", "retries": 1},
-
-                ],
-            },
-
-        ],
-    },
-
-    # ── fb_single_group ───────────────────────────────────────────────────
-    # Kịch bản 1 nhóm: vào 1 nhóm, scroll + like + share + save.
-    # is_builtin=False → user có thể update qua API/UI.
-    {
-        "name": "fb_single_group",
-        "is_builtin": False,
-        "category": "facebook",
-        "description": (
-            "Vào 1 nhóm Facebook, cuộn feed, like (LIKE_WEIGHT%) và share (SHARE_WEIGHT%) "
-            "ngẫu nhiên, lưu bài viết vào collection. "
-            "Navigation 3-tier: autocomplete → text → enter+filter Nhóm/Groups. "
-            "\n"
-            "GROUP_NAME: tên nhóm cần vào. "
-            "SCROLLS: số vòng lặp (default 20 ≈ 15 phút). "
-            "LIKE_WEIGHT: xác suất like (0-100). "
-            "SHARE_WEIGHT: xác suất share (0-100). "
-            "SAVE_COLLECTION: collection lưu data."
-        ),
-        "tags": "facebook,group,single,crawl,like,share,engage",
-        "variables": {
-            "GROUP_NAME": "openclaw vn",
-            "SCROLLS": 20,
-            "LIKE_WEIGHT": 60,
-            "SHARE_WEIGHT": 20,
-            "SAVE_COLLECTION": "fb_group_posts",
-        },
-        "steps": [
-            {"type": "tap_selector", "by": "text", "value": "Facebook"},
-            {"type": "wait_stable", "timeout": 8, "stable_duration": 0.5},
-            {"type": "dismiss_popup", "retries": 3},
-            {"type": "wait_stable", "timeout": 5, "stable_duration": 0.5},
-
-            # Mở thanh tìm kiếm
-            {
-                "type": "if_element", "by": "content-desc", "value": "Tìm kiếm", "timeout": 5,
-                "then": [{"type": "tap_selector", "by": "content-desc", "value": "Tìm kiếm", "timeout": 4}],
-                "else": [{"type": "tap_ratio", "x": 0.87, "y": 0.035}],
-            },
-            {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
-            {"type": "input_text", "text": "${GROUP_NAME}", "via": "u2"},
-            {"type": "wait", "seconds": 2},
-            {"type": "key", "key": "enter"},
-            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
-
-            # Chuyển sang tab Nhóm / Groups
-            {
-                "type": "if_element", "by": "text", "value": "Nhóm", "timeout": 5,
-                "then": [{"type": "tap_selector", "by": "text", "value": "Nhóm", "timeout": 4}],
-                "else": [
-                    {
-                        "type": "if_element", "by": "text", "value": "Groups", "timeout": 3,
-                        "then": [{"type": "tap_selector", "by": "text", "value": "Groups", "timeout": 3}],
-                        "else": [],
-                    },
-                ],
-            },
-            {"type": "wait", "seconds": 2},
-
-            # Tap vào tên nhóm trong kết quả
-            {
-                "type": "if_element", "by": "text", "value": "${GROUP_NAME}", "timeout": 5,
-                "then": [{"type": "tap_selector", "by": "text", "value": "${GROUP_NAME}", "timeout": 4}],
-                "else": [
-                    {
-                        "type": "if_element", "by": "content-desc", "value": "${GROUP_NAME}", "timeout": 3,
-                        "then": [{"type": "tap_selector", "by": "content-desc", "value": "${GROUP_NAME}", "timeout": 3}],
-                        "else": [],
-                    },
-                ],
-            },
-            {"type": "wait", "seconds": 2},
-
-            # Nhấn Truy cập / Visit để vào nhóm
-            {
-                "type": "if_element", "by": "text", "value": "Truy cập", "timeout": 4,
-                "then": [{"type": "tap_selector", "by": "text", "value": "Truy cập", "timeout": 3}],
-                "else": [
-                    {
-                        "type": "if_element", "by": "text", "value": "Visit", "timeout": 3,
-                        "then": [{"type": "tap_selector", "by": "text", "value": "Visit", "timeout": 3}],
-                        "else": [],
-                    },
-                ],
-            },
-            {"type": "wait", "seconds": 3},
-            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
-
-            # Cuộn qua phần header nhóm để vào feed bài viết
-            {"type": "scroll_down", "repeats": 2, "start_y_ratio": 0.65, "end_y_ratio": 0.47},
-            {"type": "wait", "seconds": 3},
-            {"type": "wait_stable", "timeout": 4, "stable_duration": 0.5},
-
-            # Vòng lặp chính: scroll chậm, capture đầy đủ
-            {
-                "type": "repeat", "count": "${SCROLLS}",
-                "steps": [
-                    # Đợi content render xong trước khi extract
-                    {"type": "wait_stable", "timeout": 4, "stable_duration": 0.5},
-                    {"type": "extract", "strategy": "fb_posts", "expand_see_more": True,
-                     "collection": "${SAVE_COLLECTION}", "platform": "facebook",
-                     "content_type": "group_post", "dedupe_field": "text",
-                     "tags": "group,crawl,${GROUP_NAME}"},
-                    # Đợi sau expand see_more để nội dung đầy đủ được parse
-                    {"type": "wait", "seconds": 2},
-                    {"type": "extract", "strategy": "fb_posts", "expand_see_more": False,
-                     "collection": "${SAVE_COLLECTION}", "platform": "facebook",
-                     "content_type": "group_post", "dedupe_field": "text",
-                     "tags": "group,crawl,${GROUP_NAME}"},
-                    {
-                        "type": "random_pick",
-                        "branches": [
-                            {
-                                "weight": "${LIKE_WEIGHT}",
-                                "steps": [
-                                    {
-                                        "type": "if_element", "by": "descriptionStartsWith", "value": "Nút Thích.", "timeout": 2,
-                                        "then": [
-                                            {"type": "tap_selector", "by": "descriptionStartsWith", "value": "Nút Thích.", "timeout": 3},
-                                            {"type": "wait", "seconds": 1},
-                                        ],
-                                        "else": [],
-                                    },
-                                ],
-                            },
-                            {"weight": 100, "steps": []},
-                        ],
-                    },
-                    {
-                        "type": "random_pick",
-                        "branches": [
-                            {
-                                "weight": "${SHARE_WEIGHT}",
-                                "steps": [
-                                    {
-                                        "type": "if_element", "by": "descriptionStartsWith", "value": "Nút Chia sẻ.", "timeout": 2,
-                                        "then": [
-                                            {"type": "tap_selector", "by": "descriptionStartsWith", "value": "Nút Chia sẻ.", "timeout": 3},
-                                            {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
-                                            {
-                                                "type": "if_element", "by": "text", "value": "Chia sẻ ngay", "timeout": 3,
-                                                "then": [{"type": "tap_selector", "by": "text", "value": "Chia sẻ ngay", "timeout": 3}],
-                                                "else": [
-                                                    {
-                                                        "type": "if_element", "by": "text", "value": "Share now", "timeout": 2,
-                                                        "then": [{"type": "tap_selector", "by": "text", "value": "Share now", "timeout": 2}],
-                                                        "else": [{"type": "key", "key": "back"}],
-                                                    },
-                                                ],
-                                            },
-                                            {"type": "wait", "seconds": 2},
-                                        ],
-                                        "else": [],
-                                    },
-                                ],
-                            },
-                            {"weight": 100, "steps": []},
-                        ],
-                    },
-                    # Scroll chậm: 1-2 lần để không bỏ sót bài
-                    {"type": "set_variable", "name": "_S", "from_list": [1, 1, 1, 2, 2]},
-                    {"type": "scroll_down", "repeats": "${_S}", "start_y_ratio": 0.65, "end_y_ratio": 0.47},
-                    # Đọc lâu hơn để content mới load kịp
-                    {"type": "set_variable", "name": "_READ", "from_list": [3, 4, 4, 5, 6]},
-                    {"type": "wait", "seconds": "${_READ}"},
-                    {"type": "dismiss_popup", "retries": 1},
-                ],
-            },
-
-            {"type": "key", "key": "home"},
-        ],
-    },
-
-    # ── fb_group_deep_1k ──────────────────────────────────────────────────
-    # Deep crawl 1 nhóm - expand 'Xem thêm' tại feed, không vào detail.
-    # Target: 1000 bài. is_builtin=False → user có thể update.
-    {
-        "name": "fb_group_deep_1k",
-        "is_builtin": False,
-        "category": "facebook",
-        "description": (
-            "Deep crawl 1 nhóm Facebook: expand 'Xem thêm' trực tiếp tại feed "
-            "(không vào detail), extract author + full text + reactions. "
-            "Scroll neo trái (SCROLL_X_RATIO) để giảm mở nhầm viewer ảnh do vuốt xuyên giữa màn hình; "
-            "mỗi vòng gọi dismiss_popup sau scroll (đóng dialog/overlay có nút Close/OK…). "
-            "Loop tự dừng theo stop_if_no_new (no_new_threshold). "
-            "\n"
-            "GROUP_NAME: tên nhóm cần tìm kiếm. "
-            "GROUP_XPATH: xpath chính xác vào nhóm (đổi theo nhóm thực tế). "
-            "MAX_SCROLLS: số vòng lặp tối đa (default 1000). "
-            "SCROLL_X_RATIO: neo ngang khi scroll (0.12–0.28 khuyến nghị; mặc định 0.18). "
-            "SAVE_COLLECTION: collection lưu data."
-        ),
-        "tags": "facebook,group,deep,crawl,1000,full-content,author,single,feed",
-        "variables": {
-            "GROUP_NAME": "openclaw vn",
-            "GROUP_XPATH": "//*[@content-desc=\"OpenClaw VN,Công khai · 123K thành viên\"]",
-            "MAX_SCROLLS": 3600,
-            "SCROLL_X_RATIO": 0.18,
-            "SAVE_COLLECTION": "fb_group_posts",
-        },
-        "steps": [
-            {"type": "tap_selector", "by": "text", "value": "Facebook"},
-            {"type": "wait_stable", "timeout": 8, "stable_duration": 0.5},
-            {"type": "dismiss_popup", "retries": 3},
-            {"type": "wait_stable", "timeout": 5, "stable_duration": 0.5},
-
-            {
-                "type": "if_element", "by": "content-desc", "value": "Tìm kiếm", "timeout": 5,
-                "then": [{"type": "tap_selector", "by": "content-desc", "value": "Tìm kiếm", "timeout": 4}],
-                "else": [{"type": "tap_ratio", "x": 0.87, "y": 0.035}],
-            },
-            {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
-            {"type": "input_text", "text": "${GROUP_NAME}", "via": "u2"},
-            {"type": "wait", "seconds": 2},
-            {"type": "key", "key": "enter"},
-            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
-
-            {"type": "tap_selector", "by": "xpath", "value": "${GROUP_XPATH}", "timeout": 6},
-            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
-
-            {
-                "type": "scroll_down",
-                "repeats": 2,
-                "start_x_ratio": "${SCROLL_X_RATIO}",
-                "start_y_ratio": 0.65,
-                "end_y_ratio": 0.47,
-            },
-            {"type": "wait", "seconds": 3},
-            {"type": "wait_stable", "timeout": 4, "stable_duration": 0.5},
-
-            {
-                "type": "loop",
-                "count": "${MAX_SCROLLS}",
-                "steps": [
-                    {
-                        "type": "extract",
-                        "strategy": "fb_posts",
-                        "expand_see_more": True,
-                        "stop_if_no_new": True,
-                        "no_new_threshold": 100,
-                        "collection": "${SAVE_COLLECTION}",
-                        "platform": "facebook",
-                        "content_type": "group_post",
-                        "dedupe_field": "text",
-                        "tags": "group,crawl,${GROUP_NAME}",
-                    },
-                    {
-                        "type": "scroll_down",
-                        "repeats": 1,
-                        "start_x_ratio": "${SCROLL_X_RATIO}",
-                        "start_y_ratio": 0.65,
-                        "end_y_ratio": 0.47,
-                    },
-                    {"type": "wait", "seconds": 1},
-                    {"type": "dismiss_popup", "retries": 2},
-                ],
-            },
-            {"type": "key", "key": "home"},
-        ],
-    },
 
     # ── fb_multi_group_1h ─────────────────────────────────────────────────
     # Kịch bản 1 tiếng: vào 4 nhóm liên tiếp, mỗi nhóm ~15 phút.
@@ -681,6 +117,8 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             {
                 "type": "repeat", "count": "${SCROLLS_PER_GROUP}",
                 "steps": [
+                    # Đóng bottom sheet còn sót (reactions/share panel) trước khi extract
+                    {"type": "dismiss_popup", "retries": 1},
                     {"type": "extract", "strategy": "fb_posts", "expand_see_more": True,
                      "collection": "${SAVE_COLLECTION}", "platform": "facebook",
                      "content_type": "group_post", "dedupe_field": "text",
@@ -799,6 +237,8 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             {
                 "type": "repeat", "count": "${SCROLLS_PER_GROUP}",
                 "steps": [
+                    # Đóng bottom sheet còn sót (reactions/share panel) trước khi extract
+                    {"type": "dismiss_popup", "retries": 1},
                     {"type": "extract", "strategy": "fb_posts", "expand_see_more": True,
                      "collection": "${SAVE_COLLECTION}", "platform": "facebook",
                      "content_type": "group_post", "dedupe_field": "text",
@@ -917,6 +357,8 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             {
                 "type": "repeat", "count": "${SCROLLS_PER_GROUP}",
                 "steps": [
+                    # Đóng bottom sheet còn sót (reactions/share panel) trước khi extract
+                    {"type": "dismiss_popup", "retries": 1},
                     {"type": "extract", "strategy": "fb_posts", "expand_see_more": True,
                      "collection": "${SAVE_COLLECTION}", "platform": "facebook",
                      "content_type": "group_post", "dedupe_field": "text",
@@ -1035,6 +477,8 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             {
                 "type": "repeat", "count": "${SCROLLS_PER_GROUP}",
                 "steps": [
+                    # Đóng bottom sheet còn sót (reactions/share panel) trước khi extract
+                    {"type": "dismiss_popup", "retries": 1},
                     {"type": "extract", "strategy": "fb_posts", "expand_see_more": True,
                      "collection": "${SAVE_COLLECTION}", "platform": "facebook",
                      "content_type": "group_post", "dedupe_field": "text",
@@ -1101,356 +545,37 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
     },
 
 
-
-    # ── fb_scan_posts_1h ──────────────────────────────────────────────────────
-    # Quét bài viết Facebook 1 nhóm trong ~1 tiếng, lưu kết quả vào collection.
-    # Dừng sớm khi feed hết bài mới (stop_if_no_new). Không crawl comment.
-    # Phù hợp để khởi động, thống kê bài đăng hoặc warm-up thiết bị.
-    {
-        "name": "fb_scan_posts_1h",
-        "is_builtin": True,
-        "category": "facebook",
-        "description": (
-            "Quét bài viết trong 1 nhóm Facebook trong ~1 tiếng (MAX_SCROLLS=180, ~20s/vòng). "
-            "Tự dừng khi feed hết bài mới liên tiếp (no_new_threshold=5). "
-            "Lưu toàn bộ bài viết (author, text, reactions, comments_count, shares) vào SAVE_COLLECTION. "
-            "Không crawl comment — chỉ thu thập bài viết để thống kê nhanh. "
-            "Sau khi chạy xong, xem kết quả tại tab Dữ liệu → lọc theo Campaign ID.\n"
-            "GROUP_NAME: tên nhóm để tìm kiếm. "
-            "GROUP_XPATH: xpath chính xác của nhóm trong kết quả tìm kiếm. "
-            "MAX_SCROLLS: số vòng lặp tối đa (default 180 ≈ 1 tiếng). "
-            "SCROLL_X_RATIO: neo ngang khi scroll (default 0.18, tránh tap vào ảnh). "
-            "SAVE_COLLECTION: tên collection lưu kết quả (default fb_posts_1h)."
-        ),
-        "tags": "facebook,group,post,scan,1h,crawl,feed,statistics",
-        "variables": {
-            "GROUP_NAME": "openclaw vn",
-            "GROUP_XPATH": "//*[@content-desc=\"OpenClaw VN,Công khai · 123K thành viên\"]",
-            "MAX_SCROLLS": 180,
-            "SCROLL_X_RATIO": 0.18,
-            "SAVE_COLLECTION": "fb_posts_1h",
-        },
-        "steps": [
-            # ── Phase 1: Khởi động Facebook ──────────────────────────────────
-            {"type": "tap_selector", "by": "text", "value": "Facebook"},
-            {"type": "wait_stable", "timeout": 8, "stable_duration": 0.5},
-            {"type": "dismiss_popup", "retries": 3},
-            {"type": "wait_stable", "timeout": 5, "stable_duration": 0.5},
-
-            # ── Phase 2: Tìm và vào nhóm ─────────────────────────────────────
-            {
-                "type": "if_element", "by": "content-desc", "value": "Tìm kiếm", "timeout": 5,
-                "then": [{"type": "tap_selector", "by": "content-desc", "value": "Tìm kiếm", "timeout": 4}],
-                "else": [{"type": "tap_ratio", "x": 0.87, "y": 0.035}],
-            },
-            {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
-            {"type": "input_text", "text": "${GROUP_NAME}", "via": "u2"},
-            {"type": "wait", "seconds": 2},
-            {"type": "key", "key": "enter"},
-            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
-
-            {"type": "tap_selector", "by": "xpath", "value": "${GROUP_XPATH}", "timeout": 6},
-            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
-
-            # Scroll qua header nhóm để vào feed bài viết
-            {"type": "scroll_down", "repeats": 2, "start_x_ratio": "${SCROLL_X_RATIO}", "start_y_ratio": 0.65, "end_y_ratio": 0.47},
-            {"type": "wait", "seconds": 3},
-            {"type": "wait_stable", "timeout": 4, "stable_duration": 0.5},
-
-            # ── Phase 3: Loop chính — quét feed ──────────────────────────────
-            {
-                "type": "loop",
-                "count": "${MAX_SCROLLS}",
-                "steps": [
-                    # Bước 1: Extract bài viết (auto-save)
-                    {
-                        "type": "extract",
-                        "strategy": "fb_posts",
-                        "expand_see_more": True,
-                        "expand_see_more_max_passes": 6,
-                        "expand_see_more_scroll": True,
-                        "expand_see_more_scroll_distance": 0.22,
-                        "stop_if_no_new": True,
-                        "no_new_threshold": 5,
-                        "collection": "${SAVE_COLLECTION}",
-                        "platform": "facebook",
-                        "content_type": "group_post",
-                        "dedupe_field": "text",
-                        "tags": "group,scan,${GROUP_NAME}",
-                    },
-
-                    # Bước 2: Scroll xuống bài tiếp theo
-                    {
-                        "type": "scroll_down",
-                        "repeats": 1,
-                        "start_x_ratio": "${SCROLL_X_RATIO}",
-                        "start_y_ratio": 0.65,
-                        "end_y_ratio": 0.47,
-                    },
-                    {"type": "wait", "seconds": 2},
-
-                    {"type": "dismiss_popup", "retries": 1},
-                ],
-            },
-
-            {"type": "key", "key": "home"},
-        ],
-    },
-
-    # ── fb_group_1h_one_group ─────────────────────────────────────────────
-    # Fragment: tìm nhóm + crawl + comment (giống fb_group_1h nhưng không launch_app / home).
-    # Dùng với run_scenario từ fb_group_1h_multi_account; biến MAX_SCROLLS, SAVE_COLLECTION…
-    # lấy từ scenario cha. Chỉ khai báo GROUP_NAME + GROUP_XPATH ở đây để không ghi đè biến cha.
-    {
-        "name": "fb_group_1h_one_group",
-        "is_builtin": False,
-        "category": "facebook",
-        "description": (
-            "Fragment nội bộ: một vòng tìm kiếm → tab Nhóm → tap xpath → loop crawl fb_group_1h. "
-            "Không mở app. Khi gọi trực tiếp cần đủ biến như fb_group_1h (MAX_SCROLLS, SCROLL_X_RATIO, …). "
-            "Thường dùng qua template fb_group_1h_multi_account."
-        ),
-        "tags": "facebook,group,1h,fragment,internal,crawl",
-        "variables": {
-            "GROUP_NAME": "openclaw vn",
-            "GROUP_XPATH": "//*[@content-desc=\"OpenClaw VN · Truy cập\"]",
-            "EXTRACT_PROFILE": "balanced",
-            "FB_POSTS_STRATEGY_VERSION": "fb_posts:v1",
-            "FB_COMMENTS_STRATEGY_VERSION": "fb_comments:v1",
-        },
-        "steps": [
-            {
-                "type": "if_element", "by": "content-desc", "value": "Tìm kiếm", "timeout": 5,
-                "then": [{"type": "tap_selector", "by": "content-desc", "value": "Tìm kiếm", "timeout": 4}],
-                "else": [{"type": "tap_ratio", "x": 0.87, "y": 0.035}],
-            },
-            {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
-            {"type": "input_text", "text": "${GROUP_NAME}", "via": "u2"},
-            {"type": "wait", "seconds": 2},
-            {"type": "key", "key": "enter"},
-            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
-            {
-                "type": "if_element", "by": "description", "value": "Kết quả tìm kiếm trong tab Nhóm, 3 trong số 7", "timeout": 5,
-                "then": [{"type": "tap_selector", "by": "description", "value": "Kết quả tìm kiếm trong tab Nhóm, 3 trong số 7", "timeout": 4}],
-                "else": [
-                    {
-                        "type": "if_element", "by": "text", "value": "Nhóm", "timeout": 3,
-                        "then": [{"type": "tap_selector", "by": "text", "value": "Nhóm", "timeout": 3}],
-                        "else": [
-                            {
-                                "type": "if_element", "by": "text", "value": "Groups", "timeout": 3,
-                                "then": [{"type": "tap_selector", "by": "text", "value": "Groups", "timeout": 3}],
-                                "else": [],
-                            },
-                        ],
-                    },
-                ],
-            },
-            {"type": "wait_stable", "timeout": 1, "stable_duration": 0.5},
-            {"type": "tap_selector", "by": "xpath", "value": "${GROUP_XPATH}", "timeout": 8},
-            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
-            {"type": "scroll_down", "repeats": 2, "start_x_ratio": "${SCROLL_X_RATIO}", "start_y_ratio": 0.65, "end_y_ratio": 0.47},
-            {"type": "wait", "seconds": 3},
-            {
-                "type": "loop",
-                "count": "${MAX_SCROLLS}",
-                "steps": [
-                    {"type": "wait", "seconds": 1},
-                    {
-                        "type": "extract",
-                        "strategy": "fb_posts",
-                        "extract_profile": "${EXTRACT_PROFILE}",
-                        "strategy_version": "${FB_POSTS_STRATEGY_VERSION}",
-                        "expand_see_more": True,
-                        "expand_see_more_max_passes": 4,
-                        "expand_see_more_scroll": True,
-                        "expand_see_more_scroll_distance": 0.25,
-                        "expand_completion_retries": 4,
-                        "stop_if_no_new": False,
-                        "collection": "${SAVE_COLLECTION}",
-                        "platform": "facebook",
-                        "content_type": "group_post",
-                        "dedupe_field": "post_key",
-                        "tags": "group,crawl,${GROUP_NAME}",
-                    },
-                    # Một lần cuộn nhẹ để lộ hàng Thích/Bình luận khi bài dài; tránh 2 lần
-                    # (dễ đẩy bài trên cùng ra khỏi viewport → tap nhầm "Bình luận" bài dưới).
-                    {"type": "scroll_down", "repeats": 1, "start_x_ratio": 0.5, "start_y_ratio": 0.72, "end_y_ratio": 0.48},
-                    {"type": "wait", "seconds": 1},
-                    {
-                        "type": "if_element", "by": "text", "value": "Bình luận", "timeout": 6,
-                        "ignore_error": True,
-                        "then": [
-                            {"type": "tap_selector", "by": "text", "value": "Bình luận", "timeout": 5},
-                            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
-                            {
-                                "type": "if_element", "by": "text", "value": "Đang hiển thị Phù hợp nhất bình luận. Nhấn để thay đổi bộ lọc bình luận.", "timeout": 4, "ignore_error": True,
-                                "then": [
-                                    {"type": "tap_selector", "by": "text", "value": "Đang hiển thị Phù hợp nhất bình luận. Nhấn để thay đổi bộ lọc bình luận.", "timeout": 4, "ignore_error": True},
-                                    {"type": "wait", "seconds": 0.5},
-                                    {
-                                        "type": "if_element", "by": "text", "value": "Tất cả bình luận", "timeout": 4, "ignore_error": True,
-                                        "then": [{"type": "tap_selector", "by": "description", "value": "Tất cả bình luận, Hiển thị tất cả bình luận, bao gồm cả nội dung có thể là spam.", "timeout": 4, "ignore_error": True}],
-                                        "else": [
-                                            {
-                                                "type": "if_element", "by": "text", "value": "All comments", "timeout": 4, "ignore_error": True,
-                                                "then": [{"type": "tap_selector", "by": "text", "value": "All comments", "timeout": 4, "ignore_error": True}],
-                                                "else": [],
-                                            }
-                                        ],
-                                    },
-                                    {"type": "wait_stable", "timeout": 2, "stable_duration": 0.4},
-                                ],
-                                "else": [],
-                            },
-                            {"type": "extract", "strategy": "fb_comments",
-                             "extract_profile": "${EXTRACT_PROFILE}",
-                             "strategy_version": "${FB_COMMENTS_STRATEGY_VERSION}",
-                             "parent_post_id_var": "_fb_comment_parent_pid",
-                             "expand_see_more": True,
-                             "expand_see_more_max_passes": 6,
-                             "expand_see_more_scroll": True,
-                             "expand_see_more_scroll_distance": 0.2,
-                             "max_items": 400,
-                             "comment_scroll_passes": "${MAX_COMMENT_SCROLLS}",
-                             "comment_scroll_distance": 0.7,
-                             "comment_scroll_pause_s": 0.8,
-                             "comment_no_growth_break": "${COMMENT_NO_NEW_THRESHOLD}",
-                             "min_comment_scan_passes": 6,
-                             "stop_if_no_new": False, "no_new_threshold": 4,
-                             "collection": "${SAVE_COLLECTION}",
-                             "platform": "facebook",
-                             "content_type": "comment",
-                             "dedupe_field": "comment_key",
-                             "tags": "group,comment,${GROUP_NAME}",
-                             "save_parent_id_var": "_active_comment_parent_hash",
-                             "item_level": 1},
-                            {"type": "wait", "seconds": 1},
-                            {"type": "key", "key": "back"},
-                            {"type": "wait_stable", "timeout": 5, "stable_duration": 0.5},
-                            {"type": "dismiss_popup", "retries": 3},
-                            {"type": "wait_stable", "timeout": 5, "stable_duration": 0.5},
-                        ],
-                    },
-                    {"type": "scroll_down", "repeats": 1, "start_x_ratio": "${SCROLL_X_RATIO}", "start_y_ratio": 0.65, "end_y_ratio": 0.47},
-                    {"type": "set_variable", "name": "_W", "from_list": [1, 1, 1.5, 2, 2, 3]},
-                    {"type": "wait", "seconds": "${_W}"},
-                    {"type": "dismiss_popup", "retries": 2},
-                ],
-            },
-        ],
-    },
-
-    # ── fb_group_1h_multi_account ─────────────────────────────────────────
-    # 2 tài khoản × 2 nhóm mặc định: crawl hết nhóm trên acc1 → đổi acc → crawl acc2.
-    {
-        "name": "fb_group_1h_multi_account",
-        "is_builtin": False,
-        "category": "facebook",
-        "description": (
-            "Giống fb_group_1h nhưng nhiều nhóm và 2 tài khoản Facebook trên cùng thiết bị. "
-            "Luồng: (1) Acc hiện tại (đã đăng nhập sẵn) — GROUP_1 → GROUP_2; "
-            "(2) mở switcher hồ sơ, chọn ACCOUNT_2_SWITCH_LABEL; "
-            "(3) GROUP_3 → GROUP_4. "
-            "Sau mỗi nhóm: Back 2 lần rồi tìm nhóm tiếp theo. "
-            "\n"
-            "GROUP_1_NAME..4 + GROUP_1_XPATH..4: tìm kiếm và xpath hàng nhóm (như GROUP_NAME/GROUP_XPATH). "
-            "ACCOUNT_2_SWITCH_LABEL: đúng chữ hiển thị trên danh sách hồ sơ khi đổi tài khoản. "
-            "PROFILE_SHORTCUT_X/Y: tỷ lệ tap mở menu hồ sơ (mặc định góc phải dưới — chỉnh theo máy). "
-            "MAX_SCROLLS, SCROLL_X_RATIO, SAVE_COLLECTION, MAX_COMMENT_SCROLLS: giống fb_group_1h. "
-            "Nếu UI đổi: sửa bước switch account hoặc thu control-record."
-        ),
-        "tags": "facebook,group,1h,multi,multi-account,crawl",
-        "variables": {
-            "GROUP_1_NAME": "openclaw vn",
-            "GROUP_1_XPATH": "//*[@content-desc=\"OpenClaw VN · Truy cập\"]",
-            "GROUP_2_NAME": "Tìm kiếm việc làm",
-            "GROUP_2_XPATH": "//*[@text=\"Tìm kiếm việc làm\"]",
-            "ACCOUNT_2_SWITCH_LABEL": "Tên hiển thị acc 2",
-            "GROUP_3_NAME": "công nghệ thông tin",
-            "GROUP_3_XPATH": "//*[@text=\"công nghệ thông tin\"]",
-            "GROUP_4_NAME": "lập trình viên",
-            "GROUP_4_XPATH": "//*[@text=\"lập trình viên\"]",
-            "PROFILE_SHORTCUT_X": 0.92,
-            "PROFILE_SHORTCUT_Y": 0.96,
-            "MAX_SCROLLS": 180,
-            "MAX_COMMENT_SCROLLS": 20,
-            "COMMENT_NO_NEW_THRESHOLD": 2,
-            "SCROLL_X_RATIO": 0.18,
-            "SAVE_COLLECTION": "fb_group_posts",
-        },
-        "steps": [
-            {"type": "launch_app", "package": "com.facebook.katana", "title": "mở fb multi acc"},
-            {"type": "dismiss_popup", "retries": 3},
-            {"type": "wait_stable", "timeout": 8, "stable_duration": 0.5},
-            {"type": "set_variable", "name": "GROUP_NAME", "value": "${GROUP_1_NAME}"},
-            {"type": "set_variable", "name": "GROUP_XPATH", "value": "${GROUP_1_XPATH}"},
-            {"type": "run_scenario", "scenario_name": "fb_group_1h_one_group"},
-            {"type": "key", "key": "back"},
-            {"type": "key", "key": "back"},
-            {"type": "wait", "seconds": 2},
-            {"type": "wait_stable", "timeout": 5, "stable_duration": 0.5},
-            {"type": "set_variable", "name": "GROUP_NAME", "value": "${GROUP_2_NAME}"},
-            {"type": "set_variable", "name": "GROUP_XPATH", "value": "${GROUP_2_XPATH}"},
-            {"type": "run_scenario", "scenario_name": "fb_group_1h_one_group"},
-            {"type": "key", "key": "back"},
-            {"type": "key", "key": "back"},
-            {"type": "wait", "seconds": 2},
-            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
-            {"type": "tap_ratio", "x": "${PROFILE_SHORTCUT_X}", "y": "${PROFILE_SHORTCUT_Y}"},
-            {"type": "wait", "seconds": 2},
-            {
-                "type": "if_element", "by": "text", "value": "See all profiles", "timeout": 4,
-                "then": [{"type": "tap_selector", "by": "text", "value": "See all profiles", "timeout": 4}],
-                "else": [],
-            },
-            {
-                "type": "if_element", "by": "text", "value": "Xem tất cả hồ sơ", "timeout": 4,
-                "then": [{"type": "tap_selector", "by": "text", "value": "Xem tất cả hồ sơ", "timeout": 4}],
-                "else": [],
-            },
-            {"type": "wait_stable", "timeout": 5, "stable_duration": 0.45},
-            {"type": "tap_selector", "by": "text", "value": "${ACCOUNT_2_SWITCH_LABEL}", "timeout": 12},
-            {"type": "wait_stable", "timeout": 10, "stable_duration": 0.6},
-            {"type": "dismiss_popup", "retries": 2},
-            {"type": "set_variable", "name": "GROUP_NAME", "value": "${GROUP_3_NAME}"},
-            {"type": "set_variable", "name": "GROUP_XPATH", "value": "${GROUP_3_XPATH}"},
-            {"type": "run_scenario", "scenario_name": "fb_group_1h_one_group"},
-            {"type": "key", "key": "back"},
-            {"type": "key", "key": "back"},
-            {"type": "wait", "seconds": 2},
-            {"type": "wait_stable", "timeout": 5, "stable_duration": 0.5},
-            {"type": "set_variable", "name": "GROUP_NAME", "value": "${GROUP_4_NAME}"},
-            {"type": "set_variable", "name": "GROUP_XPATH", "value": "${GROUP_4_XPATH}"},
-            {"type": "run_scenario", "scenario_name": "fb_group_1h_one_group"},
-            {"type": "key", "key": "home"},
-        ],
-    },
-
     {
         "name": "fb_group_1h",
         "is_builtin": False,
         "category": "facebook",
         "description": (
-            "Crawl bài viết 1 nhóm Facebook trong ~1 tiếng (MAX_SCROLLS=180, ~20s/vòng). "
-            "Chấp nhận bài trùng lặp — không dừng sớm khi feed lặp lại. "
-            "Navigation 3 bước: tìm kiếm → tab Nhóm (descriptionContains) → tap nhóm qua xpath. "
+            "Crawl bài viết + bình luận 1 nhóm Facebook liên tục (mặc định MAX_SCROLLS=540 ≈ 3h). "
+            "Chấp nhận bài trùng lặp — DB dedup qua content_hash, loop không dừng sớm. "
+            "Navigation: tìm kiếm → tab Nhóm → tap nhóm qua xpath. "
             "Scroll neo trái (SCROLL_X_RATIO=0.18) tránh mở ảnh. "
-            "Extract tự bấm 'Xem thêm' nhiều vòng rồi dump hierarchy; retry khi bài còn bị cắt. "
-            "Lưu toàn bộ vào SAVE_COLLECTION.\n"
-            "GROUP_NAME: tên nhóm để tìm kiếm. "
-            "GROUP_XPATH: xpath chính xác của nhóm trong kết quả. "
-            "MAX_SCROLLS: số vòng lặp (default 180 ≈ 1 tiếng). "
-            "SCROLL_X_RATIO: neo ngang (default 0.18). "
-            "SAVE_COLLECTION: collection lưu kết quả."
+            "Mỗi bài: extract posts → cuộn nhẹ lộ nút Bình luận → atomic tap + switch filter → extract comments → back.\n"
+            "\n"
+            "Biến cấu hình:\n"
+            "  GROUP_NAME: tên nhóm để tìm kiếm.\n"
+            "  GROUP_XPATH: xpath hàng nhóm trong kết quả tìm kiếm.\n"
+            "  MAX_SCROLLS: số vòng crawl (mặc định 540 ≈ 3h với ~20s/vòng).\n"
+            "  MAX_COMMENT_SCROLLS: số lần cuộn tối đa trong sheet bình luận (mặc định 35).\n"
+            "  MAX_COMMENTS_PER_POST: giới hạn số bình luận mỗi bài (mặc định 500).\n"
+            "  MIN_COMMENT_SCAN_PASSES: số vòng cuộn tối thiểu dù đã đủ bình luận (mặc định 4).\n"
+            "  COMMENT_NO_NEW_THRESHOLD: dừng cuộn bình luận sau N vòng không có thêm (mặc định 3).\n"
+            "  SCROLL_X_RATIO: neo ngang khi scroll feed (mặc định 0.18).\n"
+            "  SAVE_COLLECTION: collection lưu cả bài và bình luận."
         ),
-        "tags": "facebook,group,1h,crawl,feed,post,duplicate-ok",
+        "tags": "facebook,group,crawl,feed,post,comment,duplicate-ok",
         "variables": {
             "GROUP_NAME": "openclaw vn",
-            "GROUP_XPATH": "//*[@content-desc=\"OpenClaw VN · Truy cập\"]",
-            "MAX_SCROLLS": 9000,
-            "MAX_COMMENT_SCROLLS": 20,
-            "COMMENT_NO_NEW_THRESHOLD": 2,
+            "GROUP_XPATH": "//*[@content-desc=\"OpenClaw VN · Truy cập\"]",
+            "MAX_SCROLLS": 540,
+            "MAX_COMMENT_SCROLLS": 35,
+            "MAX_COMMENTS_PER_POST": 500,
+            "MIN_COMMENT_SCAN_PASSES": 4,
+            "COMMENT_NO_NEW_THRESHOLD": 3,
             "SCROLL_X_RATIO": 0.18,
             "SAVE_COLLECTION": "fb_group_posts",
             "EXTRACT_PROFILE": "balanced",
@@ -1460,6 +585,8 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
         "steps": [
             # ── Phase 1: Khởi động ────────────────────────────────────────────
             {"type": "launch_app", "package": "com.facebook.katana", "title": "mở fb"},
+            {"type": "dismiss_popup", "retries": 3},
+            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
 
             # ── Phase 2: Tìm kiếm nhóm ───────────────────────────────────────
             {
@@ -1473,7 +600,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             {"type": "key", "key": "enter"},
             {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
 
-            # ── Phase 3: Chọn tab Nhóm trong kết quả tìm kiếm ───────────────
+            # ── Phase 3: Chọn tab Nhóm ───────────────────────────────────────
             {
                 "type": "if_element", "by": "description", "value": "Kết quả tìm kiếm trong tab Nhóm, 3 trong số 7", "timeout": 5,
                 "then": [{"type": "tap_selector", "by": "description", "value": "Kết quả tìm kiếm trong tab Nhóm, 3 trong số 7", "timeout": 4}],
@@ -1496,33 +623,29 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             # ── Phase 4: Tap vào nhóm ───────────────────────────────────────
             {"type": "tap_selector", "by": "xpath", "value": "${GROUP_XPATH}", "timeout": 8},
             {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
-
             {"type": "scroll_down", "repeats": 2, "start_x_ratio": "${SCROLL_X_RATIO}", "start_y_ratio": 0.65, "end_y_ratio": 0.47},
             {"type": "wait", "seconds": 3},
 
-            # ── Phase 5: Loop crawl ~1 tiếng ────────────────────────────────
-            # stop_if_no_new=False (mặc định) → chạy đủ MAX_SCROLLS, không dừng sớm.
-            # Chấp nhận bài trùng: DB dedup qua content_hash nhưng loop không break.
-            # ~20s/vòng × 180 vòng ≈ 60 phút.
+            # ── Phase 5: Loop crawl ──────────────────────────────────────────
+            # ~20s/vòng × 540 ≈ 3h. Tăng MAX_SCROLLS tuỳ ý.
             {
                 "type": "loop",
                 "count": "${MAX_SCROLLS}",
                 "steps": [
-                    # Chờ nội dung load xong (đặc biệt quan trọng cho bài viết dài)
-                    {"type": "wait", "seconds": 1},
+                    # Dọn popup nhanh mỗi đầu vòng
+                    {"type": "dismiss_popup", "retries": 1},
 
-                    # Extract fb_posts: pre-expand “Xem thêm” + retry khi còn marker truncate.
-                    # Auto-save — DB tự dedup qua content_hash, không cần lo trùng
+                    # Extract bài viết (expand "Xem thêm" tối đa 2 lần — đủ cho hầu hết bài)
                     {
                         "type": "extract",
                         "strategy": "fb_posts",
                         "extract_profile": "${EXTRACT_PROFILE}",
                         "strategy_version": "${FB_POSTS_STRATEGY_VERSION}",
                         "expand_see_more": True,
-                        "expand_see_more_max_passes": 4,
+                        "expand_see_more_max_passes": 2,
                         "expand_see_more_scroll": True,
                         "expand_see_more_scroll_distance": 0.25,
-                        "expand_completion_retries": 4,
+                        "expand_completion_retries": 2,
                         "stop_if_no_new": False,
                         "collection": "${SAVE_COLLECTION}",
                         "platform": "facebook",
@@ -1531,85 +654,660 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                         "tags": "group,crawl,${GROUP_NAME}",
                     },
 
-                    # Một lần cuộn nhẹ để lộ hàng Thích/Bình luận khi bài dài; tránh 2× cuộn mạnh
-                    # trước khi tap (dễ khiến nút "Bình luận" đầu tiên thuộc bài kế tiếp).
-                    {"type": "scroll_down", "repeats": 1, "start_x_ratio": 0.5, "start_y_ratio": 0.72, "end_y_ratio": 0.48},
-                    {"type": "wait", "seconds": 1},
-                    # Vào comment bài viết đầu tiên → extract comment + cập nhật like count
-                    # (timeout đủ dài: feed đang load / chưa scroll tới bài có nút thì 1s hay miss)
+                    # Atomic tap: resolve → ghi _pid → bấm Bình luận → switch filter
+                    # pre_scroll=True: cuộn nhẹ lộ nút (thay scroll_down riêng)
                     {
-                        "type": "if_element", "by": "text", "value": "Bình luận", "timeout": 6,
-                        "ignore_error": True,
+                        "type": "tap_fb_comment_button",
+                        "timeout": 5,
+                        "pre_scroll": True,
+                        "pre_scroll_distance": 0.24,
+                        "post_tap_wait_s": 0.6,
+                        "enter_comment_sheet_timeout": 2.0,
+                        "switch_to_all_comments": True,
                         "then": [
-                            {"type": "tap_selector", "by": "text", "value": "Bình luận", "timeout": 5},
-                            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
-                            # Ưu tiên chuyển sang "Tất cả bình luận" để lấy full volume.
+                            {"type": "wait", "seconds": 0.6},
                             {
-                                "type": "if_element", "by": "text", "value": "Đang hiển thị Phù hợp nhất bình luận. Nhấn để thay đổi bộ lọc bình luận.", "timeout": 4, "ignore_error": True,
-                                "then": [
-                                    {"type": "tap_selector", "by": "text", "value": "Đang hiển thị Phù hợp nhất bình luận. Nhấn để thay đổi bộ lọc bình luận.", "timeout": 4, "ignore_error": True},
-                                    {"type": "wait", "seconds": 0.5},
-                                    {
-                                        "type": "if_element", "by": "text", "value": "Tất cả bình luận", "timeout": 4, "ignore_error": True,
-                                        "then": [{"type": "tap_selector", "by": "description", "value": "Tất cả bình luận, Hiển thị tất cả bình luận, bao gồm cả nội dung có thể là spam.", "timeout": 4, "ignore_error": True}],
-                                        "else": [
-                                            {
-                                                "type": "if_element", "by": "text", "value": "All comments", "timeout": 4, "ignore_error": True,
-                                                "then": [{"type": "tap_selector", "by": "text", "value": "All comments", "timeout": 4, "ignore_error": True}],
-                                                "else": [],
-                                            }
-                                        ],
-                                    },
-                                    {"type": "wait_stable", "timeout": 2, "stable_duration": 0.4},
-                                ],
-                                "else": [],
+                                "type": "extract",
+                                "strategy": "fb_comments",
+                                "extract_profile": "${EXTRACT_PROFILE}",
+                                "strategy_version": "${FB_COMMENTS_STRATEGY_VERSION}",
+                                "parent_post_id_var": "_fb_comment_parent_pid",
+                                "expand_see_more": True,
+                                "expand_see_more_max_passes": 4,
+                                "expand_see_more_scroll": True,
+                                "expand_see_more_scroll_distance": 0.2,
+                                "max_items": "${MAX_COMMENTS_PER_POST}",
+                                "comment_scroll_passes": "${MAX_COMMENT_SCROLLS}",
+                                "comment_scroll_distance": 0.22,
+                                "comment_scroll_duration_ms": 340,
+                                "comment_scroll_pause_s": 0.3,
+                                "comment_no_growth_break": "${COMMENT_NO_NEW_THRESHOLD}",
+                                "min_comment_scan_passes": "${MIN_COMMENT_SCAN_PASSES}",
+                                "stop_if_no_new": False,
+                                "no_new_threshold": 4,
+                                "collection": "${SAVE_COLLECTION}",
+                                "platform": "facebook",
+                                "content_type": "comment",
+                                "dedupe_field": "comment_key",
+                                "tags": "group,comment,${GROUP_NAME}",
+                                "save_parent_id_var": "_active_comment_parent_hash",
+                                "item_level": 1,
                             },
-
-                            # Loop cuộn hết comment — thoát sớm khi không còn comment mới (no_new_threshold=2)
-                            {"type": "extract", "strategy": "fb_comments",
-                             "extract_profile": "${EXTRACT_PROFILE}",
-                             "strategy_version": "${FB_COMMENTS_STRATEGY_VERSION}",
-                             "parent_post_id_var": "_fb_comment_parent_pid",
-                             "expand_see_more": True,
-                             "expand_see_more_max_passes": 6,
-                             "expand_see_more_scroll": True,
-                             "expand_see_more_scroll_distance": 0.2,
-                             "max_items": 400,
-                             "comment_scroll_passes": "${MAX_COMMENT_SCROLLS}",
-                             "comment_scroll_distance": 0.7,
-                             "comment_scroll_pause_s": 0.8,
-                             "comment_no_growth_break": "${COMMENT_NO_NEW_THRESHOLD}",
-                             "min_comment_scan_passes": 6,
-                             "stop_if_no_new": False, "no_new_threshold": 4,
-                             "collection": "${SAVE_COLLECTION}",
-                             "platform": "facebook",
-                             "content_type": "comment",
-                             "dedupe_field": "comment_key",
-                             "tags": "group,comment,${GROUP_NAME}",
-                             "save_parent_id_var": "_active_comment_parent_hash",
-                             "item_level": 1},
-                            {"type": "wait", "seconds": 1},
-
-                            # Đóng sheet bình luận trước khi scroll feed — thiếu bước này sheet vẫn mở,
-                            # vòng sau extract lại cùng comment → trùng DB / trùng batch.
                             {"type": "key", "key": "back"},
-                            {"type": "wait_stable", "timeout": 5, "stable_duration": 0.5},
-                            {"type": "dismiss_popup", "retries": 3},
-                            {"type": "wait_stable", "timeout": 5, "stable_duration": 0.5},
+                            {"type": "wait", "seconds": 1},
+                            {"type": "dismiss_popup", "retries": 1},
                         ],
+                        "else": [],
                     },
 
-                    # Scroll neo trái 1 lần
+                    # Scroll feed (neo trái tránh mở ảnh) + delay tự nhiên
                     {"type": "scroll_down", "repeats": 1, "start_x_ratio": "${SCROLL_X_RATIO}", "start_y_ratio": 0.65, "end_y_ratio": 0.47},
-                    # Đọc tự nhiên 1–3 giây
-                    {"type": "set_variable", "name": "_W", "from_list": [1, 1, 1.5, 2, 2, 3]},
+                    {"type": "set_variable", "name": "_W", "from_list": [0.5, 0.5, 1, 1, 1.5, 2]},
                     {"type": "wait", "seconds": "${_W}"},
-                    # Đóng popup nếu xuất hiện
-                    {"type": "dismiss_popup", "retries": 2},
                 ],
             },
 
             # ── Phase 6: Kết thúc ────────────────────────────────────────────
+            {"type": "key", "key": "home"},
+        ],
+    },
+
+    # ── fb_groups_per_device ───────────────────────────────────────────────────
+    {
+        "name": "fb_groups_per_device",
+        "is_builtin": False,
+        "category": "facebook",
+        "description": (
+            "Crawl 1 group Facebook riêng cho từng thiết bị từ scenario_device_variables "
+            "qua __DEVICE_GROUP__ và __DEVICE_SAVE_COLLECTION__."
+        ),
+        "tags": "facebook,group,multi-group,device-config,post,comment,crawl",
+        "variables": {
+            # Bắt buộc phải được inject từ scenario_device_variables (__DEVICE_*).
+            "GROUP_NAME": "",
+            "SAVE_COLLECTION": "",
+
+            # Cấu hình crawl cho mỗi group.
+            "MAX_SCROLLS_PER_GROUP": 180,
+            "MAX_COMMENT_SCROLLS": 35,
+            "MAX_COMMENTS_PER_POST": 500,
+            "MIN_COMMENT_SCAN_PASSES": 4,
+            "COMMENT_NO_NEW_THRESHOLD": 3,
+            "SCROLL_X_RATIO": 0.18,
+            "EXTRACT_PROFILE": "balanced",
+            "FB_POSTS_STRATEGY_VERSION": "fb_posts:v1",
+            "FB_COMMENTS_STRATEGY_VERSION": "fb_comments:v1",
+        },
+        "steps": [
+            # ── Phase 1: Override từ scenario_device_variables (__DEVICE_*) ─
+            # Keys nên set per device:
+            #   group, save_collection
+            {
+                "type": "if_variable", "name": "__DEVICE_GROUP__", "not_equals": "${__DEVICE_GROUP__}",
+                "then": [
+                    {"type": "set_variable", "name": "GROUP_NAME", "value": "${__DEVICE_GROUP__}"},
+                ],
+                "else": [],
+            },
+            {
+                "type": "if_variable", "name": "__DEVICE_SAVE_COLLECTION__", "not_equals": "${__DEVICE_SAVE_COLLECTION__}",
+                "then": [
+                    {"type": "set_variable", "name": "SAVE_COLLECTION", "value": "${__DEVICE_SAVE_COLLECTION__}"},
+                ],
+                "else": [],
+            },
+
+            # ── Phase 2: Khởi động app ──────────────────────────────────────
+            {"type": "launch_app", "package": "com.facebook.katana", "title": "mở fb"},
+            # ── Phase 3: Crawl group riêng của thiết bị hiện tại ────────────
+            {
+                "type": "if_variable",
+                "name": "GROUP_NAME",
+                "then": [
+
+                    # Tìm nhóm
+                    {
+                        "type": "if_element", "by": "content-desc", "value": "Tìm kiếm", "timeout": 5,
+                        "then": [{"type": "tap_selector", "by": "content-desc", "value": "Tìm kiếm", "timeout": 4}],
+                        "else": [{"type": "tap_ratio", "x": 0.87, "y": 0.035}],
+                    },
+                    {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
+                    {"type": "input_text", "text": "${GROUP_NAME}", "via": "u2"},
+                    {"type": "wait", "seconds": 2},
+                    {"type": "key", "key": "enter"},
+                    {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
+
+                    # Chuyển tab Nhóm
+                    {
+                        "type": "if_element", "by": "description", "value": "Kết quả tìm kiếm trong tab Nhóm, 3 trong số 7", "timeout": 5,
+                        "then": [{"type": "tap_selector", "by": "description", "value": "Kết quả tìm kiếm trong tab Nhóm, 3 trong số 7", "timeout": 4}],
+                        "else": [
+                            {
+                                "type": "if_element", "by": "text", "value": "Nhóm", "timeout": 3,
+                                "then": [{"type": "tap_selector", "by": "text", "value": "Nhóm", "timeout": 3}],
+                                "else": [
+                                    {
+                                        "type": "if_element", "by": "text", "value": "Groups", "timeout": 3,
+                                        "then": [{"type": "tap_selector", "by": "text", "value": "Groups", "timeout": 3}],
+                                        "else": [],
+                                    },
+                                ],
+                            },
+                        ],
+                    },
+                    {"type": "wait_stable", "timeout": 2, "stable_duration": 0.5},
+
+                    # Vào group đầu tiên trong kết quả
+                    {
+                        "type": "if_element", "by": "text", "value": "${GROUP_NAME}", "timeout": 4,
+                        "then": [{"type": "tap_selector", "by": "text", "value": "${GROUP_NAME}", "timeout": 4}],
+                        "else": [{"type": "tap_ratio", "x": 0.5, "y": 0.24}],
+                    },
+                    {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
+                    {"type": "dismiss_popup", "retries": 2},
+                    {"type": "scroll_down", "repeats": 2, "start_x_ratio": "${SCROLL_X_RATIO}", "start_y_ratio": 0.65, "end_y_ratio": 0.47},
+                    {"type": "wait", "seconds": 2},
+
+                    # Crawl feed + comment trong group hiện tại
+                    {
+                        "type": "loop",
+                        "count": "${MAX_SCROLLS_PER_GROUP}",
+                        "steps": [
+                            {"type": "dismiss_popup", "retries": 1},
+                            {
+                                "type": "extract",
+                                "strategy": "fb_posts",
+                                "extract_profile": "${EXTRACT_PROFILE}",
+                                "strategy_version": "${FB_POSTS_STRATEGY_VERSION}",
+                                "expand_see_more": True,
+                                "expand_see_more_max_passes": 2,
+                                "expand_see_more_scroll": True,
+                                "expand_see_more_scroll_distance": 0.25,
+                                "expand_completion_retries": 2,
+                                "stop_if_no_new": False,
+                                "collection": "${SAVE_COLLECTION}",
+                                "platform": "facebook",
+                                "content_type": "group_post",
+                                "dedupe_field": "post_key",
+                                "tags": "group,crawl,${GROUP_NAME}",
+                            },
+                            {
+                                "type": "tap_fb_comment_button",
+                                "timeout": 5,
+                                "pre_scroll": True,
+                                "pre_scroll_distance": 0.24,
+                                "post_tap_wait_s": 0.6,
+                                "enter_comment_sheet_timeout": 2.0,
+                                "switch_to_all_comments": True,
+                                "then": [
+                                    {"type": "wait", "seconds": 0.6},
+                                    {
+                                        "type": "extract",
+                                        "strategy": "fb_comments",
+                                        "extract_profile": "${EXTRACT_PROFILE}",
+                                        "strategy_version": "${FB_COMMENTS_STRATEGY_VERSION}",
+                                        "parent_post_id_var": "_fb_comment_parent_pid",
+                                        "expand_see_more": True,
+                                        "expand_see_more_max_passes": 4,
+                                        "expand_see_more_scroll": True,
+                                        "expand_see_more_scroll_distance": 0.2,
+                                        "max_items": "${MAX_COMMENTS_PER_POST}",
+                                        "comment_scroll_passes": "${MAX_COMMENT_SCROLLS}",
+                                        "comment_scroll_distance": 0.22,
+                                        "comment_scroll_duration_ms": 340,
+                                        "comment_scroll_pause_s": 0.3,
+                                        "comment_no_growth_break": "${COMMENT_NO_NEW_THRESHOLD}",
+                                        "min_comment_scan_passes": "${MIN_COMMENT_SCAN_PASSES}",
+                                        "stop_if_no_new": False,
+                                        "no_new_threshold": 4,
+                                        "collection": "${SAVE_COLLECTION}",
+                                        "platform": "facebook",
+                                        "content_type": "comment",
+                                        "dedupe_field": "comment_key",
+                                        "tags": "group,comment,${GROUP_NAME}",
+                                        "save_parent_id_var": "_active_comment_parent_hash",
+                                        "item_level": 1,
+                                    },
+                                    {"type": "key", "key": "back"},
+                                    {"type": "wait", "seconds": 1},
+                                    {"type": "dismiss_popup", "retries": 1},
+                                ],
+                                "else": [],
+                            },
+                            {"type": "scroll_down", "repeats": 1, "start_x_ratio": "${SCROLL_X_RATIO}", "start_y_ratio": 0.65, "end_y_ratio": 0.47},
+                            {"type": "set_variable", "name": "_W", "from_list": [0.5, 0.5, 1, 1, 1.5, 2]},
+                            {"type": "wait", "seconds": "${_W}"},
+                        ],
+                    },
+
+                    # Quay về trước khi xử lý group kế tiếp
+                    {"type": "key", "key": "back"},
+                    {"type": "wait", "seconds": 1},
+                    {"type": "key", "key": "back"},
+                    {"type": "wait", "seconds": 1},
+                    {"type": "dismiss_popup", "retries": 1},
+                ],
+                "else": [],
+            },
+
+            # ── Phase 4: Kết thúc ────────────────────────────────────────────
+            {"type": "key", "key": "home"},
+        ],
+    },
+
+    # ── fb_multi_account_groups ───────────────────────────────────────────────
+    {
+        "name": "fb_multi_account_groups",
+        "category": "facebook",
+        "is_builtin": False,
+        "description": (
+            "Nhiều tài khoản (thiết bị) vào nhiều nhóm FB — mỗi tài khoản xử lý "
+            "tập nhóm riêng, không trùng nhau giữa các tài khoản.\n"
+            "\n"
+            "DEVICE_INDEX được tự động inject (0, 1, 2…) theo thứ tự thiết bị trong campaign "
+            "— không cần override thủ công.\n"
+            "\n"
+            "Cách cấu hình:\n"
+            "  1. Thêm thiết bị vào campaign theo thứ tự muốn đánh số.\n"
+            "  2. Điền nhóm cho từng thiết bị:\n"
+            "       GROUP_0 = ['Nhóm A', 'Nhóm B']   (device đầu tiên)\n"
+            "       GROUP_1 = ['Nhóm C', 'Nhóm D']   (device thứ hai)\n"
+            "       ...\n"
+            "     và GROUP_COUNT_0, GROUP_COUNT_1, ... = số nhóm tương ứng.\n"
+            "  3. Thêm thiết bị thứ N: thêm if_variable DEVICE_INDEX equals 'N' "
+            "     + biến GROUP_N và GROUP_COUNT_N.\n"
+            "\n"
+            "Variables:\n"
+            "  DEVICE_INDEX    : tự inject — chỉ số slot thiết bị trong campaign\n"
+            "  GROUP_{N}       : list tên nhóm của thiết bị N\n"
+            "  GROUP_COUNT_{N} : số phần tử trong GROUP_{N}\n"
+            "  MAX_SCROLLS     : số lần scroll mỗi nhóm (default 8)\n"
+            "\n"
+            "Mở rộng số nhóm/device > 5: thêm if_variable GROUP_IDX equals 'K' "
+            "trong loop."
+        ),
+        "tags": "facebook,group,multi-account,crawl,distribute",
+        "variables": {
+            # DEVICE_INDEX được inject tự động — giá trị default ở đây chỉ cho preview
+            "DEVICE_INDEX": "0",
+
+            # ── Nhóm cho từng thiết bị ──────────────────────────────────────
+            # Thêm thiết bị: copy cặp GROUP_N + GROUP_COUNT_N, tăng N
+            "GROUP_0":       ["Nhóm A1", "Nhóm A2", "Nhóm A3"],
+            "GROUP_COUNT_0": 3,
+
+            "GROUP_1":       ["Nhóm B1", "Nhóm B2", "Nhóm B3"],
+            "GROUP_COUNT_1": 3,
+
+            "GROUP_2":       ["Nhóm C1", "Nhóm C2", "Nhóm C3"],
+            "GROUP_COUNT_2": 3,
+
+            "GROUP_3":       ["Nhóm D1", "Nhóm D2", "Nhóm D3"],
+            "GROUP_COUNT_3": 3,
+
+            "GROUP_4":       ["Nhóm E1", "Nhóm E2", "Nhóm E3"],
+            "GROUP_COUNT_4": 3,
+
+            "GROUP_5":       ["Nhóm F1", "Nhóm F2", "Nhóm F3"],
+            "GROUP_COUNT_5": 3,
+
+            "MAX_SCROLLS":  8,
+        },
+        "steps": [
+            # ── Phase 1: Gán MY_GROUPS và GROUP_COUNT theo DEVICE_INDEX ─────
+            # DEVICE_INDEX inject tự động = 0/1/2… theo thứ tự thiết bị trong campaign.
+            # Mỗi block dưới đây chỉ chạy trên đúng thiết bị tương ứng.
+            # Thêm thiết bị thứ N: copy block, đổi equals → "N", GROUP_N, GROUP_COUNT_N.
+            {
+                "type": "if_variable", "name": "DEVICE_INDEX", "equals": "0",
+                "then": [
+                    {"type": "set_variable", "name": "MY_GROUPS",   "value": "${GROUP_0}"},
+                    {"type": "set_variable", "name": "GROUP_COUNT", "value": "${GROUP_COUNT_0}"},
+                ],
+            },
+            {
+                "type": "if_variable", "name": "DEVICE_INDEX", "equals": "1",
+                "then": [
+                    {"type": "set_variable", "name": "MY_GROUPS",   "value": "${GROUP_1}"},
+                    {"type": "set_variable", "name": "GROUP_COUNT", "value": "${GROUP_COUNT_1}"},
+                ],
+            },
+            {
+                "type": "if_variable", "name": "DEVICE_INDEX", "equals": "2",
+                "then": [
+                    {"type": "set_variable", "name": "MY_GROUPS",   "value": "${GROUP_2}"},
+                    {"type": "set_variable", "name": "GROUP_COUNT", "value": "${GROUP_COUNT_2}"},
+                ],
+            },
+            {
+                "type": "if_variable", "name": "DEVICE_INDEX", "equals": "3",
+                "then": [
+                    {"type": "set_variable", "name": "MY_GROUPS",   "value": "${GROUP_3}"},
+                    {"type": "set_variable", "name": "GROUP_COUNT", "value": "${GROUP_COUNT_3}"},
+                ],
+            },
+            {
+                "type": "if_variable", "name": "DEVICE_INDEX", "equals": "4",
+                "then": [
+                    {"type": "set_variable", "name": "MY_GROUPS",   "value": "${GROUP_4}"},
+                    {"type": "set_variable", "name": "GROUP_COUNT", "value": "${GROUP_COUNT_4}"},
+                ],
+            },
+            {
+                "type": "if_variable", "name": "DEVICE_INDEX", "equals": "5",
+                "then": [
+                    {"type": "set_variable", "name": "MY_GROUPS",   "value": "${GROUP_5}"},
+                    {"type": "set_variable", "name": "GROUP_COUNT", "value": "${GROUP_COUNT_5}"},
+                ],
+            },
+
+            # ── Phase 2: Mở Facebook ─────────────────────────────────────────
+            {"type": "open_url", "url": "https://www.facebook.com"},
+            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
+            {"type": "dismiss_popup", "retries": 2},
+
+            # ── Phase 3: Khởi tạo bộ đếm nhóm (tăng trước dùng → bắt đầu từ 0) ──
+            {"type": "set_variable", "name": "GROUP_IDX", "value": 0},
+
+            # ── Phase 4: Loop lần lượt qua từng nhóm của thiết bị này ───────
+            {
+                "type": "loop",
+                "count": "${GROUP_COUNT}",
+                "steps": [
+
+                    # Tăng chỉ số trước: GROUP_IDX = 1, 2, 3 …
+                    {"type": "set_variable", "name": "GROUP_IDX", "increment": 1},
+
+                    # Chọn tên nhóm theo vị trí tuần tự trong MY_GROUPS.
+                    # MY_GROUPS là list → resolve ${MY_GROUPS} sẽ random, nên
+                    # ta dùng GROUP_IDX để lấy đúng phần tử tuần tự qua if_variable.
+                    # Mỗi if_variable chỉ active khi GROUP_IDX khớp đúng.
+                    # Thêm nhóm thứ 6+: copy block, tăng equals và index tương ứng.
+                    {
+                        "type": "if_variable", "name": "GROUP_IDX", "equals": "1",
+                        "then": [{"type": "set_variable", "name": "GROUP_NAME",
+                                  "from_list": "${MY_GROUPS}"}],
+                    },
+                    {
+                        "type": "if_variable", "name": "GROUP_IDX", "equals": "2",
+                        "then": [{"type": "set_variable", "name": "GROUP_NAME",
+                                  "from_list": "${MY_GROUPS}"}],
+                    },
+                    {
+                        "type": "if_variable", "name": "GROUP_IDX", "equals": "3",
+                        "then": [{"type": "set_variable", "name": "GROUP_NAME",
+                                  "from_list": "${MY_GROUPS}"}],
+                    },
+                    {
+                        "type": "if_variable", "name": "GROUP_IDX", "equals": "4",
+                        "then": [{"type": "set_variable", "name": "GROUP_NAME",
+                                  "from_list": "${MY_GROUPS}"}],
+                    },
+                    {
+                        "type": "if_variable", "name": "GROUP_IDX", "equals": "5",
+                        "then": [{"type": "set_variable", "name": "GROUP_NAME",
+                                  "from_list": "${MY_GROUPS}"}],
+                    },
+
+                    # ── Vào nhóm ──────────────────────────────────────────────
+                    {
+                        "type": "if_element",
+                        "by": "content-desc",
+                        "value": "Tìm kiếm",
+                        "timeout": 4,
+                        "then": [
+                            {"type": "tap_selector", "by": "content-desc",
+                             "value": "Tìm kiếm", "timeout": 4},
+                        ],
+                        "else": [
+                            {"type": "tap_ratio", "x": 0.87, "y": 0.035},
+                        ],
+                    },
+                    {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
+                    {"type": "input_text", "text": "${GROUP_NAME}", "via": "u2"},
+                    {"type": "wait", "seconds": 2},
+
+                    # Lọc tab Nhóm
+                    {
+                        "type": "if_element",
+                        "by": "text",
+                        "value": "Nhóm",
+                        "timeout": 4,
+                        "then": [
+                            {"type": "tap_selector", "by": "text", "value": "Nhóm", "timeout": 3},
+                            {"type": "wait_stable", "timeout": 3, "stable_duration": 0.4},
+                        ],
+                    },
+
+                    # Tap kết quả
+                    {
+                        "type": "if_element",
+                        "by": "text",
+                        "value": "${GROUP_NAME}",
+                        "timeout": 5,
+                        "then": [
+                            {"type": "tap_selector", "by": "text",
+                             "value": "${GROUP_NAME}", "timeout": 4},
+                        ],
+                        "else": [
+                            {"type": "tap_ratio", "x": 0.5, "y": 0.25},
+                        ],
+                    },
+                    {"type": "wait_stable", "timeout": 5, "stable_duration": 0.5},
+                    {"type": "dismiss_popup", "retries": 2},
+
+                    # ── Cuộn feed ─────────────────────────────────────────────
+                    {
+                        "type": "repeat",
+                        "count": "${MAX_SCROLLS}",
+                        "steps": [
+                            {"type": "scroll_down",
+                             "start_x_ratio": 0.3,
+                             "start_y_ratio": 0.65,
+                             "end_y_ratio": 0.35},
+                            {"type": "set_variable", "name": "_W",
+                             "from_list": [1, 1.5, 2, 2, 2.5]},
+                            {"type": "wait", "seconds": "${_W}"},
+                        ],
+                    },
+
+                    # ── Quay về ───────────────────────────────────────────────
+                    {"type": "key", "key": "back"},
+                    {"type": "wait", "seconds": 1},
+                    {"type": "key", "key": "back"},
+                    {"type": "wait", "seconds": 1},
+                    {"type": "dismiss_popup", "retries": 1},
+                ],
+            },
+
+            # ── Phase 5: Kết thúc ────────────────────────────────────────────
+            {"type": "key", "key": "home"},
+        ],
+    },
+
+    # ── fb_account_random_groups ──────────────────────────────────────────────
+    {
+        "name": "fb_account_random_groups",
+        "category": "facebook",
+        "is_builtin": False,
+        "description": (
+            "Mỗi thiết bị nhận 1 account từ account group (round-robin), login vào "
+            "Facebook, rồi chọn ngẫu nhiên GROUPS_PER_RUN nhóm từ danh sách GROUPS "
+            "và cuộn đọc mỗi nhóm.\n"
+            "\n"
+            "Credentials inject tự động qua account group:\n"
+            "  __ACCOUNT_USERNAME__ : email / số điện thoại\n"
+            "  __ACCOUNT_PASSWORD__ : mật khẩu (giải mã lúc runtime)\n"
+            "\n"
+            "Variables cần điền:\n"
+            "  GROUPS         : danh sách tên nhóm (list string)\n"
+            "  GROUPS_PER_RUN : số nhóm ghé mỗi lần chạy (default 3)\n"
+            "  MAX_SCROLLS    : số lần scroll trong mỗi nhóm (default 8)\n"
+            "  APP_PACKAGE    : com.facebook.katana hoặc com.facebook.lite\n"
+            "\n"
+            "Vận hành nhiều account:\n"
+            "  Thêm tất cả account vào 1 account group → gắn group vào scenario.\n"
+            "  Mỗi lần chạy campaign: 3 phone × 1 account (round-robin).\n"
+            "  Chạy lại để dùng tiếp các account còn lại."
+        ),
+        "tags": "facebook,group,login,account,random,crawl,multi-account",
+        "variables": {
+            "APP_PACKAGE": "com.facebook.katana",
+            "GROUPS": [
+                "Hội mua bán đồ cũ Hà Nội",
+                "Review sản phẩm chính hãng",
+                "Du lịch Việt Nam",
+                "Nuôi chó mèo Việt Nam",
+                "Học tiếng Anh giao tiếp",
+                "Đầu tư chứng khoán F0",
+                "Lập trình viên Việt Nam",
+                "Mẹ bỉm sữa chia sẻ kinh nghiệm",
+            ],
+            "GROUPS_PER_RUN": 3,
+            "MAX_SCROLLS": 8,
+        },
+        "steps": [
+            # ── Phase 1: Khởi động app + kiểm tra login ─────────────────────
+            {"type": "launch_app", "package": "${APP_PACKAGE}", "wait_after": 4},
+            {"type": "dismiss_popup", "retries": 2},
+            {"type": "wait_stable", "timeout": 6, "stable_duration": 0.5},
+
+            # Nếu có màn hình login (chưa đăng nhập / bị đăng xuất) → login
+            {
+                "type": "if_element",
+                "by": "text",
+                "value": "Đăng nhập",
+                "timeout": 4,
+                "then": [
+                    # Nhập username
+                    {
+                        "type": "if_element",
+                        "by": "text",
+                        "value": "Email hoặc số điện thoại",
+                        "timeout": 3,
+                        "then": [
+                            {"type": "tap_selector", "by": "text",
+                             "value": "Email hoặc số điện thoại", "timeout": 3},
+                        ],
+                        "else": [
+                            {"type": "tap_ratio", "x": 0.5, "y": 0.42},
+                        ],
+                    },
+                    {"type": "input_text", "text": "${__ACCOUNT_USERNAME__}", "via": "u2"},
+                    {"type": "wait", "seconds": 0.5},
+
+                    # Nhập password
+                    {
+                        "type": "if_element",
+                        "by": "text",
+                        "value": "Mật khẩu",
+                        "timeout": 3,
+                        "then": [
+                            {"type": "tap_selector", "by": "text",
+                             "value": "Mật khẩu", "timeout": 3},
+                        ],
+                        "else": [
+                            {"type": "tap_ratio", "x": 0.5, "y": 0.52},
+                        ],
+                    },
+                    {"type": "input_text", "text": "${__ACCOUNT_PASSWORD__}", "via": "u2"},
+                    {"type": "wait", "seconds": 0.5},
+
+                    # Submit
+                    {"type": "tap_selector", "by": "text", "value": "Đăng nhập", "timeout": 3},
+                    {"type": "wait_stable", "timeout": 10, "stable_duration": 0.8},
+                    {"type": "dismiss_popup", "retries": 3},
+                ],
+            },
+
+            # ── Phase 2: Vào ngẫu nhiên GROUPS_PER_RUN nhóm ─────────────────
+            {
+                "type": "repeat",
+                "count": "${GROUPS_PER_RUN}",
+                "steps": [
+
+                    # Chọn ngẫu nhiên 1 nhóm từ danh sách
+                    {"type": "set_variable", "name": "GROUP_NAME", "from_list": "${GROUPS}"},
+
+                    # Mở tìm kiếm
+                    {
+                        "type": "if_element",
+                        "by": "content-desc",
+                        "value": "Tìm kiếm",
+                        "timeout": 4,
+                        "then": [
+                            {"type": "tap_selector", "by": "content-desc",
+                             "value": "Tìm kiếm", "timeout": 4},
+                        ],
+                        "else": [
+                            {"type": "tap_ratio", "x": 0.87, "y": 0.035},
+                        ],
+                    },
+                    {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
+
+                    # Tìm tên nhóm
+                    {"type": "input_text", "text": "${GROUP_NAME}", "via": "u2"},
+                    {"type": "wait", "seconds": 2},
+
+                    # Lọc tab Nhóm
+                    {
+                        "type": "if_element",
+                        "by": "text",
+                        "value": "Nhóm",
+                        "timeout": 4,
+                        "then": [
+                            {"type": "tap_selector", "by": "text", "value": "Nhóm", "timeout": 3},
+                            {"type": "wait_stable", "timeout": 3, "stable_duration": 0.4},
+                        ],
+                    },
+
+                    # Tap kết quả
+                    {
+                        "type": "if_element",
+                        "by": "text",
+                        "value": "${GROUP_NAME}",
+                        "timeout": 5,
+                        "then": [
+                            {"type": "tap_selector", "by": "text",
+                             "value": "${GROUP_NAME}", "timeout": 4},
+                        ],
+                        "else": [
+                            {"type": "tap_ratio", "x": 0.5, "y": 0.25},
+                        ],
+                    },
+                    {"type": "wait_stable", "timeout": 5, "stable_duration": 0.5},
+                    {"type": "dismiss_popup", "retries": 2},
+
+                    # Cuộn đọc feed
+                    {
+                        "type": "repeat",
+                        "count": "${MAX_SCROLLS}",
+                        "steps": [
+                            {"type": "scroll_down",
+                             "start_x_ratio": 0.3,
+                             "start_y_ratio": 0.65,
+                             "end_y_ratio": 0.35},
+                            {"type": "set_variable", "name": "_W",
+                             "from_list": [1, 1.5, 2, 2, 2.5]},
+                            {"type": "wait", "seconds": "${_W}"},
+                        ],
+                    },
+
+                    # Quay về trước khi vào nhóm tiếp
+                    {"type": "key", "key": "back"},
+                    {"type": "wait", "seconds": 1},
+                    {"type": "key", "key": "back"},
+                    {"type": "wait", "seconds": 1},
+                    {"type": "dismiss_popup", "retries": 1},
+
+                    # Delay tự nhiên giữa các nhóm
+                    {"type": "set_variable", "name": "_GAP",
+                     "from_list": [3, 5, 7, 10]},
+                    {"type": "wait", "seconds": "${_GAP}"},
+                ],
+            },
+
+            # ── Phase 3: Kết thúc ────────────────────────────────────────────
             {"type": "key", "key": "home"},
         ],
     },
@@ -1620,8 +1318,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
 # ─────────────────────────────────────────────────────────────────────────────
 
 BUILTIN_TEMPLATES: List[Dict[str, Any]] = (
-    _GENERIC_TEMPLATES
-    + _FACEBOOK_TEMPLATES
+    _FACEBOOK_TEMPLATES
 )
 
 

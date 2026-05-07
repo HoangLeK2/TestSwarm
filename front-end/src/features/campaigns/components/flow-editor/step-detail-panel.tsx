@@ -577,6 +577,125 @@ export function StepDetailPanel({
           <F label='Số lần thử (retries)'><Input type='number' min={1} max={10} className='h-8 w-24 text-xs' value={step.retries ?? 3} onChange={(e) => update({ retries: Number(e.target.value) || 3 })} /></F>
         )}
 
+        {step.type === 'tap_fb_comment_button' && (
+          <>
+            {/* ── Mô tả ── */}
+            <div className='rounded-md border border-blue-400/40 bg-blue-50/60 px-3 py-2.5 text-[11px] leading-relaxed text-blue-950 dark:border-blue-500/30 dark:bg-blue-950/30 dark:text-blue-100'>
+              <div className='mb-1 font-semibold'>Bấm nút "Bình luận" (Facebook)</div>
+              <div className='space-y-0.5'>
+                <div>① <b>Tìm</b> bài đầu tiên có nút Bình luận đang hiện trên màn hình</div>
+                <div>② <b>Ghi nhớ bài đó</b> — comment thu thập sau sẽ gắn đúng bài này</div>
+                <div>③ <b>Bấm nút</b> → sheet bình luận mở</div>
+                <div>④ <b>Chuyển bộ lọc</b> từ "Phù hợp nhất" → "Tất cả bình luận" (tùy chọn)</div>
+                <div>⑤ Chạy nhánh <b>Khi bấm được</b> hoặc <b>Không thấy nút</b></div>
+              </div>
+              <div className='mt-2 rounded bg-amber-50 px-2 py-1.5 text-[10px] text-amber-900 dark:bg-amber-950/40 dark:text-amber-200'>
+                <b>Bước này không tự thu thập comment.</b> Để lấy comment, đặt bước
+                <code className='mx-1 rounded bg-amber-100 px-1 dark:bg-amber-900/50'>extract fb_comments</code>
+                vào nhánh <b>Khi bấm được</b> — lúc đó comment sẽ tự động gắn đúng bài vừa bấm.
+              </div>
+            </div>
+
+            {/* ── Phase 1: Tìm nút ── */}
+            <div className='text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>① Tìm nút Bình luận</div>
+            <div className='rounded border border-border/50 bg-muted/30 px-2.5 py-2 text-[11px] text-muted-foreground'>
+              Tìm node <code className='rounded bg-muted px-1'>Button</code> có text / content-desc là <code className='rounded bg-muted px-1'>"Bình luận"</code> hoặc <code className='rounded bg-muted px-1'>"Comment"</code>.
+              Nếu không thấy Button, tự động fallback sang node <code className='rounded bg-muted px-1'>clickable=true</code> cùng text.
+              Không tìm thấy → chạy nhánh <b>Không thấy nút</b>.
+            </div>
+
+            <label className='flex items-start gap-2 text-xs text-foreground'>
+              <input
+                type='checkbox' className='mt-0.5 h-3.5 w-3.5'
+                checked={!!step.pre_scroll}
+                onChange={(e) => update({ pre_scroll: e.target.checked })}
+              />
+              <span>
+                <b>Cuộn nhẹ trước khi tìm</b> — hé lộ hàng Thích / Bình luận khi bài viết dài
+                (thay cho bước scroll_down riêng trước bước này).
+              </span>
+            </label>
+
+            {step.pre_scroll && (
+              <F label='Khoảng cách cuộn (0–1, tỉ lệ màn hình)'>
+                <Input
+                  type='number' min={0.05} max={0.6} step={0.01} className='h-8 w-28 text-xs'
+                  value={step.pre_scroll_distance ?? 0.24}
+                  onChange={(e) => update({ pre_scroll_distance: Math.min(0.6, Math.max(0.05, Number(e.target.value) || 0.24)) })}
+                />
+              </F>
+            )}
+
+            <div className='grid grid-cols-2 gap-2'>
+              <F label='Chờ nút tối đa (giây)'>
+                <Input
+                  type='number' min={0.5} step={0.5} className='h-8 text-xs'
+                  value={step.timeout ?? 6}
+                  onChange={(e) => update({ timeout: Math.max(0.5, Number(e.target.value) || 6) })}
+                />
+              </F>
+              <F label='Tần suất kiểm tra (giây)'>
+                <Input
+                  type='number' min={0.1} step={0.1} className='h-8 text-xs'
+                  value={step.poll ?? 0.4}
+                  onChange={(e) => update({ poll: Math.max(0.1, Number(e.target.value) || 0.4) })}
+                />
+              </F>
+            </div>
+
+            {/* ── Phase 2: Sau khi tap ── */}
+            <div className='text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>② Sau khi bấm</div>
+            <F label='Chờ sheet bình luận mở (giây)'>
+              <Input
+                type='number' min={0} step={0.1} className='h-8 w-28 text-xs'
+                value={step.post_tap_wait_s ?? 0.8}
+                onChange={(e) => update({ post_tap_wait_s: Math.max(0, Number(e.target.value) || 0.8) })}
+              />
+            </F>
+
+            {/* ── Phase 3: Bộ lọc ── */}
+            <div className='text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>③ Bộ lọc bình luận</div>
+            <label className='flex items-start gap-2 text-xs text-foreground'>
+              <input
+                type='checkbox' className='mt-0.5 h-3.5 w-3.5'
+                checked={step.switch_to_all_comments !== false}
+                onChange={(e) => update({ switch_to_all_comments: e.target.checked })}
+              />
+              <span>
+                <b>Tự động chuyển sang "Tất cả bình luận"</b> — tap hàng
+                "Đang hiển thị Phù hợp nhất bình luận…" rồi chọn "Tất cả bình luận, bao gồm cả nội dung có thể là spam".
+                Bỏ tick để giữ bộ lọc mặc định của Facebook.
+              </span>
+            </label>
+
+            {/* ── Phase 4: Nhận diện bài ── */}
+            <div className='text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>④ Nhận diện bài viết</div>
+            <F label='Trường hash bài (giữ mặc định nếu không rõ)'>
+              <Input
+                className='h-8 text-xs font-mono'
+                value={step.dedupe_field ?? 'post_key'}
+                onChange={(e) => update({ dedupe_field: e.target.value || 'post_key' })}
+                placeholder='post_key'
+              />
+            </F>
+
+            {/* ── Khi lỗi ── */}
+            <div className='text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>⑤ Khi không tìm thấy nút</div>
+            <label className='flex items-start gap-2 text-xs text-foreground'>
+              <input
+                type='checkbox' className='mt-0.5 h-3.5 w-3.5'
+                checked={step.ignore_error !== false}
+                onChange={(e) => update({ ignore_error: e.target.checked })}
+              />
+              <span>
+                <b>Bỏ qua khi không thấy nút</b> (khuyến nghị bật) — không có nút Bình luận
+                không bị tính là lỗi, kịch bản tiếp tục bình thường. Bỏ tick để kịch bản
+                dừng và báo lỗi khi không tìm thấy nút.
+              </span>
+            </label>
+          </>
+        )}
+
         {step.type === 'tap_position' && (
           <F label='Vị trí'>
             <select className='w-full rounded border bg-background px-2 py-1.5 text-xs' value={step.pos ?? 'middle_center'} onChange={(e) => update({ pos: e.target.value })}>
@@ -1238,6 +1357,76 @@ export function StepDetailPanel({
             />
           </div>
         )}
+
+        {/* ─── Xử lý lỗi (chung cho mọi step) ─────────────────────────── */}
+        <ErrorHandlingFields step={step} update={update} />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Shared error-handling section rendered at the bottom of every step's form.
+ *
+ * Backend priority (see temporal/workflows.py::resolve_error_policy):
+ *   step.on_error → step.ignore_error → scenario.on_error → scenario.continue_on_error → "stop"
+ */
+function ErrorHandlingFields({
+  step,
+  update,
+}: {
+  step: FlowStep;
+  update: (patch: Partial<FlowStep>) => void;
+}) {
+  const policy = step.on_error ?? '';
+  const effective =
+    policy === 'continue' ? 'Bỏ qua bước này, chạy tiếp' :
+    policy === 'stop' ? 'Dừng kịch bản ngay' :
+    policy === 'pause' ? 'Tạm dừng, chờ bạn xử lý' :
+    step.ignore_error === true ? 'Bỏ qua bước này, chạy tiếp (do "Bỏ qua nếu lỗi")' :
+    'Theo cài đặt của kịch bản (mặc định: Dừng)';
+
+  return (
+    <div className='mt-3 space-y-2.5 rounded-md border border-amber-400/40 bg-amber-50/50 px-3 py-2.5 dark:border-amber-500/30 dark:bg-amber-950/20'>
+      <div className='flex items-start justify-between gap-2'>
+        <div className='text-[11px] font-semibold text-amber-900 dark:text-amber-200'>
+          Nếu bước này gặp lỗi thì làm gì?
+        </div>
+      </div>
+
+      <p className='text-[10.5px] leading-relaxed text-amber-900/80 dark:text-amber-200/80'>
+        "Lỗi" ở đây là khi máy không thực hiện được bước (mất kết nối, phần tử không
+        tồn tại, timeout…). Tuỳ bước, bạn có thể cho phép <b>bỏ qua</b> để tiếp tục kịch bản, hoặc <b>dừng</b> luôn.
+      </p>
+
+      <label className='flex items-start gap-2 text-[11px] text-foreground'>
+        <input
+          type='checkbox'
+          className='mt-0.5 h-3.5 w-3.5 shrink-0'
+          checked={step.ignore_error === true}
+          onChange={(e) => update({ ignore_error: e.target.checked || undefined })}
+        />
+        <span className='leading-relaxed'>
+          <b>Bỏ qua nếu lỗi</b> — Bước này thất bại thì coi như xong, kịch bản chạy tiếp.
+          Phù hợp cho bước không bắt buộc (VD: đóng popup, bấm nút tuỳ chọn).
+        </span>
+      </label>
+
+      <F label='Cách xử lý khi lỗi (ưu tiên cao hơn "Bỏ qua nếu lỗi")'>
+        <select
+          className='h-8 w-full rounded border bg-background px-2 py-1.5 text-xs'
+          value={policy}
+          onChange={(e) => update({ on_error: e.target.value || undefined })}
+        >
+          <option value=''>— Theo cài đặt của kịch bản (thường là Dừng)</option>
+          <option value='continue'>Bỏ qua bước này, chạy tiếp bước sau</option>
+          <option value='stop'>Dừng kịch bản ngay</option>
+          <option value='pause'>Tạm dừng, chờ bạn vào xử lý thủ công</option>
+        </select>
+      </F>
+
+      <div className='rounded bg-amber-100/60 px-2 py-1.5 text-[10.5px] leading-relaxed text-amber-900 dark:bg-amber-900/30 dark:text-amber-100'>
+        Kết quả áp dụng: <b>{effective}</b>.
       </div>
     </div>
   );

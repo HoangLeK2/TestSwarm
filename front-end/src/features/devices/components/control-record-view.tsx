@@ -2,7 +2,8 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -17,13 +18,6 @@ import { DeviceTile } from './device-tile';
 import { SafeModeBanner } from '@/features/core/components/safe-mode-banner';
 import { useSafeMode } from '@/features/core/services/use-safe-mode';
 import { Button } from '@/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import {
@@ -41,12 +35,10 @@ import {
   Save,
   ArrowLeft,
   Play,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   RefreshCw,
   Video,
-  Clapperboard,
   Crosshair,
   HelpCircle,
   SlidersHorizontal,
@@ -69,14 +61,6 @@ const FlowgramCanvas = dynamic(
 );
 import { VariableEditor } from '@/components/variable-editor';
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-  DropdownMenuSeparator,
-  DropdownMenuLabel,
-} from '@/components/ui/dropdown-menu';
-import {
   Dialog,
   DialogContent,
   DialogHeader,
@@ -91,6 +75,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { useControlRecord } from '../hooks/use-control-record';
+import { campaignsApi } from '@/features/campaigns/services/api';
 import { useScenarioTemplates } from '@/features/scenario-templates/hooks/use-scenario-templates';
 import type { ScenarioTemplateOut } from '@/features/scenario-templates/services/api';
 import { useAccountGroups } from '@/features/account-groups/hooks/use-account-groups';
@@ -109,6 +94,7 @@ import type { FlowStep } from '@/features/campaigns/components/scenario-steps/ty
 import { findSelectorInXml } from '../utils/control-record-xml';
 import { parseHierarchyTree, findNodeIdAtRatio } from '../utils/hierarchy-tree';
 import { previewScenarioStream, cancelPreviewStream } from '../services/api';
+import { devicesApi } from '../services/manage-api';
 import { useTranslations } from 'next-intl';
 import type { FixedLayoutPluginContext } from '@flowgram.ai/fixed-layout-editor';
 import { StepDetailPanel } from '@/features/campaigns/components/flow-editor/step-detail-panel';
@@ -197,6 +183,8 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
   const flowRunLeafAbortRef = useRef<AbortController | null>(null);
   const flowRunningFgIdsRef = useRef<Set<string>>(new Set());
   const [varDialogOpen, setVarDialogOpen] = useState(false);
+  const [deviceVarDialogOpen, setDeviceVarDialogOpen] = useState(false);
+  const [selectedScenarioDeviceId, setSelectedScenarioDeviceId] = useState<string | null>(null);
   const [installDialogOpen, setInstallDialogOpen] = useState(false);
   const [installUrl, setInstallUrl] = useState('');
   const [jsonDialogOpen, setJsonDialogOpen] = useState(false);
@@ -333,6 +321,156 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
   const [scenarioVariables, setScenarioVariables] = useState<Record<string, any>>(
     () => flattenVarDefs(save.editingContext?.variables ?? {})
   );
+  const [deviceVarDrafts, setDeviceVarDrafts] = useState<Record<string, Record<string, any>>>({});
+  const [deviceVarKeys, setDeviceVarKeys] = useState<string[]>([]);
+  const [newDeviceVarKey, setNewDeviceVarKey] = useState('');
+  const [bulkFillKey, setBulkFillKey] = useState<string>('');
+  const [bulkFillValue, setBulkFillValue] = useState('');
+  const [pendingScenarioDeviceVarsDraftMap, setPendingScenarioDeviceVarsDraftMap] = useState<
+    Record<string, Record<string, any>> | null
+  >(null);
+  const activeCampaignId = save.editingContext?.campaignId ?? null;
+  const activeScenarioId = save.editingContext?.scenarioId ?? null;
+  const selectedSerial = device.selectedDevice?.serial ?? null;
+  const devicesQuery = useQuery({
+    queryKey: ['control-record-device-map'],
+    queryFn: devicesApi.list,
+    staleTime: 15_000,
+  });
+  const selectedDeviceId = useMemo(() => {
+    if (!selectedSerial) return null;
+    return devicesQuery.data?.find((d) => d.serial === selectedSerial)?.id ?? null;
+  }, [devicesQuery.data, selectedSerial]);
+  const inlineScenarioDeviceVars = useMemo(() => {
+    if (!selectedDeviceId) return null;
+    const vars = deviceVarDrafts[selectedDeviceId] ?? {};
+    return Object.keys(vars).length > 0 ? vars : null;
+  }, [selectedDeviceId, deviceVarDrafts]);
+  const toDeviceTokenName = useCallback((rawKey: string) => {
+    const normalized = String(rawKey).replace(/[^A-Za-z0-9_]/g, '_').toUpperCase();
+    return `__DEVICE_${normalized}__`;
+  }, []);
+  const copyDeviceToken = useCallback(
+    async (rawKey: string) => {
+      const tokenExpr = `\${${toDeviceTokenName(rawKey)}}`;
+      try {
+        await navigator.clipboard.writeText(tokenExpr);
+        toast.success(`Đã sao chép biến: ${tokenExpr}`);
+      } catch {
+        toast.error('Không sao chép được. Hãy thử lại.');
+      }
+    },
+    [toDeviceTokenName],
+  );
+  const campaignDevicesQuery = useQuery({
+    queryKey: ['campaign-devices', activeCampaignId],
+    enabled: !!activeCampaignId,
+    queryFn: () => campaignsApi.getDevices(activeCampaignId!),
+  });
+  useEffect(() => {
+    if (!deviceVarDialogOpen) return;
+    if (selectedScenarioDeviceId) return;
+    if (selectedDeviceId) {
+      setSelectedScenarioDeviceId(selectedDeviceId);
+      return;
+    }
+    const firstCampaignDeviceId = campaignDevicesQuery.data?.[0]?.id ?? null;
+    if (firstCampaignDeviceId) setSelectedScenarioDeviceId(firstCampaignDeviceId);
+  }, [deviceVarDialogOpen, selectedScenarioDeviceId, selectedDeviceId, campaignDevicesQuery.data]);
+  const selectedDeviceLabel = useMemo(() => {
+    const source = campaignDevicesQuery.data ?? devicesQuery.data ?? [];
+    const d = source.find((x) => x.id === (selectedScenarioDeviceId ?? selectedDeviceId));
+    if (!d) return 'Chưa chọn thiết bị';
+    const model = `${d.brand || ''} ${d.model || ''}`.trim();
+    return model ? `${model} (${d.serial})` : d.serial;
+  }, [campaignDevicesQuery.data, devicesQuery.data, selectedScenarioDeviceId, selectedDeviceId]);
+  const scenarioDeviceVarsQuery = useQuery({
+    queryKey: ['scenario-device-vars', activeCampaignId, activeScenarioId, selectedScenarioDeviceId],
+    enabled: deviceVarDialogOpen && !!activeCampaignId && !!activeScenarioId && !!selectedScenarioDeviceId,
+    queryFn: () =>
+      campaignsApi.getScenarioDeviceVariables(
+        activeCampaignId!,
+        activeScenarioId!,
+        selectedScenarioDeviceId!,
+      ),
+  });
+  useEffect(() => {
+    if (!deviceVarDialogOpen) return;
+    const devices = campaignDevicesQuery.data ?? [];
+    if (devices.length === 0) return;
+    if (!activeScenarioId) {
+      const seeded: Record<string, Record<string, any>> = {};
+      const base = pendingScenarioDeviceVarsDraftMap ?? {};
+      for (const d of devices) seeded[d.id] = { ...(base[d.id] ?? {}) };
+      setDeviceVarDrafts(seeded);
+      setDeviceVarKeys(Array.from(new Set(Object.values(seeded).flatMap((m) => Object.keys(m)))));
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const entries = await Promise.all(
+        devices.map(async (d) => {
+          const res = await campaignsApi.getScenarioDeviceVariables(activeCampaignId!, activeScenarioId, d.id);
+          return [d.id, (res.vars ?? {}) as Record<string, any>] as const;
+        }),
+      );
+      if (cancelled) return;
+      const seeded: Record<string, Record<string, any>> = Object.fromEntries(entries);
+      setDeviceVarDrafts(seeded);
+      setDeviceVarKeys(Array.from(new Set(entries.flatMap(([, m]) => Object.keys(m)))));
+    })().catch((err) => toast.error(`Không tải được biến thiết bị: ${String(err)}`));
+    return () => {
+      cancelled = true;
+    };
+  }, [deviceVarDialogOpen, campaignDevicesQuery.data, activeCampaignId, activeScenarioId, pendingScenarioDeviceVarsDraftMap]);
+  useEffect(() => {
+    if (!deviceVarKeys.length) {
+      setBulkFillKey('');
+      return;
+    }
+    if (!bulkFillKey || !deviceVarKeys.includes(bulkFillKey)) {
+      setBulkFillKey(deviceVarKeys[0]);
+    }
+  }, [deviceVarKeys, bulkFillKey]);
+  const saveScenarioDeviceVarsMutation = useMutation({
+    mutationFn: async (drafts: Record<string, Record<string, any>>) => {
+      if (!activeCampaignId || !activeScenarioId) return;
+      const devices = campaignDevicesQuery.data ?? [];
+      await Promise.all(
+        devices.map((d) =>
+          campaignsApi.replaceScenarioDeviceVariables(activeCampaignId, activeScenarioId, d.id, {
+            vars: drafts[d.id] ?? {},
+          }),
+        ),
+      );
+    },
+    onSuccess: () => {
+      toast.success('Đã lưu biến cho tất cả thiết bị trong chiến dịch');
+      setDeviceVarDialogOpen(false);
+    },
+    onError: (err) => toast.error(String(err)),
+  });
+  useEffect(() => {
+    if (!pendingScenarioDeviceVarsDraftMap) return;
+    if (!activeCampaignId || !activeScenarioId) return;
+    const devices = campaignDevicesQuery.data ?? [];
+    if (devices.length === 0) return;
+    Promise.all(
+      devices.map((d) =>
+        campaignsApi.replaceScenarioDeviceVariables(activeCampaignId, activeScenarioId, d.id, {
+          vars: pendingScenarioDeviceVarsDraftMap[d.id] ?? {},
+        }),
+      ),
+    )
+      .then(() => {
+        toast.success('Đã áp dụng biến thiết bị vào scenario vừa lưu');
+        setPendingScenarioDeviceVarsDraftMap(null);
+      })
+      .catch((err) => {
+        toast.error(`Không áp dụng được biến thiết bị sau khi lưu scenario: ${String(err)}`);
+      });
+  }, [pendingScenarioDeviceVarsDraftMap, activeCampaignId, activeScenarioId, campaignDevicesQuery.data]);
+
   useEffect(() => {
     if (save.editingContext?.variables) {
       setScenarioVariables(flattenVarDefs(save.editingContext.variables));
@@ -409,6 +547,9 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           },
           ctrl.signal,
           scenarioVariables,
+          null,
+          activeScenarioId,
+          inlineScenarioDeviceVars,
         );
       } catch (e) {
         if (!ctrl.signal.aborted) {
@@ -427,7 +568,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
         }, 2800);
       }
     },
-    [device.selectedDevice, scenarioVariables],
+    [activeScenarioId, device.selectedDevice, scenarioVariables, inlineScenarioDeviceVars],
   );
 
   const handleFlowDetailChange = useCallback(
@@ -489,6 +630,9 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           },
           ctrl.signal,
           scenarioVariables,
+          null,
+          activeScenarioId,
+          inlineScenarioDeviceVars,
         );
       } catch (e) {
         if (ctrl.signal.aborted) {
@@ -512,7 +656,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
         }
       }
     },
-    [device.selectedDevice, stepRunStates, scenarioVariables],
+    [activeScenarioId, device.selectedDevice, stepRunStates, scenarioVariables, inlineScenarioDeviceVars],
   );
 
   const addStepFromSelector = useCallback(
@@ -553,10 +697,10 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
   ]);
 
   const applySelectorPick = useCallback(
-    (by: string, value: string) => {
+    (by: string, value: string, fallback?: { rx: number; ry: number } | null) => {
       if (!selectorPickTarget) return;
       const raw = steps.items as FlowStep[];
-      const next = applySelectorToSteps(raw, selectorPickTarget, by, value);
+      const next = applySelectorToSteps(raw, selectorPickTarget, by, value, fallback ?? null);
       if (next === raw) {
         toast.warning(t('pickSelectorNoElement'));
         return;
@@ -570,7 +714,13 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
       selector.setBy(by as typeof selector.by);
       selector.setValue(value);
       setSelectorPickTarget(null);
-      toast.success(t('pickSelectorApplied', { by, value: value.slice(0, 48) }));
+      if (fallback) {
+        toast.success(
+          `${t('pickSelectorApplied', { by, value: value.slice(0, 48) })} · fallback=(${fallback.rx.toFixed(3)}, ${fallback.ry.toFixed(3)})`,
+        );
+      } else {
+        toast.success(t('pickSelectorApplied', { by, value: value.slice(0, 48) }));
+      }
     },
     [selectorPickTarget, steps, selector, t],
   );
@@ -600,7 +750,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           toast.error(`Canvas: ${String(e)}`);
         }
         setFlowCoordPick(null);
-        toast.success('Đã gán swipe_ratio cho node', { duration: 2000 });
+        toast.success(`Đã gán swipe_ratio: (${x1}, ${y1}) → (${x2}, ${y2})`, { duration: 2500 });
         return;
       }
 
@@ -617,7 +767,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           })) as any,
         );
         setCoordinatePickTarget(null);
-        toast.success('Đã cập nhật đoạn vuốt');
+        toast.success(`Đã cập nhật đoạn vuốt: (${x1}, ${y1}) → (${x2}, ${y2})`, { duration: 2500 });
       }
     },
     [coordinatePickTarget, showFlowUi, flowCoordPick, steps, device.selectedDevice, hierarchy],
@@ -705,7 +855,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
             })) as any,
           );
           setCoordinatePickTarget(null);
-          toast.success('Đã cập nhật tọa độ chạm');
+          toast.success(`Đã cập nhật tọa độ chạm: (${rx3}, ${ry3})`, { duration: 2500 });
         }
         return;
       }
@@ -713,7 +863,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
       if (selectorPickTarget) {
         const sel = findSelectorInXml(hierarchy.xml, rx, ry);
         if (sel?.value) {
-          applySelectorPick(sel.by, sel.value);
+          applySelectorPick(sel.by, sel.value, { rx: rx3, ry: ry3 });
         } else {
           toast.warning(t('pickSelectorNoElement'));
         }
@@ -824,6 +974,12 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
             {device.connectedDevices.map((d) => (
               <SelectItem key={d.serial} value={d.serial} className='text-xs'>
                 {d.brand} {d.model} — {d.serial.slice(0, 10)}
+                {(((d.state || '').replace('DeviceState.', '') === 'BUSY') ||
+                  (d.scenario_active ?? 0) > 0) && (
+                  <span className='ml-1.5 rounded bg-amber-400/20 px-1 py-0.5 text-[9px] font-medium text-amber-700 dark:text-amber-300'>
+                    chiến dịch
+                  </span>
+                )}
               </SelectItem>
             ))}
           </SelectContent>
@@ -1016,6 +1172,12 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
         >
           {selectedDevice ? (
             <>
+              {(((selectedDevice.state || '').replace('DeviceState.', '') === 'BUSY') ||
+                (selectedDevice.scenario_active ?? 0) > 0) && (
+                <div className='flex w-full items-center gap-2 border-b border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300'>
+                  <span>{t('takeover.manualControlBlocked')}</span>
+                </div>
+              )}
               <div className='w-full max-w-[460px] p-3'>
                 <DeviceTile
                   device={selectedDevice}
@@ -1034,6 +1196,12 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                       : undefined
                   }
                   highlightBounds={highlightBounds}
+                  hideControls={((selectedDevice.state || '').replace('DeviceState.', '') === 'BUSY') ||
+                    (selectedDevice.scenario_active ?? 0) > 0}
+                  hideDeviceFunctions={((selectedDevice.state || '').replace('DeviceState.', '') === 'BUSY') ||
+                    (selectedDevice.scenario_active ?? 0) > 0}
+                  readOnlyPreview={((selectedDevice.state || '').replace('DeviceState.', '') === 'BUSY') ||
+                    (selectedDevice.scenario_active ?? 0) > 0}
                 />
               </div>
             </>
@@ -1147,30 +1315,23 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
               )}
 
               {/* Section header */}
-              <div className='flex shrink-0 items-center gap-2 overflow-hidden border-b border-border/40 bg-muted/20 px-4 py-1.5'>
-                <Clapperboard className='size-3.5 shrink-0 text-muted-foreground' />
-                <span className='shrink-0 text-[11px] font-semibold text-foreground'>
-                  {showFlowUi ? 'Sơ đồ Flow' : t('editorSectionTitle')}
-                </span>
-                <div
-                  className='flex min-w-0 flex-1 items-center justify-end gap-1.5 overflow-x-auto whitespace-nowrap [scrollbar-width:thin] [&::-webkit-scrollbar]:h-1 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border'
-                >
-                <div className='hidden shrink-0 items-center gap-1 sm:flex'>
-                  {record.pollingXml && <RefreshCw size={11} className='animate-spin text-red-500/70' />}
+              <div className='flex shrink-0 items-center border-b border-border/40 bg-muted/20 px-4 py-2'>
+                <div className='flex min-w-0 max-w-full flex-nowrap items-center gap-1.5 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'>
+                  {record.pollingXml && <RefreshCw size={12} className='animate-spin text-red-500/80' />}
                   <Button
                     size='sm'
                     variant={record.recording ? 'destructive' : 'default'}
-                    className='h-7 shrink-0 gap-1.5 px-2 text-[10px]'
+                    className='h-7 shrink-0 gap-1.5 px-2.5 text-xs'
                     onClick={() => void record.toggleRecording()}
                     disabled={!selectedDevice}
                   >
-                    {record.recording ? <Square className='size-3' /> : <Circle className='size-3 fill-current' />}
+                    {record.recording ? <Square className='size-3.5' /> : <Circle className='size-3.5 fill-current' />}
                     {record.recording ? t('stopRecording') : t('startRecording')}
                   </Button>
                   <Button
                     size='sm'
                     variant='outline'
-                    className='h-7 shrink-0 gap-1.5 px-2 text-[10px]'
+                    className='h-7 shrink-0 gap-1.5 px-2.5 text-xs'
                     onClick={() => setPlayerMode(true)}
                     disabled={
                       !selectedDevice ||
@@ -1183,130 +1344,94 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                         : undefined
                     }
                   >
-                    <Play className='size-3' />
+                    <Play className='size-3.5' />
                     {t('tryRun')}
                   </Button>
-                </div>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button size='sm' variant='outline' className='h-7 shrink-0 gap-1 px-2 text-[10px]'>
-                      <Plus className='size-3' />
-                      Luồng
-                      <ChevronDown className='size-3' />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align='start' className='w-56'>
-                    <DropdownMenuLabel className='pb-0.5 pt-2'>
-                      <span className='block text-[11px] font-bold text-foreground'>Chờ / Delay</span>
-                    </DropdownMenuLabel>
-                    <DropdownMenuItem className='gap-2 text-xs' onClick={steps.addWait}>
-                      <StepIcon type='wait' size={13} /> Chờ (giây)
-                    </DropdownMenuItem>
-                    <DropdownMenuItem className='gap-2 text-xs' onClick={() => steps.addFlow('wait_element')}>
-                      <StepIcon type='wait_element' size={13} /> Chờ phần tử xuất hiện
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuLabel className='pb-0.5 pt-1'>
-                      <span className='block text-[11px] font-bold text-foreground'>Điều kiện</span>
-                    </DropdownMenuLabel>
-                    <DropdownMenuItem className='gap-2 text-xs' onClick={() => steps.addFlow('if_element')}>
-                      <StepIcon type='if_element' size={13} /> Nếu phần tử tồn tại
-                    </DropdownMenuItem>
-                    <DropdownMenuItem className='gap-2 text-xs' onClick={() => steps.addFlow('if_variable')}>
-                      <StepIcon type='if_variable' size={13} /> Nếu biến thỏa điều kiện
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuLabel className='pb-0.5 pt-1'>
-                      <span className='block text-[11px] font-bold text-foreground'>Lặp lại</span>
-                    </DropdownMenuLabel>
-                    <DropdownMenuItem className='gap-2 text-xs' onClick={() => steps.addFlow('repeat')}>
-                      <StepIcon type='repeat' size={13} /> Lặp N lần
-                    </DropdownMenuItem>
-                    <DropdownMenuItem className='gap-2 text-xs' onClick={() => steps.addFlow('repeat_until')}>
-                      <StepIcon type='repeat_until' size={13} /> Lặp cho đến khi
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-                <Tooltip delayDuration={300}>
-                  <TooltipTrigger asChild>
-                    <Button size='sm' variant='outline' className='h-7 shrink-0 gap-1 px-2 text-[10px]' onClick={() => setInstallDialogOpen(true)} disabled={!selectedDevice}>
-                      <PackagePlus className='size-3' />
-                      APK
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side='bottom' className='text-xs'>Cài APK từ URL lên thiết bị</TooltipContent>
-                </Tooltip>
-                <Tooltip delayDuration={300}>
-                  <TooltipTrigger asChild>
-                    <Button size='sm' variant='ghost' className='h-7 w-7 shrink-0 p-0' onClick={() => setJsonDialogOpen(true)} disabled={steps.items.length === 0}>
-                      <Code2 className='size-3.5' />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side='bottom' className='text-xs'>Xem JSON</TooltipContent>
-                </Tooltip>
-                <Tooltip delayDuration={300}>
-                  <TooltipTrigger asChild>
-                    <Button size='sm' variant='ghost' className='h-7 w-7 shrink-0 p-0' onClick={steps.copyJson} disabled={steps.items.length === 0}>
-                      <Copy className='size-3.5' />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side='bottom' className='text-xs'>Copy JSON</TooltipContent>
-                </Tooltip>
-                <Button
-                  size='sm'
-                  variant='default'
-                  className='h-7 shrink-0 gap-1 px-2 text-[10px]'
-                  onClick={() => {
-                    // Template mode: save back to the template directly (no campaign picker).
-                    if (save.templateContext) {
-                      save.saveToTemplate(scenarioVariables);
-                      return;
-                    }
-                    steps.openSave();
-                  }}
-                  disabled={steps.items.length === 0 || safeReadOnly || save.savingTemplate}
-                  title={safeReadOnly ? 'Safe mode: không cho lưu' : undefined}
-                >
-                  <Save className='size-3' />
-                  {save.templateContext
-                    ? (save.savingTemplate ? t('templateSaving') : t('templateSave'))
-                    : 'Lưu'}
-                </Button>
-                {/* Variables editor button */}
-                <Tooltip delayDuration={400}>
-                  <TooltipTrigger asChild>
-                    <button
-                      type='button'
-                      onClick={() => setVarDialogOpen(true)}
-                      className={cn(
-                        'flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors',
-                        Object.keys(scenarioVariables).length > 0
-                          ? 'bg-primary/10 text-primary hover:bg-primary/20'
-                          : 'text-muted-foreground hover:bg-muted',
-                      )}
-                    >
-                      <SlidersHorizontal className='size-3' />
-                      Biến
-                      {Object.keys(scenarioVariables).length > 0 && (
-                        <span className='rounded-full bg-primary/20 px-1 text-[9px] font-bold'>
-                          {Object.keys(scenarioVariables).length}
-                        </span>
-                      )}
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side='bottom' className='text-xs'>
-                    Chỉnh biến — giá trị thay thế cho {'${VAR}'} khi chạy thử bước
-                  </TooltipContent>
-                </Tooltip>
-
-                <Tooltip delayDuration={400}>
-                  <TooltipTrigger asChild>
-                    <button type='button' className='shrink-0 rounded-full p-0.5 text-muted-foreground hover:bg-muted'>
-                      <HelpCircle className='size-3.5' />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side='bottom' className='max-w-xs text-xs'>{t('tooltipScenarioSection')}</TooltipContent>
-                </Tooltip>
+                  <Tooltip delayDuration={300}>
+                    <TooltipTrigger asChild>
+                      <Button size='sm' variant='ghost' className='h-7 w-7 shrink-0 p-0' onClick={() => setJsonDialogOpen(true)} disabled={steps.items.length === 0}>
+                        <Code2 className='size-3.5' />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side='bottom' className='text-xs'>Xem JSON</TooltipContent>
+                  </Tooltip>
+                  <Button
+                    size='sm'
+                    variant='outline'
+                    className='h-7 shrink-0 gap-1.5 px-2.5 text-xs'
+                    onClick={() => {
+                      if (save.templateContext) {
+                        save.saveToTemplate(scenarioVariables);
+                        return;
+                      }
+                      steps.openSave();
+                    }}
+                    disabled={steps.items.length === 0 || safeReadOnly || save.savingTemplate}
+                    title={safeReadOnly ? 'Safe mode: không cho lưu' : undefined}
+                  >
+                    <Save className='size-3.5' />
+                    {save.templateContext
+                      ? (save.savingTemplate ? t('templateSaving') : t('templateSave'))
+                      : 'Lưu'}
+                  </Button>
+                  <Tooltip delayDuration={400}>
+                    <TooltipTrigger asChild>
+                      <Button
+                        size='sm'
+                        variant='outline'
+                        onClick={() => setVarDialogOpen(true)}
+                        className={cn(
+                          'h-7 shrink-0 gap-1.5 px-2.5 text-xs',
+                          Object.keys(scenarioVariables).length > 0 && 'border-primary/40 bg-primary/10 text-primary hover:bg-primary/20',
+                        )}
+                      >
+                        <SlidersHorizontal className='size-3.5' />
+                        Biến
+                        {Object.keys(scenarioVariables).length > 0 && (
+                          <span className='rounded-full bg-primary/20 px-1.5 text-[10px] font-bold'>
+                            {Object.keys(scenarioVariables).length}
+                          </span>
+                        )}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side='bottom' className='text-xs'>
+                      Chỉnh biến — giá trị thay thế cho {'${VAR}'} khi chạy thử bước
+                    </TooltipContent>
+                  </Tooltip>
+                  <Tooltip delayDuration={400}>
+                    <TooltipTrigger asChild>
+                      <Button
+                        size='sm'
+                        variant='outline'
+                        onClick={() => setDeviceVarDialogOpen(true)}
+                        disabled={!activeCampaignId || !selectedDeviceId}
+                        className={cn(
+                          'h-7 shrink-0 gap-1.5 px-2.5 text-xs',
+                          deviceVarKeys.length > 0 && activeCampaignId && selectedDeviceId
+                            ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-300'
+                            : '',
+                        )}
+                      >
+                        <SlidersHorizontal className='size-3.5' />
+                        Biến thiết bị
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side='bottom' className='text-xs'>
+                      {!activeCampaignId
+                        ? 'Mở trong ngữ cảnh chiến dịch để thiết lập'
+                        : !selectedScenarioDeviceId
+                          ? 'Chọn thiết bị trước'
+                          : `Đang gắn cho: ${selectedDeviceLabel}`}
+                    </TooltipContent>
+                  </Tooltip>
+                  <Tooltip delayDuration={400}>
+                    <TooltipTrigger asChild>
+                      <Button size='sm' variant='ghost' className='h-7 w-7 shrink-0 p-0'>
+                        <HelpCircle className='size-3.5' />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side='bottom' className='max-w-xs text-xs'>{t('tooltipScenarioSection')}</TooltipContent>
+                  </Tooltip>
                 </div>
               </div>
 
@@ -1612,15 +1737,251 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
               Biến kịch bản
             </DialogTitle>
           </DialogHeader>
-          <p className='shrink-0 text-[12px] text-muted-foreground -mt-1'>
-            Đặt giá trị cho biến như <code className='rounded bg-muted px-1 font-mono'>{'${GROUP_NAME}'}</code>.
-            Khi chạy thử bước, giá trị này sẽ thay thế tên biến.
-          </p>
+          <div className='shrink-0 rounded-md border bg-muted/30 p-3 text-xs'>
+            <p className='font-medium text-foreground'>Cách gắn biến (nhanh)</p>
+            <p className='mt-1 text-muted-foreground'>
+              1) Tạo <span className='font-medium text-foreground'>tên biến</span> (vd: <code className='rounded bg-muted px-1 font-mono'>PLATFORM</code>) và nhập giá trị.
+            </p>
+            <p className='text-muted-foreground'>
+              2) Trong bước, dùng biến <code className='rounded bg-muted px-1 font-mono'>{'${PLATFORM}'}</code>.
+            </p>
+            <p className='text-muted-foreground'>
+              3) Khi chạy, hệ thống tự thay biến bằng giá trị bạn đã nhập.
+            </p>
+          </div>
           <div className='min-h-0 overflow-y-auto overscroll-y-contain pr-1 [-webkit-overflow-scrolling:touch]'>
             <VariableEditor
               variables={scenarioVariables}
               onChange={setScenarioVariables}
             />
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={deviceVarDialogOpen} onOpenChange={setDeviceVarDialogOpen}>
+        <DialogContent className='!w-[min(94vw,1320px)] max-h-[min(88dvh,760px)] !max-w-[1320px] gap-4 overflow-hidden !grid grid-rows-[auto_auto_auto_minmax(0,1fr)_auto]'>
+          <DialogHeader className='shrink-0'>
+            <DialogTitle className='flex items-center gap-2 text-base'>
+              <SlidersHorizontal className='size-4' />
+              Biến thiết bị cho kịch bản
+            </DialogTitle>
+          </DialogHeader>
+          <p className='shrink-0 text-[12px] text-muted-foreground -mt-1'>
+            Phạm vi: kịch bản hiện tại + toàn bộ thiết bị trong chiến dịch.
+          </p>
+          <div className='shrink-0 rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground'>
+            Mỗi <span className='font-medium text-foreground'>hàng</span> là 1 biến. Mỗi <span className='font-medium text-foreground'>cột</span> là 1 thiết bị.
+            <span className='ml-1'>Bạn điền giá trị theo từng ô để mỗi thiết bị dùng dữ liệu riêng.</span>
+            <span className='ml-1 block pt-1'>
+              Dùng trong step/context theo cú pháp <code className='rounded bg-muted px-1 font-mono'>{'${__DEVICE_TEN_BIEN__}'}</code> (bấm nút copy ở từng hàng).
+            </span>
+          </div>
+          <p className='shrink-0 text-[12px] text-muted-foreground -mt-2'>
+            Thiết bị đang chọn: <span className='font-medium text-foreground/80'>{selectedDeviceLabel}</span>
+          </p>
+          <div className='shrink-0 flex items-center gap-2'>
+            <Input
+              value={newDeviceVarKey}
+              onChange={(e) => setNewDeviceVarKey(e.target.value)}
+              placeholder='Tên biến mới (VD: USERNAME)'
+              className='h-8 text-xs'
+            />
+            <Button
+              size='sm'
+              variant='outline'
+              onClick={() => {
+                const key = newDeviceVarKey.trim();
+                if (!key) return;
+                if (deviceVarKeys.includes(key)) {
+                  toast.warning('Biến đã tồn tại');
+                  return;
+                }
+                setDeviceVarKeys((prev) => [...prev, key]);
+                setNewDeviceVarKey('');
+              }}
+            >
+              Thêm cột
+            </Button>
+          </div>
+          <div className='shrink-0 rounded-md border bg-muted/30 p-2'>
+            <div className='grid gap-2 md:grid-cols-[220px_1fr_auto_auto]'>
+              <Select
+                value={bulkFillKey || '_none'}
+                onValueChange={(v) => setBulkFillKey(v === '_none' ? '' : v)}
+              >
+                <SelectTrigger className='h-8 text-xs'>
+                  <SelectValue placeholder='Chọn cột biến để điền nhanh' />
+                </SelectTrigger>
+                <SelectContent className='z-[10010]'>
+                  <SelectItem value='_none' className='text-xs'>Chọn cột biến</SelectItem>
+                  {deviceVarKeys.map((key) => (
+                    <SelectItem key={key} value={key} className='text-xs font-mono'>
+                      {key}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Input
+                value={bulkFillValue}
+                onChange={(e) => setBulkFillValue(e.target.value)}
+                placeholder='Giá trị điền nhanh'
+                className='h-8 text-xs'
+              />
+              <Button
+                size='sm'
+                variant='outline'
+                disabled={!bulkFillKey}
+                onClick={() => {
+                  if (!bulkFillKey) return;
+                  setDeviceVarDrafts((prev) => {
+                    const next: Record<string, Record<string, any>> = {};
+                    for (const d of campaignDevicesQuery.data ?? []) {
+                      next[d.id] = {
+                        ...(prev[d.id] ?? {}),
+                        [bulkFillKey]: bulkFillValue,
+                      };
+                    }
+                    return next;
+                  });
+                }}
+              >
+                Áp dụng tất cả
+              </Button>
+              <Button
+                size='sm'
+                variant='outline'
+                disabled={!bulkFillKey}
+                onClick={() => {
+                  if (!bulkFillKey) return;
+                  setDeviceVarDrafts((prev) => {
+                    const next: Record<string, Record<string, any>> = {};
+                    for (const d of campaignDevicesQuery.data ?? []) {
+                      const current = prev[d.id]?.[bulkFillKey];
+                      next[d.id] = {
+                        ...(prev[d.id] ?? {}),
+                        [bulkFillKey]:
+                          current === undefined || current === null || String(current).trim() === ''
+                            ? bulkFillValue
+                            : current,
+                      };
+                    }
+                    return next;
+                  });
+                }}
+              >
+                Chỉ ô trống
+              </Button>
+            </div>
+          </div>
+          <div className='min-h-0 overflow-y-auto overscroll-y-contain pr-1 [-webkit-overflow-scrolling:touch]'>
+            {scenarioDeviceVarsQuery.isLoading && activeScenarioId ? (
+              <p className='text-xs text-muted-foreground'>Đang tải biến...</p>
+            ) : (campaignDevicesQuery.data ?? []).length === 0 ? (
+              <p className='text-xs text-muted-foreground'>Chiến dịch chưa có thiết bị.</p>
+            ) : deviceVarKeys.length === 0 ? (
+              <p className='text-xs text-muted-foreground'>Chưa có cột biến. Nhập tên biến và bấm "Thêm cột".</p>
+            ) : (
+              <div className='overflow-auto rounded-md border'>
+                <div
+                  className='min-w-[780px]'
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: `220px repeat(${(campaignDevicesQuery.data ?? []).length}, minmax(180px, 1fr))`,
+                  }}
+                >
+                  <div className='sticky left-0 top-0 z-20 border-b bg-muted px-3 py-2 text-xs font-semibold'>
+                    Biến
+                  </div>
+                  {(campaignDevicesQuery.data ?? []).map((d) => (
+                    <div key={`head-${d.id}`} className='border-b border-l bg-muted px-3 py-2 text-xs font-semibold'>
+                      <p className='truncate'>{d.name || d.serial}</p>
+                      <p className='truncate text-[10px] font-normal text-muted-foreground'>{d.serial}</p>
+                    </div>
+                  ))}
+                  {deviceVarKeys.map((key) => (
+                    <Fragment key={`row-${key}`}>
+                      <div key={`row-name-${key}`} className='sticky left-0 z-10 border-b bg-background px-3 py-2'>
+                        <div className='flex items-start justify-between gap-2'>
+                          <div className='min-w-0'>
+                            <p className='truncate font-mono text-xs'>{key}</p>
+                            <button
+                              type='button'
+                              className='mt-1 inline-flex items-center gap-1 rounded px-1 py-0.5 text-[10px] text-primary hover:bg-muted'
+                              onClick={() => void copyDeviceToken(key)}
+                              title='Sao chép biến để dán vào step/context'
+                            >
+                              <Copy className='size-3' />
+                              <code className='font-mono'>{`\${${toDeviceTokenName(key)}}`}</code>
+                            </button>
+                          </div>
+                          <Button
+                            size='sm'
+                            variant='ghost'
+                            className='h-6 px-2 text-[11px]'
+                            onClick={() => {
+                              setDeviceVarKeys((prev) => prev.filter((k) => k !== key));
+                              setDeviceVarDrafts((prev) => {
+                                const next: Record<string, Record<string, any>> = {};
+                                for (const [did, vars] of Object.entries(prev)) {
+                                  const v = { ...vars };
+                                  delete v[key];
+                                  next[did] = v;
+                                }
+                                return next;
+                              });
+                            }}
+                          >
+                            Xóa
+                          </Button>
+                        </div>
+                      </div>
+                      {(campaignDevicesQuery.data ?? []).map((d) => (
+                        <div key={`cell-${key}-${d.id}`} className='border-b border-l bg-background p-2'>
+                          <Input
+                            className='h-8 text-xs'
+                            value={String(deviceVarDrafts[d.id]?.[key] ?? '')}
+                            onChange={(e) => {
+                              const value = e.target.value;
+                              setDeviceVarDrafts((prev) => ({
+                                ...prev,
+                                [d.id]: {
+                                  ...(prev[d.id] ?? {}),
+                                  [key]: value,
+                                },
+                              }));
+                            }}
+                          />
+                        </div>
+                      ))}
+                    </Fragment>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+          <div className='flex justify-end gap-2'>
+            <Button
+              variant='outline'
+              size='sm'
+              onClick={() => setDeviceVarDialogOpen(false)}
+            >
+              Hủy
+            </Button>
+            <Button
+              size='sm'
+              onClick={() => {
+                if (activeScenarioId) {
+                  saveScenarioDeviceVarsMutation.mutate(deviceVarDrafts);
+                  return;
+                }
+                setPendingScenarioDeviceVarsDraftMap(deviceVarDrafts);
+                setDeviceVarDialogOpen(false);
+                toast.info('Đã lưu tạm biến thiết bị. Khi bạn lưu scenario, hệ thống sẽ tự áp dụng.');
+              }}
+              disabled={saveScenarioDeviceVarsMutation.isPending || (campaignDevicesQuery.data ?? []).length === 0}
+            >
+              {saveScenarioDeviceVarsMutation.isPending ? 'Đang lưu...' : activeScenarioId ? 'Lưu' : 'Lưu tạm'}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
@@ -1646,7 +2007,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
               className='absolute right-1 top-1 z-10 h-6 gap-1 px-2 text-[10px] shadow-sm'
               onClick={steps.copyJson}
             >
-              <Copy className='size-3' /> Copy
+              <Copy className='size-3' /> Sao chép
             </Button>
             <pre className='max-w-full min-h-0 flex-1 overflow-x-auto overflow-y-auto overscroll-y-contain rounded-md border border-border bg-muted/40 p-3 pb-10 pr-14 pt-9 text-[11px] font-mono leading-relaxed'>
               {JSON.stringify(

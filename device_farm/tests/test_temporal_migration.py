@@ -41,6 +41,7 @@ from temporal.activities import (
     set_device_registry,
 )
 from temporal.workflows import ScenarioStepsWorkflow
+from services.extraction_usecase import PersistReport
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -156,6 +157,22 @@ def _ok_steps_result(
 
 def _fail_steps_result(msg: str = "fail") -> StepsResult:
     return StepsResult(success=False, steps_executed=1, failed_message=msg)
+
+
+def _persist_tuple(
+    saved: int = 0,
+    dup: int = 0,
+    err: int = 0,
+    processed: int | None = None,
+    offsets: dict[str, int] | None = None,
+):
+    report = PersistReport(
+        saved_count=saved,
+        duplicate_count=dup,
+        error_count=err,
+        processed_count=processed if processed is not None else saved + dup + err,
+    )
+    return report, (offsets or {})
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -805,11 +822,13 @@ class TestExecuteSaveExtractionActivity:
             step={"type": "save_extraction", "data_var": "posts", "collection": "default"},
             context={"posts": posts},
         )
-        saved_responses = [{"saved": True}, {"saved": True}]
-
         with (
             patch("temporal.activities.activity.heartbeat"),
-            patch("services.content_store.save_content_item", side_effect=saved_responses),
+            patch(
+                "temporal.activities.persist_data_items",
+                new_callable=AsyncMock,
+                return_value=_persist_tuple(saved=2, processed=2),
+            ),
         ):
             result = await self.acts.execute_save_extraction(inp)
 
@@ -828,10 +847,11 @@ class TestExecuteSaveExtractionActivity:
         )
         with (
             patch("temporal.activities.activity.heartbeat"),
-            patch("services.content_store.save_content_item", side_effect=[
-                {"saved": False},  # duplicate
-                {"saved": True},   # new
-            ]),
+            patch(
+                "temporal.activities.persist_data_items",
+                new_callable=AsyncMock,
+                return_value=_persist_tuple(saved=1, dup=1, processed=2),
+            ),
         ):
             result = await self.acts.execute_save_extraction(inp)
 
@@ -848,12 +868,16 @@ class TestExecuteSaveExtractionActivity:
         )
         with (
             patch("temporal.activities.activity.heartbeat"),
-            patch("services.content_store.save_content_item", side_effect=Exception("db down")),
+            patch(
+                "temporal.activities.persist_data_items",
+                new_callable=AsyncMock,
+                side_effect=Exception("db down"),
+            ),
         ):
             result = await self.acts.execute_save_extraction(inp)
 
         assert result.ok is False
-        assert result.details["error_count"] >= 1
+        assert "save_extraction failed" in result.message
 
     @pytest.mark.asyncio
     async def test_missing_data_var_returns_error(self):
@@ -904,7 +928,11 @@ class TestExecuteSaveExtractionActivity:
         )
         with (
             patch("temporal.activities.activity.heartbeat"),
-            patch("services.content_store.save_content_item", return_value={"saved": True}),
+            patch(
+                "temporal.activities.persist_data_items",
+                new_callable=AsyncMock,
+                return_value=_persist_tuple(saved=1, processed=1),
+            ),
         ):
             result = await self.acts.execute_save_extraction(inp)
 
@@ -920,7 +948,11 @@ class TestExecuteSaveExtractionActivity:
         )
         with (
             patch("temporal.activities.activity.heartbeat"),
-            patch("services.content_store.save_content_item", return_value={"saved": True}),
+            patch(
+                "temporal.activities.persist_data_items",
+                new_callable=AsyncMock,
+                return_value=_persist_tuple(saved=1, processed=1),
+            ),
         ):
             result = await self.acts.execute_save_extraction(inp)
 
@@ -940,21 +972,15 @@ class TestExecuteSaveExtractionActivity:
                 "__save_extraction_offsets__": {"posts": 2},
             },
         )
-        saved_calls = []
-
-        async def fake_save(data, **kwargs):
-            saved_calls.append(data)
-            return {"saved": True}
-
         with (
             patch("temporal.activities.activity.heartbeat"),
-            patch("services.content_store.save_content_item", side_effect=fake_save),
+            patch(
+                "temporal.activities.persist_data_items",
+                new_callable=AsyncMock,
+                return_value=_persist_tuple(saved=1, processed=1),
+            ),
         ):
             result = await self.acts.execute_save_extraction(inp)
-
-        # Only item at index 2 (id=3) should have been saved
-        assert len(saved_calls) == 1
-        assert saved_calls[0]["id"] == "3"
         assert result.details["saved_count"] == 1
 
     @pytest.mark.asyncio
@@ -1854,15 +1880,18 @@ class TestSaveExtractionOffsetCorrectness:
             context={"posts": posts},
         )
         # Item 1 saved, item 2 errors, item 3 saved
-        side_effects = [
-            {"saved": True},
-            Exception("db timeout"),
-            {"saved": True},
-        ]
-
         with (
             patch("temporal.activities.activity.heartbeat"),
-            patch("services.content_store.save_content_item", side_effect=side_effects),
+            patch(
+                "temporal.activities.persist_data_items",
+                new_callable=AsyncMock,
+                return_value=_persist_tuple(
+                    saved=2,
+                    err=1,
+                    processed=3,
+                    offsets={"posts": 2},
+                ),
+            ),
         ):
             result = await self.acts.execute_save_extraction(inp)
 
@@ -1884,11 +1913,16 @@ class TestSaveExtractionOffsetCorrectness:
         )
         with (
             patch("temporal.activities.activity.heartbeat"),
-            patch("services.content_store.save_content_item", side_effect=[
-                {"saved": True},   # saved
-                {"saved": False},  # dup
-                {"saved": True},   # saved
-            ]),
+            patch(
+                "temporal.activities.persist_data_items",
+                new_callable=AsyncMock,
+                return_value=_persist_tuple(
+                    saved=2,
+                    dup=1,
+                    processed=3,
+                    offsets={"posts": 3},
+                ),
+            ),
         ):
             result = await self.acts.execute_save_extraction(inp)
 

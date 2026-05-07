@@ -13,14 +13,15 @@
  */
 
 import { useEffect, useRef } from 'react';
-import { subscribeBinaryFrames, getLastConfigFrame, getLastKeyFrame, subscribeDeviceFarm, requestIdr, isCachedKeyFrameStale } from '../services/ws';
-import { WebGLRenderer } from '../lib/webgl-renderer';
+import { subscribeBinaryFrames, getLastConfigFrame, getLastKeyFrame, subscribeDeviceFarm, requestIdr, isCachedKeyFrameStale, notifyDecoderBackpressure } from '../services/ws';
 
 export function useH264Video(
   serial: string,
   canvasRef: React.RefObject<HTMLCanvasElement | null>,
   opts?: {
-    onFrame?: () => void;
+    restartKey?: number;
+    onFrame?: (frame?: { mostlyBlack: boolean }) => void;
+    onStall?: (reason: 'no_packets' | 'decoder_stalled') => void;
     onStats?: (stats: {
       decodeQueueSize: number;
       droppedDelta: number;
@@ -29,27 +30,22 @@ export function useH264Video(
     }) => void;
   }
 ) {
+  const restartKey = opts?.restartKey ?? 0;
   const workerRef  = useRef<Worker | null>(null);
-  const rendererRef = useRef<WebGLRenderer | null>(null);
   const rafRef     = useRef<number | null>(null);
-  const latestFrameRef = useRef<VideoFrame | null>(null);
-  const latestSizeRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
+  const mountedAtRef = useRef(0);
+  const lastVideoPacketAtRef = useRef(0);
+  const lastRenderedFrameAtRef = useRef(0);
+  const lastRecoveryAtRef = useRef(0);
 
-  // Drop any in-memory VideoFrame and tell worker the slot is free. Call on
-  // every decoder reset. Without this, a frame that was pending when the tab
-  // went hidden stays in ref — its underlying GPU buffer may be invalidated
-  // when Chrome suspends the page, so drawLatest silently fails on return,
-  // while the worker's frameInFlight stays true → no new frames pumped → black.
+  // Unblock the worker's frameInFlight gate on decoder reset. Push model renders
+  // immediately so there is no pending VideoFrame in a ref; this just resets the
+  // worker's in-flight flag so it resumes pumping after a reset/reconnect.
   const clearLatestFrame = () => {
-    const pending = latestFrameRef.current;
-    if (pending && typeof pending.close === 'function') {
-      try { pending.close(); } catch { /* already closed */ }
-    }
-    latestFrameRef.current = null;
-    latestSizeRef.current = { w: 0, h: 0 };
     workerRef.current?.postMessage({ type: 'frame-consumed' });
   };
   const onFrameRef = useRef(opts?.onFrame);
+  const onStallRef = useRef(opts?.onStall);
   const onStatsRef = useRef(opts?.onStats);
   const serialRef  = useRef(serial);
   const wsConnectedRef = useRef(false);
@@ -60,65 +56,87 @@ export function useH264Video(
   const everDisconnectedRef = useRef(false);
 
   onFrameRef.current = opts?.onFrame;
+  onStallRef.current = opts?.onStall;
   onStatsRef.current = opts?.onStats;
   serialRef.current  = serial;
 
   // ── Main lifecycle: spawn worker + subscribe to frames ───────────────────
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    if (!serial) {
+      mountedAtRef.current = 0;
+      lastVideoPacketAtRef.current = 0;
+      lastRenderedFrameAtRef.current = 0;
+      lastRecoveryAtRef.current = 0;
+      return;
+    }
     if (!('VideoDecoder' in window)) {
       console.warn('[H264] WebCodecs not supported in this browser');
       return;
     }
 
-    const worker = new Worker('/h264-worker.js?v=19');
+    const worker = new Worker('/h264-worker.js?v=26');
     workerRef.current = worker;
+    mountedAtRef.current = Date.now();
 
-    const drawLatest = () => {
+    worker.postMessage({ type: 'init' });
+
+    // Render frame immediately when worker pushes it. Use 2D canvas instead of
+    // WebGL: WebCodecs VideoFrame -> WebGL texture is GPU/driver-sensitive and
+    // can silently produce a black canvas on some Chrome/macOS combinations.
+    const renderFrame = (frame: VideoFrame, w: number, h: number) => {
       const canvas = canvasRef.current;
-      const frame = latestFrameRef.current;
-      if (canvas && frame) {
-        try {
-          let renderer = rendererRef.current;
-          if (!renderer) {
-            renderer = new WebGLRenderer(canvas);
-            rendererRef.current = renderer;
-          }
-          if (renderer) {
-            const { w, h } = latestSizeRef.current;
-            // texImage2D can throw InvalidStateError when the VideoFrame's
-            // underlying GPU buffer was invalidated by the browser (e.g. the
-            // page was suspended while hidden). Swallow so the RAF chain
-            // keeps turning — the next decoded frame will render fine.
-            try {
-              renderer.render(frame, w, h);
-              onFrameRef.current?.();
-            } catch (err) {
-              console.debug('[H264] render skipped (invalidated frame):', err);
-            }
-          }
-        } finally {
-          if (typeof frame.close === 'function') {
-            try { frame.close(); } catch { /* already closed */ }
-          }
-          latestFrameRef.current = null;
-          workerRef.current?.postMessage({ type: 'frame-consumed' });
+      if (!canvas) { try { frame.close(); } catch { /* ok */ } return; }
+      try {
+        const width = Math.max(1, Math.floor(w || frame.displayWidth || 1));
+        const height = Math.max(1, Math.floor(h || frame.displayHeight || 1));
+        if (canvas.width !== width || canvas.height !== height) {
+          canvas.width = width;
+          canvas.height = height;
         }
-      }
-      // Hard-sync decode handoff with display loop: pull at most one frame per RAF tick.
-      workerRef.current?.postMessage({ type: 'pull-frame' });
-      rafRef.current = requestAnimationFrame(drawLatest);
+        const ctx = canvas.getContext('2d', { alpha: false });
+        if (!ctx) return;
+        ctx.drawImage(frame, 0, 0, width, height);
+        const mostlyBlack = isCanvasMostlyBlack(ctx, width, height);
+        lastRenderedFrameAtRef.current = Date.now();
+        onFrameRef.current?.({ mostlyBlack });
+      } catch (err) {
+        console.debug('[H264] render skipped:', err);
+      } finally { try { frame.close(); } catch { /* ok */ } }
     };
-    rafRef.current = requestAnimationFrame(drawLatest);
+
+    // RAF sends pull-frame as fallback for missed pushes (decoder reset, tab restore).
+    const keepalive = () => {
+      workerRef.current?.postMessage({ type: 'pull-frame' });
+      rafRef.current = requestAnimationFrame(keepalive);
+    };
+    rafRef.current = requestAnimationFrame(keepalive);
 
     worker.onmessage = ({ data }) => {
-      if (data.type === 'error') console.error('[H264] worker reported error:', data.message);
+      if (data.type === 'error') console.error('[H264] worker error:', data.message);
+      if (data.type === 'decoder-error') {
+        const now = Date.now();
+        const s = serialRef.current;
+        const w = workerRef.current;
+        if (s && w && now - lastRecoveryAtRef.current > 700) {
+          lastRecoveryAtRef.current = now;
+          onStallRef.current?.('decoder_stalled');
+          w.postMessage({ type: 'reset' });
+          clearLatestFrame();
+          setTimeout(() => requestIdr(s, 0), 30);
+        }
+        return;
+      }
+      if (data.type === 'decoder-backpressure') {
+        const s = serialRef.current;
+        if (s) {
+          notifyDecoderBackpressure(s, 500);
+        }
+        return;
+      }
       if (data.type === 'frame' && data.frame) {
-        // Latest-frame-only mode: replace pending frame, close old one.
-        const prev = latestFrameRef.current;
-        if (prev && typeof prev.close === 'function') prev.close();
-        latestFrameRef.current = data.frame as VideoFrame;
-        latestSizeRef.current = { w: data.width as number, h: data.height as number };
+        renderFrame(data.frame as VideoFrame, data.width as number, data.height as number);
+        worker.postMessage({ type: 'frame-consumed' });
       }
       if (data.type === 'stats') {
         onStatsRef.current?.({
@@ -127,17 +145,11 @@ export function useH264Video(
           decodedFrames: Number(data.decodedFrames ?? 0),
           accel: String(data.accel ?? ''),
         });
-        // Useful for diagnosing browser decode bottlenecks in production logs.
-        console.debug(
-          '[H264] stats',
-          `q=${data.decodeQueueSize} dropped=${data.droppedDelta} decoded=${data.decodedFrames} accel=${data.accel}`
-        );
+        console.debug('[H264] stats',
+          `q=${data.decodeQueueSize} dropped=${data.droppedDelta} decoded=${data.decodedFrames} accel=${data.accel}`);
       }
     };
     worker.onerror = (e) => console.error('[H264] worker load error:', e.message);
-
-    // Worker only decodes and sends VideoFrame; drawing is done by main-thread RAF loop.
-    worker.postMessage({ type: 'init' });
 
     // Subscribe to binary frames synchronously.
     // ws.ts replays cached config + keyframe via queueMicrotask so they land
@@ -154,6 +166,7 @@ export function useH264Video(
       }
       const frameType = view.getUint8(0);
       if (frameType !== 0x10 && frameType !== 0x11) return;
+      if (frameType === 0x11) lastVideoPacketAtRef.current = Date.now();
 
       const slen = view.getUint8(1);
       if (buf.byteLength < 2 + slen + 4) return;
@@ -177,23 +190,17 @@ export function useH264Video(
 
     return () => {
       unsubscribe();
+      mountedAtRef.current = 0;
       worker.postMessage({ type: 'reset' });
       worker.terminate();
       workerRef.current = null;
-      if (rendererRef.current) {
-        rendererRef.current.dispose();
-        rendererRef.current = null;
-      }
       if (rafRef.current != null) {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
       }
-      const pending = latestFrameRef.current;
-      if (pending && typeof pending.close === 'function') pending.close();
-      latestFrameRef.current = null;
+      // Push model: frames are rendered and closed immediately — no pending ref to clean up.
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [serial, restartKey]);
 
   // ── Reset when serial changes, then immediately replay cached config+IDR ──
   // Without replay, the worker sits with decoder=null until the next live IDR
@@ -224,7 +231,7 @@ export function useH264Video(
     // IDR that arrived while the tab was hidden, so replaying it drifts the
     // decoder. The server-side forced IDR (requested below) fills the gap.
     if (isCachedKeyFrameStale(serialValue)) {
-      requestIdr(serialValue);
+      requestIdr(serialValue, 0);
       return;
     }
     const keyBuf = getLastKeyFrame(serialValue);
@@ -259,6 +266,10 @@ export function useH264Video(
     const w = workerRef.current;
     if (!w) return;
 
+    lastVideoPacketAtRef.current = 0;
+    lastRenderedFrameAtRef.current = 0;
+    lastRecoveryAtRef.current = 0;
+    mountedAtRef.current = Date.now();
     w.postMessage({ type: 'reset' });
     clearLatestFrame();
     if (!serial) return;
@@ -267,8 +278,8 @@ export function useH264Video(
     // The bootstrap cache covers fast path (~50ms replay), but the cache may
     // be stale or missing; the server-forced IDR lands within ~100ms and
     // guarantees decoder sync even if no prior viewer primed the cache.
-    requestIdr(serial);
-  }, [serial]);
+    requestIdr(serial, 0);
+  }, [serial, restartKey]);
 
   // Reconnect warm-up: WS reconnect often leaves decoder on stale refs.
   // Refresh worked because it recreated hook+worker; do that automatically.
@@ -294,7 +305,7 @@ export function useH264Video(
       // Allow ws.ts cache replay microtask to settle before bootstrap replay.
       setTimeout(() => {
         replayCachedBootstrap(w, s);
-        requestIdr(s);
+        requestIdr(s, 0);
       }, 30);
     });
     return () => unsub();
@@ -313,20 +324,92 @@ export function useH264Video(
       if (!w || !s) return;
       w.postMessage({ type: 'reset' });
       clearLatestFrame();
-      // Kick the RAF chain in case the browser didn't resume it cleanly
-      // (extreme cases after long hide windows).
-      if (rafRef.current == null) {
-        // Guard: drawLatest is hoisted inside the mount effect. We can't
-        // reach it from here. Re-posting pull-frame unblocks the worker,
-        // and the next natural RAF tick will resume drawing.
-        workerRef.current?.postMessage({ type: 'pull-frame' });
-      }
+      // Push model: worker pumps frames on its own. frame-consumed unblocks
+      // the worker's frameInFlight gate in case it stalled while hidden.
       setTimeout(() => {
         replayCachedBootstrap(w, s);
-        requestIdr(s);
+        requestIdr(s, 0);
       }, 30);
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, []);
+
+  // Runtime freeze recovery: the WS can stay open and keep receiving H264
+  // packets while WebCodecs stops producing frames (bad P-frame chain, decoder
+  // hiccup, GPU/context stall). In that state the canvas keeps showing the last
+  // good frame forever, so periodically ask for a fresh IDR and reset decoder.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const s = serialRef.current;
+      const w = workerRef.current;
+      if (!s || !w) return;
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+
+      const now = Date.now();
+      const mountedAt = mountedAtRef.current;
+      const lastPacketAt = lastVideoPacketAtRef.current;
+      const lastRenderedAt = lastRenderedFrameAtRef.current;
+      if (!lastPacketAt) {
+        if (mountedAt && now - mountedAt > 3000 && now - lastRecoveryAtRef.current > 3000) {
+          lastRecoveryAtRef.current = now;
+          onStallRef.current?.('no_packets');
+          requestIdr(s, 0);
+        }
+        return;
+      }
+
+      const packetAgeMs = now - lastPacketAt;
+      const renderedAgeMs = lastRenderedAt ? now - lastRenderedAt : Infinity;
+
+      // If no video packets are arriving, this is likely a transport/agent stall;
+      // an IDR request is cheap and avoids waiting for the next user interaction.
+      // Do not mark the stream stalled when a valid frame is already visible:
+      // scrcpy may emit very few frames on a static screen.
+      if (packetAgeMs > 3000 && now - lastRecoveryAtRef.current > 3000) {
+        lastRecoveryAtRef.current = now;
+        requestIdr(s, 0);
+        if (!lastRenderedAt) {
+          onStallRef.current?.('no_packets');
+        }
+        return;
+      }
+
+      // Packets are arriving but no frame has rendered recently: reset the
+      // browser decoder and request a keyframe to rebuild the reference chain.
+      if (packetAgeMs < 2000 && renderedAgeMs > 1800 && now - lastRecoveryAtRef.current > 1500) {
+        lastRecoveryAtRef.current = now;
+        onStallRef.current?.('decoder_stalled');
+        w.postMessage({ type: 'reset' });
+        clearLatestFrame();
+        setTimeout(() => {
+          replayCachedBootstrap(w, s);
+          requestIdr(s, 0);
+        }, 30);
+      }
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+}
+
+function isCanvasMostlyBlack(ctx: CanvasRenderingContext2D, width: number, height: number): boolean {
+  const sampleW = Math.min(32, width);
+  const sampleH = Math.min(32, height);
+  const x = Math.max(0, Math.floor((width - sampleW) / 2));
+  const y = Math.max(0, Math.floor((height - sampleH) / 2));
+  let data: Uint8ClampedArray;
+  try {
+    data = ctx.getImageData(x, y, sampleW, sampleH).data;
+  } catch {
+    return false;
+  }
+  let dark = 0;
+  let lit = 0;
+  const total = sampleW * sampleH;
+  for (let i = 0; i < data.length; i += 4) {
+    const luma = (data[i] * 0.2126) + (data[i + 1] * 0.7152) + (data[i + 2] * 0.0722);
+    if (luma < 8) dark += 1;
+    if (luma > 24) lit += 1;
+  }
+  return dark / total > 0.985 && lit / total < 0.01;
 }

@@ -49,7 +49,8 @@ import {
   IconPlayerPlay,
   IconFolder,
   IconTemplate,
-  IconUsersGroup
+  IconUsersGroup,
+  IconServer
 } from '@tabler/icons-react';
 
 export type Icon = React.ComponentType<IconProps>;
@@ -105,5 +106,6 @@ export const Icons = {
   play: IconPlayerPlay,
   folder: IconFolder,
   template: IconTemplate,
-  usersGroup: IconUsersGroup
+  usersGroup: IconUsersGroup,
+  server: IconServer
 };

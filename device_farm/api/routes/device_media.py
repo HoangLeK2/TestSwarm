@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import functools
 import logging
 import os
 
@@ -18,7 +19,7 @@ def build_device_media_router(manager: DeviceManager) -> APIRouter:
     low_bw_mode = os.environ.get("LOW_BW_MODE", "").lower() in {"1", "true", "yes"}
 
     @router.get("/stream/{serial}")
-    async def mjpeg_stream(serial: str, fps: float = 0):
+    async def mjpeg_stream(serial: str, fps: float = 0, fresh: bool = False):
         device = manager.get_device(serial)
         if not device:
             return JSONResponse({"error": "Not found"}, status_code=404)
@@ -30,14 +31,20 @@ def build_device_media_router(manager: DeviceManager) -> APIRouter:
                 interval = 1.0 if low_bw_mode else 0.033
             loop = asyncio.get_event_loop()
             while True:
-                # take_screenshot() returns cached scrcpy frame (fast path).
-                # If no cache exists, capture_screenshot uses relay screencap fallback.
-                # Do NOT enable WS u2 fallback here to avoid hammering /screenshot/0
-                # and flooding logs with U2 HTTP 500 when atx/u2 is unstable.
-                frame = device.take_screenshot()
+                # Normal mode uses cached scrcpy frame (fast path). Stall fallback
+                # can opt into fresh screencap at low FPS so the UI has a way out
+                # when the H264/cache path is frozen.
+                frame = None if fresh else device.take_screenshot()
                 if not frame:
                     frame = await loop.run_in_executor(
-                        None, device.capture_screenshot, 70, 800, False
+                        None,
+                        functools.partial(
+                            device.capture_screenshot,
+                            quality=70,
+                            max_width=800,
+                            allow_ws_u2_fallback=False,
+                            skip_cache=fresh,
+                        ),
                     )
                 if frame:
                     yield (
@@ -58,7 +65,7 @@ def build_device_media_router(manager: DeviceManager) -> APIRouter:
         if not device:
             return JSONResponse({"error": "Not found"}, status_code=404)
         if fresh:
-            frame = device.capture_screenshot()
+            frame = device.capture_screenshot(skip_cache=True)
         else:
             frame = device.take_screenshot()
         if not frame:

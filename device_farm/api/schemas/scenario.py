@@ -333,6 +333,17 @@ class IfVariableStep(StepBase):
     greater_than: Optional[float] = None
     else_steps: Optional[List[StepModel]] = Field(None, alias="else")
 
+class TapFbCommentButtonStep(StepBase):
+    type: Literal["tap_fb_comment_button"]
+    timeout: NumOrVar = 6.0
+    poll: NumOrVar = 0.4
+    dedupe_field: str = "post_key"
+    ignore_error: bool = True
+    switch_to_all_comments: bool = True
+    post_tap_wait_s: NumOrVar = 0.8
+    then: List[StepModel] = []
+    else_steps: List[StepModel] = Field(default_factory=list, alias="else")
+
 class RandomPickStep(StepBase):
     type: Literal["random_pick"]
     branches: List[RandomBranch] = Field(min_length=1)
@@ -476,6 +487,7 @@ StepModel = Annotated[
         Annotated[RepeatUntilStep, Tag("repeat_until")],
         Annotated[IfElementStep, Tag("if_element")],
         Annotated[IfVariableStep, Tag("if_variable")],
+        Annotated[TapFbCommentButtonStep, Tag("tap_fb_comment_button")],
         Annotated[RandomPickStep, Tag("random_pick")],
         Annotated[LoopStep, Tag("loop")],
         Annotated[BreakIfStep, Tag("break_if")],

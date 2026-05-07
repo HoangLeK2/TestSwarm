@@ -12,6 +12,7 @@ from api.deps import CurrentUser, DB
 from api.schemas.campaign import (
     CampaignCreate, CampaignDeviceOut, CampaignOut,
     ScenarioCreate, ScenarioUpdate, ScenarioOut,
+    ScenarioDeviceVariablesBody, ScenarioDeviceVariablesOut,
 )
 from db import crud as repo
 from db.crud.default_scenario import (
@@ -21,6 +22,12 @@ from db.crud.default_scenario import (
     scenario_row_to_embedded_dict,
 )
 from db.crud.device import get_device_by_serial
+from db.crud.scenario_device_variable import (
+    delete_scenario_device_variable_key,
+    get_scenario_device_variables,
+    merge_scenario_device_variables,
+    replace_scenario_device_variables,
+)
 from services.image_store import save_step_images, delete_scenario_images
 
 router = APIRouter(prefix="/campaigns", tags=["campaigns"])
@@ -596,6 +603,118 @@ async def get_scenario(campaign_id: str, scenario_id: str, db: DB, user: Current
         s,
         account_group_name=await _lookup_account_group_name(db, s.account_group_id),
     )
+
+
+@router.get(
+    "/{campaign_id}/scenarios/{scenario_id}/devices/{device_id}/variables",
+    response_model=ScenarioDeviceVariablesOut,
+)
+async def get_scenario_device_variables_endpoint(
+    campaign_id: str,
+    scenario_id: str,
+    device_id: str,
+    db: DB,
+    user: CurrentUser,
+):
+    await _get_campaign_or_404(campaign_id, user.id, db)
+    scenario = await repo.get_scenario(db, scenario_id)
+    if not scenario or scenario.campaign_id != campaign_id:
+        raise HTTPException(status_code=404, detail="Scenario not found")
+    device = await repo.get_device(db, device_id)
+    if not device or device.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Device not found")
+    vars_map = await get_scenario_device_variables(db, scenario_id, device_id)
+    return ScenarioDeviceVariablesOut(
+        scenario_id=scenario_id,
+        device_id=device_id,
+        vars=vars_map,
+    )
+
+
+@router.put(
+    "/{campaign_id}/scenarios/{scenario_id}/devices/{device_id}/variables",
+    response_model=ScenarioDeviceVariablesOut,
+)
+async def replace_scenario_device_variables_endpoint(
+    campaign_id: str,
+    scenario_id: str,
+    device_id: str,
+    body: ScenarioDeviceVariablesBody,
+    db: DB,
+    user: CurrentUser,
+):
+    await _get_campaign_or_404(campaign_id, user.id, db)
+    scenario = await repo.get_scenario(db, scenario_id)
+    if not scenario or scenario.campaign_id != campaign_id:
+        raise HTTPException(status_code=404, detail="Scenario not found")
+    device = await repo.get_device(db, device_id)
+    if not device or device.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Device not found")
+    vars_map = await replace_scenario_device_variables(db, scenario_id, device_id, body.vars)
+    await db.commit()
+    return ScenarioDeviceVariablesOut(
+        scenario_id=scenario_id,
+        device_id=device_id,
+        vars=vars_map,
+    )
+
+
+@router.patch(
+    "/{campaign_id}/scenarios/{scenario_id}/devices/{device_id}/variables",
+    response_model=ScenarioDeviceVariablesOut,
+)
+async def merge_scenario_device_variables_endpoint(
+    campaign_id: str,
+    scenario_id: str,
+    device_id: str,
+    body: ScenarioDeviceVariablesBody,
+    db: DB,
+    user: CurrentUser,
+):
+    await _get_campaign_or_404(campaign_id, user.id, db)
+    scenario = await repo.get_scenario(db, scenario_id)
+    if not scenario or scenario.campaign_id != campaign_id:
+        raise HTTPException(status_code=404, detail="Scenario not found")
+    device = await repo.get_device(db, device_id)
+    if not device or device.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Device not found")
+    vars_map = await merge_scenario_device_variables(db, scenario_id, device_id, body.vars)
+    await db.commit()
+    return ScenarioDeviceVariablesOut(
+        scenario_id=scenario_id,
+        device_id=device_id,
+        vars=vars_map,
+    )
+
+
+@router.delete(
+    "/{campaign_id}/scenarios/{scenario_id}/devices/{device_id}/variables/{key}",
+    response_model=dict,
+)
+async def delete_scenario_device_variable_key_endpoint(
+    campaign_id: str,
+    scenario_id: str,
+    device_id: str,
+    key: str,
+    db: DB,
+    user: CurrentUser,
+):
+    await _get_campaign_or_404(campaign_id, user.id, db)
+    scenario = await repo.get_scenario(db, scenario_id)
+    if not scenario or scenario.campaign_id != campaign_id:
+        raise HTTPException(status_code=404, detail="Scenario not found")
+    device = await repo.get_device(db, device_id)
+    if not device or device.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Device not found")
+    removed = await delete_scenario_device_variable_key(db, scenario_id, device_id, key)
+    await db.commit()
+    return {
+        "ok": True,
+        "removed": bool(removed),
+        "scenario_id": scenario_id,
+        "device_id": device_id,
+        "key": key,
+    }
 
 
 @router.patch("/{campaign_id}/scenarios/{scenario_id}", response_model=ScenarioOut)

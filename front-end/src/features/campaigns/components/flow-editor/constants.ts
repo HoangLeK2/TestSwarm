@@ -152,6 +152,15 @@ export const INSERT_MENU = [
       { type: 'run_scenario', label: 'Chạy kịch bản con' },
     ]
   },
+  {
+    group: 'Facebook chuyên biệt',
+    description: 'Các bước được làm sẵn cho thao tác trên Facebook',
+    items: [
+      { type: 'tap_fb_comment_button', label: 'Bấm nút Bình luận (tự chuyển "Tất cả bình luận", có nhánh OK / Không thấy)' },
+      { type: 'extract_fb_comments', label: 'Thu thập bình luận (đã preset: cuộn, dedupe, gắn bài cha)' },
+      { type: 'extract_fb_posts', label: 'Thu thập bài viết (đã preset: mở rộng "Xem thêm", dedupe)' },
+    ]
+  },
 ];
 
 export function getStepSummary(step: FlowStep): string {
@@ -193,6 +202,11 @@ export function getStepSummary(step: FlowStep): string {
     case 'random_pick': return `${step.branches?.length ?? 0} nhánh`;
     case 'run_scenario': return step.scenario_name || step.scenario_id || '';
     case 'loop': return `×${step.count ?? '?'}`;
+    case 'tap_fb_comment_button': {
+      const thenN = Array.isArray(step.then) ? step.then.length : 0;
+      const elseN = Array.isArray(step.else) ? step.else.length : 0;
+      return `OK: ${thenN} bước${elseN ? ` · Không thấy: ${elseN} bước` : ''} · chờ ${step.timeout ?? 6}s`;
+    }
     case 'extract': {
       const base = localizeExtractStrategy(step.strategy);
       return step.collection ? `${base} → ${localizeCollection(step.collection)}` : base;
@@ -278,6 +292,11 @@ export function getStepDisplay(step: FlowStep): { target: string; selectorBadge?
       return { target: Object.keys(step.condition ?? {}).join(', ') || 'condition' };
     case 'loop':
       return { target: `×${step.count ?? '?'}` };
+    case 'tap_fb_comment_button': {
+      const thenN = Array.isArray(step.then) ? step.then.length : 0;
+      const elseN = Array.isArray(step.else) ? step.else.length : 0;
+      return { target: `Bấm Bình luận · OK ${thenN}${elseN ? ` / Không thấy ${elseN}` : ''}` };
+    }
     case 'extract': {
       const base = localizeExtractStrategy(step.strategy);
       return { target: step.collection ? `${base} → ${localizeCollection(step.collection)}` : base };
@@ -327,6 +346,7 @@ export function getStepTypeName(type: string): string {
     if_element: 'NẾU PHẦN TỬ', if_variable: 'NẾU BIẾN', if: 'IF', break_if: 'BREAK IF',
     random_pick: 'Chọn ngẫu nhiên', run_scenario: 'Chạy kịch bản con',
     loop: 'VÒNG LẶP', extract: 'TRÍCH XUẤT', save_extraction: 'LƯU DỮ LIỆU (riêng)',
+    tap_fb_comment_button: 'BẤM NÚT BÌNH LUẬN (FB)',
     extract_text_hierarchy: 'EXTRACT TEXT HIERARCHY',
     extract_text_ocr: 'EXTRACT TEXT OCR',
     extract_text_ai: 'EXTRACT TEXT AI',

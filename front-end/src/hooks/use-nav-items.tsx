@@ -75,6 +75,11 @@ export function useNavItems(): {
           title: t('content'),
           url: ROUTES.CONTENT.ROOT,
           icon: 'stats'
+        },
+        {
+          title: t('activity_history'),
+          url: ROUTES.DASHBOARD.ACTIVITY_HISTORY.ROOT,
+          icon: 'history'
         }
       ]
     }
@@ -98,24 +103,18 @@ export function useNavItems(): {
       ]
     },
     {
-      title: t('developer'),
+      title: t('infrastructure'),
       type: 'group',
       items: [
         {
-          title: t('api_keys'),
-          url: ROUTES.DASHBOARD.API_KEYS(currentOrg?.id || ''),
-          icon: 'key'
-        }
-      ]
-    },
-    {
-      title: t('totp'),
-      type: 'group',
-      items: [
+          title: t('relay_agents'),
+          url: ROUTES.RELAY_AGENTS.ROOT,
+          icon: 'server'
+        },
         {
-          title: t('totp'),
-          url: ROUTES.DASHBOARD.TOTP(currentOrg?.id || ''),
-          icon: 'settings'
+          title: t('notifications'),
+          url: ROUTES.NOTIFICATIONS.ROOT,
+          icon: 'bell'
         }
       ]
     }

@@ -56,7 +56,7 @@ class DeviceContext:
 
     @property
     def is_available(self) -> bool:
-        return self.state == DeviceState.ONLINE
+        return self.state in (DeviceState.ONLINE, DeviceState.BUSY)
 
 
 class DeviceRegistry:

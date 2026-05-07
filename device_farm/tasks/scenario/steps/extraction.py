@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from tasks.scenario.failure_bundle import capture_failure_bundle
 from tasks.scenario.steps import register_step
 from tasks.scenario.context import ScenarioContext
+from services.extraction_usecase import resolve_comment_parent_hash
 
 log = logging.getLogger(__name__)
 
@@ -57,8 +58,6 @@ def _emit_extraction_event(sc: ScenarioContext, step_idx: int, diagnostic: Dict[
         )
     except Exception as exc:  # pragma: no cover
         log.debug("extraction_result event emit failed: %s", exc)
-
-
 
 
 @register_step("extract")
@@ -149,15 +148,7 @@ def _parse_posts_with_diag(xml: str, source_index: int) -> Tuple[List[Dict[str, 
         is_fb_post_truncated,
     )
     root = _parse_xml(xml)
-    if root is not None and _hierarchy_is_fb_comment_sheet(root):
-        return [], {
-            "reason_code": "wrong_screen_comment_sheet",
-            "posts_returned": 0,
-            "truncated_post_count": 0,
-            "candidate_clusters": 0,
-            "filtered_junk_count": 0,
-            "locale_tokens_hit": [],
-        }
+    is_comment_sheet = bool(root is not None and _hierarchy_is_fb_comment_sheet(root))
     posts = parse_fb_posts_from_xml(xml, source_index=source_index)
     if posts:
         return posts, {
@@ -167,6 +158,20 @@ def _parse_posts_with_diag(xml: str, source_index: int) -> Tuple[List[Dict[str, 
             "candidate_clusters": len(posts),
             "filtered_junk_count": 0,
             "locale_tokens_hit": [],
+            "comment_sheet": is_comment_sheet,
+        }
+    if is_comment_sheet:
+        # Expanded Facebook views can be rendered as "comment sheet" while still
+        # containing a valid post body. We now let parser attempt extraction first;
+        # if nothing is found, treat as expected empty instead of hard wrong-screen.
+        return [], {
+            "reason_code": "comment_sheet_no_posts_expected",
+            "posts_returned": 0,
+            "truncated_post_count": 0,
+            "candidate_clusters": 0,
+            "filtered_junk_count": 0,
+            "locale_tokens_hit": [],
+            "comment_sheet": True,
         }
     _, diag = parse_fb_posts_from_xml_with_diagnostic(xml, source_index=source_index)
     return posts, diag
@@ -177,16 +182,26 @@ def _parse_comments_with_diag(
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Same adapter pattern for comments — preserves test mocks."""
     from tasks.fb_extract import (
+        _parse_xml,
+        _resolve_comment_region_anchors,
         parse_fb_comments_from_xml,
         parse_fb_comments_from_xml_with_diagnostic,
     )
     rows = parse_fb_comments_from_xml(xml, parent_post_id=parent_post_id, max_items=max_items)
     if rows:
+        anchor_found = False
+        root = _parse_xml(xml)
+        if root is not None:
+            action_btn_y2, _action_btn_y_mid, _comment_y_max = _resolve_comment_region_anchors(
+                root,
+                parent_post_id,
+            )
+            anchor_found = action_btn_y2 is not None
         body_rows = [r for r in rows if r.get("_type") != "post_stats"]
         return rows, {
             "reason_code": "ok",
             "comments_returned": len(body_rows),
-            "anchor_button_found": True,  # best-effort; real diag would confirm
+            "anchor_button_found": anchor_found,
             "nodes_in_band": len(rows),
             "candidate_clusters": len(rows),
             "locale_tokens_hit": [],
@@ -294,13 +309,17 @@ def _extract_fb_posts(sc, step, idx, result, xml, expand_see_more, completion_re
     result["message"] = f"extract fb_posts: +{added} new (total {len(ctx['posts'])})"
     log.info(f"[{serial}] {result['message']}")
 
+    dedupe_field = str(step.get("dedupe_field") or "post_key")
+    ctx["_fb_posts_dedupe_field"] = dedupe_field
     if new_posts:
-        ctx["_first_new_post_hash"] = compute_content_hash(new_posts[0], dedupe_field="post_key")
-        pid_map = {}
+        ctx["_first_new_post_hash"] = compute_content_hash(new_posts[0], dedupe_field=dedupe_field)
+        # Accumulate pid→hash across batches so tap_fb_comment_button (or a
+        # late tap on a cached post) can still resolve the parent hash.
+        pid_map = ctx.setdefault("_post_id_map", {})
         for p in new_posts:
-            if p.get("_pid"):
-                pid_map[p["_pid"]] = compute_content_hash(p, dedupe_field="post_key")
-        ctx["_post_id_map"] = pid_map
+            _pid = p.get("_pid")
+            if _pid:
+                pid_map[_pid] = compute_content_hash(p, dedupe_field=dedupe_field)
         _tpid = new_posts[0].get("_pid")
         if _tpid:
             ctx["_fb_comment_parent_pid"] = _tpid
@@ -365,17 +384,39 @@ def _extract_fb_comments(sc, step, idx, result, xml, stop_if_no_new, no_new_thre
         _is_junk_parsed_comment_row,
         _post_id_from_ctx,
     )
+    from services.content_store import compute_content_hash
 
     serial = sc.serial
     ctx = sc.ctx
     ctx["_active_comment_parent_hash"] = None
     parent_post_id_var = step.get("parent_post_id_var")
     max_items = int(step.get("max_items") or 50)
+    comment_scroll_passes = max(0, int(step.get("comment_scroll_passes", 0) or 0))
+    min_comment_scan_passes = max(0, int(step.get("min_comment_scan_passes", 0) or 0))
+    comment_no_growth_break = max(0, int(step.get("comment_no_growth_break", 0) or 0))
+    comment_scroll_distance = max(0.12, min(0.45, float(step.get("comment_scroll_distance", 0.28) or 0.28)))
+    comment_scroll_pause_s = max(0.1, float(step.get("comment_scroll_pause_s", 0.4) or 0.4))
+    comment_scroll_duration_ms = max(220, min(900, int(step.get("comment_scroll_duration_ms", 360) or 360)))
     parent_post_id = _post_id_from_ctx(ctx, parent_post_id_var)
     raw_items, cdiag = _parse_comments_with_diag(
         xml, parent_post_id=parent_post_id, max_items=max_items,
     )
     creason = cdiag.get("reason_code", "unknown")
+    if creason in {"no_nodes_in_band", "empty_cluster"}:
+        # Transitional frame after comment-tap can still look like feed for a
+        # short moment. Retry a couple of fresh snapshots before giving up.
+        for _ in range(2):
+            time.sleep(0.35)
+            xml_retry = sc.device.hierarchy_xml(force_refresh=True)
+            if not xml_retry:
+                continue
+            rows_retry, diag_retry = _parse_comments_with_diag(
+                xml_retry, parent_post_id=parent_post_id, max_items=max_items,
+            )
+            reason_retry = diag_retry.get("reason_code", "unknown")
+            if reason_retry == "ok":
+                raw_items, cdiag, creason = rows_retry, diag_retry, reason_retry
+                break
 
     # F1.8 session-death — short-circuit on comment screen too.
     if creason in ("login_screen", "rate_limited"):
@@ -397,13 +438,93 @@ def _extract_fb_comments(sc, step, idx, result, xml, stop_if_no_new, no_new_thre
 
     post_stats = next((x for x in raw_items if x.get("_type") == "post_stats"), None)
     new_comments = [x for x in raw_items if x.get("_type") != "post_stats" and not _is_junk_parsed_comment_row(x)]
+    # Progressive comment scan: pull more comments by scrolling in-sheet and
+    # merging snapshots. This uses template knobs that were previously ignored.
+    all_comments = list(new_comments)
+    no_growth_streak = 0
+    scan_passes_done = 0
+    if comment_scroll_passes > 0:
+        for _ in range(comment_scroll_passes):
+            if len(all_comments) >= max_items:
+                break
+            try:
+                sx = int(sc.w * 0.55)
+                sy1_ratio = 0.74
+                sy2_ratio = max(0.2, sy1_ratio - comment_scroll_distance)
+                sy1 = int(sc.h * sy1_ratio)
+                sy2 = int(sc.h * sy2_ratio)
+                sc.device.swipe(sx, sy1, sx, sy2, duration_ms=comment_scroll_duration_ms)
+                time.sleep(comment_scroll_pause_s)
+                xml_next = sc.device.hierarchy_xml(force_refresh=True)
+                if not xml_next:
+                    no_growth_streak += 1
+                else:
+                    rows_next, _diag_next = _parse_comments_with_diag(
+                        xml_next, parent_post_id=parent_post_id, max_items=max_items,
+                    )
+                    if _diag_next.get("reason_code") == "ok":
+                        ps_next = next((x for x in rows_next if x.get("_type") == "post_stats"), None)
+                        if ps_next and post_stats is None:
+                            post_stats = ps_next
+                    comments_next = [
+                        x for x in rows_next
+                        if x.get("_type") != "post_stats" and not _is_junk_parsed_comment_row(x)
+                    ]
+                    before = len(all_comments)
+                    all_comments = _dedup_comments(all_comments + comments_next)
+                    grew = len(all_comments) > before
+                    no_growth_streak = 0 if grew else (no_growth_streak + 1)
+                scan_passes_done += 1
+                if comment_no_growth_break > 0 and scan_passes_done >= min_comment_scan_passes:
+                    if no_growth_streak >= comment_no_growth_break:
+                        break
+            except Exception:
+                no_growth_streak += 1
+                scan_passes_done += 1
+                if comment_no_growth_break > 0 and scan_passes_done >= min_comment_scan_passes:
+                    if no_growth_streak >= comment_no_growth_break:
+                        break
+
+    parent_hash = resolve_comment_parent_hash(ctx, parent_post_id)
+    result["parent_hash_source"] = ctx.get("_comment_parent_resolve_source")
+    if parent_hash:
+        ctx["_active_comment_parent_hash"] = parent_hash
+
+    # In many FB layouts, comment sheet omits like/share text. Fallback to
+    # the already-extracted parent post stats from feed context.
+    post_stats_source = "comment_sheet"
+    if post_stats is None and parent_hash:
+        dedupe_field = str(ctx.get("_fb_posts_dedupe_field") or step.get("dedupe_field") or "post_key")
+        for post in (ctx.get("posts") or []):
+            try:
+                if compute_content_hash(post, dedupe_field=dedupe_field) != parent_hash:
+                    continue
+            except Exception:
+                continue
+            post_stats = {
+                "_type": "post_stats",
+                "reactions": post.get("reactions"),
+                "shares": post.get("shares"),
+                "comments": post.get("comments"),
+            }
+            post_stats_source = "feed_parent_fallback"
+            break
 
     if post_stats:
+        if post_stats_source == "comment_sheet" and parent_hash:
+            dedupe_field = str(ctx.get("_fb_posts_dedupe_field") or step.get("dedupe_field") or "post_key")
+            for post in (ctx.get("posts") or []):
+                try:
+                    if compute_content_hash(post, dedupe_field=dedupe_field) != parent_hash:
+                        continue
+                except Exception:
+                    continue
+                post_stats["reactions"] = post_stats.get("reactions") or post.get("reactions")
+                post_stats["shares"] = post_stats.get("shares") or post.get("shares")
+                post_stats["comments"] = post_stats.get("comments") or post.get("comments")
+                break
         ctx["_comment_view_stats"] = post_stats
-        _pid_key = parent_post_id
-        parent_hash = ctx.get("_post_id_map", {}).get(_pid_key) or ctx.get("_first_new_post_hash")
-        if parent_hash:
-            ctx["_active_comment_parent_hash"] = parent_hash
+        result["post_stats_source"] = post_stats_source
         if parent_hash:
             try:
                 from db.database import activity_session
@@ -417,29 +538,31 @@ def _extract_fb_comments(sc, step, idx, result, xml, stop_if_no_new, no_new_thre
                             _db, content_hash=_ph,
                             likes_count=_safe_int(_ps.get("reactions")),
                             shares_count=_safe_int(_ps.get("shares")),
+                            comments_count=_safe_int(_ps.get("comments")),
                         )
                         if updated:
                             await _db.commit()
-                            log.info(f"[{_serial}] post stats updated: hash={_ph[:12]} reactions={_ps.get('reactions')} shares={_ps.get('shares')}")
+                            log.info(
+                                f"[{_serial}] post stats updated: hash={_ph[:12]} "
+                                f"reactions={_ps.get('reactions')} "
+                                f"shares={_ps.get('shares')} "
+                                f"comments={_ps.get('comments')} source={post_stats_source}"
+                            )
 
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                     pool.submit(asyncio.run, _do_update_stats()).result(timeout=10)
             except Exception as exc:
                 log.warning(f"[{serial}] update_content_stats failed: {exc}")
-    else:
-        _pid_key = parent_post_id
-        parent_hash = ctx.get("_post_id_map", {}).get(_pid_key) or ctx.get("_first_new_post_hash")
-        if parent_hash:
-            ctx["_active_comment_parent_hash"] = parent_hash
 
     ctx.setdefault("comments", [])
     prev_count = len(ctx["comments"])
-    ctx["comments"] = _dedup_comments(ctx["comments"] + new_comments)
+    ctx["comments"] = _dedup_comments(ctx["comments"] + all_comments)
     added = len(ctx["comments"]) - prev_count
     result["extracted"] = added
     result["total_comments"] = len(ctx["comments"])
     result["parent_post_id"] = parent_post_id
     result["post_stats"] = post_stats
+    result["comment_scan_passes"] = scan_passes_done
     result["message"] = f"extract fb_comments: +{added} new (total {len(ctx['comments'])}, post={parent_post_id})"
 
     if stop_if_no_new:
@@ -494,16 +617,35 @@ def _do_inline_auto_save(sc, step, strategy, result, collection):
         level = int(step.get("item_level") or 0)
         dserial = sc.device.serial
         user_id = (sc.scenario.get("_campaign_vars") or {}).get("__USER_ID__")
+        execution_id = sc.scenario.get("_execution_id")   # real DB FK — only set by Temporal
+        run_hash_scope = sc.scenario.get("_run_hash_scope") or execution_id  # per-run dedup scope, no FK
+        campaign_id = sc.scenario.get("_campaign_id")
         snap = list(batch)
 
+        async def _resolve_user_id() -> str | None:
+            """Fallback to device owner when no auth context, to avoid orphaned data."""
+            if user_id:
+                return user_id
+            try:
+                from db.database import activity_session
+                from db.crud.device import get_device_by_serial
+                async with activity_session() as db:
+                    dev = await get_device_by_serial(db, dserial)
+                    return dev.user_id if dev else None
+            except Exception:
+                return None
+
         async def _auto_save_all():
+            resolved_uid = await _resolve_user_id()
             sv = dp = er = pc = 0
             for it in snap:
                 try:
                     r = await save_content_item(
                         data=it, collection=coll, platform=plat, content_type=ctype,
                         dedupe_field=dedup, tags=tags, device_serial=dserial,
-                        parent_id=parent_id, item_level=level, user_id=user_id,
+                        parent_id=parent_id, item_level=level, user_id=resolved_uid,
+                        campaign_id=campaign_id, execution_id=execution_id,
+                        hash_scope=run_hash_scope,
                     )
                     if r.get("saved"):
                         sv += 1

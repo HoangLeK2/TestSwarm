@@ -36,22 +36,33 @@ from relay.supervisor     import RelaySupervisor
 from relay.u2_session_pool import U2SessionPool
 
 logger = logging.getLogger("relay.agent")
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except Exception:
+        return default
+
+
 SCRCPY_RESTART_WINDOW_SECONDS = 120.0
 SCRCPY_RESTART_MAX_ATTEMPTS = 5
 SCRCPY_RESTART_MAX_BACKOFF_SECONDS = 15.0
 SCRCPY_STABLE_RESET_SECONDS = 30.0
+RELAY_SEND_QUEUE_MAX = max(4, _env_int("RELAY_SEND_QUEUE_MAX", 12))
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _RELAY_ID_FILE = os.path.join(os.path.dirname(_HERE), ".relay_id")
 
 # CMD_TYPE constants — must match adb_relay_server.py
-CMD_SHELL        = 0
-CMD_RESTART_U2   = 1
-CMD_ADB_CONNECT  = 2
-CMD_RESTART_ATX  = 3
-CMD_BOOTSTRAP    = 4  # push binaries + install APKs + start atx-agent + u2
-CMD_SCREENCAP    = 5  # adb exec-out screencap -p → base64 PNG
-CMD_PROBE_CAPS   = 6  # _probe_capabilities() → JSON dict in output
+CMD_SHELL           = 0
+CMD_RESTART_U2      = 1
+CMD_ADB_CONNECT     = 2
+CMD_RESTART_ATX     = 3
+CMD_BOOTSTRAP       = 4  # push binaries + install APKs + start atx-agent + u2
+CMD_SCREENCAP       = 5  # adb exec-out screencap -p → base64 PNG
+CMD_PROBE_CAPS      = 6  # _probe_capabilities() → JSON dict in output
+CMD_RESTART_SCRCPY  = 7  # stop + resume scrcpy session for a device
 
 
 def _load_or_create_relay_id() -> str:
@@ -115,8 +126,9 @@ class RelayAgent:
         self._scrcpy_desired: dict[str, dict[str, Any]] = {}
         self._active_send_queue: Optional[asyncio.Queue] = None
         self._active_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._scrcpy_auto_resume_enabled = os.getenv("SCRCPY_AUTO_RESUME", "true").lower() in ("1", "true", "yes", "on")
 
-        self._u2_batch_enabled = os.getenv("U2_BATCH_ENABLED", "").lower() in ("1", "true")
+        self._u2_batch_enabled = os.getenv("U2_BATCH_ENABLED", "true").lower() in ("1", "true")
         self._u2_pool: Optional[U2SessionPool] = None
         self._u2_executor: Optional[Any] = None
         # A11y control-plane workers
@@ -129,6 +141,62 @@ class RelayAgent:
         self._scrcpy_logical_to_adb: dict[str, str] = {}
         # USB serial → LAN IP for atx-agent HTTP (u2 proxy); filled from TCP suppress map or adb probe.
         self._atx_lan_host_cache: dict[str, str] = {}
+
+    def _ensure_default_scrcpy_desired(self) -> None:
+        """
+        Ensure every currently online device has a desired scrcpy state.
+        This enables "auto open screen" even on fresh startup before any
+        explicit scrcpy_start command has ever been received.
+        """
+        base_port = 27183
+        used_ports: set[int] = set()
+
+        def _next_free_port() -> int:
+            p = base_port
+            while p in used_ports:
+                p += 1
+            used_ports.add(p)
+            return p
+
+        # Normalize online devices first: avoid duplicate local forward ports
+        # (two scrcpy sessions sharing one local tcp port causes EOF/reset loops).
+        for serial in self._registry.online_serials:
+            state = self._scrcpy_desired.get(serial)
+            if not state:
+                continue
+            cfg = state.get("cfg") or {}
+            try:
+                port = int(cfg.get("port", 0) or 0)
+            except Exception:
+                port = 0
+            if port <= 0 or port in used_ports:
+                cfg["port"] = _next_free_port()
+            else:
+                used_ports.add(port)
+            state["cfg"] = cfg
+
+        for serial in self._registry.online_serials:
+            state = self._scrcpy_desired.get(serial)
+            if state:
+                continue
+            self._scrcpy_desired[serial] = {
+                "desired": True,
+                "manual_stop": False,
+                "last_stop_reason": "",
+                "cfg": {
+                    "max_fps": 30,
+                    "max_width": 800,
+                    "enable_control": True,
+                    "port": _next_free_port(),
+                    "bitrate": 2_000_000,
+                    "low_latency": False,
+                },
+                "adb_serial": serial,
+                "retry_count": 0,
+                "retry_window_start": 0.0,
+                "restart_task": None,
+                "last_started_at": 0.0,
+            }
 
     async def run(self) -> None:
         zc = start_mdns_discovery()
@@ -185,11 +253,11 @@ class RelayAgent:
         if self._api_key:
             headers["x-relay-api-key"] = self._api_key
 
-        # send_queue: str for JSON text frames, bytes for binary frames
-        # maxsize=8: larger buffer absorbs IDR burst (1 large keyframe ~30-80KB)
-        # without dropping the following P-frames. Drains instantly on LAN.
-        # P-frames are dropped when full (decoder resyncs on next IDR).
-        send_queue: asyncio.Queue = asyncio.Queue(maxsize=8)
+        # send_queue: str for JSON text frames, bytes for binary frames.
+        # Keep this shallow for interactive streaming. If transport stalls, old
+        # P-frames are worse than useless: they make the viewer decode history
+        # in bursts. scrcpy_relay.py drops deltas on overflow and requests IDR.
+        send_queue: asyncio.Queue = asyncio.Queue(maxsize=RELAY_SEND_QUEUE_MAX)
         loop = asyncio.get_running_loop()
         self._active_send_queue = send_queue
         self._active_loop = loop
@@ -212,7 +280,9 @@ class RelayAgent:
                 "version":  "2.0.0",
             }))
             logger.info("register sent: relay_id=%s serials=%s", self._relay_id, serials)
-            await self._resume_desired_scrcpy_sessions(send_queue, loop, source="ws-connected")
+            if self._scrcpy_auto_resume_enabled:
+                self._ensure_default_scrcpy_desired()
+                await self._resume_desired_scrcpy_sessions(send_queue, loop, source="ws-connected")
 
             # ── Device watcher + heartbeat ────────────────────────────────────
             watcher = AdbDeviceWatcher(
@@ -265,82 +335,109 @@ class RelayAgent:
 
     async def _connect_and_stream_grpc(self) -> None:
         """gRPC mode: bidirectional stream with HTTP/2 multiplexing."""
+        from grpc import aio as grpc_aio
         from relay.grpc_client import GrpcRelayClient
+        from relay.control_client import AgentControlClient
 
-        send_queue: asyncio.Queue = asyncio.Queue(maxsize=8)
+        send_queue: asyncio.Queue = asyncio.Queue(maxsize=RELAY_SEND_QUEUE_MAX)
         loop = asyncio.get_running_loop()
         self._active_send_queue = send_queue
         self._active_loop = loop
 
         logger.info("gRPC connecting → %s (relay_id=%s)", self._grpc_addr, self._relay_id)
 
-        client = GrpcRelayClient(
-            server_addr=self._grpc_addr,
-            api_key=self._api_key,
-            agent_id=self._relay_id,
-            send_queue=send_queue,
-            loop=loop,
-        )
+        # Shared channel — HTTP/2 multiplexes video stream + control stream
+        # over a single TCP connection; the two streams are fully independent.
+        async with grpc_aio.insecure_channel(
+            self._grpc_addr,
+            options=[
+                ("grpc.keepalive_time_ms",               10_000),
+                ("grpc.keepalive_timeout_ms",              5_000),
+                ("grpc.keepalive_permit_without_calls",        1),
+                ("grpc.http2.max_pings_without_data",          0),
+                ("grpc.http2.min_time_between_pings_ms",   5_000),
+                ("grpc.initial_reconnect_backoff_ms",      1_000),
+                ("grpc.max_reconnect_backoff_ms",         30_000),
+                ("grpc.max_send_message_length",    4 * 1024 * 1024),
+                ("grpc.max_receive_message_length", 4 * 1024 * 1024),
+            ],
+        ) as channel:
+            client = GrpcRelayClient(
+                server_addr=self._grpc_addr,
+                api_key=self._api_key,
+                agent_id=self._relay_id,
+                send_queue=send_queue,
+                loop=loop,
+                channel=channel,
+            )
 
-        # ── Register ──────────────────────────────────────────────────────────
-        serials = self._registry.online_serials or _list_serials()
-        register_msg = json.dumps({
-            "type":     "register",
-            "relay_id": self._relay_id,
-            "serials":  serials,
-            "version":  "2.0.0",
-        })
-        await send_queue.put(register_msg)
-        await self._resume_desired_scrcpy_sessions(send_queue, loop, source="grpc-connected")
+            # Channel 2: control plane (register/heartbeat/commands) — runs
+            # independently; a 180s bootstrap never blocks video frames.
+            ctrl_client = AgentControlClient(channel, self._api_key, self)
+            ctrl_task = asyncio.create_task(ctrl_client.run(), name="grpc-ctrl-client")
 
-        # ── Device watcher + heartbeat ────────────────────────────────────────
-        watcher = AdbDeviceWatcher(
-            on_device_event=lambda s, st: self._on_device_event(s, st, send_queue),
-        )
-        watcher_task = asyncio.create_task(watcher.run(), name="device-watcher-grpc")
-        hb_task = asyncio.create_task(
-            self._periodic_heartbeat(send_queue), name="relay-heartbeat-grpc"
-        )
+            # ── Register on Channel 1 (video stream) for backward compat ──────
+            # Channel 2 also sends register; server uses whichever arrives first.
+            serials = self._registry.online_serials or _list_serials()
+            register_msg = json.dumps({
+                "type":     "register",
+                "relay_id": self._relay_id,
+                "serials":  serials,
+                "version":  "2.0.0",
+            })
+            await send_queue.put(register_msg)
+            if self._scrcpy_auto_resume_enabled:
+                self._ensure_default_scrcpy_desired()
+                await self._resume_desired_scrcpy_sessions(send_queue, loop, source="grpc-connected")
 
-        # ── ControlMsg consumer: routes server msgs to sessions ───────────────
-        async def _consume_ctrl() -> None:
-            while True:
-                ctrl_msg = await client.ctrl_q.get()
-                if ctrl_msg is None:
-                    return
-                if ctrl_msg.is_json:
-                    try:
-                        msg = json.loads(ctrl_msg.data.decode("utf-8", errors="replace"))
-                        await self._handle_server_msg(msg, send_queue, loop)
-                    except Exception as exc:
-                        logger.debug("gRPC JSON msg error: %s", exc)
-                else:
-                    # Binary scrcpy control → route to session
-                    self._scrcpy_mgr.send_control(
-                        self._scrcpy_device_serial(ctrl_msg.serial),
-                        ctrl_msg.data,
-                    )
+            # ── Device watcher + heartbeat ────────────────────────────────────
+            watcher = AdbDeviceWatcher(
+                on_device_event=lambda s, st: self._on_device_event(s, st, send_queue),
+            )
+            watcher_task = asyncio.create_task(watcher.run(), name="device-watcher-grpc")
+            hb_task = asyncio.create_task(
+                self._periodic_heartbeat(send_queue), name="relay-heartbeat-grpc"
+            )
 
-        ctrl_task = asyncio.create_task(_consume_ctrl(), name="grpc-ctrl-consumer")
+            # ── ControlMsg consumer: routes server msgs to sessions ───────────
+            async def _consume_ctrl() -> None:
+                while True:
+                    ctrl_msg = await client.ctrl_q.get()
+                    if ctrl_msg is None:
+                        return
+                    if ctrl_msg.is_json:
+                        try:
+                            msg = json.loads(ctrl_msg.data.decode("utf-8", errors="replace"))
+                            await self._handle_server_msg(msg, send_queue, loop)
+                        except Exception as exc:
+                            logger.debug("gRPC JSON msg error: %s", exc)
+                    else:
+                        # Binary scrcpy control → route to session
+                        self._scrcpy_mgr.send_control(
+                            self._scrcpy_device_serial(ctrl_msg.serial),
+                            ctrl_msg.data,
+                        )
 
-        try:
-            # client.start() blocks and reconnects internally — run it directly
-            # (the outer run() loop handles top-level reconnect/backoff)
-            await client._stream_once()
-        finally:
-            client.stop()
-            watcher_task.cancel()
-            hb_task.cancel()
-            ctrl_task.cancel()
-            await send_queue.put(None)
-            self._cancel_scrcpy_restart_tasks()
-            if self._active_send_queue is send_queue:
-                self._active_send_queue = None
-                self._active_loop = None
-            # Keep scrcpy sessions alive across transport reconnects.
-            # Transient WS/gRPC reconnects are common on unstable networks; stopping
-            # all sessions here causes 2-5s black/freeze gaps on every reconnect.
-            # Sessions are explicitly cleaned up on scrcpy_stop or full agent shutdown.
+            consume_task = asyncio.create_task(_consume_ctrl(), name="grpc-ctrl-consumer")
+
+            try:
+                await client._stream_once(channel)
+            finally:
+                client.stop()
+                ctrl_client.stop()
+                watcher_task.cancel()
+                hb_task.cancel()
+                consume_task.cancel()
+                ctrl_task.cancel()
+                await send_queue.put(None)
+                self._cancel_scrcpy_restart_tasks()
+                if self._active_send_queue is send_queue:
+                    self._active_send_queue = None
+                    self._active_loop = None
+                # Keep scrcpy sessions alive across transport reconnects.
+                # Transient WS/gRPC reconnects are common on unstable networks; stopping
+                # all sessions here causes 2-5s black/freeze gaps on every reconnect.
+                # Sessions are explicitly cleaned up on scrcpy_stop or full agent shutdown.
 
     async def _handle_binary(self, data: bytes, send_queue: asyncio.Queue) -> None:
         """Handle binary frame from server (currently: scrcpy control 0x43)."""
@@ -438,7 +535,9 @@ class RelayAgent:
                     self._atx_lan_host_cache[usb_s] = tcp_s.rsplit(":", 1)[0]
             for tcp_s, _usb_s in pairs or []:
                 await self._scrcpy_mgr.stop_session(tcp_s, reason="manual_stop")
-            await self._resume_desired_scrcpy_sessions(send_queue, loop, source="device-online")
+            if self._scrcpy_auto_resume_enabled:
+                self._ensure_default_scrcpy_desired()
+                await self._resume_desired_scrcpy_sessions(send_queue, loop, source="device-online")
 
         if ctx.state == DeviceState.RECONNECTING and ":" in serial:
             usb_anchor = self._tcp_suppressed_for_usb.get(serial)
@@ -1011,6 +1110,8 @@ class RelayAgent:
                 import json as _json
                 caps = _probe_capabilities(serial)
                 output, rc = _json.dumps(caps), 0
+            elif cmd_type == CMD_RESTART_SCRCPY:
+                output, rc = self._restart_scrcpy_sync(serial, timeout)
             else:
                 output, rc = _adb_shell(serial, cmd, timeout=timeout)
 
@@ -1052,6 +1153,9 @@ class RelayAgent:
         if reason not in abnormal_reasons:
             logger.info("auto-resume skipped %s: non-abnormal reason=%s", logical, reason)
             return
+        if not self._scrcpy_auto_resume_enabled:
+            logger.info("auto-resume disabled, skip %s (reason=%s)", logical, reason)
+            return
         logger.info("auto-resume flagged %s: reason=%s", logical, reason)
         if self._active_send_queue is None or self._active_loop is None:
             return
@@ -1069,6 +1173,32 @@ class RelayAgent:
             )
 
         loop.call_soon_threadsafe(_schedule_resume)
+
+    def _restart_scrcpy_sync(self, serial: str, timeout: int) -> tuple[str, int]:
+        """Stop + resume scrcpy for serial. Called from thread pool (_execute_command)."""
+        loop  = self._active_loop
+        queue = self._active_send_queue
+        if loop is None or queue is None:
+            return "no active transport", -1
+
+        adb_serial = self._scrcpy_device_serial(serial)
+        logical    = self._logical_serial_for_adb(adb_serial)
+
+        async def _do_restart():
+            await self._scrcpy_mgr.stop_session(adb_serial, reason="manual_restart")
+            state = self._scrcpy_desired.get(logical) or self._scrcpy_desired.get(serial)
+            if state:
+                state["desired"]     = True
+                state["manual_stop"] = False
+                state["last_stop_reason"] = ""
+            await self._start_desired_scrcpy(logical, queue, loop)
+
+        fut = asyncio.run_coroutine_threadsafe(_do_restart(), loop)
+        try:
+            fut.result(timeout=float(timeout))
+            return "scrcpy restarted", 0
+        except Exception as exc:
+            return str(exc), -1
 
     def _logical_serial_for_adb(self, adb_serial: str) -> str:
         for logical, mapped in self._scrcpy_logical_to_adb.items():
@@ -1122,21 +1252,30 @@ class RelayAgent:
         loop: asyncio.AbstractEventLoop,
         source: str,
     ) -> None:
-        # NOTE: "device_offline" is deliberately NOT in this set. When a device
-        # disappears we already teardown scrcpy via stop_all_for_serial; the
-        # ONLINE transition's _resume_desired_scrcpy_sessions path brings it
-        # back up. Restarting from the stop callback would race the reconnect.
+        # The reason filter only applies to the session-stopped callback path,
+        # where we must avoid double-restarting after a clean/manual stop. All
+        # other sources (device-online, ws-connected, grpc-connected, supervisor)
+        # are recovery triggers — they must resume regardless of last reason
+        # (including "device_offline", "cleanup_idle", "manual_stop" from pair
+        # switchover, etc.), otherwise the stream will never come back after a
+        # phone WiFi drop / reconnect cycle.
         abnormal_reasons = {"zombie_thread", "runtime_error", "startup_failure"}
+        only_abnormal = source == "session-stopped"
         for logical, state in list(self._scrcpy_desired.items()):
             if not state.get("desired", False):
                 continue
             if state.get("manual_stop", False):
                 continue
-            if state.get("last_stop_reason") not in abnormal_reasons:
+            if only_abnormal and state.get("last_stop_reason") not in abnormal_reasons:
                 continue
             restart_task = state.get("restart_task")
             if restart_task and not restart_task.done():
                 continue
+            # Recovery trigger: reset retry budget so the device gets a fresh
+            # attempt window after a genuine availability change.
+            if not only_abnormal:
+                state["retry_count"] = 0
+                state["retry_window_start"] = 0.0
             task = asyncio.create_task(
                 self._restart_with_backoff(logical, send_queue, loop, source=source),
                 name=f"scrcpy-restart-{logical}",

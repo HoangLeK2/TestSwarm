@@ -55,6 +55,11 @@ async def _detect_bloom_support() -> bool:
                 "Install redis/redis-stack image to enable."
             )
     except Exception as exc:
+        if "different loop" in str(exc) or "attached to a different" in str(exc):
+            # Called from asyncio.run() in a worker thread — Redis client bound to main loop.
+            # Don't permanently disable; just skip bloom for this call.
+            log.debug("bloom_dedup: skipping (wrong event loop) — DB dedup used instead")
+            return False
         log.warning("bloom_dedup: module detection failed (%s) — disabling", exc)
         _BLOOM_AVAILABLE = False
     return _BLOOM_AVAILABLE

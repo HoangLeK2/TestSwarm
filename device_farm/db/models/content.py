@@ -4,11 +4,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, JSON, SmallInteger, String, Text, Index, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Integer, JSON, SmallInteger, String, Text, Index, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.database import Base
-from .enums import ContentExportStatus
 from .utils import _now, _uuid
 
 
@@ -126,21 +125,3 @@ class ContentCollection(Base):
     )
 
 
-class ContentExport(Base):
-    """Export job record."""
-
-    __tablename__ = "content_exports"
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    collection: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    format: Mapped[str] = mapped_column(String(10), nullable=False, default="csv")
-    status: Mapped[str] = mapped_column(String(20), default=ContentExportStatus.PENDING)
-    filters: Mapped[dict] = mapped_column(JSON, default=dict)
-    file_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    file_size_bytes: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
-    item_count: Mapped[int] = mapped_column(Integer, default=0)
-    user_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
-    )
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
-    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

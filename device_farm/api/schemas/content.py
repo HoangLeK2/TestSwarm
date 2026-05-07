@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -61,23 +61,6 @@ class CollectionCreate(BaseModel):
     name: str
     description: str = ""
     platform: str | None = None
-
-
-class ExportRequest(BaseModel):
-    collection: str | None = None
-    format: str = "csv"
-    filters: dict = {}
-
-
-class ExportOut(BaseModel):
-    id: str
-    collection: str | None = None
-    format: str
-    status: str
-    item_count: int
-    file_size_bytes: int | None = None
-    created_at: datetime
-    completed_at: datetime | None = None
 
 
 class ContentStatsOut(BaseModel):

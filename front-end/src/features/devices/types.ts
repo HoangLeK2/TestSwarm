@@ -12,6 +12,8 @@ export interface Device {
   minitouch_ready?: boolean;
   u2_ready?: boolean;
   relay_scrcpy_enabled?: boolean;
+  /** >0 when a Temporal scenario/campaign is actively driving this device */
+  scenario_active?: number;
 }
 
 export interface Task {
@@ -55,9 +57,15 @@ export type WsMessage =
       touch_method?: string;
       minitouch_ready?: boolean;
       u2_ready?: boolean;
+      scenario_active?: number;
     }
   | { type: 'log'; serial: string; line: string }
   | { type: 'ws_status'; connected: boolean }
+  | { type: 'device_busy'; serial: string; reason: string; scenario_active: boolean }
+  | {
+      type: 'notification';
+      data: import('@/features/notifications/services/api').NotificationItem;
+    }
   | {
       type: 'device_event';
       id: string;

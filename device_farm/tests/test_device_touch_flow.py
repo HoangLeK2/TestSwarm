@@ -208,6 +208,13 @@ class TestCaptureScreenshot:
         result = d.capture_screenshot()
         assert result == b"\xff\xd8\xff\xe0fake-jpeg"
 
+    def test_skip_cache_does_not_return_stale_scrcpy_frame(self):
+        d = _make_device()
+        d._scrcpy_active = True
+        d._latest_jpeg = b"\xff\xd8\xff\xe0stale-jpeg"
+        result = d.capture_screenshot(skip_cache=True)
+        assert result is None
+
     def test_returns_cached_when_ws_agent_mode(self):
         d = _make_device()
         d._latest_jpeg = b"cached"

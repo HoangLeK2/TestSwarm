@@ -51,6 +51,33 @@ export class WebGLRenderer {
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
+  isMostlyBlack(): boolean {
+    if (this.contextLost || !this.gl || this.width <= 0 || this.height <= 0) {
+      return false;
+    }
+    const gl = this.gl;
+    const sampleW = Math.min(32, this.width);
+    const sampleH = Math.min(32, this.height);
+    const x = Math.max(0, Math.floor((this.width - sampleW) / 2));
+    const y = Math.max(0, Math.floor((this.height - sampleH) / 2));
+    const pixels = new Uint8Array(sampleW * sampleH * 4);
+    try {
+      gl.readPixels(x, y, sampleW, sampleH, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    } catch {
+      return false;
+    }
+
+    let dark = 0;
+    let lit = 0;
+    const total = sampleW * sampleH;
+    for (let i = 0; i < pixels.length; i += 4) {
+      const luma = (pixels[i] * 0.2126) + (pixels[i + 1] * 0.7152) + (pixels[i + 2] * 0.0722);
+      if (luma < 8) dark += 1;
+      if (luma > 24) lit += 1;
+    }
+    return dark / total > 0.985 && lit / total < 0.01;
+  }
+
   dispose(): void {
     this.canvas.removeEventListener('webglcontextlost', this.onContextLostBound as EventListener, false);
     this.canvas.removeEventListener('webglcontextrestored', this.onContextRestoredBound, false);
@@ -189,4 +216,3 @@ export class WebGLRenderer {
     }
   }
 }
-

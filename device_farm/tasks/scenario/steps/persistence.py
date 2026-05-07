@@ -82,8 +82,31 @@ def handle_save_extraction(sc: ScenarioContext, step: Dict[str, Any], idx: int, 
         parent_id = sc.ctx.get(parent_id_var) if parent_id_var else None
         item_level = int(step.get("item_level") or 0)
         user_id = (sc.scenario.get("_campaign_vars") or {}).get("__USER_ID__")
+        execution_id = sc.scenario.get("_execution_id")   # real DB FK — set by Temporal
+        run_hash_scope = sc.scenario.get("_run_hash_scope") or execution_id
+        campaign_id = sc.scenario.get("_campaign_id")
+
+        async def _resolve_user_id() -> str | None:
+            """Fallback to device owner when caller context is absent."""
+            if user_id:
+                return user_id
+            # Allow direct scenario payload overrides for non-campaign callers.
+            direct_uid = sc.scenario.get("user_id") or sc.scenario.get("__USER_ID__")
+            if direct_uid:
+                s = str(direct_uid).strip()
+                if s:
+                    return s
+            try:
+                from db.database import activity_session
+                from db.crud.device import get_device_by_serial
+                async with activity_session() as db:
+                    dev = await get_device_by_serial(db, dserial)
+                    return dev.user_id if dev else None
+            except Exception:
+                return None
 
         async def _save_all_items():
+            resolved_uid = await _resolve_user_id()
             sv = dp = er = pc = 0
             last: dict = {}
             for it in items_snap:
@@ -91,7 +114,9 @@ def handle_save_extraction(sc: ScenarioContext, step: Dict[str, Any], idx: int, 
                     r = await save_content_item(
                         data=it, collection=coll, platform=plat, content_type=ctype,
                         dedupe_field=dedup_f, tags=tags, device_serial=dserial,
-                        parent_id=parent_id, item_level=item_level, user_id=user_id,
+                        parent_id=parent_id, item_level=item_level, user_id=resolved_uid,
+                        campaign_id=campaign_id, execution_id=execution_id,
+                        hash_scope=run_hash_scope,
                     )
                     last = r
                     if r.get("saved"):

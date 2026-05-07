@@ -37,11 +37,25 @@ export function selectorPickTargetEquals(
   return ap.every((seg, i) => seg.listKey === bp[i]!.listKey && seg.childIndex === bp[i]!.childIndex);
 }
 
-function mergeSelector(step: FlowStep, by: string, value: string): FlowStep {
+function mergeSelector(
+  step: FlowStep,
+  by: string,
+  value: string,
+  fallback?: { rx: number; ry: number } | null,
+): FlowStep {
   // 'tap' stores selector nested: step.selector = { by, value }
   if (step.type === 'tap') {
-    return { ...step, selector: { by, value } };
+    const next: any = { ...step, selector: { by, value } };
+    if (fallback) {
+      next.fallback = { ...(step.fallback ?? {}), rx: fallback.rx, ry: fallback.ry };
+    }
+    return next as FlowStep;
   }
+
+  if (step.type === 'tap_selector' && fallback) {
+    return { ...step, by, value, fallback_rx: fallback.rx, fallback_ry: fallback.ry } as FlowStep;
+  }
+
   return { ...step, by, value };
 }
 
@@ -54,6 +68,7 @@ export function applySelectorToSteps(
   target: SelectorPickTarget,
   by: string,
   value: string,
+  fallback?: { rx: number; ry: number } | null,
 ): FlowStep[] {
   const root = steps[target.rootIndex];
   if (!root) return steps;
@@ -63,7 +78,7 @@ export function applySelectorToSteps(
     if (pathIdx === targetPath.length) {
       // This IS the node to update
       if (!SELECTOR_STEP_TYPES.has(node.type)) return node;
-      return mergeSelector(node, by, value);
+      return mergeSelector(node, by, value, fallback ?? null);
     }
 
     const seg = targetPath[pathIdx]!;

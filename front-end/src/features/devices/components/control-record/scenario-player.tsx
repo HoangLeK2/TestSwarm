@@ -802,6 +802,21 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedStep
                           >
                             {result.message}
                           </p>
+                          {(() => {
+                            const debugParts: string[] = [];
+                            const parentSrc = (result as any).parent_hash_source;
+                            const scanPasses = (result as any).comment_scan_passes;
+                            const reasonCode = (result as any).reason_code;
+                            if (parentSrc) debugParts.push(`parent=${String(parentSrc)}`);
+                            if (typeof scanPasses === 'number') debugParts.push(`scan_passes=${scanPasses}`);
+                            if (reasonCode) debugParts.push(`reason=${String(reasonCode)}`);
+                            if (debugParts.length === 0) return null;
+                            return (
+                              <p className='text-[10px] text-muted-foreground'>
+                                {debugParts.join(' · ')}
+                              </p>
+                            );
+                          })()}
                         </div>
                       </PopoverContent>
                     </Popover>

@@ -4,16 +4,15 @@ from __future__ import annotations
 import csv
 import io
 import logging
-import os
 from typing import AsyncGenerator
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
 
 from api.deps import CurrentUser, DB
 from api.schemas.content import (
     CollectionCreate, CollectionOut, ContentItemOut, ContentStatsOut,
-    ExportOut, ExportRequest, SaveContentBody,
+    SaveContentBody,
 )
 from db.crud import content as content_crud
 
@@ -72,7 +71,6 @@ async def _csv_generator(db, filters: dict) -> AsyncGenerator[bytes, None]:
 async def _xlsx_bytes(db, filters: dict) -> bytes:
     """Build XLSX in-memory using openpyxl write-only mode (low memory)."""
     import openpyxl
-    from openpyxl.utils import get_column_letter
 
     wb = openpyxl.Workbook(write_only=True)
     ws = wb.create_sheet("Content")
@@ -258,80 +256,6 @@ async def delete_collection(name: str, db: DB, user: CurrentUser):
     count = await content_crud.delete_collection(db, name, user_id=user.id)
     await db.commit()
     return {"ok": True, "items_deleted": count}
-
-
-# ── Exports ───────────────────────────────────────────────────────────────────
-
-
-@router.post("/export", response_model=ExportOut)
-async def create_export(
-    body: ExportRequest,
-    db: DB,
-    background_tasks: BackgroundTasks,
-    user: CurrentUser,
-):
-    if body.format not in ("csv", "json"):
-        raise HTTPException(400, "format must be 'csv' or 'json'")
-
-    export = await content_crud.create_export(
-        db,
-        collection=body.collection,
-        format=body.format,
-        filters=body.filters,
-        user_id=user.id,
-    )
-    await db.commit()
-
-    from services.content_export import process_export
-    background_tasks.add_task(process_export, export.id)
-
-    return ExportOut(
-        id=export.id, collection=export.collection, format=export.format,
-        status=export.status, item_count=0, created_at=export.created_at,
-    )
-
-
-@router.get("/exports/list", response_model=list[ExportOut])
-async def list_exports(db: DB, user: CurrentUser):
-    exports = await content_crud.list_exports(db, user_id=user.id)
-    return [
-        ExportOut(
-            id=e.id, collection=e.collection, format=e.format,
-            status=e.status, item_count=e.item_count,
-            file_size_bytes=e.file_size_bytes,
-            created_at=e.created_at, completed_at=e.completed_at,
-        )
-        for e in exports
-    ]
-
-
-@router.get("/exports/{export_id}")
-async def get_export(export_id: str, db: DB, user: CurrentUser):
-    export = await content_crud.get_export(db, export_id, user_id=user.id)
-    if not export:
-        raise HTTPException(404, "Export not found")
-    return ExportOut(
-        id=export.id, collection=export.collection, format=export.format,
-        status=export.status, item_count=export.item_count,
-        file_size_bytes=export.file_size_bytes,
-        created_at=export.created_at, completed_at=export.completed_at,
-    )
-
-
-@router.get("/exports/{export_id}/download")
-async def download_export(export_id: str, db: DB, user: CurrentUser):
-    export = await content_crud.get_export(db, export_id, user_id=user.id)
-    if not export:
-        raise HTTPException(404, "Export not found")
-    if export.status != "ready" or not export.file_path:
-        raise HTTPException(422, f"Export not ready (status={export.status})")
-    if not os.path.exists(export.file_path):
-        raise HTTPException(404, "Export file not found on disk")
-    return FileResponse(
-        export.file_path,
-        filename=f"content-export-{export_id}.{export.format}",
-        media_type="text/csv" if export.format == "csv" else "application/json",
-    )
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

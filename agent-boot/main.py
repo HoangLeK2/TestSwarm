@@ -109,6 +109,9 @@ def _build_parser() -> argparse.ArgumentParser:
                         default=_env("RELAY_MODE", "ws"),
                         choices=["ws", "grpc"],
                         help="Transport mode: 'ws' (WebSocket, default) or 'grpc' (HTTP/2 multiplexed)")
+    parser.add_argument("--ws-url", metavar="URL",
+                        default=_env("DEVICE_FARM_WS", ""),
+                        help="WebSocket URL for STFService auto-connect (default: $DEVICE_FARM_WS)")
     parser.add_argument("--debug", action="store_true",
                         help="Enable debug logging")
 
@@ -172,12 +175,15 @@ def _run_bootstrap(args: argparse.Namespace) -> bool:
     print(f"[agent-boot] Bootstrapping {len(serials)} device(s): {serials}")
     results = run_bootstrap(
         serials, stf_apk,
+        relay_id=getattr(args, "relay_id", ""),
+        api_key=getattr(args, "relay_api_key", ""),
         skip_tcpip=args.skip_tcpip,
         tcpip_port=args.tcpip_port,
         use_bundle=args.use_bundle,
         skip_u2=args.skip_u2,
         skip_atx=args.skip_atx,
         skip_stf=args.skip_stf,
+        ws_url=getattr(args, "ws_url", ""),
     )
 
     failed = [s for s, ok in results.items() if not ok]

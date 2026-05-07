@@ -21,6 +21,7 @@ from api.schemas.device_control import (
     SwipeRequest,
     TapRequest,
 )
+from api.routes.device_control.guards import reject_manual_control_if_busy
 from runtime.core import DeviceManager
 
 
@@ -32,6 +33,8 @@ def build_gestures_router(manager: DeviceManager) -> APIRouter:
         device = manager.get_device(serial)
         if not device:
             return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
+        if blocked := await reject_manual_control_if_busy(device):
+            return blocked
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, device.tap, body.x, body.y)
         return {"ok": True}
@@ -41,6 +44,8 @@ def build_gestures_router(manager: DeviceManager) -> APIRouter:
         device = manager.get_device(serial)
         if not device:
             return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
+        if blocked := await reject_manual_control_if_busy(device):
+            return blocked
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
             None, device.swipe, body.x1, body.y1, body.x2, body.y2, body.ms
@@ -52,6 +57,8 @@ def build_gestures_router(manager: DeviceManager) -> APIRouter:
         device = manager.get_device(serial)
         if not device:
             return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
+        if blocked := await reject_manual_control_if_busy(device):
+            return blocked
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, device.key, body.key)
         return {"ok": True}
@@ -61,6 +68,8 @@ def build_gestures_router(manager: DeviceManager) -> APIRouter:
         device = manager.get_device(serial)
         if not device:
             return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
+        if blocked := await reject_manual_control_if_busy(device):
+            return blocked
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, device.launch_app, body.package)
         return {"ok": True}
@@ -70,6 +79,8 @@ def build_gestures_router(manager: DeviceManager) -> APIRouter:
         device = manager.get_device(serial)
         if not device:
             return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
+        if blocked := await reject_manual_control_if_busy(device):
+            return blocked
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, lambda: device.open_url(body.url, body.package))
         return {"ok": True}
@@ -79,6 +90,8 @@ def build_gestures_router(manager: DeviceManager) -> APIRouter:
         device = manager.get_device(serial)
         if not device:
             return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
+        if blocked := await reject_manual_control_if_busy(device):
+            return blocked
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, device.input_text, body.text)
         return {"ok": True}
@@ -88,6 +101,8 @@ def build_gestures_router(manager: DeviceManager) -> APIRouter:
         device = manager.get_device(serial)
         if not device:
             return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
+        if blocked := await reject_manual_control_if_busy(device):
+            return blocked
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, device.long_tap, body.x, body.y, body.duration_ms)
         return {"ok": True}
@@ -99,6 +114,8 @@ def build_gestures_router(manager: DeviceManager) -> APIRouter:
         device = manager.get_device(serial)
         if not device:
             return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
+        if blocked := await reject_manual_control_if_busy(device):
+            return blocked
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, device.scroll, body.direction, body.distance)
         return {"ok": True}
@@ -108,6 +125,8 @@ def build_gestures_router(manager: DeviceManager) -> APIRouter:
         device = manager.get_device(serial)
         if not device:
             return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
+        if blocked := await reject_manual_control_if_busy(device):
+            return blocked
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, device.double_tap, body.x, body.y)
         return {"ok": True}
@@ -117,6 +136,8 @@ def build_gestures_router(manager: DeviceManager) -> APIRouter:
         device = manager.get_device(serial)
         if not device:
             return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
+        if blocked := await reject_manual_control_if_busy(device):
+            return blocked
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
             None, lambda: device.pinch(body.cx, body.cy, body.scale, body.duration_ms)
@@ -128,6 +149,8 @@ def build_gestures_router(manager: DeviceManager) -> APIRouter:
         device = manager.get_device(serial)
         if not device:
             return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
+        if blocked := await reject_manual_control_if_busy(device):
+            return blocked
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
             None, lambda: device.drag(body.x1, body.y1, body.x2, body.y2, body.duration_ms)
@@ -139,6 +162,8 @@ def build_gestures_router(manager: DeviceManager) -> APIRouter:
         device = manager.get_device(serial)
         if not device:
             return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
+        if blocked := await reject_manual_control_if_busy(device):
+            return blocked
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, device.set_clipboard, body.text)
         return {"ok": True}

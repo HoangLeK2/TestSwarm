@@ -23,11 +23,36 @@ from runtime.core import DeviceManager, DeviceState
 
 log = logging.getLogger(__name__)
 
+# Frontend stream sender tuning. H.264 is reference-frame based: sending old
+# P-frames after the client/server has fallen behind produces visible bursty
+# playback. Prefer dropping stale deltas and forcing a fresh IDR so viewers stay
+# close to live.
+STREAM_STALE_DELTA_DROP_MS = max(
+    0.0,
+    float(os.environ.get("STREAM_STALE_DELTA_DROP_MS", "180.0")),
+)
+STREAM_WS_LOCK_WAIT_MS = max(
+    1.0,
+    float(os.environ.get("STREAM_WS_LOCK_WAIT_MS", "60.0")),
+)
+STREAM_WS_SEND_TIMEOUT_MS = max(
+    50.0,
+    float(os.environ.get("STREAM_WS_SEND_TIMEOUT_MS", "250.0")),
+)
+
 
 def _bind_pending_kw_only(meta: Dict[str, Any]) -> Dict[str, Any]:
     """Only pass kwargs that bind_pending_device accepts (older images may lack adb_*)."""
     params = inspect.signature(repo.bind_pending_device).parameters
     return {k: v for k, v in meta.items() if k in params}
+
+
+def _is_private_ip(host: str) -> bool:
+    try:
+        ip = ipaddress.ip_address((host or "").strip())
+        return bool(ip.is_private or ip.is_loopback or ip.is_link_local)
+    except Exception:
+        return False
 
 
 def _parse_agent_binary_frame(buf: bytes) -> Dict[str, Any] | None:
@@ -185,6 +210,16 @@ class WebSocketManager:
         """Broadcast a device event to all connected frontend WebSockets."""
         msg = {"type": "device_event", **event}
         for conn_id, ctrl_q in list(self._ctrl_queues.items()):
+            try:
+                ctrl_q.put_nowait(msg)
+            except Exception:
+                pass
+
+    async def send_to_user(self, user_id: str, msg: dict) -> None:
+        """Queue one JSON message to every connected frontend for a user."""
+        for conn_id, ctrl_q in list(self._ctrl_queues.items()):
+            if self._db_enabled and self._user_ids.get(conn_id) != user_id:
+                continue
             try:
                 ctrl_q.put_nowait(msg)
             except Exception:
@@ -532,18 +567,32 @@ class WebSocketManager:
                 version_gap = version - last_version - 1
                 if version_gap > 0:
                     dropped_version_total += version_gap
+                    if not is_key:
+                        # Any skipped P-frame breaks the browser decoder reference chain → freeze.
+                        # Request IDR immediately regardless of congestion state.
+                        _request_idr_recover()
                 lag_ms = max(0.0, (time.monotonic() - frame_ts) * 1000.0)
                 if not congestion and (lag_ms > 100.0 or version_gap > 4):
                     congestion = True
                 elif congestion and lag_ms < 50.0:
                     congestion = False
 
-                # In congestion, prefer skipping non-key deltas when version gaps are large.
+                # If the latest snapshot is already old, sending a delta frame
+                # makes the browser decode history and then stutter back to live.
+                # Drop stale deltas, request an IDR, and wait for a keyframe.
+                if (
+                    STREAM_STALE_DELTA_DROP_MS > 0
+                    and lag_ms > STREAM_STALE_DELTA_DROP_MS
+                    and not is_key
+                ):
+                    dropped_version_total += 1
+                    last_version = version
+                    _request_idr_recover()
+                    continue
+
+                # In congestion with large gaps, skip non-key deltas (IDR already requested above).
                 if congestion and version_gap > 8 and not is_key:
                     last_version = version
-                    # Dropped non-key → reference chain broken on browser. Ask encoder
-                    # for fresh IDR so decoder can re-sync without showing corrupt frames.
-                    _request_idr_recover()
                     continue
 
                 send_started = time.monotonic()
@@ -551,7 +600,10 @@ class WebSocketManager:
                 # if another sender currently owns the socket, drop this stale frame
                 # and wait for a fresher snapshot instead of blocking.
                 try:
-                    await asyncio.wait_for(ws_send_lock.acquire(), timeout=0.1)
+                    await asyncio.wait_for(
+                        ws_send_lock.acquire(),
+                        timeout=STREAM_WS_LOCK_WAIT_MS / 1000.0,
+                    )
                 except asyncio.TimeoutError:
                     last_version = version
                     # Drop on lock contention. Always recover — if we drop a
@@ -560,7 +612,10 @@ class WebSocketManager:
                     _request_idr_recover()
                     continue
                 try:
-                    await asyncio.wait_for(ws.send_bytes(frame), timeout=0.25)
+                    await asyncio.wait_for(
+                        ws.send_bytes(frame),
+                        timeout=STREAM_WS_SEND_TIMEOUT_MS / 1000.0,
+                    )
                 except asyncio.TimeoutError:
                     _request_idr_recover()
                     raise
@@ -659,11 +714,34 @@ class WebSocketManager:
                     continue
                 is_busy_state = getattr(device, "state", None) == DeviceState.BUSY
                 scenario_active = int(getattr(device, "_scenario_active", 0) or 0) > 0
+                if not scenario_active:
+                    # Cross-process guard: Temporal workers may run in a separate process.
+                    # In-memory _scenario_active is process-local, so fall back to Redis.
+                    try:
+                        from services import redis_store
+
+                        if redis_store.enabled():
+                            r = redis_store.client()
+                            if r is not None:
+                                v = await r.get(redis_store.key(f"device:{serial}:scenario_active"))
+                                scenario_active = int(v or "0") > 0
+                    except Exception:
+                        pass
                 if is_busy_state or scenario_active:
                     log.info(
                         "ws drop write frame type=%s serial=%s (busy_state=%s scenario_active=%s)",
                         msg_type, serial, is_busy_state, scenario_active,
                     )
+                    reason = "busy_state" if is_busy_state else "scenario_active"
+                    try:
+                        await ws.send_json({
+                            "type": "device_busy",
+                            "serial": serial,
+                            "reason": reason,
+                            "scenario_active": scenario_active,
+                        })
+                    except Exception:
+                        pass
                     continue
 
             # Fire-and-forget all input commands — don't await executor so the receiver
@@ -915,6 +993,9 @@ class DeviceAgentSession:
             # ── Nếu có ?key= thì bắt buộc key phải khớp pending device; sai key → từ chối ──
             # Extract device IP from WebSocket connection for ADB/scrcpy
             client_ip = ws.client.host if ws.client else ""
+            trusted_client_ip = client_ip if _is_private_ip(client_ip) else ""
+            bound_device = None
+            adb_serial_hint = str(hello.get("adb_serial") or "").strip()
 
             if key:
                 meta = {
@@ -924,9 +1005,13 @@ class DeviceAgentSession:
                     "sdk_version": int(hello.get("sdk", 0) or 0),
                     "screen_width": int(hello.get("screen_width", 0) or 0),
                     "screen_height": int(hello.get("screen_height", 0) or 0),
-                    "adb_ip": client_ip,
-                    "adb_port": 5555,
                 }
+                if adb_serial_hint:
+                    meta["adb_serial"] = adb_serial_hint
+                # Never store proxy/public WS source IP as adb_ip.
+                if trusted_client_ip:
+                    meta["adb_ip"] = trusted_client_ip
+                    meta["adb_port"] = 5555
                 try:
                     async with AsyncSessionLocal() as db:
                         kw = _bind_pending_kw_only(meta)
@@ -954,6 +1039,7 @@ class DeviceAgentSession:
                         db_sess = await repo.open_session(
                             db, bound.id, ws.client.host if ws.client else ""
                         )
+                        bound_device = bound
                         db_session_id = db_sess.id
                         await db.commit()
                         log.info("Bound pending device key=%s… → serial=%s", key[:8], serial)
@@ -964,6 +1050,13 @@ class DeviceAgentSession:
                     )
                     await ws.close(code=4001)
                     return
+
+            if bound_device is None and self._ws_manager._db_enabled:
+                try:
+                    async with AsyncSessionLocal() as db:
+                        bound_device = await repo.get_device_by_serial(db, serial)
+                except Exception as _db_exc:
+                    log.debug("DB lookup for adb hints skipped: %s", _db_exc)
 
             # ── Register device (in-memory) ─────────────────────────────────────
             is_new = self._manager.get_device(serial) is None
@@ -983,48 +1076,89 @@ class DeviceAgentSession:
                 self._config
                 and getattr(self._config.device, "u2_always_tunnel", False)
             )
+            _u2_relay_mapped = False
             if client_ip and client_ip not in ("127.0.0.1", "::1", "localhost"):
-                candidate = f"{client_ip}:5555"
-                resolved_serial = candidate
+                resolved_serial = serial
                 relay = None
+                resolved_from_hint = ""
+                relay_mapped = False
+                # Keep a stable ADB-oriented hint even when relay is not online yet.
+                # This prevents retry loops from falling back to app-generated serial.
+                preferred_serial_hint = ""
                 try:
                     from runtime.transports.adb_relay_server import get_relay_manager
                     relay = get_relay_manager()
+                    hints: list[str] = []
+                    if adb_serial_hint:
+                        hints.append(adb_serial_hint)
+                    if getattr(device, "_adb_serial", None):
+                        hints.append(str(getattr(device, "_adb_serial")).strip())
+                    if bound_device is not None:
+                        _adb_serial = str(getattr(bound_device, "adb_serial", "") or "").strip()
+                        _ip = str(getattr(bound_device, "adb_ip", "") or "").strip()
+                        _port = int(getattr(bound_device, "adb_port", 5555) or 5555)
+                        if _adb_serial:
+                            hints.append(_adb_serial)
+                        if _ip:
+                            hints.append(f"{_ip}:{_port}")
+                            hints.append(_ip)
+                    if trusted_client_ip:
+                        hints.append(f"{trusted_client_ip}:5555")
+
+                    # Last fallback: phone-reported serial itself.
+                    hints.append(serial)
+                    deduped_hints = [h for h in dict.fromkeys(hints) if h]
+                    preferred_serial_hint = deduped_hints[0] if deduped_hints else serial
+
                     if relay:
-                        resolved_serial = relay.resolve_serial(candidate)
-                        # Docker/cloud + NAT path: app WS client_ip may be a public/NAT IP
-                        # that relay agents never register. If there is exactly one relay
-                        # serial online, fall back to it so app-serial devices can still
-                        # attach scrcpy through local agent-boot.
-                        if resolved_serial == candidate:
-                            all_serials: list[str] = []
-                            for serials in relay.registered_relays().values():
-                                all_serials.extend(serials)
-                            uniq = sorted(set(all_serials))
-                            if len(uniq) == 1:
-                                try:
-                                    is_public = ipaddress.ip_address(client_ip).is_global
-                                except Exception:
-                                    is_public = False
-                                if is_public:
-                                    resolved_serial = uniq[0]
-                                    log.info(
-                                        "[DEVICE-WS] NAT fallback: using relay serial %s for client_ip=%s",
-                                        resolved_serial, client_ip,
-                                    )
+                        for hint in deduped_hints:
+                            actual = relay.resolve_serial(hint)
+                            if relay.relay_for_serial(actual):
+                                resolved_serial = actual
+                                resolved_from_hint = hint
+                                relay_mapped = True
+                                break
+
+                        if not relay.relay_for_serial(resolved_serial):
+                            resolved_serial = preferred_serial_hint
+                            log.warning(
+                                "[DEVICE-WS] relay serial unresolved for serial=%s client_ip=%s; "
+                                "keeping preferred hint=%s",
+                                serial,
+                                client_ip,
+                                preferred_serial_hint,
+                            )
+                        elif resolved_from_hint:
+                            log.info(
+                                "[DEVICE-WS] relay serial resolved for %s via hint=%s -> %s",
+                                serial,
+                                resolved_from_hint,
+                                resolved_serial,
+                            )
+                        else:
+                            relay_mapped = True
+                    else:
+                        resolved_serial = preferred_serial_hint
+                        log.info(
+                            "[DEVICE-WS] relay not ready for serial=%s; using preferred hint=%s",
+                            serial,
+                            preferred_serial_hint,
+                        )
                 except Exception as _relay_exc:
                     log.debug("relay resolve_serial skipped: %s", _relay_exc)
 
                 device._adb_serial = resolved_serial
-                # Cloud/Docker: container cannot open TCP to device_ip:7912.
-                # u2_always_tunnel=True → keep _u2_host=None so WS tunnel is always used.
+                _u2_relay_mapped = relay_mapped
                 # Local/same-LAN: set _u2_host so atx-agent at device_ip:7912 is used directly.
-                device._u2_host = None if _u2_always_tunnel else client_ip
-                # Tell relay agents to `adb connect ip:5555` — one of them is near the phone
+                # Docker/cloud with relay: keep _u2_host as a host hint so DeviceClient
+                # can build an agent_boot_u2_proxy session. Docker/cloud without relay
+                # falls back to the legacy WS tunnel.
+                device._u2_host = client_ip if (relay_mapped or not _u2_always_tunnel) else None
+                # Tell relay agents to `adb connect ip:5555` only for trusted/private LAN IP.
                 try:
-                    if relay:
+                    if relay and trusted_client_ip:
                         asyncio.create_task(
-                            relay.broadcast_adb_connect(candidate)
+                            relay.broadcast_adb_connect(f"{trusted_client_ip}:5555")
                         )
                 except Exception as _relay_exc:
                     log.debug("relay adb_connect skipped: %s", _relay_exc)
@@ -1081,11 +1215,11 @@ class DeviceAgentSession:
             # Acknowledge — send tunnel ports + stream options (FPS for scrcpy/MediaProjection)
             # Local mode: WiFi devices use atx-agent at device_ip:7912 directly — omit u2
             # tunnel port from ack so APK won't create a ServiceTunnel that reconnects endlessly.
-            # Cloud/Docker (u2_always_tunnel=True): keep u2 tunnel in ack — atx-agent at
-            # device_ip:7912 is unreachable from container; WS tunnel is the only path.
+            # Cloud/Docker (u2_always_tunnel=True): keep u2 tunnel in ack only when
+            # no relay owns the device. If relay is mapped, agent_boot_u2_proxy is used.
             tunnels_for_ack = dict(device._tunnel_ports)
             if (client_ip and client_ip not in ("127.0.0.1", "::1", "localhost")
-                    and not _u2_always_tunnel):
+                    and (not _u2_always_tunnel or _u2_relay_mapped)):
                 tunnels_for_ack.pop("u2", None)
             hello_ack_msg: Dict[str, Any] = {
                 "type": "hello_ack",
@@ -1135,9 +1269,12 @@ class DeviceAgentSession:
                             "sdk_version": int(hello.get("sdk", 0) or 0),
                             "screen_width": int(hello.get("screen_width", 0) or 0),
                             "screen_height": int(hello.get("screen_height", 0) or 0),
-                            "adb_ip": client_ip,
-                            "adb_port": 5555,
                         }
+                        if adb_serial_hint:
+                            meta["adb_serial"] = adb_serial_hint
+                        if trusted_client_ip:
+                            meta["adb_ip"] = trusted_client_ip
+                            meta["adb_port"] = 5555
                         db_dev = await repo.get_or_create_device(db, serial)
                         await repo.update_device_metadata(db, serial, **meta)
                         db_sess = await repo.open_session(db, db_dev.id, client_ip)
@@ -1268,22 +1405,24 @@ class DeviceAgentSession:
                             # Re-resolve target at attach time: when device-agent connects
                             # before relay registration, _adb_serial can remain a NAT/public
                             # client_ip:5555 that no relay owns. Resolve again against current
-                            # relay registry and fall back to the single online relay serial.
+                            # relay registry; if unresolved, keep current target and do not
+                            # force-bind to an unrelated relay serial.
                             try:
                                 from runtime.transports.adb_relay_server import get_relay_manager
 
                                 relay_mgr = get_relay_manager()
                                 if relay_mgr:
                                     resolved = relay_mgr.resolve_serial(scrcpy_target)
-                                    if resolved == scrcpy_target and ":" in str(scrcpy_target):
-                                        all_serials: list[str] = []
-                                        for serials in relay_mgr.registered_relays().values():
-                                            all_serials.extend(serials)
-                                        uniq = sorted(set(all_serials))
-                                        if len(uniq) == 1:
-                                            resolved = uniq[0]
                                     scrcpy_target = resolved
-                                    device._adb_serial = scrcpy_target
+                                    if relay_mgr.relay_for_serial(scrcpy_target):
+                                        device._adb_serial = scrcpy_target
+                                    else:
+                                        log.warning(
+                                            "Auto-attach unresolved relay serial for %s: target=%s client_ip=%s",
+                                            serial,
+                                            scrcpy_target,
+                                            client_ip,
+                                        )
                             except Exception:
                                 pass
                             loop.run_in_executor(
@@ -1489,4 +1628,3 @@ class DeviceAgentSession:
                 "[DEVICE-WS] Device disconnected: serial=%s ip=%s duration=%s",
                 serial or "unknown", client_addr, dur_str,
             )
-

@@ -109,25 +109,14 @@ async def test_stream_export_csv_returns_attachment_and_rows():
 
 
 @pytest.mark.asyncio
-async def test_download_export_enforces_ready_and_file_exists():
+async def test_legacy_async_export_endpoints_removed():
     app = _build_app()
-    with patch(
-        "api.routes.content.content_crud.get_export",
-        new=AsyncMock(return_value=SimpleNamespace(status="processing", file_path=None)),
-    ):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-            not_ready = await ac.get("/api/content/exports/export-1/download")
-    assert not_ready.status_code == 422
-    assert "Export not ready" in not_ready.json()["detail"]
-
-    with (
-        patch(
-            "api.routes.content.content_crud.get_export",
-            new=AsyncMock(return_value=SimpleNamespace(status="ready", file_path="/tmp/not-found.csv", format="csv")),
-        ),
-        patch("api.routes.content.os.path.exists", return_value=False),
-    ):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-            missing = await ac.get("/api/content/exports/export-2/download")
-    assert missing.status_code == 404
-    assert missing.json()["detail"] == "Export file not found on disk"
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp_create = await ac.post("/api/content/export", json={"format": "csv"})
+        resp_list = await ac.get("/api/content/exports/list")
+        resp_get = await ac.get("/api/content/exports/export-1")
+        resp_download = await ac.get("/api/content/exports/export-1/download")
+    assert resp_create.status_code == 404
+    assert resp_list.status_code == 404
+    assert resp_get.status_code == 404
+    assert resp_download.status_code == 404

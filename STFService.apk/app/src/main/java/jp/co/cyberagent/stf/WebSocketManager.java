@@ -27,13 +27,13 @@ public class WebSocketManager {
     private volatile boolean destroyed = false;
 
     public WebSocketManager() {
+        // Client-side ping detects dead sockets (Doze, WiFi sleep, OEM kill) within ~30s.
+        // readTimeout triggers onFailure if no frame/pong arrives, surfacing half-open TCP.
         client = new OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
-                .readTimeout(0, TimeUnit.MILLISECONDS)
-                // Disable OkHttp client-side ping — server sends heartbeat pings instead.
-                // Client pings every 20s caused "no pong within 20000ms" disconnects when
-                // the server event loop was briefly busy processing video frames.
-                .pingInterval(0, TimeUnit.MILLISECONDS)
+                .readTimeout(60, TimeUnit.SECONDS)
+                .pingInterval(25, TimeUnit.SECONDS)
+                .retryOnConnectionFailure(true)
                 .build();
     }
 

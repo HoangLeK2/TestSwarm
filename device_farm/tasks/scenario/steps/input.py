@@ -56,7 +56,11 @@ def handle_input_text(sc: ScenarioContext, step: Dict[str, Any], idx: int, resul
                 from runtime.transports.adb_relay_server import get_relay_manager
                 relay = get_relay_manager()
                 loop = getattr(device, "_loop", None)
-                target_serial = getattr(device, "_adb_serial", None) or getattr(device, "serial", None) or serial
+                resolver = getattr(device, "_resolve_relay_serial", None)
+                target_serial = (
+                    resolver() if callable(resolver)
+                    else getattr(device, "_adb_serial", None) or getattr(device, "serial", None) or serial
+                )
                 if relay and loop and target_serial and relay.relay_for_serial(target_serial):
                     actual_serial = relay.resolve_serial(str(target_serial))
                     fut = asyncio.run_coroutine_threadsafe(

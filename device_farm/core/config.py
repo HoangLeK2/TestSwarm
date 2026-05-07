@@ -72,7 +72,7 @@ class DeviceConfig:
     scrcpy_max_width: int = 800
     scrcpy_bitrate: int = 8_000_000       # H.264 bitrate bps for local ADB path (8 Mbps)
     scrcpy_relay_bitrate: int = 2_000_000 # H.264 bitrate for WiFi ADB relay path (keep ≤4Mbps to avoid IDR transfer lag)
-    scrcpy_control: bool = True           # Enable scrcpy control channel for touch/key/text
+    scrcpy_control: bool = True           # Enable scrcpy control socket for H264 IDR/keyframes
     u2_always_tunnel: bool = False        # Cloud/Docker: force WS tunnel for U2, never direct TCP to device_ip:7912
 
 
@@ -433,6 +433,20 @@ def load_config(path: str = "config.yaml") -> Config:
     def _get(section: dict, key: str, default):
         return section.get(key, default)
 
+    def _as_bool(value, default: bool = False) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return default
+        if isinstance(value, str):
+            text = value.strip().lower()
+            if text in {"1", "true", "yes", "on"}:
+                return True
+            if text in {"0", "false", "no", "off"}:
+                return False
+            return default
+        return bool(value)
+
     web_raw = raw.get("web", {})
     ports_raw = raw.get("ports", {})
     adb_raw = raw.get("adb", {})
@@ -442,6 +456,7 @@ def load_config(path: str = "config.yaml") -> Config:
     task_raw = raw.get("task", {})
     logging_raw = raw.get("logging", {})
     u2_raw = raw.get("u2", {})
+    u2_batch_raw = raw.get("u2_batch", {})
     wd_raw = raw.get("wifi_densepose", {})
     streaming_raw = raw.get("streaming", {})
 
@@ -486,6 +501,9 @@ def load_config(path: str = "config.yaml") -> Config:
     if env_cors_origins:
         web_cors_allowed_origins = _normalize_cors_origins(env_cors_origins.split(","))
 
+    if _as_bool(_get(u2_batch_raw, "enabled", False), False):
+        os.environ.setdefault("U2_BATCH_ENABLED", "true")
+
     return Config(
         web=WebConfig(
             host=_get(web_raw, "host", "0.0.0.0"),
@@ -520,10 +538,13 @@ def load_config(path: str = "config.yaml") -> Config:
             scrcpy_max_width=_get(device_raw, "scrcpy_max_width", 800),
             scrcpy_bitrate=_get(device_raw, "scrcpy_bitrate", 8_000_000),
             scrcpy_relay_bitrate=_get(device_raw, "scrcpy_relay_bitrate", 2_000_000),
-            scrcpy_control=bool(_get(device_raw, "scrcpy_control", True)),
-            u2_always_tunnel=bool(
-                _get(device_raw, "u2_always_tunnel", False)
-                or os.environ.get("DEVICE_FARM_U2_ALWAYS_TUNNEL", "")
+            scrcpy_control=_as_bool(_get(device_raw, "scrcpy_control", True), True),
+            u2_always_tunnel=_as_bool(
+                os.environ.get(
+                    "DEVICE_FARM_U2_ALWAYS_TUNNEL",
+                    _get(device_raw, "u2_always_tunnel", False),
+                ),
+                False,
             ),
         ),
         watchdog=WatchdogConfig(
@@ -560,18 +581,21 @@ def load_config(path: str = "config.yaml") -> Config:
         streaming=StreamingConfig(
             mode=_get(streaming_raw, "mode", "periodic"),
             dashboard_interval=float(_get(streaming_raw, "dashboard_interval", 3.0)),
-            auto_attach_scrcpy_on_connect=bool(
+            auto_attach_scrcpy_on_connect=_as_bool(
                 _get(
                     streaming_raw,
                     "auto_attach_scrcpy_on_connect",
                     _get(streaming_raw, "auto_attach_scrcpy", True),
-                )
+                ),
+                True,
             ),
-            dashboard_grid_preview_mjpeg=bool(
-                _get(streaming_raw, "dashboard_grid_preview_mjpeg", True)
+            dashboard_grid_preview_mjpeg=_as_bool(
+                _get(streaming_raw, "dashboard_grid_preview_mjpeg", True),
+                True,
             ),
-            auto_attach_scrcpy_on_relay_online=bool(
-                _get(streaming_raw, "auto_attach_scrcpy_on_relay_online", True)
+            auto_attach_scrcpy_on_relay_online=_as_bool(
+                _get(streaming_raw, "auto_attach_scrcpy_on_relay_online", True),
+                True,
             ),
         ),
         temporal=_build_temporal_config(raw.get("temporal", {})),

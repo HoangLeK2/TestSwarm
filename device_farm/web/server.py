@@ -148,6 +148,18 @@ def create_app(
         if event_recorder is not None:
             event_recorder.set_event_loop(loop)
             _app.state.event_recorder = event_recorder
+        notification_service = getattr(_app.state, "notification_service", None)
+        if notification_service is not None:
+            try:
+                notification_service.set_event_loop(loop)
+            except Exception:
+                pass
+        activity_logger = getattr(_app.state, "activity_logger", None)
+        if activity_logger is not None:
+            try:
+                activity_logger.set_event_loop(loop)
+            except Exception:
+                pass
         log.info("Device Farm server started")
 
         # Single lifecycle owner for this app run. Every long-lived coroutine,
@@ -222,6 +234,21 @@ def create_app(
                 await recover_stuck_executions(stale_after_minutes=5)
             except Exception as rec_exc:
                 log.warning("crash recovery failed (non-fatal): %s", rec_exc)
+
+            # Phase 2 — relay agent reconciliation: previous crash may have left
+            # relay_agents rows with status='online'. Mark them offline so the UI
+            # shows accurate state until agents reconnect.
+            try:
+                from db.database import AsyncSessionLocal as _AslRec
+                from sqlalchemy import text as _text
+                async with _AslRec() as _db:
+                    await _db.execute(_text(
+                        "UPDATE relay_agents SET status='offline', disconnected_at=NOW() "
+                        "WHERE status='online'"
+                    ))
+                    await _db.commit()
+            except Exception as _rec_exc:
+                log.warning("relay agent reconciliation failed (non-fatal): %s", _rec_exc)
 
         # ── Redis shared state ──
         from services import redis_store
@@ -335,6 +362,49 @@ def create_app(
                 except Exception as grpc_exc:
                     log.warning("gRPC relay server failed to start (WS fallback active): %s", grpc_exc)
 
+                # ── Persistence callbacks for AgentControlServicer ─────────────
+                if config.database.enabled:
+                    try:
+                        from runtime.transports.agent_control_servicer import get_control_servicer
+                        from db import crud as _ctrl_repo
+                        from db.database import AsyncSessionLocal as _AslCtrl
+
+                        async def _on_ctrl_register(payload: dict) -> None:
+                            async with _AslCtrl() as _db:
+                                try:
+                                    await _ctrl_repo.upsert_relay_agent(_db, **payload)
+                                    await _db.commit()
+                                except Exception as _exc:
+                                    await _db.rollback()
+                                    log.warning("relay upsert failed: %s", _exc)
+
+                        async def _on_ctrl_heartbeat(payload: dict) -> None:
+                            async with _AslCtrl() as _db:
+                                try:
+                                    await _ctrl_repo.update_relay_heartbeat(_db, **payload)
+                                    await _db.commit()
+                                except Exception as _exc:
+                                    await _db.rollback()
+                                    log.debug("relay heartbeat update failed: %s", _exc)
+
+                        async def _on_ctrl_offline(relay_id: str) -> None:
+                            async with _AslCtrl() as _db:
+                                try:
+                                    await _ctrl_repo.mark_relay_offline(_db, relay_id)
+                                    await _db.commit()
+                                except Exception as _exc:
+                                    await _db.rollback()
+                                    log.warning("relay offline mark failed: %s", _exc)
+
+                        _ctrl_svc = get_control_servicer()
+                        if _ctrl_svc is not None:
+                            _ctrl_svc.set_persistence_callbacks(
+                                _on_ctrl_register, _on_ctrl_heartbeat, _on_ctrl_offline
+                            )
+                            log.info("AgentControlServicer persistence callbacks wired")
+                    except Exception as _cb_exc:
+                        log.warning("Could not wire control servicer callbacks: %s", _cb_exc)
+
                 # Auto-attach scrcpy whenever a relay agent reports a new device.
                 _relay_mgr_ref = relay_manager
                 _manager_ref   = manager
@@ -421,6 +491,25 @@ def create_app(
                                 ws_device.serial,
                             )
                     if ws_device is not None:
+                        current_adb_serial = str(getattr(ws_device, "_adb_serial", "") or "")
+                        # Sticky mapping: when one WS device is "lone match" for multiple
+                        # relay serials (e.g. dual devices .83/.86), do not thrash scrcpy
+                        # attach between serials. Keep whichever relay serial is already
+                        # selected on the device unless this is the first bind.
+                        if current_adb_serial and current_adb_serial != serial:
+                            log.info(
+                                "relay device online %s — skip reattach for WS device %s "
+                                "(sticky _adb_serial=%s)",
+                                serial,
+                                ws_device.serial,
+                                current_adb_serial,
+                            )
+                            return
+                        if not current_adb_serial:
+                            try:
+                                ws_device._adb_serial = serial
+                            except Exception:
+                                pass
                         ws_device.set_event_loop(asyncio.get_event_loop())
                         _st = getattr(_config_ref, "streaming", None)
                         _relay_auto = bool(
@@ -695,8 +784,25 @@ def create_app(
         db_enabled=db_enabled,
         read_only=config.safe_mode.read_only,
     )
+    app.state.ws_manager = ws_manager
     if event_recorder is not None:
         ws_manager.bind_event_recorder(event_recorder)
+    if db_enabled:
+        try:
+            from services.notification_service import NotificationService
+            from services.activity_logger import ActivityLogger
+
+            notification_service = NotificationService(ws_manager)
+            if event_recorder is not None:
+                notification_service.bind_device_events(event_recorder)
+            app.state.notification_service = notification_service
+
+            activity_logger = ActivityLogger()
+            if event_recorder is not None:
+                activity_logger.bind_device_events(event_recorder)
+            app.state.activity_logger = activity_logger
+        except Exception as exc:
+            log.warning("notification/activity service failed to initialize: %s", exc)
     agent_session = DeviceAgentSession(manager, ws_manager, config)
 
     @app.websocket("/ws")

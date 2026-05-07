@@ -13,6 +13,7 @@ from db.models.utils import _now
 
 
 PENDING_SERIAL_PREFIX = "pending-"
+_UNSET = object()
 
 
 async def get_device_by_serial(db: AsyncSession, serial: str) -> Optional[Device]:
@@ -78,8 +79,9 @@ async def bind_pending_device(
     sdk_version: int = 0,
     screen_width: int = 0,
     screen_height: int = 0,
-    adb_ip: str | None = None,
-    adb_port: int = 5555,
+    adb_serial: str | object = _UNSET,
+    adb_ip: str | object = _UNSET,
+    adb_port: int | object = _UNSET,
 ) -> Optional[Device]:
     """
     Gắn thiết bị pending (tìm theo device_key) với serial thật từ điện thoại.
@@ -98,43 +100,45 @@ async def bind_pending_device(
             # → xóa để pending device lấy serial này
             await db.execute(delete(Device).where(Device.id == existing.id))
             await db.flush()
-        await db.execute(
-            update(Device)
-            .where(Device.id == device.id)
-            .values(
-                serial=serial,
-                brand=brand,
-                model=model,
-                android_version=android_version,
-                sdk_version=sdk_version,
-                screen_width=screen_width,
-                screen_height=screen_height,
-                adb_ip=adb_ip or None,
-                adb_port=adb_port,
-                last_seen=_now(),
-            )
-        )
+        values = {
+            "serial": serial,
+            "brand": brand,
+            "model": model,
+            "android_version": android_version,
+            "sdk_version": sdk_version,
+            "screen_width": screen_width,
+            "screen_height": screen_height,
+            "last_seen": _now(),
+        }
+        if adb_serial is not _UNSET:
+            values["adb_serial"] = str(adb_serial or "").strip() or None
+        if adb_ip is not _UNSET:
+            values["adb_ip"] = str(adb_ip or "").strip() or None
+        if adb_port is not _UNSET:
+            values["adb_port"] = int(adb_port or 5555)
+        await db.execute(update(Device).where(Device.id == device.id).values(**values))
         await db.flush()
         device.serial = serial
     else:
         # Case 2: device đã bind trước đó → cho phép re-connect với cùng serial
         if device.serial != serial:
             return None
-        await db.execute(
-            update(Device)
-            .where(Device.id == device.id)
-            .values(
-                brand=brand,
-                model=model,
-                android_version=android_version,
-                sdk_version=sdk_version,
-                screen_width=screen_width,
-                screen_height=screen_height,
-                adb_ip=adb_ip or None,
-                adb_port=adb_port,
-                last_seen=_now(),
-            )
-        )
+        values = {
+            "brand": brand,
+            "model": model,
+            "android_version": android_version,
+            "sdk_version": sdk_version,
+            "screen_width": screen_width,
+            "screen_height": screen_height,
+            "last_seen": _now(),
+        }
+        if adb_serial is not _UNSET:
+            values["adb_serial"] = str(adb_serial or "").strip() or None
+        if adb_ip is not _UNSET:
+            values["adb_ip"] = str(adb_ip or "").strip() or None
+        if adb_port is not _UNSET:
+            values["adb_port"] = int(adb_port or 5555)
+        await db.execute(update(Device).where(Device.id == device.id).values(**values))
         await db.flush()
 
     device.brand = brand
@@ -143,8 +147,12 @@ async def bind_pending_device(
     device.sdk_version = sdk_version
     device.screen_width = screen_width
     device.screen_height = screen_height
-    device.adb_ip = adb_ip or None
-    device.adb_port = adb_port
+    if adb_serial is not _UNSET:
+        device.adb_serial = str(adb_serial or "").strip() or None
+    if adb_ip is not _UNSET:
+        device.adb_ip = str(adb_ip or "").strip() or None
+    if adb_port is not _UNSET:
+        device.adb_port = int(adb_port or 5555)
     return device
 
 
@@ -158,6 +166,7 @@ async def update_device_metadata(
     sdk_version: int = 0,
     screen_width: int = 0,
     screen_height: int = 0,
+    adb_serial: str | None = None,
     adb_ip: str | None = None,
     adb_port: int | None = None,
 ) -> None:
@@ -172,6 +181,8 @@ async def update_device_metadata(
     }
     if adb_ip is not None:
         values["adb_ip"] = adb_ip
+    if adb_serial is not None:
+        values["adb_serial"] = adb_serial or None
     if adb_port is not None:
         values["adb_port"] = adb_port
     await db.execute(

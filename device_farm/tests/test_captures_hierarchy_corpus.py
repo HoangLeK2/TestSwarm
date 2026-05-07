@@ -364,3 +364,68 @@ def test_expand_see_more_taps_visible_xem_them_on_171900_capture() -> None:
     n = _expand_see_more(dev, max_passes=5, scroll_between=False, no_change_threshold=3)
     assert n >= 1
     assert len(dev.taps) >= 1
+
+
+def test_golden_221514_does_not_collapse_body_to_image_label() -> None:
+    """Profile tab-strip + stale action row should not force post text to bare 'Ảnh'."""
+    path = (
+        CAPTURES_ROOT
+        / "49c62ff79ec0c35d_2026-04-29_221514"
+        / "step_000_extract_pre_hierarchy.xml"
+    )
+    _require_capture_file(path)
+    posts = parse_fb_posts_from_xml(path.read_text(encoding="utf-8", errors="replace"))
+    assert posts
+    lead = posts[0]
+    assert lead.get("author") == "M-TP"
+    assert (lead.get("text") or "").strip().lower() != "ảnh"
+    assert "ĐỪNG LÀM TRÁI TIM ANH ĐAU" in (lead.get("text") or "")
+
+
+def test_golden_224209_profile_post_keeps_author_and_strips_pinned_header_from_body() -> None:
+    """Pinned metadata row must stay out of body; author should not collapse to media label."""
+    path = (
+        CAPTURES_ROOT
+        / "49c62ff79ec0c35d_2026-04-29_224209"
+        / "step_000_extract_pre_hierarchy.xml"
+    )
+    _require_capture_file(path)
+    posts = parse_fb_posts_from_xml(path.read_text(encoding="utf-8", errors="replace"))
+    assert posts
+    lead = posts[0]
+    assert lead.get("author") == "Hoàng Minh Châu"
+    text = (lead.get("text") or "")
+    assert "Bài viết đã ghimĐã ghim" not in text
+    assert "Chia sẻ với: Công khai" not in text
+    assert "Việt Nam tôi đó" in text
+
+
+def test_golden_225853_extracts_primary_post_and_skips_footer_hide_row() -> None:
+    """Event/ad style card should parse as one post; trailing footer row is junk."""
+    path = (
+        CAPTURES_ROOT
+        / "49c62ff79ec0c35d_2026-04-29_225853"
+        / "step_000_extract_pre_hierarchy.xml"
+    )
+    _require_capture_file(path)
+    posts = parse_fb_posts_from_xml(path.read_text(encoding="utf-8", errors="replace"))
+    assert len(posts) == 1
+    lead = posts[0]
+    assert lead.get("author") == "Triển lãm Điện tử & Thiết bị thông minh tại Việt Nam"
+    assert "NGUỒN HÀNG ĐIỆN TỬ HỘI TỤ" in (lead.get("text") or "")
+    assert (lead.get("timestamp") or "") == ""
+
+
+def test_golden_230946_expanded_sheet_still_extracts_post() -> None:
+    """After tapping 'Xem thêm', expanded sheet layout must still yield a post."""
+    path = (
+        CAPTURES_ROOT
+        / "49c62ff79ec0c35d_2026-04-29_230946"
+        / "step_000_extract_hierarchy.xml"
+    )
+    _require_capture_file(path)
+    posts = parse_fb_posts_from_xml(path.read_text(encoding="utf-8", errors="replace"))
+    assert posts
+    lead = posts[0]
+    assert lead.get("author") == "Triển lãm Điện tử & Thiết bị thông minh tại Việt Nam"
+    assert "Bạn không cần tìm kiếm nhiều nơi vì IEAE Vietnam 2026" in (lead.get("text") or "")

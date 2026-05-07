@@ -163,12 +163,39 @@
     }
   },
   "navigation": {
+    "general": "Chung",
     "dashboard": "Trang điều khiển",
     "overview": "Tổng quan hệ thống",
+    "products": "Sản phẩm",
+    "profile": "Hồ sơ",
+    "logout": "Đăng xuất",
+    "statistic": "Thống kê",
+    "admin": "Quản trị",
+    "organizations": "Tổ chức",
+    "organization": "Tổ chức",
+    "batches": "NDATrace UID",
+    "vc_release": "Quản lý VC",
+    "sgtin": "Danh sách SGTIN",
+    "faq": "FAQ",
+    "help": "Trợ giúp",
+    "api_keys": "API Keys",
+    "inventory": "Quản lý tồn kho",
+    "flow": "Quản lý luồng",
+    "flow-vc": "Quản lý luồng phát hành VC",
+    "vc-release": "Phát hành VC",
+    "settings": "Cài đặt",
+    "developer": "Nhà phát triển",
+    "sync": "Đồng bộ sản phẩm",
+    "quick_action": {
+      "sync_product": "Đồng bộ sản phẩm",
+      "vc_release": "Phát hành VC"
+    },
+    "members": "Thành viên",
     "organization_general": "Tổng quan tổ chức",
     "nav_group_devices": "Thiết bị",
     "nav_group_automation": "Chiến dịch & lịch chạy",
     "nav_group_library": "Tài khoản, kịch bản & kết quả",
+    "activity_history": "Lịch sử hoạt động",
     "devices": "Danh sách thiết bị",
     "device_farm": "Xem thiết bị",
     "devices_manage": "Quản trị thiết bị",
@@ -179,7 +206,20 @@
     "accounts": "Danh sách tài khoản",
     "account_groups": "Nhóm tài khoản",
     "scenario_templates": "Mẫu kịch bản",
-    "content": "Kết quả thu thập"
+    "content": "Kết quả thu thập",
+    "infrastructure": "Hạ tầng",
+    "relay_agents": "Relay Agents",
+    "notifications": "Thông báo"
+  },
+  "relayAgentsFeature": {
+    "title": "Relay Agents",
+    "onlineSummary": "{online}/{total} đang online",
+    "loading": "Đang tải...",
+    "empty": "Chưa có Relay Agent nào kết nối",
+    "bootstrapAll": "Khởi động tất cả",
+    "noDevices": "Chưa có thiết bị",
+    "moreDevices": "+{count} thiết bị",
+    "lastHeartbeat": "Lần heartbeat cuối: {time}"
   },
   "deviceGroupsFeature": {
     "list": {
@@ -473,6 +513,7 @@
       "engineTemporal": "Engine: Temporal",
       "engineTaskQueue": "Engine: Hàng đợi trong process",
       "temporalFallback": "Không kết nối Temporal — đang chạy bằng hàng đợi trong process.",
+      "runStarted": "Đang chạy kịch bản trên {count} thiết bị",
       "campaignDone": "Campaign đã chạy xong",
       "fleetDone": "Fleet xong: {done}/{total} thiết bị",
       "deleteConfirm": "Xoá campaign này? Các task lịch sử sẽ vẫn giữ trong logs, nhưng campaign sẽ biến mất khỏi danh sách.",
@@ -772,7 +813,13 @@
       "loadTemplateFailed": "Không tải được mẫu kịch bản",
       "saveTemplateSuccess": "Đã lưu mẫu kịch bản"
     },
+    "takeover": {
+      "manualControlBlocked": "Thiết bị đang bận hoặc đang chạy campaign — thao tác thủ công bị chặn"
+    },
     "view": {
+      "takeover": {
+        "manualControlBlocked": "Thiết bị đang bận hoặc đang chạy campaign — thao tác thủ công bị chặn"
+      },
       "noDeviceConnected": "Chưa có thiết bị nào kết nối",
       "addDevice": "Thêm thiết bị",
       "selectDevice": "Chọn thiết bị",
@@ -1098,7 +1145,7 @@
     "backendErrorTitle": "Không kết nối được backend.",
     "backendErrorHint": "Backend đang chạy trên port 8081?",
     "streamConnecting": "Đang kết nối màn hình...",
-    "streamWaitingFirstFrame": "Đang chờ khung hình đầu tiên...",
+    "streamWaitingFirstFrame": "Đang ổn định màn hình...",
     "streamOffline": "Mất kết nối",
     "screenStream": "Luồng màn hình",
     "screenStreamHint": "Bật/tắt scrcpy qua API farm (relay). Tắt để giảm tải agent-boot.",
@@ -1510,6 +1557,97 @@
       "deleteConfirm": "Xóa lịch chạy \"{name}\"?",
       "deleteSuccess": "Đã xóa lịch chạy",
       "deleteFailed": "Xóa lịch chạy thất bại"
+    }
+  },
+  "analyticsFeature": {
+    "dashboard": {
+      "title": "Nhật ký hoạt động",
+      "subtitle": "Theo dõi các sự kiện thiết bị và tác vụ gần đây trong hệ thống."
+    },
+    "activity": {
+      "title": "Activity log",
+      "subtitle": "Tự động làm mới mỗi 5 giây",
+      "refresh": "Làm mới",
+      "loading": "Đang tải hoạt động",
+      "loadError": "Không tải được nhật ký hoạt động",
+      "empty": "Chưa có hoạt động nào",
+      "unknownDevice": "Thiết bị",
+      "task": "Tác vụ",
+      "deviceSerial": "Thiết bị {serial}",
+      "duration": "{seconds}s",
+      "titles": {
+        "deviceConnect": "{device} đã kết nối",
+        "deviceDisconnect": "{device} mất kết nối",
+        "deviceError": "{device} báo lỗi",
+        "taskDone": "{task} hoàn tất",
+        "taskFailed": "{task} thất bại",
+        "campaignRun": "Chiến dịch được chạy",
+        "campaignComplete": "Chiến dịch hoàn tất",
+        "scheduleTriggered": "Lịch chạy được kích hoạt"
+      }
+    }
+  },
+  "notificationsFeature": {
+    "title": "Thông báo",
+    "subtitle": "Quản lý kênh thông báo trong web, Telegram và webhook",
+    "loading": "Đang tải",
+    "loadingChannels": "Đang tải kênh thông báo",
+    "empty": "Chưa có thông báo",
+    "noChannels": "Chưa có kênh thông báo",
+    "manageChannels": "Quản lý kênh",
+    "addChannel": "Thêm kênh",
+    "createChannel": "Tạo kênh",
+    "editChannel": "Chỉnh sửa kênh",
+    "testTitle": "Thông báo thử",
+    "testBody": "Kênh thông báo Device Farm đang hoạt động.",
+    "types": {
+      "in_app": "Trong web",
+      "telegram": "Telegram",
+      "webhook": "Webhook"
+    },
+    "fields": {
+      "name": "Tên",
+      "type": "Loại",
+      "enabled": "Bật",
+      "events": "Sự kiện",
+      "actions": "Thao tác",
+      "botToken": "Bot token",
+      "chatId": "Chat ID",
+      "webhookUrl": "Webhook URL",
+      "headersJson": "Headers JSON"
+    },
+    "actions": {
+      "cancel": "Hủy",
+      "save": "Lưu"
+    },
+    "status": {
+      "on": "Bật",
+      "off": "Tắt"
+    },
+    "eventTitles": {
+      "deviceDisconnect": "Thiết bị {label} mất kết nối",
+      "deviceReconnect": "Thiết bị {label} đã kết nối lại",
+      "deviceError": "Thiết bị {label} báo lỗi"
+    },
+    "eventBodies": {
+      "deviceDisconnect": "Thiết bị mất kết nối",
+      "deviceReconnect": "{serial} đang online",
+      "deviceError": "Thiết bị chuyển sang trạng thái lỗi"
+    },
+    "toasts": {
+      "channelCreated": "Đã tạo kênh",
+      "channelUpdated": "Đã cập nhật kênh",
+      "channelDeleted": "Đã xóa kênh",
+      "testSent": "Đã gửi thông báo thử"
+    },
+    "errors": {
+      "nameRequired": "Tên kênh là bắt buộc",
+      "eventRequired": "Vui lòng chọn ít nhất một sự kiện",
+      "saveFailed": "Lưu kênh thất bại",
+      "invalidConfig": "Cấu hình kênh không hợp lệ",
+      "loadChannels": "Không tải được kênh thông báo",
+      "testFailed": "Gửi thử thất bại",
+      "deleteFailed": "Xóa kênh thất bại"
     }
   },
   "errors": {

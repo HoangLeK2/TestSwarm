@@ -206,7 +206,20 @@
     "accounts": "Accounts",
     "account_groups": "Account groups",
     "scenario_templates": "Scenario Templates",
-    "content": "Collected Results"
+    "content": "Collected Results",
+    "infrastructure": "Infrastructure",
+    "relay_agents": "Relay Agents",
+    "notifications": "Notifications"
+  },
+  "relayAgentsFeature": {
+    "title": "Relay Agents",
+    "onlineSummary": "{online}/{total} online",
+    "loading": "Loading...",
+    "empty": "No relay agents connected",
+    "bootstrapAll": "Bootstrap All",
+    "noDevices": "No devices",
+    "moreDevices": "+{count} more",
+    "lastHeartbeat": "Last heartbeat: {time}"
   },
   "deviceGroupsFeature": {
     "list": {
@@ -500,6 +513,7 @@
       "engineTemporal": "Engine: Temporal",
       "engineTaskQueue": "Engine: In-process queue",
       "temporalFallback": "Temporal unavailable — using in-process task queue.",
+      "runStarted": "Running scenario on {count} device(s)",
       "campaignDone": "Campaign finished",
       "fleetDone": "Fleet done: {done}/{total} devices",
       "deleteConfirm": "Delete this campaign? Historical tasks remain in logs, but campaign will be removed from list.",
@@ -799,7 +813,13 @@
       "loadTemplateFailed": "Failed to load template",
       "saveTemplateSuccess": "Template saved"
     },
+    "takeover": {
+      "manualControlBlocked": "Device busy or campaign running — manual input blocked"
+    },
     "view": {
+      "takeover": {
+        "manualControlBlocked": "Device busy or campaign running — manual input blocked"
+      },
       "noDeviceConnected": "No connected devices",
       "addDevice": "Add device",
       "selectDevice": "Select device",
@@ -1959,6 +1979,97 @@
       "deleteConfirm": "Delete schedule \"{name}\"?",
       "deleteSuccess": "Schedule deleted",
       "deleteFailed": "Delete schedule failed"
+    }
+  },
+  "analyticsFeature": {
+    "dashboard": {
+      "title": "Activity Log",
+      "subtitle": "Track recent device and task activity across the system."
+    },
+    "activity": {
+      "title": "Activity log",
+      "subtitle": "Auto-refreshes every 5 seconds",
+      "refresh": "Refresh",
+      "loading": "Loading activity",
+      "loadError": "Could not load activity log",
+      "empty": "No activity yet",
+      "unknownDevice": "Device",
+      "task": "Task",
+      "deviceSerial": "Device {serial}",
+      "duration": "{seconds}s",
+      "titles": {
+        "deviceConnect": "{device} connected",
+        "deviceDisconnect": "{device} disconnected",
+        "deviceError": "{device} reported an error",
+        "taskDone": "{task} completed",
+        "taskFailed": "{task} failed",
+        "campaignRun": "Campaign started",
+        "campaignComplete": "Campaign completed",
+        "scheduleTriggered": "Schedule triggered"
+      }
+    }
+  },
+  "notificationsFeature": {
+    "title": "Notifications",
+    "subtitle": "Manage in-app, Telegram and webhook notification channels",
+    "loading": "Loading",
+    "loadingChannels": "Loading notification channels",
+    "empty": "No notifications",
+    "noChannels": "No notification channels",
+    "manageChannels": "Manage channels",
+    "addChannel": "Add channel",
+    "createChannel": "Create channel",
+    "editChannel": "Edit channel",
+    "testTitle": "Test notification",
+    "testBody": "Device Farm notification channel is working.",
+    "types": {
+      "in_app": "In-app",
+      "telegram": "Telegram",
+      "webhook": "Webhook"
+    },
+    "fields": {
+      "name": "Name",
+      "type": "Type",
+      "enabled": "Enabled",
+      "events": "Events",
+      "actions": "Actions",
+      "botToken": "Bot token",
+      "chatId": "Chat ID",
+      "webhookUrl": "Webhook URL",
+      "headersJson": "Headers JSON"
+    },
+    "actions": {
+      "cancel": "Cancel",
+      "save": "Save"
+    },
+    "status": {
+      "on": "On",
+      "off": "Off"
+    },
+    "eventTitles": {
+      "deviceDisconnect": "Device {label} disconnected",
+      "deviceReconnect": "Device {label} reconnected",
+      "deviceError": "Device {label} reported an error"
+    },
+    "eventBodies": {
+      "deviceDisconnect": "Device lost connection",
+      "deviceReconnect": "{serial} is online",
+      "deviceError": "Device entered error state"
+    },
+    "toasts": {
+      "channelCreated": "Channel created",
+      "channelUpdated": "Channel updated",
+      "channelDeleted": "Channel deleted",
+      "testSent": "Test notification sent"
+    },
+    "errors": {
+      "nameRequired": "Channel name is required",
+      "eventRequired": "Select at least one event",
+      "saveFailed": "Save failed",
+      "invalidConfig": "Invalid channel config",
+      "loadChannels": "Could not load notification channels",
+      "testFailed": "Test failed",
+      "deleteFailed": "Delete failed"
     }
   },
   "errors": {

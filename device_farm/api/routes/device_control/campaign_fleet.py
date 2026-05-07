@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Body
 from fastapi.responses import JSONResponse
@@ -203,7 +204,7 @@ def build_campaign_fleet_router(
             }
         try:
             client = await get_temporal_client(config.temporal)
-            raw_rows: list[tuple[str, str, str, str | None]] = []
+            raw_rows: list[tuple[str, str, str, datetime | None]] = []
             # Top-level IDs have pattern: campaign:{id}:device:{serial}:scenario:{scen_id}
             # Child IDs have extra suffixes like :steps, :repeat:…, :if_element:…
             # We match exactly 5 colon-separated segments to exclude children.
@@ -222,21 +223,33 @@ def build_campaign_fleet_router(
                         wf.id,
                         wf.run_id,
                         temporal_st,
-                        wf.start_time.isoformat() if wf.start_time else None,
+                        wf.start_time,
                     )
                 )
 
-            async def _one(row: tuple[str, str, str, str | None]) -> dict:
+            def _rank(row: tuple[str, str, str, datetime | None]) -> tuple[int, datetime, str]:
+                _wf_id, run_id, _temporal_st, start_dt = row
+                fallback_dt = datetime.min.replace(tzinfo=timezone.utc)
+                return (1 if start_dt is not None else 0, start_dt or fallback_dt, run_id)
+
+            latest_by_workflow_id: dict[str, tuple[str, str, str, datetime | None]] = {}
+            for row in raw_rows:
+                wf_id = row[0]
+                prev = latest_by_workflow_id.get(wf_id)
+                if prev is None or _rank(row) >= _rank(prev):
+                    latest_by_workflow_id[wf_id] = row
+
+            async def _one(row: tuple[str, str, str, datetime | None]) -> dict:
                 wf_id, run_id, temporal_st, start_time = row
                 ui_st = await _workflow_ui_status(client, wf_id, temporal_st)
                 return {
                     "workflow_id": wf_id,
                     "run_id": run_id,
                     "status": ui_st,
-                    "start_time": start_time,
+                    "start_time": start_time.isoformat() if start_time else None,
                 }
 
-            workflows = list(await asyncio.gather(*(_one(r) for r in raw_rows)))
+            workflows = list(await asyncio.gather(*(_one(r) for r in latest_by_workflow_id.values())))
             return {
                 "campaign_id": campaign_id,
                 "workflows": workflows,
@@ -464,5 +477,39 @@ def build_campaign_fleet_router(
             return JSONResponse(
                 {"error": f"Failed to cancel: {exc}"}, status_code=500,
             )
+
+    @router.post("/devices/{serial}/interrupt")
+    async def api_device_interrupt(serial: str):
+        """Cancel all running scenarios on a device to allow manual takeover.
+
+        Cancels every matching Temporal workflow, then force-resets the
+        in-process _scenario_active counter so the WebSocket input gate opens
+        immediately without waiting for the activity to acknowledge cancellation.
+        """
+        device = manager.get_device(serial)
+        if not device:
+            return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
+
+        cancelled: list[str] = []
+        if config.temporal.enabled:
+            try:
+                client = await get_temporal_client(config.temporal)
+                safe_serial = serial.replace('"', "").replace("\\", "")
+                needle = f":device:{safe_serial}:"
+                async for wf in client.list_workflows('ExecutionStatus = "Running"'):
+                    if needle not in wf.id:
+                        continue
+                    try:
+                        await client.get_workflow_handle(wf.id).cancel()
+                        cancelled.append(wf.id)
+                    except Exception as exc:
+                        log.warning("interrupt: failed to cancel %s: %s", wf.id, exc)
+            except Exception as exc:
+                log.warning("interrupt: temporal unavailable for %s: %s", serial, exc)
+
+        # Force-reset so ws gate opens immediately (activity cancel is async)
+        device._scenario_active = 0
+
+        return {"ok": True, "serial": serial, "cancelled_workflows": cancelled}
 
     return router

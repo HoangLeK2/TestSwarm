@@ -34,6 +34,7 @@ class Device(Base):
     screen_height: Mapped[int] = mapped_column(Integer, default=0)
 
     # ADB connection info (last known). Optional; used for diagnostics / future reconnect flows.
+    adb_serial: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, default=None, index=True)
     adb_ip: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, default=None)
     adb_port: Mapped[int] = mapped_column(Integer, nullable=False, default=5555)
 
@@ -48,7 +49,6 @@ class Device(Base):
     sessions: Mapped[list["DeviceSession"]] = relationship(
         "DeviceSession", back_populates="device"
     )
-
     def __repr__(self) -> str:  # pragma: no cover - repr
         return f"<Device {self.serial} model={self.brand}/{self.model}>"
 

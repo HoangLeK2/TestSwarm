@@ -7,6 +7,11 @@ function nonempty(s: unknown): string {
   return String(s ?? '').trim();
 }
 
+function isVariableToken(v: unknown): boolean {
+  const raw = nonempty(v);
+  return /^\$\{[^}]+\}$/.test(raw);
+}
+
 function validateStepsArray(steps: unknown, path: string): ScenarioStepsValidation {
   if (!Array.isArray(steps)) {
     return { ok: false, message: `${path}: danh sách bước không hợp lệ` };
@@ -83,9 +88,12 @@ function validateStep(raw: unknown, path: string): ScenarioStepsValidation {
       return { ok: true };
     }
     case 'repeat': {
-      const count = Number(s.count ?? 0);
-      if (!Number.isFinite(count) || count < 1) {
-        return { ok: false, message: `${path} (repeat): count phải ≥ 1` };
+      const rawCount = s.count;
+      const count = Number(rawCount ?? 0);
+      const countIsValidLiteral = Number.isFinite(count) && count >= 1;
+      const countIsVariable = isVariableToken(rawCount);
+      if (!countIsValidLiteral && !countIsVariable) {
+        return { ok: false, message: `${path} (repeat): count phải là số ≥ 1 hoặc biến dạng \${VAR}` };
       }
       const inner = s.steps;
       if (!Array.isArray(inner) || inner.length < 1) {

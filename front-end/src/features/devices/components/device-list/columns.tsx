@@ -2,21 +2,83 @@ import { formatDistanceToNow } from 'date-fns';
 import { vi } from 'date-fns/locale';
 import { QrCode, Trash2, Wifi, WifiOff } from 'lucide-react';
 import type { ColumnDef } from '@tanstack/react-table';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { devicesApi, isPendingDevice, type DeviceOut } from '../../services/manage-api';
+import { Badge } from '../../../../components/ui/badge';
+import { Button } from '../../../../components/ui/button';
+import { devicesApi, isPendingDevice, type DeviceOut, type RelayAgentOut } from '../../services/manage-api';
 import { TagsCell } from './TagsCell';
+import { DeviceCmdButton } from './BootstrapDialog';
+
+function DeviceActionsCell({
+  device,
+  relayMap,
+  deletingId,
+  setDeletingId,
+  setConnectDevice,
+  t,
+}: {
+  device: DeviceOut;
+  relayMap: Record<string, RelayAgentOut>;
+  deletingId: string | null;
+  setDeletingId: (id: string | null | ((prev: string | null) => string | null)) => void;
+  setConnectDevice: (device: DeviceOut | null) => void;
+  t: (key: string, values?: Record<string, any>) => string;
+}) {
+  const handleDelete = async () => {
+    if (!window.confirm(t('deleteConfirm'))) return;
+    setDeletingId(device.id);
+    try {
+      await devicesApi.delete(device.id);
+      window.location.reload();
+    } finally {
+      setDeletingId((prev) => (prev === device.id ? null : prev));
+    }
+  };
+
+  const hasRelay = !!(
+    (device.relay_id ? relayMap[device.relay_id] : undefined) ??
+    relayMap[device.serial] ??
+    (device.adb_ip ? relayMap[device.adb_ip] : undefined)
+  );
+
+  return (
+    <div className='flex items-center justify-end gap-1'>
+      {hasRelay && (
+        <>
+          <DeviceCmdButton device={device} cmd='bootstrap' />
+          <DeviceCmdButton device={device} cmd='restart_u2' />
+          <DeviceCmdButton device={device} cmd='restart_scrcpy' />
+        </>
+      )}
+      <Button size='sm' variant='outline' onClick={() => setConnectDevice(device)}>
+        <QrCode size={14} className='mr-1.5' />
+        {t('connect')}
+      </Button>
+      <Button
+        size='icon'
+        variant='ghost'
+        className='size-7 text-destructive hover:text-destructive'
+        disabled={deletingId === device.id}
+        onClick={handleDelete}
+        title={t('deleteDevice')}
+      >
+        <Trash2 size={14} />
+      </Button>
+    </div>
+  );
+}
 
 export function getDeviceColumns({
   t,
   deletingId,
   setDeletingId,
-  setConnectDevice
+  setConnectDevice,
+  relayMap = {}
 }: {
   t: (key: string, values?: Record<string, any>) => string;
   deletingId: string | null;
   setDeletingId: (id: string | null | ((prev: string | null) => string | null)) => void;
   setConnectDevice: (device: DeviceOut | null) => void;
+  relayMap?: Record<string, RelayAgentOut>;
 }): ColumnDef<DeviceOut>[] {
   return [
     {
@@ -115,42 +177,36 @@ export function getDeviceColumns({
       }
     },
     {
-      id: 'actions',
-      header: '',
+      id: 'relay',
+      header: 'Relay',
       cell: ({ row }) => {
-        const device = row.original;
-
-        const handleDelete = async () => {
-          if (!window.confirm(t('deleteConfirm'))) return;
-
-          setDeletingId(device.id);
-          try {
-            await devicesApi.delete(device.id);
-            window.location.reload();
-          } finally {
-            setDeletingId((prev) => (prev === device.id ? null : prev));
-          }
-        };
-
+        const d = row.original;
+        const relay =
+          (d.relay_id ? relayMap[d.relay_id] : undefined) ??
+          relayMap[d.serial] ??
+          (d.adb_ip ? relayMap[d.adb_ip] : undefined);
+        if (!relay) return <span className='text-[11px] text-muted-foreground'>—</span>;
         return (
-          <div className='flex items-center justify-end gap-2'>
-            <Button size='sm' variant='outline' onClick={() => setConnectDevice(device)}>
-              <QrCode size={14} className='mr-1.5' />
-              {t('connect')}
-            </Button>
-            <Button
-              size='icon'
-              variant='ghost'
-              className='size-7 text-destructive hover:text-destructive'
-              disabled={deletingId === device.id}
-              onClick={handleDelete}
-              title={t('deleteDevice')}
-            >
-              <Trash2 size={14} />
-            </Button>
+          <div className='flex items-center gap-1'>
+            <span className={`size-1.5 rounded-full ${relay.status === 'online' ? 'bg-green-500' : 'bg-gray-400'}`} />
+            <span className='font-mono text-[11px]'>{relay.hostname || relay.relay_id}</span>
           </div>
         );
       }
+    },
+    {
+      id: 'actions',
+      header: '',
+      cell: ({ row }) => (
+        <DeviceActionsCell
+          device={row.original}
+          relayMap={relayMap}
+          deletingId={deletingId}
+          setDeletingId={setDeletingId}
+          setConnectDevice={setConnectDevice}
+          t={t}
+        />
+      )
     }
   ];
 }

@@ -1,13 +1,13 @@
 'use strict';
-console.log('[H264Worker] LOADED v18');
+console.log('[H264Worker] LOADED v26');
 /**
- * H264 VideoDecoder — Web Worker + OffscreenCanvas, zero-buffering.
+ * H264 VideoDecoder — Web Worker, push-model rendering.
  *
  * Strategy:
- *   1. Try hardware decode (prefer-hardware) — fast, low-latency.
+ *   1. prefer-hardware first — fast, low-latency.
  *   2. On async error → flag hardware as broken, reinit with software (no-preference).
- *   3. Low-latency mode: drop delta frames only when queue/latency crosses thresholds.
- *      This favors freshness over completeness (less "khung khung"/rubber-band lag).
+ *   3. Push frame to main thread immediately on decode output.
+ *   4. Drop delta frames only when queue/latency crosses thresholds.
  */
 
 let decoder       = null;
@@ -19,11 +19,11 @@ let decodedFrames = 0;
 let t0Us          = 0;      // local monotonic origin for chunk timestamps
 let lastTsUs      = 0;      // strictly increasing chunk timestamp guard
 let lastDecodeTsUs = 0;     // timestamp of last chunk accepted by decoder
-let pendingFrame = null;    // latest frame waiting to be sent
+let pendingFrame = null;    // latest frame waiting to be sent (VideoFrame path)
 let frameInFlight = false;  // one frame has been sent but not consumed by main
 let lastOutputMs = 0;
 let decodeFps = 15;
-let targetFps = 15;  // default matches config.yaml scrcpy_max_fps; updated via 'set-target-fps'
+let targetFps = 15;  // updated via 'set-target-fps'
 let flushInFlight = false;
 let needKeyframe = false;
 const MAX_DRIFT_US = 500000;
@@ -31,6 +31,16 @@ const MAX_SAFE_TS_US = Number.MAX_SAFE_INTEGER;
 let lastDecoderErrorLogAt = 0;
 let sameDecoderErrorCount = 0;
 let lastDecoderErrorMsg = '';
+let decoderInitToken = 0;
+let decoderConfiguring = false;
+let pendingKeyChunk = null;
+let lastBackpressurePostAt = 0;
+
+// Keep the stream live-first. Once WebCodecs has this much pending decode work,
+// decoding more P-frames only makes the visible stream play old frames in bursts.
+// Drop deltas, request a fresh IDR from the main thread, and resume from that IDR.
+const DELTA_DROP_QUEUE_SIZE = 3;
+const KEY_RESET_QUEUE_SIZE = 6;
 
 function logDecoderError(accel, msg) {
   var now = Date.now();
@@ -44,12 +54,32 @@ function logDecoderError(accel, msg) {
   // throttle noisy decode failures (device stream hiccups can spam thousands of lines)
   if ((now - lastDecoderErrorLogAt) < 1500 && sameDecoderErrorCount > 0) return;
   lastDecoderErrorLogAt = now;
-  console.error(
+  console.warn(
     '[H264Worker] decoder error (accel=' + accel + ')'
       + (sameDecoderErrorCount > 0 ? ' x' + (sameDecoderErrorCount + 1) : '')
       + ':',
     text
   );
+}
+
+function postDecoderError(accel, msg) {
+  self.postMessage({
+    type: 'decoder-error',
+    accel: String(accel || ''),
+    message: String(msg || 'unknown'),
+  });
+}
+
+function postBackpressure(reason) {
+  var now = Date.now();
+  if (now - lastBackpressurePostAt < 500) return;
+  lastBackpressurePostAt = now;
+  self.postMessage({
+    type: 'decoder-backpressure',
+    reason: String(reason || 'decode_queue'),
+    decodeQueueSize: decoder ? (decoder.decodeQueueSize || 0) : 0,
+    droppedDelta,
+  });
 }
 
 function nextMonotonicTsUs() {
@@ -157,9 +187,15 @@ function initDecoder(avccRecord) {
 
   var codec = getCodecString(avccRecord);
   var desc  = avccRecord instanceof Uint8Array ? avccRecord : new Uint8Array(avccRecord);
-  var accel = hwFailed ? 'no-preference' : 'prefer-hardware';
+  var token = ++decoderInitToken;
+  decoderConfiguring = true;
+  pendingKeyChunk = null;
 
-  decoder = new VideoDecoder({
+  configureSupportedDecoder(token, codec, desc);
+}
+
+function createDecoder(accel) {
+  return new VideoDecoder({
     output: function(frame) {
       var now = performance.now();
       if (lastOutputMs > 0) {
@@ -199,7 +235,8 @@ function initDecoder(avccRecord) {
         try { pendingFrame.close(); } catch (_) {}
       }
       pendingFrame = frame;
-      // Pull-model: main thread requests frame on RAF; worker does not push eagerly.
+      // Push: send immediately if slot free; pull-frame in RAF is fallback.
+      tryPostPendingFrame();
       if ((decodedFrames & 15) === 0) {
         self.postMessage({ type: 'fps' });
       }
@@ -209,45 +246,136 @@ function initDecoder(avccRecord) {
           decodeQueueSize: decoder.decodeQueueSize || 0,
           droppedDelta,
           decodedFrames,
-          accel: hwFailed ? 'software' : 'hardware',
+          accel: accel === 'no-preference' ? 'software' : 'hardware',
         });
       }
     },
     error: function(e) {
       var msg = (e && e.message) ? e.message : String(e);
       logDecoderError(accel, msg);
-      if (!hwFailed) {
-        // Hardware decode failed — switch to software for all future IDRs
+      postDecoderError(accel, msg);
+      if (accel !== 'no-preference') {
         hwFailed = true;
-        console.log('[H264Worker] switching to software decode');
       }
       closeDecoder();
-      // Reinit immediately with software if we have config — next IDR will use it
     },
   });
+}
 
-  try {
-    // optimizeForLatency: true — instructs the decoder to output frames as soon as
-    // they are decoded (no internal reorder buffer). Critical for 1-in-1-out behavior
-    // with H264 Baseline profile streams from scrcpy. Without this, decoders may
-    // buffer 4 frames after each IDR before emitting the first VideoFrame.
-    decoder.configure({
+async function configureSupportedDecoder(token, codec, desc) {
+  var candidates = [
+    {
       codec: codec,
       description: desc,
-      hardwareAcceleration: accel,
+      hardwareAcceleration: hwFailed ? 'no-preference' : 'prefer-hardware',
       optimizeForLatency: true,
-    });
-    console.log('[H264Worker] configured accel=' + accel + ' codec=' + codec);
-  } catch (e) {
-    console.error('[H264Worker] configure failed:', e && e.message);
-    if (!hwFailed) {
-      // Synchronous failure on hardware — retry with software immediately
-      hwFailed = true;
+    },
+    {
+      codec: codec,
+      description: desc,
+      hardwareAcceleration: 'no-preference',
+      optimizeForLatency: true,
+    },
+    {
+      codec: codec,
+      description: desc,
+      optimizeForLatency: true,
+    },
+  ];
+
+  for (var i = 0; i < candidates.length; i++) {
+    var cfg = candidates[i];
+    try {
+      if (typeof VideoDecoder.isConfigSupported === 'function') {
+        var support = await VideoDecoder.isConfigSupported(cfg);
+        if (token !== decoderInitToken) return;
+        if (!support || support.supported === false) continue;
+        cfg = support.config || cfg;
+      }
+      var accel = cfg.hardwareAcceleration || 'no-preference';
+      decoder = createDecoder(accel);
+      decoder.configure(cfg);
+      decoderConfiguring = false;
+      waitIdr = true;
+      console.log('[H264Worker] configured accel=' + accel + ' codec=' + codec);
+      if (pendingKeyChunk) {
+        var pending = pendingKeyChunk;
+        pendingKeyChunk = null;
+        decodeChunk(pending.isKey, pending.ptsUs, pending.frameData);
+      }
+      return;
+    } catch (e) {
+      if (decoder) { try { decoder.close(); } catch (_) {} }
       decoder = null;
-      initDecoder(avccRecord);
-    } else {
-      closeDecoder();
+      if (cfg.hardwareAcceleration === 'prefer-hardware') hwFailed = true;
+      console.warn('[H264Worker] config candidate rejected:', codec, cfg.hardwareAcceleration || 'default', e && e.message);
     }
+  }
+  decoderConfiguring = false;
+  pendingKeyChunk = null;
+  var msg = 'no supported WebCodecs config for codec=' + codec;
+  console.error('[H264Worker] ' + msg);
+  postDecoderError('config', msg);
+}
+
+function decodeChunk(isKey, ptsUs, frameData) {
+  if (decoderConfiguring) {
+    if (isKey) pendingKeyChunk = { isKey: true, ptsUs: ptsUs, frameData: frameData };
+    return;
+  }
+  if (!decoder) {
+    if (!isKey || !lastAvcc) return;
+    pendingKeyChunk = { isKey: true, ptsUs: ptsUs, frameData: frameData };
+    initDecoder(lastAvcc);
+    return;
+  }
+  if (decoder.state === 'closed') { closeDecoder(); return; }
+
+  var decodeQueueSize = decoder.decodeQueueSize || 0;
+  if (!isKey && decodeQueueSize >= DELTA_DROP_QUEUE_SIZE) {
+    droppedDelta++;
+    waitIdr = true;
+    postBackpressure('decode_queue_delta_drop');
+    return;
+  }
+  if (isKey && decodeQueueSize >= KEY_RESET_QUEUE_SIZE && lastAvcc) {
+    // A fresh IDR is more valuable than draining stale queued deltas. Resetting
+    // drops browser-side backlog and starts the decoder from the newest keyframe.
+    pendingKeyChunk = { isKey: true, ptsUs: ptsUs, frameData: frameData };
+    initDecoder(lastAvcc);
+    postBackpressure('decode_queue_key_reset');
+    return;
+  }
+
+  if (waitIdr) {
+    if (!isKey) return;
+    waitIdr = false;
+    console.log('[H264Worker] first IDR decoded');
+  }
+  if (isKey) {
+    needKeyframe = false;
+  }
+
+  var tsUs = normalizeChunkTimestampUs(ptsUs);
+  var data = frameData;
+  if (isKey) {
+    data = stripParamNals(frameData);
+  }
+  if (data.byteLength === 0) return;
+
+  try {
+    decoder.decode(new EncodedVideoChunk({
+      type: isKey ? 'key' : 'delta',
+      timestamp: tsUs,
+      data: data,
+    }));
+    lastDecodeTsUs = tsUs;
+  } catch (e) {
+    var accel = hwFailed ? 'no-preference' : 'prefer-hardware';
+    var msg = e && e.message;
+    logDecoderError(accel, msg);
+    postDecoderError(accel, msg);
+    closeDecoder();
   }
 }
 
@@ -262,6 +390,7 @@ self.onmessage = function(event) {
       console.log('[H264Worker] init');
       break;
 
+
     case 'config': {
       var avcc = new Uint8Array(data.avcc);
       if (avcc.length < 4) break;
@@ -273,47 +402,7 @@ self.onmessage = function(event) {
     }
 
     case 'frame': {
-      if (!decoder) {
-        if (!data.isKey || !lastAvcc) return;
-        initDecoder(lastAvcc);
-        if (!decoder) return;
-      }
-      if (decoder.state === 'closed') { closeDecoder(); return; }
-
-      if (waitIdr) {
-        if (!data.isKey) return;
-        waitIdr = false;
-        console.log('[H264Worker] first IDR decoded');
-      }
-      if (data.isKey) {
-        needKeyframe = false;
-      }
-
-      // Hybrid timestamping:
-      // - prefer source PTS when available
-      // - enforce strict monotonicity to avoid WebCodecs reorder glitches
-      var tsUs = normalizeChunkTimestampUs(data.ptsUs);
-      var frameData = data.frameData;
-      if (data.isKey) {
-        frameData = stripParamNals(data.frameData);
-      }
-      if (frameData.byteLength === 0) return;
-
-      try {
-        decoder.decode(new EncodedVideoChunk({
-          type     : data.isKey ? 'key' : 'delta',
-          // Use client monotonic clock to avoid remote PTS jitter/stalls.
-          timestamp: tsUs,
-          data     : frameData,
-        }));
-        lastDecodeTsUs = tsUs;
-        // Do not flush in live mode.
-        // flush() forces "next chunk must be keyframe", which creates
-        // decode errors under normal P-frame flow.
-      } catch (e) {
-        logDecoderError(hwFailed ? 'no-preference' : 'prefer-hardware', e && e.message);
-        closeDecoder();
-      }
+      decodeChunk(Boolean(data.isKey), Number(data.ptsUs || 0), data.frameData);
       break;
     }
 
@@ -336,15 +425,6 @@ self.onmessage = function(event) {
 
       if (frameType === 0x11) {
         if (buf.byteLength < doff + 9) return;
-        if (!decoder) {
-          if (!lastAvcc) return;
-          initDecoder(lastAvcc);
-          if (!decoder) return;
-        }
-        if (decoder.state === 'closed') {
-          closeDecoder();
-          return;
-        }
         var isKey = view.getUint8(doff) !== 0;
         var ptsHi = view.getUint32(doff + 1, false);
         var ptsLo = view.getUint32(doff + 5, false);
@@ -354,35 +434,9 @@ self.onmessage = function(event) {
           ptsUs = Number(ptsBig);
         }
 
-        if (waitIdr) {
-          if (!isKey) return;
-          waitIdr = false;
-        }
-        if (isKey) {
-          needKeyframe = false;
-        }
-
-        var tsUs = normalizeChunkTimestampUs(ptsUs);
         var rawFrame = new Uint8Array(buf, doff + 9);
         if (rawFrame.byteLength === 0) return;
-        var frameData = rawFrame;
-        if (isKey) {
-          frameData = new Uint8Array(stripParamNals(buf.slice(doff + 9)));
-        }
-        if (frameData.byteLength === 0) return;
-
-        try {
-          decoder.decode(new EncodedVideoChunk({
-            type: isKey ? 'key' : 'delta',
-            timestamp: tsUs,
-            data: frameData,
-          }));
-          lastDecodeTsUs = tsUs;
-          // Do not flush in live mode (see note above).
-        } catch (e) {
-          logDecoderError(hwFailed ? 'no-preference' : 'prefer-hardware', e && e.message);
-          closeDecoder();
-        }
+        decodeChunk(isKey, ptsUs, rawFrame);
       }
       break;
     }
@@ -390,6 +444,9 @@ self.onmessage = function(event) {
     case 'reset':
       // Keep lastAvcc so the next keyframe can reinit the decoder immediately
       // without waiting for a new config frame (which may arrive seconds later).
+      decoderInitToken++;
+      decoderConfiguring = false;
+      pendingKeyChunk = null;
       closeDecoder();
       break;
 

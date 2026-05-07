@@ -64,12 +64,14 @@ class GrpcRelayClient:
         agent_id: str,
         send_queue: asyncio.Queue,
         loop: asyncio.AbstractEventLoop,
+        channel=None,
     ) -> None:
         self._addr = server_addr          # "host:50051"
         self._api_key = api_key or ""
         self._agent_id = agent_id
         self._send_queue = send_queue     # shared with ScrcpyRelaySession (same as WS)
         self._loop = loop
+        self._shared_channel = channel    # pre-created channel shared with control stream
         self.ctrl_q: asyncio.Queue = asyncio.Queue(maxsize=256)
         self._running = False
 
@@ -94,7 +96,7 @@ class GrpcRelayClient:
     def stop(self) -> None:
         self._running = False
 
-    async def _stream_once(self) -> None:
+    async def _stream_once(self, channel=None) -> None:
         # Called either from start() (which already set _running=True) or
         # directly from agent.py — ensure the generator loop runs in both cases.
         self._running = True
@@ -105,6 +107,22 @@ class GrpcRelayClient:
             ("x-relay-api-key", self._api_key),
             ("x-agent-id", self._agent_id),
         ]
+
+        # Use shared channel if provided (agent.py creates it to share with
+        # AgentControlClient so both streams run over the same TCP connection).
+        shared = channel or self._shared_channel
+        if shared is not None:
+            stub = relay_pb2_grpc.RelayServiceStub(shared)
+            call = stub.Stream(
+                self._frame_generator(relay_pb2),
+                metadata=metadata,
+            )
+            async for ctrl_msg in call:
+                try:
+                    self.ctrl_q.put_nowait(ctrl_msg)
+                except asyncio.QueueFull:
+                    pass
+            return
 
         async with aio.insecure_channel(
             self._addr,
@@ -119,8 +137,8 @@ class GrpcRelayClient:
                 ("grpc.max_send_message_length",    4 * 1024 * 1024),
                 ("grpc.max_receive_message_length", 4 * 1024 * 1024),
             ],
-        ) as channel:
-            stub = relay_pb2_grpc.RelayServiceStub(channel)
+        ) as ch:
+            stub = relay_pb2_grpc.RelayServiceStub(ch)
             call = stub.Stream(
                 self._frame_generator(relay_pb2),
                 metadata=metadata,

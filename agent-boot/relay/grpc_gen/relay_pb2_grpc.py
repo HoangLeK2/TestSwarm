@@ -97,3 +97,87 @@ class RelayService(object):
             timeout,
             metadata,
             _registered_method=True)
+
+
+class AgentControlServiceStub(object):
+    """── Control plane (separate stream, low-volume) ───────────────────────────────
+    Runs on the same gRPC port as RelayService but as an independent HTTP/2 stream.
+    This keeps identity + command traffic off the high-throughput video stream.
+
+    """
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.ControlStream = channel.stream_stream(
+                '/devicefarm.AgentControlService/ControlStream',
+                request_serializer=relay__pb2.AgentControlMsg.SerializeToString,
+                response_deserializer=relay__pb2.ServerControlMsg.FromString,
+                _registered_method=True)
+
+
+class AgentControlServiceServicer(object):
+    """── Control plane (separate stream, low-volume) ───────────────────────────────
+    Runs on the same gRPC port as RelayService but as an independent HTTP/2 stream.
+    This keeps identity + command traffic off the high-throughput video stream.
+
+    """
+
+    def ControlStream(self, request_iterator, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_AgentControlServiceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'ControlStream': grpc.stream_stream_rpc_method_handler(
+                    servicer.ControlStream,
+                    request_deserializer=relay__pb2.AgentControlMsg.FromString,
+                    response_serializer=relay__pb2.ServerControlMsg.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'devicefarm.AgentControlService', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('devicefarm.AgentControlService', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class AgentControlService(object):
+    """── Control plane (separate stream, low-volume) ───────────────────────────────
+    Runs on the same gRPC port as RelayService but as an independent HTTP/2 stream.
+    This keeps identity + command traffic off the high-throughput video stream.
+
+    """
+
+    @staticmethod
+    def ControlStream(request_iterator,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.stream_stream(
+            request_iterator,
+            target,
+            '/devicefarm.AgentControlService/ControlStream',
+            relay__pb2.AgentControlMsg.SerializeToString,
+            relay__pb2.ServerControlMsg.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)

@@ -42,7 +42,32 @@ uv run main.py                        # bootstrap → relay (default)
 uv run main.py --relay-only           # bỏ qua bootstrap, chỉ chạy relay
 uv run main.py --bootstrap-only       # setup devices rồi exit
 uv run main.py --serial 172.16.0.213:45269   # target device cụ thể
+uv run main.py --ws-url ws://host:8081/device-agent  # auto-connect STFService
 ```
+
+## Environment Variables
+
+| Biến | Default | Mô tả |
+|------|---------|--------|
+| `RELAY_SERVER` | `localhost:50051` | Địa chỉ gRPC server (`host:port`) |
+| `RELAY_API_KEY` | *(bắt buộc)* | Auth key khớp với farm server |
+| `RELAY_MODE` | `grpc` | Transport: `grpc` hoặc `ws` |
+| `DEVICE_FARM_WS` | *(trống)* | URL WebSocket cho STFService auto-connect (e.g. `ws://host:8081/device-agent`) |
+| `U2_BATCH_ENABLED` | `true` | Bật u2 batch/flow executor (1 gRPC RTT thay vì 3 HTTP RTT) |
+| `SCRCPY_VIDEO_CODEC` | `h264` | Codec video gửi đến browser (`h264` only) |
+| `SCRCPY_VIDEO_ENCODER` | *(auto)* | Force encoder cụ thể, e.g. `c2.android.avc.encoder` |
+| `SCRCPY_FRAME_TIMEOUT_S` | `30` | Giây không có frame trước khi scrcpy restart |
+| `AUTO_OPEN_STF_APP` | `0` | Set `1` để tự mở STFService UI sau bootstrap |
+
+## Network Ports
+
+| Port | Hướng | Mục đích |
+|------|-------|---------|
+| 50051 | agent → server (outbound) | gRPC relay stream |
+| 5555 | agent → device | ADB over WiFi |
+| 7912 | agent → device | atx-agent (u2 RPC) |
+
+Không cần mở inbound port trên máy agent.
 
 ## Bootstrap steps
 
@@ -54,7 +79,7 @@ uv run main.py --serial 172.16.0.213:45269   # target device cụ thể
 | 4 | atx-agent | Push + start atx-agent trên port 7912 |
 | 5 | STFService | Install APK |
 | 6 | Permissions | Grant WRITE_SECURE_SETTINGS, READ_PHONE_STATE |
-| 7 | Open app | Launch STFService → scan QR để connect cloud |
+| 7 | Auto-connect | Launch STFService + inject `DEVICE_FARM_WS` via ADB intent (không cần scan QR) |
 
 ## Relay Architecture
 

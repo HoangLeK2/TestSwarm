@@ -10,7 +10,11 @@ from fastapi.responses import FileResponse
 
 from api.deps import CurrentUser, DB
 from runtime.core import DeviceManager
-from api.schemas.device import DeviceCreate, DeviceOut, SessionOut
+from api.schemas.device import (
+    DeviceCreate,
+    DeviceOut,
+    SessionOut,
+)
 from api.schemas.device_group import UpdateTagsBody
 from db import crud as repo
 from db.crud.device_group import update_device_tags
@@ -23,7 +27,25 @@ _ROOT_DIR = Path(__file__).resolve().parents[2]
 _APK_CANDIDATES = [
     # Preferred: pre-bundled APK in device_farm/bundle/apks/STFService.apk
     _ROOT_DIR / "bundle" / "apks" / "STFService.apk",
-    # Fallback: local Gradle release build from ../STFService.apk Android project
+    # Fallback: local Gradle release builds from ../STFService.apk Android project
+    _ROOT_DIR.parent
+    / "STFService.apk"
+    / "app"
+    / "build"
+    / "outputs"
+    / "apk"
+    / "lite"
+    / "release"
+    / "app-lite-release.apk",
+    _ROOT_DIR.parent
+    / "STFService.apk"
+    / "app"
+    / "build"
+    / "outputs"
+    / "apk"
+    / "full"
+    / "release"
+    / "app-full-release.apk",
     _ROOT_DIR.parent
     / "STFService.apk"
     / "app"
@@ -162,9 +184,64 @@ async def poll_pairing(pairing_id: str, user: CurrentUser):
 # ── Device CRUD ───────────────────────────────────────────────────────────────
 
 @router.get("", response_model=list[DeviceOut])
-async def list_devices(db: DB, user: CurrentUser):
+async def list_devices(request: Request, db: DB, user: CurrentUser):
     devices = await repo.list_devices(db, user_id=user.id)
-    return [_to_out(d) for d in devices]
+    manager: DeviceManager | None = getattr(request.app.state, "manager", None)
+    try:
+        ctrl = _get_ctrl_servicer()
+    except HTTPException:
+        ctrl = None
+
+    def _resolve_relay_id(device) -> str | None:
+        # Source of truth: control channel registered by agent-boot.
+        # Do not rely on local ADB availability inside API container.
+        if ctrl is not None and not str(getattr(device, "serial", "")).startswith("pending-"):
+            if ctrl.conn_for_serial(device.serial):
+                conn = ctrl.conn_for_serial(device.serial)
+                if conn is not None:
+                    return conn.relay_id
+            if getattr(device, "adb_ip", None):
+                tcp_serial = f"{device.adb_ip}:{getattr(device, 'adb_port', 5555)}"
+                conn = ctrl.conn_for_serial(tcp_serial)
+                if conn is not None:
+                    return conn.relay_id
+                matched = ctrl.find_serial_by_ip(device.adb_ip)
+                if matched:
+                    conn = ctrl.conn_for_serial(matched)
+                    if conn is not None:
+                        return conn.relay_id
+
+        # Fallback for WS logical device view when ctrl serial is not yet indexed.
+        if manager is None:
+            return None
+        runtime_device = manager.get_device(getattr(device, "serial", ""))
+        if runtime_device is None:
+            return None
+        try:
+            from runtime.transports.adb_relay_server import get_relay_manager
+
+            relay = get_relay_manager()
+            if relay is None:
+                return None
+
+            adb_serial = str(getattr(runtime_device, "_adb_serial", "") or "")
+            if adb_serial:
+                conn = relay.relay_for_serial(adb_serial)
+                if conn is not None:
+                    return conn.relay_id
+
+            # Fallback for WS devices that are online but have not copied _adb_serial yet.
+            # If there is exactly one active relay, pin to that relay so dashboard
+            # does not show a false blank state.
+            if getattr(runtime_device, "_agent_send", None) is not None:
+                relay_ids = list((relay.registered_relays() or {}).keys())
+                if len(relay_ids) == 1:
+                    return relay_ids[0]
+            return None
+        except Exception:
+            return None
+
+    return [_to_out(d, relay_id=_resolve_relay_id(d)) for d in devices]
 
 
 @router.post("", response_model=DeviceOut, status_code=status.HTTP_201_CREATED)
@@ -254,7 +331,122 @@ async def device_sessions(device_id: str, db: DB, user: CurrentUser):
     ]
 
 
-def _to_out(d) -> DeviceOut:
+# ── Relay control endpoints ───────────────────────────────────────────────────
+
+from api.schemas.relay_agent import RelayCommandOut  # noqa: E402
+
+
+def _get_ctrl_servicer():
+    from runtime.transports.agent_control_servicer import get_control_servicer
+    svc = get_control_servicer()
+    if svc is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="control servicer not available (gRPC relay not started)",
+        )
+    return svc
+
+
+async def _resolve_ctrl_serial(db, device_id: str, user_id: str, ctrl, manager: DeviceManager | None = None) -> str:
+    """Return the serial string the control servicer actually has a channel for."""
+    device = await repo.get_device(db, device_id)
+    if not device or device.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Device not found")
+    if device.serial.startswith("pending-"):
+        raise HTTPException(status_code=409, detail="Device not yet paired")
+
+    candidates: list[str] = []
+
+    def _add_candidate(s: str | None) -> None:
+        s = str(s or "").strip()
+        if s and s not in candidates:
+            candidates.append(s)
+
+    _add_candidate(device.serial)
+    _add_candidate(getattr(device, "adb_serial", None))
+    if getattr(device, "adb_ip", None):
+        _add_candidate(f"{device.adb_ip}:{getattr(device, 'adb_port', 5555)}")
+        _add_candidate(device.adb_ip)
+
+    # Runtime mapping from WS logical device -> relay ADB serial.
+    if manager is not None:
+        runtime_device = manager.get_device(device.serial)
+        if runtime_device is not None:
+            resolver = getattr(runtime_device, "_resolve_relay_serial", None)
+            if callable(resolver):
+                try:
+                    _add_candidate(resolver())
+                except Exception:
+                    pass
+            _add_candidate(getattr(runtime_device, "_adb_serial", None))
+
+    # Try exact serial match first.
+    for serial in candidates:
+        if ctrl.conn_for_serial(serial):
+            return serial
+
+    # Then resolve via relay index (ip:port churn, mDNS, USB-preferred remap).
+    try:
+        from runtime.transports.adb_relay_server import get_relay_manager
+
+        relay = get_relay_manager()
+        if relay is not None:
+            for hint in candidates:
+                resolved = relay.resolve_serial(hint)
+                if resolved and ctrl.conn_for_serial(resolved):
+                    return resolved
+    except Exception:
+        pass
+
+    # Last fallback by IP for dynamic wireless debug ports.
+    for hint in candidates:
+        if "." in hint:
+            ip = hint.split(":")[0]
+            matched = ctrl.find_serial_by_ip(ip)
+            if matched:
+                return matched
+
+    # Neither found — return USB serial so error message is meaningful
+    return device.serial
+
+
+@router.post("/{device_id}/bootstrap", response_model=RelayCommandOut)
+async def bootstrap_device(device_id: str, request: Request, db: DB, user: CurrentUser):
+    ctrl   = _get_ctrl_servicer()
+    manager: DeviceManager | None = getattr(request.app.state, "manager", None)
+    serial = await _resolve_ctrl_serial(db, device_id, user.id, ctrl, manager)
+    res    = await ctrl.bootstrap(serial, timeout=180.0)
+    return RelayCommandOut(**res)
+
+
+@router.post("/{device_id}/restart-u2", response_model=RelayCommandOut)
+async def restart_u2(device_id: str, request: Request, db: DB, user: CurrentUser):
+    ctrl   = _get_ctrl_servicer()
+    manager: DeviceManager | None = getattr(request.app.state, "manager", None)
+    serial = await _resolve_ctrl_serial(db, device_id, user.id, ctrl, manager)
+    res    = await ctrl.restart_u2(serial, timeout=60.0)
+    return RelayCommandOut(**res)
+
+
+@router.post("/{device_id}/restart-atx", response_model=RelayCommandOut)
+async def restart_atx(device_id: str, request: Request, db: DB, user: CurrentUser):
+    ctrl   = _get_ctrl_servicer()
+    manager: DeviceManager | None = getattr(request.app.state, "manager", None)
+    serial = await _resolve_ctrl_serial(db, device_id, user.id, ctrl, manager)
+    res    = await ctrl.restart_atx(serial, timeout=30.0)
+    return RelayCommandOut(**res)
+
+
+@router.post("/{device_id}/restart-scrcpy", response_model=RelayCommandOut)
+async def restart_scrcpy(device_id: str, request: Request, db: DB, user: CurrentUser):
+    ctrl   = _get_ctrl_servicer()
+    manager: DeviceManager | None = getattr(request.app.state, "manager", None)
+    serial = await _resolve_ctrl_serial(db, device_id, user.id, ctrl, manager)
+    res    = await ctrl.restart_scrcpy(serial, timeout=30.0)
+    return RelayCommandOut(**res)
+
+
+def _to_out(d, *, relay_id: str | None = None) -> DeviceOut:
     return DeviceOut(
         id=d.id, serial=d.serial, name=d.name,
         device_key=d.device_key, user_id=d.user_id,
@@ -262,7 +454,9 @@ def _to_out(d) -> DeviceOut:
         android_version=d.android_version, sdk_version=d.sdk_version,
         screen_width=d.screen_width, screen_height=d.screen_height,
         last_seen=d.last_seen, created_at=d.created_at,
+        adb_serial=getattr(d, "adb_serial", None),
         adb_ip=getattr(d, "adb_ip", None),
         adb_port=getattr(d, "adb_port", 5555),
         tags=getattr(d, "tags", "") or "",
+        relay_id=relay_id,
     )

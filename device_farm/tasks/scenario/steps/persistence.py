@@ -4,12 +4,26 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import logging
+import os
 from typing import Any, Dict
 
 from tasks.scenario.steps import register_step
 from tasks.scenario.context import ScenarioContext
 
 log = logging.getLogger(__name__)
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except Exception:
+        return default
+
+
+def _chunks(items: list[dict], size: int):
+    size = max(1, size)
+    for i in range(0, len(items), size):
+        yield items[i:i + size]
 
 
 @register_step("save_extraction")
@@ -106,32 +120,54 @@ def handle_save_extraction(sc: ScenarioContext, step: Dict[str, Any], idx: int, 
                 return None
 
         async def _save_all_items():
+            from db.database import activity_session
+
             resolved_uid = await _resolve_user_id()
             sv = dp = er = pc = 0
             last: dict = {}
-            for it in items_snap:
-                try:
-                    r = await save_content_item(
-                        data=it, collection=coll, platform=plat, content_type=ctype,
-                        dedupe_field=dedup_f, tags=tags, device_serial=dserial,
-                        parent_id=parent_id, item_level=item_level, user_id=resolved_uid,
-                        campaign_id=campaign_id, execution_id=execution_id,
-                        hash_scope=run_hash_scope,
-                    )
-                    last = r
-                    if r.get("saved"):
-                        sv += 1
-                    else:
-                        dp += 1
-                    pc += 1
-                except Exception as exc:
-                    er += 1
-                    log.warning("[%s] save_extraction item failed (%s): %s", dserial, data_var, exc)
+            chunk_size = max(1, int(step.get("save_batch_size") or _env_int("SAVE_EXTRACTION_BATCH_SIZE", 200)))
+            for chunk in _chunks(items_snap, chunk_size):
+                async with activity_session() as db:
+                    chunk_err = 0
+                    chunk_processed = 0
+                    chunk_saved = 0
+                    chunk_dup = 0
+                    for it in chunk:
+                        try:
+                            r = await save_content_item(
+                                data=it, collection=coll, platform=plat, content_type=ctype,
+                                dedupe_field=dedup_f, tags=tags, device_serial=dserial,
+                                parent_id=parent_id, item_level=item_level, user_id=resolved_uid,
+                                campaign_id=campaign_id, execution_id=execution_id,
+                                hash_scope=run_hash_scope, db=db,
+                            )
+                            last = r
+                            if r.get("saved"):
+                                chunk_saved += 1
+                            else:
+                                chunk_dup += 1
+                            chunk_processed += 1
+                        except Exception as exc:
+                            chunk_err += 1
+                            log.warning("[%s] save_extraction item failed (%s): %s", dserial, data_var, exc)
+                            break
+                    sv += chunk_saved
+                    dp += chunk_dup
+                    er += chunk_err
+                    pc += chunk_processed
+                if chunk_err:
                     break
+                if len(chunk) >= chunk_size and len(items_snap) > chunk_size:
+                    try:
+                        await asyncio.sleep(float(os.environ.get("SAVE_EXTRACTION_CHUNK_PAUSE_S", "0.02")))
+                    except Exception:
+                        pass
             return sv, dp, er, pc, last
 
+        from db.database import run_activity_coro
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            fut = pool.submit(asyncio.run, _save_all_items())
+            fut = pool.submit(run_activity_coro, _save_all_items())
             saved_count, duplicate_count, error_count, processed_count, last_result = fut.result(timeout=120)
 
         if isinstance(data, list):

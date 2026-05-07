@@ -174,6 +174,7 @@ def log_task_activity_sync(task, serial: str, duration_seconds: float | None) ->
             )
 
     try:
-        asyncio.run(_write())
+        from db.database import run_activity_coro
+        run_activity_coro(_write())
     except Exception as exc:
         log.warning("activity task write failed task=%s serial=%s: %s", getattr(task, "id", None), serial, exc)

@@ -6,6 +6,7 @@ import concurrent.futures
 import importlib
 import json
 import logging
+import os
 import time
 import xml.etree.ElementTree as ET
 from typing import Any, Dict, List, Optional, Tuple
@@ -16,6 +17,19 @@ from tasks.scenario.context import ScenarioContext
 from services.extraction_usecase import resolve_comment_parent_hash
 
 log = logging.getLogger(__name__)
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except Exception:
+        return default
+
+
+def _chunks(items: list[dict], size: int):
+    size = max(1, size)
+    for i in range(0, len(items), size):
+        yield items[i:i + size]
 
 try:
     _trace_log = importlib.import_module("structlog").get_logger("scenario_trace")
@@ -527,7 +541,7 @@ def _extract_fb_comments(sc, step, idx, result, xml, stop_if_no_new, no_new_thre
         result["post_stats_source"] = post_stats_source
         if parent_hash:
             try:
-                from db.database import activity_session
+                from db.database import activity_session, run_activity_coro
                 from db.crud.content import update_content_stats
                 from services.content_store import _safe_int
                 _ph, _ps, _serial = parent_hash, post_stats, serial
@@ -550,7 +564,7 @@ def _extract_fb_comments(sc, step, idx, result, xml, stop_if_no_new, no_new_thre
                             )
 
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                    pool.submit(asyncio.run, _do_update_stats()).result(timeout=10)
+                    pool.submit(run_activity_coro, _do_update_stats()).result(timeout=10)
             except Exception as exc:
                 log.warning(f"[{serial}] update_content_stats failed: {exc}")
 
@@ -636,30 +650,52 @@ def _do_inline_auto_save(sc, step, strategy, result, collection):
                 return None
 
         async def _auto_save_all():
+            from db.database import activity_session
+
             resolved_uid = await _resolve_user_id()
             sv = dp = er = pc = 0
-            for it in snap:
-                try:
-                    r = await save_content_item(
-                        data=it, collection=coll, platform=plat, content_type=ctype,
-                        dedupe_field=dedup, tags=tags, device_serial=dserial,
-                        parent_id=parent_id, item_level=level, user_id=resolved_uid,
-                        campaign_id=campaign_id, execution_id=execution_id,
-                        hash_scope=run_hash_scope,
-                    )
-                    if r.get("saved"):
-                        sv += 1
-                    else:
-                        dp += 1
-                    pc += 1
-                except Exception as exc:
-                    er += 1
-                    log.warning("[%s] extract auto-save failed: %s", dserial, exc)
+            chunk_size = max(1, int(step.get("save_batch_size") or _env_int("EXTRACT_AUTO_SAVE_BATCH_SIZE", 100)))
+            for chunk in _chunks(snap, chunk_size):
+                async with activity_session() as db:
+                    chunk_processed = 0
+                    chunk_saved = 0
+                    chunk_dup = 0
+                    chunk_err = 0
+                    for it in chunk:
+                        try:
+                            r = await save_content_item(
+                                data=it, collection=coll, platform=plat, content_type=ctype,
+                                dedupe_field=dedup, tags=tags, device_serial=dserial,
+                                parent_id=parent_id, item_level=level, user_id=resolved_uid,
+                                campaign_id=campaign_id, execution_id=execution_id,
+                                hash_scope=run_hash_scope, db=db,
+                            )
+                            if r.get("saved"):
+                                chunk_saved += 1
+                            else:
+                                chunk_dup += 1
+                            chunk_processed += 1
+                        except Exception as exc:
+                            chunk_err += 1
+                            log.warning("[%s] extract auto-save failed: %s", dserial, exc)
+                            break
+                    sv += chunk_saved
+                    dp += chunk_dup
+                    er += chunk_err
+                    pc += chunk_processed
+                if chunk_err:
                     break
+                if len(chunk) >= chunk_size and len(snap) > chunk_size:
+                    try:
+                        await asyncio.sleep(float(os.environ.get("EXTRACT_AUTO_SAVE_CHUNK_PAUSE_S", "0.02")))
+                    except Exception:
+                        pass
             return sv, dp, er, pc
 
+        from db.database import run_activity_coro
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            saved, dup, err, proc = pool.submit(asyncio.run, _auto_save_all()).result(timeout=120)
+            saved, dup, err, proc = pool.submit(run_activity_coro, _auto_save_all()).result(timeout=120)
 
         offsets[data_var] = start + proc
         result["auto_save"] = {"saved": saved, "duplicate": dup, "errors": err}

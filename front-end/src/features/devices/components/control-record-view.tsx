@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import {
   AlertDialog,
@@ -20,6 +20,13 @@ import { useSafeMode } from '@/features/core/services/use-safe-mode';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import {
+  DEFAULT_DEVICE_VARIABLES,
+  DeviceVarsJsonPanel,
+  formatDeviceVarsJson,
+  formatInitialDeviceVars,
+  parseDeviceVarsJson,
+} from '@/components/device-vars-json-panel';
 import {
   Select,
   SelectContent,
@@ -321,11 +328,8 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
   const [scenarioVariables, setScenarioVariables] = useState<Record<string, any>>(
     () => flattenVarDefs(save.editingContext?.variables ?? {})
   );
-  const [deviceVarDrafts, setDeviceVarDrafts] = useState<Record<string, Record<string, any>>>({});
-  const [deviceVarKeys, setDeviceVarKeys] = useState<string[]>([]);
-  const [newDeviceVarKey, setNewDeviceVarKey] = useState('');
-  const [bulkFillKey, setBulkFillKey] = useState<string>('');
-  const [bulkFillValue, setBulkFillValue] = useState('');
+  const [deviceVarJsonDrafts, setDeviceVarJsonDrafts] = useState<Record<string, string>>({});
+  const [deviceVarEnabledByDevice, setDeviceVarEnabledByDevice] = useState<Record<string, boolean>>({});
   const [pendingScenarioDeviceVarsDraftMap, setPendingScenarioDeviceVarsDraftMap] = useState<
     Record<string, Record<string, any>> | null
   >(null);
@@ -343,24 +347,19 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
   }, [devicesQuery.data, selectedSerial]);
   const inlineScenarioDeviceVars = useMemo(() => {
     if (!selectedDeviceId) return null;
-    const vars = deviceVarDrafts[selectedDeviceId] ?? {};
+    if (deviceVarEnabledByDevice[selectedDeviceId] !== true) return null;
+    const draft = deviceVarJsonDrafts[selectedDeviceId];
+    let vars: Record<string, any>;
+    try {
+      vars = parseDeviceVarsJson(draft ?? '{}');
+    } catch {
+      return null;
+    }
     return Object.keys(vars).length > 0 ? vars : null;
-  }, [selectedDeviceId, deviceVarDrafts]);
-  const toDeviceTokenName = useCallback((rawKey: string) => {
-    const normalized = String(rawKey).replace(/[^A-Za-z0-9_]/g, '_').toUpperCase();
-    return `__DEVICE_${normalized}__`;
-  }, []);
-  const copyDeviceToken = useCallback(
-    async (rawKey: string) => {
-      const tokenExpr = `\${${toDeviceTokenName(rawKey)}}`;
-      try {
-        await navigator.clipboard.writeText(tokenExpr);
-        toast.success(`Đã sao chép biến: ${tokenExpr}`);
-      } catch {
-        toast.error('Không sao chép được. Hãy thử lại.');
-      }
-    },
-    [toDeviceTokenName],
+  }, [selectedDeviceId, deviceVarJsonDrafts, deviceVarEnabledByDevice]);
+  const hasEnabledDeviceVars = useMemo(
+    () => Object.values(deviceVarEnabledByDevice).some(Boolean),
+    [deviceVarEnabledByDevice],
   );
   const campaignDevicesQuery = useQuery({
     queryKey: ['campaign-devices', activeCampaignId],
@@ -384,6 +383,33 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
     const model = `${d.brand || ''} ${d.model || ''}`.trim();
     return model ? `${model} (${d.serial})` : d.serial;
   }, [campaignDevicesQuery.data, devicesQuery.data, selectedScenarioDeviceId, selectedDeviceId]);
+  const currentDeviceVarJsonDraft = selectedScenarioDeviceId
+    ? deviceVarJsonDrafts[selectedScenarioDeviceId] ?? formatDeviceVarsJson(DEFAULT_DEVICE_VARIABLES)
+    : formatDeviceVarsJson(DEFAULT_DEVICE_VARIABLES);
+  const currentDeviceVarsEnabled = selectedScenarioDeviceId
+    ? deviceVarEnabledByDevice[selectedScenarioDeviceId] === true
+    : false;
+  const currentDeviceVarJsonError = useMemo(() => {
+    if (!currentDeviceVarsEnabled) return '';
+    try {
+      parseDeviceVarsJson(currentDeviceVarJsonDraft);
+      return '';
+    } catch (err) {
+      return err instanceof Error ? err.message : 'JSON không hợp lệ';
+    }
+  }, [currentDeviceVarJsonDraft, currentDeviceVarsEnabled]);
+  const setCurrentDeviceVarsEnabled = useCallback((enabled: boolean) => {
+    if (!selectedScenarioDeviceId) return;
+    setDeviceVarEnabledByDevice((prev) => ({ ...prev, [selectedScenarioDeviceId]: enabled }));
+    setDeviceVarJsonDrafts((prev) => ({
+      ...prev,
+      [selectedScenarioDeviceId]: prev[selectedScenarioDeviceId] ?? formatDeviceVarsJson(DEFAULT_DEVICE_VARIABLES),
+    }));
+  }, [selectedScenarioDeviceId]);
+  const setCurrentDeviceVarJsonDraft = useCallback((value: string) => {
+    if (!selectedScenarioDeviceId) return;
+    setDeviceVarJsonDrafts((prev) => ({ ...prev, [selectedScenarioDeviceId]: value }));
+  }, [selectedScenarioDeviceId]);
   const scenarioDeviceVarsQuery = useQuery({
     queryKey: ['scenario-device-vars', activeCampaignId, activeScenarioId, selectedScenarioDeviceId],
     enabled: deviceVarDialogOpen && !!activeCampaignId && !!activeScenarioId && !!selectedScenarioDeviceId,
@@ -399,11 +425,16 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
     const devices = campaignDevicesQuery.data ?? [];
     if (devices.length === 0) return;
     if (!activeScenarioId) {
-      const seeded: Record<string, Record<string, any>> = {};
+      const seeded: Record<string, string> = {};
+      const enabled: Record<string, boolean> = {};
       const base = pendingScenarioDeviceVarsDraftMap ?? {};
-      for (const d of devices) seeded[d.id] = { ...(base[d.id] ?? {}) };
-      setDeviceVarDrafts(seeded);
-      setDeviceVarKeys(Array.from(new Set(Object.values(seeded).flatMap((m) => Object.keys(m)))));
+      for (const d of devices) {
+        const vars = { ...(base[d.id] ?? {}) };
+        seeded[d.id] = formatInitialDeviceVars(vars);
+        enabled[d.id] = Object.keys(vars).length > 0;
+      }
+      setDeviceVarJsonDrafts(seeded);
+      setDeviceVarEnabledByDevice(enabled);
       return;
     }
     let cancelled = false;
@@ -415,33 +446,37 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
         }),
       );
       if (cancelled) return;
-      const seeded: Record<string, Record<string, any>> = Object.fromEntries(entries);
-      setDeviceVarDrafts(seeded);
-      setDeviceVarKeys(Array.from(new Set(entries.flatMap(([, m]) => Object.keys(m)))));
+      const seeded: Record<string, string> = Object.fromEntries(
+        entries.map(([deviceId, vars]) => [deviceId, formatInitialDeviceVars(vars)]),
+      );
+      const enabled: Record<string, boolean> = Object.fromEntries(
+        entries.map(([deviceId, vars]) => [deviceId, Object.keys(vars).length > 0]),
+      );
+      setDeviceVarJsonDrafts(seeded);
+      setDeviceVarEnabledByDevice(enabled);
     })().catch((err) => toast.error(`Không tải được biến thiết bị: ${String(err)}`));
     return () => {
       cancelled = true;
     };
   }, [deviceVarDialogOpen, campaignDevicesQuery.data, activeCampaignId, activeScenarioId, pendingScenarioDeviceVarsDraftMap]);
-  useEffect(() => {
-    if (!deviceVarKeys.length) {
-      setBulkFillKey('');
-      return;
-    }
-    if (!bulkFillKey || !deviceVarKeys.includes(bulkFillKey)) {
-      setBulkFillKey(deviceVarKeys[0]);
-    }
-  }, [deviceVarKeys, bulkFillKey]);
   const saveScenarioDeviceVarsMutation = useMutation({
-    mutationFn: async (drafts: Record<string, Record<string, any>>) => {
+    mutationFn: async (drafts: Record<string, string>) => {
       if (!activeCampaignId || !activeScenarioId) return;
       const devices = campaignDevicesQuery.data ?? [];
       await Promise.all(
-        devices.map((d) =>
-          campaignsApi.replaceScenarioDeviceVariables(activeCampaignId, activeScenarioId, d.id, {
-            vars: drafts[d.id] ?? {},
-          }),
-        ),
+        devices.map((d) => {
+          let vars: Record<string, any> = {};
+          if (deviceVarEnabledByDevice[d.id] === true) {
+            try {
+              vars = parseDeviceVarsJson(drafts[d.id] ?? '{}');
+            } catch {
+              throw new Error(`JSON không hợp lệ ở thiết bị ${d.serial}`);
+            }
+          }
+          return campaignsApi.replaceScenarioDeviceVariables(activeCampaignId, activeScenarioId, d.id, {
+            vars,
+          });
+        }),
       );
     },
     onSuccess: () => {
@@ -456,11 +491,14 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
     const devices = campaignDevicesQuery.data ?? [];
     if (devices.length === 0) return;
     Promise.all(
-      devices.map((d) =>
-        campaignsApi.replaceScenarioDeviceVariables(activeCampaignId, activeScenarioId, d.id, {
-          vars: pendingScenarioDeviceVarsDraftMap[d.id] ?? {},
-        }),
-      ),
+      devices.map((d) => {
+        const vars = deviceVarEnabledByDevice[d.id] === true
+          ? (pendingScenarioDeviceVarsDraftMap[d.id] ?? {})
+          : {};
+        return campaignsApi.replaceScenarioDeviceVariables(activeCampaignId, activeScenarioId, d.id, {
+          vars,
+        });
+      }),
     )
       .then(() => {
         toast.success('Đã áp dụng biến thiết bị vào scenario vừa lưu');
@@ -1407,7 +1445,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                         disabled={!activeCampaignId || !selectedDeviceId}
                         className={cn(
                           'h-7 shrink-0 gap-1.5 px-2.5 text-xs',
-                          deviceVarKeys.length > 0 && activeCampaignId && selectedDeviceId
+                          hasEnabledDeviceVars && activeCampaignId && selectedDeviceId
                             ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-300'
                             : '',
                         )}
@@ -1759,7 +1797,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
       </Dialog>
 
       <Dialog open={deviceVarDialogOpen} onOpenChange={setDeviceVarDialogOpen}>
-        <DialogContent className='!w-[min(94vw,1320px)] max-h-[min(88dvh,760px)] !max-w-[1320px] gap-4 overflow-hidden !grid grid-rows-[auto_auto_auto_minmax(0,1fr)_auto]'>
+        <DialogContent className='!w-[min(94vw,980px)] max-h-[min(88dvh,760px)] !max-w-[980px] gap-4 overflow-hidden !grid grid-rows-[auto_auto_minmax(0,1fr)_auto]'>
           <DialogHeader className='shrink-0'>
             <DialogTitle className='flex items-center gap-2 text-base'>
               <SlidersHorizontal className='size-4' />
@@ -1770,191 +1808,54 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
             Phạm vi: kịch bản hiện tại + toàn bộ thiết bị trong chiến dịch.
           </p>
           <div className='shrink-0 rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground'>
-            Mỗi <span className='font-medium text-foreground'>hàng</span> là 1 biến. Mỗi <span className='font-medium text-foreground'>cột</span> là 1 thiết bị.
-            <span className='ml-1'>Bạn điền giá trị theo từng ô để mỗi thiết bị dùng dữ liệu riêng.</span>
+            Chọn thiết bị bên trái, bật biến riêng nếu cần, rồi nhập JSON cho thiết bị đó.
             <span className='ml-1 block pt-1'>
-              Dùng trong step/context theo cú pháp <code className='rounded bg-muted px-1 font-mono'>{'${__DEVICE_TEN_BIEN__}'}</code> (bấm nút copy ở từng hàng).
+              Tắt switch để thiết bị dùng biến global của kịch bản/campaign.
             </span>
-          </div>
-          <p className='shrink-0 text-[12px] text-muted-foreground -mt-2'>
-            Thiết bị đang chọn: <span className='font-medium text-foreground/80'>{selectedDeviceLabel}</span>
-          </p>
-          <div className='shrink-0 flex items-center gap-2'>
-            <Input
-              value={newDeviceVarKey}
-              onChange={(e) => setNewDeviceVarKey(e.target.value)}
-              placeholder='Tên biến mới (VD: USERNAME)'
-              className='h-8 text-xs'
-            />
-            <Button
-              size='sm'
-              variant='outline'
-              onClick={() => {
-                const key = newDeviceVarKey.trim();
-                if (!key) return;
-                if (deviceVarKeys.includes(key)) {
-                  toast.warning('Biến đã tồn tại');
-                  return;
-                }
-                setDeviceVarKeys((prev) => [...prev, key]);
-                setNewDeviceVarKey('');
-              }}
-            >
-              Thêm cột
-            </Button>
-          </div>
-          <div className='shrink-0 rounded-md border bg-muted/30 p-2'>
-            <div className='grid gap-2 md:grid-cols-[220px_1fr_auto_auto]'>
-              <Select
-                value={bulkFillKey || '_none'}
-                onValueChange={(v) => setBulkFillKey(v === '_none' ? '' : v)}
-              >
-                <SelectTrigger className='h-8 text-xs'>
-                  <SelectValue placeholder='Chọn cột biến để điền nhanh' />
-                </SelectTrigger>
-                <SelectContent className='z-[10010]'>
-                  <SelectItem value='_none' className='text-xs'>Chọn cột biến</SelectItem>
-                  {deviceVarKeys.map((key) => (
-                    <SelectItem key={key} value={key} className='text-xs font-mono'>
-                      {key}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Input
-                value={bulkFillValue}
-                onChange={(e) => setBulkFillValue(e.target.value)}
-                placeholder='Giá trị điền nhanh'
-                className='h-8 text-xs'
-              />
-              <Button
-                size='sm'
-                variant='outline'
-                disabled={!bulkFillKey}
-                onClick={() => {
-                  if (!bulkFillKey) return;
-                  setDeviceVarDrafts((prev) => {
-                    const next: Record<string, Record<string, any>> = {};
-                    for (const d of campaignDevicesQuery.data ?? []) {
-                      next[d.id] = {
-                        ...(prev[d.id] ?? {}),
-                        [bulkFillKey]: bulkFillValue,
-                      };
-                    }
-                    return next;
-                  });
-                }}
-              >
-                Áp dụng tất cả
-              </Button>
-              <Button
-                size='sm'
-                variant='outline'
-                disabled={!bulkFillKey}
-                onClick={() => {
-                  if (!bulkFillKey) return;
-                  setDeviceVarDrafts((prev) => {
-                    const next: Record<string, Record<string, any>> = {};
-                    for (const d of campaignDevicesQuery.data ?? []) {
-                      const current = prev[d.id]?.[bulkFillKey];
-                      next[d.id] = {
-                        ...(prev[d.id] ?? {}),
-                        [bulkFillKey]:
-                          current === undefined || current === null || String(current).trim() === ''
-                            ? bulkFillValue
-                            : current,
-                      };
-                    }
-                    return next;
-                  });
-                }}
-              >
-                Chỉ ô trống
-              </Button>
-            </div>
           </div>
           <div className='min-h-0 overflow-y-auto overscroll-y-contain pr-1 [-webkit-overflow-scrolling:touch]'>
             {scenarioDeviceVarsQuery.isLoading && activeScenarioId ? (
               <p className='text-xs text-muted-foreground'>Đang tải biến...</p>
             ) : (campaignDevicesQuery.data ?? []).length === 0 ? (
               <p className='text-xs text-muted-foreground'>Chiến dịch chưa có thiết bị.</p>
-            ) : deviceVarKeys.length === 0 ? (
-              <p className='text-xs text-muted-foreground'>Chưa có cột biến. Nhập tên biến và bấm "Thêm cột".</p>
             ) : (
-              <div className='overflow-auto rounded-md border'>
-                <div
-                  className='min-w-[780px]'
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: `220px repeat(${(campaignDevicesQuery.data ?? []).length}, minmax(180px, 1fr))`,
-                  }}
-                >
-                  <div className='sticky left-0 top-0 z-20 border-b bg-muted px-3 py-2 text-xs font-semibold'>
-                    Biến
-                  </div>
-                  {(campaignDevicesQuery.data ?? []).map((d) => (
-                    <div key={`head-${d.id}`} className='border-b border-l bg-muted px-3 py-2 text-xs font-semibold'>
-                      <p className='truncate'>{d.name || d.serial}</p>
-                      <p className='truncate text-[10px] font-normal text-muted-foreground'>{d.serial}</p>
-                    </div>
-                  ))}
-                  {deviceVarKeys.map((key) => (
-                    <Fragment key={`row-${key}`}>
-                      <div key={`row-name-${key}`} className='sticky left-0 z-10 border-b bg-background px-3 py-2'>
-                        <div className='flex items-start justify-between gap-2'>
-                          <div className='min-w-0'>
-                            <p className='truncate font-mono text-xs'>{key}</p>
-                            <button
-                              type='button'
-                              className='mt-1 inline-flex items-center gap-1 rounded px-1 py-0.5 text-[10px] text-primary hover:bg-muted'
-                              onClick={() => void copyDeviceToken(key)}
-                              title='Sao chép biến để dán vào step/context'
-                            >
-                              <Copy className='size-3' />
-                              <code className='font-mono'>{`\${${toDeviceTokenName(key)}}`}</code>
-                            </button>
-                          </div>
-                          <Button
-                            size='sm'
-                            variant='ghost'
-                            className='h-6 px-2 text-[11px]'
-                            onClick={() => {
-                              setDeviceVarKeys((prev) => prev.filter((k) => k !== key));
-                              setDeviceVarDrafts((prev) => {
-                                const next: Record<string, Record<string, any>> = {};
-                                for (const [did, vars] of Object.entries(prev)) {
-                                  const v = { ...vars };
-                                  delete v[key];
-                                  next[did] = v;
-                                }
-                                return next;
-                              });
-                            }}
-                          >
-                            Xóa
-                          </Button>
-                        </div>
-                      </div>
-                      {(campaignDevicesQuery.data ?? []).map((d) => (
-                        <div key={`cell-${key}-${d.id}`} className='border-b border-l bg-background p-2'>
-                          <Input
-                            className='h-8 text-xs'
-                            value={String(deviceVarDrafts[d.id]?.[key] ?? '')}
-                            onChange={(e) => {
-                              const value = e.target.value;
-                              setDeviceVarDrafts((prev) => ({
-                                ...prev,
-                                [d.id]: {
-                                  ...(prev[d.id] ?? {}),
-                                  [key]: value,
-                                },
-                              }));
-                            }}
-                          />
-                        </div>
-                      ))}
-                    </Fragment>
-                  ))}
+              <div className='grid min-h-[430px] grid-cols-[260px_1fr] divide-x rounded-md border'>
+                <div className='min-h-0 overflow-y-auto p-2'>
+                  {(campaignDevicesQuery.data ?? []).map((d) => {
+                    const active = selectedScenarioDeviceId === d.id;
+                    const enabled = deviceVarEnabledByDevice[d.id] === true;
+                    return (
+                      <button
+                        key={d.id}
+                        type='button'
+                        className={cn(
+                          'mb-1 flex w-full items-center gap-2 rounded border border-transparent px-2 py-2 text-left text-xs hover:bg-muted/60',
+                          active && 'border-primary/30 bg-primary/[0.06]',
+                        )}
+                        onClick={() => setSelectedScenarioDeviceId(d.id)}
+                      >
+                        <span className='min-w-0 flex-1'>
+                          <span className='block truncate font-medium'>{d.name || d.serial}</span>
+                          <span className='block truncate font-mono text-[10px] text-muted-foreground'>{d.serial}</span>
+                        </span>
+                        <Badge variant={enabled ? 'default' : 'secondary'} className='shrink-0 text-[10px]'>
+                          {enabled ? 'riêng' : 'global'}
+                        </Badge>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className='min-h-0 p-4'>
+                  <DeviceVarsJsonPanel
+                    enabled={currentDeviceVarsEnabled}
+                    onEnabledChange={setCurrentDeviceVarsEnabled}
+                    draft={currentDeviceVarJsonDraft}
+                    onDraftChange={setCurrentDeviceVarJsonDraft}
+                    jsonError={currentDeviceVarJsonError}
+                    deviceLabel={selectedDeviceLabel}
+                    editorClassName='min-h-[330px]'
+                    emptyClassName='min-h-[330px]'
+                  />
                 </div>
               </div>
             )}
@@ -1971,14 +1872,31 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
               size='sm'
               onClick={() => {
                 if (activeScenarioId) {
-                  saveScenarioDeviceVarsMutation.mutate(deviceVarDrafts);
+                  saveScenarioDeviceVarsMutation.mutate(deviceVarJsonDrafts);
                   return;
                 }
-                setPendingScenarioDeviceVarsDraftMap(deviceVarDrafts);
+                const parsedDrafts: Record<string, Record<string, any>> = {};
+                for (const d of campaignDevicesQuery.data ?? []) {
+                  if (deviceVarEnabledByDevice[d.id] !== true) {
+                    parsedDrafts[d.id] = {};
+                    continue;
+                  }
+                  try {
+                    parsedDrafts[d.id] = parseDeviceVarsJson(deviceVarJsonDrafts[d.id] ?? '{}');
+                  } catch {
+                    toast.error(`JSON không hợp lệ ở thiết bị ${d.serial}`);
+                    return;
+                  }
+                }
+                setPendingScenarioDeviceVarsDraftMap(parsedDrafts);
                 setDeviceVarDialogOpen(false);
                 toast.info('Đã lưu tạm biến thiết bị. Khi bạn lưu scenario, hệ thống sẽ tự áp dụng.');
               }}
-              disabled={saveScenarioDeviceVarsMutation.isPending || (campaignDevicesQuery.data ?? []).length === 0}
+              disabled={
+                saveScenarioDeviceVarsMutation.isPending
+                || (campaignDevicesQuery.data ?? []).length === 0
+                || !!currentDeviceVarJsonError
+              }
             >
               {saveScenarioDeviceVarsMutation.isPending ? 'Đang lưu...' : activeScenarioId ? 'Lưu' : 'Lưu tạm'}
             </Button>

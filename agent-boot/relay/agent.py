@@ -750,10 +750,9 @@ class RelayAgent:
                 }))
             return
 
-        state = self._a11y_state.get(serial)
-        if state is None:
-            state = {
-                "session_id": session_id,
+        def _new_state(active_session_id: str) -> dict[str, Any]:
+            return {
+                "session_id": active_session_id,
                 "last_seq": 0,
                 "queued_seqs": set(),
                 "mut_q": asyncio.Queue(maxsize=self._a11y_max_queue),
@@ -761,7 +760,47 @@ class RelayAgent:
                 "mut_worker": None,
                 "qry_worker": None,
             }
+
+        async def _reject(error: str, queue_pos: int = -1) -> None:
+            if mode == "query":
+                await send_queue.put(json.dumps({
+                    "type": "a11y_result",
+                    "id": req_id,
+                    "serial": serial,
+                    "seq": seq,
+                    "ok": False,
+                    "error": error,
+                    "data": {},
+                }))
+                return
+            await send_queue.put(json.dumps({
+                "type": "a11y_ack",
+                "id": req_id,
+                "serial": serial,
+                "seq": seq,
+                "accepted": False,
+                "queue_pos": queue_pos,
+                "error": error,
+            }))
+
+        state = self._a11y_state.get(serial)
+        if state is None:
+            state = _new_state(session_id)
             self._a11y_state[serial] = state
+
+        # Farm/device-client restarts create a new session_id and reset their
+        # local seq counter. Treat ordering as session-scoped; otherwise a
+        # long-running agent rejects every new farm request as stale_seq.
+        if session_id and state.get("session_id") and state.get("session_id") != session_id:
+            for key in ("mut_worker", "qry_worker"):
+                worker = state.get(key)
+                if worker is not None and not worker.done():
+                    worker.cancel()
+            state = _new_state(session_id)
+            self._a11y_state[serial] = state
+        elif session_id and not state.get("session_id"):
+            state["session_id"] = session_id
+
         if not state.get("mut_worker") or state["mut_worker"].done():
             state["mut_worker"] = asyncio.create_task(
                 self._a11y_worker(serial, state["mut_q"], send_queue, loop, query_lane=False),
@@ -773,24 +812,12 @@ class RelayAgent:
                 name=f"a11y-qry-{serial}",
             )
 
-        # Session switch: keep global seq monotonic; only update active session.
-        if session_id and state.get("session_id") != session_id:
-            state["session_id"] = session_id
-
         # At-most-once / in-order guard on enqueue.
         if seq > 0 and (
             seq <= int(state.get("last_seq", 0) or 0)
             or seq in state.get("queued_seqs", set())
         ):
-            await send_queue.put(json.dumps({
-                "type": "a11y_ack",
-                "id": req_id,
-                "serial": serial,
-                "seq": seq,
-                "accepted": False,
-                "queue_pos": -1,
-                "error": "stale_seq",
-            }))
+            await _reject("stale_seq")
             return
 
         q = state["qry_q"] if mode == "query" else state["mut_q"]
@@ -808,15 +835,7 @@ class RelayAgent:
         try:
             q.put_nowait(item)
         except asyncio.QueueFull:
-            await send_queue.put(json.dumps({
-                "type": "a11y_ack",
-                "id": req_id,
-                "serial": serial,
-                "seq": seq,
-                "accepted": False,
-                "queue_pos": q.qsize(),
-                "error": "queue_overflow",
-            }))
+            await _reject("queue_overflow", queue_pos=q.qsize())
             return
         if seq > 0:
             state.setdefault("queued_seqs", set()).add(seq)

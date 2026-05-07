@@ -60,7 +60,7 @@ def set_temporal_config(cfg) -> None:
 async def _to_thread_with_heartbeat(
     fn: Callable,
     *args: Any,
-    heartbeat_interval: float = 20.0,
+    heartbeat_interval: float = 10.0,
     **kwargs: Any,
 ) -> Any:
     """Run a sync blocking function in the thread pool while sending Temporal heartbeats.
@@ -79,6 +79,10 @@ async def _to_thread_with_heartbeat(
                 activity.heartbeat(f"running:{n}")
             n += 1
 
+    # Emit one heartbeat immediately so short timeout windows don't expire
+    # before the first sleep tick under high worker load.
+    with contextlib.suppress(Exception):
+        activity.heartbeat("running:start")
     heartbeat_task = asyncio.create_task(_heartbeat_loop())
     try:
         return await asyncio.to_thread(functools.partial(fn, *args, **kwargs))
@@ -348,7 +352,17 @@ class DeviceActivities:
                         "ok": result.get("success", False),
                         "message": result.get("failed_message") or "",
                     }
-            except Exception as exc:
+            except BaseException as exc:
+                # Keep Temporal cancellation semantics (timeout/cancel) intact.
+                try:
+                    from temporalio.exceptions import CancelledError as _TemporalCancelledError
+                    if isinstance(exc, (asyncio.CancelledError, _TemporalCancelledError)):
+                        raise
+                except ImportError:
+                    if isinstance(exc, asyncio.CancelledError):
+                        raise
+                if not isinstance(exc, Exception):
+                    raise
                 log.error("[%s] batch step#%d (%s): %s", inp.device_serial, step_idx, step_type, exc)
                 entry = {"index": step_idx, "type": step_type, "ok": False, "message": str(exc)}
 

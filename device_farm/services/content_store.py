@@ -10,6 +10,8 @@ import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 log = logging.getLogger(__name__)
 
 try:
@@ -225,6 +227,7 @@ async def save_content_item(
     item_level: int = 0,
     user_id: str | None = None,
     hash_scope: str | None = None,
+    db: AsyncSession | None = None,
 ) -> dict[str, Any]:
     """
     Save extracted content to database with deduplication.
@@ -262,10 +265,12 @@ async def save_content_item(
     except Exception as exc:
         log.debug("bloom fast path skipped (%s)", exc)
 
-    async with activity_session() as db:
+    owns_session = db is None
+
+    async def _save_with_session(db_session: AsyncSession, *, owns_session: bool) -> dict[str, Any]:
         # Dedup check
         existing = await get_content_by_hash(
-            db,
+            db_session,
             content_hash,
             collection,
             user_id=user_id,
@@ -276,7 +281,7 @@ async def save_content_item(
 
         # Ensure collection exists
         await get_or_create_collection(
-            db,
+            db_session,
             collection,
             platform=platform,
             content_type=content_type,
@@ -324,7 +329,7 @@ async def save_content_item(
         )
 
         item = await create_content_item(
-            db,
+            db_session,
             collection=collection,
             platform=platform,
             content_type=content_type,
@@ -352,8 +357,9 @@ async def save_content_item(
             user_id=user_id,
         )
 
-        await increment_collection_count(db, collection, user_id=user_id)
-        await db.commit()
+        await increment_collection_count(db_session, collection, user_id=user_id)
+        if owns_session:
+            await db_session.commit()
 
         # Phase 5 — record in Bloom filter so future checks fast-path.
         try:
@@ -364,6 +370,11 @@ async def save_content_item(
 
         log.info(f"Content saved: id={item.id} collection={collection} hash={content_hash[:12]}")
         return {"saved": True, "id": item.id}
+
+    if owns_session:
+        async with activity_session() as db_session:
+            return await _save_with_session(db_session, owns_session=True)
+    return await _save_with_session(db, owns_session=False)
 
 
 def _save_screenshot(data: bytes, content_hash: str) -> str:

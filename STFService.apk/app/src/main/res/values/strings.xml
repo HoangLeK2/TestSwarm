@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">STFService</string>
+    <string name="app_name">Device Farm</string>
     <string name="service_ticker">STFService running</string>
     <string name="service_title">STFService</string>
     <string name="service_text">STFService is running.</string>

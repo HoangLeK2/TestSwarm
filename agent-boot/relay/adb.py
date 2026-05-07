@@ -18,6 +18,8 @@ import re
 import shutil
 import subprocess
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Optional
 
@@ -61,6 +63,7 @@ _ABI_BINARY: dict[str, str] = {
 # u2 APK package names
 _U2_PKG      = "com.github.uiautomator"
 _U2_TEST_PKG = "com.github.uiautomator.test"
+_STF_PKG     = "jp.co.cyberagent.stf"
 _U2_RUNNER   = "androidx.test.runner.AndroidJUnitRunner"
 
 def _run(
@@ -193,6 +196,10 @@ def _resolve_device_lan_ip(serial: str) -> str | None:
     """LAN IPv4 to reach atx-agent :7912 when ADB serial is USB (not ip:port)."""
     if not serial:
         return None
+    if ":" in serial:
+        host = serial.rsplit(":", 1)[0].strip()
+        if _looks_like_ipv4(host):
+            return host
     for prop in ("dhcp.wlan0.ipaddress", "dhcp.wlan1.ipaddress"):
         out, _ = _adb_shell(serial, f"getprop {prop}", timeout=4)
         ip = out.strip()
@@ -233,14 +240,43 @@ def _adb_connect(ip_port: str, timeout: int = 15) -> tuple[str, int]:
     return out.strip(), 0 if ok else 1
 
 
-def _restart_u2(serial: str, timeout: int = 60) -> tuple[str, int]:
-    _U2_PKG    = "com.github.uiautomator.test"
-    _U2_RUNNER = "androidx.test.runner.AndroidJUnitRunner"
+def _device_port_listening(serial: str, port: int, timeout: int = 5) -> bool:
+    hex_port = format(port, "04X")
+    out, _ = _adb_shell(
+        serial,
+        f"cat /proc/net/tcp6 /proc/net/tcp 2>/dev/null | grep -i ':{hex_port}' | head -1 || true",
+        timeout=timeout,
+    )
+    return bool(out.strip())
 
+
+def _atx_http_ping(serial: str, timeout: float = 2.0, host: str | None = None) -> tuple[bool, str]:
+    host = host or _resolve_device_lan_ip(serial)
+    if not host:
+        return False, "device LAN IP unavailable"
+    url = f"http://{host}:7912/ping"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            body = resp.read(128).decode("utf-8", errors="replace").strip()
+            if 200 <= int(resp.status) < 300:
+                return True, body or f"HTTP {resp.status}"
+            return False, f"HTTP {resp.status}: {body}"
+    except urllib.error.HTTPError as exc:
+        body = exc.read(128).decode("utf-8", errors="replace") if exc.fp else ""
+        return False, f"HTTP {exc.code}: {body.strip()}"
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _restart_u2(serial: str, timeout: int = 60) -> tuple[str, int]:
+    _apply_u2_stability_settings(serial)
+    _adb_shell(serial, f"am force-stop {_U2_TEST_PKG}", timeout=10)
     _adb_shell(serial, f"am force-stop {_U2_PKG}", timeout=10)
+    _adb_shell(serial, "pkill -9 -f 'uiautomator' 2>/dev/null || true", timeout=5)
+    time.sleep(0.3)
     _adb_shell(
         serial,
-        f"nohup am instrument -w {_U2_PKG}/{_U2_RUNNER}"
+        f"nohup am instrument -w -e debug false {_U2_TEST_PKG}/{_U2_RUNNER}"
         f" </dev/null >/data/local/tmp/u2.log 2>&1 &",
         timeout=10,
     )
@@ -248,14 +284,10 @@ def _restart_u2(serial: str, timeout: int = 60) -> tuple[str, int]:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         time.sleep(1.0)
-        out, _ = _adb_shell(
-            serial,
-            "cat /proc/net/tcp6 /proc/net/tcp 2>/dev/null | grep -i ':2330' | head -1 || true",
-            timeout=5,
-        )
-        if out.strip():
+        if _device_port_listening(serial, 9008):
             return "u2 started", 0
-    return "u2 did not start within timeout", -1
+    log_tail, _ = _adb_shell(serial, "tail -n 40 /data/local/tmp/u2.log 2>/dev/null || true", timeout=5)
+    return f"u2 did not start within timeout; log_tail={log_tail[-1000:]}", -1
 
 
 def _restart_atx(serial: str, timeout: int = 30) -> tuple[str, int]:
@@ -264,9 +296,13 @@ def _restart_atx(serial: str, timeout: int = 30) -> tuple[str, int]:
     atx-agent manages u2 lifecycle on-device — restarting it is faster and
     cleaner than restarting u2 instrumentation directly when atx is frozen/dead.
     """
+    _apply_u2_stability_settings(serial)
     # Kill zombie u2 first — a stuck u2 process is the #1 reason atx freezes.
+    _adb_shell(serial, "/data/local/tmp/atx-agent server --stop 2>/dev/null || true", timeout=5)
+    _adb_shell(serial, f"am force-stop {_U2_TEST_PKG}", timeout=10)
+    _adb_shell(serial, f"am force-stop {_U2_PKG}", timeout=10)
     _adb_shell(serial, "pkill -9 -f 'uiautomator' 2>/dev/null || true", timeout=5)
-    _adb_shell(serial, "pkill -9 atx-agent 2>/dev/null || true", timeout=5)
+    _adb_shell(serial, "pkill -9 -f 'atx-agent' 2>/dev/null || true", timeout=5)
     time.sleep(0.5)
     # Restart atx-agent as a background daemon.
     _adb_shell(
@@ -275,19 +311,52 @@ def _restart_atx(serial: str, timeout: int = 30) -> tuple[str, int]:
         " </dev/null >/data/local/tmp/atx-agent.log 2>&1 &",
         timeout=5,
     )
-    # Poll port 7912 until atx-agent is ready to accept connections.
-    _ATX_PORT_HEX = "1EE8"  # 7912 decimal (0x1EE8)
+    # Poll until atx-agent is actually responsive. Port-open alone can be a
+    # false positive when the Go process accepts but the HTTP handler is wedged.
     deadline = time.monotonic() + timeout
+    last_ping = ""
+    atx_host = _resolve_device_lan_ip(serial)
     while time.monotonic() < deadline:
         time.sleep(1.5)
-        out, _ = _adb_shell(
-            serial,
-            f"cat /proc/net/tcp6 /proc/net/tcp 2>/dev/null | grep -i ':{_ATX_PORT_HEX}' | head -1 || true",
-            timeout=5,
-        )
-        if out.strip():
+        ok, last_ping = _atx_http_ping(serial, host=atx_host)
+        if ok:
             return "atx-agent started", 0
-    return "atx-agent did not start within timeout", -1
+        if not last_ping.startswith("device LAN IP unavailable"):
+            continue
+        if _device_port_listening(serial, 7912):
+            return "atx-agent started (port check only; LAN HTTP unavailable)", 0
+    log_tail, _ = _adb_shell(serial, "tail -n 60 /data/local/tmp/atx-agent.log 2>/dev/null || true", timeout=5)
+    return f"atx-agent did not start within timeout; last_ping={last_ping}; log_tail={log_tail[-1000:]}", -1
+
+
+def _apply_u2_stability_settings(serial: str) -> None:
+    """
+    Best-effort Android/OEM settings that keep u2 alive on aggressive ROMs.
+
+    Vivo/iQOO commonly kills instrumentation/native background processes when
+    the screen turns off. These commands are idempotent and intentionally
+    non-fatal: some ROM builds reject one or more appops/settings.
+    """
+    commands = [
+        # Keep display awake while the farm is attached over USB/charging.
+        "settings put global stay_on_while_plugged_in 3",
+        "svc power stayon true",
+        "settings put system screen_off_timeout 2147483647",
+        # Reduce Doze/background restrictions for the app and u2 packages.
+        f"dumpsys deviceidle whitelist +{_STF_PKG} 2>/dev/null || true",
+        f"dumpsys deviceidle whitelist +{_U2_PKG} 2>/dev/null || true",
+        f"dumpsys deviceidle whitelist +{_U2_TEST_PKG} 2>/dev/null || true",
+        f"cmd deviceidle whitelist +{_STF_PKG} 2>/dev/null || true",
+        f"cmd deviceidle whitelist +{_U2_PKG} 2>/dev/null || true",
+        f"cmd deviceidle whitelist +{_U2_TEST_PKG} 2>/dev/null || true",
+        # openatx recommends overlay appop; harmless when unsupported.
+        f"appops set {_U2_PKG} SYSTEM_ALERT_WINDOW allow 2>/dev/null || true",
+        f"appops set {_U2_TEST_PKG} SYSTEM_ALERT_WINDOW allow 2>/dev/null || true",
+        f"appops set {_STF_PKG} RUN_IN_BACKGROUND allow 2>/dev/null || true",
+        f"appops set {_STF_PKG} RUN_ANY_IN_BACKGROUND allow 2>/dev/null || true",
+    ]
+    for cmd in commands:
+        _adb_shell(serial, cmd, timeout=5)
 
 
 def _run_bytes(
@@ -499,9 +568,8 @@ def _bootstrap_device(serial: str, timeout: int = 180) -> tuple[str, int]:
         else:
             logger.info("[%s] %s", serial, msg)
 
-    # 4. Exclude u2 from Doze battery optimization (idempotent)
-    for pkg in (_U2_PKG, _U2_TEST_PKG):
-        _adb_shell(serial, f"dumpsys deviceidle whitelist +{pkg} 2>/dev/null || true", timeout=5)
+    # 4. Apply display/battery/Doze stability settings before starting services.
+    _apply_u2_stability_settings(serial)
 
     # 5. Start atx-agent
     msg, rc = _restart_atx(serial, timeout=min(timeout // 2, 45))

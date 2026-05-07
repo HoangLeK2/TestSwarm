@@ -65,6 +65,13 @@ SCRCPY_AUTO_STOP_IDLE_S = max(0.0, float(os.environ.get("SCRCPY_AUTO_STOP_IDLE_S
 SCRCPY_STOP_GRACE_S = max(0.0, float(os.environ.get("SCRCPY_STOP_GRACE_S", "12")))
 
 
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, str(default)))
+    except Exception:
+        return default
+
+
 class LatestFrameStore:
     """Latest-frame snapshot store with version/event signaling.
 
@@ -1047,7 +1054,7 @@ class DeviceClient:
             fut = asyncio.run_coroutine_threadsafe(
                 self._a11y_query_async(action, payload, timeout=timeout), self._loop
             )
-            res = fut.result(timeout=timeout + 1.0)
+            res = fut.result(timeout=timeout + 2.0)
             if bool(res.get("ok")):
                 self._a11y_route_current = "grpc"
                 self._a11y_fail_hard_count = 0
@@ -1600,17 +1607,18 @@ class DeviceClient:
     def _hierarchy_via_ws(self, timeout: float = 5.0) -> Optional[str]:
         """Request hierarchy dump via gRPC a11y query, fallback to WS direct."""
         # Prefer gRPC a11y control-plane (query lane) when enabled.
-        q = self._a11y_query("dump_hierarchy", {}, timeout=timeout)
+        q = self._a11y_query("dump_hierarchy", {"timeout": timeout}, timeout=timeout)
         if q.get("ok"):
             data = q.get("data") or {}
             xml = data.get("xml") if isinstance(data, dict) else None
-            if xml:
-                self._log(f"a11y dump_hierarchy ok xml_len={len(str(xml))}", level=logging.INFO)
-                return str(xml)
-            self._log("a11y dump_hierarchy ok but empty xml", level=logging.WARNING)
+            xml_norm = self._normalize_hierarchy_xml(xml)
+            if xml_norm:
+                self._log(f"relay u2 dump_hierarchy ok xml_len={len(xml_norm)}", level=logging.INFO)
+                return xml_norm
+            self._log("relay u2 dump_hierarchy ok but empty/invalid xml", level=logging.WARNING)
         else:
             self._log(
-                f"a11y dump_hierarchy failed: {q.get('error') or 'unknown'}",
+                f"relay u2 dump_hierarchy failed: {q.get('error') or 'unknown'}",
                 level=logging.WARNING,
             )
         if self._agent_send is None:
@@ -1624,11 +1632,15 @@ class DeviceClient:
             self._log(f"hierarchy_via_ws: timeout ({timeout:.1f}s)", level=logging.WARNING)
             return None
         if self._ws_hierarchy_error:
-            self._log(f"hierarchy_via_ws error: {self._ws_hierarchy_error}", level=logging.WARNING)
+            self._log(f"ws a11y dump_hierarchy failed: {self._ws_hierarchy_error}", level=logging.WARNING)
             return None
         xml = self._ws_hierarchy_xml
         if xml:
-            self._log(f"hierarchy_via_ws: OK ({len(xml)} bytes)", level=logging.DEBUG)
+            xml = self._normalize_hierarchy_xml(xml)
+            if xml:
+                self._log(f"hierarchy_via_ws: OK ({len(xml)} bytes)", level=logging.DEBUG)
+            else:
+                self._log("hierarchy_via_ws: invalid/empty xml", level=logging.WARNING)
         else:
             self._log("hierarchy_via_ws: agent returned null xml", level=logging.WARNING)
         return xml
@@ -1711,6 +1723,17 @@ class DeviceClient:
         t = s.strip()
         return t in ("<hierarchy />", "<?xml version=\"1.0\" encoding=\"UTF-8\"?><hierarchy />") or t.endswith("<hierarchy />")
 
+    @classmethod
+    def _normalize_hierarchy_xml(cls, xml: Any) -> Optional[str]:
+        s = str(xml or "")
+        if cls._is_empty_hierarchy(s) or "<hierarchy" not in s:
+            return None
+        try:
+            parse_xml(s)
+        except Exception:
+            return None
+        return _trim_xml(s)
+
     def _hierarchy_xml_via_u2(self, now: float) -> Optional[str]:
         """Fallback: hierarchy via u2 (atx-agent or WS tunnel)."""
         return self._hierarchy_xml_u2_impl(now)
@@ -1719,8 +1742,8 @@ class DeviceClient:
     # compressed=True cuts dump time from 3-10 s to 1-3 s on complex Samsung screens
     # because dumpWindowHierarchy skips off-screen/invisible view sub-trees.
     _U2_HIERARCHY_COMPRESSED = True
-    _U2_HIERARCHY_TIMEOUT    = 2.5   # seconds; keep input path responsive
-    _A11Y_HIERARCHY_TIMEOUT  = 1.5   # seconds; avoid long fallback stalls
+    _U2_HIERARCHY_TIMEOUT    = max(1.0, _env_float("U2_HIERARCHY_TIMEOUT", 2.5))
+    _A11Y_HIERARCHY_TIMEOUT  = max(1.0, _env_float("A11Y_HIERARCHY_TIMEOUT", 4.0))
     _HIERARCHY_LOCK_WAIT_S   = 0.15  # seconds; fail fast when another dump is running
     _HIERARCHY_FORCE_DEBOUNCE_S = 0.35  # seconds; collapse refresh storms
     _HIERARCHY_STALE_CACHE_TTL_S = 20.0  # soften transient relay/u2/a11y outages
@@ -3183,15 +3206,16 @@ class DeviceClient:
             self._log(f"_trigger_atx_restart_async: {exc}", level=logging.DEBUG)
 
     def _poll_atx_recovery(self, host: str, poll_interval: float = 3.0, max_wait: float = 25.0) -> None:
-        """Background thread: poll port 7912 after restart, clear backoff when alive.
+        """Background thread: poll atx-agent after restart, clear backoff when alive.
 
-        Uses a cheap TCP connect (no HTTP) to detect when atx-agent is ready.
-        Once the port accepts a connection, resets _u2_reconnect_failed_at so the
+        Uses HTTP /ping when possible to avoid treating a wedged HTTP handler as
+        healthy just because the TCP port accepts. Once the probe succeeds, resets
+        _u2_reconnect_failed_at so the
         next ensure_u2_healthy() call immediately attempts reconnect instead of
         waiting the remaining flat backoff.
         """
         # Prefer relay probe in cloud mode (farm cannot reach device_ip:7912 directly).
-        # Falls back to direct TCP for LAN/local deployments.
+        # Falls back to direct HTTP for LAN/local deployments.
         def _probe_alive() -> bool:
             loop = self._loop
             if loop:
@@ -3210,8 +3234,10 @@ class DeviceClient:
                     pass
             # LAN fallback: direct TCP connect
             try:
-                with socket.create_connection((host, 7912), timeout=2.0):
-                    return True
+                import urllib.request
+
+                with urllib.request.urlopen(f"http://{host}:7912/ping", timeout=2.0) as resp:
+                    return 200 <= int(resp.status) < 300
             except Exception:
                 return False
 

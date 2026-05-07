@@ -45,6 +45,24 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except Exception:
+        return default
+
+
+def _looks_like_hierarchy_xml(body: str) -> bool:
+    s = (body or "").strip()
+    if not s or "<hierarchy" not in s:
+        return False
+    return not (
+        s == "<hierarchy />"
+        or s == '<?xml version="1.0" encoding="UTF-8"?><hierarchy />'
+        or s.endswith("<hierarchy />")
+    )
+
+
 SCRCPY_RESTART_WINDOW_SECONDS = 120.0
 SCRCPY_RESTART_MAX_ATTEMPTS = 5
 SCRCPY_RESTART_MAX_BACKOFF_SECONDS = 15.0
@@ -904,11 +922,7 @@ class RelayAgent:
                 err = "" if ok else out
                 data = {}
             elif action == "dump_hierarchy":
-                # Query lane only: use atx-agent dumpHierarchy endpoint.
-                r = self._do_u2_http(serial, "GET", "/dump/hierarchy", "", "application/json", 5.0)
-                ok = bool(r.get("ok"))
-                err = "" if ok else str(r.get("body", "") or r.get("error", ""))
-                data = {"xml": r.get("body", "") if ok else "", "content_type": r.get("content_type", "")}
+                ok, err, data = self._execute_dump_hierarchy(serial, payload)
             else:
                 ok = False
                 err = f"unsupported_action:{action}"
@@ -932,6 +946,70 @@ class RelayAgent:
                 "error": str(exc),
                 "data": {},
             }
+
+    def _execute_dump_hierarchy(self, serial: str, payload: dict) -> tuple[bool, str, dict]:
+        """
+        Query lane only: use atx-agent dumpHierarchy endpoint.
+
+        The caller owns the overall deadline; keep retries opportunistic so a
+        fast empty/500 response can recover, but a slow dump does not exceed the
+        relay timeout by much.
+        """
+        try:
+            total_timeout = float(
+                payload.get("timeout")
+                or payload.get("timeout_s")
+                or _env_float("A11Y_DUMP_TIMEOUT", 4.0)
+            )
+        except Exception:
+            total_timeout = _env_float("A11Y_DUMP_TIMEOUT", 4.0)
+        total_timeout = max(1.0, min(total_timeout, 15.0))
+
+        try:
+            attempts = int(payload.get("attempts") or _env_int("A11Y_DUMP_ATTEMPTS", 2))
+        except Exception:
+            attempts = 2
+        attempts = max(1, min(attempts, 3))
+
+        deadline = time.monotonic() + total_timeout
+        last_err = ""
+        last_status = 0
+        last_ct = ""
+
+        for attempt in range(attempts):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.2:
+                break
+            req_timeout = max(1.0, min(total_timeout, remaining))
+            r = self._do_u2_http(
+                serial,
+                "GET",
+                "/dump/hierarchy",
+                "",
+                "application/json",
+                req_timeout,
+            )
+            last_status = int(r.get("status", 0) or 0)
+            last_ct = str(r.get("content_type", "") or "")
+            body = str(r.get("body", "") or "")
+            if bool(r.get("ok")) and _looks_like_hierarchy_xml(body):
+                return True, "", {
+                    "xml": body,
+                    "content_type": last_ct,
+                    "status": last_status,
+                    "attempts": attempt + 1,
+                }
+            last_err = body or str(r.get("error", "") or "")
+            if attempt < attempts - 1 and (deadline - time.monotonic()) > 0.5:
+                time.sleep(0.2)
+
+        err = last_err or f"dump_hierarchy timeout after {total_timeout:.1f}s"
+        return False, err, {
+            "xml": "",
+            "content_type": last_ct,
+            "status": last_status,
+            "attempts": attempts,
+        }
 
     async def _handle_u2_request(self, msg: dict, send_queue: asyncio.Queue) -> None:
         """Proxy an HTTP request to atx-agent (port 7912) on behalf of device_farm."""

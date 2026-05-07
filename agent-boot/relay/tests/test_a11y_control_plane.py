@@ -8,6 +8,20 @@ import pytest
 from relay.agent import RelayAgent
 
 
+@pytest.fixture(autouse=True)
+async def cleanup_a11y_worker_tasks():
+    yield
+    current = asyncio.current_task()
+    tasks = [
+        task for task in asyncio.all_tasks()
+        if task is not current and task.get_name().startswith("a11y-")
+    ]
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
 @pytest.mark.asyncio
 async def test_a11y_queue_overflow_rejects(monkeypatch):
     agent = RelayAgent(
@@ -88,6 +102,103 @@ async def test_a11y_stale_seq_rejected(monkeypatch):
     assert ack["type"] == "a11y_ack"
     assert ack["accepted"] is False
     assert ack["error"] == "stale_seq"
+
+
+@pytest.mark.asyncio
+async def test_a11y_session_switch_resets_seq(monkeypatch):
+    agent = RelayAgent(
+        server_url="localhost:50051",
+        api_key="x",
+        relay_id="r1",
+        relay_mode="grpc",
+    )
+
+    async def _noop_worker(*args, **kwargs):
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(agent, "_a11y_worker", _noop_worker)
+
+    send_q: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+    agent._a11y_state["s1"] = {
+        "session_id": "old-session",
+        "last_seq": 42,
+        "queued_seqs": {43},
+        "mut_q": asyncio.Queue(maxsize=10),
+        "qry_q": asyncio.Queue(maxsize=10),
+        "mut_worker": None,
+        "qry_worker": None,
+    }
+
+    await agent._handle_a11y_action(
+        {
+            "type": "a11y_action",
+            "serial": "s1",
+            "session_id": "new-session",
+            "mode": "mutate",
+            "action": "tap",
+            "payload": {"x": 1, "y": 2},
+            "id": "r-new",
+            "seq": 1,
+            "ts": 1,
+        },
+        send_q,
+        loop,
+    )
+
+    ack = json.loads(await asyncio.wait_for(send_q.get(), timeout=0.5))
+    assert ack["type"] == "a11y_ack"
+    assert ack["accepted"] is True
+    assert agent._a11y_state["s1"]["session_id"] == "new-session"
+    assert agent._a11y_state["s1"]["queued_seqs"] == {1}
+
+
+@pytest.mark.asyncio
+async def test_a11y_query_stale_seq_returns_result(monkeypatch):
+    agent = RelayAgent(
+        server_url="localhost:50051",
+        api_key="x",
+        relay_id="r1",
+        relay_mode="grpc",
+    )
+
+    async def _noop_worker(*args, **kwargs):
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(agent, "_a11y_worker", _noop_worker)
+
+    send_q: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+    agent._a11y_state["s1"] = {
+        "session_id": "sess-1",
+        "last_seq": 10,
+        "queued_seqs": set(),
+        "mut_q": asyncio.Queue(maxsize=10),
+        "qry_q": asyncio.Queue(maxsize=10),
+        "mut_worker": None,
+        "qry_worker": None,
+    }
+
+    await agent._handle_a11y_action(
+        {
+            "type": "a11y_action",
+            "serial": "s1",
+            "session_id": "sess-1",
+            "mode": "query",
+            "action": "dump_hierarchy",
+            "payload": {},
+            "id": "r-stale-query",
+            "seq": 9,
+            "ts": 9,
+        },
+        send_q,
+        loop,
+    )
+
+    result = json.loads(await asyncio.wait_for(send_q.get(), timeout=0.5))
+    assert result["type"] == "a11y_result"
+    assert result["ok"] is False
+    assert result["error"] == "stale_seq"
 
 
 @pytest.mark.asyncio

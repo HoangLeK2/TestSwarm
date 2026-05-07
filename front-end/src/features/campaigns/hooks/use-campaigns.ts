@@ -86,12 +86,39 @@ export function useUpdateCampaignStatus() {
   return useMutation({
     mutationFn: ({ id, status }: { id: string; status: CampaignStatus }) =>
       campaignsApi.updateStatus(id, status),
+    onMutate: async ({ id, status }) => {
+      await Promise.all([
+        qc.cancelQueries({ queryKey: KEYS.list }),
+        qc.cancelQueries({ queryKey: KEYS.detail(id) }),
+      ]);
+      const previousList = qc.getQueryData<CampaignOut[]>(KEYS.list);
+      const previousDetail = qc.getQueryData<CampaignOut>(KEYS.detail(id));
+      qc.setQueryData<CampaignOut[] | undefined>(KEYS.list, (old) =>
+        old?.map((campaign) =>
+          campaign.id === id ? { ...campaign, status } : campaign,
+        ),
+      );
+      qc.setQueryData<CampaignOut | undefined>(KEYS.detail(id), (old) =>
+        old ? { ...old, status } : old,
+      );
+      return { previousList, previousDetail };
+    },
+    onError: (_error, { id }, context) => {
+      if (context?.previousList) {
+        qc.setQueryData(KEYS.list, context.previousList);
+      }
+      if (context?.previousDetail) {
+        qc.setQueryData(KEYS.detail(id), context.previousDetail);
+      }
+    },
     onSuccess: async (_data, { id }) => {
       qc.invalidateQueries({ queryKey: KEYS.list });
       qc.invalidateQueries({ queryKey: KEYS.detail(id) });
+      qc.invalidateQueries({ queryKey: ['campaign-workflows', id] });
       await Promise.all([
         qc.refetchQueries({ queryKey: KEYS.list }),
-        qc.refetchQueries({ queryKey: KEYS.detail(id) })
+        qc.refetchQueries({ queryKey: KEYS.detail(id) }),
+        qc.refetchQueries({ queryKey: ['campaign-workflows', id] }),
       ]);
     }
   });

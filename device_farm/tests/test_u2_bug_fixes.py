@@ -231,6 +231,40 @@ class TestDeviceClientU2RelaySelection:
             assert d._should_force_u2_relay() is True
 
 
+class TestDeviceClientU2Recovery:
+    """Legacy WS tunnel reconnect failures should trigger real recovery, not redial stale ports forever."""
+
+    def test_legacy_reconnect_failure_requests_recovery_and_clears_ready_channel(self):
+        d = DeviceClient(serial="logical-serial", index=0, config=Config())
+        d._tunnel_ports = {"u2": 45678}
+        d._tunnels_ready_channels = {"u2"}
+        d._agent_send = lambda msg: None
+        recovery = Mock()
+        d._recover_u2_ws_mode = recovery
+
+        class FakeSession:
+            def close(self):
+                pass
+
+        class FakeU2:
+            def __init__(self, *args, **kwargs):
+                self._session = FakeSession()
+                self.settings = {}
+
+            def implicitly_wait(self, _timeout):
+                pass
+
+            def verify(self, timeout):
+                raise TimeoutError("u2 dead")
+
+        with patch("runtime.core.device_client.U2JsonRpcClient", FakeU2):
+            assert d._reconnect_u2() is False
+
+        assert "u2" not in d._tunnels_ready_channels
+        recovery.assert_called_once()
+        assert d._recovery_reason == "u2_legacy_reconnect_failed"
+
+
 class TestWatchdogAtxProbe:
     """Docker/agent-boot watchdog probes must use relay before direct TCP."""
 

@@ -72,6 +72,13 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except Exception:
+        return default
+
+
 class LatestFrameStore:
     """Latest-frame snapshot store with version/event signaling.
 
@@ -269,6 +276,8 @@ class DeviceClient:
         self._u2_start_services_requested_at: float = 0.0
         self._atx_restart_triggered_at: float = float("-inf") # dedup guard; -inf = never triggered
         self._atx_grace_given_at: float = float("-inf")      # time first timeout was seen; -inf = no grace in progress
+        self._hierarchy_relay_u2_fail_count: int = 0
+        self._hierarchy_relay_u2_last_fail_at: float = 0.0
         self._recovery_started_at: float = 0.0
         self._recovery_reason: str = ""
         # Periodic screenshot timer state
@@ -1592,12 +1601,13 @@ class DeviceClient:
             if self._ws_hierarchy_a11y_available:
                 self._log("a11y not available on device — using u2 fallback for hierarchy", level=logging.WARNING)
                 self._ws_hierarchy_a11y_available = False
-            # Auto-heal path: when a11y is unavailable, proactively ensure u2 is up
-            # so hierarchy/controls can continue via fallback without manual actions.
+            # Legacy tunnel auto-heal: ask the APK to reconnect the u2 tunnel.
+            # In atx-agent/relay mode the APK cannot reliably restart u2; hard
+            # recovery is driven by relay u2 hierarchy failures instead.
             if self._agent_send is not None:
                 now_mono = time.monotonic()
                 last_req = float(getattr(self, "_a11y_recover_requested_at", 0.0) or 0.0)
-                if (now_mono - last_req) >= 10.0:
+                if not self._u2_host and (now_mono - last_req) >= 10.0:
                     setattr(self, "_a11y_recover_requested_at", now_mono)
                     self._request_u2_start_services("a11y_unavailable")
         elif xml:
@@ -1614,13 +1624,16 @@ class DeviceClient:
             xml_norm = self._normalize_hierarchy_xml(xml)
             if xml_norm:
                 self._log(f"relay u2 dump_hierarchy ok xml_len={len(xml_norm)}", level=logging.INFO)
+                self._reset_hierarchy_relay_u2_failures()
                 return xml_norm
             self._log("relay u2 dump_hierarchy ok but empty/invalid xml", level=logging.WARNING)
         else:
+            relay_u2_error = str(q.get("error") or "unknown")
             self._log(
-                f"relay u2 dump_hierarchy failed: {q.get('error') or 'unknown'}",
+                f"relay u2 dump_hierarchy failed: {relay_u2_error}",
                 level=logging.WARNING,
             )
+            self._note_hierarchy_relay_u2_failure(relay_u2_error)
         if self._agent_send is None:
             return None
         self._ws_hierarchy_xml = None
@@ -1644,6 +1657,54 @@ class DeviceClient:
         else:
             self._log("hierarchy_via_ws: agent returned null xml", level=logging.WARNING)
         return xml
+
+    _HIERARCHY_RELAY_U2_RESTART_FAILS = max(1, _env_int("HIERARCHY_RELAY_U2_RESTART_FAILS", 2))
+    _HIERARCHY_RELAY_U2_FAIL_WINDOW_S = max(5.0, _env_float("HIERARCHY_RELAY_U2_FAIL_WINDOW_S", 30.0))
+
+    def _reset_hierarchy_relay_u2_failures(self) -> None:
+        self._hierarchy_relay_u2_fail_count = 0
+        self._hierarchy_relay_u2_last_fail_at = 0.0
+
+    def _note_hierarchy_relay_u2_failure(self, error: str) -> None:
+        s = (error or "").lower()
+        hard = (
+            "timed out" in s
+            or "timeout" in s
+            or "signal: killed" in s
+            or "connection refused" in s
+            or "connection reset" in s
+            or "bad gateway" in s
+        )
+        if not hard:
+            self._reset_hierarchy_relay_u2_failures()
+            return
+
+        now = time.monotonic()
+        if now - self._hierarchy_relay_u2_last_fail_at > self._HIERARCHY_RELAY_U2_FAIL_WINDOW_S:
+            self._hierarchy_relay_u2_fail_count = 0
+        self._hierarchy_relay_u2_last_fail_at = now
+        self._hierarchy_relay_u2_fail_count += 1
+
+        if self._hierarchy_relay_u2_fail_count < self._HIERARCHY_RELAY_U2_RESTART_FAILS:
+            return
+
+        self._hierarchy_relay_u2_fail_count = 0
+        self._mark_recovery_start("hierarchy_relay_u2_failed")
+        with self._u2_lock:
+            self._u2 = None
+        self._u2_reconnect_failed_at = now
+        if self._u2_host:
+            self._log(
+                f"hierarchy: relay u2 failed repeatedly ({error}) — triggering atx restart",
+                level=logging.WARNING,
+            )
+            self._trigger_atx_restart_async(self._u2_host)
+        else:
+            self._log(
+                f"hierarchy: relay u2 failed repeatedly ({error}) — triggering u2 recovery",
+                level=logging.WARNING,
+            )
+            self._recover_u2_ws_mode()
 
     def hierarchy_xml(self, force_refresh: bool = False) -> Optional[str]:
         """
@@ -1688,6 +1749,7 @@ class DeviceClient:
             xml = self._hierarchy_xml_via_u2(now)
             if xml and not self._is_empty_hierarchy(xml):
                 self._log(f"hierarchy: route=u2 bytes={len(xml)}", level=logging.DEBUG)
+                self._reset_hierarchy_relay_u2_failures()
                 return xml
 
             # Fallback: a11y query / WS direct.
@@ -2951,6 +3013,14 @@ class DeviceClient:
 
         self._u2 = None
         self._u2_reconnect_failed_at = time.monotonic()
+        self._tunnels_ready_channels.discard("u2")
+        self._mark_recovery_start("u2_legacy_reconnect_failed")
+        self._log(
+            "u2 reconnect failed after full cycle — requesting u2 service restart",
+            level=logging.WARNING,
+        )
+        if self._agent_send is not None:
+            self._recover_u2_ws_mode()
         return False
 
     def _select_u2_relay_serial(self, relay: Any, host: str) -> Optional[str]:

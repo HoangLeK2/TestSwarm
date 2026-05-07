@@ -38,7 +38,7 @@
         <!-- WsAgent: WebSocket agent; MJPEG qua MediaProjection hoặc video ngoài (scrcpy) — xem USE_MEDIA_PROJECTION -->
         <service android:name=".WsAgentService"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice|dataSync" />
+            android:foregroundServiceType="connectedDevice" />
         <service android:name=".TouchAccessibilityService"
             android:exported="false"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
@@ -51,7 +51,8 @@
         </service>
 
         <service android:name=".Service"
-            android:exported="true">
+            android:exported="true"
+            android:process=":legacy_stfservice">
             <intent-filter>
                 <action android:name="jp.co.cyberagent.stf.ACTION_START"/>
                 <action android:name="jp.co.cyberagent.stf.ACTION_STOP"/>

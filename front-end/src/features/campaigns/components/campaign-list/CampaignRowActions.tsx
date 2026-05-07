@@ -54,7 +54,6 @@ import {
   useRunCampaign,
   useScenarios,
   useUpdateCampaignStatus,
-  useWorkflowCancel,
   useWorkflowPause,
   useWorkflowResume,
 } from '../../hooks/use-campaigns';
@@ -92,7 +91,6 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
 
   const { mutate: pauseWf, isPending: isPausing } = useWorkflowPause();
   const { mutate: resumeWf, isPending: isResuming } = useWorkflowResume();
-  const { mutate: cancelWf, isPending: isCancelling } = useWorkflowCancel();
 
   const previewSerial = devices[0]?.serial ?? '';
   const totalSteps = scenarios.reduce((s, sc) => s + sc.steps.length, 0);
@@ -133,8 +131,11 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
   const handleCancelAll = () => {
     if (!window.confirm(t('cancelConfirm'))) return;
     const allActive = [...runningWorkflowIds, ...pausedWorkflowIds];
-    allActive.forEach((id) =>
-      cancelWf(id, { onError: () => toast.error(`Cancel failed: ${id}`) })
+    patchCampaignStatus(
+      { id: campaign.id, status: 'idle' },
+      {
+        onError: () => toast.error(t('runFailed')),
+      },
     );
     toast.info(t('cancellingAll', { count: allActive.length }));
   };
@@ -220,8 +221,10 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
 
               <RunCampaignDialog
                 open={runDialogOpen}
+                campaignId={campaign.id}
                 onClose={() => setRunDialogOpen(false)}
                 devices={devices}
+                scenarios={scenarios}
                 isRunning={isRunning}
                 onConfirm={(deviceSerials) => {
                   setRunDialogOpen(false);
@@ -276,7 +279,7 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
               size='sm'
               variant='ghost'
               className='h-8 w-8 p-0 text-destructive hover:text-destructive'
-              disabled={isCancelling}
+              disabled={isPatchingCampaign}
               onClick={handleCancelAll}
               title={t('titleCancel') ?? 'Huỷ'}
               aria-label='Huỷ'

@@ -54,12 +54,21 @@ def _build_url() -> str:
 
 DATABASE_URL = _build_url()
 
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except Exception:
+        return default
+
+
 # Main engine — pooled, used by FastAPI (single event loop).
 engine = create_async_engine(
     DATABASE_URL,
     echo=False,
-    pool_size=10,
-    max_overflow=20,
+    pool_size=max(1, _env_int("DB_POOL_SIZE", 5)),
+    max_overflow=max(0, _env_int("DB_MAX_OVERFLOW", 5)),
+    pool_timeout=max(1, _env_int("DB_POOL_TIMEOUT", 10)),
     pool_pre_ping=True,
     pool_recycle=300,
 )
@@ -92,8 +101,9 @@ def _engine_for_loop(loop: asyncio.AbstractEventLoop) -> tuple[AsyncEngine, asyn
         act_engine = create_async_engine(
             DATABASE_URL,
             echo=False,
-            pool_size=5,
-            max_overflow=10,
+            pool_size=max(1, _env_int("DB_ACTIVITY_POOL_SIZE", 2)),
+            max_overflow=max(0, _env_int("DB_ACTIVITY_MAX_OVERFLOW", 2)),
+            pool_timeout=max(1, _env_int("DB_ACTIVITY_POOL_TIMEOUT", 10)),
             pool_pre_ping=True,
             pool_recycle=300,
         )
@@ -113,6 +123,25 @@ async def dispose_loop_engine() -> None:
             await entry[0].dispose()
         except Exception:
             pass
+
+
+async def _run_activity_coro(coro):
+    try:
+        return await coro
+    finally:
+        await dispose_loop_engine()
+
+
+def run_activity_coro(coro):
+    """
+    Run an async activity coroutine from sync code and dispose the loop-scoped
+    SQLAlchemy engine before asyncio.run() closes the event loop.
+
+    Without this, one-off worker threads that call asyncio.run(activity_session)
+    leave pooled asyncpg connections attached to closed event loops, eventually
+    exhausting Postgres with "too many clients already".
+    """
+    return asyncio.run(_run_activity_coro(coro))
 
 
 @asynccontextmanager

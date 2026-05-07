@@ -3,12 +3,27 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 import logging
+import os
+import asyncio
 
 from db.crud.content import update_content_stats
 from db.database import activity_session
 from services.content_store import save_content_item, _safe_int, compute_content_hash
 
 log = logging.getLogger(__name__)
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except Exception:
+        return default
+
+
+def _chunks(items: list[dict[str, Any]], size: int):
+    size = max(1, size)
+    for i in range(0, len(items), size):
+        yield items[i:i + size]
 
 
 @dataclass
@@ -153,6 +168,7 @@ async def persist_data_items(
     parent_id: str | None = None,
     item_level: int = 0,
     user_id: str | None = None,
+    batch_size: int | None = None,
 ) -> tuple[PersistReport, dict[str, Any]]:
     report = PersistReport()
     is_list_input = isinstance(data, list)
@@ -168,42 +184,50 @@ async def persist_data_items(
     if not items:
         return report, offset_map
 
-    async with activity_session() as db:
-        for item in items:
-            try:
-                result = await save_content_item(
-                    data=item,
-                    collection=collection,
-                    platform=platform,
-                    content_type=content_type,
-                    dedupe_field=dedupe_field,
-                    tags=tags,
-                    device_serial=device_serial,
-                    campaign_id=campaign_id,
-                    execution_id=execution_id,
-                    parent_id=parent_id,
-                    item_level=item_level,
-                    user_id=user_id,
-                    db=db,
-                )
-                report.last_result = result
-                if result.get("saved"):
-                    report.saved_count += 1
-                else:
-                    report.duplicate_count += 1
-                report.processed_count += 1
-            except Exception:
-                report.error_count += 1
-                log.warning(
-                    "persist_data_items failed: var=%s idx=%s collection=%s type=%s",
-                    data_var,
-                    start_idx + report.processed_count,
-                    collection,
-                    content_type,
-                    exc_info=True,
-                )
-                # Stop on first failing item to avoid skipping failed records in offset tracking.
-                break
+    chunk_size = max(1, int(batch_size or _env_int("EXTRACT_AUTO_SAVE_BATCH_SIZE", 100)))
+    for chunk in _chunks(items, chunk_size):
+        async with activity_session() as db:
+            chunk_failed = False
+            for item in chunk:
+                try:
+                    result = await save_content_item(
+                        data=item,
+                        collection=collection,
+                        platform=platform,
+                        content_type=content_type,
+                        dedupe_field=dedupe_field,
+                        tags=tags,
+                        device_serial=device_serial,
+                        campaign_id=campaign_id,
+                        execution_id=execution_id,
+                        parent_id=parent_id,
+                        item_level=item_level,
+                        user_id=user_id,
+                        db=db,
+                    )
+                    report.last_result = result
+                    if result.get("saved"):
+                        report.saved_count += 1
+                    else:
+                        report.duplicate_count += 1
+                    report.processed_count += 1
+                except Exception:
+                    report.error_count += 1
+                    chunk_failed = True
+                    log.warning(
+                        "persist_data_items failed: var=%s idx=%s collection=%s type=%s",
+                        data_var,
+                        start_idx + report.processed_count,
+                        collection,
+                        content_type,
+                        exc_info=True,
+                    )
+                    # Stop on first failing item to avoid skipping failed records in offset tracking.
+                    break
+        if chunk_failed:
+            break
+        if len(chunk) >= chunk_size and len(items) > chunk_size:
+            await asyncio.sleep(float(os.environ.get("EXTRACT_AUTO_SAVE_CHUNK_PAUSE_S", "0.02")))
 
     if is_list_input:
         offset_map[data_var] = start_idx + report.processed_count

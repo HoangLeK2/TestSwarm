@@ -111,10 +111,12 @@ def _run_async_coro_sync(coro: Any, timeout: float = 120.0) -> Any:
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(coro)
+        from db.database import run_activity_coro
+        return run_activity_coro(coro)
 
+    from db.database import run_activity_coro
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-    fut = pool.submit(asyncio.run, coro)
+    fut = pool.submit(run_activity_coro, coro)
     try:
         return fut.result(timeout=timeout)
     finally:
@@ -2381,7 +2383,7 @@ def _run_scenario_task_legacy(
                         if parent_hash:
                             try:
                                 import concurrent.futures as _cf
-                                from db.database import activity_session
+                                from db.database import activity_session, run_activity_coro
                                 from db.crud.content import update_content_stats
                                 from services.content_store import _safe_int
                                 _ph = parent_hash
@@ -2407,7 +2409,7 @@ def _run_scenario_task_legacy(
                                             )
 
                                 with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
-                                    _pool.submit(asyncio.run, _do_update_stats()).result(timeout=10)
+                                    _pool.submit(run_activity_coro, _do_update_stats()).result(timeout=10)
                             except Exception as exc:
                                 log.warning(f"[{serial}] update_content_stats failed: {exc}")
                     else:
@@ -2472,6 +2474,7 @@ def _run_scenario_task_legacy(
                                 parent_id=_as_parent_id,
                                 item_level=_as_level,
                                 user_id=(scenario.get("_campaign_vars") or {}).get("__USER_ID__"),
+                                batch_size=step.get("save_batch_size"),
                             )
                         )
                         ctx["__save_extraction_offsets__"] = _updated_offsets

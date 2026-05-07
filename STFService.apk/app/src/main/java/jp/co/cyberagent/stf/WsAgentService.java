@@ -96,6 +96,7 @@ public class WsAgentService extends android.app.Service {
     public static final String EXTRA_WS_URL = "ws_url";
     public static final String EXTRA_PROJECTION_DATA = "projection_data";
     public static final String EXTRA_PROJECTION_CODE = "projection_code";
+    public static final String EXTRA_ALLOW_BATTERY_DIALOG = "allow_battery_dialog";
 
     private static final String TAG = "WsAgentService";
     private static final String CHANNEL_ID = "ws_agent";
@@ -298,7 +299,8 @@ public class WsAgentService extends android.app.Service {
                     + " projData=" + (projData != null ? "OK" : "NULL"));
 
             startForeground();
-            requestBatteryOptimizationExemption();
+            maybeRequestBatteryOptimizationExemption(
+                    intent != null && intent.getBooleanExtra(EXTRA_ALLOW_BATTERY_DIALOG, false));
 
             if (USE_MEDIA_PROJECTION) {
                 // Get MediaProjection token — reuse static if already valid (avoids dialog).
@@ -423,10 +425,14 @@ public class WsAgentService extends android.app.Service {
      * Request battery optimization exemption so Doze mode doesn't kill our WS connection.
      * Shows system dialog on first call; no-op if already exempted.
      */
-    private void requestBatteryOptimizationExemption() {
+    private void maybeRequestBatteryOptimizationExemption(boolean allowDialog) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
             if (pm != null && !pm.isIgnoringBatteryOptimizations(getPackageName())) {
+                if (!allowDialog) {
+                    Log.w(TAG, "Battery optimization is active; open STFService UI once to request exemption");
+                    return;
+                }
                 try {
                     android.content.Intent intent = new android.content.Intent(
                             android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
@@ -1757,6 +1763,7 @@ public class WsAgentService extends android.app.Service {
         i.putExtra(EXTRA_WS_URL, wsUrl);
         i.putExtra(EXTRA_PROJECTION_CODE, resultCode);
         i.putExtra(EXTRA_PROJECTION_DATA, projData);
+        i.putExtra(EXTRA_ALLOW_BATTERY_DIALOG, ctx instanceof Activity);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             ctx.startForegroundService(i);
         } else {

@@ -3,7 +3,7 @@ watchdog.py — WatchdogThread: health monitoring for WS-agent and relay devices
 
 Health checks:
   - WS Agent mode: agent WebSocket alive + state READY → healthy
-    - atx-agent sub-check: TCP probe port 7912 every interval; 2 misses → restart
+    - atx-agent sub-check: HTTP /ping probe on port 7912 every interval; 2 misses → restart
   - Relay mode: frame liveness check (scrcpy stream)
   - If device unhealthy too long → mark DEAD
 """
@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import socket
 import threading
 import time
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from core.config import Config
@@ -25,7 +25,7 @@ log = logging.getLogger(__name__)
 # Seconds a device can stay DISCONNECTED/ERROR before being marked DEAD
 _MAX_DISCONNECTED_SECS = 120
 
-# atx-agent TCP probe: consecutive TCP-connect failures before triggering restart
+# atx-agent HTTP probe: consecutive /ping failures before triggering restart
 _ATX_MAX_MISS = 2
 
 # Cooldown between atx-agent restart triggers (seconds)
@@ -42,7 +42,7 @@ class WatchdogThread(threading.Thread):
         self._running = False
         # Track when each serial entered a non-READY state
         self._bad_since: dict[str, float] = {}
-        # atx-agent TCP probe: consecutive miss count per serial
+        # atx-agent HTTP probe: consecutive miss count per serial
         self._atx_miss_count: dict[str, int] = {}
         # Last atx-agent restart trigger time per serial (for cooldown)
         self._atx_last_restart: dict[str, float] = {}
@@ -128,7 +128,7 @@ class WatchdogThread(threading.Thread):
         if agent_alive and device.state == DeviceState.READY:
             self._bad_since.pop(serial, None)
             device.reconnect_attempts = 0
-            # ── atx-agent sub-check: TCP probe port 7912 ──────────────────────
+            # ── atx-agent sub-check: HTTP /ping probe on port 7912 ───────────
             # Detects frozen atx-agent before the next u2 RPC times out.
             # Only probe when u2 is currently connected (_u2_host set, _u2 live).
             atx_host = getattr(device, "_u2_host", None)
@@ -161,12 +161,10 @@ class WatchdogThread(threading.Thread):
         self._track_bad_state(device)
 
     def _check_atx_agent(self, device: DeviceClient, host: str) -> None:
-        """Probe atx-agent port 7912 before u2 RPCs time out.
+        """Probe atx-agent /ping before u2 RPCs time out.
 
-        A frozen atx-agent keeps the port open (connect succeeds) but never responds
-        to HTTP — that's caught by the u2 stale-ping in device_client.  This probe
-        specifically catches the case where atx-agent has crashed and the port is
-        fully closed (Connection refused).  Two consecutive misses trigger a restart.
+        A frozen atx-agent can keep the port open while its HTTP handler is wedged.
+        Two consecutive HTTP misses trigger a restart.
         """
         serial = device.serial
         if self._probe_atx_agent_alive(device, host):
@@ -227,8 +225,8 @@ class WatchdogThread(threading.Thread):
                 log.debug("[%s] atx-agent relay probe failed: %s", device.serial, exc)
 
         try:
-            with socket.create_connection((host, 7912), timeout=0.5):
-                return True
+            with urllib.request.urlopen(f"http://{host}:7912/ping", timeout=1.0) as resp:
+                return 200 <= int(resp.status) < 300
         except Exception:
             return False
 

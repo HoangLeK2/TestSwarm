@@ -105,6 +105,7 @@ public class WsAgentService extends android.app.Service {
     private static final int CAPTURE_WIDTH       = 1080; // max width; scales down if screen smaller
     private static final int TARGET_FPS          = 10;   // MJPEG target frame rate (low for perf)
     private static final int JPEG_QUALITY        = 75;   // JPEG compression (0-100)
+    private static final long A11Y_AUTO_ENABLE_MIN_INTERVAL_MS = 10000L;
 
     /**
      * Shared MediaProjection token — static so it survives service restarts within the same
@@ -141,6 +142,7 @@ public class WsAgentService extends android.app.Service {
     private HandlerThread    imageHandlerThread;
     private Handler          imageHandler;
     private volatile long    lastFrameTime   = 0;
+    private volatile long    lastA11yAutoEnableMs = 0;
     private volatile byte[]  latestJpeg      = null;          // latest JPEG frame (for screenshot API)
 
     // Precomputed for binary JPEG frame protocol:
@@ -516,10 +518,8 @@ public class WsAgentService extends android.app.Service {
                 } else {
                     sendLog("MJPEG capture skipped — use scrcpy (or similar) for display");
                 }
-                // Auto-enable accessibility for hierarchy dump + gesture injection
                 if (!TouchAccessibilityService.isAvailable()) {
-                    sendLog("a11y not available — attempting auto-enable…");
-                    mainHandler.post(() -> autoEnableAccessibility());
+                    requestAutoEnableAccessibility("connect");
                 }
             }
 
@@ -1211,6 +1211,7 @@ public class WsAgentService extends android.app.Service {
                                 resp.put("xml", xml);
                             } else {
                                 resp.put("error", "accessibility_not_available");
+                                requestAutoEnableAccessibility("dump_hierarchy");
                             }
                             if (wsManager != null) wsManager.send(resp.toString());
                         } catch (Exception e) {
@@ -1482,6 +1483,17 @@ public class WsAgentService extends android.app.Service {
     }
 
     // activeU2Port() / startU2Server() removed for ADB-first builds.
+
+    private void requestAutoEnableAccessibility(String reason) {
+        long now = SystemClock.elapsedRealtime();
+        long last = lastA11yAutoEnableMs;
+        if (now - last < A11Y_AUTO_ENABLE_MIN_INTERVAL_MS) {
+            return;
+        }
+        lastA11yAutoEnableMs = now;
+        sendLog("a11y not available — attempting auto-enable (" + reason + ")");
+        mainHandler.post(() -> autoEnableAccessibility());
+    }
 
     /**
      * Try to enable TouchAccessibilityService programmatically via WRITE_SECURE_SETTINGS.

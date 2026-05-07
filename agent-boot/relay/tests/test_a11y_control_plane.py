@@ -182,6 +182,62 @@ async def test_a11y_query_does_not_emit_ack(monkeypatch):
     assert msg["id"] == "r-query"
 
 
+def test_a11y_dump_hierarchy_retries_empty_stub(monkeypatch):
+    agent = RelayAgent(
+        server_url="localhost:50051",
+        api_key="x",
+        relay_id="r1",
+        relay_mode="grpc",
+    )
+    calls = []
+    responses = [
+        {"ok": True, "status": 200, "body": "<hierarchy />", "content_type": "text/xml"},
+        {"ok": True, "status": 200, "body": "<hierarchy><node /></hierarchy>", "content_type": "text/xml"},
+    ]
+
+    def _fake_u2_http(serial, method, path, body, content_type, timeout):
+        calls.append((serial, method, path, timeout))
+        return responses.pop(0)
+
+    monkeypatch.setattr(agent, "_do_u2_http", _fake_u2_http)
+
+    ok, err, data = agent._execute_dump_hierarchy(
+        "s1",
+        {"timeout": 2.0, "attempts": 2},
+    )
+
+    assert ok is True
+    assert err == ""
+    assert data["attempts"] == 2
+    assert data["xml"].startswith("<hierarchy")
+    assert len(calls) == 2
+    assert calls[0][2] == "/dump/hierarchy"
+    assert 1.0 <= calls[0][3] <= 2.0
+
+
+def test_a11y_dump_hierarchy_rejects_non_xml(monkeypatch):
+    agent = RelayAgent(
+        server_url="localhost:50051",
+        api_key="x",
+        relay_id="r1",
+        relay_mode="grpc",
+    )
+
+    def _fake_u2_http(serial, method, path, body, content_type, timeout):
+        return {"ok": True, "status": 200, "body": "not xml", "content_type": "text/plain"}
+
+    monkeypatch.setattr(agent, "_do_u2_http", _fake_u2_http)
+
+    ok, err, data = agent._execute_dump_hierarchy(
+        "s1",
+        {"timeout": 1.0, "attempts": 1},
+    )
+
+    assert ok is False
+    assert "not xml" in err
+    assert data["xml"] == ""
+
+
 @pytest.mark.asyncio
 async def test_a11y_inflight_duplicate_seq_rejected(monkeypatch):
     agent = RelayAgent(

@@ -554,6 +554,22 @@ def _ensure_stability_settings(serial: str) -> None:
     except Exception as exc:
         console.print(f"    [yellow]⚠[/yellow] stay_on_while_plugged_in failed: {exc}")
 
+    for label, cmd in [
+        ("svc power stayon=true", "svc power stayon true"),
+        ("screen_off_timeout=max", "settings put system screen_off_timeout 2147483647"),
+        ("STF Doze whitelist", f"dumpsys deviceidle whitelist +{_STF_PKG} 2>/dev/null || true"),
+        ("u2 Doze whitelist", "dumpsys deviceidle whitelist +com.github.uiautomator 2>/dev/null || true"),
+        ("u2-test Doze whitelist", "dumpsys deviceidle whitelist +com.github.uiautomator.test 2>/dev/null || true"),
+        ("u2 overlay appop", "appops set com.github.uiautomator SYSTEM_ALERT_WINDOW allow 2>/dev/null || true"),
+        ("STF background appop", f"appops set {_STF_PKG} RUN_IN_BACKGROUND allow 2>/dev/null || true"),
+        ("STF any-background appop", f"appops set {_STF_PKG} RUN_ANY_IN_BACKGROUND allow 2>/dev/null || true"),
+    ]:
+        try:
+            _adb_shell(cmd, serial=serial, timeout=10)
+            console.print(f"    [green]✓[/green] {label}")
+        except Exception as exc:
+            console.print(f"    [yellow]⚠[/yellow] {label} failed: {exc}")
+
     # Log available H264/H265 encoders so operators know what to flip to
     # via SCRCPY_VIDEO_ENCODER if the default encoder stalls. Non-blocking:
     # any failure here is diagnostic-only, never fails bootstrap.

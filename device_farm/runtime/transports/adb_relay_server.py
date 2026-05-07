@@ -991,7 +991,7 @@ class AdbRelayManager:
             },
             reply_id=req_id,
             timeout=timeout,
-            timeout_grace=0.0,
+            timeout_grace=1.0,
         )
         if result.get("type") != "a11y_result":
             return {

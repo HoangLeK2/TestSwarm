@@ -479,6 +479,21 @@ def test_if_variable_unresolved_var_goes_to_else():
     assert var_ctx.resolve("${R}") == "else"
 
 
+def test_if_variable_truthy_unresolved_var_goes_to_else():
+    dev = _MockDevice()
+    var_ctx = VariableContext()
+    scenario = {
+        "steps": [
+            {"type": "if_variable", "name": "__DEVICE_GROUP_NAME__",
+             "then": [{"type": "set_variable", "name": "R", "value": "device"}],
+             "else": [{"type": "set_variable", "name": "R", "value": "global"}]},
+        ]
+    }
+    result = run_scenario_task(dev, scenario, _var_ctx=var_ctx)
+    assert result["success"] is True
+    assert var_ctx.resolve("${R}") == "global"
+
+
 # ── random_pick ──────────────────────────────────────────────────────────────
 
 

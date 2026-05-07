@@ -651,7 +651,11 @@ def handle_if_variable(sc: ScenarioContext, step: Dict[str, Any], idx: int, resu
         except (TypeError, ValueError):
             condition_met = False
     else:
-        condition_met = bool(raw_val) and str_val not in ("None", "", "0")
+        condition_met = (
+            bool(raw_val)
+            and str_val not in ("None", "", "0")
+            and str_val != f"${{{name}}}"
+        )
 
     branch_steps = then_steps if condition_met else else_steps
     branch_name = "then" if condition_met else "else"

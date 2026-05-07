@@ -2958,7 +2958,11 @@ def _run_scenario_task_legacy(
                         condition_met = False
                 else:
                     # No comparison op — truthy: var is set and non-empty
-                    condition_met = bool(raw_val) and str_val not in ("None", "", "0")
+                    condition_met = (
+                        bool(raw_val)
+                        and str_val not in ("None", "", "0")
+                        and str_val != f"${{{name}}}"
+                    )
 
                 branch_steps = then_steps if condition_met else else_steps
                 branch_name = "then" if condition_met else "else"

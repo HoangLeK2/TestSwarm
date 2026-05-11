@@ -1860,9 +1860,6 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           </p>
           <div className='shrink-0 rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground'>
             {tDvDlg('instructions')}
-            <span className='ml-1 block pt-1'>
-              {tDvDlg('switchHint')}
-            </span>
           </div>
           <div className='min-h-0 overflow-y-auto overscroll-y-contain pr-1 [-webkit-overflow-scrolling:touch]'>
             {scenarioDeviceVarsQuery.isLoading && activeScenarioId ? (

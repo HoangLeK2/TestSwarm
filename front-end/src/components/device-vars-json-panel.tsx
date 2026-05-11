@@ -241,14 +241,14 @@ export function DeviceVarsJsonPanel({
         <div className='min-w-0'>
           <p className='text-xs font-medium'>{t('toggleLabel')}</p>
           <p className='mt-0.5 text-[11px] text-muted-foreground'>
-            {t('toggleDescription')}
+            {enabled ? t('toggleDescriptionOn') : t('toggleDescriptionOff')}
           </p>
         </div>
         <Switch
           checked={enabled}
           disabled={loading}
           onCheckedChange={onEnabledChange}
-          aria-label={t('toggleAria')}
+          aria-label={enabled ? t('toggleAriaOn') : t('toggleAriaOff')}
         />
       </div>
 
@@ -288,9 +288,9 @@ export function DeviceVarsJsonPanel({
             emptyClassName,
           )}
         >
-          <p className='text-center text-xs text-muted-foreground'>
+          {/* <p className='text-center text-xs text-muted-foreground'>
             {t('modeOffHint')}
-          </p>
+          </p> */}
           {globalReadOnlyBlock}
         </div>
       )}

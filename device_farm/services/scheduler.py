@@ -399,14 +399,16 @@ class SchedulerService:
     ) -> None:
         """Register a Temporal Schedule that triggers ScheduleRunWorkflow."""
         try:
+            from temporalio.api.common.v1 import Payloads, WorkflowType
+            from temporalio.api.enums.v1 import WorkflowIdReusePolicy
+            from temporalio.api.taskqueue.v1 import TaskQueue
+            from temporalio.api.workflow.v1 import NewWorkflowExecutionInfo
             from temporalio.client import (
                 Schedule,
                 ScheduleActionStartWorkflow,
                 ScheduleSpec,
                 ScheduleState,
             )
-            from temporalio.common import SearchAttributeKey, WorkflowIDReusePolicy
-            from temporal.schedule_workflow import ScheduleRunWorkflow
             from temporal.schedule_shared import ScheduleRunInput
             from temporal.shared import TASK_QUEUE_NAME
 
@@ -417,18 +419,26 @@ class SchedulerService:
             temporal_id = f"{_TEMPORAL_SCHEDULE_PREFIX}{schedule_id}"
             workflow_id_prefix = f"{_TEMPORAL_WORKFLOW_PREFIX}{schedule_id}"
 
+            run_input = ScheduleRunInput(schedule_id=schedule_id)
+            (arg_payload,) = await self._client.data_converter.encode([run_input])
+            # temporalio 1.24+ dropped workflow_id_reuse_policy from ScheduleActionStartWorkflow;
+            # set it on NewWorkflowExecutionInfo and pass via raw_info.
+            raw_start = NewWorkflowExecutionInfo(
+                workflow_id=workflow_id_prefix,
+                workflow_type=WorkflowType(name="ScheduleRunWorkflow"),
+                task_queue=TaskQueue(name=task_queue),
+                input=Payloads(payloads=[arg_payload]),
+                workflow_id_reuse_policy=(
+                    WorkflowIdReusePolicy.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE
+                ),
+            )
+
             await self._client.create_schedule(
                 temporal_id,
                 Schedule(
                     action=ScheduleActionStartWorkflow(
-                        ScheduleRunWorkflow.run,
-                        ScheduleRunInput(schedule_id=schedule_id),
-                        id=workflow_id_prefix,
-                        task_queue=task_queue,
-                        # ALLOW_DUPLICATE lets each scheduled fire start a new workflow
-                        # even if a previous run with the same prefix-id is still running
-                        # or completed — prevents ID collision on repeated firings.
-                        workflow_id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
+                        "<unset>",
+                        raw_info=raw_start,
                     ),
                     spec=ScheduleSpec(
                         cron_expressions=[cron_expression],

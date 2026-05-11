@@ -236,6 +236,8 @@
     "loading": "Đang tải...",
     "empty": "Chưa có Relay Agent nào kết nối",
     "bootstrapAll": "Khởi động tất cả",
+    "registerDevice": "Đăng ký thiết bị",
+    "registered": "đã đăng ký",
     "noDevices": "Chưa có thiết bị",
     "moreDevices": "+{count} thiết bị",
     "lastHeartbeat": "Lần heartbeat cuối: {time}"
@@ -1061,8 +1063,8 @@
     "emptyDescription": "Chưa có thiết bị nào. Nhấn <strong>Đăng ký thiết bị</strong> để thêm. Sau đó chọn thiết bị trong danh sách để kết nối.",
     "newDevice": "Thiết bị mới",
     "notConnected": "Chưa kết nối",
-    "online": "Online",
-    "offline": "Offline",
+    "online": "Trực tuyến",
+    "offline": "Ngoại tuyến",
     "connect": "Kết nối",
     "deleteDevice": "Xoá thiết bị",
     "deleteConfirm": "Xoá thiết bị này? Các campaign liên quan cũng sẽ bỏ liên kết với thiết bị.",
@@ -1076,6 +1078,7 @@
     "labels": {
       "model": "Model",
       "android": "Android",
+      "adbSerial": "ADB serial",
       "screen": "Màn hình"
     },
     "connectDialog": {
@@ -1162,9 +1165,12 @@
     "title": "Đăng ký thiết bị",
     "titleQr": "Quét mã QR để kết nối",
     "titleConnected": "Thiết bị đã kết nối",
-    "description": "Sau đăng ký, quét mã QR bằng app <strong>STFService</strong> trên điện thoại — thiết bị sẽ tự kết nối và ghi nhận serial.",
+    "description": "Chọn thiết bị mà <strong>agent-boot</strong> đang thấy, đặt tên, rồi quét QR bằng app <strong>STFService</strong> để kết nối.",
     "nameLabel": "Tên thiết bị",
     "namePlaceholder": "VD: Điện thoại test 1",
+    "deviceLabel": "Thiết bị cần đăng ký",
+    "devicePlaceholder": "Chọn serial từ agent-boot",
+    "noAvailableDevices": "Chưa có thiết bị khả dụng. Hãy cắm thiết bị và đảm bảo agent-boot đang online.",
     "descLabel": "Ghi chú (tuỳ chọn)",
     "descPlaceholder": "VD: Phòng QA, máy Samsung...",
     "submit": "Đăng ký",
@@ -1176,6 +1182,9 @@
     "qrInstruction": "Mở app <strong>STFService</strong> trên điện thoại — quét QR hoặc dán link bên dưới.",
     "waiting": "Đang chờ thiết bị kết nối…",
     "generatingQr": "Đang tạo mã QR…",
+    "sendToPhone": "Gửi link xuống điện thoại",
+    "sendingToPhone": "Đang gửi…",
+    "sentToPhone": "Đã gửi link xuống điện thoại",
     "successMessage": "Thiết bị đã online và sẵn sàng điều khiển.",
     "infoSerial": "Serial",
     "infoAndroid": "Android",
@@ -1183,6 +1192,8 @@
     "controlNow": "Điều khiển ngay",
     "close": "Đóng",
     "errorRegister": "Đăng ký thất bại",
+    "errorNoDevice": "Chưa chọn thiết bị để đăng ký",
+    "errorPushToPhone": "Không gửi được link xuống điện thoại",
     "errorCopy": "Copy thất bại"
   },
   "devicesFarm": {
@@ -1652,13 +1663,27 @@
     "fields": {
       "name": "Tên",
       "type": "Loại",
-      "enabled": "Bật",
+      "enabled": "Kích hoạt",
       "events": "Sự kiện",
       "actions": "Thao tác",
       "botToken": "Bot token",
       "chatId": "Chat ID",
       "webhookUrl": "Webhook URL",
       "headersJson": "Headers JSON"
+    },
+    "placeholders": {
+      "channelName": "Ví dụ: Trình duyệt"
+    },
+    "eventLabels": {
+      "device_disconnect": "Thiết bị ngắt kết nối",
+      "device_reconnect": "Thiết bị kết nối lại",
+      "task_failed": "Tác vụ thất bại",
+      "campaign_complete": "Chiến dịch hoàn tất",
+      "campaign_failed": "Chiến dịch thất bại",
+      "schedule_triggered": "Lịch được kích hoạt",
+      "schedule_failed": "Lịch thất bại",
+      "account_banned": "Tài khoản bị khóa",
+      "content_milestone": "Mốc nội dung"
     },
     "actions": {
       "cancel": "Hủy",
@@ -2506,7 +2531,7 @@
     }
   },
   "organization": {
-    "noName": "Chưa đặt tên",
+    "noName": "Đang tải...",
     "owner": "Chủ sở hữu",
     "title": "Quản lý tổ chức",
     "settings": "Cài đặt",

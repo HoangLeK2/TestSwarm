@@ -132,6 +132,22 @@ function flattenVarDefs(vars: Record<string, any>): Record<string, any> {
   return out;
 }
 
+/** Bounded label for device Select (long model/serial otherwise breaks the top bar). */
+function formatDeviceSelectLabel(d: { brand: string; model: string; serial: string }) {
+  const left = `${d.brand} ${d.model}`.trim().replace(/\s+/g, ' ');
+  const s = d.serial;
+  const serialShort = s.length > 16 ? `${s.slice(0, 7)}…${s.slice(-6)}` : s;
+  if (!left) return serialShort;
+  const maxLeft = 26;
+  const leftShort = left.length > maxLeft ? `${left.slice(0, maxLeft - 1)}…` : left;
+  return `${leftShort} — ${serialShort}`;
+}
+
+function deviceSelectFullTitle(d: { brand: string; model: string; serial: string }) {
+  const left = `${d.brand} ${d.model}`.trim();
+  return left ? `${left} — ${d.serial}` : d.serial;
+}
+
 type Props = { initialSerial?: string | null; initialCampaignId?: string | null; initialScenarioId?: string | null; initialTemplateId?: string | null };
 
 const ENABLE_FLOWGRAM_CONTROL_UI = false;  // UI flowgram disabled 
@@ -982,7 +998,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
       <SafeModeBanner className='mx-3 mt-2' />
 
       {/* ── Top bar ─────────────────────────────────────────────────────── */}
-      <div className='flex shrink-0 items-center gap-3 border-b bg-background px-3 py-2'>
+      <div className='flex min-w-0 shrink-0 items-center gap-3 overflow-hidden border-b bg-background px-3 py-2'>
         {/* Back */}
         <Button
           variant='ghost'
@@ -1022,27 +1038,41 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
         )}
 
         {/* Device selector */}
-        <Select
-          value={device.selectedSerial ?? ''}
-          onValueChange={(v) => guardWhilePlaying(() => device.setSelectedSerial(v || null))}
-        >
-          <SelectTrigger className='h-8 w-[220px] shrink-0 text-xs'>
-            <SelectValue placeholder={t('selectPhonePlaceholder')} />
-          </SelectTrigger>
-          <SelectContent>
-            {device.connectedDevices.map((d) => (
-              <SelectItem key={d.serial} value={d.serial} className='text-xs'>
-                {d.brand} {d.model} — {d.serial.slice(0, 10)}
-                {(((d.state || '').replace('DeviceState.', '') === 'BUSY') ||
-                  (d.scenario_active ?? 0) > 0) && (
-                  <span className='ml-1.5 rounded bg-amber-400/20 px-1 py-0.5 text-[9px] font-medium text-amber-700 dark:text-amber-300'>
-                    chiến dịch
+        <div className='min-w-0 max-w-[min(280px,calc(100vw-14rem))] shrink'>
+          <Select
+            value={device.selectedSerial ?? ''}
+            onValueChange={(v) => guardWhilePlaying(() => device.setSelectedSerial(v || null))}
+          >
+            <SelectTrigger
+              className={cn(
+                'h-8 w-full min-w-0 max-w-full overflow-hidden text-xs',
+                '[&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate [&_[data-slot=select-value]]:text-left',
+              )}
+            >
+              <SelectValue placeholder={t('selectPhonePlaceholder')} />
+            </SelectTrigger>
+            <SelectContent className='max-w-[min(420px,calc(100vw-2rem))]'>
+              {device.connectedDevices.map((d) => (
+                <SelectItem
+                  key={d.serial}
+                  value={d.serial}
+                  title={deviceSelectFullTitle(d)}
+                  className='text-xs'
+                >
+                  <span className='inline-flex min-w-0 max-w-full items-center gap-1'>
+                    <span className='min-w-0 truncate'>{formatDeviceSelectLabel(d)}</span>
+                    {(((d.state || '').replace('DeviceState.', '') === 'BUSY') ||
+                      (d.scenario_active ?? 0) > 0) && (
+                      <span className='shrink-0 rounded bg-amber-400/20 px-1 py-0.5 text-[9px] font-medium text-amber-700 dark:text-amber-300'>
+                        chiến dịch
+                      </span>
+                    )}
                   </span>
-                )}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
 
         {/* WS status dot */}
         <span className={cn(
@@ -1052,7 +1082,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
             : 'border-red-500/20 bg-red-500/10 text-red-600 dark:text-red-400',
         )}>
           <span className={cn('size-1.5 rounded-full', device.wsConnected ? 'bg-green-500' : 'bg-red-500')} />
-          {device.wsConnected ? 'Online' : 'Offline'}
+          {device.wsConnected ? t('wsConnected') : t('wsDisconnected')}
         </span>
 
         <div className='h-5 w-px bg-border' />

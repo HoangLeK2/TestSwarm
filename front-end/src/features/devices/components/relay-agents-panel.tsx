@@ -2,17 +2,19 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { ChevronDown, ChevronRight, Server, Loader2, RefreshCw } from 'lucide-react';
+import { ChevronDown, ChevronRight, Server, Loader2, Plus, RefreshCw } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '@/components/ui/collapsible';
-import { relayAgentsApi, type RelayAgentOut } from '../services/manage-api';
+import { relayAgentsApi, type DeviceOut, type RelayAgentOut } from '../services/manage-api';
 
 interface RelayAgentCardProps {
   agent: RelayAgentOut;
+  registeredSerials?: Set<string>;
+  onDeviceRegistered?: (device: DeviceOut) => void;
 }
 
-function RelayAgentCard({ agent }: RelayAgentCardProps) {
+function RelayAgentCard({ agent, registeredSerials, onDeviceRegistered }: RelayAgentCardProps) {
   const qc = useQueryClient();
   const t = useTranslations('relayAgentsFeature');
 
@@ -29,6 +31,19 @@ function RelayAgentCard({ agent }: RelayAgentCardProps) {
     },
     onError: (err) => {
       console.error('[relay-agents] bootstrap-all failed', err);
+    },
+  });
+
+  const { mutate: registerDevice, isPending: isRegistering } = useMutation({
+    mutationFn: (serial: string) =>
+      relayAgentsApi.registerDevice(agent.relay_id, serial, { name: serial }),
+    onSuccess: (device) => {
+      qc.invalidateQueries({ queryKey: ['devices'] });
+      qc.invalidateQueries({ queryKey: ['relay-agents'] });
+      onDeviceRegistered?.(device);
+    },
+    onError: (err) => {
+      console.error('[relay-agents] register device failed', err);
     },
   });
 
@@ -61,9 +76,29 @@ function RelayAgentCard({ agent }: RelayAgentCardProps) {
         {realSerials.length === 0 ? (
           <span className='text-[11px] text-muted-foreground'>{t('noDevices')}</span>
         ) : (
-          realSerials.slice(0, 6).map(s => (
-            <span key={s} className='rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]'>{s}</span>
-          ))
+          realSerials.slice(0, 6).map(s => {
+            const registered = registeredSerials?.has(s) ?? false;
+            return (
+              <span key={s} className='inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5'>
+                <span className='font-mono text-[10px]'>{s}</span>
+                {registered ? (
+                  <span className='text-[10px] text-muted-foreground'>{t('registered')}</span>
+                ) : (
+                  <Button
+                    type='button'
+                    size='icon'
+                    variant='ghost'
+                    className='size-5'
+                    disabled={!online || isRegistering}
+                    title={t('registerDevice')}
+                    onClick={() => registerDevice(s)}
+                  >
+                    {isRegistering ? <Loader2 className='size-3 animate-spin' /> : <Plus className='size-3' />}
+                  </Button>
+                )}
+              </span>
+            );
+          })
         )}
         {realSerials.length > 6 && (
           <span className='text-[11px] text-muted-foreground'>{t('moreDevices', { count: realSerials.length - 6 })}</span>
@@ -75,9 +110,11 @@ function RelayAgentCard({ agent }: RelayAgentCardProps) {
 
 interface RelayAgentsPanelProps {
   agents: RelayAgentOut[];
+  registeredSerials?: Set<string>;
+  onDeviceRegistered?: (device: DeviceOut) => void;
 }
 
-export function RelayAgentsPanel({ agents }: RelayAgentsPanelProps) {
+export function RelayAgentsPanel({ agents, registeredSerials, onDeviceRegistered }: RelayAgentsPanelProps) {
   const t = useTranslations('relayAgentsFeature');
   const [open, setOpen] = useState(false);
   const didAutoOpen = useRef(false);
@@ -109,7 +146,12 @@ export function RelayAgentsPanel({ agents }: RelayAgentsPanelProps) {
       <CollapsibleContent>
         <div className='mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3'>
           {agents.map(agent => (
-            <RelayAgentCard key={agent.relay_id} agent={agent} />
+            <RelayAgentCard
+              key={agent.relay_id}
+              agent={agent}
+              registeredSerials={registeredSerials}
+              onDeviceRegistered={onDeviceRegistered}
+            />
           ))}
         </div>
       </CollapsibleContent>

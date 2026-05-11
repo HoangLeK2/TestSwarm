@@ -31,6 +31,155 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
 
 
     {
+        "name": "Crawl bài viết + bình luận 1 nhóm Facebook",
+        "is_builtin": False,
+        "category": "facebook",
+        "description": (
+            "Crawl bài viết + bình luận 1 nhóm Facebook liên tục (mặc định MAX_SCROLLS=540 ≈ 3h). "
+            "Chấp nhận bài trùng lặp — DB dedup qua content_hash, loop không dừng sớm. "
+            "Navigation: tìm kiếm → tab Nhóm → tap nhóm qua text. "
+            "Scroll neo trái (SCROLL_X_RATIO=0.18) tránh mở ảnh. "
+            "Mỗi bài: extract posts → cuộn nhẹ lộ nút Bình luận → atomic tap + switch filter → extract comments → back.\n"
+        ),
+        "tags": "facebook,group,crawl",
+        "variables": {
+            "GROUP_NAME": "openclaw vn",
+            "GROUP_TEXT": "OpenClaw VN · Truy cập",
+            "MAX_SCROLLS": 540,
+            "MAX_COMMENT_SCROLLS": 35,
+            "MAX_COMMENTS_PER_POST": 500,
+            "MIN_COMMENT_SCAN_PASSES": 4,
+            "COMMENT_NO_NEW_THRESHOLD": 3,
+            "SCROLL_X_RATIO": 0.18,
+            "SAVE_COLLECTION": "fb_group_posts",
+            "EXTRACT_PROFILE": "balanced",
+            "FB_POSTS_STRATEGY_VERSION": "fb_posts:v1",
+            "FB_COMMENTS_STRATEGY_VERSION": "fb_comments:v1",
+        },
+        "steps": [
+            # ── Phase 1: Khởi động ────────────────────────────────────────────
+            {"type": "launch_app", "package": "com.facebook.katana", "title": "mở fb"},
+
+            # ── Phase 2: Tìm kiếm nhóm ───────────────────────────────────────
+            {
+                "type": "if_element", "by": "content-desc", "value": "Tìm kiếm", "timeout": 5,
+                "then": [{"type": "tap_selector", "by": "content-desc", "value": "Tìm kiếm", "timeout": 4}],
+                "else": [{"type": "tap_ratio", "x": 0.87, "y": 0.035}],
+            },
+            {"type": "wait_stable", "timeout": 4, "stable_duration": 0.4},
+            {"type": "input_text", "text": "${GROUP_NAME}", "via": "u2"},
+            {"type": "key", "key": "enter"},
+            # ── Phase 3: Chọn tab Nhóm ───────────────────────────────────────
+            {
+                "type": "if_element", "by": "description", "value": "Kết quả tìm kiếm trong tab Nhóm, 3 trong số 7", "timeout": 5,
+                "then": [{"type": "tap_selector", "by": "description", "value": "Kết quả tìm kiếm trong tab Nhóm, 3 trong số 7", "timeout": 4}],
+                "else": [
+                    {
+                        "type": "if_element", "by": "text", "value": "Nhóm", "timeout": 3,
+                        "then": [{"type": "tap_selector", "by": "text", "value": "Nhóm", "timeout": 3}],
+                        "else": [
+                            {
+                                "type": "if_element", "by": "text", "value": "Groups", "timeout": 3,
+                                "then": [{"type": "tap_selector", "by": "text", "value": "Groups", "timeout": 3}],
+                                "else": [],
+                            },
+                        ],
+                    },
+                ],
+            },
+            {"type": "wait_stable", "timeout": 1, "stable_duration": 0.5},
+
+            # ── Phase 4: Tap vào nhóm ───────────────────────────────────────
+            {"type": "tap_selector", "by": "text", "value": "${GROUP_TEXT}", "timeout": 8},
+            {"type": "scroll_down", "repeats": 2, "start_x_ratio": "${SCROLL_X_RATIO}", "start_y_ratio": 0.65, "end_y_ratio": 0.47},
+            {"type": "wait", "seconds": 3},
+
+            # ── Phase 5: Loop crawl ──────────────────────────────────────────
+            # ~20s/vòng × 540 ≈ 3h. Tăng MAX_SCROLLS tuỳ ý.
+            {
+                "type": "loop",
+                "count": "${MAX_SCROLLS}",
+                "steps": [
+                    # Dọn popup nhanh mỗi đầu vòng
+                    {"type": "dismiss_popup", "retries": 1},
+
+                    # Extract bài viết (expand "Xem thêm" tối đa 2 lần — đủ cho hầu hết bài)
+                    {
+                        "type": "extract",
+                        "strategy": "fb_posts",
+                        "extract_profile": "${EXTRACT_PROFILE}",
+                        "strategy_version": "${FB_POSTS_STRATEGY_VERSION}",
+                        "expand_see_more": True,
+                        "expand_see_more_max_passes": 2,
+                        "expand_see_more_scroll": True,
+                        "expand_see_more_scroll_distance": 0.25,
+                        "expand_completion_retries": 2,
+                        "stop_if_no_new": False,
+                        "collection": "${SAVE_COLLECTION}",
+                        "platform": "facebook",
+                        "content_type": "group_post",
+                        "dedupe_field": "post_key",
+                        "tags": "group,crawl,${GROUP_NAME}",
+                    },
+
+                    # Atomic tap: resolve → ghi _pid → bấm Bình luận → switch filter
+                    # pre_scroll=True: cuộn nhẹ lộ nút (thay scroll_down riêng)
+                    {
+                        "type": "tap_fb_comment_button",
+                        "timeout": 5,
+                        "pre_scroll": True,
+                        "pre_scroll_distance": 0.24,
+                        "post_tap_wait_s": 0.6,
+                        "enter_comment_sheet_timeout": 2.0,
+                        "switch_to_all_comments": True,
+                        "then": [
+                            {"type": "wait", "seconds": 0.6},
+                            {
+                                "type": "extract",
+                                "strategy": "fb_comments",
+                                "extract_profile": "${EXTRACT_PROFILE}",
+                                "strategy_version": "${FB_COMMENTS_STRATEGY_VERSION}",
+                                "parent_post_id_var": "_fb_comment_parent_pid",
+                                "expand_see_more": True,
+                                "expand_see_more_max_passes": 4,
+                                "expand_see_more_scroll": True,
+                                "expand_see_more_scroll_distance": 0.2,
+                                "max_items": "${MAX_COMMENTS_PER_POST}",
+                                "comment_scroll_passes": "${MAX_COMMENT_SCROLLS}",
+                                "comment_scroll_distance": 0.22,
+                                "comment_scroll_duration_ms": 340,
+                                "comment_scroll_pause_s": 0.3,
+                                "comment_no_growth_break": "${COMMENT_NO_NEW_THRESHOLD}",
+                                "min_comment_scan_passes": "${MIN_COMMENT_SCAN_PASSES}",
+                                "stop_if_no_new": False,
+                                "no_new_threshold": 4,
+                                "collection": "${SAVE_COLLECTION}",
+                                "platform": "facebook",
+                                "content_type": "comment",
+                                "dedupe_field": "comment_key",
+                                "tags": "group,comment,${GROUP_NAME}",
+                                "save_parent_id_var": "_active_comment_parent_hash",
+                                "item_level": 1,
+                            },
+                            {"type": "key", "key": "back"},
+                            {"type": "wait", "seconds": 1},
+                            {"type": "dismiss_popup", "retries": 1},
+                        ],
+                        "else": [],
+                    },
+
+                    # Scroll feed (neo trái tránh mở ảnh) + delay tự nhiên
+                    {"type": "scroll_down", "repeats": 1, "start_x_ratio": "${SCROLL_X_RATIO}", "start_y_ratio": 0.65, "end_y_ratio": 0.47},
+                    {"type": "set_variable", "name": "_W", "from_list": [0.5, 0.5, 1, 1, 1.5, 2]},
+                    {"type": "wait", "seconds": "${_W}"},
+                ],
+            },
+
+            # ── Phase 6: Kết thúc ────────────────────────────────────────────
+            {"type": "key", "key": "home"},
+        ],
+    },
+    {
         "name": "fb_group_1h",
         "is_builtin": False,
         "category": "facebook",

@@ -935,6 +935,51 @@ class DeviceAgentSession:
                 return
 
             serial = str(serial)
+            app_serial = serial
+            # Extract device IP from WebSocket connection for ADB/scrcpy. This is
+            # used only when it is a private/LAN address; public proxy addresses
+            # cannot identify the Android device behind agent-boot.
+            client_ip = ws.client.host if ws.client else ""
+            trusted_client_ip = client_ip if _is_private_ip(client_ip) else ""
+            adb_serial_hint = str(hello.get("adb_serial") or "").strip()
+
+            agent_boot_serial = ""
+            if pair_id and pair_id in _pairing_mod.store:
+                pair_meta = _pairing_mod.store.get(pair_id) or {}
+                agent_boot_serial = str(
+                    pair_meta.get("serial") or pair_meta.get("adb_serial") or ""
+                ).strip()
+            if not agent_boot_serial and trusted_client_ip:
+                try:
+                    from runtime.transports.agent_control_servicer import get_control_servicer
+
+                    ctrl = get_control_servicer()
+                    if ctrl is not None:
+                        agent_boot_serial = str(ctrl.find_serial_by_ip(trusted_client_ip) or "").strip()
+                except Exception as exc:
+                    log.debug("agent-boot serial lookup skipped: %s", exc)
+            if agent_boot_serial:
+                serial = agent_boot_serial
+                adb_serial_hint = agent_boot_serial
+                log.info(
+                    "[DEVICE-WS] mapped app serial %s to agent-boot ADB serial %s",
+                    app_serial,
+                    serial,
+                )
+            elif key and self._ws_manager._db_enabled:
+                try:
+                    async with AsyncSessionLocal() as db:
+                        key_device = await repo.get_device_by_key(db, key)
+                        if key_device is not None and not str(key_device.serial).startswith("pending-"):
+                            serial = str(key_device.serial)
+                            adb_serial_hint = str(getattr(key_device, "adb_serial", "") or serial).strip()
+                            log.info(
+                                "[DEVICE-WS] mapped app serial %s to registered key serial %s",
+                                app_serial,
+                                serial,
+                            )
+                except Exception as exc:
+                    log.debug("DB key serial lookup skipped: %s", exc)
 
             # ── Shared-secret auth (set AGENT_SECRET env var to enable) ────
             _required_secret = os.environ.get("AGENT_SECRET", "").strip()
@@ -991,11 +1036,7 @@ class DeviceAgentSession:
             # as new devices. Only reject when key= is explicitly provided but invalid.
 
             # ── Nếu có ?key= thì bắt buộc key phải khớp pending device; sai key → từ chối ──
-            # Extract device IP from WebSocket connection for ADB/scrcpy
-            client_ip = ws.client.host if ws.client else ""
-            trusted_client_ip = client_ip if _is_private_ip(client_ip) else ""
             bound_device = None
-            adb_serial_hint = str(hello.get("adb_serial") or "").strip()
 
             if key:
                 meta = {
@@ -1165,6 +1206,31 @@ class DeviceAgentSession:
             else:
                 device._adb_serial = serial  # USB: Build.getSerial() matches ADB serial
                 device._u2_host = None  # USB: no direct IP access; fall back to WS tunnel
+
+            # STFService is not the source of truth for ADB identity. Persist
+            # the serial resolved from agent-boot/control/relay when available.
+            try:
+                resolved_adb_serial = str(getattr(device, "_adb_serial", "") or "").strip()
+                should_persist_adb_serial = bool(
+                    resolved_adb_serial
+                    and (
+                        adb_serial_hint
+                        or _u2_relay_mapped
+                        or (resolved_adb_serial != serial and ":" in resolved_adb_serial)
+                    )
+                )
+                if should_persist_adb_serial and self._ws_manager._db_enabled:
+                    async with AsyncSessionLocal() as db:
+                        await repo.update_device_adb_identity(
+                            db,
+                            serial,
+                            adb_serial=resolved_adb_serial,
+                            adb_ip=trusted_client_ip or None,
+                            adb_port=5555 if trusted_client_ip else None,
+                        )
+                        await db.commit()
+            except Exception as db_exc:
+                log.debug("Persist adb serial skipped: %s", db_exc)
 
             loop = asyncio.get_running_loop()
             device.set_event_loop(loop)

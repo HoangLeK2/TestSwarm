@@ -1,11 +1,18 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import QRCode from 'qrcode';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select';
 import {
   Dialog,
   DialogContent,
@@ -16,31 +23,64 @@ import {
 import Link from 'next/link';
 import { ROUTES } from '@/config/routes';
 import { Separator } from '@/components/ui/separator';
-import { Plus, Copy, Check, CheckCircle2, Loader2, QrCode, Smartphone } from 'lucide-react';
+import { Plus, Copy, Check, CheckCircle2, Loader2, QrCode, Send, Smartphone } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
-import { devicesApi, isPendingDevice } from '@/features/devices/services/manage-api';
+import { devicesApi, relayAgentsApi, isPendingDevice } from '@/features/devices/services/manage-api';
 import { getDeviceAgentWsUrl } from '@/lib/farm-api';
 import { useTranslations } from 'next-intl';
-import type { DeviceOut } from '@/features/devices/services/manage-api';
+import type { DeviceOut, RelayAgentOut } from '@/features/devices/services/manage-api';
 
 type Step = 'form' | 'confirm' | 'qr' | 'connected';
 
 const POLL_INTERVAL_MS = 2000;
 
-export function RegisterDeviceDialog() {
+type RelayDeviceChoice = {
+  id: string;
+  relayId: string;
+  relayLabel: string;
+  serial: string;
+};
+
+export function RegisterDeviceDialog({
+  relayAgents = [],
+  registeredSerials = new Set<string>(),
+}: {
+  relayAgents?: RelayAgentOut[];
+  registeredSerials?: Set<string>;
+}) {
   const t = useTranslations('devicesRegister');
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState<Step>('form');
   const [loading, setLoading] = useState(false);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [selectedRelayDeviceId, setSelectedRelayDeviceId] = useState('');
   const [registeredDevice, setRegisteredDevice] = useState<DeviceOut | null>(null);
   const [connectedDevice, setConnectedDevice] = useState<DeviceOut | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [pushingUrl, setPushingUrl] = useState(false);
   const qc = useQueryClient();
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const qrOpenedAtRef = useRef<number>(0);
+
+  const relayDeviceChoices = useMemo<RelayDeviceChoice[]>(() => {
+    const choices: RelayDeviceChoice[] = [];
+    for (const agent of relayAgents) {
+      if (agent.status !== 'online') continue;
+      for (const serial of agent.serials) {
+        if (!serial || serial.startsWith('pending-') || registeredSerials.has(serial)) continue;
+        choices.push({
+          id: `${agent.relay_id}::${serial}`,
+          relayId: agent.relay_id,
+          relayLabel: agent.hostname || agent.relay_id,
+          serial,
+        });
+      }
+    }
+    return choices;
+  }, [relayAgents, registeredSerials]);
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
@@ -55,12 +95,24 @@ export function RegisterDeviceDialog() {
       setStep('form');
       setName('');
       setDescription('');
+      setSelectedRelayDeviceId('');
       setRegisteredDevice(null);
       setConnectedDevice(null);
       setQrDataUrl(null);
       setCopied(false);
+      setPushingUrl(false);
+      qrOpenedAtRef.current = 0;
     }
   }, [open, stopPolling]);
+
+  useEffect(() => {
+    if (
+      relayDeviceChoices.length > 0 &&
+      (!selectedRelayDeviceId || !relayDeviceChoices.some((choice) => choice.id === selectedRelayDeviceId))
+    ) {
+      setSelectedRelayDeviceId(relayDeviceChoices[0].id);
+    }
+  }, [relayDeviceChoices, selectedRelayDeviceId]);
 
   useEffect(() => {
     if (step !== 'qr' || !registeredDevice?.device_key) {
@@ -80,12 +132,18 @@ export function RegisterDeviceDialog() {
       try {
         const list = await devicesApi.list();
         const found = list.find((d) => d.id === registeredDevice.id);
-        if (found && !isPendingDevice(found)) {
-          stopPolling();
-          setConnectedDevice(found);
-          setStep('connected');
-          qc.invalidateQueries({ queryKey: ['devices'] });
-        }
+        if (!found || isPendingDevice(found)) return;
+        const sessions = await devicesApi.sessions(found.id);
+        const hasFreshActiveSession = sessions.some((session) => {
+          if (session.disconnected_at) return false;
+          const connectedAtTs = Date.parse(session.connected_at);
+          return Number.isFinite(connectedAtTs) && connectedAtTs >= qrOpenedAtRef.current;
+        });
+        if (!hasFreshActiveSession) return;
+        stopPolling();
+        setConnectedDevice(found);
+        setStep('connected');
+        qc.invalidateQueries({ queryKey: ['devices'] });
       } catch {
         // ignore transient errors
       }
@@ -95,15 +153,22 @@ export function RegisterDeviceDialog() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    const choice = relayDeviceChoices.find((item) => item.id === selectedRelayDeviceId);
+    if (!choice) {
+      toast.error(t('errorNoDevice'));
+      return;
+    }
     setLoading(true);
     try {
-      const device = await devicesApi.register({
-        name: name.trim() || undefined,
-        description: description.trim() || undefined
+      const displayName = [name.trim(), description.trim()].filter(Boolean).join(' — ');
+      const device = await relayAgentsApi.registerDevice(choice.relayId, choice.serial, {
+        name: displayName || choice.serial,
       });
       setRegisteredDevice(device);
-      setStep('confirm');
+      qrOpenedAtRef.current = Date.now();
+      setStep('qr');
       qc.invalidateQueries({ queryKey: ['devices'] });
+      qc.invalidateQueries({ queryKey: ['relay-agents'] });
     } catch {
       toast.error(t('errorRegister'));
     } finally {
@@ -123,6 +188,23 @@ export function RegisterDeviceDialog() {
     );
   }
 
+  async function pushConnectUrl() {
+    if (!registeredDevice?.relay_id) return;
+    setPushingUrl(true);
+    try {
+      const res = await relayAgentsApi.pushConnectUrl(registeredDevice.relay_id, registeredDevice.serial);
+      if (!res.ok) {
+        toast.error(res.error || t('errorPushToPhone'));
+        return;
+      }
+      toast.success(t('sentToPhone'));
+    } catch {
+      toast.error(t('errorPushToPhone'));
+    } finally {
+      setPushingUrl(false);
+    }
+  }
+
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
@@ -131,7 +213,7 @@ export function RegisterDeviceDialog() {
           {t('title')}
         </Button>
       </DialogTrigger>
-      <DialogContent className='z-[1000] max-w-sm' onInteractOutside={() => {}}>
+      <DialogContent className='max-w-sm' zIndex={20000} onInteractOutside={() => {}}>
         <DialogHeader>
           <DialogTitle>
             {step === 'form' && t('title')}
@@ -157,6 +239,29 @@ export function RegisterDeviceDialog() {
               />
             </div>
             <div className='space-y-2'>
+              <Label htmlFor='reg-relay-device'>{t('deviceLabel')}</Label>
+              <Select
+                value={selectedRelayDeviceId}
+                onValueChange={setSelectedRelayDeviceId}
+                disabled={relayDeviceChoices.length === 0}
+              >
+                <SelectTrigger id='reg-relay-device' className='w-full'>
+                  <SelectValue placeholder={t('devicePlaceholder')} />
+                </SelectTrigger>
+                <SelectContent className='z-[20002]'>
+                  {relayDeviceChoices.map((choice) => (
+                    <SelectItem key={choice.id} value={choice.id}>
+                      <span className='font-mono'>{choice.serial}</span>
+                      <span className='text-xs text-muted-foreground'> · {choice.relayLabel}</span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {relayDeviceChoices.length === 0 && (
+                <p className='text-xs text-muted-foreground'>{t('noAvailableDevices')}</p>
+              )}
+            </div>
+            <div className='space-y-2'>
               <Label htmlFor='reg-desc'>{t('descLabel')}</Label>
               <Textarea
                 id='reg-desc'
@@ -167,7 +272,7 @@ export function RegisterDeviceDialog() {
                 className='resize-none'
               />
             </div>
-            <Button type='submit' className='w-full' disabled={loading}>
+            <Button type='submit' className='w-full' disabled={loading || relayDeviceChoices.length === 0}>
               {loading ? t('submitting') : t('submit')}
             </Button>
           </form>
@@ -223,6 +328,19 @@ export function RegisterDeviceDialog() {
                 {copied ? <Check size={14} /> : <Copy size={14} />}
               </Button>
             </div>
+
+            {registeredDevice.relay_id && (
+              <Button
+                type='button'
+                variant='outline'
+                className='w-full gap-2'
+                disabled={pushingUrl}
+                onClick={pushConnectUrl}
+              >
+                {pushingUrl ? <Loader2 size={14} className='animate-spin' /> : <Send size={14} />}
+                {pushingUrl ? t('sendingToPhone') : t('sendToPhone')}
+              </Button>
+            )}
 
             <div className='flex items-center gap-2 text-sm text-muted-foreground'>
               <Loader2 size={14} className='animate-spin' />

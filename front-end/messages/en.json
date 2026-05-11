@@ -236,6 +236,8 @@
     "loading": "Loading...",
     "empty": "No relay agents connected",
     "bootstrapAll": "Bootstrap All",
+    "registerDevice": "Register device",
+    "registered": "registered",
     "noDevices": "No devices",
     "moreDevices": "+{count} more",
     "lastHeartbeat": "Last heartbeat: {time}"
@@ -1076,6 +1078,7 @@
     "labels": {
       "model": "Model",
       "android": "Android",
+      "adbSerial": "ADB serial",
       "screen": "Screen"
     },
     "connectDialog": {
@@ -1162,9 +1165,12 @@
     "title": "Register device",
     "titleQr": "Scan QR code to connect",
     "titleConnected": "Device connected",
-    "description": "After registering, scan the QR code using the <strong>STFService</strong> app on your phone — the device will connect automatically and record its serial.",
+    "description": "Choose a device currently visible to <strong>agent-boot</strong>, name it, then scan the QR code with <strong>STFService</strong> to connect.",
     "nameLabel": "Device name",
     "namePlaceholder": "E.g. Test phone 1",
+    "deviceLabel": "Device to register",
+    "devicePlaceholder": "Select serial from agent-boot",
+    "noAvailableDevices": "No available devices yet. Plug in a device and make sure agent-boot is online.",
     "descLabel": "Notes (optional)",
     "descPlaceholder": "E.g. QA room, Samsung device...",
     "submit": "Register",
@@ -1176,6 +1182,9 @@
     "qrInstruction": "Open <strong>STFService</strong> on your phone — scan QR or paste the link below.",
     "waiting": "Waiting for device to connect…",
     "generatingQr": "Generating QR code…",
+    "sendToPhone": "Send link to phone",
+    "sendingToPhone": "Sending…",
+    "sentToPhone": "Link sent to phone",
     "successMessage": "Device is online and ready to control.",
     "infoSerial": "Serial",
     "infoAndroid": "Android",
@@ -1183,6 +1192,8 @@
     "controlNow": "Control now",
     "close": "Close",
     "errorRegister": "Registration failed",
+    "errorNoDevice": "Select a device to register",
+    "errorPushToPhone": "Could not send link to phone",
     "errorCopy": "Copy failed"
   },
   "devicesFarm": {
@@ -2081,6 +2092,20 @@
       "chatId": "Chat ID",
       "webhookUrl": "Webhook URL",
       "headersJson": "Headers JSON"
+    },
+    "placeholders": {
+      "channelName": "e.g. Browser"
+    },
+    "eventLabels": {
+      "device_disconnect": "Device disconnected",
+      "device_reconnect": "Device reconnected",
+      "task_failed": "Task failed",
+      "campaign_complete": "Campaign completed",
+      "campaign_failed": "Campaign failed",
+      "schedule_triggered": "Schedule triggered",
+      "schedule_failed": "Schedule failed",
+      "account_banned": "Account banned",
+      "content_milestone": "Content milestone"
     },
     "actions": {
       "cancel": "Cancel",

@@ -97,7 +97,7 @@ export function ConnectDialog({
         if (!v) onClose();
       }}
     >
-      <DialogContent className='z-[1000] max-w-sm'>
+      <DialogContent className='max-w-sm' zIndex={20000}>
         <DialogHeader>
           <DialogTitle>
             {connectedDevice ? t('successTitle') : t('title')}

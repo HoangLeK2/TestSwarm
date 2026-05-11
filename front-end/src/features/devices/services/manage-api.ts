@@ -14,6 +14,7 @@ export type DeviceOut = {
   screen_height: number;
   last_seen: string | null;
   created_at: string;
+  adb_serial: string | null;
   adb_ip: string | null;
   adb_port: number;
   tags?: string;
@@ -92,6 +93,19 @@ export const relayAgentsApi = {
     farmApi.get<RelayAgentOut[]>('/relay-agents').then((r) => r.data),
   get: (relayId: string) =>
     farmApi.get<RelayAgentOut>(`/relay-agents/${relayId}`).then((r) => r.data),
+  registerDevice: (relayId: string, serial: string, body?: { name?: string }) =>
+    farmApi
+      .post<DeviceOut>(
+        `/relay-agents/${encodeURIComponent(relayId)}/devices/${encodeURIComponent(serial)}/register`,
+        body ?? {},
+      )
+      .then((r) => r.data),
+  pushConnectUrl: (relayId: string, serial: string) =>
+    farmApi
+      .post<RelayCommandOut>(
+        `/relay-agents/${encodeURIComponent(relayId)}/devices/${encodeURIComponent(serial)}/push-connect-url`,
+      )
+      .then((r) => r.data),
   bootstrapAll: (relayId: string) =>
     farmApi.post<BootstrapAllResult>(`/relay-agents/${relayId}/bootstrap-all`).then((r) => r.data),
 };

@@ -43,6 +43,25 @@
       "clear": "Clear",
       "close": "Close"
     },
+    "deviceVarsJson": {
+      "title": "Device variables for scenario",
+      "toggleLabel": "Use device-specific variables",
+      "toggleDescription": "Turn off to run with campaign/scenario global variables.",
+      "toggleAria": "Use device-specific variables",
+      "globalBlockTitle": "Global variables (campaign → scenario; scenario overrides duplicate keys)",
+      "globalReadonlyAria": "Global variables (read-only)",
+      "globalEmpty": "No global variables on campaign/scenario (or only hidden system keys like __…).",
+      "modeOffHint": "This device does not inject overrides — only the globals below apply.",
+      "addGlobalKeyLabel": "Add global key:",
+      "footerLoading": "Loading saved configuration…",
+      "footerMergedEditor": "Single JSON: globals plus device overrides. Values identical to globals are not stored as overrides — remove a key to inherit global.",
+      "footerUsingGlobal": "Using global variables.",
+      "parseInvalidJson": "Invalid JSON (syntax error).",
+      "parseInvalidRoot": "JSON must be an object, e.g. {\"group_name\": \"abc\"}",
+      "parseUnknown": "Invalid JSON",
+      "invalidAtDevice": "Invalid JSON for device {serial}",
+      "saveFailed": "Failed to save device variables"
+    },
     "modal": {
       "confirmAction": "Confirm Action",
       "areYouSure": "Are you sure you want to proceed?",
@@ -217,6 +236,8 @@
     "loading": "Loading...",
     "empty": "No relay agents connected",
     "bootstrapAll": "Bootstrap All",
+    "registerDevice": "Register device",
+    "registered": "registered",
     "noDevices": "No devices",
     "moreDevices": "+{count} more",
     "lastHeartbeat": "Last heartbeat: {time}"
@@ -524,6 +545,13 @@
       "runFailed": "Run campaign failed",
       "titleNeedDevice": "Add at least 1 device before running",
       "titleRun": "Run campaign",
+      "runDialogNotReady": "This campaign does not have enough devices or scenarios to run.",
+      "runDialogSelectAll": "Select all",
+      "runDialogAriaSelectDevice": "Select device",
+      "runDialogAriaDeselectDevice": "Deselect device",
+      "runDialogScenarioPlaceholder": "Select scenario",
+      "runDialogRun": "Run",
+      "runDialogRunCount": "Run ({count})",
       "paused": "Campaign paused",
       "titlePause": "Pause",
       "titleResume": "Resume",
@@ -816,6 +844,24 @@
     "takeover": {
       "manualControlBlocked": "Device busy or campaign running — manual input blocked"
     },
+    "deviceVarsDialog": {
+      "title": "Device variables for scenario",
+      "scopeHint": "Scope: current scenario and all devices in the campaign.",
+      "instructions": "Pick a device on the left, enable overrides if needed, then edit JSON for that device.",
+      "switchHint": "Turn the switch off to use global variables from scenario/campaign.",
+      "loadingVars": "Loading variables…",
+      "noDevicesInCampaign": "This campaign has no devices yet.",
+      "badgePerDevice": "custom",
+      "badgeGlobal": "global",
+      "cancel": "Cancel",
+      "saveDraftToast": "Device variables saved as draft. They will apply when you save the scenario.",
+      "saveLoading": "Saving…",
+      "save": "Save",
+      "saveDraft": "Save draft",
+      "noDeviceSelected": "No device selected",
+      "loadVarsError": "Failed to load device variables: {message}",
+      "saveAllSuccess": "Saved variables for all devices in the campaign"
+    },
     "view": {
       "takeover": {
         "manualControlBlocked": "Device busy or campaign running — manual input blocked"
@@ -1032,6 +1078,7 @@
     "labels": {
       "model": "Model",
       "android": "Android",
+      "adbSerial": "ADB serial",
       "screen": "Screen"
     },
     "connectDialog": {
@@ -1118,9 +1165,12 @@
     "title": "Register device",
     "titleQr": "Scan QR code to connect",
     "titleConnected": "Device connected",
-    "description": "After registering, scan the QR code using the <strong>STFService</strong> app on your phone — the device will connect automatically and record its serial.",
+    "description": "Choose a device currently visible to <strong>agent-boot</strong>, name it, then scan the QR code with <strong>STFService</strong> to connect.",
     "nameLabel": "Device name",
     "namePlaceholder": "E.g. Test phone 1",
+    "deviceLabel": "Device to register",
+    "devicePlaceholder": "Select serial from agent-boot",
+    "noAvailableDevices": "No available devices yet. Plug in a device and make sure agent-boot is online.",
     "descLabel": "Notes (optional)",
     "descPlaceholder": "E.g. QA room, Samsung device...",
     "submit": "Register",
@@ -1132,6 +1182,9 @@
     "qrInstruction": "Open <strong>STFService</strong> on your phone — scan QR or paste the link below.",
     "waiting": "Waiting for device to connect…",
     "generatingQr": "Generating QR code…",
+    "sendToPhone": "Send link to phone",
+    "sendingToPhone": "Sending…",
+    "sentToPhone": "Link sent to phone",
     "successMessage": "Device is online and ready to control.",
     "infoSerial": "Serial",
     "infoAndroid": "Android",
@@ -1139,6 +1192,8 @@
     "controlNow": "Control now",
     "close": "Close",
     "errorRegister": "Registration failed",
+    "errorNoDevice": "Select a device to register",
+    "errorPushToPhone": "Could not send link to phone",
     "errorCopy": "Copy failed"
   },
   "devicesFarm": {
@@ -2037,6 +2092,20 @@
       "chatId": "Chat ID",
       "webhookUrl": "Webhook URL",
       "headersJson": "Headers JSON"
+    },
+    "placeholders": {
+      "channelName": "e.g. Browser"
+    },
+    "eventLabels": {
+      "device_disconnect": "Device disconnected",
+      "device_reconnect": "Device reconnected",
+      "task_failed": "Task failed",
+      "campaign_complete": "Campaign completed",
+      "campaign_failed": "Campaign failed",
+      "schedule_triggered": "Schedule triggered",
+      "schedule_failed": "Schedule failed",
+      "account_banned": "Account banned",
+      "content_milestone": "Content milestone"
     },
     "actions": {
       "cancel": "Cancel",

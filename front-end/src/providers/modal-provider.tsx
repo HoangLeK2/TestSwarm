@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 import { useTranslations } from 'next-intl';
+import { DEFAULT_DIALOG_Z_INDEX } from '@/components/ui/dialog';
 import { Modal } from '@/components/ui/modal';
 
 interface ConfirmModalOptions {
@@ -59,7 +60,7 @@ export function ModalProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = React.useState<ModalState>({
     isOpen: false,
     isLoading: false,
-    zIndex: 100
+    zIndex: DEFAULT_DIALOG_Z_INDEX
   });
 
   const confirm = React.useCallback(
@@ -77,7 +78,7 @@ export function ModalProvider({ children }: { children: React.ReactNode }) {
           onCancel: options.onCancel,
           isLoading: false,
           resolve,
-          zIndex: options.zIndex || 100
+          zIndex: options.zIndex ?? DEFAULT_DIALOG_Z_INDEX
         });
       });
     },
@@ -97,7 +98,7 @@ export function ModalProvider({ children }: { children: React.ReactNode }) {
         onConfirm: options.onConfirm,
         onCancel: options.onCancel,
         isLoading: false,
-        zIndex: options.zIndex || 100
+        zIndex: options.zIndex ?? DEFAULT_DIALOG_Z_INDEX
       });
     },
     []
@@ -168,7 +169,7 @@ export function ModalProvider({ children }: { children: React.ReactNode }) {
         cancelText={state.cancelText}
         confirmVariant={state.confirmVariant}
         isLoading={state.isLoading}
-        zIndex={state.zIndex || 100}
+        zIndex={state.zIndex ?? DEFAULT_DIALOG_Z_INDEX}
       >
         {state.content}
       </Modal>

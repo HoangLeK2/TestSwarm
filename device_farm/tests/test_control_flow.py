@@ -484,7 +484,7 @@ def test_if_variable_truthy_unresolved_var_goes_to_else():
     var_ctx = VariableContext()
     scenario = {
         "steps": [
-            {"type": "if_variable", "name": "__DEVICE_GROUP_NAME__",
+            {"type": "if_variable", "name": "group_name",
              "then": [{"type": "set_variable", "name": "R", "value": "device"}],
              "else": [{"type": "set_variable", "name": "R", "value": "global"}]},
         ]

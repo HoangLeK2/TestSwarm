@@ -13,6 +13,42 @@ import { reconnectDeviceFarmSocket, requestIdr, subscribeDeviceFarm } from '../s
 import { useTranslations } from 'next-intl';
 import { SHOW_RELAY_SCRCPY_UI_TOGGLE } from '../streaming-ui-flags';
 
+type Size = { width: number; height: number };
+
+type ObjectFitRect = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  scale: number;
+};
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(value, max));
+}
+
+function getObjectCoverRect(
+  sourceW: number,
+  sourceH: number,
+  displayW: number,
+  displayH: number,
+  align: 'center' | 'bottom',
+): ObjectFitRect {
+  if (sourceW <= 0 || sourceH <= 0 || displayW <= 0 || displayH <= 0) {
+    return { left: 0, top: 0, width: displayW, height: displayH, scale: 1 };
+  }
+  const scale = Math.max(displayW / sourceW, displayH / sourceH);
+  const width = sourceW * scale;
+  const height = sourceH * scale;
+  return {
+    left: (displayW - width) / 2,
+    top: align === 'bottom' ? displayH - height : (displayH - height) / 2,
+    width,
+    height,
+    scale,
+  };
+}
+
 
 interface DeviceScreenProps {
   device: Device;
@@ -52,6 +88,7 @@ export function DeviceScreen({
   const t = useTranslations('devicesFarm');
   const wrapRef    = useRef<HTMLDivElement>(null);
   const canvasRef  = useRef<HTMLCanvasElement>(null);
+  const imageRef   = useRef<HTMLImageElement>(null);
   const draggedRef = useRef(false);
   const dragStartRef = useRef<{ x: number; y: number } | null>(null);
   const onSwipeRef = useRef(onSwipe);
@@ -62,6 +99,8 @@ export function DeviceScreen({
   const [mjpegFailed, setMjpegFailed] = useState(false);
   const [wsConnected, setWsConnected] = useState(false);
   const [loadingElapsedSec, setLoadingElapsedSec] = useState(0);
+  const [streamSize, setStreamSize] = useState<Size | null>(null);
+  const [wrapSize, setWrapSize] = useState<Size>({ width: 0, height: 0 });
 
   const id = serialToId(device.serial);
   const dw = device.screen_width  || 1080;
@@ -88,6 +127,33 @@ export function DeviceScreen({
   } | null>(null);
   const [screenStreamOn, setScreenStreamOn] = useState(true);
   const [streamToggleBusy, setStreamToggleBusy] = useState(false);
+  const streamingMode = streamingFlags?.mode;
+  const streamingAutoAttach = streamingFlags?.autoAttach;
+
+  const updateStreamSize = useCallback((width: number, height: number) => {
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return;
+    const next = { width: Math.round(width), height: Math.round(height) };
+    setStreamSize((prev) =>
+      prev?.width === next.width && prev?.height === next.height ? prev : next,
+    );
+  }, []);
+
+  useLayoutEffect(() => {
+    const el = wrapRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const update = () => {
+      const rect = el.getBoundingClientRect();
+      setWrapSize((prev) => {
+        const width = Math.round(rect.width);
+        const height = Math.round(rect.height);
+        return prev.width === width && prev.height === height ? prev : { width, height };
+      });
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -111,26 +177,21 @@ export function DeviceScreen({
 
   /** Sync from server (default on). Matches grid tile when UI toggle is hidden. */
   useLayoutEffect(() => {
-    if (!streamingFlags) return;
-    if (streamingFlags.mode !== 'continuous') {
+    if (!streamingMode) return;
+    if (streamingMode !== 'continuous') {
       setScreenStreamOn(true);
       return;
     }
     const serverWants =
       device.relay_scrcpy_enabled !== undefined && device.relay_scrcpy_enabled !== null
         ? Boolean(device.relay_scrcpy_enabled)
-        : Boolean(streamingFlags.autoAttach ?? true);
+        : Boolean(streamingAutoAttach ?? true);
     setScreenStreamOn(serverWants);
-  }, [
-    streamingFlags?.mode,
-    streamingFlags?.autoAttach,
-    device.serial,
-    device.relay_scrcpy_enabled,
-  ]);
+  }, [streamingMode, streamingAutoAttach, device.serial, device.relay_scrcpy_enabled]);
 
   // Until /api/config returns, assume non-continuous (fail-open: keep legacy full stream).
   const isContinuous =
-    streamingFlags !== null && streamingFlags.mode === 'continuous';
+    streamingFlags !== null && streamingMode === 'continuous';
   /** Subscribe relay H.264 + honor server detach; MJPEG below stays on so you always see picture. */
   const relayH264Allowed =
     streamingFlags === null || !isContinuous || screenStreamOn;
@@ -196,6 +257,10 @@ export function DeviceScreen({
     {
       restartKey: h264RestartKey,
       onFrame: useCallback((frame?: { mostlyBlack: boolean }) => {
+        const canvas = canvasRef.current;
+        if (canvas?.width && canvas?.height) {
+          updateStreamSize(canvas.width, canvas.height);
+        }
         if (h264StallFallbackTimerRef.current) {
           clearTimeout(h264StallFallbackTimerRef.current);
           h264StallFallbackTimerRef.current = null;
@@ -236,7 +301,7 @@ export function DeviceScreen({
           if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
           h264TimeoutRef.current = setTimeout(() => setH264Active(false), 8000);
         }
-      }, [hasFrame, h264Active, h264PrimaryMode, h264Stalled]),
+      }, [hasFrame, h264Active, h264PrimaryMode, h264Stalled, updateStreamSize]),
       onStall: useCallback((reason: 'no_packets' | 'decoder_stalled') => {
         const now = Date.now();
         const burst = h264RecoveryBurstRef.current;
@@ -347,46 +412,88 @@ export function DeviceScreen({
   }, [isActive, hasFrame, device.serial]);
 
   // ── Touch / gesture ──────────────────────────────────────────────────────
-  /** `object-cover`: fill view, crop — map pointer to device pixels. */
+  const getCoordinateSpace = useCallback(() => {
+    const canvas = canvasRef.current;
+    const img = imageRef.current;
+    const sourceW =
+      (h264Active && canvas?.width ? canvas.width : 0) ||
+      img?.naturalWidth ||
+      streamSize?.width ||
+      dw;
+    const sourceH =
+      (h264Active && canvas?.height ? canvas.height : 0) ||
+      img?.naturalHeight ||
+      streamSize?.height ||
+      dh;
+    let targetW = dw;
+    let targetH = dh;
+
+    // Stream frames are the most reliable source for orientation. Status
+    // dimensions can lag after rotation, so swap only when orientation differs.
+    if (sourceW > 0 && sourceH > 0 && targetW > 0 && targetH > 0) {
+      const streamLandscape = sourceW > sourceH;
+      const targetLandscape = targetW > targetH;
+      if (streamLandscape !== targetLandscape) {
+        [targetW, targetH] = [targetH, targetW];
+      }
+    }
+
+    return {
+      sourceW: Math.max(1, sourceW || targetW || 1),
+      sourceH: Math.max(1, sourceH || targetH || 1),
+      targetW: Math.max(1, targetW || sourceW || 1),
+      targetH: Math.max(1, targetH || sourceH || 1),
+    };
+  }, [dh, dw, h264Active, streamSize]);
+
+  /** Mirror CSS object-cover exactly, then convert stream ratio to device pixels. */
   const clientToDevice = useCallback(
     (displayX: number, displayY: number, displayW: number, displayH: number) => {
-      const srcW = dw;
-      const srcH = dh;
-      if (displayW <= 0 || displayH <= 0 || srcW <= 0 || srcH <= 0) {
+      const { sourceW, sourceH, targetW, targetH } = getCoordinateSpace();
+      if (displayW <= 0 || displayH <= 0 || sourceW <= 0 || sourceH <= 0) {
         const rx = 0.5;
         const ry = 0.5;
         return {
-          x: Math.max(0, Math.min(Math.round(rx * dw), dw - 1)),
-          y: Math.max(0, Math.min(Math.round(ry * dh), dh - 1)),
+          x: clamp(Math.round(rx * targetW), 0, targetW - 1),
+          y: clamp(Math.round(ry * targetH), 0, targetH - 1),
           rx,
           ry,
-          srcW,
-          srcH,
+          srcW: sourceW,
+          srcH: sourceH,
         };
       }
 
-      // Both MJPEG <img> and H264 <canvas> use the same object-cover classes.
-      // Pointer mapping must mirror that crop math exactly.
-      const scale = Math.max(displayW / srcW, displayH / srcH);
-      const drawnW = srcW * scale;
-      const drawnH = srcH * scale;
-      const ox = (displayW - drawnW) / 2;
-      const oy = streamCoverAlign === 'bottom' ? displayH - drawnH : (displayH - drawnH) / 2;
-      const xDev = (displayX - ox) / scale;
-      const yDev = (displayY - oy) / scale;
-      const rx = xDev / dw;
-      const ry = yDev / dh;
+      const fit = getObjectCoverRect(sourceW, sourceH, displayW, displayH, streamCoverAlign);
+      const sourceX = clamp((displayX - fit.left) / fit.scale, 0, sourceW);
+      const sourceY = clamp((displayY - fit.top) / fit.scale, 0, sourceH);
+      const rx = clamp(sourceX / sourceW, 0, 1);
+      const ry = clamp(sourceY / sourceH, 0, 1);
+      const xDev = rx * targetW;
+      const yDev = ry * targetH;
       return {
-        x: Math.max(0, Math.min(Math.round(xDev), dw - 1)),
-        y: Math.max(0, Math.min(Math.round(yDev), dh - 1)),
-        rx: Math.max(0, Math.min(rx, 1)),
-        ry: Math.max(0, Math.min(ry, 1)),
-        srcW,
-        srcH,
+        x: clamp(Math.round(xDev), 0, targetW - 1),
+        y: clamp(Math.round(yDev), 0, targetH - 1),
+        rx,
+        ry,
+        srcW: sourceW,
+        srcH: sourceH,
       };
     },
-    [dw, dh, streamCoverAlign]
+    [getCoordinateSpace, streamCoverAlign]
   );
+
+  const highlightStyle = React.useMemo<React.CSSProperties | undefined>(() => {
+    if (!highlightBounds || wrapSize.width <= 0 || wrapSize.height <= 0) return undefined;
+    const { sourceW, sourceH, targetW, targetH } = getCoordinateSpace();
+    const fit = getObjectCoverRect(sourceW, sourceH, wrapSize.width, wrapSize.height, streamCoverAlign);
+    const [x1, y1, x2, y2] = highlightBounds;
+    return {
+      left: `${fit.left + (x1 / targetW) * fit.width}px`,
+      top: `${fit.top + (y1 / targetH) * fit.height}px`,
+      width: `${((x2 - x1) / targetW) * fit.width}px`,
+      height: `${((y2 - y1) / targetH) * fit.height}px`,
+    };
+  }, [getCoordinateSpace, highlightBounds, streamCoverAlign, wrapSize.height, wrapSize.width]);
 
   const streamObjectClass =
     streamCoverAlign === 'bottom' ? 'object-cover object-bottom' : 'object-cover object-center';
@@ -447,7 +554,7 @@ export function DeviceScreen({
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
       if (draggedRef.current) { draggedRef.current = false; return; }
-      const el   = (e.target as HTMLElement) ?? e.currentTarget;
+      const el = wrapRef.current ?? e.currentTarget;
       const rect = el.getBoundingClientRect();
       const p    = clientToDevice(e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height);
 
@@ -471,7 +578,7 @@ export function DeviceScreen({
   const handleDoubleClick = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
       if (mode !== 'tap' || gestureMode === 'double_tap') return; // double_tap mode uses single click
-      const el   = (e.target as HTMLElement) ?? e.currentTarget;
+      const el = wrapRef.current ?? e.currentTarget;
       const rect = el.getBoundingClientRect();
       const p    = clientToDevice(e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height);
       wsSend({ type: 'double_tap', serial: device.serial, x: p.x, y: p.y });
@@ -484,7 +591,7 @@ export function DeviceScreen({
     (e: React.WheelEvent<HTMLDivElement>) => {
       if (!e.ctrlKey) return; // Ctrl+scroll = pinch
       e.preventDefault();
-      const el   = (e.target as HTMLElement) ?? e.currentTarget;
+      const el = wrapRef.current ?? e.currentTarget;
       const rect = el.getBoundingClientRect();
       const p    = clientToDevice(e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height);
       const scale = e.deltaY < 0 ? 2.0 : 0.5; // scroll up = zoom in, down = zoom out
@@ -512,12 +619,18 @@ export function DeviceScreen({
       >
         {/* MJPEG baseline — always shown until H264 takes over */}
         {mjpegUrl && !mjpegFailed && (
+          // eslint-disable-next-line @next/next/no-img-element -- MJPEG stream endpoint must stay as a native img.
           <img
+            ref={imageRef}
             src={mjpegUrl}
             alt={`${device.brand} ${device.model}`}
             className={`absolute inset-0 h-full w-full ${streamObjectClass} transition-opacity duration-500 ${h264Active ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
             onLoad={() => {
               setHasFrame(true);
+              const img = imageRef.current;
+              if (img?.naturalWidth && img?.naturalHeight) {
+                updateStreamSize(img.naturalWidth, img.naturalHeight);
+              }
             }}
             onError={() => setMjpegFailed(true)}
             draggable={false}
@@ -534,12 +647,7 @@ export function DeviceScreen({
         {highlightBounds && dw > 0 && dh > 0 && (
           <div
             className='pointer-events-none absolute border-2 border-red-500 bg-red-500/15 transition-all duration-150'
-            style={{
-              left:   `${(highlightBounds[0] / dw) * 100}%`,
-              top:    `${(highlightBounds[1] / dh) * 100}%`,
-              width:  `${((highlightBounds[2] - highlightBounds[0]) / dw) * 100}%`,
-              height: `${((highlightBounds[3] - highlightBounds[1]) / dh) * 100}%`,
-            }}
+            style={highlightStyle}
           />
         )}
         {!hasFrame && isActive && (

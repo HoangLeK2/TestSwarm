@@ -184,11 +184,11 @@ export const workflowsApi = {
       .get<WorkflowProgress>(`/workflows/${workflowId}/progress`)
       .then((r) => r.data),
   pause: (workflowId: string) =>
-    farmApi.post(`/workflows/${workflowId}/pause`).then((r) => r.data),
+    farmApi.post(`/workflows/${encodeURIComponent(workflowId)}/pause`).then((r) => r.data),
   resume: (workflowId: string) =>
-    farmApi.post(`/workflows/${workflowId}/resume`).then((r) => r.data),
+    farmApi.post(`/workflows/${encodeURIComponent(workflowId)}/resume`).then((r) => r.data),
   cancel: (workflowId: string) =>
-    farmApi.post(`/workflows/${workflowId}/cancel`).then((r) => r.data),
+    farmApi.post(`/workflows/${encodeURIComponent(workflowId)}/cancel`).then((r) => r.data),
   listForDevice: (serial: string) =>
     farmApi
       .get<{ serial: string; workflows: import('../types').WorkflowInfo[]; temporal_available: boolean }>(

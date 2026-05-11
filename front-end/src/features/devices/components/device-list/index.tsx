@@ -43,6 +43,14 @@ export function DeviceList() {
   }, [relayAgents]);
 
   const data: DeviceOut[] = devices ?? [];
+  const registeredSerials = useMemo(() => {
+    const serials = new Set<string>();
+    for (const device of data) {
+      serials.add(device.serial);
+      if (device.adb_serial) serials.add(device.adb_serial);
+    }
+    return serials;
+  }, [data]);
 
   const columns = useMemo(
     () =>
@@ -69,7 +77,7 @@ export function DeviceList() {
     <div className='space-y-4'>
       <div className='flex items-center justify-between'>
         <h2 className='text-lg font-semibold'>{t('title', { count: devices?.length ?? 0 })}</h2>
-        <RegisterDeviceDialog />
+        <RegisterDeviceDialog relayAgents={relayAgents ?? []} registeredSerials={registeredSerials} />
       </div>
 
       {!devices?.length && (
@@ -87,4 +95,3 @@ export function DeviceList() {
     </div>
   );
 }
-

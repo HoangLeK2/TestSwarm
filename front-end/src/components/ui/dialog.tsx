@@ -30,7 +30,8 @@ function DialogClose({
   return <DialogPrimitive.Close data-slot='dialog-close' {...props} />;
 }
 
-const DEFAULT_DIALOG_Z_INDEX = 9999;
+/** Base z-index for overlay; content uses +1. */
+export const DEFAULT_DIALOG_Z_INDEX = 9999;
 
 function DialogOverlay({
   className,

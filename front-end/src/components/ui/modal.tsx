@@ -1,5 +1,6 @@
 'use client';
 import {
+  DEFAULT_DIALOG_Z_INDEX,
   Dialog,
   DialogContent,
   DialogDescription,
@@ -59,7 +60,7 @@ export const Modal: React.FC<ModalProps> = ({
   contentClassName,
   isLoading = false,
   disabled = false,
-  zIndex = 100
+  zIndex = DEFAULT_DIALOG_Z_INDEX
 }) => {
   const handleOpenChange = (open: boolean) => {
     if (onOpenChange) {
@@ -77,7 +78,7 @@ export const Modal: React.FC<ModalProps> = ({
           !!wrapperClassName && wrapperClassName
         )}
         onClose={onClose}
-        style={{ zIndex }}
+        zIndex={zIndex}
       >
         {showHeader && (
           <DialogHeader className='bg-muted'>

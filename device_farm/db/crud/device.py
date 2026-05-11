@@ -192,6 +192,30 @@ async def update_device_metadata(
     )
 
 
+async def update_device_adb_identity(
+    db: AsyncSession,
+    serial: str,
+    *,
+    adb_serial: str | None = None,
+    adb_ip: str | None = None,
+    adb_port: int | None = None,
+) -> None:
+    values: dict = {}
+    if adb_serial is not None:
+        values["adb_serial"] = str(adb_serial or "").strip() or None
+    if adb_ip is not None:
+        values["adb_ip"] = str(adb_ip or "").strip() or None
+    if adb_port is not None:
+        values["adb_port"] = int(adb_port or 5555)
+    if not values:
+        return
+    await db.execute(
+        update(Device)
+        .where(Device.serial == serial)
+        .values(**values)
+    )
+
+
 async def update_device_name(db: AsyncSession, device_id: str, name: str) -> None:
     """Update display name for a device."""
     await db.execute(
@@ -257,4 +281,3 @@ async def delete_device(db: AsyncSession, device_id: str) -> None:
     await db.execute(delete(CampaignDevice).where(CampaignDevice.device_id == device_id))
     # Then delete the device
     await db.execute(delete(Device).where(Device.id == device_id))
-

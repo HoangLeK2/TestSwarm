@@ -7,6 +7,7 @@ import contextlib
 import functools
 import logging
 import re
+import threading
 import xml.etree.ElementTree as ET
 from typing import Any, Callable
 
@@ -61,6 +62,8 @@ async def _to_thread_with_heartbeat(
     fn: Callable,
     *args: Any,
     heartbeat_interval: float = 10.0,
+    cooperative_cancel_event: threading.Event | None = None,
+    cancel_grace_s: float = 5.0,
     **kwargs: Any,
 ) -> Any:
     """Run a sync blocking function in the thread pool while sending Temporal heartbeats.
@@ -84,8 +87,21 @@ async def _to_thread_with_heartbeat(
     with contextlib.suppress(Exception):
         activity.heartbeat("running:start")
     heartbeat_task = asyncio.create_task(_heartbeat_loop())
+    thread_task = asyncio.create_task(asyncio.to_thread(functools.partial(fn, *args, **kwargs)))
     try:
-        return await asyncio.to_thread(functools.partial(fn, *args, **kwargs))
+        return await thread_task
+    except BaseException as exc:
+        try:
+            from temporalio.exceptions import CancelledError as _TemporalCancelledError
+            is_cancelled = isinstance(exc, (asyncio.CancelledError, _TemporalCancelledError))
+        except ImportError:
+            is_cancelled = isinstance(exc, asyncio.CancelledError)
+
+        if is_cancelled and cooperative_cancel_event is not None:
+            cooperative_cancel_event.set()
+            with contextlib.suppress(Exception, asyncio.CancelledError):
+                await asyncio.wait_for(asyncio.shield(thread_task), timeout=cancel_grace_s)
+        raise
     finally:
         heartbeat_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -222,9 +238,15 @@ class DeviceActivities:
                 device_serial=inp.device_serial,
                 device_model=getattr(device, "model", ""),
             )
+            cancel_event = threading.Event()
 
             result = await _to_thread_with_heartbeat(
-                run_scenario_task, device, mini_scenario, _var_ctx=var_ctx,
+                run_scenario_task,
+                device,
+                mini_scenario,
+                _var_ctx=var_ctx,
+                cancel_event=cancel_event,
+                cooperative_cancel_event=cancel_event,
             )
 
             # Extract the single step result
@@ -320,6 +342,7 @@ class DeviceActivities:
             device_serial=inp.device_serial,
             device_model=getattr(device, "model", ""),
         )
+        cancel_event = threading.Event()
 
         for batch_pos, (step, step_idx) in enumerate(zip(inp.steps, inp.step_indices)):
             activity.heartbeat(f"batch:{batch_pos}/{len(inp.steps)}")
@@ -334,7 +357,12 @@ class DeviceActivities:
 
             try:
                 result = await _to_thread_with_heartbeat(
-                    run_scenario_task, device, mini_scenario, _var_ctx=var_ctx,
+                    run_scenario_task,
+                    device,
+                    mini_scenario,
+                    _var_ctx=var_ctx,
+                    cancel_event=cancel_event,
+                    cooperative_cancel_event=cancel_event,
                 )
                 step_results = result.get("step_results", [])
                 if step_results:

@@ -241,7 +241,26 @@ async def list_devices(request: Request, db: DB, user: CurrentUser):
         except Exception:
             return None
 
-    return [_to_out(d, relay_id=_resolve_relay_id(d)) for d in devices]
+    def _resolve_runtime_adb_serial(device) -> str | None:
+        persisted = str(getattr(device, "adb_serial", "") or "").strip()
+        if persisted:
+            return persisted
+        if manager is None:
+            return None
+        runtime_device = manager.get_device(getattr(device, "serial", ""))
+        if runtime_device is None:
+            return None
+        adb_serial = str(getattr(runtime_device, "_adb_serial", "") or "").strip()
+        return adb_serial or None
+
+    return [
+        _to_out(
+            d,
+            relay_id=_resolve_relay_id(d),
+            adb_serial=_resolve_runtime_adb_serial(d),
+        )
+        for d in devices
+    ]
 
 
 @router.post("", response_model=DeviceOut, status_code=status.HTTP_201_CREATED)
@@ -446,7 +465,12 @@ async def restart_scrcpy(device_id: str, request: Request, db: DB, user: Current
     return RelayCommandOut(**res)
 
 
-def _to_out(d, *, relay_id: str | None = None) -> DeviceOut:
+def _to_out(
+    d,
+    *,
+    relay_id: str | None = None,
+    adb_serial: str | None = None,
+) -> DeviceOut:
     return DeviceOut(
         id=d.id, serial=d.serial, name=d.name,
         device_key=d.device_key, user_id=d.user_id,
@@ -454,7 +478,7 @@ def _to_out(d, *, relay_id: str | None = None) -> DeviceOut:
         android_version=d.android_version, sdk_version=d.sdk_version,
         screen_width=d.screen_width, screen_height=d.screen_height,
         last_seen=d.last_seen, created_at=d.created_at,
-        adb_serial=getattr(d, "adb_serial", None),
+        adb_serial=adb_serial if adb_serial is not None else getattr(d, "adb_serial", None),
         adb_ip=getattr(d, "adb_ip", None),
         adb_port=getattr(d, "adb_port", 5555),
         tags=getattr(d, "tags", "") or "",

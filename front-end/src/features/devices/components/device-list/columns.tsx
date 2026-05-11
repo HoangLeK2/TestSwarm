@@ -142,6 +142,12 @@ export function getDeviceColumns({
                 <span className='font-medium'>{t('labels.android')}:</span> {d.android_version} (SDK {d.sdk_version})
               </div>
             )}
+            {d.adb_serial && (
+              <div>
+                <span className='font-medium'>{t('labels.adbSerial')}:</span>{' '}
+                <span className='font-mono'>{d.adb_serial}</span>
+              </div>
+            )}
             {d.screen_width > 0 && (
               <div>
                 <span className='font-medium'>{t('labels.screen')}:</span> {d.screen_width}×{d.screen_height}
@@ -210,4 +216,3 @@ export function getDeviceColumns({
     }
   ];
 }
-

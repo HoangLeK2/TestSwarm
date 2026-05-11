@@ -9,7 +9,7 @@ from db.database import AsyncSessionLocal
 from db import crud as repo
 from db.crud.default_scenario import DEVICE_CONTEXT_KEY
 from db.crud.scenario_device_variable import get_scenario_device_variables
-from common.variable_resolver import device_vars_to_tokens
+from common.variable_resolver import normalize_device_vars
 
 log = logging.getLogger(__name__)
 
@@ -104,16 +104,16 @@ async def _build_per_scenario_device_runtime_vars(
     db,
     scenarios: list,
     devices: list,
-) -> Dict[str, Dict[str, Dict[str, str]]]:
-    out: Dict[str, Dict[str, Dict[str, str]]] = {}
+) -> Dict[str, Dict[str, Dict[str, Any]]]:
+    out: Dict[str, Dict[str, Dict[str, Any]]] = {}
     for scen in scenarios:
-        per_device: Dict[str, Dict[str, str]] = {}
+        per_device: Dict[str, Dict[str, Any]] = {}
         for device in devices:
             try:
                 raw = await get_scenario_device_variables(db, scen.id, device.id)
             except Exception:
                 raw = {}
-            per_device[device.id] = device_vars_to_tokens(raw)
+            per_device[device.id] = normalize_device_vars(raw)
         out[scen.id] = per_device
     return out
 
@@ -285,8 +285,9 @@ async def enqueue_campaign_run_temporal(
         # start — if a later dispatch happens, it must see the advanced cursor.
         await account_db.commit()
 
-    # Guardrail: fb_groups_per_device requires unique per-device "group" value
-    # from scenario_device_variables (mapped to __DEVICE_GROUP__ token).
+    # Guardrail: fb_groups_per_device requires unique per-device group value
+    # from scenario_device_variables. Device vars share the same namespace as
+    # global vars and override them at dispatch time.
     for scen in scenarios:
         if getattr(scen, "name", "") != "fb_groups_per_device":
             continue
@@ -295,7 +296,12 @@ async def enqueue_campaign_run_temporal(
         group_to_serials: dict[str, list[str]] = {}
         for d in devices:
             vars_for_device = token_map.get(d.id, {})
-            raw_group = str(vars_for_device.get("__DEVICE_GROUP__", "")).strip()
+            raw_group = str(
+                vars_for_device.get("group_name")
+                or vars_for_device.get("GROUP_NAME")
+                or vars_for_device.get("group")
+                or ""
+            ).strip()
             if not raw_group:
                 missing_serials.append(d.serial)
                 continue
@@ -312,8 +318,8 @@ async def enqueue_campaign_run_temporal(
                 "missing_group_devices": missing_serials,
                 "duplicate_groups": duplicate_groups,
                 "hint": (
-                    "Set unique 'group' per device in scenario device variables "
-                    "(token: ${__DEVICE_GROUP__})."
+                    "Set unique 'group_name' per device in scenario device variables "
+                    "and use the same ${group_name} key in scenario/global variables."
                 ),
             }, 400
 

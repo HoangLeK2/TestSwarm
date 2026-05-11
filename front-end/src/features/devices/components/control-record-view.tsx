@@ -21,10 +21,9 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import {
-  DEFAULT_DEVICE_VARIABLES,
   DeviceVarsJsonPanel,
-  formatDeviceVarsJson,
   formatInitialDeviceVars,
+  mergeCampaignScenarioVariables,
   parseDeviceVarsJson,
 } from '@/components/device-vars-json-panel';
 import {
@@ -133,12 +132,31 @@ function flattenVarDefs(vars: Record<string, any>): Record<string, any> {
   return out;
 }
 
+/** Bounded label for device Select (long model/serial otherwise breaks the top bar). */
+function formatDeviceSelectLabel(d: { brand: string; model: string; serial: string }) {
+  const left = `${d.brand} ${d.model}`.trim().replace(/\s+/g, ' ');
+  const s = d.serial;
+  const serialShort = s.length > 16 ? `${s.slice(0, 7)}…${s.slice(-6)}` : s;
+  if (!left) return serialShort;
+  const maxLeft = 26;
+  const leftShort = left.length > maxLeft ? `${left.slice(0, maxLeft - 1)}…` : left;
+  return `${leftShort} — ${serialShort}`;
+}
+
+function deviceSelectFullTitle(d: { brand: string; model: string; serial: string }) {
+  const left = `${d.brand} ${d.model}`.trim();
+  return left ? `${left} — ${d.serial}` : d.serial;
+}
+
 type Props = { initialSerial?: string | null; initialCampaignId?: string | null; initialScenarioId?: string | null; initialTemplateId?: string | null };
 
 const ENABLE_FLOWGRAM_CONTROL_UI = false;  // UI flowgram disabled 
 
 export function ControlRecordView({ initialSerial, initialCampaignId, initialScenarioId, initialTemplateId }: Props = {}) {
   const t = useTranslations('devicesControlRecord.view');
+  const tDv = useTranslations('components.deviceVarsJson');
+  const tDvDlg = useTranslations('devicesControlRecord.deviceVarsDialog');
+  const tModal = useTranslations('components.modal');
   const { error, device, record, steps, save, hierarchy, selector } = useControlRecord(initialSerial, initialCampaignId, initialScenarioId, initialTemplateId);
   const { setSkipTapRecordingWhilePick } = record;
   const { read_only: safeReadOnly, stream_hierarchy: safeHierarchy } = useSafeMode();
@@ -345,18 +363,25 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
     if (!selectedSerial) return null;
     return devicesQuery.data?.find((d) => d.serial === selectedSerial)?.id ?? null;
   }, [devicesQuery.data, selectedSerial]);
+  const deviceVarsParseMsgs = useMemo(
+    () => ({
+      invalidJson: tDv('parseInvalidJson'),
+      invalidRoot: tDv('parseInvalidRoot'),
+    }),
+    [tDv],
+  );
   const inlineScenarioDeviceVars = useMemo(() => {
     if (!selectedDeviceId) return null;
     if (deviceVarEnabledByDevice[selectedDeviceId] !== true) return null;
     const draft = deviceVarJsonDrafts[selectedDeviceId];
     let vars: Record<string, any>;
     try {
-      vars = parseDeviceVarsJson(draft ?? '{}');
+      vars = parseDeviceVarsJson(draft ?? '{}', deviceVarsParseMsgs);
     } catch {
       return null;
     }
     return Object.keys(vars).length > 0 ? vars : null;
-  }, [selectedDeviceId, deviceVarJsonDrafts, deviceVarEnabledByDevice]);
+  }, [selectedDeviceId, deviceVarJsonDrafts, deviceVarEnabledByDevice, deviceVarsParseMsgs]);
   const hasEnabledDeviceVars = useMemo(
     () => Object.values(deviceVarEnabledByDevice).some(Boolean),
     [deviceVarEnabledByDevice],
@@ -365,6 +390,12 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
     queryKey: ['campaign-devices', activeCampaignId],
     enabled: !!activeCampaignId,
     queryFn: () => campaignsApi.getDevices(activeCampaignId!),
+  });
+  const campaignForGlobalVarsQuery = useQuery({
+    queryKey: ['campaign', activeCampaignId, 'global-vars-preview'],
+    enabled: deviceVarDialogOpen && !!activeCampaignId,
+    queryFn: () => campaignsApi.get(activeCampaignId!),
+    staleTime: 30_000,
   });
   useEffect(() => {
     if (!deviceVarDialogOpen) return;
@@ -379,33 +410,41 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
   const selectedDeviceLabel = useMemo(() => {
     const source = campaignDevicesQuery.data ?? devicesQuery.data ?? [];
     const d = source.find((x) => x.id === (selectedScenarioDeviceId ?? selectedDeviceId));
-    if (!d) return 'Chưa chọn thiết bị';
+    if (!d) return tDvDlg('noDeviceSelected');
     const model = `${d.brand || ''} ${d.model || ''}`.trim();
     return model ? `${model} (${d.serial})` : d.serial;
-  }, [campaignDevicesQuery.data, devicesQuery.data, selectedScenarioDeviceId, selectedDeviceId]);
+  }, [campaignDevicesQuery.data, devicesQuery.data, selectedScenarioDeviceId, selectedDeviceId, tDvDlg]);
   const currentDeviceVarJsonDraft = selectedScenarioDeviceId
-    ? deviceVarJsonDrafts[selectedScenarioDeviceId] ?? formatDeviceVarsJson(DEFAULT_DEVICE_VARIABLES)
-    : formatDeviceVarsJson(DEFAULT_DEVICE_VARIABLES);
+    ? deviceVarJsonDrafts[selectedScenarioDeviceId] ?? formatInitialDeviceVars({}, scenarioVariables)
+    : formatInitialDeviceVars({}, scenarioVariables);
   const currentDeviceVarsEnabled = selectedScenarioDeviceId
     ? deviceVarEnabledByDevice[selectedScenarioDeviceId] === true
     : false;
   const currentDeviceVarJsonError = useMemo(() => {
     if (!currentDeviceVarsEnabled) return '';
     try {
-      parseDeviceVarsJson(currentDeviceVarJsonDraft);
+      parseDeviceVarsJson(currentDeviceVarJsonDraft, deviceVarsParseMsgs);
       return '';
     } catch (err) {
-      return err instanceof Error ? err.message : 'JSON không hợp lệ';
+      return err instanceof Error ? err.message : tDv('parseUnknown');
     }
-  }, [currentDeviceVarJsonDraft, currentDeviceVarsEnabled]);
+  }, [currentDeviceVarJsonDraft, currentDeviceVarsEnabled, deviceVarsParseMsgs, tDv]);
+  const deviceVarGlobalPreview = useMemo(
+    () =>
+      mergeCampaignScenarioVariables(
+        campaignForGlobalVarsQuery.data?.variables,
+        scenarioVariables,
+      ),
+    [campaignForGlobalVarsQuery.data?.variables, scenarioVariables],
+  );
   const setCurrentDeviceVarsEnabled = useCallback((enabled: boolean) => {
     if (!selectedScenarioDeviceId) return;
     setDeviceVarEnabledByDevice((prev) => ({ ...prev, [selectedScenarioDeviceId]: enabled }));
     setDeviceVarJsonDrafts((prev) => ({
       ...prev,
-      [selectedScenarioDeviceId]: prev[selectedScenarioDeviceId] ?? formatDeviceVarsJson(DEFAULT_DEVICE_VARIABLES),
+      [selectedScenarioDeviceId]: prev[selectedScenarioDeviceId] ?? formatInitialDeviceVars({}, scenarioVariables),
     }));
-  }, [selectedScenarioDeviceId]);
+  }, [scenarioVariables, selectedScenarioDeviceId]);
   const setCurrentDeviceVarJsonDraft = useCallback((value: string) => {
     if (!selectedScenarioDeviceId) return;
     setDeviceVarJsonDrafts((prev) => ({ ...prev, [selectedScenarioDeviceId]: value }));
@@ -430,7 +469,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
       const base = pendingScenarioDeviceVarsDraftMap ?? {};
       for (const d of devices) {
         const vars = { ...(base[d.id] ?? {}) };
-        seeded[d.id] = formatInitialDeviceVars(vars);
+        seeded[d.id] = formatInitialDeviceVars(vars, scenarioVariables);
         enabled[d.id] = Object.keys(vars).length > 0;
       }
       setDeviceVarJsonDrafts(seeded);
@@ -447,18 +486,18 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
       );
       if (cancelled) return;
       const seeded: Record<string, string> = Object.fromEntries(
-        entries.map(([deviceId, vars]) => [deviceId, formatInitialDeviceVars(vars)]),
+        entries.map(([deviceId, vars]) => [deviceId, formatInitialDeviceVars(vars, scenarioVariables)]),
       );
       const enabled: Record<string, boolean> = Object.fromEntries(
         entries.map(([deviceId, vars]) => [deviceId, Object.keys(vars).length > 0]),
       );
       setDeviceVarJsonDrafts(seeded);
       setDeviceVarEnabledByDevice(enabled);
-    })().catch((err) => toast.error(`Không tải được biến thiết bị: ${String(err)}`));
+    })().catch((err) => toast.error(tDvDlg('loadVarsError', { message: String(err) })));
     return () => {
       cancelled = true;
     };
-  }, [deviceVarDialogOpen, campaignDevicesQuery.data, activeCampaignId, activeScenarioId, pendingScenarioDeviceVarsDraftMap]);
+  }, [deviceVarDialogOpen, campaignDevicesQuery.data, activeCampaignId, activeScenarioId, pendingScenarioDeviceVarsDraftMap, scenarioVariables, tDvDlg]);
   const saveScenarioDeviceVarsMutation = useMutation({
     mutationFn: async (drafts: Record<string, string>) => {
       if (!activeCampaignId || !activeScenarioId) return;
@@ -468,9 +507,9 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           let vars: Record<string, any> = {};
           if (deviceVarEnabledByDevice[d.id] === true) {
             try {
-              vars = parseDeviceVarsJson(drafts[d.id] ?? '{}');
+              vars = parseDeviceVarsJson(drafts[d.id] ?? '{}', deviceVarsParseMsgs);
             } catch {
-              throw new Error(`JSON không hợp lệ ở thiết bị ${d.serial}`);
+              throw new Error(tDv('invalidAtDevice', { serial: d.serial }));
             }
           }
           return campaignsApi.replaceScenarioDeviceVariables(activeCampaignId, activeScenarioId, d.id, {
@@ -480,7 +519,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
       );
     },
     onSuccess: () => {
-      toast.success('Đã lưu biến cho tất cả thiết bị trong chiến dịch');
+      toast.success(tDvDlg('saveAllSuccess'));
       setDeviceVarDialogOpen(false);
     },
     onError: (err) => toast.error(String(err)),
@@ -492,9 +531,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
     if (devices.length === 0) return;
     Promise.all(
       devices.map((d) => {
-        const vars = deviceVarEnabledByDevice[d.id] === true
-          ? (pendingScenarioDeviceVarsDraftMap[d.id] ?? {})
-          : {};
+        const vars = pendingScenarioDeviceVarsDraftMap[d.id] ?? {};
         return campaignsApi.replaceScenarioDeviceVariables(activeCampaignId, activeScenarioId, d.id, {
           vars,
         });
@@ -961,7 +998,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
       <SafeModeBanner className='mx-3 mt-2' />
 
       {/* ── Top bar ─────────────────────────────────────────────────────── */}
-      <div className='flex shrink-0 items-center gap-3 border-b bg-background px-3 py-2'>
+      <div className='flex min-w-0 shrink-0 items-center gap-3 overflow-hidden border-b bg-background px-3 py-2'>
         {/* Back */}
         <Button
           variant='ghost'
@@ -1001,27 +1038,41 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
         )}
 
         {/* Device selector */}
-        <Select
-          value={device.selectedSerial ?? ''}
-          onValueChange={(v) => guardWhilePlaying(() => device.setSelectedSerial(v || null))}
-        >
-          <SelectTrigger className='h-8 w-[220px] shrink-0 text-xs'>
-            <SelectValue placeholder={t('selectPhonePlaceholder')} />
-          </SelectTrigger>
-          <SelectContent>
-            {device.connectedDevices.map((d) => (
-              <SelectItem key={d.serial} value={d.serial} className='text-xs'>
-                {d.brand} {d.model} — {d.serial.slice(0, 10)}
-                {(((d.state || '').replace('DeviceState.', '') === 'BUSY') ||
-                  (d.scenario_active ?? 0) > 0) && (
-                  <span className='ml-1.5 rounded bg-amber-400/20 px-1 py-0.5 text-[9px] font-medium text-amber-700 dark:text-amber-300'>
-                    chiến dịch
+        <div className='min-w-0 max-w-[min(280px,calc(100vw-14rem))] shrink'>
+          <Select
+            value={device.selectedSerial ?? ''}
+            onValueChange={(v) => guardWhilePlaying(() => device.setSelectedSerial(v || null))}
+          >
+            <SelectTrigger
+              className={cn(
+                'h-8 w-full min-w-0 max-w-full overflow-hidden text-xs',
+                '[&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate [&_[data-slot=select-value]]:text-left',
+              )}
+            >
+              <SelectValue placeholder={t('selectPhonePlaceholder')} />
+            </SelectTrigger>
+            <SelectContent className='max-w-[min(420px,calc(100vw-2rem))]'>
+              {device.connectedDevices.map((d) => (
+                <SelectItem
+                  key={d.serial}
+                  value={d.serial}
+                  title={deviceSelectFullTitle(d)}
+                  className='text-xs'
+                >
+                  <span className='inline-flex min-w-0 max-w-full items-center gap-1'>
+                    <span className='min-w-0 truncate'>{formatDeviceSelectLabel(d)}</span>
+                    {(((d.state || '').replace('DeviceState.', '') === 'BUSY') ||
+                      (d.scenario_active ?? 0) > 0) && (
+                      <span className='shrink-0 rounded bg-amber-400/20 px-1 py-0.5 text-[9px] font-medium text-amber-700 dark:text-amber-300'>
+                        chiến dịch
+                      </span>
+                    )}
                   </span>
-                )}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
 
         {/* WS status dot */}
         <span className={cn(
@@ -1031,7 +1082,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
             : 'border-red-500/20 bg-red-500/10 text-red-600 dark:text-red-400',
         )}>
           <span className={cn('size-1.5 rounded-full', device.wsConnected ? 'bg-green-500' : 'bg-red-500')} />
-          {device.wsConnected ? 'Online' : 'Offline'}
+          {device.wsConnected ? t('wsConnected') : t('wsDisconnected')}
         </span>
 
         <div className='h-5 w-px bg-border' />
@@ -1801,23 +1852,23 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           <DialogHeader className='shrink-0'>
             <DialogTitle className='flex items-center gap-2 text-base'>
               <SlidersHorizontal className='size-4' />
-              Biến thiết bị cho kịch bản
+              {tDv('title')}
             </DialogTitle>
           </DialogHeader>
           <p className='shrink-0 text-[12px] text-muted-foreground -mt-1'>
-            Phạm vi: kịch bản hiện tại + toàn bộ thiết bị trong chiến dịch.
+            {tDvDlg('scopeHint')}
           </p>
           <div className='shrink-0 rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground'>
-            Chọn thiết bị bên trái, bật biến riêng nếu cần, rồi nhập JSON cho thiết bị đó.
+            {tDvDlg('instructions')}
             <span className='ml-1 block pt-1'>
-              Tắt switch để thiết bị dùng biến global của kịch bản/campaign.
+              {tDvDlg('switchHint')}
             </span>
           </div>
           <div className='min-h-0 overflow-y-auto overscroll-y-contain pr-1 [-webkit-overflow-scrolling:touch]'>
             {scenarioDeviceVarsQuery.isLoading && activeScenarioId ? (
-              <p className='text-xs text-muted-foreground'>Đang tải biến...</p>
+              <p className='text-xs text-muted-foreground'>{tDvDlg('loadingVars')}</p>
             ) : (campaignDevicesQuery.data ?? []).length === 0 ? (
-              <p className='text-xs text-muted-foreground'>Chiến dịch chưa có thiết bị.</p>
+              <p className='text-xs text-muted-foreground'>{tDvDlg('noDevicesInCampaign')}</p>
             ) : (
               <div className='grid min-h-[430px] grid-cols-[260px_1fr] divide-x rounded-md border'>
                 <div className='min-h-0 overflow-y-auto p-2'>
@@ -1839,7 +1890,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                           <span className='block truncate font-mono text-[10px] text-muted-foreground'>{d.serial}</span>
                         </span>
                         <Badge variant={enabled ? 'default' : 'secondary'} className='shrink-0 text-[10px]'>
-                          {enabled ? 'riêng' : 'global'}
+                          {enabled ? tDvDlg('badgePerDevice') : tDvDlg('badgeGlobal')}
                         </Badge>
                       </button>
                     );
@@ -1853,6 +1904,8 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                     onDraftChange={setCurrentDeviceVarJsonDraft}
                     jsonError={currentDeviceVarJsonError}
                     deviceLabel={selectedDeviceLabel}
+                    baseVariables={scenarioVariables}
+                    globalVariablesPreview={deviceVarGlobalPreview}
                     editorClassName='min-h-[330px]'
                     emptyClassName='min-h-[330px]'
                   />
@@ -1866,7 +1919,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
               size='sm'
               onClick={() => setDeviceVarDialogOpen(false)}
             >
-              Hủy
+              {tModal('cancel')}
             </Button>
             <Button
               size='sm'
@@ -1882,15 +1935,15 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                     continue;
                   }
                   try {
-                    parsedDrafts[d.id] = parseDeviceVarsJson(deviceVarJsonDrafts[d.id] ?? '{}');
+                    parsedDrafts[d.id] = parseDeviceVarsJson(deviceVarJsonDrafts[d.id] ?? '{}', deviceVarsParseMsgs);
                   } catch {
-                    toast.error(`JSON không hợp lệ ở thiết bị ${d.serial}`);
+                    toast.error(tDv('invalidAtDevice', { serial: d.serial }));
                     return;
                   }
                 }
                 setPendingScenarioDeviceVarsDraftMap(parsedDrafts);
                 setDeviceVarDialogOpen(false);
-                toast.info('Đã lưu tạm biến thiết bị. Khi bạn lưu scenario, hệ thống sẽ tự áp dụng.');
+                toast.info(tDvDlg('saveDraftToast'));
               }}
               disabled={
                 saveScenarioDeviceVarsMutation.isPending
@@ -1898,7 +1951,11 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                 || !!currentDeviceVarJsonError
               }
             >
-              {saveScenarioDeviceVarsMutation.isPending ? 'Đang lưu...' : activeScenarioId ? 'Lưu' : 'Lưu tạm'}
+              {saveScenarioDeviceVarsMutation.isPending
+                ? tDvDlg('saveLoading')
+                : activeScenarioId
+                  ? tDvDlg('save')
+                  : tDvDlg('saveDraft')}
             </Button>
           </div>
         </DialogContent>

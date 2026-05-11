@@ -201,7 +201,10 @@ class AgentControlServicer:
     async def restart_scrcpy(self, serial: str, timeout: float = 30.0) -> dict:
         return await self._send(serial, "restart_scrcpy", timeout)
 
-    async def _send(self, serial: str, kind: str, timeout: float) -> dict:
+    async def shell(self, serial: str, cmd: str, timeout: float = 30.0) -> dict:
+        return await self._send(serial, "shell", timeout, cmd=cmd)
+
+    async def _send(self, serial: str, kind: str, timeout: float, *, cmd: str = "") -> dict:
         from .grpc_gen import relay_pb2
 
         conn = self.conn_for_serial(serial)
@@ -214,10 +217,14 @@ class AgentControlServicer:
             "restart_u2":     relay_pb2.RestartU2Cmd,
             "restart_atx":    relay_pb2.RestartAtxCmd,
             "restart_scrcpy": relay_pb2.RestartScrcpyCmd,
+            "shell":          relay_pb2.ShellCmd,
         }
         cmd_cls  = cmd_map[kind]
+        kwargs = {"msg_id": msg_id, "serial": serial, "timeout": int(timeout)}
+        if kind == "shell":
+            kwargs["cmd"] = cmd
         ctrl_msg = relay_pb2.ServerControlMsg(**{
-            kind: cmd_cls(msg_id=msg_id, serial=serial, timeout=int(timeout))
+            kind: cmd_cls(**kwargs)
         })
         return await conn.send_command(ctrl_msg, timeout)
 

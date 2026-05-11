@@ -59,7 +59,7 @@ type FormState = {
 };
 
 const DEFAULT_FORM: FormState = {
-  name: 'Browser',
+  name: '',
   type: 'in_app',
   enabled: true,
   events: [...NOTIFICATION_EVENTS],
@@ -81,6 +81,10 @@ function channelToForm(channel?: NotificationChannel): FormState {
     webhookUrl: String(channel.config?.url ?? ''),
     headersText: JSON.stringify(channel.config?.headers ?? {}, null, 2)
   };
+}
+
+function eventLabelKey(eventName: string) {
+  return `eventLabels.${eventName.replace(/\./g, '_')}` as const;
 }
 
 function formToPayload(form: FormState): NotificationChannelInput {
@@ -171,6 +175,7 @@ function ChannelDialog({
             <Input
               id='notification-channel-name'
               value={form.name}
+              placeholder={t('placeholders.channelName')}
               onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
             />
           </div>
@@ -250,15 +255,19 @@ function ChannelDialog({
           <div className='grid gap-2'>
             <Label>{t('fields.events')}</Label>
             <div className='grid gap-2 rounded-md border p-3 sm:grid-cols-2'>
-              {NOTIFICATION_EVENTS.map((eventName) => (
-                <Label key={eventName} className='text-xs font-normal'>
-                  <Checkbox
-                    checked={form.events.includes(eventName)}
-                    onCheckedChange={(checked) => toggleEvent(eventName, checked === true)}
-                  />
-                  {eventName}
-                </Label>
-              ))}
+              {NOTIFICATION_EVENTS.map((eventName) => {
+                const labelKey = eventLabelKey(eventName);
+                const label = t.has(labelKey) ? t(labelKey) : eventName;
+                return (
+                  <Label key={eventName} className='text-xs font-normal'>
+                    <Checkbox
+                      checked={form.events.includes(eventName)}
+                      onCheckedChange={(checked) => toggleEvent(eventName, checked === true)}
+                    />
+                    <span className='ml-2'>{label}</span>
+                  </Label>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -274,6 +283,11 @@ function ChannelDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+function formatEventBadge(eventName: string, t: ReturnType<typeof useTranslations<'notificationsFeature'>>) {
+  const labelKey = eventLabelKey(eventName);
+  return t.has(labelKey) ? t(labelKey) : eventName;
 }
 
 export function NotificationChannelSettings() {
@@ -340,7 +354,7 @@ export function NotificationChannelSettings() {
                     <div className='flex max-w-[420px] flex-wrap gap-1'>
                       {channel.events.slice(0, 4).map((eventName) => (
                         <Badge key={eventName} variant='outline' className='text-[10px]'>
-                          {eventName}
+                          {formatEventBadge(eventName, t)}
                         </Badge>
                       ))}
                       {channel.events.length > 4 ? (

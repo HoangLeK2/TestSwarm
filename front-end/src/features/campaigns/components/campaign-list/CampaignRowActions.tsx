@@ -7,7 +7,6 @@ import {
   Pause,
   Square,
   Trash2,
-  Eye,
   MoreHorizontal,
   Smartphone,
   FileText,
@@ -20,13 +19,6 @@ import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { RunCampaignDialog } from '../run-campaign-dialog';
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from '@/components/ui/dialog';
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -38,9 +30,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import { DeviceControlEmbed } from '@/features/devices/components/device-control-embed';
-import { DeviceStepsPanel } from '@/features/devices/components/device-step-monitor';
-import { List } from 'lucide-react';
 import { AddDevicesToCampaignDialog } from '../add-devices-dialog';
 import { ScenarioListDialog } from '../scenario-list-dialog';
 import { CampaignMonitorDialog } from '../campaign-monitor';
@@ -56,12 +45,16 @@ import {
   useUpdateCampaignStatus,
   useWorkflowPause,
   useWorkflowResume,
+  useWorkflowCancel,
 } from '../../hooks/use-campaigns';
 import type { CampaignOut } from '../../types';
 import { isCampaignActiveExecution, isIdleStatus } from '../../types';
+import { useConfirm } from '@/providers/modal-provider';
 
 export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
   const t = useTranslations('campaignsFeature.list');
+  const tCommon = useTranslations('common');
+  const confirm = useConfirm();
   const tAdd = useTranslations('campaignsFeature.addDevices');
   const tScenario = useTranslations('campaignsFeature.scenarioList');
   const router = useRouter();
@@ -86,11 +79,13 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
   );
   const workflows = wfData?.workflows ?? [];
   const runningWorkflowIds = workflows.filter((w) => w.status === 'RUNNING').map((w) => w.workflow_id);
-  const pausedWorkflowIds = workflows.filter((w) => w.status === 'PAUSED').map((w) => w.workflow_id);
-  const hasActiveWorkflows = runningWorkflowIds.length > 0 || pausedWorkflowIds.length > 0;
+  const pausedWorkflowIds = workflows.filter((w) => w.status === 'PAUSED' || w.status === 'paused_on_error').map((w) => w.workflow_id);
+  const activeWorkflowIds = [...runningWorkflowIds, ...pausedWorkflowIds];
+  const hasActiveWorkflows = activeWorkflowIds.length > 0;
 
   const { mutate: pauseWf, isPending: isPausing } = useWorkflowPause();
   const { mutate: resumeWf, isPending: isResuming } = useWorkflowResume();
+  const { mutateAsync: cancelWf, isPending: isCancelling } = useWorkflowCancel();
 
   const previewSerial = devices[0]?.serial ?? '';
   const totalSteps = scenarios.reduce((s, sc) => s + sc.steps.length, 0);
@@ -128,16 +123,31 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
     toast.info(t('resumingAll', { count: pausedWorkflowIds.length }));
   };
 
-  const handleCancelAll = () => {
-    if (!window.confirm(t('cancelConfirm'))) return;
-    const allActive = [...runningWorkflowIds, ...pausedWorkflowIds];
+  const handleCancelAll = async () => {
+    const ok = await confirm({
+      title: t('titleCancelAll'),
+      description: t('cancelConfirm'),
+      confirmText: tCommon('confirm'),
+      cancelText: tCommon('cancel'),
+      confirmVariant: 'destructive',
+      zIndex: 10000,
+    });
+    if (!ok) return;
+    const results = await Promise.allSettled(
+      activeWorkflowIds.map((id) => cancelWf(id))
+    );
+    const failed = results.filter((r) => r.status === 'rejected').length;
+    if (failed > 0) {
+      toast.error(`Cancel failed for ${failed} workflow(s)`);
+      return;
+    }
     patchCampaignStatus(
       { id: campaign.id, status: 'idle' },
       {
         onError: () => toast.error(t('runFailed')),
       },
     );
-    toast.info(t('cancellingAll', { count: allActive.length }));
+    toast.info(t('cancellingAll', { count: activeWorkflowIds.length }));
   };
 
   const running = isCampaignActiveExecution(campaign.status);
@@ -222,6 +232,7 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
               <RunCampaignDialog
                 open={runDialogOpen}
                 campaignId={campaign.id}
+                campaignVariables={campaign.variables ?? {}}
                 onClose={() => setRunDialogOpen(false)}
                 devices={devices}
                 scenarios={scenarios}
@@ -279,7 +290,7 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
               size='sm'
               variant='ghost'
               className='h-8 w-8 p-0 text-destructive hover:text-destructive'
-              disabled={isPatchingCampaign}
+              disabled={isPatchingCampaign || isCancelling}
               onClick={handleCancelAll}
               title={t('titleCancel') ?? 'Huỷ'}
               aria-label='Huỷ'

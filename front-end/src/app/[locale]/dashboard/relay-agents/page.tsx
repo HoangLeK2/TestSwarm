@@ -1,12 +1,22 @@
 'use client';
 
+import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Server, Loader2, RefreshCw } from 'lucide-react';
+import { Server, Loader2, Plus, RefreshCw } from 'lucide-react';
 import { useFormatter, useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
-import { relayAgentsApi, type RelayAgentOut } from '@/features/devices/services/manage-api';
+import { devicesApi, relayAgentsApi, type DeviceOut, type RelayAgentOut } from '@/features/devices/services/manage-api';
+import { ConnectDialog } from '@/features/devices/components/device-list/ConnectDialog';
 
-function RelayAgentCard({ agent }: { agent: RelayAgentOut }) {
+function RelayAgentCard({
+  agent,
+  registeredSerials,
+  onDeviceRegistered,
+}: {
+  agent: RelayAgentOut;
+  registeredSerials: Set<string>;
+  onDeviceRegistered: (device: DeviceOut) => void;
+}) {
   const qc = useQueryClient();
   const format = useFormatter();
   const t = useTranslations('relayAgentsFeature');
@@ -19,6 +29,18 @@ function RelayAgentCard({ agent }: { agent: RelayAgentOut }) {
     },
     onError: (err) => {
       console.error('[relay-agents] bootstrap-all failed', err);
+    },
+  });
+  const { mutate: registerDevice, isPending: isRegistering } = useMutation({
+    mutationFn: (serial: string) =>
+      relayAgentsApi.registerDevice(agent.relay_id, serial, { name: serial }),
+    onSuccess: (device) => {
+      qc.invalidateQueries({ queryKey: ['devices'] });
+      qc.invalidateQueries({ queryKey: ['relay-agents'] });
+      onDeviceRegistered(device);
+    },
+    onError: (err) => {
+      console.error('[relay-agents] register device failed', err);
     },
   });
 
@@ -53,9 +75,29 @@ function RelayAgentCard({ agent }: { agent: RelayAgentOut }) {
         {realSerials.length === 0 ? (
           <span className='text-[11px] text-muted-foreground'>{t('noDevices')}</span>
         ) : (
-          realSerials.slice(0, 8).map(s => (
-            <span key={s} className='rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]'>{s}</span>
-          ))
+          realSerials.slice(0, 8).map(s => {
+            const registered = registeredSerials.has(s);
+            return (
+              <span key={s} className='inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5'>
+                <span className='font-mono text-[10px]'>{s}</span>
+                {registered ? (
+                  <span className='text-[10px] text-muted-foreground'>{t('registered')}</span>
+                ) : (
+                  <Button
+                    type='button'
+                    size='icon'
+                    variant='ghost'
+                    className='size-5'
+                    disabled={!online || isRegistering}
+                    title={t('registerDevice')}
+                    onClick={() => registerDevice(s)}
+                  >
+                    {isRegistering ? <Loader2 className='size-3 animate-spin' /> : <Plus className='size-3' />}
+                  </Button>
+                )}
+              </span>
+            );
+          })
         )}
         {realSerials.length > 8 && (
           <span className='text-[11px] text-muted-foreground'>{t('moreDevices', { count: realSerials.length - 8 })}</span>
@@ -78,14 +120,25 @@ function RelayAgentCard({ agent }: { agent: RelayAgentOut }) {
 
 export default function RelayAgentsPage() {
   const t = useTranslations('relayAgentsFeature');
+  const [connectDevice, setConnectDevice] = useState<DeviceOut | null>(null);
   const { data: agents = [], isLoading } = useQuery<RelayAgentOut[]>({
     queryKey: ['relay-agents'],
     queryFn: relayAgentsApi.list,
     staleTime: 15_000,
     refetchInterval: 30_000,
   });
+  const { data: devices = [] } = useQuery<DeviceOut[]>({
+    queryKey: ['devices'],
+    queryFn: devicesApi.list,
+    staleTime: 15_000,
+  });
 
   const onlineCount = agents.filter(a => a.status === 'online').length;
+  const registeredSerials = new Set<string>();
+  for (const device of devices) {
+    registeredSerials.add(device.serial);
+    if (device.adb_serial) registeredSerials.add(device.adb_serial);
+  }
 
   return (
     <div className='space-y-6'>
@@ -115,9 +168,22 @@ export default function RelayAgentsPage() {
       {agents.length > 0 && (
         <div className='grid gap-4 sm:grid-cols-2 lg:grid-cols-3'>
           {agents.map(agent => (
-            <RelayAgentCard key={agent.relay_id} agent={agent} />
+            <RelayAgentCard
+              key={agent.relay_id}
+              agent={agent}
+              registeredSerials={registeredSerials}
+              onDeviceRegistered={(device) => setConnectDevice(device)}
+            />
           ))}
         </div>
+      )}
+
+      {connectDevice && (
+        <ConnectDialog
+          device={connectDevice}
+          open={!!connectDevice}
+          onClose={() => setConnectDevice(null)}
+        />
       )}
     </div>
   );

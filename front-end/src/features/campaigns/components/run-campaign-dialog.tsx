@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslations } from 'next-intl';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Play, Smartphone, CheckSquare, Square, Loader2 } from 'lucide-react';
@@ -21,10 +22,9 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import {
-  DEFAULT_DEVICE_VARIABLES,
   DeviceVarsJsonPanel,
-  formatDeviceVarsJson,
   formatInitialDeviceVars,
+  mergeCampaignScenarioVariables,
   parseDeviceVarsJson,
 } from '@/components/device-vars-json-panel';
 import { cn } from '@/lib/utils';
@@ -34,6 +34,8 @@ import type { CampaignDeviceOut, ScenarioOut } from '../types';
 interface Props {
   open: boolean;
   campaignId: string;
+  /** Campaign-level variables (merged with active scenario for read-only preview). */
+  campaignVariables?: Record<string, unknown>;
   onClose: () => void;
   devices: CampaignDeviceOut[];
   scenarios: ScenarioOut[];
@@ -46,12 +48,16 @@ const makePairKey = (scenarioId: string, deviceId: string) => `${scenarioId}::${
 export function RunCampaignDialog({
   open,
   campaignId,
+  campaignVariables = {},
   onClose,
   devices,
   scenarios,
   isRunning,
   onConfirm,
 }: Props) {
+  const tList = useTranslations('campaignsFeature.list');
+  const tVars = useTranslations('components.deviceVarsJson');
+  const tModal = useTranslations('components.modal');
   const qc = useQueryClient();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [activeDeviceId, setActiveDeviceId] = useState<string>('');
@@ -69,6 +75,10 @@ export function RunCampaignDialog({
   const activeDevice = useMemo(
     () => devices.find((d) => d.id === activeDeviceId) ?? devices[0],
     [activeDeviceId, devices],
+  );
+  const activeScenario = useMemo(
+    () => scenarios.find((s) => s.id === activeScenarioId) ?? scenarios[0],
+    [activeScenarioId, scenarios],
   );
   const pairKey =
     activeScenarioId && activeDevice?.id
@@ -103,7 +113,7 @@ export function RunCampaignDialog({
       if (prev[pairKey] !== undefined) return prev;
       return {
         ...prev,
-        [pairKey]: formatInitialDeviceVars(savedVars),
+        [pairKey]: formatInitialDeviceVars(savedVars, activeScenario?.variables),
       };
     });
     setDeviceVarEnabled((prev) => {
@@ -113,23 +123,35 @@ export function RunCampaignDialog({
         [pairKey]: Object.keys(savedVars).length > 0,
       };
     });
-  }, [pairKey, variableQuery.data]);
+  }, [activeScenario?.variables, pairKey, variableQuery.data]);
 
   const allSelected = allSerials.length > 0 && allSerials.every((s) => selected.has(s));
   const someSelected = allSerials.some((s) => selected.has(s));
   const currentDraft = pairKey
-    ? drafts[pairKey] ?? (variableQuery.isLoading ? '' : '{}')
-    : '{}';
+    ? drafts[pairKey] ?? (variableQuery.isLoading ? '' : formatInitialDeviceVars({}, activeScenario?.variables))
+    : formatInitialDeviceVars({}, activeScenario?.variables);
   const currentDeviceVarsEnabled = pairKey ? deviceVarEnabled[pairKey] === true : false;
+  const parseMsgs = useMemo(
+    () => ({
+      invalidJson: tVars('parseInvalidJson'),
+      invalidRoot: tVars('parseInvalidRoot'),
+    }),
+    [tVars],
+  );
   const currentJsonError = useMemo(() => {
     if (variableQuery.isLoading || !currentDeviceVarsEnabled) return '';
     try {
-      parseDeviceVarsJson(currentDraft);
+      parseDeviceVarsJson(currentDraft, parseMsgs);
       return '';
     } catch (err) {
-      return err instanceof Error ? err.message : 'JSON không hợp lệ';
+      return err instanceof Error ? err.message : tVars('parseUnknown');
     }
-  }, [currentDeviceVarsEnabled, currentDraft, variableQuery.isLoading]);
+  }, [currentDeviceVarsEnabled, currentDraft, variableQuery.isLoading, parseMsgs, tVars]);
+
+  const globalVariablesPreview = useMemo(
+    () => mergeCampaignScenarioVariables(campaignVariables, activeScenario?.variables),
+    [campaignVariables, activeScenario?.variables],
+  );
 
   const toggle = (serial: string) => {
     setSelected((prev) => {
@@ -159,7 +181,7 @@ export function RunCampaignDialog({
     setDeviceVarEnabled((prev) => ({ ...prev, [pairKey]: enabled }));
     setDrafts((prev) => ({
       ...prev,
-      [pairKey]: prev[pairKey] ?? formatDeviceVarsJson(DEFAULT_DEVICE_VARIABLES),
+      [pairKey]: prev[pairKey] ?? formatInitialDeviceVars({}, activeScenario?.variables),
     }));
     setDirtyKeys((prev) => ({ ...prev, [pairKey]: true }));
   };
@@ -169,12 +191,12 @@ export function RunCampaignDialog({
     for (const key of keys) {
       if (deviceVarEnabled[key] !== true) continue;
       try {
-        parseDeviceVarsJson(drafts[key] ?? '{}');
+        parseDeviceVarsJson(drafts[key] ?? '{}', parseMsgs);
       } catch (err) {
         const [scenarioId, deviceId] = key.split('::');
         setActiveScenarioId(scenarioId);
         setActiveDeviceId(deviceId);
-        toast.error(err instanceof Error ? err.message : 'JSON không hợp lệ');
+        toast.error(err instanceof Error ? err.message : tVars('parseUnknown'));
         return false;
       }
     }
@@ -187,7 +209,7 @@ export function RunCampaignDialog({
         keys.map((key) => {
           const [scenarioId, deviceId] = key.split('::');
           const vars = deviceVarEnabled[key] === true
-            ? parseDeviceVarsJson(drafts[key] ?? '{}')
+            ? parseDeviceVarsJson(drafts[key] ?? '{}', parseMsgs)
             : {};
           return campaignsApi.replaceScenarioDeviceVariables(campaignId, scenarioId, deviceId, {
             vars,
@@ -203,7 +225,7 @@ export function RunCampaignDialog({
       setDirtyKeys({});
       return true;
     } catch {
-      toast.error('Lưu biến thiết bị thất bại');
+      toast.error(tVars('saveFailed'));
       return false;
     } finally {
       setIsSaving(false);
@@ -223,13 +245,13 @@ export function RunCampaignDialog({
         <DialogHeader>
           <DialogTitle className='flex items-center gap-2 border-b px-5 py-4 text-sm'>
             <Play size={14} />
-            Chạy campaign
+            {tList('titleRun')}
           </DialogTitle>
         </DialogHeader>
 
         {devices.length === 0 || scenarios.length === 0 ? (
           <p className='py-4 text-center text-xs text-muted-foreground'>
-            Chưa có đủ thiết bị hoặc kịch bản để chạy campaign này.
+            {tList('runDialogNotReady')}
           </p>
         ) : (
           <div className='grid min-h-0 grid-cols-[280px_1fr] divide-x px-5 '>
@@ -242,7 +264,7 @@ export function RunCampaignDialog({
                 {allSelected
                   ? <CheckSquare size={14} className='text-primary' />
                   : <Square size={14} className='text-muted-foreground' />}
-                <span className='font-medium'>Chọn tất cả</span>
+                <span className='font-medium'>{tList('runDialogSelectAll')}</span>
                 <Badge variant='secondary' className='ml-auto text-[10px]'>
                   {allSerials.length}
                 </Badge>
@@ -264,7 +286,7 @@ export function RunCampaignDialog({
                         type='button'
                         onClick={() => toggle(device.serial)}
                         className='flex h-7 w-7 shrink-0 items-center justify-center rounded hover:bg-muted'
-                        aria-label={isChecked ? 'Bỏ chọn thiết bị' : 'Chọn thiết bị'}
+                        aria-label={isChecked ? tList('runDialogAriaDeselectDevice') : tList('runDialogAriaSelectDevice')}
                       >
                         {isChecked
                           ? <CheckSquare size={13} className='text-primary' />
@@ -290,7 +312,7 @@ export function RunCampaignDialog({
                 {scenarios.length > 1 && (
                   <Select value={activeScenarioId} onValueChange={setActiveScenarioId}>
                     <SelectTrigger size='sm' className='w-[220px] text-xs'>
-                      <SelectValue placeholder='Chọn kịch bản' />
+                      <SelectValue placeholder={tList('runDialogScenarioPlaceholder')} />
                     </SelectTrigger>
                     <SelectContent>
                       {scenarios.map((scenario) => (
@@ -311,6 +333,8 @@ export function RunCampaignDialog({
                 loading={variableQuery.isLoading}
                 jsonError={currentJsonError}
                 deviceLabel={activeDevice?.serial}
+                baseVariables={activeScenario?.variables}
+                globalVariablesPreview={globalVariablesPreview}
                 editorClassName='min-h-[460px]'
                 emptyClassName='min-h-[460px]'
               />
@@ -320,7 +344,7 @@ export function RunCampaignDialog({
 
         <DialogFooter className='border-t px-5 py-4'>
           <Button size='sm' variant='outline' className='h-7 text-xs' onClick={onClose}>
-            Hủy
+            {tModal('cancel')}
           </Button>
           <Button
             size='sm'
@@ -329,7 +353,9 @@ export function RunCampaignDialog({
             onClick={handleRun}
           >
             {isSaving ? <Loader2 size={12} className='animate-spin' /> : <Play size={12} />}
-            Chạy {selected.size > 0 && selected.size < allSerials.length ? `(${selected.size})` : ''}
+            {selected.size > 0 && selected.size < allSerials.length
+              ? tList('runDialogRunCount', { count: selected.size })
+              : tList('runDialogRun')}
           </Button>
         </DialogFooter>
       </DialogContent>

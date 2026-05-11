@@ -51,7 +51,7 @@ from core.config import Config
 from db import crud as repo
 from db.database import AsyncSessionLocal
 from db.crud.scenario_device_variable import get_scenario_device_variables
-from common.variable_resolver import device_vars_to_tokens
+from common.variable_resolver import normalize_device_vars
 from runtime.core import DeviceManager
 
 log = logging.getLogger(__name__)
@@ -149,9 +149,9 @@ async def _resolve_device_runtime_vars(
     scenario_id: Optional[str] = None,
     inline_device_vars: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    inline_tokens = device_vars_to_tokens(inline_device_vars or {})
+    inline_vars = normalize_device_vars(inline_device_vars or {})
     if not scenario_id:
-        return inline_tokens
+        return inline_vars
     try:
         from db.crud.device import get_device, get_device_by_serial
     except Exception:
@@ -166,12 +166,12 @@ async def _resolve_device_runtime_vars(
             if user_id and getattr(device, "user_id", None) != user_id:
                 return {}
             raw = await get_scenario_device_variables(db, scenario_id, device.id)
-            db_tokens = device_vars_to_tokens(raw)
+            db_vars = normalize_device_vars(raw)
             # Inline draft vars win over persisted vars for preview ergonomics.
-            return {**db_tokens, **inline_tokens}
+            return {**db_vars, **inline_vars}
     except Exception as exc:
         log.warning("preview device vars resolve failed: %s", exc)
-        return inline_tokens
+        return inline_vars
 
 
 async def _execute_scenario_body(
@@ -234,11 +234,12 @@ def build_scenarios_router(
         )
         # Inject __ACCOUNT_* vars from the bound account group (if any) so a
         # test run can exercise login steps without first saving the scenario.
-        # Client-supplied variables still win on key collision.
+        # Device-specific variables override the global scenario/campaign vars
+        # that the client sends in body.variables.
         acct_vars = await _resolve_account_group_vars(body.account_group_id, user_id)
         merged = {**device_vars, **acct_vars}
         if merged:
-            body.variables = {**merged, **(body.variables or {})}
+            body.variables = {**(body.variables or {}), **merged}
         return await _execute_scenario_body(
             manager, serial, body, trace_source="api.preview", user_id=user_id
         )
@@ -271,12 +272,12 @@ def build_scenarios_router(
             body.scenario_device_vars,
         )
 
-        # Same account-group rotation hook as the non-stream preview. Keep
-        # upstream variables authoritative on collision.
+        # Same account-group rotation hook as the non-stream preview. Device
+        # vars share the global namespace and override body.variables.
         acct_vars = await _resolve_account_group_vars(body.account_group_id, user_id)
         merged = {**device_vars, **acct_vars}
         if merged:
-            body.variables = {**merged, **(body.variables or {})}
+            body.variables = {**(body.variables or {}), **merged}
 
         cancel_event = threading.Event()
         _register_preview(serial, trace_id, cancel_event, user_id=user_id)
@@ -366,7 +367,7 @@ def build_scenarios_router(
             body.scenario_device_vars,
         )
         if device_vars:
-            body.variables = {**device_vars, **(body.variables or {})}
+            body.variables = {**(body.variables or {}), **device_vars}
         return await _execute_scenario_body(
             manager, serial, body, trace_source="api.run", user_id=user_id
         )
@@ -400,7 +401,7 @@ def build_scenarios_router(
             body.scenario_device_vars,
         )
         if device_vars:
-            body.variables = {**device_vars, **(body.variables or {})}
+            body.variables = {**(body.variables or {}), **device_vars}
         if not body.steps:
             return JSONResponse(
                 {"error": "steps must be a non-empty array"},

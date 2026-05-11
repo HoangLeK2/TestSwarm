@@ -43,6 +43,25 @@
       "clear": "Xóa",
       "close": "Đóng"
     },
+    "deviceVarsJson": {
+      "title": "Biến thiết bị cho kịch bản",
+      "toggleLabel": "Dùng biến riêng thiết bị",
+      "toggleDescription": "Tắt để chạy bằng biến global của campaign/kịch bản.",
+      "toggleAria": "Dùng biến riêng thiết bị",
+      "globalBlockTitle": "Biến global (campaign → kịch bản, kịch bản ghi đè key trùng)",
+      "globalReadonlyAria": "Biến global (chỉ đọc)",
+      "globalEmpty": "Chưa có biến global nào trên campaign/kịch bản (hoặc chỉ có biến hệ thống dạng __… bị ẩn).",
+      "modeOffHint": "Thiết bị này không inject biến riêng — chỉ dùng biến global bên dưới.",
+      "addGlobalKeyLabel": "Thêm key global:",
+      "footerLoading": "Đang tải cấu hình đã lưu...",
+      "footerMergedEditor": "Một JSON: global + override thiết bị. Giá trị trùng global không lưu vào override — xóa key để kế thừa global.",
+      "footerUsingGlobal": "Đang dùng biến global.",
+      "parseInvalidJson": "JSON không hợp lệ (sai cú pháp).",
+      "parseInvalidRoot": "JSON phải là object, ví dụ {\"group_name\": \"abc\"}",
+      "parseUnknown": "JSON không hợp lệ",
+      "invalidAtDevice": "JSON không hợp lệ ở thiết bị {serial}",
+      "saveFailed": "Lưu biến thiết bị thất bại"
+    },
     "modal": {
       "confirmAction": "Xác nhận hành động",
       "areYouSure": "Bạn có chắc muốn tiếp tục?",
@@ -524,6 +543,13 @@
       "runFailed": "Chạy campaign thất bại",
       "titleNeedDevice": "Thêm ít nhất 1 thiết bị trước khi chạy",
       "titleRun": "Chạy campaign",
+      "runDialogNotReady": "Chưa có đủ thiết bị hoặc kịch bản để chạy campaign này.",
+      "runDialogSelectAll": "Chọn tất cả",
+      "runDialogAriaSelectDevice": "Chọn thiết bị",
+      "runDialogAriaDeselectDevice": "Bỏ chọn thiết bị",
+      "runDialogScenarioPlaceholder": "Chọn kịch bản",
+      "runDialogRun": "Chạy",
+      "runDialogRunCount": "Chạy ({count})",
       "paused": "Đã tạm dừng campaign",
       "titlePause": "Tạm dừng",
       "titleResume": "Tiếp tục chạy",
@@ -815,6 +841,24 @@
     },
     "takeover": {
       "manualControlBlocked": "Thiết bị đang bận hoặc đang chạy campaign — thao tác thủ công bị chặn"
+    },
+    "deviceVarsDialog": {
+      "title": "Biến thiết bị cho kịch bản",
+      "scopeHint": "Phạm vi: kịch bản hiện tại + toàn bộ thiết bị trong chiến dịch.",
+      "instructions": "Chọn thiết bị bên trái, bật biến riêng nếu cần, rồi nhập JSON cho thiết bị đó.",
+      "switchHint": "Tắt switch để thiết bị dùng biến global của kịch bản/campaign.",
+      "loadingVars": "Đang tải biến...",
+      "noDevicesInCampaign": "Chiến dịch chưa có thiết bị.",
+      "badgePerDevice": "riêng",
+      "badgeGlobal": "global",
+      "cancel": "Hủy",
+      "saveDraftToast": "Đã lưu tạm biến thiết bị. Khi bạn lưu scenario, hệ thống sẽ tự áp dụng.",
+      "saveLoading": "Đang lưu...",
+      "save": "Lưu",
+      "saveDraft": "Lưu tạm",
+      "noDeviceSelected": "Chưa chọn thiết bị",
+      "loadVarsError": "Không tải được biến thiết bị: {message}",
+      "saveAllSuccess": "Đã lưu biến cho tất cả thiết bị trong chiến dịch"
     },
     "view": {
       "takeover": {

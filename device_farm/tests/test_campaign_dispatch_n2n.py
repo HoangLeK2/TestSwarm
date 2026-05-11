@@ -75,6 +75,47 @@ async def test_dispatch_single_device_single_scenario_n2n():
 
 
 @pytest.mark.asyncio
+async def test_dispatch_device_vars_share_namespace_and_override_global_vars():
+    db = _make_db_mock()
+    temporal = AsyncMock()
+    temporal.start_workflow = AsyncMock()
+    execution = SimpleNamespace(id="exec-override", meta={"scenarios_count": 1})
+    scenario = _scenario("sc-override")
+    scenario.variables = {"group_name": "global-group", "save_collection": "global_collection"}
+
+    with ExitStack() as stack:
+        stack.enter_context(patch("services.campaign_dispatch.AsyncSessionLocal", return_value=db))
+        stack.enter_context(patch("services.campaign_dispatch.repo.get_campaign", return_value=_campaign("camp-override")))
+        stack.enter_context(
+            patch("services.campaign_dispatch.repo.list_campaign_devices", return_value=[_device("dev-1", "SN001")])
+        )
+        stack.enter_context(
+            patch("services.campaign_dispatch.repo.list_scenarios", return_value=[scenario])
+        )
+        stack.enter_context(patch("services.campaign_dispatch.repo.update_campaign_status", new_callable=AsyncMock))
+        stack.enter_context(patch("db.crud.scenario_template.list_templates", new_callable=AsyncMock, return_value=[]))
+        stack.enter_context(patch("services.campaign_dispatch._get_device_account_vars", new_callable=AsyncMock, return_value={}))
+        stack.enter_context(
+            patch(
+                "services.campaign_dispatch.get_scenario_device_variables",
+                new_callable=AsyncMock,
+                return_value={"group_name": "device-group"},
+            )
+        )
+        stack.enter_context(patch("db.crud.execution.create_execution", new_callable=AsyncMock, return_value=execution))
+        stack.enter_context(patch("db.crud.execution.add_device_to_execution", new_callable=AsyncMock))
+        stack.enter_context(patch("db.crud.execution.update_execution", new_callable=AsyncMock))
+
+        _, status = await enqueue_campaign_run_temporal("camp-override", temporal)
+
+    assert status == 200
+    started_input: ScenarioInput = temporal.start_workflow.await_args.args[1]
+    assert started_input.variables["group_name"] == "device-group"
+    assert started_input.variables["save_collection"] == "global_collection"
+    assert "__DEVICE_GROUP_NAME__" not in started_input.variables
+
+
+@pytest.mark.asyncio
 async def test_dispatch_multi_device_multi_scenario_starts_n_to_n_workflows():
     db = _make_db_mock()
     temporal = AsyncMock()

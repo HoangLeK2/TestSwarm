@@ -6,7 +6,7 @@ common/variable_resolver.py — Variable interpolation engine for scenario execu
 Support ${VAR} syntax in any string field of step.
 Resolution order (priority decreasing):
   1. Runtime vars  (set_variable step, extraction results)
-  2. Scenario-level vars  (scenario.variables)
+  2. Scenario-level vars  (scenario.variables, including device overrides)
   3. Campaign-level vars  (campaign.variables)
   4. Env vars  (only names listed in VariableContext.env_whitelist — opt-in, default empty)
   5. Built-in vars  (__NOW__, __DEVICE_SERIAL__, ...)
@@ -16,14 +16,12 @@ Resolution order (priority decreasing):
 import os
 import random
 import re
-import json
 import uuid
 from datetime import datetime
 from typing import Any
 
 _EXACT_VAR_RE = re.compile(r"^\$\{(\w+)\}$")
 _VAR_PATTERN = re.compile(r"\$\{(\w+)\}")
-_DEVICE_KEY_SANITIZE_RE = re.compile(r"[^A-Za-z0-9_]")
 
 _BUILTIN_NAMES: frozenset[str] = frozenset({
     "__NOW__", "__DATE__", "__TIME__",
@@ -54,19 +52,9 @@ def _normalize_vars(raw: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def device_vars_to_tokens(raw: dict[str, Any] | None) -> dict[str, str]:
-    """Convert per-device config map into ``__DEVICE_*`` string tokens."""
-    out: dict[str, str] = {}
-    for key, value in (raw or {}).items():
-        token_key = _DEVICE_KEY_SANITIZE_RE.sub("_", str(key)).upper()
-        token = f"__DEVICE_{token_key}__"
-        if isinstance(value, (dict, list)):
-            out[token] = json.dumps(value, ensure_ascii=False)
-        elif value is None:
-            out[token] = ""
-        else:
-            out[token] = str(value)
-    return out
+def normalize_device_vars(raw: dict[str, Any] | None) -> dict[str, Any]:
+    """Return per-device variable overrides in the same namespace as globals."""
+    return dict(raw or {})
 
 
 class VariableContext:

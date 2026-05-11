@@ -12,8 +12,10 @@ Run: pytest tests/test_u2_bug_fixes.py -v
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, call, patch
 
 import pytest
@@ -263,6 +265,73 @@ class TestDeviceClientU2Recovery:
         assert "u2" not in d._tunnels_ready_channels
         recovery.assert_called_once()
         assert d._recovery_reason == "u2_legacy_reconnect_failed"
+
+    def test_atx_recovery_uses_relay_restart_u2(self):
+        d = DeviceClient(serial="logical-serial", index=0, config=Config())
+        d._u2_host = "172.16.0.83"
+        d._adb_serial = "172.16.0.83:5555"
+        d._loop = object()
+        d._agent_send = Mock()
+        d._recovery_log = Mock()
+        d._mark_recovery_end = Mock()
+        relay = _FakeRelay(["172.16.0.83:5555"])
+        restart_calls = []
+
+        async def restart_u2(serial, timeout=60.0):
+            restart_calls.append((serial, timeout))
+            return True
+
+        relay.restart_u2 = restart_u2
+
+        def run_now(coro, _loop):
+            asyncio.run(coro)
+            return SimpleNamespace()
+
+        with patch("runtime.transports.adb_relay_server.get_relay_manager", return_value=relay), \
+                patch("runtime.core.device_client.asyncio.run_coroutine_threadsafe", side_effect=run_now):
+            d._recover_u2_ws_mode()
+
+        assert restart_calls == [("172.16.0.83:5555", 60.0)]
+        d._agent_send.assert_not_called()
+
+    def test_atx_502_triggers_u2_restart_not_atx_restart(self):
+        d = DeviceClient(serial="logical-serial", index=0, config=Config())
+        d._u2_host = "172.16.0.83"
+        d._trigger_u2_restart_async = Mock(return_value=True)
+        d._trigger_atx_restart_async = Mock()
+
+        class FakeSession:
+            def close(self):
+                pass
+
+        class FakeU2:
+            def __init__(self, *args, **kwargs):
+                self._session = FakeSession()
+                self.settings = {}
+
+            def implicitly_wait(self, _timeout):
+                pass
+
+            def verify(self, timeout):
+                raise RuntimeError("JSON-RPC HTTP 502 for method='deviceInfo': 'Bad Gateway'")
+
+        with patch("runtime.core.device_client.U2JsonRpcClient", FakeU2):
+            assert d._reconnect_u2_atx() is False
+
+        d._trigger_u2_restart_async.assert_called_once_with("172.16.0.83")
+        d._trigger_atx_restart_async.assert_not_called()
+
+    def test_u2_touch_failure_triggers_async_recovery_in_atx_mode(self):
+        d = DeviceClient(serial="logical-serial", index=0, config=Config())
+        d._u2_host = "172.16.0.83"
+        d._u2 = object()
+        d._recover_u2_ws_mode = Mock()
+
+        ok = d._try_u2_tap_impl(lambda: (_ for _ in ()).throw(RuntimeError("u2 killed")))
+
+        assert ok is False
+        assert d._u2 is None
+        d._recover_u2_ws_mode.assert_called_once()
 
 
 class TestWatchdogAtxProbe:

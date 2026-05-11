@@ -11,7 +11,7 @@ import re
 
 import pytest
 
-from common.variable_resolver import VariableContext, device_vars_to_tokens
+from common.variable_resolver import VariableContext, normalize_device_vars
 
 
 
@@ -268,14 +268,14 @@ def test_full_step_resolution():
     }
 
 
-def test_device_vars_to_tokens_scalar_and_none():
-    out = device_vars_to_tokens({"email": "a@example.com", "port": 5555, "empty": None})
-    assert out["__DEVICE_EMAIL__"] == "a@example.com"
-    assert out["__DEVICE_PORT__"] == "5555"
-    assert out["__DEVICE_EMPTY__"] == ""
+def test_normalize_device_vars_keeps_global_namespace():
+    out = normalize_device_vars({"group_name": "device-group", "port": 5555, "empty": None})
+    assert out == {"group_name": "device-group", "port": 5555, "empty": None}
 
 
-def test_device_vars_to_tokens_json_and_key_sanitize():
-    out = device_vars_to_tokens({"proxy.url": {"host": "x", "port": 80}, "group-name": ["A", "B"]})
-    assert out["__DEVICE_PROXY_URL__"] == '{"host": "x", "port": 80}'
-    assert out["__DEVICE_GROUP_NAME__"] == '["A", "B"]'
+def test_device_var_can_override_global_when_merged_into_scenario_vars():
+    global_vars = {"group_name": "global-group", "save_collection": "global_collection"}
+    device_vars = normalize_device_vars({"group_name": "device-group"})
+    ctx = VariableContext(scenario_vars={**global_vars, **device_vars})
+    assert ctx.resolve("${group_name}") == "device-group"
+    assert ctx.resolve("${save_collection}") == "global_collection"

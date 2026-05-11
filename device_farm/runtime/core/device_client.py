@@ -275,6 +275,7 @@ class DeviceClient:
         self._u2_last_ok_at: float = 0.0             # monotonic time of last confirmed-live ping
         self._u2_start_services_requested_at: float = 0.0
         self._atx_restart_triggered_at: float = float("-inf") # dedup guard; -inf = never triggered
+        self._u2_restart_triggered_at: float = float("-inf")  # dedup guard for relay restart_u2
         self._atx_grace_given_at: float = float("-inf")      # time first timeout was seen; -inf = no grace in progress
         self._hierarchy_relay_u2_fail_count: int = 0
         self._hierarchy_relay_u2_last_fail_at: float = 0.0
@@ -922,6 +923,8 @@ class DeviceClient:
             with self._u2_lock:
                 if self._u2 is u2_snap:
                     self._u2 = None
+            if self._u2_host:
+                self._recover_u2_ws_mode()
         # Don't reconnect inline — let keepalive handle it in background.
         # Inline reconnect blocks the touch caller for 3-12s (tunnel churn)
         # and starves the event loop. Return False → caller falls through to
@@ -1773,7 +1776,10 @@ class DeviceClient:
 
             self._log("hierarchy: route=u2->a11y failed", level=logging.WARNING)
             self._note_hierarchy_failure("route_failed")
-            self._request_u2_start_services("hierarchy_route_failed")
+            if self._u2_host:
+                self._recover_u2_ws_mode()
+            else:
+                self._request_u2_start_services("hierarchy_route_failed")
             return None
         finally:
             self._hierarchy_lock.release()
@@ -2788,27 +2794,29 @@ class DeviceClient:
     _U2_ATX_PROBE_TIMEOUT      = 1.5  # quick probe; timeout triggers second-chance logic
     _U2_ATX_TIMEOUT_GRACE      = 6.0  # wait after first timeout — covers u2 restart (3-8s)
     _U2_ATX_RECONNECT_BACKOFF  = 15.0 # backoff after triggering atx restart (was 30s)
+    _U2_RESTART_IN_FLIGHT_MAX_S = 65.0 # restart_u2 can wait up to 60s for port 9008
 
     def _recover_u2_ws_mode(self) -> None:
         """
         WS-mode u2 recovery after keepalive detects dead connection.
 
         atx-agent path (_u2_host set):
-          atx-agent on device detects u2 death and restarts it automatically.
-          We just null the stale client and reset backoff — keepalive will
-          reconnect to device_ip:7912 once atx-agent brings u2 back up.
+          Restart u2 instrumentation explicitly through agent-boot relay.  A
+          killed u2 process can leave atx-agent alive but proxying 502 forever.
 
         Legacy path (USB / no atx-agent):
           Rate-limited ADB restart: ask APK to reconnect tunnel, and if u2
           process is dead, restart am instrument via ADB.
         """
         if self._u2_host:
-            # atx-agent path: just tell the APK to restart u2 instrumentation.
-            # atx-agent manages u2 death automatically — no need to kill the binary.
-            # Binary restart only happens when atx-agent is frozen (read timeout),
-            # which is detected and handled in _connect_u2_via_atx_agent.
-            self._log("u2 recovery: sending start_services to APK (atx-agent path)", level=logging.DEBUG)
-            self._request_u2_start_services("recover_atx")
+            # atx-agent path: when u2 instrumentation is killed, atx-agent may
+            # stay alive and return 502/timeout forever.  Restart u2 explicitly
+            # through agent-boot; fall back to legacy APK start_services only
+            # when no relay is available.
+            self._log("u2 recovery: triggering relay restart_u2 (atx-agent path)", level=logging.INFO)
+            if self._trigger_u2_restart_async(self._u2_host):
+                return
+            self._request_u2_start_services("recover_atx_fallback")
             return
 
         # ── Legacy: no atx-agent — ADB restart ───────────────────────────────
@@ -2943,6 +2951,85 @@ class DeviceClient:
         t = threading.Thread(target=_do_restart, daemon=True, name=f"u2-recover-{self.serial}")
         t.start()
 
+    @staticmethod
+    def _looks_like_atx_u2_dead_error(exc: Exception) -> bool:
+        """True when atx-agent is reachable but its u2 backend is gone."""
+        msg = str(exc or "").lower()
+        markers = (
+            "json-rpc http 502",
+            "502 bad gateway",
+            "uiautomator not connected",
+            "uiautomator not running",
+            "uiautomation not connected",
+            "instrumentation process is not running",
+        )
+        return any(marker in msg for marker in markers)
+
+    def _trigger_u2_restart_async(self, host: str) -> bool:
+        """Restart only u2 instrumentation via agent-boot relay, deduped."""
+        now = time.monotonic()
+        if now - self._u2_restart_triggered_at < self._U2_RESTART_IN_FLIGHT_MAX_S:
+            self._log("u2 restart skipped — restart_u2 already in flight", level=logging.DEBUG)
+            return True
+        self._u2_restart_triggered_at = now
+        self._u2_reconnect_failed_at = now
+        self._u2_batch = None
+        with self._u2_lock:
+            self._u2 = None
+
+        loop = self._loop
+        if not loop:
+            self._u2_restart_triggered_at = float("-inf")
+            self._log("u2 restart skipped — event loop unavailable", level=logging.WARNING)
+            return False
+        try:
+            from runtime.transports.adb_relay_server import get_relay_manager
+
+            relay = get_relay_manager()
+            if not relay:
+                self._u2_restart_triggered_at = float("-inf")
+                self._log("u2 restart skipped — relay manager unavailable", level=logging.WARNING)
+                return False
+            actual_serial = self._select_u2_relay_serial(relay, host)
+            if not actual_serial:
+                self._u2_restart_triggered_at = float("-inf")
+                self._log(
+                    "u2 restart skipped — no relay for host "
+                    f"{host} (adb_serial={self._adb_serial or 'unset'})",
+                    level=logging.WARNING,
+                )
+                return False
+
+            async def _do_restart() -> None:
+                try:
+                    ok = await relay.restart_u2(actual_serial, timeout=60.0)
+                    if ok:
+                        self._log(f"u2 restarted via agent-boot for {actual_serial}")
+                        self._u2_reconnect_failed_at = 0.0
+                        self._u2_restart_triggered_at = float("-inf")
+                        self._atx_grace_given_at = float("-inf")
+                        self._recovery_log(
+                            "u2_started",
+                            source="relay_restart_u2",
+                            relay_serial=actual_serial,
+                            host=host,
+                            port=9008,
+                        )
+                        self._mark_recovery_end("u2_restarted_via_agent_boot", relay_serial=actual_serial)
+                    else:
+                        self._u2_reconnect_failed_at = time.monotonic()
+                        self._log(f"u2 restart via agent-boot failed for {actual_serial}", level=logging.WARNING)
+                except Exception as exc2:
+                    self._u2_reconnect_failed_at = time.monotonic()
+                    self._log(f"u2 restart error for {actual_serial}: {exc2}", level=logging.WARNING)
+
+            asyncio.run_coroutine_threadsafe(_do_restart(), loop)
+            return True
+        except Exception as exc:
+            self._u2_restart_triggered_at = float("-inf")
+            self._log(f"_trigger_u2_restart_async: {exc}", level=logging.DEBUG)
+            return False
+
     def _reconnect_u2(self) -> bool:
         """Connect (or reconnect) the u2 client.
 
@@ -3057,6 +3144,10 @@ class DeviceClient:
         if not host:
             return False
 
+        if time.monotonic() - self._u2_restart_triggered_at < self._U2_RESTART_IN_FLIGHT_MAX_S:
+            self._log("u2 ATX: restart_u2 in flight — skipping reconnect probe", level=logging.DEBUG)
+            return False
+
         port = 7912
         cfg = self.config.u2
 
@@ -3164,6 +3255,15 @@ class DeviceClient:
                     level=logging.WARNING,
                 )
                 self._mark_recovery_start("atx_connect_failed")
+
+                if self._looks_like_atx_u2_dead_error(exc):
+                    self._log(
+                        "u2 ATX proxy reports dead uiautomator — triggering relay restart_u2",
+                        level=logging.WARNING,
+                    )
+                    self._mark_recovery_start("u2_dead_atx_proxy")
+                    if self._trigger_u2_restart_async(host):
+                        return False
 
                 if "timed out" in exc_str.lower():
                     now = time.monotonic()

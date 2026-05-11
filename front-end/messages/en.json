@@ -43,6 +43,25 @@
       "clear": "Clear",
       "close": "Close"
     },
+    "deviceVarsJson": {
+      "title": "Device variables for scenario",
+      "toggleLabel": "Use device-specific variables",
+      "toggleDescription": "Turn off to run with campaign/scenario global variables.",
+      "toggleAria": "Use device-specific variables",
+      "globalBlockTitle": "Global variables (campaign → scenario; scenario overrides duplicate keys)",
+      "globalReadonlyAria": "Global variables (read-only)",
+      "globalEmpty": "No global variables on campaign/scenario (or only hidden system keys like __…).",
+      "modeOffHint": "This device does not inject overrides — only the globals below apply.",
+      "addGlobalKeyLabel": "Add global key:",
+      "footerLoading": "Loading saved configuration…",
+      "footerMergedEditor": "Single JSON: globals plus device overrides. Values identical to globals are not stored as overrides — remove a key to inherit global.",
+      "footerUsingGlobal": "Using global variables.",
+      "parseInvalidJson": "Invalid JSON (syntax error).",
+      "parseInvalidRoot": "JSON must be an object, e.g. {\"group_name\": \"abc\"}",
+      "parseUnknown": "Invalid JSON",
+      "invalidAtDevice": "Invalid JSON for device {serial}",
+      "saveFailed": "Failed to save device variables"
+    },
     "modal": {
       "confirmAction": "Confirm Action",
       "areYouSure": "Are you sure you want to proceed?",
@@ -524,6 +543,13 @@
       "runFailed": "Run campaign failed",
       "titleNeedDevice": "Add at least 1 device before running",
       "titleRun": "Run campaign",
+      "runDialogNotReady": "This campaign does not have enough devices or scenarios to run.",
+      "runDialogSelectAll": "Select all",
+      "runDialogAriaSelectDevice": "Select device",
+      "runDialogAriaDeselectDevice": "Deselect device",
+      "runDialogScenarioPlaceholder": "Select scenario",
+      "runDialogRun": "Run",
+      "runDialogRunCount": "Run ({count})",
       "paused": "Campaign paused",
       "titlePause": "Pause",
       "titleResume": "Resume",
@@ -815,6 +841,24 @@
     },
     "takeover": {
       "manualControlBlocked": "Device busy or campaign running — manual input blocked"
+    },
+    "deviceVarsDialog": {
+      "title": "Device variables for scenario",
+      "scopeHint": "Scope: current scenario and all devices in the campaign.",
+      "instructions": "Pick a device on the left, enable overrides if needed, then edit JSON for that device.",
+      "switchHint": "Turn the switch off to use global variables from scenario/campaign.",
+      "loadingVars": "Loading variables…",
+      "noDevicesInCampaign": "This campaign has no devices yet.",
+      "badgePerDevice": "custom",
+      "badgeGlobal": "global",
+      "cancel": "Cancel",
+      "saveDraftToast": "Device variables saved as draft. They will apply when you save the scenario.",
+      "saveLoading": "Saving…",
+      "save": "Save",
+      "saveDraft": "Save draft",
+      "noDeviceSelected": "No device selected",
+      "loadVarsError": "Failed to load device variables: {message}",
+      "saveAllSuccess": "Saved variables for all devices in the campaign"
     },
     "view": {
       "takeover": {

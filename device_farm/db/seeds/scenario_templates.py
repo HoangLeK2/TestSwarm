@@ -202,13 +202,12 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
         "is_builtin": False,
         "category": "facebook",
         "description": (
-            "Crawl bài viết + bình luận 1 nhóm Facebook. Mặc định dùng biến global GROUP_NAME. "
-            "Nếu thiết bị có config group_name thì ưu tiên __DEVICE_GROUP_NAME__; nếu có thêm "
-            "search thì dùng __DEVICE_SEARCH__ làm từ khóa tìm kiếm."
+            "Crawl bài viết + bình luận 1 nhóm Facebook. Mặc định dùng biến global group_name. "
+            "Nếu thiết bị có config group_name/search cùng tên thì giá trị thiết bị ghi đè global."
         ),
-        "tags": "facebook,group,crawl,feed,post,comment,device-config-fallback",
+        "tags": "facebook,group,crawl,feed,post,comment,device-override",
         "variables": {
-            "GROUP_NAME": "openclaw vn",
+            "group_name": "openclaw vn",
             "MAX_SCROLLS": 540,
             "MAX_COMMENT_SCROLLS": 35,
             "MAX_COMMENTS_PER_POST": 500,
@@ -221,22 +220,13 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "FB_COMMENTS_STRATEGY_VERSION": "fb_comments:v1",
         },
         "steps": [
-            {"type": "set_variable", "name": "SEARCH_TEXT", "value": "${GROUP_NAME}"},
-            {"type": "set_variable", "name": "TARGET_GROUP_NAME", "value": "${GROUP_NAME}"},
+            {"type": "set_variable", "name": "SEARCH_TEXT", "value": "${group_name}"},
+            {"type": "set_variable", "name": "TARGET_GROUP_NAME", "value": "${group_name}"},
             {
                 "type": "if_variable",
-                "name": "__DEVICE_GROUP_NAME__",
+                "name": "search",
                 "then": [
-                    {"type": "set_variable", "name": "SEARCH_TEXT", "value": "${__DEVICE_GROUP_NAME__}"},
-                    {"type": "set_variable", "name": "TARGET_GROUP_NAME", "value": "${__DEVICE_GROUP_NAME__}"},
-                ],
-                "else": [],
-            },
-            {
-                "type": "if_variable",
-                "name": "__DEVICE_SEARCH__",
-                "then": [
-                    {"type": "set_variable", "name": "SEARCH_TEXT", "value": "${__DEVICE_SEARCH__}"},
+                    {"type": "set_variable", "name": "SEARCH_TEXT", "value": "${search}"},
                 ],
                 "else": [],
             },

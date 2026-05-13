@@ -6,7 +6,7 @@ import secrets
 import shlex
 import uuid
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
 from api.deps import CurrentUser, DB
@@ -145,6 +145,10 @@ async def push_connect_url_to_device(
     request: Request,
     db: DB,
     user: CurrentUser,
+    device_id: str | None = Query(
+        None,
+        description="Logical device id when DB serial is pending-* but ADB path serial is physical",
+    ),
 ):
     """Send the device-agent URL to STFService via agent-boot/ADB; no QR scan required."""
     row = await repo.get_relay_agent(db, relay_id)
@@ -155,9 +159,15 @@ async def push_connect_url_to_device(
     if serial not in set(row.serials or []):
         raise HTTPException(status_code=409, detail="serial is not reported by this relay agent")
 
-    device = await repo.get_device_by_serial(db, serial)
-    if not device or device.user_id != user.id:
-        raise HTTPException(status_code=404, detail="registered device not found")
+    device = None
+    if device_id and device_id.strip():
+        device = await repo.get_device(db, device_id.strip())
+        if not device or device.user_id != user.id:
+            raise HTTPException(status_code=404, detail="device not found")
+    else:
+        device = await repo.get_device_by_serial(db, serial)
+        if not device or device.user_id != user.id:
+            raise HTTPException(status_code=404, detail="registered device not found")
 
     scheme = "wss" if request.url.scheme == "https" else "ws"
     host = request.headers.get("host", request.url.netloc)

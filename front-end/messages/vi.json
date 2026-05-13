@@ -46,17 +46,20 @@
     "deviceVarsJson": {
       "title": "Biến trên thiết bị này",
       "toggleLabel": "Ghi đè biến global cho thiết bị này",
-      "toggleDescriptionOn": "JSON bên dưới = global + phần bạn sửa. Hệ thống chỉ lưu các key khác với global; xóa một key để key đó kế thừa lại từ global.",
+      "toggleDescriptionOn": "Form bên dưới = global + phần bạn sửa. Chỉ các key khác global được lưu làm override thiết bị; mở \"JSON nâng cao\" nếu cần sửa raw.",
       "toggleDescriptionOff": "Thiết bị chỉ dùng biến global (campaign + kịch bản, xem khung bên dưới). Bật công tắc nếu cần giá trị riêng trên máy này.",
       "toggleAriaOn": "Đang bật ghi đè theo thiết bị — tắt để chỉ dùng biến global",
       "toggleAriaOff": "Đang tắt ghi đè — bật để chỉnh JSON ghi đè",
+      "formTitle": "Chỉnh từng biến",
+      "advancedJson": "JSON nâng cao",
+      "advancedJsonHint": "Sửa trực tiếp object đã merge (global + override). Dùng khi copy/paste hoặc thêm key lạ.",
       "globalBlockTitle": "Biến global (campaign → kịch bản, kịch bản ghi đè key trùng)",
       "globalReadonlyAria": "Biến global (chỉ đọc)",
       "globalEmpty": "Chưa có biến global nào trên campaign/kịch bản (hoặc chỉ có biến hệ thống dạng __… bị ẩn).",
       "modeOffHint": "Đang kế thừa: chỉ biến global (campaign + kịch bản). Bật công tắc phía trên nếu cần ghi đè theo thiết bị.",
       "addGlobalKeyLabel": "Thêm key global:",
       "footerLoading": "Đang tải cấu hình đã lưu...",
-      "footerMergedEditor": "Một JSON: global + override thiết bị. Giá trị trùng global không lưu vào override — xóa key để kế thừa global.",
+      "footerMergedEditor": "Form hoặc JSON nâng cao: global + override. Giá trị trùng global không lưu override — xóa key trong JSON để kế thừa global.",
       "footerUsingGlobal": "Đang dùng biến global.",
       "parseInvalidJson": "JSON không hợp lệ (sai cú pháp).",
       "parseInvalidRoot": "JSON phải là object, ví dụ {\"group_name\": \"abc\"}",
@@ -180,7 +183,9 @@
       "accountGroupLabel": "Nhóm tài khoản",
       "accountGroupNone": "— Không dùng —",
       "accountGroupHint": "Mỗi device trong campaign sẽ dùng một account khác từ nhóm.",
-      "accountGroupCaption": "{count} account · {strategy}"
+      "accountGroupCaption": "{count} account · {strategy}",
+      "loadOverwriteTitle": "Thay thế các bước kịch bản?",
+      "loadOverwriteDescription": "Kịch bản hiện tại có {count} bước. Tải từ \"{name}\" sẽ ghi đè."
     }
   },
   "navigation": {
@@ -1096,7 +1101,13 @@
       "infoModel": "Model",
       "infoAndroid": "Android",
       "controlNow": "Điều khiển ngay",
-      "close": "Đóng"
+      "close": "Đóng",
+      "sendToPhone": "Gửi link xuống điện thoại",
+      "sendingToPhone": "Đang gửi…",
+      "sentToPhone": "Đã gửi link xuống điện thoại",
+      "errorPushToPhone": "Không gửi được link qua relay. Kiểm tra agent-boot và app Chức năng thiết bị.",
+      "pickAdbSerial": "ADB serial (relay)",
+      "pickAdbSerialHint": "Nhiều máy cắm USB — chọn đúng serial của máy cần mở link này."
     }
   },
   "deviceStf": {
@@ -1223,6 +1234,8 @@
     "addDevice": "Thêm thiết bị",
     "controlAndRecord": "Điều khiển & ghi kịch bản",
     "controlDevice": "Điều khiển",
+    "restartDeviceConfirmTitle": "Khởi động lại thiết bị",
+    "restartDeviceConfirmDescription": "Gửi lệnh khởi động lại tới thiết bị {serial}?",
     "deviceInactive": "Thiết bị chưa hoạt động",
     "header": {
       "eyebrow": "Device Farm",

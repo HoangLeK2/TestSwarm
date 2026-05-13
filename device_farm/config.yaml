@@ -144,7 +144,7 @@ temporal:
                                          # For cloud scale: run more farm pods, each with worker_count=2-4
   worker_max_concurrent_activities: 10  # Max parallel device actions per worker thread
   worker_max_concurrent_workflows: 50   # Max parallel workflow tasks per worker thread
-  workflow_execution_timeout: 3600      # Max seconds for one campaign workflow
+  workflow_execution_timeout: 0         # 0 = unlimited (no timeout). Was 3600s.
   activity_start_to_close_timeout: 60   # Max seconds per device action
   activity_retry_max_attempts: 3        # Retry failed device actions
   activity_retry_initial_interval: 1.0  # First retry delay (seconds)

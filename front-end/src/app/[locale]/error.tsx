@@ -62,7 +62,7 @@ export default function Error({
                 throw new globalThis.Error('Report dialog not available');
               }
             } catch (_err) {
-              window.alert(t('reportDialogFail'));
+              // Report dialog unavailable — use toast when enabling this button again
             }
           }}
         >

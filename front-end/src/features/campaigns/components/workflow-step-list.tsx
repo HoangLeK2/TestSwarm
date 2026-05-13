@@ -27,7 +27,8 @@ import type { FlowStep } from './scenario-steps/types';
 
 export function parseWorkflowId(id: string) {
   const m = id.match(/^campaign:([^:]+):device:.+:scenario:([^:]+)$/);
-  return { campaignId: m?.[1] ?? '', scenarioId: m?.[2] ?? '' };
+  const scenarioId = m?.[2] ?? '';
+  return { campaignId: m?.[1] ?? '', scenarioId: scenarioId === '__sequence__' ? '' : scenarioId };
 }
 
 // ── Single step row ───────────────────────────────────────────────────────────
@@ -52,7 +53,7 @@ export function StepRow({
   isPending: boolean;
 }) {
   const t = useTranslations('campaignsFeature.list');
-  const type = stepDef?.type ?? logEntry?.step_type ?? (isCurrentlyRunning ? currentStepType : '');
+  const type = stepDef?.type ?? logEntry?.step_type ?? logEntry?.type ?? (isCurrentlyRunning ? currentStepType : '');
   const userTitle = (stepDef as Record<string, unknown> | undefined)?.['title'] as string | undefined;
   const { target } = stepDef ? getStepDisplay(stepDef) : { target: '' };
   const label = userTitle?.trim() || (type ? getStepTypeName(type) : t('monitorStepFallback', { n: index + 1 }));

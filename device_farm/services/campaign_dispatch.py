@@ -161,6 +161,42 @@ def _build_scenario_registry(
     return registry
 
 
+def _build_device_sequence_steps(
+    *,
+    scenarios: list,
+    device,
+    slot_idx: int,
+    per_scenario_device_vars: Dict[str, Dict[str, Dict[str, Any]]],
+    per_scenario_device_runtime_vars: Dict[str, Dict[str, Dict[str, Any]]],
+) -> list[Dict[str, Any]]:
+    """Build ordered run_scenario steps for one device.
+
+    A campaign run should fan out by device, not by scenario. Each device gets a
+    single workflow whose top-level steps call the campaign scenarios in DB
+    order, carrying the per-scenario device/account variables as overrides.
+    """
+    steps: list[Dict[str, Any]] = []
+    for scenario_idx, scen in enumerate(scenarios):
+        if not scen.steps:
+            continue
+        acct_vars = per_scenario_device_vars.get(scen.id, {}).get(device.id, {})
+        device_runtime_vars = (
+            per_scenario_device_runtime_vars.get(scen.id, {}).get(device.id, {})
+        )
+        steps.append({
+            "type": "run_scenario",
+            "scenario_id": scen.id,
+            "scenario_name": scen.name,
+            "variables": {
+                "DEVICE_INDEX": str(slot_idx),
+                "SCENARIO_INDEX": str(scenario_idx),
+                **device_runtime_vars,
+                **acct_vars,
+            },
+        })
+    return steps
+
+
 async def enqueue_campaign_run_temporal(
     campaign_id: str,
     temporal_client,
@@ -329,47 +365,46 @@ async def enqueue_campaign_run_temporal(
 
     workflow_ids: list[str] = []
 
+    _campaign_vars = dict(campaign.variables or {})
+    if campaign.user_id:
+        _campaign_vars["__USER_ID__"] = str(campaign.user_id)
+
     for slot_idx, d in enumerate(devices):
-        for scen in scenarios:
-            if not scen.steps:
-                continue
-            acct_vars = per_scenario_device_vars.get(scen.id, {}).get(d.id, {})
-            device_runtime_vars = (
-                per_scenario_device_runtime_vars.get(scen.id, {}).get(d.id, {})
+        sequence_steps = _build_device_sequence_steps(
+            scenarios=scenarios,
+            device=d,
+            slot_idx=slot_idx,
+            per_scenario_device_vars=per_scenario_device_vars,
+            per_scenario_device_runtime_vars=per_scenario_device_runtime_vars,
+        )
+        if not sequence_steps:
+            continue
+
+        wf_id = f"campaign:{campaign_id}:device:{d.serial}:scenario:__sequence__"
+        try:
+            from temporalio.common import WorkflowIDReusePolicy
+            await temporal_client.start_workflow(
+                ScenarioWorkflow.run,
+                ScenarioInput(
+                    campaign_id=campaign_id,
+                    device_serial=d.serial,
+                    steps=sequence_steps,
+                    variables={},
+                    campaign_vars=_campaign_vars,
+                    scenario_registry=registry,
+                    run_id=execution_id,
+                    execution_id=execution_id,
+                ),
+                id=wf_id,
+                task_queue=task_queue,
+                id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
             )
-            # Inject per-device slot so scenarios can branch on DEVICE_INDEX
-            # without manual override (e.g. fb_multi_account_groups template).
-            slot_vars: Dict[str, Any] = {"DEVICE_INDEX": str(slot_idx)}
-            wf_id = f"campaign:{campaign_id}:device:{d.serial}:scenario:{scen.id}"
-            try:
-                from temporalio.common import WorkflowIDReusePolicy
-                _sc_vars = dict(scen.variables or {})
-                _sc_vars.pop(DEVICE_CONTEXT_KEY, None)
-                _campaign_vars = dict(campaign.variables or {})
-                if campaign.user_id:
-                    _campaign_vars["__USER_ID__"] = str(campaign.user_id)
-                await temporal_client.start_workflow(
-                    ScenarioWorkflow.run,
-                    ScenarioInput(
-                        campaign_id=campaign_id,
-                        device_serial=d.serial,
-                        steps=scen.steps,
-                        variables={**_sc_vars, **slot_vars, **device_runtime_vars, **acct_vars},
-                        campaign_vars=_campaign_vars,
-                        scenario_registry=registry,
-                        run_id=execution_id,
-                        execution_id=execution_id,
-                    ),
-                    id=wf_id,
-                    task_queue=task_queue,
-                    id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
-                )
-                workflow_ids.append(wf_id)
-            except Exception as exc:
-                log.error("Failed to start workflow %s: %s", wf_id, exc)
+            workflow_ids.append(wf_id)
+        except Exception as exc:
+            log.error("Failed to start workflow %s: %s", wf_id, exc)
 
     scen_with_steps = sum(1 for s in scenarios if s.steps)
-    expected_workflows = len(devices) * scen_with_steps
+    expected_workflows = len(devices) if scen_with_steps else 0
     if expected_workflows > 0 and not workflow_ids:
         log.error(
             "Campaign %s: all %d workflow start(s) failed — no devices are running",
@@ -391,7 +426,12 @@ async def enqueue_campaign_run_temporal(
     async with AsyncSessionLocal() as db:
         await update_execution(
             db, execution_id,
-            meta={**execution_record.meta, "workflow_ids": workflow_ids},
+            meta={
+                **execution_record.meta,
+                "workflow_ids": workflow_ids,
+                "scenario_ids": [s.id for s in scenarios if s.steps],
+                "execution_mode": "device_sequence",
+            },
         )
         await db.commit()
 

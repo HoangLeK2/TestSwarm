@@ -23,6 +23,7 @@ import {
   PASTE_COMMAND,
   type LexicalNode
 } from 'lexical';
+import { toast } from 'sonner';
 
 import { Command, CommandItem, CommandList } from '@/components/ui/command';
 import {
@@ -80,7 +81,7 @@ export function ContextMenuPlugin(): React.ReactNode {
               name: 'clipboard-read'
             });
             if (permission.state === 'denied') {
-              alert('Not allowed to paste from clipboard.');
+              toast.error('Not allowed to paste from clipboard.');
               return;
             }
 
@@ -106,7 +107,7 @@ export function ContextMenuPlugin(): React.ReactNode {
             });
 
             if (permission.state === 'denied') {
-              alert('Not allowed to paste from clipboard.');
+              toast.error('Not allowed to paste from clipboard.');
               return;
             }
 

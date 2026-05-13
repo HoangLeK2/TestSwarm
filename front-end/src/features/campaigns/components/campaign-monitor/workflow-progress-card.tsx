@@ -21,7 +21,8 @@ function parseSerial(workflowId: string): string {
 
 function parseScenarioId(workflowId: string): string {
   const m = workflowId.match(/:scenario:([^:]+)$/);
-  return m ? m[1] : '';
+  if (!m || m[1] === '__sequence__') return '';
+  return m[1];
 }
 
 // ── Status badge ─────────────────────────────────────────────────────────────

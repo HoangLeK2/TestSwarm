@@ -15,11 +15,14 @@ import { CreateTemplateDialog } from '../create-template-dialog';
 import { getTemplateColumns } from './columns';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
+import { useConfirm } from '@/providers/modal-provider';
 
 const CATEGORIES = ['all', 'general', 'facebook', 'tiktok', 'utility'] as const;
 
 export function TemplateList() {
   const t = useTranslations('scenarioTemplatesFeature.list');
+  const tCommon = useTranslations('common');
+  const confirm = useConfirm();
   const { data: templates, isLoading, error } = useScenarioTemplates();
   const deleteMutation = useDeleteScenarioTemplate();
   const duplicateMutation = useDuplicateScenarioTemplate();
@@ -48,15 +51,24 @@ export function TemplateList() {
       getTemplateColumns(
         t,
         (tpl) => {
-          if (window.confirm(t('confirmDelete', { name: tpl.name }))) {
+          void (async () => {
+            const ok = await confirm({
+              title: t('delete'),
+              description: t('confirmDelete', { name: tpl.name }),
+              confirmText: tCommon('confirm'),
+              cancelText: tCommon('cancel'),
+              confirmVariant: 'destructive',
+              zIndex: 10_000
+            });
+            if (!ok) return;
             deleteMutation.mutate(tpl.id);
-          }
+          })();
         },
         (tpl) => {
           duplicateMutation.mutate(tpl.id);
         }
       ),
-    [t, deleteMutation, duplicateMutation]
+    [t, tCommon, confirm, deleteMutation, duplicateMutation]
   );
 
   const { table } = useDataTable<ScenarioTemplateOut>({

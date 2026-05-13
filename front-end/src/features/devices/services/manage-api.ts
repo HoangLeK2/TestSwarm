@@ -100,10 +100,12 @@ export const relayAgentsApi = {
         body ?? {},
       )
       .then((r) => r.data),
-  pushConnectUrl: (relayId: string, serial: string) =>
+  pushConnectUrl: (relayId: string, serial: string, opts?: { deviceId?: string }) =>
     farmApi
       .post<RelayCommandOut>(
         `/relay-agents/${encodeURIComponent(relayId)}/devices/${encodeURIComponent(serial)}/push-connect-url`,
+        undefined,
+        opts?.deviceId ? { params: { device_id: opts.deviceId } } : undefined,
       )
       .then((r) => r.data),
   bootstrapAll: (relayId: string) =>

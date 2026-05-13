@@ -1,10 +1,12 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useTranslations } from 'next-intl';
 import type { Device, Task, WsMessage } from '../types';
 import { createWs } from '../services/ws';
 import { fetchConfig, fetchLiveDevices, fetchTasks } from '../services/api';
 import { devicesApi } from '../services/manage-api';
+import { useConfirm } from '@/providers/modal-provider';
 
 export function useDeviceFarm() {
   const [devices, setDevices] = useState<Device[]>([]);
@@ -17,6 +19,9 @@ export function useDeviceFarm() {
   const [wifiDenseposeUrl, setWifiDenseposeUrl] = useState<string | null>(null);
 
   const wsRef = useRef<ReturnType<typeof createWs> | null>(null);
+  const t = useTranslations('devicesFarm');
+  const tCommon = useTranslations('common');
+  const confirm = useConfirm();
 
   const wsSend = useCallback((obj: object) => wsRef.current?.send(obj), []);
   const refreshTasks = useCallback(() => {
@@ -150,10 +155,22 @@ export function useDeviceFarm() {
     }));
   }, []);
 
-  const handleRestart = useCallback((serial: string) => {
-    if (!confirm(`Restart device ${serial}?`)) return;
-    wsSend({ type: 'restart', serial });
-  }, [wsSend]);
+  const handleRestart = useCallback(
+    (serial: string) => {
+      void (async () => {
+        const ok = await confirm({
+          title: t('restartDeviceConfirmTitle'),
+          description: t('restartDeviceConfirmDescription', { serial }),
+          confirmText: tCommon('confirm'),
+          cancelText: tCommon('cancel'),
+          zIndex: 10_000
+        });
+        if (!ok) return;
+        wsSend({ type: 'restart', serial });
+      })();
+    },
+    [confirm, t, tCommon, wsSend]
+  );
 
   const myDevices = devices.filter((device) => registeredSerials.has(device.serial));
 

@@ -85,6 +85,7 @@ _CONTROL_FLOW_TYPES = frozenset({
     "set_variable", "set_var", "break_if",
     "loop", "if", "repeat", "repeat_until",
     "if_element", "if_variable", "random_pick",
+    "run_scenario",
     "extract", "save_extraction",
 })
 
@@ -172,7 +173,6 @@ class ScenarioWorkflow:
                 ),
                 id=f"{workflow.info().workflow_id}:steps",
                 task_queue=TASK_QUEUE_NAME,
-                execution_timeout=timedelta(seconds=3600),
             )
 
             if self._cancelled:
@@ -780,6 +780,26 @@ class ScenarioStepsWorkflow:
                     break
                 continue
 
+            # ── run_scenario ────────────────────────────────────────────────
+            if step_type == "run_scenario":
+                ok, msg, sub_results, runtime_context = await self._handle_run_scenario(
+                    inp, step, runtime_vars, runtime_context, idx,
+                )
+                _append({
+                    "index": idx, "type": "run_scenario", "ok": ok,
+                    "message": msg, "sub_results": sub_results,
+                })
+                steps_executed += 1
+                if not ok:
+                    action, early = await self._apply_error_policy(
+                        step, idx, msg, inp, runtime_vars, runtime_context,
+                        steps_executed, step_results,
+                    )
+                    if action == "stop":
+                        return early
+                    continue
+                continue
+
             # ── extract — writes to context (posts / text_nodes) ─────────────
             if step_type == "extract":
                 extract_result: ExtractResult = await workflow.execute_activity(
@@ -1266,6 +1286,91 @@ class ScenarioStepsWorkflow:
 
         return True, f"random_pick: executed branch {chosen_idx}", merged_ctx, child_result.break_requested
 
+    async def _handle_run_scenario(
+        self,
+        inp: StepsInput,
+        step: dict,
+        runtime_vars: dict,
+        runtime_context: dict,
+        idx: int,
+    ) -> tuple[bool, str, list, dict]:
+        """Handle run_scenario as in-workflow control flow.
+
+        This keeps campaign-level scenario sequences on one device strictly
+        sequential while preserving Temporal step execution for the nested
+        scenario, instead of wrapping the whole sub-scenario in one long
+        activity call.
+        """
+        scenario_id = str(step.get("scenario_id") or "").strip()
+        scenario_name = str(step.get("scenario_name") or "").strip()
+        scenario_ref = scenario_id or scenario_name
+
+        if not scenario_ref:
+            return False, "run_scenario: missing scenario_id or scenario_name", [], runtime_context
+
+        stack = list(runtime_context.get("__scenario_call_stack__") or [])
+        if scenario_ref in stack:
+            return (
+                False,
+                f"run_scenario: circular reference detected: {scenario_ref!r}",
+                [],
+                runtime_context,
+            )
+
+        registry = inp.scenario_registry or {}
+        sub_def: dict[str, Any] | None = None
+        if scenario_id:
+            sub_def = (registry.get("by_id") or {}).get(scenario_id)
+        if sub_def is None and scenario_name:
+            sub_def = (registry.get("by_campaign_name") or {}).get(scenario_name)
+        if sub_def is None and scenario_name:
+            sub_def = (registry.get("by_template_name") or {}).get(scenario_name)
+
+        if sub_def is None:
+            return (
+                False,
+                f"run_scenario: sub-scenario not found: {scenario_ref!r}",
+                [],
+                runtime_context,
+            )
+
+        override_vars = step.get("variables") or {}
+        if not isinstance(override_vars, dict):
+            override_vars = {}
+        merged_vars = {**(sub_def.get("variables") or {}), **override_vars}
+        child_vars = {**inp.variables, **merged_vars}
+        sub_steps = sub_def.get("steps") or []
+
+        child_context = {
+            **runtime_context,
+            "__scenario_call_stack__": [*stack, scenario_ref],
+        }
+        child_result = await self._execute_child_steps(
+            inp,
+            sub_steps,
+            runtime_vars,
+            child_context,
+            variables=child_vars,
+        )
+
+        merged_ctx = {**runtime_context, **child_result.context}
+        merged_ctx.pop("__scenario_call_stack__", None)
+
+        if not child_result.success:
+            return (
+                False,
+                f"run_scenario: sub-scenario {scenario_ref!r} failed — {child_result.failed_message}",
+                child_result.step_results,
+                merged_ctx,
+            )
+
+        return (
+            True,
+            f"run_scenario: {scenario_ref!r} completed ({child_result.steps_executed} steps)",
+            child_result.step_results,
+            merged_ctx,
+        )
+
     # ── Inline step execution (no child workflow spawn) ──────────────────
 
     async def _execute_child_steps(
@@ -1274,6 +1379,8 @@ class ScenarioStepsWorkflow:
         steps: list[dict],
         runtime_vars: dict,
         runtime_context: dict,
+        *,
+        variables: dict[str, Any] | None = None,
     ) -> StepsResult:
         """Execute a list of steps inline (same workflow, no child spawn).
 
@@ -1298,7 +1405,7 @@ class ScenarioStepsWorkflow:
         nested_inp = StepsInput(
             device_serial=parent_inp.device_serial,
             steps=steps,
-            variables=parent_inp.variables,
+            variables=parent_inp.variables if variables is None else variables,
             campaign_vars=parent_inp.campaign_vars,
             scenario_registry=parent_inp.scenario_registry,
             depth=parent_inp.depth + 1,
@@ -1307,6 +1414,7 @@ class ScenarioStepsWorkflow:
             context=context_copy,
             campaign_id=getattr(parent_inp, "campaign_id", None),
             run_id=getattr(parent_inp, "run_id", None),
+            execution_id=getattr(parent_inp, "execution_id", None),
         )
         return await self.run(nested_inp)
 

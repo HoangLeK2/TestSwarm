@@ -92,11 +92,21 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
   const hasScenario = totalSteps > 0;
 
   const handleDelete = () => {
-    if (!window.confirm(t('deleteConfirm'))) return;
-    deleteCampaign(campaign.id, {
-      onSuccess: () => toast.success(t('deleteSuccess')),
-      onError: () => toast.error(t('deleteFailed')),
-    });
+    void (async () => {
+      const ok = await confirm({
+        title: t('titleDelete'),
+        description: t('deleteConfirm'),
+        confirmText: tCommon('confirm'),
+        cancelText: tCommon('cancel'),
+        confirmVariant: 'destructive',
+        zIndex: 10_000
+      });
+      if (!ok) return;
+      deleteCampaign(campaign.id, {
+        onSuccess: () => toast.success(t('deleteSuccess')),
+        onError: () => toast.error(t('deleteFailed')),
+      });
+    })();
   };
 
   const handlePauseAll = () => {

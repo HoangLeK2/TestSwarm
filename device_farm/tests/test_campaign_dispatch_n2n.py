@@ -110,13 +110,15 @@ async def test_dispatch_device_vars_share_namespace_and_override_global_vars():
 
     assert status == 200
     started_input: ScenarioInput = temporal.start_workflow.await_args.args[1]
-    assert started_input.variables["group_name"] == "device-group"
-    assert started_input.variables["save_collection"] == "global_collection"
-    assert "__DEVICE_GROUP_NAME__" not in started_input.variables
+    step_vars = started_input.steps[0]["variables"]
+    registry_vars = started_input.scenario_registry["by_id"]["sc-override"]["variables"]
+    assert step_vars["group_name"] == "device-group"
+    assert registry_vars["save_collection"] == "global_collection"
+    assert "__DEVICE_GROUP_NAME__" not in step_vars
 
 
 @pytest.mark.asyncio
-async def test_dispatch_multi_device_multi_scenario_starts_n_to_n_workflows():
+async def test_dispatch_multi_device_multi_scenario_starts_one_sequence_per_device():
     db = _make_db_mock()
     temporal = AsyncMock()
     temporal.start_workflow = AsyncMock()
@@ -139,9 +141,13 @@ async def test_dispatch_multi_device_multi_scenario_starts_n_to_n_workflows():
         result, status = await enqueue_campaign_run_temporal("camp-2", temporal)
 
     assert status == 200
-    assert len(result["workflow_ids"]) == 4
-    assert temporal.start_workflow.await_count == 4
+    assert len(result["workflow_ids"]) == 2
+    assert temporal.start_workflow.await_count == 2
     assert sorted(result["device_serials"]) == ["SN001", "SN002"]
+    started_inputs = [call.args[1] for call in temporal.start_workflow.await_args_list]
+    assert all(len(inp.steps) == 2 for inp in started_inputs)
+    assert all(step["type"] == "run_scenario" for inp in started_inputs for step in inp.steps)
+    assert all(wf_id.endswith(":scenario:__sequence__") for wf_id in result["workflow_ids"])
 
 
 @pytest.mark.asyncio
@@ -175,7 +181,9 @@ async def test_dispatch_skips_empty_scenarios_and_starts_only_valid_steps():
     assert status == 200
     assert temporal.start_workflow.await_count == 1
     assert len(result["workflow_ids"]) == 1
-    assert "scenario:sc-valid" in result["workflow_ids"][0]
+    assert result["workflow_ids"][0].endswith(":scenario:__sequence__")
+    started_input: ScenarioInput = temporal.start_workflow.await_args.args[1]
+    assert [step["scenario_id"] for step in started_input.steps] == ["sc-valid"]
 
 
 @pytest.mark.asyncio

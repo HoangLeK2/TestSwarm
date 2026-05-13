@@ -7,6 +7,7 @@ import { Button } from '../../../../components/ui/button';
 import { devicesApi, isPendingDevice, type DeviceOut, type RelayAgentOut } from '../../services/manage-api';
 import { TagsCell } from './TagsCell';
 import { DeviceCmdButton } from './BootstrapDialog';
+import type { ConfirmModalOptions } from '@/providers/modal-provider';
 
 function DeviceActionsCell({
   device,
@@ -14,17 +15,28 @@ function DeviceActionsCell({
   deletingId,
   setDeletingId,
   setConnectDevice,
+  confirm,
   t,
+  tCommon,
 }: {
   device: DeviceOut;
   relayMap: Record<string, RelayAgentOut>;
   deletingId: string | null;
   setDeletingId: (id: string | null | ((prev: string | null) => string | null)) => void;
   setConnectDevice: (device: DeviceOut | null) => void;
+  confirm: (options: ConfirmModalOptions) => Promise<boolean>;
   t: (key: string, values?: Record<string, any>) => string;
+  tCommon: (key: string, values?: Record<string, any>) => string;
 }) {
   const handleDelete = async () => {
-    if (!window.confirm(t('deleteConfirm'))) return;
+    const ok = await confirm({
+      title: t('deleteDevice'),
+      description: t('deleteConfirm'),
+      confirmText: tCommon('confirm'),
+      cancelText: tCommon('cancel'),
+      confirmVariant: 'destructive',
+      zIndex: 10_000
+    });
     setDeletingId(device.id);
     try {
       await devicesApi.delete(device.id);
@@ -69,16 +81,20 @@ function DeviceActionsCell({
 
 export function getDeviceColumns({
   t,
+  tCommon,
   deletingId,
   setDeletingId,
   setConnectDevice,
-  relayMap = {}
+  relayMap = {},
+  confirm
 }: {
   t: (key: string, values?: Record<string, any>) => string;
+  tCommon: (key: string, values?: Record<string, any>) => string;
   deletingId: string | null;
   setDeletingId: (id: string | null | ((prev: string | null) => string | null)) => void;
   setConnectDevice: (device: DeviceOut | null) => void;
   relayMap?: Record<string, RelayAgentOut>;
+  confirm: (options: ConfirmModalOptions) => Promise<boolean>;
 }): ColumnDef<DeviceOut>[] {
   return [
     {
@@ -210,7 +226,9 @@ export function getDeviceColumns({
           deletingId={deletingId}
           setDeletingId={setDeletingId}
           setConnectDevice={setConnectDevice}
+          confirm={confirm}
           t={t}
+          tCommon={tCommon}
         />
       )
     }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Server, Loader2, Plus, RefreshCw } from 'lucide-react';
 import { useFormatter, useTranslations } from 'next-intl';
@@ -140,6 +140,21 @@ export default function RelayAgentsPage() {
     if (device.adb_serial) registeredSerials.add(device.adb_serial);
   }
 
+  const relayMap = useMemo(() => {
+    const m: Record<string, RelayAgentOut> = {};
+    for (const agent of agents) {
+      m[agent.relay_id] = agent;
+      for (const serial of agent.serials) {
+        m[serial] = agent;
+        const colonIdx = serial.lastIndexOf(':');
+        if (colonIdx > 0) {
+          m[serial.slice(0, colonIdx)] = agent;
+        }
+      }
+    }
+    return m;
+  }, [agents]);
+
   return (
     <div className='space-y-6'>
       <div className='flex items-center gap-3'>
@@ -183,6 +198,9 @@ export default function RelayAgentsPage() {
           device={connectDevice}
           open={!!connectDevice}
           onClose={() => setConnectDevice(null)}
+          relayMap={relayMap}
+          relayAgents={agents}
+          registeredSerials={registeredSerials}
         />
       )}
     </div>

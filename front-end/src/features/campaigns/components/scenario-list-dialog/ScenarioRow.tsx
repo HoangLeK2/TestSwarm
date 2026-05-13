@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { ROUTES } from '@/config/routes';
 import type { CampaignOut, ScenarioOut } from '../../types';
 import { useDeleteScenario } from '../../hooks/use-campaigns';
+import { useConfirm } from '@/providers/modal-provider';
 
 export function ScenarioRow({
   campaign,
@@ -23,6 +24,8 @@ export function ScenarioRow({
   dragDisabled?: boolean;
 }) {
   const t = useTranslations('campaignsFeature.scenarioList');
+  const tCommon = useTranslations('common');
+  const confirm = useConfirm();
   const { mutate: deleteScenario, isPending } = useDeleteScenario();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: scenario.id,
@@ -36,18 +39,28 @@ export function ScenarioRow({
 
   const handleDelete = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!window.confirm(t('deleteConfirm', { name: scenario.name }))) return;
+    void (async () => {
+      const ok = await confirm({
+        title: t('deleteTitle'),
+        description: t('deleteConfirm', { name: scenario.name }),
+        confirmText: tCommon('confirm'),
+        cancelText: tCommon('cancel'),
+        confirmVariant: 'destructive',
+        zIndex: 10_000
+      });
+      if (!ok) return;
 
-    deleteScenario(
-      { campaignId: campaign.id, scenarioId: scenario.id },
-      {
-        onSuccess: () => {
-          toast.success(t('deleteSuccess'));
-          onDeleted();
-        },
-        onError: () => toast.error(t('deleteFailed'))
-      }
-    );
+      deleteScenario(
+        { campaignId: campaign.id, scenarioId: scenario.id },
+        {
+          onSuccess: () => {
+            toast.success(t('deleteSuccess'));
+            onDeleted();
+          },
+          onError: () => toast.error(t('deleteFailed'))
+        }
+      );
+    })();
   };
 
   return (
@@ -75,7 +88,9 @@ export function ScenarioRow({
       </button>
       <FileText size={14} className='shrink-0 text-muted-foreground' />
       <div className='min-w-0 flex-1'>
-        <div className='truncate font-medium'>{scenario.name}</div>
+        <div className='line-clamp-2 break-words font-medium' title={scenario.name}>
+          {scenario.name}
+        </div>
         {scenario.instructions && <div className='truncate text-[11px] text-muted-foreground'>{scenario.instructions}</div>}
         <div className='text-[11px] text-muted-foreground'>{t('stepsCount', { count: scenario.steps.length })}</div>
       </div>

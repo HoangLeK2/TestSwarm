@@ -90,8 +90,10 @@ export function ScenarioListDialog({ campaign, children }: { campaign: CampaignO
       </DialogTrigger>
 
       <DialogContent className='max-h-[80vh] overflow-y-auto sm:max-w-lg'>
-        <DialogHeader>
-          <DialogTitle>{t('title', { campaign: campaign.name })}</DialogTitle>
+        <DialogHeader className='pr-10 text-left sm:pr-12'>
+          <DialogTitle className='break-words text-base font-semibold leading-snug sm:text-lg'>
+            {t('title', { campaign: campaign.name })}
+          </DialogTitle>
         </DialogHeader>
 
         <div className='flex flex-col gap-2'>

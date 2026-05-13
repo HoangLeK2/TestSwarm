@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl';
 import { DEFAULT_DIALOG_Z_INDEX } from '@/components/ui/dialog';
 import { Modal } from '@/components/ui/modal';
 
-interface ConfirmModalOptions {
+export interface ConfirmModalOptions {
   title?: string | React.ReactNode;
   description?: string | React.ReactNode;
   confirmText?: string;

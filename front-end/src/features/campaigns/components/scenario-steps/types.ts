@@ -131,6 +131,7 @@ export function getStepIcon(type: string): LucideIcon {
     case 'input_text':
     case 'input_selector':
     case 'key':
+    case 'key_back':
       return Keyboard;
     case 'wait_element':
     case 'assert_element':
@@ -302,6 +303,8 @@ export function createDefaultStep(type: string, afterOrder?: string | null, befo
     case 'verify_screen': return { ...base, type: 'verify_screen', screenshot: '', ssim_threshold: 0.75, timeout: 8, poll: 0.5 };
     case 'dismiss_popup': return { ...base, type: 'dismiss_popup', retries: 3 };
     case 'key': return { ...base, type: 'key', key: 'enter' };
+    /** Insert-menu alias → Android BACK (same engine step as `key`). */
+    case 'key_back': return { ...base, type: 'key', key: 'back' };
     case 'double_tap': return { ...base, type: 'double_tap', rx: 0.5, ry: 0.5 };
     case 'pinch': return { ...base, type: 'pinch', scale: 0.5, rx: 0.5, ry: 0.5 };
     case 'drag': return { ...base, type: 'drag', rx1: 0.5, ry1: 0.3, rx2: 0.5, ry2: 0.7, duration_ms: 1000 };

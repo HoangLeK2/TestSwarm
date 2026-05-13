@@ -3,7 +3,7 @@ import type { FlowStep } from '../scenario-steps/types';
 export const STEP_COLORS: Record<string, string> = {
   tap: 'border-l-blue-500', tap_ratio: 'border-l-blue-500', tap_position: 'border-l-blue-500',
   tap_selector: 'border-l-blue-500', long_tap_selector: 'border-l-blue-500', swipe_ratio: 'border-l-blue-500',
-  input_text: 'border-l-cyan-500', input_selector: 'border-l-cyan-500', key: 'border-l-cyan-500',
+  input_text: 'border-l-cyan-500', input_selector: 'border-l-cyan-500', key: 'border-l-cyan-500', key_back: 'border-l-cyan-500',
   launch_app: 'border-l-indigo-500', open_url: 'border-l-indigo-500',
   scroll_down: 'border-l-indigo-500', scroll_to: 'border-l-indigo-500',
   wait: 'border-l-green-500', wait_element: 'border-l-green-500', wait_stable: 'border-l-green-500', verify_screen: 'border-l-green-500',
@@ -118,6 +118,7 @@ export const INSERT_MENU = [
       { type: 'input_text', label: 'Nhập văn bản' },
       { type: 'input_selector', label: 'Nhập vào phần tử' },
       { type: 'key', label: 'Nhấn phím' },
+      { type: 'key_back', label: 'Quay lại (Back)' },
       { type: 'launch_app', label: 'Mở ứng dụng' },
       { type: 'open_url', label: 'Mở URL' },
       { type: 'scroll_down', label: 'Cuộn xuống' },

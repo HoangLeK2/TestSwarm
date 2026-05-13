@@ -52,6 +52,7 @@ import { stepsToGraph } from '../utils/steps-to-graph';
 import type { FlowNode, FlowEdge } from './scenario-steps/types';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import { findSelectorInXml } from '@/features/devices/utils/control-record-xml';
+import { useConfirm } from '@/providers/modal-provider';
 
 const DynamicFlowgramCanvas = dynamic(
   () =>
@@ -420,6 +421,8 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
   const [accountGroupId, setAccountGroupId] = useState<string>('');
   const [rawJson, setRawJson] = useState('');
   const tScenarioForm = useTranslations('components.scenariosForm');
+  const tCommon = useTranslations('common');
+  const confirm = useConfirm();
   const { data: accountGroups = [] } = useAccountGroups();
   const [deviceModel, setDeviceModel] = useState('');
   const [androidVersion, setAndroidVersion] = useState('');
@@ -1191,14 +1194,28 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
   );
 
   const handleLoadFromScenario = (scenarioId: string) => {
-    const source = allScenarios.find((s) => s.id === scenarioId);
-    if (!source) return;
-    if (steps.length > 0 && !window.confirm(`Kịch bản hiện tại có ${steps.length} bước. Tải từ "${source.name}" sẽ ghi đè — tiếp tục?`)) return;
-    const loaded = Array.isArray(source.steps) ? coerceSteps(source.steps) : [];
-    replaceStepsAndGraph(loaded);
-    setFlowCanvasKey((k) => k + 1);
-    if (source.instructions) setInstructions(source.instructions);
-    toast.success(`Đã tải ${(source.steps as any[]).length} bước từ "${source.name}"`);
+    void (async () => {
+      const source = allScenarios.find((s) => s.id === scenarioId);
+      if (!source) return;
+      if (steps.length > 0) {
+        const ok = await confirm({
+          title: tScenarioForm('loadOverwriteTitle'),
+          description: tScenarioForm('loadOverwriteDescription', {
+            count: steps.length,
+            name: source.name,
+          }),
+          confirmText: tCommon('confirm'),
+          cancelText: tCommon('cancel'),
+          zIndex: 2000,
+        });
+        if (!ok) return;
+      }
+      const loaded = Array.isArray(source.steps) ? coerceSteps(source.steps) : [];
+      replaceStepsAndGraph(loaded);
+      setFlowCanvasKey((k) => k + 1);
+      if (source.instructions) setInstructions(source.instructions);
+      toast.success(`Đã tải ${(source.steps as any[]).length} bước từ "${source.name}"`);
+    })();
   };
 
   /** Luôn có thiết bị xem trước khi campaign có device — tránh cột phải trống khi chọn "Không gửi XML". */

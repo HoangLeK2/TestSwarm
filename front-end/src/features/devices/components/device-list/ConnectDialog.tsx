@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import QRCode from 'qrcode';
-import { CheckCircle2, Copy, Loader2, Smartphone } from 'lucide-react';
+import { CheckCircle2, Copy, Loader2, Send, Smartphone } from 'lucide-react';
 import { toast } from 'sonner';
 import Image from 'next/image';
 import Link from 'next/link';
@@ -13,23 +13,79 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Separator } from '@/components/ui/separator';
 import { getDeviceAgentWsUrl } from '@/lib/farm-api';
 import { ROUTES } from '@/config/routes';
-import { devicesApi, isPendingDevice, type DeviceOut } from '../../services/manage-api';
+import {
+  devicesApi,
+  isPendingDevice,
+  PENDING_SERIAL_PREFIX,
+  relayAgentsApi,
+  type DeviceOut,
+  type RelayAgentOut,
+} from '../../services/manage-api';
+
+/** Serial for ADB on relay: real serial, or adb_serial when DB row is still pending-*. */
+function resolveRelayPushTarget(
+  device: DeviceOut,
+  relayMap?: Record<string, RelayAgentOut>,
+): { relayId: string; serial: string } | null {
+  const serial = isPendingDevice(device)
+    ? (device.adb_serial ?? '').trim()
+    : (device.serial ?? '').trim();
+  if (!serial) return null;
+
+  let relayId = (device.relay_id ?? '').trim();
+  if (!relayId && relayMap) {
+    const agent =
+      (device.adb_serial ? relayMap[device.adb_serial] : undefined) ??
+      (device.adb_ip ? relayMap[device.adb_ip] : undefined);
+    relayId = (agent?.relay_id ?? '').trim();
+  }
+  if (!relayId) return null;
+  return { relayId, serial };
+}
+
+/** ADB targets on online relays; skip placeholders and serials already bound to a real device row. */
+function relayPushCandidates(
+  relayAgents: RelayAgentOut[] | undefined,
+  registeredSerials: Set<string> | undefined,
+): { relayId: string; serial: string }[] {
+  if (!relayAgents?.length) return [];
+  const taken = registeredSerials ?? new Set<string>();
+  const out: { relayId: string; serial: string }[] = [];
+  for (const agent of relayAgents) {
+    if (agent.status !== 'online') continue;
+    for (const s of agent.serials) {
+      if (!s || s.startsWith(PENDING_SERIAL_PREFIX)) continue;
+      if (taken.has(s)) continue;
+      out.push({ relayId: agent.relay_id, serial: s });
+    }
+  }
+  return out;
+}
 
 const POLL_INTERVAL_MS = 2000;
 
 export function ConnectDialog({
   device,
   open,
-  onClose
+  onClose,
+  relayMap,
+  relayAgents,
+  registeredSerials,
 }: {
   device: DeviceOut;
   open: boolean;
   onClose: () => void;
+  relayMap?: Record<string, RelayAgentOut>;
+  relayAgents?: RelayAgentOut[];
+  /** Primary serials (and adb_serial) already used by non-pending devices — excluded from relay pick list. */
+  registeredSerials?: Set<string>;
 }) {
   const t = useTranslations('devicesList.connectDialog');
   const qc = useQueryClient();
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
+  const [pushingUrl, setPushingUrl] = useState(false);
   const [connectedDevice, setConnectedDevice] = useState<DeviceOut | null>(null);
+  const [relayPickIdx, setRelayPickIdx] = useState(0);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const openedAtRef = useRef<number>(0);
 
@@ -40,12 +96,18 @@ export function ConnectDialog({
     }
   };
 
+  useEffect(() => {
+    if (!open) return;
+    setRelayPickIdx(0);
+  }, [open, device?.id]);
+
   // Reset state when dialog closes or device changes
   useEffect(() => {
     if (!open) {
       stopPolling();
       setConnectedDevice(null);
       setQrDataUrl('');
+      setPushingUrl(false);
       openedAtRef.current = 0;
       return;
     }
@@ -87,6 +149,49 @@ export function ConnectDialog({
     }, POLL_INTERVAL_MS);
     return stopPolling;
   }, [open, device?.id, connectedDevice, qc, t]);
+
+  const candidates = useMemo(
+    () => relayPushCandidates(relayAgents, registeredSerials),
+    [relayAgents, registeredSerials],
+  );
+
+  const directPush = useMemo(
+    () => (device ? resolveRelayPushTarget(device, relayMap) : null),
+    [device, relayMap],
+  );
+
+  const relayPush = useMemo(() => {
+    if (!device) return null;
+    if (directPush) return directPush;
+    if (isPendingDevice(device) && candidates.length > 0) {
+      const i = Math.min(Math.max(0, relayPickIdx), candidates.length - 1);
+      return candidates[i]!;
+    }
+    return null;
+  }, [device, directPush, candidates, relayPickIdx]);
+
+  const showRelayPicker = Boolean(
+    device && isPendingDevice(device) && !directPush && candidates.length > 1,
+  );
+
+  async function pushConnectUrl() {
+    if (!relayPush || !device) return;
+    setPushingUrl(true);
+    try {
+      const res = await relayAgentsApi.pushConnectUrl(relayPush.relayId, relayPush.serial, {
+        deviceId: isPendingDevice(device) ? device.id : undefined,
+      });
+      if (!res.ok) {
+        toast.error(res.error || t('errorPushToPhone'));
+        return;
+      }
+      toast.success(t('sentToPhone'));
+    } catch {
+      toast.error(t('errorPushToPhone'));
+    } finally {
+      setPushingUrl(false);
+    }
+  }
 
   const wsUrl = device?.device_key ? getDeviceAgentWsUrl(`key=${device.device_key}`) : '';
 
@@ -169,6 +274,38 @@ export function ConnectDialog({
                 <Copy size={14} />
               </Button>
             </div>
+            {showRelayPicker ? (
+              <div className='flex flex-col gap-1.5'>
+                <label className='text-xs font-medium text-foreground' htmlFor='relay-serial-pick'>
+                  {t('pickAdbSerial')}
+                </label>
+                <select
+                  id='relay-serial-pick'
+                  className='h-9 w-full rounded-md border border-input bg-background px-2 font-mono text-xs'
+                  value={relayPickIdx}
+                  onChange={(e) => setRelayPickIdx(Number(e.target.value))}
+                >
+                  {candidates.map((c, idx) => (
+                    <option key={`${c.relayId}:${c.serial}`} value={idx}>
+                      {c.serial}
+                    </option>
+                  ))}
+                </select>
+                <p className='text-[11px] text-muted-foreground'>{t('pickAdbSerialHint')}</p>
+              </div>
+            ) : null}
+            {relayPush ? (
+              <Button
+                type='button'
+                variant='outline'
+                className='w-full gap-2'
+                disabled={pushingUrl}
+                onClick={pushConnectUrl}
+              >
+                {pushingUrl ? <Loader2 size={14} className='animate-spin' /> : <Send size={14} />}
+                {pushingUrl ? t('sendingToPhone') : t('sendToPhone')}
+              </Button>
+            ) : null}
             {qrDataUrl ? (
               <Image
                 src={qrDataUrl}

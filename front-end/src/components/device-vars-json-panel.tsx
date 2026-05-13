@@ -6,6 +6,9 @@ import { Braces, Plus } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 
 export const DEFAULT_DEVICE_VARIABLES = {
@@ -101,6 +104,109 @@ export function parseDeviceVarsJson(
 
 export function formatDeviceVarsJson(vars: Record<string, unknown>) {
   return JSON.stringify(vars, null, 2);
+}
+
+function formatScalarForInput(v: unknown): string {
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'boolean') return v ? 'true' : 'false';
+  if (typeof v === 'object') return JSON.stringify(v);
+  return String(v);
+}
+
+/** Keep string vs number vs boolean stable when editing a single field. */
+function coerceInputToValue(raw: string, previous: unknown): unknown {
+  const trimmed = raw.trim();
+  if (typeof previous === 'string') return raw;
+  if (typeof previous === 'number') {
+    const n = Number(trimmed);
+    return Number.isFinite(n) ? n : raw;
+  }
+  if (typeof previous === 'boolean') {
+    if (/^true$/i.test(trimmed)) return true;
+    if (/^false$/i.test(trimmed)) return false;
+    return raw;
+  }
+  if (trimmed === 'true' || trimmed === 'false') return trimmed === 'true';
+  if (
+    trimmed !== ''
+    && !Number.isNaN(Number(trimmed))
+    && String(Number(trimmed)) === trimmed
+  ) {
+    return Number(trimmed);
+  }
+  return raw;
+}
+
+type VariablesFieldGridProps = {
+  entries: [string, unknown][];
+  readOnly: boolean;
+  onApply?: (key: string, value: unknown) => void;
+  globalBaseline?: Record<string, unknown>;
+  disabled?: boolean;
+  globalHint?: (value: string) => string;
+};
+
+function VariablesFieldGrid({
+  entries,
+  readOnly,
+  onApply,
+  globalBaseline,
+  disabled = false,
+  globalHint,
+}: VariablesFieldGridProps) {
+  if (entries.length === 0) return null;
+  return (
+    <ScrollArea className='w-full max-h-[min(42vh,320px)] rounded-md border border-border/80 bg-muted/15'>
+      <div className='space-y-2.5 p-3 pr-4'>
+        {entries.map(([key, value]) => {
+          const g = globalBaseline?.[key];
+          const differs =
+            readOnly === false
+            && g !== undefined
+            && JSON.stringify(g) !== JSON.stringify(value);
+          const id = `dv-${key.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+          return (
+            <div
+              key={key}
+              className='grid gap-1.5 border-b border-border/30 pb-2.5 last:border-0 last:pb-0 sm:grid-cols-[minmax(0,11rem)_1fr] sm:items-center sm:gap-3'
+            >
+              <div className='min-w-0'>
+                <Label htmlFor={id} className='block truncate font-mono text-[11px] text-muted-foreground' title={key}>
+                  {key}
+                </Label>
+                {differs && globalHint ? (
+                  <p className='mt-0.5 truncate font-mono text-[10px] text-muted-foreground/90' title={formatScalarForInput(g)}>
+                    {globalHint(formatScalarForInput(g))}
+                  </p>
+                ) : null}
+              </div>
+              {typeof value === 'boolean' && !readOnly && onApply ? (
+                <Switch
+                  id={id}
+                  checked={value}
+                  disabled={disabled}
+                  onCheckedChange={(c) => onApply(key, c)}
+                />
+              ) : (
+                <Input
+                  id={id}
+                  className='h-8 font-mono text-xs'
+                  readOnly={readOnly}
+                  disabled={disabled && !readOnly}
+                  spellCheck={false}
+                  value={formatScalarForInput(value)}
+                  onChange={(e) => {
+                    if (readOnly || !onApply) return;
+                    onApply(key, coerceInputToValue(e.target.value, value));
+                  }}
+                />
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </ScrollArea>
+  );
 }
 
 export function formatInitialDeviceVars(
@@ -201,14 +307,14 @@ export function DeviceVarsJsonPanel({
   );
 
   const globalReadOnlyBlock = (
-    <div className='space-y-1.5'>
+    <div className='flex min-h-0 flex-1 flex-col space-y-1.5'>
       <p className='text-[11px] font-medium text-muted-foreground'>
         {t('globalBlockTitle')}
       </p>
       {hasGlobalPreview ? (
         <Textarea
           readOnly
-          className='min-h-[200px] resize-none bg-muted/30 font-mono text-xs leading-5 text-muted-foreground'
+          className='min-h-[200px] flex-1 resize-none bg-muted/30 font-mono text-xs leading-5 text-muted-foreground'
           value={globalJson}
           spellCheck={false}
           aria-label={t('globalReadonlyAria')}
@@ -222,8 +328,8 @@ export function DeviceVarsJsonPanel({
   );
 
   return (
-    <div className={cn('min-h-0', className)}>
-      <div className='mb-3 flex items-center justify-between gap-3'>
+    <div className={cn('flex min-h-0 flex-col', className)}>
+      <div className='mb-3 shrink-0 flex items-center justify-between gap-3'>
         <div className='min-w-0'>
           <div className='flex items-center gap-2 text-xs font-medium'>
             <Braces size={13} />
@@ -237,7 +343,7 @@ export function DeviceVarsJsonPanel({
         </div>
       </div>
 
-      <div className='mb-3 flex items-center justify-between rounded border bg-muted/20 px-3 py-2'>
+      <div className='mb-3 shrink-0 flex items-center justify-between rounded border bg-muted/20 px-3 py-2'>
         <div className='min-w-0'>
           <p className='text-xs font-medium'>{t('toggleLabel')}</p>
           <p className='mt-0.5 text-[11px] text-muted-foreground'>
@@ -253,7 +359,7 @@ export function DeviceVarsJsonPanel({
       </div>
 
       {enabled ? (
-        <div className='space-y-2'>
+        <div className='flex min-h-0 flex-1 flex-col space-y-2'>
           {missingTemplateKeys.length > 0 && (
             <div className='flex flex-wrap items-center gap-1.5'>
               <span className='mr-1 text-[11px] text-muted-foreground'>{t('addGlobalKeyLabel')}</span>
@@ -274,7 +380,10 @@ export function DeviceVarsJsonPanel({
             </div>
           )}
           <Textarea
-            className={cn('min-h-[420px] resize-none font-mono text-xs leading-5', editorClassName)}
+            className={cn(
+              'min-h-[200px] flex-1 resize-none font-mono text-xs leading-5',
+              editorClassName,
+            )}
             value={mergedEditorValue}
             disabled={loading}
             spellCheck={false}
@@ -284,7 +393,7 @@ export function DeviceVarsJsonPanel({
       ) : (
         <div
           className={cn(
-            'flex min-h-0 flex-col gap-3 rounded-md border border-dashed bg-muted/10 p-4',
+            'flex min-h-0 flex-1 flex-col gap-3 rounded-md border border-dashed bg-muted/10 p-4',
             emptyClassName,
           )}
         >
@@ -295,7 +404,7 @@ export function DeviceVarsJsonPanel({
         </div>
       )}
 
-      <div className='mt-2 flex min-h-5 items-center justify-between gap-3 text-[11px]'>
+      <div className='mt-2 flex shrink-0 min-h-5 items-center justify-between gap-3 text-[11px]'>
         <span className='text-muted-foreground'>
           {loading
             ? t('footerLoading')

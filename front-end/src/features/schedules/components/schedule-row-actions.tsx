@@ -10,9 +10,12 @@ import { useToggleSchedule, useRunNowSchedule, useDeleteSchedule } from '../hook
 import type { ScheduleOut } from '../services/api';
 import { ScheduleFormDialog } from './schedule-form-dialog';
 import { ScheduleRunHistoryDialog } from './schedule-run-history-dialog';
+import { useConfirm } from '@/providers/modal-provider';
 
 export function ScheduleRowActions({ schedule }: { schedule: ScheduleOut }) {
   const t = useTranslations('schedulesFeature.actions');
+  const tCommon = useTranslations('common');
+  const confirm = useConfirm();
   const toggleMutation = useToggleSchedule();
   const runNowMutation = useRunNowSchedule();
   const deleteMutation = useDeleteSchedule();
@@ -37,12 +40,21 @@ export function ScheduleRowActions({ schedule }: { schedule: ScheduleOut }) {
   };
 
   const handleDelete = () => {
-    const ok = window.confirm(t('deleteConfirm', { name: schedule.name }));
-    if (!ok) return;
-    deleteMutation.mutate(schedule.id, {
-      onSuccess: () => toast.success(t('deleteSuccess')),
-      onError: (err: unknown) => toast.error(formatFarmApiError(err, t('deleteFailed')))
-    });
+    void (async () => {
+      const ok = await confirm({
+        title: t('delete'),
+        description: t('deleteConfirm', { name: schedule.name }),
+        confirmText: tCommon('confirm'),
+        cancelText: tCommon('cancel'),
+        confirmVariant: 'destructive',
+        zIndex: 10_000
+      });
+      if (!ok) return;
+      deleteMutation.mutate(schedule.id, {
+        onSuccess: () => toast.success(t('deleteSuccess')),
+        onError: (err: unknown) => toast.error(formatFarmApiError(err, t('deleteFailed')))
+      });
+    })();
   };
 
   return (

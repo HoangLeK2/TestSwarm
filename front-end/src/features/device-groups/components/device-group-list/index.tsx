@@ -10,9 +10,12 @@ import { useDataTable } from '@/hooks/use-data-table';
 import { CreateDeviceGroupDialog } from '../create-device-group-dialog';
 import { DeviceGroupDetail } from '../device-group-detail';
 import { getDeviceGroupColumns } from './columns';
+import { useConfirm } from '@/providers/modal-provider';
 
 export function DeviceGroupList() {
   const t = useTranslations('deviceGroupsFeature.list');
+  const tCommon = useTranslations('common');
+  const confirm = useConfirm();
   const { data: groups, isLoading, error } = useDeviceGroups();
   const deleteMutation = useDeleteDeviceGroup();
   const [selectedGroup, setSelectedGroup] = useState<DeviceGroupOut | null>(null);
@@ -24,13 +27,21 @@ export function DeviceGroupList() {
       getDeviceGroupColumns(
         t,
         (group) => {
-          if (window.confirm(t('confirmDelete', { name: group.name }))) {
+          void (async () => {
+            const ok = await confirm({
+              description: t('confirmDelete', { name: group.name }),
+              confirmText: tCommon('confirm'),
+              cancelText: tCommon('cancel'),
+              confirmVariant: 'destructive',
+              zIndex: 10_000
+            });
+            if (!ok) return;
             deleteMutation.mutate(group.id);
-          }
+          })();
         },
         (group) => setSelectedGroup(group)
       ),
-    [t, deleteMutation]
+    [t, tCommon, confirm, deleteMutation]
   );
 
   const { table } = useDataTable<DeviceGroupOut>({

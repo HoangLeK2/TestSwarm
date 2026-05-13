@@ -241,21 +241,51 @@ export function RunCampaignDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className='max-h-[92vh] max-w-5xl min-w-[92vh] overflow-hidden p-0'>
-        <DialogHeader>
-          <DialogTitle className='flex items-center gap-2 border-b px-5 py-4 text-sm'>
-            <Play size={14} />
-            {tList('titleRun')}
+      <DialogContent className='flex max-h-[92vh] min-w-[800px] max-w-5xl flex-col gap-0 overflow-hidden p-0 sm:w-full'>
+        <DialogHeader className='shrink-0 space-y-0 border-b px-5 py-4 pr-12 text-left'>
+          <DialogTitle className='flex items-start gap-2 text-base font-semibold leading-snug'>
+            <Play size={16} className='mt-0.5 shrink-0 text-primary' />
+            <span className='min-w-0 break-words'>{tList('titleRun')}</span>
           </DialogTitle>
+          {activeScenario ? (
+            scenarios.length > 1 ? (
+              <div className='mt-3 min-w-0'>
+                <Select value={activeScenarioId} onValueChange={setActiveScenarioId}>
+                  <SelectTrigger
+                    size='sm'
+                    className='h-auto min-h-9 w-full min-w-0 whitespace-normal py-2 text-left text-xs leading-snug [&_[data-slot=select-value]]:line-clamp-2 [&_[data-slot=select-value]]:whitespace-normal'
+                    title={activeScenario.name}
+                  >
+                    <SelectValue placeholder={tList('runDialogScenarioPlaceholder')} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {scenarios.map((scenario) => (
+                      <SelectItem key={scenario.id} value={scenario.id}>
+                        {scenario.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : (
+              <p
+                className='mt-2 line-clamp-3 text-xs font-medium leading-snug text-foreground'
+                title={activeScenario.name}
+              >
+                {activeScenario.name}
+              </p>
+            )
+          ) : null}
         </DialogHeader>
 
         {devices.length === 0 || scenarios.length === 0 ? (
-          <p className='py-4 text-center text-xs text-muted-foreground'>
+          <p className='shrink-0 px-5 py-6 text-center text-xs text-muted-foreground'>
             {tList('runDialogNotReady')}
           </p>
         ) : (
-          <div className='grid min-h-0 grid-cols-[280px_1fr] divide-x px-5 '>
-            <div className='min-h-0 py-4 pr-4'>
+          <div className='flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden px-5'>
+            <div className='grid min-h-0 min-w-0 flex-1 grid-cols-1 divide-y divide-border pt-4 pb-2 md:grid-cols-[minmax(200px,280px)_minmax(0,1fr)] md:divide-x md:divide-y-0'>
+              <div className='min-h-0 max-md:max-h-[40vh] max-md:overflow-y-auto md:py-4 md:pr-4'>
               <button
                 type='button'
                 onClick={toggleAll}
@@ -270,7 +300,7 @@ export function RunCampaignDialog({
                 </Badge>
               </button>
 
-              <div className='max-h-[64vh] space-y-1 overflow-y-auto pr-1'>
+              <div className='max-h-[min(64vh,28rem)] space-y-1 overflow-y-auto pr-1 md:max-h-none md:overflow-visible'>
                 {devices.map((device) => {
                   const isChecked = selected.has(device.serial);
                   const isActive = activeDevice?.id === device.id;
@@ -306,25 +336,7 @@ export function RunCampaignDialog({
               </div>
             </div>
 
-            <div className='min-h-0 py-4 pl-4'>
-              <div className='mb-3 flex items-center justify-between gap-3'>
-                <div className='min-w-0' />
-                {scenarios.length > 1 && (
-                  <Select value={activeScenarioId} onValueChange={setActiveScenarioId}>
-                    <SelectTrigger size='sm' className='w-[220px] text-xs'>
-                      <SelectValue placeholder={tList('runDialogScenarioPlaceholder')} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {scenarios.map((scenario) => (
-                        <SelectItem key={scenario.id} value={scenario.id}>
-                          {scenario.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-              </div>
-
+              <div className='flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden md:py-4 md:pl-4'>
               <DeviceVarsJsonPanel
                 enabled={currentDeviceVarsEnabled}
                 onEnabledChange={handleDeviceVarsToggle}
@@ -335,14 +347,16 @@ export function RunCampaignDialog({
                 deviceLabel={activeDevice?.serial}
                 baseVariables={activeScenario?.variables}
                 globalVariablesPreview={globalVariablesPreview}
-                editorClassName='min-h-[460px]'
-                emptyClassName='min-h-[460px]'
+                className='flex min-h-0 min-w-0 flex-1 flex-col'
+                editorClassName='min-h-[200px] flex-1 md:min-h-[260px]'
+                emptyClassName='flex min-h-[200px] flex-1 flex-col md:min-h-[260px]'
               />
+              </div>
             </div>
           </div>
         )}
 
-        <DialogFooter className='border-t px-5 py-4'>
+        <DialogFooter className='shrink-0 gap-2 border-t bg-background px-5 py-4'>
           <Button size='sm' variant='outline' className='h-7 text-xs' onClick={onClose}>
             {tModal('cancel')}
           </Button>

@@ -14,9 +14,12 @@ import { useDataTable } from '@/hooks/use-data-table';
 import { CreateAccountDialog } from '../create-account-dialog';
 import { ImportAccountsDialog } from '../import-accounts-dialog';
 import { getAccountColumns } from './columns';
+import { useConfirm } from '@/providers/modal-provider';
 
 export function AccountList() {
   const t = useTranslations('accountsFeature.list');
+  const tCommon = useTranslations('common');
+  const confirm = useConfirm();
   const { data: accounts, isLoading, error } = useAccounts();
   const deleteMutation = useDeleteAccount();
   const statusMutation = useUpdateAccountStatus();
@@ -28,15 +31,24 @@ export function AccountList() {
       getAccountColumns(
         t,
         (account) => {
-          if (window.confirm(t('confirmDelete', { username: account.username }))) {
+          void (async () => {
+            const ok = await confirm({
+              title: t('delete'),
+              description: t('confirmDelete', { username: account.username }),
+              confirmText: tCommon('confirm'),
+              cancelText: tCommon('cancel'),
+              confirmVariant: 'destructive',
+              zIndex: 10_000
+            });
+            if (!ok) return;
             deleteMutation.mutate(account.id);
-          }
+          })();
         },
         (account, status) => {
           statusMutation.mutate({ accountId: account.id, status });
         }
       ),
-    [t, deleteMutation, statusMutation]
+    [t, tCommon, confirm, deleteMutation, statusMutation]
   );
 
   const { table } = useDataTable<AccountOut>({

@@ -115,6 +115,7 @@ export type WorkflowProgress = {
 
 export type StepLogEntry = {
   index: number;
+  type?: string;
   step_type: string;
   ok: boolean;
   message: string | null;

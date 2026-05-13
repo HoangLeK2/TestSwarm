@@ -216,8 +216,8 @@ class DeviceActivities:
             # inside _resolve_password() (activity-local) and passed via scenario_vars,
             # NOT campaign_vars, to prevent leaking into serialized workflow state.
             credential_vars: dict[str, Any] = {}
-            if "__ACCOUNT_ID__" in resolved_campaign_vars:
-                acct_id = resolved_campaign_vars["__ACCOUNT_ID__"]
+            acct_id = resolved_campaign_vars.get("__ACCOUNT_ID__") or inp.variables.get("__ACCOUNT_ID__")
+            if acct_id:
                 pwd = await self._resolve_password(acct_id)
                 if pwd is None:
                     return StepResult(
@@ -321,7 +321,7 @@ class DeviceActivities:
 
         # Resolve credentials once for the whole batch.
         credential_vars: dict[str, Any] = {}
-        acct_id = inp.campaign_vars.get("__ACCOUNT_ID__")
+        acct_id = inp.campaign_vars.get("__ACCOUNT_ID__") or inp.variables.get("__ACCOUNT_ID__")
         if acct_id:
             pwd = await self._resolve_password(acct_id)
             if pwd is None:

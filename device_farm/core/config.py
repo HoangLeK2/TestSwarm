@@ -196,7 +196,7 @@ class TemporalConfig:
     worker_count: int = 1                    # parallel worker threads per process; each has own event loop + thread pool
     worker_max_concurrent_activities: int = 10
     worker_max_concurrent_workflows: int = 50
-    workflow_execution_timeout: int = 3600   # seconds
+    workflow_execution_timeout: int = 0   # seconds; 0 = unlimited
     activity_start_to_close_timeout: int = 60  # seconds
     activity_retry_max_attempts: int = 3
     activity_retry_initial_interval: float = 1.0

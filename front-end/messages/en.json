@@ -46,17 +46,20 @@
     "deviceVarsJson": {
       "title": "Variables for this device",
       "toggleLabel": "Override globals on this device",
-      "toggleDescriptionOn": "JSON below shows globals plus your edits. Only keys that differ from globals are stored as this device’s overrides — remove a key to inherit that value from globals again.",
+      "toggleDescriptionOn": "The form below shows globals plus your edits. Only keys that differ from globals are stored as device overrides; open “Advanced JSON” to edit raw.",
       "toggleDescriptionOff": "This device uses only campaign + scenario globals (see below). Turn on to set different values for this device only.",
       "toggleAriaOn": "Per-device overrides are on — turn off to use globals only",
       "toggleAriaOff": "Per-device overrides are off — turn on to edit overrides",
+      "formTitle": "Edit fields",
+      "advancedJson": "Advanced JSON",
+      "advancedJsonHint": "Edit the merged object (globals + overrides) directly. Use for copy/paste or uncommon keys.",
       "globalBlockTitle": "Global variables (campaign → scenario; scenario overrides duplicate keys)",
       "globalReadonlyAria": "Global variables (read-only)",
       "globalEmpty": "No global variables on campaign/scenario (or only hidden system keys like __…).",
       "modeOffHint": "Inherited: campaign + scenario globals only. Turn on the switch above to add per-device overrides.",
       "addGlobalKeyLabel": "Add global key:",
       "footerLoading": "Loading saved configuration…",
-      "footerMergedEditor": "Single JSON: globals plus device overrides. Values identical to globals are not stored as overrides — remove a key to inherit global.",
+      "footerMergedEditor": "Form or advanced JSON: globals plus overrides. Values identical to globals are not stored as overrides — remove a key in JSON to inherit global.",
       "footerUsingGlobal": "Using global variables.",
       "parseInvalidJson": "Invalid JSON (syntax error).",
       "parseInvalidRoot": "JSON must be an object, e.g. {\"group_name\": \"abc\"}",
@@ -178,7 +181,9 @@
       "accountGroupLabel": "Account group",
       "accountGroupNone": "— None —",
       "accountGroupHint": "Each device in the campaign will use a different account from the pool.",
-      "accountGroupCaption": "{count} accounts · {strategy}"
+      "accountGroupCaption": "{count} accounts · {strategy}",
+      "loadOverwriteTitle": "Replace scenario steps?",
+      "loadOverwriteDescription": "The current scenario has {count} steps. Loading from \"{name}\" will replace them."
     }
   },
   "navigation": {
@@ -1096,7 +1101,13 @@
       "infoModel": "Model",
       "infoAndroid": "Android",
       "controlNow": "Control now",
-      "close": "Close"
+      "close": "Close",
+      "sendToPhone": "Send link to phone",
+      "sendingToPhone": "Sending…",
+      "sentToPhone": "Link sent device successfully",
+      "errorPushToPhone": "Could not push link via relay. Check agent-boot and STFService app.",
+      "pickAdbSerial": "ADB serial (relay)",
+      "pickAdbSerialHint": "Multiple USB devices — pick the serial for the phone that should open this link."
     }
   },
   "deviceStf": {
@@ -1223,6 +1234,8 @@
     "addDevice": "Add device",
     "controlAndRecord": "Control & record scenario",
     "controlDevice": "Control",
+    "restartDeviceConfirmTitle": "Restart device",
+    "restartDeviceConfirmDescription": "Send restart command to device {serial}?",
     "deviceInactive": "Device is inactive",
     "header": {
       "eyebrow": "Device Farm",

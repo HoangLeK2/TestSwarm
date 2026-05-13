@@ -28,7 +28,10 @@ class CampaignRunBody(BaseModel):
 
 log = logging.getLogger(__name__)
 
-# Compiled once at import time — matches top-level ScenarioWorkflow IDs:
+# Compiled once at import time — matches top-level ScenarioWorkflow IDs.
+# Campaign runs use one sequence workflow per device:
+#   campaign:<id>:device:<serial>:scenario:__sequence__
+# Older/direct runs may still use:
 #   campaign:<id>:device:<serial>:scenario:<scen_id>
 # Device serial may contain colons (WiFi ADB: 192.168.1.1:5555) so we cannot
 # count colons; instead we use a greedy .+ for the serial segment.
@@ -190,7 +193,7 @@ def build_campaign_fleet_router(
     async def api_list_campaign_workflows(campaign_id: str, db: DB, user: CurrentUser):
         """List top-level Temporal workflow runs for a campaign.
 
-        Only returns ScenarioWorkflow entries (one per device×scenario).
+        Only returns top-level ScenarioWorkflow entries (normally one per device).
         Child workflows (ScenarioStepsWorkflow) are excluded — they are an
         implementation detail and would flood the list.
         """
@@ -205,7 +208,7 @@ def build_campaign_fleet_router(
         try:
             client = await get_temporal_client(config.temporal)
             raw_rows: list[tuple[str, str, str, datetime | None]] = []
-            # Top-level IDs have pattern: campaign:{id}:device:{serial}:scenario:{scen_id}
+            # Top-level IDs have pattern: campaign:{id}:device:{serial}:scenario:{id-or-sequence}
             # Child IDs have extra suffixes like :steps, :repeat:…, :if_element:…
             # We match exactly 5 colon-separated segments to exclude children.
             # Sanitize campaign_id before embedding in Temporal query string to

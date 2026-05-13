@@ -12,9 +12,12 @@ import { useDataTable } from '@/hooks/use-data-table';
 import { getDeviceColumns } from './columns';
 import { ConnectDialog } from './ConnectDialog';
 import { useTranslations } from 'next-intl';
+import { useConfirm } from '@/providers/modal-provider';
 
 export function DeviceList() {
   const t = useTranslations('devicesList');
+  const tCommon = useTranslations('common');
+  const confirm = useConfirm();
   const { data: devices, isLoading, error } = useDevices();
   const [connectDevice, setConnectDevice] = useState<DeviceOut | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -56,12 +59,14 @@ export function DeviceList() {
     () =>
       getDeviceColumns({
         t,
+        tCommon,
         deletingId,
         setDeletingId,
         setConnectDevice,
-        relayMap
+        relayMap,
+        confirm
       }),
-    [deletingId, t, relayMap]
+    [deletingId, t, tCommon, relayMap, confirm]
   );
 
   const { table } = useDataTable<DeviceOut>({
@@ -90,7 +95,14 @@ export function DeviceList() {
       {devices?.length ? <DataTable table={table} total={devices.length} /> : null}
 
       {connectDevice && (
-        <ConnectDialog device={connectDevice} open={!!connectDevice} onClose={() => setConnectDevice(null)} />
+        <ConnectDialog
+          device={connectDevice}
+          open={!!connectDevice}
+          onClose={() => setConnectDevice(null)}
+          relayMap={relayMap}
+          relayAgents={relayAgents ?? []}
+          registeredSerials={registeredSerials}
+        />
       )}
     </div>
   );

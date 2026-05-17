@@ -107,7 +107,7 @@ streaming:
   dashboard_interval: 0.1    # 10fps — scrcpy decode → JPEG cache → MJPEG endpoint
   auto_attach_scrcpy_on_connect: true
   auto_attach_scrcpy_on_relay_online: true
-  dashboard_grid_preview_mjpeg: false
+  dashboard_grid_preview_mjpeg: true
 
 # Set enabled: true only when Temporal server is running.
 # When disabled, campaigns fall back to the in-process TaskQueue automatically.

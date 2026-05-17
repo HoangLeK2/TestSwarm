@@ -1,5 +1,7 @@
 export interface Device {
   serial: string;
+  name?: string;
+  display_name?: string;
   brand: string;
   model: string;
   state: string;

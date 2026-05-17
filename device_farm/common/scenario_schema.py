@@ -263,6 +263,7 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "dedupe_field",
             "ignore_error",
             "switch_to_all_comments",
+            "comment_filter",
             "post_tap_wait_s",
             "then",
             "else",
@@ -271,7 +272,8 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "Atomic step: tìm + tap nút 'Bình luận' topmost trong feed Facebook, "
             "tự set parent context cho extract fb_comments. "
             "then: steps chạy khi tap thành công. else: chạy khi không tap được. "
-            "switch_to_all_comments=true (default) sẽ tự chuyển filter sang 'All comments'."
+            "comment_filter: most_relevant | newest | all_comments (hoặc none để giữ mặc định FB). "
+            "Legacy switch_to_all_comments=false tắt đổi filter; true (default) = all_comments."
         ),
     },
     "random_pick": {
@@ -315,18 +317,19 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "item_level",
         ],
         "description": (
-            "Extract UI data từ màn hình hiện tại vào context['posts']. "
+            "Extract content data từ XML màn hình hiện tại qua agent-boot extra-data. "
             "strategy: 'fb_posts' — parse FB post cards (author/text/timestamp/reactions/"
             "comments/shares/post_type/image_desc/comment_preview); "
-            "'text_nodes' — thu thập tất cả text node vào context['text_nodes']. "
-            "'fb_comments' — parse comment rows + stats trong comment view/feed preview. "
+            "'text_nodes' — thu thập text node vào context['text_nodes']; "
+            "'fb_comments' — parse comment rows + stats trong comment view/feed preview; "
+            "ig/tiktok/linkedin/auto posts/comments — parse content tương ứng trong agent-boot. "
             "extract_profile: balanced|aggressive|safe (áp defaults scan params). "
             "strategy_version: lock behavior parser/runtime (vd: fb_comments:v1). "
             "stop_if_no_new (bool, default False): set ctx['_break']=True khi không có bài mới "
             "trong no_new_threshold (default 3) lần scroll liên tiếp — dùng bên trong step 'loop'. "
             "expand_see_more (bool, default True): tự tap nút 'See more'/'Xem thêm' trước khi parse. "
-            "Nếu set collection/platform/content_type/dedupe_field thì extract sẽ auto-save "
-            "incremental vào content DB với offset tracking. "
+            "Nếu set collection/platform/content_type/dedupe_field thì agent-boot sẽ ghi trực tiếp "
+            "vào content DB. "
             "⚠ Dùng với step 'loop' (không phải 'repeat') để stop_if_no_new hoạt động."
         ),
     },

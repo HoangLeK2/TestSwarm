@@ -4,6 +4,7 @@ import asyncio
 import atexit
 import logging
 import importlib
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -369,14 +370,41 @@ def create_app(
                         from db import crud as _ctrl_repo
                         from db.database import AsyncSessionLocal as _AslCtrl
 
-                        async def _on_ctrl_register(payload: dict) -> None:
+                        def _relay_ownership_required() -> bool:
+                            raw = os.getenv("RELAY_AGENT_OWNERSHIP_REQUIRED", "").strip().lower()
+                            if raw:
+                                return raw in {"1", "true", "yes", "on"}
+                            return True
+
+                        async def _on_ctrl_register(payload: dict) -> bool:
                             async with _AslCtrl() as _db:
                                 try:
+                                    enrollment_token = str(payload.pop("enrollment_token", "") or "").strip()
+                                    if not enrollment_token:
+                                        if _relay_ownership_required():
+                                            log.warning(
+                                                "relay register rejected: missing enrollment token relay_id=%s",
+                                                payload.get("relay_id", ""),
+                                            )
+                                            return False
+                                    else:
+                                        token_row = await _ctrl_repo.resolve_relay_agent_token(_db, enrollment_token)
+                                        if token_row is None:
+                                            log.warning(
+                                                "relay register rejected: invalid enrollment token relay_id=%s",
+                                                payload.get("relay_id", ""),
+                                            )
+                                            return False
+                                        payload["user_id"] = token_row.user_id
+                                        payload["enrollment_token_id"] = token_row.id
+
                                     await _ctrl_repo.upsert_relay_agent(_db, **payload)
                                     await _db.commit()
+                                    return True
                                 except Exception as _exc:
                                     await _db.rollback()
                                     log.warning("relay upsert failed: %s", _exc)
+                                    return False
 
                         async def _on_ctrl_heartbeat(payload: dict) -> None:
                             async with _AslCtrl() as _db:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy import delete
@@ -24,6 +24,28 @@ async def get_device_by_serial(db: AsyncSession, serial: str) -> Optional[Device
 async def get_device_by_key(db: AsyncSession, device_key: str) -> Optional[Device]:
     result = await db.execute(select(Device).where(Device.device_key == device_key))
     return result.scalar_one_or_none()
+
+
+async def list_devices_by_serial_aliases(db: AsyncSession, aliases: list[str]) -> list[Device]:
+    cleaned = {str(alias or "").strip() for alias in aliases}
+    cleaned = {alias for alias in cleaned if alias}
+    if not cleaned:
+        return []
+
+    ips = {alias.rsplit(":", 1)[0] for alias in cleaned if ":" in alias and alias.rsplit(":", 1)[0]}
+    stmt = (
+        select(Device)
+        .where(
+            or_(
+                Device.serial.in_(cleaned),
+                Device.adb_serial.in_(cleaned),
+                Device.adb_ip.in_(cleaned | ips),
+            )
+        )
+        .order_by(Device.created_at)
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
 
 
 async def get_device(db: AsyncSession, device_id: str) -> Optional[Device]:

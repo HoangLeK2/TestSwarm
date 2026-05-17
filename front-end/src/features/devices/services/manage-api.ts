@@ -65,6 +65,7 @@ export type RelayAgentOut = {
   ip:                string;
   version:           string;
   serials:           string[];
+  device_names?:     Record<string, string>;
   status:            'online' | 'offline';
   connected_at:      string;
   last_heartbeat_at: string | null;
@@ -84,6 +85,53 @@ export type BootstrapAllResult = {
   ok:       number;
   failed:   number;
   results:  Array<{ serial: string; ok: boolean; output: string; error: string }>;
+};
+
+export type RelayAgentTokenOut = {
+  id:           string;
+  name:         string;
+  prefix:       string;
+  status:       'active' | 'revoked';
+  created_at:   string;
+  last_used_at: string | null;
+  revoked_at:   string | null;
+};
+
+export type RelayAgentTokenCreated = RelayAgentTokenOut & {
+  token: string;
+};
+
+export type RelayBatchJobItemOut = {
+  id: string;
+  serial: string;
+  device_id: string | null;
+  status: 'pending' | 'running' | 'ok' | 'failed' | 'skipped' | string;
+  step: string;
+  attempts: number;
+  error: string;
+  result: Record<string, unknown>;
+};
+
+export type RelayBatchJobOut = {
+  id: string;
+  relay_id: string;
+  kind: 'provision' | 'claim_connect' | string;
+  status: 'pending' | 'running' | 'completed' | 'completed_with_errors' | 'failed' | 'cancelled' | string;
+  total: number;
+  ok: number;
+  failed: number;
+  pending: number;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  updated_at: string;
+  items: RelayBatchJobItemOut[];
+};
+
+export type RelayBatchJobCreate = {
+  serials?: string[];
+  mode?: 'selected' | 'all_visible';
+  connect?: boolean;
 };
 
 // ── Relay agents API ──────────────────────────────────────────────────────────
@@ -110,6 +158,31 @@ export const relayAgentsApi = {
       .then((r) => r.data),
   bootstrapAll: (relayId: string) =>
     farmApi.post<BootstrapAllResult>(`/relay-agents/${relayId}/bootstrap-all`).then((r) => r.data),
+  createProvisionJob: (relayId: string, body: RelayBatchJobCreate) =>
+    farmApi
+      .post<RelayBatchJobOut>(`/relay-agents/${encodeURIComponent(relayId)}/jobs/provision`, body)
+      .then((r) => r.data),
+  createClaimConnectJob: (relayId: string, body: RelayBatchJobCreate) =>
+    farmApi
+      .post<RelayBatchJobOut>(`/relay-agents/${encodeURIComponent(relayId)}/jobs/claim-connect`, body)
+      .then((r) => r.data),
+  getJob: (relayId: string, jobId: string) =>
+    farmApi
+      .get<RelayBatchJobOut>(`/relay-agents/${encodeURIComponent(relayId)}/jobs/${encodeURIComponent(jobId)}`)
+      .then((r) => r.data),
+  listJobItems: (relayId: string, jobId: string, params?: { status?: string; limit?: number; offset?: number }) =>
+    farmApi
+      .get<RelayBatchJobItemOut[]>(
+        `/relay-agents/${encodeURIComponent(relayId)}/jobs/${encodeURIComponent(jobId)}/items`,
+        { params },
+      )
+      .then((r) => r.data),
+  listTokens: () =>
+    farmApi.get<RelayAgentTokenOut[]>('/relay-agents/tokens').then((r) => r.data),
+  createToken: (body: { name?: string }) =>
+    farmApi.post<RelayAgentTokenCreated>('/relay-agents/tokens', body).then((r) => r.data),
+  revokeToken: (tokenId: string) =>
+    farmApi.delete(`/relay-agents/tokens/${encodeURIComponent(tokenId)}`).then((r) => r.data),
 };
 
 // ── Device relay control API ──────────────────────────────────────────────────

@@ -160,6 +160,9 @@ def _start_agent_boot_relay_bg(relay_server: str, api_key: str) -> None:
         env["RELAY_SERVER"] = relay_server
     if api_key:
         env["RELAY_API_KEY"] = api_key
+    enrollment_token = os.getenv("RELAY_ENROLLMENT_TOKEN", "").strip()
+    if enrollment_token:
+        env["RELAY_ENROLLMENT_TOKEN"] = enrollment_token
 
     log = logging.getLogger("main")
     # Refuse duplicate spawn if a previous relay is still alive (e.g. under

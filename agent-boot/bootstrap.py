@@ -77,6 +77,10 @@ def _auto_open_stf_enabled() -> bool:
     return os.environ.get("AUTO_OPEN_STF_APP", "").strip().lower() in {"1", "true", "yes"}
 
 
+def _force_u2_install_enabled() -> bool:
+    return os.environ.get("AGENT_BOOT_FORCE_U2_INSTALL", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 # ── ADB helpers ───────────────────────────────────────────────────────────────
 
 def _run(cmd: list[str], check: bool = True, timeout: int = 60) -> subprocess.CompletedProcess[str]:
@@ -133,11 +137,24 @@ def _is_atx_listening(serial: str) -> bool:
     return bool(out)
 
 
-def _adb_install(apk_path: Path, serial: str, label: str, extra_flags: list[str] | None = None) -> bool:
+def _adb_install(
+    apk_path: Path,
+    serial: str,
+    label: str,
+    extra_flags: list[str] | None = None,
+    package_name: str | None = None,
+) -> bool:
     flags = ["-r"] + (extra_flags or [])
     r = _adb("install", *flags, str(apk_path), serial=serial, check=False, timeout=120)
     out = (r.stdout + r.stderr).strip()
     ok = r.returncode == 0 and "Failure" not in out and "Exception" not in out
+    if not ok and package_name and (
+        "INSTALL_FAILED_UPDATE_INCOMPATIBLE" in out or "signatures do not match" in out
+    ):
+        _adb_shell(f"pm uninstall {package_name} 2>/dev/null || true", serial=serial)
+        r = _adb("install", *flags, str(apk_path), serial=serial, check=False, timeout=120)
+        out = (r.stdout + r.stderr).strip()
+        ok = r.returncode == 0 and "Failure" not in out and "Exception" not in out
     if ok:
         console.print(f"    [green]✓[/green] {label} installed")
     else:
@@ -315,16 +332,17 @@ def step_wireless_debugging(serial: str, skip: bool) -> None:
         console.print("      Enable manually: Settings → Developer Options → Wireless Debugging → ON")
 
 
-def step_install_u2(serial: str, skip: bool) -> bool:
+def step_install_u2(serial: str, skip: bool, force: bool = False) -> bool:
     _step_header(3, "Install uiautomator2 APKs")
     if skip:
         console.print("    [dim]Skipped (--skip-u2)[/dim]")
         return False
 
-    main_ok = _is_pkg_installed(_U2_PKG, serial)
-    test_ok = _is_pkg_installed(_U2_TEST_PKG, serial)
-    if main_ok and test_ok:
-        console.print("    [green]✓[/green] Already installed — skipping.")
+    installed_main = _is_pkg_installed(_U2_PKG, serial)
+    installed_test = _is_pkg_installed(_U2_TEST_PKG, serial)
+    if installed_main and installed_test and not (force or _force_u2_install_enabled()):
+        console.print(f"    [green]✓[/green] {_U2_PKG} already installed — skipping.")
+        console.print(f"    [green]✓[/green] {_U2_TEST_PKG} already installed — skipping.")
         return True
 
     main_apk, test_apk = find_u2_apks()
@@ -336,10 +354,14 @@ def step_install_u2(serial: str, skip: bool) -> bool:
         return False
 
     ok = True
-    if not main_ok:
-        ok &= _adb_install(main_apk, serial, _U2_PKG)
-    if not test_ok:
-        ok &= _adb_install(test_apk, serial, _U2_TEST_PKG, extra_flags=["-t"])
+    if force or _force_u2_install_enabled() or not installed_main:
+        ok &= _adb_install(main_apk, serial, _U2_PKG, package_name=_U2_PKG)
+    else:
+        console.print(f"    [green]✓[/green] {_U2_PKG} already installed — skipping.")
+    if force or _force_u2_install_enabled() or not installed_test:
+        ok &= _adb_install(test_apk, serial, _U2_TEST_PKG, extra_flags=["-t"], package_name=_U2_TEST_PKG)
+    else:
+        console.print(f"    [green]✓[/green] {_U2_TEST_PKG} already installed — skipping.")
     return ok
 
 
@@ -651,6 +673,7 @@ def boot_device(serial: str, stf_apk: Path | None, *,
                 use_bundle: bool = False,
                 skip_u2: bool = False, skip_atx: bool = False,
                 skip_stf: bool = False,
+                force_u2_install: bool = False,
                 ws_url: str = "") -> bool:
     sdk   = _get_sdk(serial)
     model = _adb_shell("getprop ro.product.model", serial=serial)
@@ -683,7 +706,7 @@ def boot_device(serial: str, stf_apk: Path | None, *,
             u2_ok = bundle_ok and _is_pkg_installed(_U2_PKG, active) and _is_pkg_installed(_U2_TEST_PKG, active)
             atx_ok = bundle_ok and _is_atx_listening(active)
         else:
-            u2_ok  = step_install_u2(active, skip=skip_u2)
+            u2_ok  = step_install_u2(active, skip=skip_u2, force=force_u2_install)
             atx_ok = step_push_atx_agent(active, skip=skip_u2 or skip_atx)
         step_install_stf(active, stf_apk, skip=skip_stf)
         step_grant_permissions(active, skip=skip_stf)
@@ -724,12 +747,18 @@ def _ws_to_http_base(ws_url: str) -> str:
     return f"{scheme}://{host_port}"
 
 
-def _fetch_pair_urls(ws_url: str, serials: list[str], relay_id: str, api_key: str) -> dict[str, str]:
+def _fetch_pair_urls(
+    ws_url: str,
+    serials: list[str],
+    relay_id: str,
+    api_key: str,
+    enrollment_token: str = "",
+) -> dict[str, str]:
     """Call /api/relay-agents/{relay_id}/pair-bulk → {serial: ws_url_with_pair}.
 
     Returns empty dict on any error (bootstrap falls back to bare ws_url).
     """
-    if not serials or not ws_url or not relay_id or not api_key:
+    if not serials or not ws_url or not relay_id or not api_key or not enrollment_token:
         return {}
     http_base = _ws_to_http_base(ws_url)
     if not http_base:
@@ -739,7 +768,11 @@ def _fetch_pair_urls(ws_url: str, serials: list[str], relay_id: str, api_key: st
     req = urllib.request.Request(
         endpoint,
         data=payload,
-        headers={"Content-Type": "application/json", "X-Relay-Api-Key": api_key},
+        headers={
+            "Content-Type": "application/json",
+            "X-Relay-Api-Key": api_key,
+            "X-Relay-Enrollment-Token": enrollment_token,
+        },
         method="POST",
     )
     try:
@@ -762,10 +795,12 @@ def run_bootstrap(
     """Bootstrap all serials in parallel. Returns {serial: success}."""
     # Fetch per-device pairing URLs so each STFService gets a unique token.
     ws_url = kwargs.get("ws_url", "")
-    pair_urls = _fetch_pair_urls(ws_url, serials, relay_id, api_key) if ws_url else {}
+    enrollment_token = kwargs.get("enrollment_token", "")
+    pair_urls = _fetch_pair_urls(ws_url, serials, relay_id, api_key, enrollment_token) if ws_url else {}
 
     def _boot(serial: str) -> bool:
         kw = dict(kwargs)
+        kw.pop("enrollment_token", None)
         if pair_urls:
             kw["ws_url"] = pair_urls.get(serial, ws_url)
         return boot_device(serial, stf_apk, **kw)

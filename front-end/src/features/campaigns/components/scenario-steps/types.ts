@@ -279,7 +279,7 @@ export function createDefaultStep(type: string, afterOrder?: string | null, befo
     case 'wait': return { ...base, type: 'wait', seconds: 1 };
     case 'tap_ratio': return { ...base, type: 'tap_ratio', x: 0.5, y: 0.5 };
     case 'tap_selector': return { ...base, type: 'tap_selector', by: 'text', value: '', timeout: 8, fallback_rx: 0.5, fallback_ry: 0.5 };
-    case 'tap_fb_comment_button': return { ...base, type: 'tap_fb_comment_button', timeout: 6, poll: 0.4, dedupe_field: 'post_key', switch_to_all_comments: true, post_tap_wait_s: 0.8, ignore_error: true, pre_scroll: false, pre_scroll_distance: 0.24, then: [], else: [] };
+    case 'tap_fb_comment_button': return { ...base, type: 'tap_fb_comment_button', timeout: 6, poll: 0.4, dedupe_field: 'post_key', comment_filter: 'all_comments', switch_to_all_comments: true, post_tap_wait_s: 0.8, ignore_error: true, pre_scroll: false, pre_scroll_distance: 0.24, then: [], else: [] };
     case 'tap_position': return { ...base, type: 'tap_position', pos: 'middle_center' };
     case 'swipe_ratio': return { ...base, type: 'swipe_ratio', x1: 0.5, y1: 0.8, x2: 0.5, y2: 0.2, duration_ms: 300 };
     case 'input_text': return { ...base, type: 'input_text', via: 'u2', text: '' };

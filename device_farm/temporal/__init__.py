@@ -11,6 +11,8 @@ Provides durable, fault-tolerant scenario execution with:
 """
 
 from .activities import DeviceActivities
+from .relay_onboarding_activities import RelayOnboardingActivities
+from .relay_onboarding_workflows import RelayOnboardingWorkflow
 from .schedule_activities import ScheduleActivities
 from .schedule_workflow import ScheduleRunWorkflow
 from .workflows import ScenarioWorkflow, ScenarioStepsWorkflow
@@ -18,6 +20,8 @@ from .worker import create_temporal_worker, start_temporal_worker
 
 __all__ = [
     "DeviceActivities",
+    "RelayOnboardingActivities",
+    "RelayOnboardingWorkflow",
     "ScheduleActivities",
     "ScenarioWorkflow",
     "ScenarioStepsWorkflow",

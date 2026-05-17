@@ -363,7 +363,7 @@ Register → Login → Access Token (24h) + Refresh Token (7d)
 
 **Functional Requirements:**
 
-1. User registration: email, name, password, role
+1. User registration: email, name, password, role; successful registration also creates a default organization and owner membership
 2. JWT Bearer token authentication (HS256)
 3. Access token: 24h TTL (configurable)
 4. Refresh token: 7d TTL (configurable)
@@ -381,7 +381,7 @@ Register → Login → Access Token (24h) + Refresh Token (7d)
 
 **Functional Requirements:**
 
-1. Tao organization (businessName, businessEmail, businessLogo)
+1. Tao organization (businessName, businessEmail, businessLogo); new users get one default organization automatically at registration
 2. Thanh vien voi role: owner / member
 3. List organizations cua user
 4. Unique constraint (organization_id, user_id)
@@ -572,6 +572,8 @@ Content-Type: application/json
   "role": "operator"
 }
 ```
+
+On success, the backend also creates a default organization for the user and adds the user as `owner`. The response remains the user payload; clients load organizations after login through `/api/organizations`.
 
 **Login:**
 ```http

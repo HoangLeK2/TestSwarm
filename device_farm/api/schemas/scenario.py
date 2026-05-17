@@ -340,6 +340,7 @@ class TapFbCommentButtonStep(StepBase):
     dedupe_field: str = "post_key"
     ignore_error: bool = True
     switch_to_all_comments: bool = True
+    comment_filter: Optional[str] = None
     post_tap_wait_s: NumOrVar = 0.8
     then: List[StepModel] = []
     else_steps: List[StepModel] = Field(default_factory=list, alias="else")
@@ -376,7 +377,19 @@ class RunScenarioStep(StepBase):
 
 class ExtractStep(StepBase):
     type: Literal["extract"]
-    strategy: Literal["fb_posts", "text_nodes", "fb_comments"]
+    strategy: Literal[
+        "fb_posts",
+        "text_nodes",
+        "fb_comments",
+        "ig_posts",
+        "tiktok_posts",
+        "linkedin_posts",
+        "auto_posts",
+        "ig_comments",
+        "tiktok_comments",
+        "linkedin_comments",
+        "auto_comments",
+    ]
     stop_if_no_new: bool = False
     no_new_threshold: int = Field(3, ge=1, le=1000)
     expand_see_more: bool = True

@@ -112,10 +112,12 @@ class RelayAgent:
         api_key: Optional[str],
         relay_id: str,
         relay_mode: str = "ws",
+        enrollment_token: Optional[str] = None,
     ) -> None:
         self._api_key   = api_key
         self._relay_id  = relay_id
         self._relay_mode = relay_mode.lower().strip()
+        self._enrollment_token = (enrollment_token or "").strip()
 
         if self._relay_mode == "grpc":
             # Accept "host:port" or "grpc://host:port" → strip scheme
@@ -270,6 +272,8 @@ class RelayAgent:
         headers: dict = {}
         if self._api_key:
             headers["x-relay-api-key"] = self._api_key
+        if self._enrollment_token:
+            headers["x-relay-enrollment-token"] = self._enrollment_token
 
         # send_queue: str for JSON text frames, bytes for binary frames.
         # Keep this shallow for interactive streaming. If transport stalls, old
@@ -600,6 +604,11 @@ class RelayAgent:
                     "sdk":             c.get("sdk", ""),
                     "brand":           c.get("brand", ""),
                     "model":           c.get("model", ""),
+                    "device_name":     c.get("device_name", ""),
+                    "marketing_name":  c.get("marketing_name", ""),
+                    "display_name":    c.get("display_name", ""),
+                    "wlan_ip":         c.get("wlan_ip", ""),
+                    "wlan_cidr":       c.get("wlan_cidr", ""),
                     "abi":             c.get("abi", ""),
                     "screen_width":    c.get("screen_width", 0),
                     "screen_height":   c.get("screen_height", 0),

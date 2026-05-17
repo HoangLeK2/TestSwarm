@@ -17,6 +17,10 @@ import { DeviceStepMonitor } from './device-step-monitor';
 import { SHOW_RELAY_SCRCPY_UI_TOGGLE } from '../streaming-ui-flags';
 import { useH264Video } from '../hooks/use-h264-canvas';
 
+/** When true (default), grid tiles load MJPEG/H264 immediately for active devices (no scroll-to-load). Set NEXT_PUBLIC_DEVICE_FARM_GRID_PREVIEW_EAGER=0 to restore lazy viewport loading. */
+const GRID_PREVIEW_EAGER =
+  (process.env.NEXT_PUBLIC_DEVICE_FARM_GRID_PREVIEW_EAGER ?? '1').trim() !== '0';
+
 const gridH264Slots = new Set<string>();
 const gridH264SlotListeners = new Set<() => void>();
 
@@ -65,8 +69,10 @@ export function DeviceTilePreview({
 
   const previewZoneRef = useRef<HTMLDivElement>(null);
   const [inView, setInView] = useState(false);
+  const [lazyLoadStream, setLazyLoadStream] = useState(false);
 
   useLayoutEffect(() => {
+    if (GRID_PREVIEW_EAGER) return;
     const el = previewZoneRef.current;
     if (!el) return;
     const margin = 140;
@@ -85,7 +91,6 @@ export function DeviceTilePreview({
     return () => io.disconnect();
   }, []);
 
-  const [loadStream, setLoadStream] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [h264Active, setH264Active] = useState(false);
   const [hasH264Slot, setHasH264Slot] = useState(false);
@@ -93,17 +98,20 @@ export function DeviceTilePreview({
   const h264WarmupRef = useRef<{ startedAt: number; frames: number }>({ startedAt: 0, frames: 0 });
 
   useEffect(() => {
+    if (GRID_PREVIEW_EAGER) return;
     if (!inView) {
-      const t = window.setTimeout(() => setLoadStream(false), 700);
+      const t = window.setTimeout(() => setLazyLoadStream(false), 700);
       return () => window.clearTimeout(t);
     }
-    setLoadStream(true);
+    setLazyLoadStream(true);
     return undefined;
   }, [inView]);
 
+  const loadStream = GRID_PREVIEW_EAGER ? isActive : lazyLoadStream;
+
   const previewFps = useMemo(() => {
-    const raw = Number(process.env.NEXT_PUBLIC_DEVICE_FARM_PREVIEW_FPS ?? 4);
-    if (!Number.isFinite(raw)) return 4;
+    const raw = Number(process.env.NEXT_PUBLIC_DEVICE_FARM_PREVIEW_FPS ?? 8);
+    if (!Number.isFinite(raw)) return 8;
     return Math.max(1, Math.min(8, Math.round(raw)));
   }, []);
 
@@ -128,8 +136,8 @@ export function DeviceTilePreview({
   const [relayStreamBusy, setRelayStreamBusy] = useState(false);
 
   const gridH264Limit = useMemo(() => {
-    const raw = Number(process.env.NEXT_PUBLIC_DEVICE_FARM_GRID_H264_LIMIT ?? 1);
-    if (!Number.isFinite(raw)) return 1;
+    const raw = Number(process.env.NEXT_PUBLIC_DEVICE_FARM_GRID_H264_LIMIT ?? 4);
+    if (!Number.isFinite(raw)) return 4;
     return Math.max(0, Math.min(4, Math.round(raw)));
   }, []);
 

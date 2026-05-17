@@ -37,7 +37,7 @@ def _verify_token_only(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
 
-async def _get_live_allowed_serials(request: Request, db_enabled: bool) -> Optional[set[str]]:
+async def _get_live_device_map(request: Request, db_enabled: bool) -> Optional[dict[str, dict[str, str]]]:
     if not db_enabled:
         return None
 
@@ -59,7 +59,27 @@ async def _get_live_allowed_serials(request: Request, db_enabled: bool) -> Optio
 
     async with AsyncSessionLocal() as db:
         db_devices = await repo.list_devices(db, user_id=user_id)
-        return {d.serial for d in db_devices if d.serial}
+        out: dict[str, dict[str, str]] = {}
+        for device in db_devices:
+            serial = str(getattr(device, "serial", "") or "").strip()
+            if not serial:
+                continue
+            name = str(getattr(device, "name", "") or "").strip()
+            brand = str(getattr(device, "brand", "") or "").strip()
+            model = str(getattr(device, "model", "") or "").strip()
+            display_name = name or " ".join(p for p in [brand, model] if p).strip() or serial
+            out[serial] = {
+                "name": name,
+                "display_name": display_name,
+            }
+        return out
+
+
+async def _get_live_allowed_serials(request: Request, db_enabled: bool) -> Optional[set[str]]:
+    device_map = await _get_live_device_map(request, db_enabled)
+    if device_map is None:
+        return None
+    return set(device_map.keys())
 
 
 def build_public_router(
@@ -84,10 +104,14 @@ def build_public_router(
         limit: Optional[int] = None,
         offset: int = 0,
     ):
-        allowed_serials = await _get_live_allowed_serials(request, db_enabled)
+        allowed_devices = await _get_live_device_map(request, db_enabled)
         devices = [d.status_dict() for d in manager.all_devices()]
-        if allowed_serials is not None:
-            devices = [d for d in devices if d.get("serial") in allowed_serials]
+        if allowed_devices is not None:
+            devices = [d for d in devices if d.get("serial") in allowed_devices]
+            for d in devices:
+                info = allowed_devices.get(str(d.get("serial") or ""), {})
+                d["name"] = info.get("name", "")
+                d["display_name"] = info.get("display_name", d.get("serial", ""))
         store = getattr(request.app.state, "session_store", None)
         for d in devices:
             serial = d.get("serial", "")

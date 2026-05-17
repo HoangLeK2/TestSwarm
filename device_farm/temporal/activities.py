@@ -483,483 +483,51 @@ class DeviceActivities:
         ctx.setdefault("comments", [])
 
         strategy = str(step.get("strategy", "fb_posts"))
-        stop_if_no_new = bool(step.get("stop_if_no_new", False))
-        no_new_threshold = int(step.get("no_new_threshold", 3))
-        expand_see_more = bool(step.get("expand_see_more", True))
-        _ecr = step.get("expand_completion_retries", 3)
-        completion_retries = max(0, int(3 if _ecr is None else _ecr))
-        em_passes = int(step.get("expand_see_more_max_passes", 2))
-        em_scroll = bool(step.get("expand_see_more_scroll", False))
-        em_scroll_distance = float(step.get("expand_see_more_scroll_distance", 0.3))
-        lazy_rounds = int(step.get("expand_lazy_hydration_rounds", 6))
-        lazy_scroll = float(step.get("expand_lazy_scroll_distance", em_scroll_distance))
-        prefetch_passes = int(step.get("expand_prefetch_scroll_passes", 0) or 0)
-        break_requested = False
-        details: dict[str, Any] = {}
+        from tasks.scenario.steps.extraction import EDGE_CONTENT_STRATEGIES
 
-        try:
-            # Always pre-expand fb_posts when enabled (see scenario_task extract notes).
-            do_pre_expand = expand_see_more and strategy in ("fb_posts", "fb_comments")
-            if do_pre_expand:
-                try:
-                    if strategy == "fb_posts":
-                        from tasks.fb_extract import expand_see_more_with_lazy_hydration
+        if strategy in EDGE_CONTENT_STRATEGIES:
+            edge_result: dict[str, Any] = {}
+            scenario_meta = {
+                "_campaign_id": inp.campaign_id,
+                "_execution_id": inp.execution_id or inp.run_id,
+                "_run_hash_scope": inp.execution_id or inp.run_id,
+                "_campaign_vars": {"__USER_ID__": inp.user_id} if inp.user_id else {},
+                "__USER_ID__": inp.user_id,
+                "name": inp.scenario_config.get("name") or inp.scenario_config.get("scenario_name"),
+            }
+            from tasks.scenario.steps.extraction import request_edge_extra_data
 
-                        expanded = await _to_thread_with_heartbeat(
-                            expand_see_more_with_lazy_hydration,
-                            device,
-                            max_rounds=max(3, lazy_rounds),
-                            scroll_distance=max(0.12, lazy_scroll),
-                        )
-                    else:
-                        from tasks.fb_extract import _expand_see_more
-
-                        expanded = await _to_thread_with_heartbeat(
-                            _expand_see_more,
-                            device,
-                            max_passes=em_passes,
-                            scroll_between=em_scroll,
-                            scroll_distance=em_scroll_distance,
-                        )
-                    if expanded:
-                        await asyncio.sleep(0.55 if strategy == "fb_comments" else 0.35)
-                except Exception:
-                    pass
-
-            if strategy == "fb_posts" and expand_see_more and prefetch_passes > 0:
-                try:
-                    from tasks.fb_extract import prefetch_viewport_scrolls
-
-                    await _to_thread_with_heartbeat(
-                        prefetch_viewport_scrolls,
-                        device,
-                        passes=prefetch_passes,
-                        distance=max(0.15, em_scroll_distance),
-                        pause_s=float(step.get("expand_prefetch_scroll_pause", 0.7)),
-                    )
-                except Exception:
-                    pass
-
-            xml = await _to_thread_with_heartbeat(device.hierarchy_xml, force_refresh=True)
-            if not xml:
+            handled = await _to_thread_with_heartbeat(
+                request_edge_extra_data,
+                device=device,
+                serial=inp.device_serial,
+                ctx=ctx,
+                scenario=scenario_meta,
+                step=step,
+                strategy=strategy,
+                result=edge_result,
+            )
+            if handled:
                 return ExtractResult(
-                    ok=False,
-                    message="extract: hierarchy_xml returned None",
+                    ok=bool(edge_result.get("ok", True)),
+                    message=str(edge_result.get("message") or ""),
                     context=ctx,
+                    details={k: v for k, v in edge_result.items() if k not in {"ok", "message"}},
                 )
-
-            if strategy == "fb_posts":
-                from tasks.fb_extract import (
-                    parse_fb_posts_from_xml,
-                    _dedup,
-                    is_fb_post_truncated,
-                    expand_see_more_with_lazy_hydration,
-                )
-                from services.content_store import compute_content_hash, scope_content_hash
-                scroll_idx = ctx.get("_loop_iter", 0)
-                new_posts = parse_fb_posts_from_xml(xml, source_index=scroll_idx)
-
-                def _snapshot(posts: list[dict[str, Any]]) -> tuple[int, int]:
-                    unresolved = sum(1 for _p in posts if is_fb_post_truncated(_p))
-                    total_len = sum(len(str(_p.get("text") or "")) for _p in posts)
-                    return unresolved, total_len
-
-                unresolved_first, total_len_first = _snapshot(new_posts)
-
-                if expand_see_more and any(is_fb_post_truncated(p) for p in new_posts):
-                    try:
-                        await _to_thread_with_heartbeat(
-                            expand_see_more_with_lazy_hydration,
-                            device,
-                            max_rounds=max(2, min(lazy_rounds, 5)),
-                            scroll_distance=max(0.12, lazy_scroll),
-                        )
-                        xml_h = await _to_thread_with_heartbeat(device.hierarchy_xml, force_refresh=True)
-                        if xml_h:
-                            new_posts = _dedup(
-                                new_posts
-                                + parse_fb_posts_from_xml(xml_h, source_index=scroll_idx)
-                            )
-                    except Exception:
-                        pass
-
-                unresolved_before, total_len_before = _snapshot(new_posts)
-                retries_done = 0
-                plateau = 0
-                if expand_see_more and unresolved_before > 0:
-                    max_retries = max(1, min(4, completion_retries))
-                    prev_unresolved, prev_total_len = unresolved_before, total_len_before
-                    for _ in range(max_retries):
-                        retries_done += 1
-                        try:
-                            await _to_thread_with_heartbeat(
-                                expand_see_more_with_lazy_hydration,
-                                device,
-                                max_rounds=max(3, min(lazy_rounds, 8)),
-                                scroll_distance=max(0.12, lazy_scroll),
-                            )
-                            await asyncio.sleep(0.6)
-                            xml_retry = await _to_thread_with_heartbeat(device.hierarchy_xml, force_refresh=True)
-                            if not xml_retry:
-                                break
-                            retry_posts = parse_fb_posts_from_xml(xml_retry, source_index=scroll_idx)
-                            # Merge instead of replacing to prevent viewport-drift data loss.
-                            candidate_posts = _dedup(new_posts + (retry_posts or []))
-                            curr_unresolved, curr_total_len = _snapshot(candidate_posts)
-                            improved = (
-                                (curr_unresolved < prev_unresolved)
-                                or (curr_total_len > prev_total_len + 20)
-                            )
-                            new_posts = candidate_posts
-                            if improved:
-                                plateau = 0
-                            else:
-                                plateau += 1
-                            prev_unresolved, prev_total_len = curr_unresolved, curr_total_len
-                            if curr_unresolved == 0 or plateau >= 2:
-                                break
-                        except Exception:
-                            break
-
-                unresolved_after, total_len_after = _snapshot(new_posts)
-                prev_count = len(ctx["posts"])
-                ctx["posts"] = _dedup(ctx["posts"] + new_posts)
-                added = len(ctx["posts"]) - prev_count
-                details["extracted"] = added
-                details["total_posts"] = len(ctx["posts"])
-                details["extract_diagnostics"] = {
-                    "unresolved_first_parse": unresolved_first,
-                    "total_len_first_parse": total_len_first,
-                    "unresolved_before": unresolved_before,
-                    "unresolved_after": unresolved_after,
-                    "total_len_before": total_len_before,
-                    "total_len_after": total_len_after,
-                    "completion_retries": retries_done,
-                    "plateau_count": plateau,
-                }
-                msg = f"extract fb_posts: +{added} new (total {len(ctx['posts'])})"
-                log.info(
-                    "[%s] extract fb_posts diagnostics: unresolved %s->%s, len %s->%s, retries=%s, plateau=%s",
-                    inp.device_serial,
-                    unresolved_before,
-                    unresolved_after,
-                    total_len_before,
-                    total_len_after,
-                    retries_done,
-                    plateau,
-                )
-                # Track first VISIBLE post for comment linking.
-                # Uses new_posts[0] (topmost post on screen), NOT the first "new" post,
-                # because tap_selector("Bình luận") taps the topmost button on screen.
-                if new_posts:
-                    ctx["_first_new_post_hash"] = scope_content_hash(
-                        compute_content_hash(new_posts[0], dedupe_field="post_key"),
-                        inp.execution_id or inp.run_id,
-                    )
-                    # Accumulate pid→hash across batches to support tap_fb_comment_button
-                    # and late taps on previously-cached posts.
-                    pid_map = ctx.setdefault("_post_id_map", {})
-                    for _p in new_posts:
-                        _p_pid = _p.get("_pid")
-                        if _p_pid:
-                            pid_map[_p_pid] = scope_content_hash(
-                                compute_content_hash(_p, dedupe_field="post_key"),
-                                inp.execution_id or inp.run_id,
-                            )
-                    _tpid = new_posts[0].get("_pid")
-                    if _tpid:
-                        ctx["_fb_comment_parent_pid"] = _tpid
-                    else:
-                        ctx.pop("_fb_comment_parent_pid", None)
-                else:
-                    ctx.pop("_fb_comment_parent_pid", None)
-                if stop_if_no_new:
-                    if added == 0:
-                        base_streak = ctx.get("_no_new_posts_streak", ctx.get("_no_new_streak", 0))
-                        ctx["_no_new_posts_streak"] = base_streak + 1
-                        # Backward compatibility for any condition using legacy key.
-                        ctx["_no_new_streak"] = ctx["_no_new_posts_streak"]
-                        if ctx["_no_new_posts_streak"] >= no_new_threshold:
-                            break_requested = True
-                            msg += f" — breaking (no new for {ctx['_no_new_posts_streak']} scrolls)"
-                    else:
-                        ctx["_no_new_posts_streak"] = 0
-                        ctx["_no_new_streak"] = 0
-
-            elif strategy == "text_nodes":
-                import xml.etree.ElementTree as ET
-                root = ET.fromstring(xml)
-                texts = [
-                    (node.get("text") or "").strip()
-                    for node in root.iter()
-                    if len((node.get("text") or "").strip()) > 2
-                ]
-                # Ensure we have our own list (not shared with inp.context)
-                ctx["text_nodes"] = list(ctx.get("text_nodes") or [])
-                ctx["text_nodes"].extend(texts)
-                details["extracted"] = len(texts)
-                msg = f"extract text_nodes: {len(texts)} texts"
-
-            elif strategy == "fb_comments":
-                from tasks.fb_extract import (
-                    parse_fb_comments_from_xml_with_diagnostic,
-                    _dedup_comments,
-                    _is_junk_parsed_comment_row,
-                    _post_id_from_ctx,
-                )
-                ctx["_active_comment_parent_hash"] = None
-                parent_post_id_var = step.get("parent_post_id_var")
-                max_items = int(step.get("max_items") or 400)
-                comment_scroll_passes = int(
-                    step.get("comment_scroll_passes")
-                    or step.get("scroll_passes")
-                    or 0
-                )
-                # Keep comment-sheet scrolling gentle by default. A large distance can
-                # cause momentum-like overscroll on some devices and "throw" the sheet.
-                _scroll_distance_raw = (
-                    step.get("comment_scroll_distance")
-                    if step.get("comment_scroll_distance") is not None
-                    else step.get("scroll_distance")
-                )
-                comment_scroll_distance = float(
-                    _scroll_distance_raw if _scroll_distance_raw is not None else 0.32
-                )
-                comment_scroll_distance = max(0.18, min(0.40, comment_scroll_distance))
-                comment_scroll_duration_ms = int(
-                    step.get("comment_scroll_duration_ms")
-                    or step.get("scroll_duration_ms")
-                    or 620
-                )
-                comment_scroll_duration_ms = max(220, min(1200, comment_scroll_duration_ms))
-                comment_scroll_pause_s = float(
-                    step.get("comment_scroll_pause_s")
-                    or step.get("scroll_pause_s")
-                    or 0.45
-                )
-                no_growth_break = int(step.get("comment_no_growth_break") or 2)
-                min_comment_scan_passes = int(step.get("min_comment_scan_passes") or 0)
-                parent_post_id = _post_id_from_ctx(ctx, parent_post_id_var)
-
-                # Reason codes that mean "comment screen is gone" (popup closed, back to feed,
-                # session dead, etc.). If we hit one of these mid-scroll we must STOP immediately,
-                # otherwise we keep swiping aggressively on the wrong screen.
-                _OFF_COMMENT_SCREEN_REASONS = {
-                    "xml_parse_error",
-                    "no_text_nodes",
-                    "anchor_not_found",
-                    "login_screen",
-                    "rate_limited",
-                }
-
-                def _parse_comment_frame(
-                    frame_xml: str,
-                ) -> tuple[dict[str, Any] | None, list[dict[str, Any]], str]:
-                    raw_items, diag = parse_fb_comments_from_xml_with_diagnostic(
-                        frame_xml,
-                        parent_post_id=parent_post_id,
-                        max_items=max_items,
-                    )
-                    frame_post_stats = next((x for x in raw_items if x.get("_type") == "post_stats"), None)
-                    frame_comments = [
-                        x
-                        for x in raw_items
-                        if x.get("_type") != "post_stats"
-                        and not _is_junk_parsed_comment_row(x)
-                    ]
-                    return frame_post_stats, frame_comments, str(diag.get("reason_code") or "")
-
-                # Parse current viewport first, then scroll several passes to collect more comments.
-                post_stats, new_comments, first_reason = _parse_comment_frame(xml)
-                def _comment_identity(row: dict[str, Any]) -> str:
-                    return str(
-                        row.get("comment_key")
-                        or f"{row.get('author','')}|{row.get('text','')}|{row.get('timestamp','')}"
-                    )
-                seen_comment_keys = {_comment_identity(c) for c in new_comments}
-                scanned_frames = 1
-                growthless_streak = 0
-                screen_left_comment = first_reason in _OFF_COMMENT_SCREEN_REASONS
-                for pass_idx in range(max(0, comment_scroll_passes)):
-                    if screen_left_comment:
-                        break
-                    if len(new_comments) >= max_items:
-                        break
-                    await _to_thread_with_heartbeat(
-                        device.scroll,
-                        "down",
-                        max(0.1, min(0.9, comment_scroll_distance)),
-                        duration_ms=comment_scroll_duration_ms,
-                    )
-                    await asyncio.sleep(max(0.1, comment_scroll_pause_s))
-                    xml_next = await _to_thread_with_heartbeat(device.hierarchy_xml, force_refresh=True)
-                    if not xml_next:
-                        break
-                    scanned_frames += 1
-                    frame_stats, frame_comments, frame_reason = _parse_comment_frame(xml_next)
-                    # Comment popup/screen is gone — abort scroll loop NOW to avoid
-                    # aggressive swipes on feed/home after popup dismissal.
-                    if frame_reason in _OFF_COMMENT_SCREEN_REASONS:
-                        screen_left_comment = True
-                        log.info(
-                            f"[{inp.device_serial}] fb_comments: screen departed (reason={frame_reason}), "
-                            f"breaking scroll loop at pass {pass_idx}"
-                        )
-                        break
-                    if frame_stats:
-                        post_stats = frame_stats
-                    prev_len = len(new_comments)
-                    for c in frame_comments:
-                        key = _comment_identity(c)
-                        if key in seen_comment_keys:
-                            continue
-                        seen_comment_keys.add(key)
-                        new_comments.append(c)
-                    if len(new_comments) == prev_len:
-                        growthless_streak += 1
-                        # Don't terminate too early: first passes often only warm up/lazy-load.
-                        if (
-                            pass_idx + 1 >= max(0, min_comment_scan_passes)
-                            and growthless_streak >= max(1, no_growth_break)
-                        ):
-                            break
-                    else:
-                        growthless_streak = 0
-                # Final safety dedup (single pass), avoids repeated N^2-ish dedup per frame.
-                new_comments = _dedup_comments(new_comments)
-
-                # Update parent post reaction/share/comments counts with the
-                # accurate values visible in the comment-sheet header. These
-                # counts are more reliable than what the feed card shows (feed
-                # truncates to "1,2K" while the sheet shows "1.234").
-                if post_stats:
-                    ctx["_comment_view_stats"] = post_stats
-                    parent_hash = resolve_comment_parent_hash(ctx, parent_post_id)
-                    if parent_hash:
-                        ctx["_active_comment_parent_hash"] = parent_hash
-                        try:
-                            updated_ok = await update_parent_stats_if_available(
-                                content_hash=parent_hash,
-                                post_stats=post_stats,
-                            )
-                            log.info(
-                                f"[{inp.device_serial}] post stats update: "
-                                f"hash={parent_hash[:12]} "
-                                f"reactions={post_stats.get('reactions')} "
-                                f"shares={post_stats.get('shares')} "
-                                f"comments={post_stats.get('comments')} "
-                                f"applied={updated_ok}"
-                            )
-                        except Exception as exc:
-                            log.warning(f"update_content_stats failed: {exc}")
-                    else:
-                        log.warning(
-                            f"[{inp.device_serial}] post stats extracted "
-                            f"(reactions={post_stats.get('reactions')}, "
-                            f"shares={post_stats.get('shares')}, "
-                            f"comments={post_stats.get('comments')}) "
-                            f"but parent_hash unresolved (pid={parent_post_id}). "
-                            "Counts are denormalized onto comment rows but the "
-                            "parent post row won't be updated."
-                        )
-                else:
-                    parent_hash = resolve_comment_parent_hash(ctx, parent_post_id)
-                    if parent_hash:
-                        ctx["_active_comment_parent_hash"] = parent_hash
-                    log.debug(
-                        f"[{inp.device_serial}] no post_stats found in comment-sheet "
-                        "header (header parser returned None)."
-                    )
-
-                ctx.setdefault("comments", [])
-                prev_count = len(ctx["comments"])
-                ctx["comments"] = _dedup_comments(ctx["comments"] + new_comments)
-                added = len(ctx["comments"]) - prev_count
-                details["extracted"] = added
-                details["total_comments"] = len(ctx["comments"])
-                details["parent_post_id"] = parent_post_id
-                details["post_stats"] = post_stats
-                details["comment_scan"] = {
-                    "frames": scanned_frames,
-                    "scroll_passes": comment_scroll_passes,
-                    "scroll_distance": comment_scroll_distance,
-                    "scroll_duration_ms": comment_scroll_duration_ms,
-                    "max_items": max_items,
-                    "growthless_streak": growthless_streak,
-                    "min_scan_passes": min_comment_scan_passes,
-                }
-                msg = (
-                    f"extract fb_comments: +{added} new "
-                    f"(total {len(ctx['comments'])}, post={parent_post_id})"
-                )
-                if stop_if_no_new:
-                    if added == 0:
-                        ctx["_no_new_comments_streak"] = ctx.get("_no_new_comments_streak", 0) + 1
-                        # Backward compatibility for legacy condition key.
-                        ctx["_no_new_streak"] = ctx["_no_new_comments_streak"]
-                        if ctx["_no_new_comments_streak"] >= no_new_threshold:
-                            break_requested = True
-                            msg += (
-                                f" — breaking comments loop (no new for {ctx['_no_new_comments_streak']} scrolls)"
-                            )
-                    else:
-                        ctx["_no_new_comments_streak"] = 0
-                        ctx["_no_new_streak"] = 0
-            else:
-                return ExtractResult(
-                    ok=False,
-                    message=f"extract: unknown strategy {strategy!r}",
-                    context=ctx,
-                )
-
-            # Temporal path parity with task-queue path: optional inline autosave.
-            # If `collection` exists on extract step, persist newly extracted records now.
-            collection = str(step.get("collection") or "").strip()
-            if collection:
-                offsets = ctx.get("__save_extraction_offsets__", ctx.get("__extract_save_offsets__", {}))
-                extracted_var = extract_data_var_for_strategy(step)
-                source_data = ctx.get(extracted_var)
-                parent_hash = ctx.get("_active_comment_parent_hash")
-                item_level = 1 if strategy == "fb_comments" else 0
-                report, updated_offsets = await persist_data_items(
-                    data=source_data,
-                    data_var=extracted_var,
-                    offsets=offsets,
-                    collection=collection,
-                    platform=step.get("platform"),
-                    content_type=step.get("content_type", "comment" if strategy == "fb_comments" else "post"),
-                    dedupe_field=step.get("dedupe_field"),
-                    tags=step.get("tags"),
-                    device_serial=inp.device_serial,
-                    campaign_id=inp.campaign_id,
-                    execution_id=inp.execution_id or inp.run_id,
-                    parent_id=parent_hash if strategy == "fb_comments" else None,
-                    item_level=item_level,
-                    user_id=inp.user_id,
-                )
-                # Use one shared namespace so extract inline-save and explicit save_extraction
-                # coordinate offsets for the same data_var.
-                ctx["__save_extraction_offsets__"] = updated_offsets
-                details["auto_save"] = {
-                    "saved": report.saved_count,
-                    "duplicate": report.duplicate_count,
-                    "errors": report.error_count,
-                    "saved_count": report.saved_count,
-                    "duplicate_count": report.duplicate_count,
-                    "error_count": report.error_count,
-                }
-
             return ExtractResult(
-                ok=True,
-                message=msg,
+                ok=False,
+                message=(
+                    f"extract {strategy}: device_farm content XML parser was removed; "
+                    "enable edge_extra_data so phone/APK sends XML to agent-boot"
+                ),
                 context=ctx,
-                break_requested=break_requested,
-                details=details,
             )
 
-        except Exception as exc:
-            log.error("[%s] execute_extract error: %s", inp.device_serial, exc)
-            return ExtractResult(ok=False, message=f"extract failed: {exc}", context=ctx)
+        return ExtractResult(
+            ok=False,
+            message=f"extract: unknown strategy {strategy!r}",
+            context=ctx,
+        )
 
     @activity.defn
     async def execute_save_extraction(self, inp: SaveExtractionInput) -> StepResult:

@@ -586,7 +586,7 @@ export function StepDetailPanel({
                 <div>① <b>Tìm</b> bài đầu tiên có nút Bình luận đang hiện trên màn hình</div>
                 <div>② <b>Ghi nhớ bài đó</b> — comment thu thập sau sẽ gắn đúng bài này</div>
                 <div>③ <b>Bấm nút</b> → sheet bình luận mở</div>
-                <div>④ <b>Chuyển bộ lọc</b> từ "Phù hợp nhất" → "Tất cả bình luận" (tùy chọn)</div>
+                <div>④ <b>Chọn bộ lọc</b> trong sheet 3 option (tùy chọn)</div>
                 <div>⑤ Chạy nhánh <b>Khi bấm được</b> hoặc <b>Không thấy nút</b></div>
               </div>
               <div className='mt-2 rounded bg-amber-50 px-2 py-1.5 text-[10px] text-amber-900 dark:bg-amber-950/40 dark:text-amber-200'>
@@ -655,18 +655,32 @@ export function StepDetailPanel({
 
             {/* ── Phase 3: Bộ lọc ── */}
             <div className='text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>③ Bộ lọc bình luận</div>
-            <label className='flex items-start gap-2 text-xs text-foreground'>
-              <input
-                type='checkbox' className='mt-0.5 h-3.5 w-3.5'
-                checked={step.switch_to_all_comments !== false}
-                onChange={(e) => update({ switch_to_all_comments: e.target.checked })}
-              />
-              <span>
-                <b>Tự động chuyển sang "Tất cả bình luận"</b> — tap hàng
-                "Đang hiển thị Phù hợp nhất bình luận…" rồi chọn "Tất cả bình luận, bao gồm cả nội dung có thể là spam".
-                Bỏ tick để giữ bộ lọc mặc định của Facebook.
-              </span>
-            </label>
+            <F label='Sắp xếp bình luận sau khi mở sheet'>
+              <select
+                className='h-8 w-full rounded-md border border-input bg-background px-2 text-xs'
+                value={
+                  step.comment_filter
+                  ?? (step.switch_to_all_comments === false ? 'none' : 'all_comments')
+                }
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v === 'none') {
+                    update({ comment_filter: 'none', switch_to_all_comments: false });
+                  } else {
+                    update({ comment_filter: v, switch_to_all_comments: true });
+                  }
+                }}
+              >
+                <option value='none'>Không đổi — giữ mặc định Facebook</option>
+                <option value='most_relevant'>Phù hợp nhất</option>
+                <option value='newest'>Mới nhất</option>
+                <option value='all_comments'>Tất cả bình luận</option>
+              </select>
+            </F>
+            <p className='text-[10px] leading-relaxed text-muted-foreground'>
+              Mở sheet bằng hàng &quot;Nhấn để thay đổi bộ lọc&quot;, rồi tap đúng một trong ba dòng tiêu đề
+              (không tap dòng mô tả spam bên dưới).
+            </p>
 
             {/* ── Phase 4: Nhận diện bài ── */}
             <div className='text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>④ Nhận diện bài viết</div>

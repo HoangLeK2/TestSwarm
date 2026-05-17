@@ -34,10 +34,12 @@ def test_normalize_extract_step_keeps_explicit_values() -> None:
     assert step["extract_profile"] == "safe"
 
 
-def test_normalize_extract_step_without_profile_keeps_legacy_behavior() -> None:
+def test_normalize_extract_step_without_profile_applies_fb_comments_edge_defaults() -> None:
     step = normalize_extract_step({"type": "extract", "strategy": "fb_comments"})
     assert "extract_profile" not in step
-    assert "comment_scroll_passes" not in step
+    assert step["comment_scroll_passes"] >= 1
+    assert step["max_items"] >= 50
+    assert step["min_comment_scan_passes"] >= 1
 
 
 def test_normalize_alias_for_parent_id_var() -> None:

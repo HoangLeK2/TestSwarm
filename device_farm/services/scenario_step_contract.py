@@ -16,9 +16,13 @@ def normalize_extract_step(raw_step: dict[str, Any]) -> dict[str, Any]:
     strategy = str(step.get("strategy") or "fb_posts")
     profile = str(step.get("extract_profile") or step.get("profile") or "")
 
-    # Backward compatibility: only apply profile defaults when profile is explicit.
     if profile:
         defaults = get_profile_defaults(profile, strategy)
+        for key, val in defaults.items():
+            step.setdefault(key, val)
+    elif strategy == "fb_comments":
+        # Edge path: STF scrolls inside one extra_data request when comment_scroll_passes > 0.
+        defaults = get_profile_defaults(DEFAULT_EXTRACT_PROFILE, strategy)
         for key, val in defaults.items():
             step.setdefault(key, val)
 
@@ -59,7 +63,7 @@ def extract_data_var_for_strategy(step: dict[str, Any]) -> str:
     override = str(step.get("extract_var") or "").strip()
     if override:
         return override
-    if strategy == "fb_comments":
+    if strategy.endswith("_comments"):
         return "comments"
     if strategy == "text_nodes":
         return "text_nodes"

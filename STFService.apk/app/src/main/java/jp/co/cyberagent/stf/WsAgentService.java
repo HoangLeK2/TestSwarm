@@ -55,15 +55,18 @@ import java.io.OutputStream;
 import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import android.content.ComponentName;
 import android.content.pm.ActivityInfo;
 import android.content.pm.ResolveInfo;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -1225,10 +1228,353 @@ public class WsAgentService extends android.app.Service {
                         }
                     });
                     break;
+                case "extra_data_xml": {
+                    final String endpoint = msg.optString("endpoint", "");
+                    final String requestId = msg.optString("request_id", "");
+                    final String strategy = msg.optString("strategy", "fb_posts");
+                    final String token = msg.optString("extra_data_token", "");
+                    final JSONObject context = msg.optJSONObject("context");
+                    executor.submit(() -> handleExtraDataXml(endpoint, requestId, strategy, token, context));
+                    break;
+                }
             }
         } catch (Exception e) {
             Log.w(TAG, "handleCommand: " + e);
         }
+    }
+
+    private void handleExtraDataXml(String endpoint, String requestId, String strategy, String token, @Nullable JSONObject context) {
+        JSONObject result = new JSONObject();
+        try {
+            result.put("type", "extra_data_result");
+            result.put("request_id", requestId);
+            if (endpoint == null || endpoint.isEmpty()) {
+                result.put("ok", false);
+                result.put("error", "endpoint_required");
+                if (wsManager != null) wsManager.send(result.toString());
+                return;
+            }
+            okhttp3.OkHttpClient client = new okhttp3.OkHttpClient.Builder()
+                    .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(90, java.util.concurrent.TimeUnit.SECONDS)
+                    .build();
+
+            String xml = dumpHierarchyViaU2(client);
+            if (xml == null || xml.isEmpty()) {
+                boolean allowA11yFallback = context != null
+                        && context.optBoolean("allow_a11y_xml_fallback", false);
+                if (allowA11yFallback) {
+                    xml = TouchAccessibilityService.dumpHierarchyIfAvailable();
+                }
+                if (xml == null || xml.isEmpty()) {
+                    result.put("ok", false);
+                    result.put("error", "u2_hierarchy_unavailable");
+                    if (wsManager != null) wsManager.send(result.toString());
+                    return;
+                }
+            }
+
+            JSONObject payload = new JSONObject();
+            payload.put("schema_version", 1);
+            payload.put("request_id", requestId);
+            payload.put("serial", serial);
+            String serverStrategy = "fb_comment_target_tap".equals(strategy)
+                    ? "fb_comment_target"
+                    : strategy;
+            JSONArray xmlSnapshots = new JSONArray();
+            xmlSnapshots.put(xml);
+            if ("fb_comments".equals(serverStrategy)) {
+                collectCommentXmlSnapshots(client, context, xmlSnapshots);
+            }
+            payload.put("strategy", serverStrategy);
+            payload.put("context", context != null ? context : new JSONObject());
+            payload.put("xml", xml);
+            payload.put("xml_sha256", sha256Hex(xml));
+            if (xmlSnapshots.length() > 1) {
+                payload.put("xml_snapshots", xmlSnapshots);
+            }
+            payload.put("snapshot_count", xmlSnapshots.length());
+            payload.put("captured_at_ms", System.currentTimeMillis());
+
+            okhttp3.RequestBody body = okhttp3.RequestBody.create(
+                    okhttp3.MediaType.parse("application/json; charset=utf-8"),
+                    payload.toString()
+            );
+            okhttp3.Request.Builder reqBuilder = new okhttp3.Request.Builder()
+                    .url(endpoint)
+                    .post(body);
+            if (token != null && !token.isEmpty()) {
+                reqBuilder.header("X-Agent-Boot-Extra-Token", token);
+            }
+            okhttp3.Request req = reqBuilder.build();
+            try (okhttp3.Response resp = client.newCall(req).execute()) {
+                String bodyText = resp.body() != null ? resp.body().string() : "{}";
+                JSONObject ingest = new JSONObject(bodyText);
+                result.put("ok", resp.isSuccessful() && ingest.optBoolean("ok", false));
+                result.put("status", resp.code());
+                result.put("ingest", ingest);
+                if ("fb_comment_target_tap".equals(strategy)
+                        && resp.isSuccessful()
+                        && ingest.optBoolean("ok", false)) {
+                    boolean tapped = tapResolvedCommentTarget(ingest);
+                    result.put("agent_tapped", tapped);
+                    if (!tapped) {
+                        result.put("tap_error", "local_tap_unavailable");
+                    }
+                }
+                if (!result.optBoolean("ok")) {
+                    result.put("error", ingest.optString("error", "ingest_failed"));
+                }
+            }
+        } catch (Exception e) {
+            try {
+                result.put("type", "extra_data_result");
+                result.put("request_id", requestId);
+                result.put("ok", false);
+                result.put("error", e.getMessage() != null ? e.getMessage() : e.toString());
+            } catch (Exception ignored) {}
+        }
+        if (wsManager != null) wsManager.send(result.toString());
+    }
+
+    private void collectCommentXmlSnapshots(
+            okhttp3.OkHttpClient client,
+            @Nullable JSONObject context,
+            JSONArray snapshots
+    ) {
+        int passes = extraDataInt(context, "comment_scroll_passes", 0, 0, 20);
+        if (passes <= 0) return;
+        int minPasses = extraDataInt(context, "min_comment_scan_passes", 1, 0, passes);
+        int noGrowthBreak = extraDataInt(context, "comment_no_growth_break", 3, 0, 20);
+        int maxSnapshots = extraDataInt(context, "comment_max_snapshots", 16, 1, 31);
+        int maxXmlBytes = extraDataInt(context, "comment_xml_max_bytes", 6 * 1024 * 1024, 512 * 1024, 7 * 1024 * 1024);
+        double distance = extraDataDouble(context, "comment_scroll_distance", 0.22, 0.08, 0.75);
+        int durationMs = extraDataInt(context, "comment_scroll_duration_ms", 340, 120, 1600);
+        long pauseMs = Math.round(extraDataDouble(context, "comment_scroll_pause_s", 0.30, 0.05, 4.0) * 1000.0);
+        int totalXmlBytes = 0;
+        int unchangedPasses = 0;
+        java.util.HashSet<String> seenDigests = new java.util.HashSet<>();
+        for (int i = 0; i < snapshots.length(); i++) {
+            String existing = snapshots.optString(i, "");
+            if (!existing.isEmpty()) {
+                totalXmlBytes += existing.getBytes(StandardCharsets.UTF_8).length;
+                try {
+                    seenDigests.add(sha256Hex(existing));
+                } catch (Exception ignored) {}
+            }
+        }
+
+        DisplayMetrics dm = new DisplayMetrics();
+        try {
+            ((WindowManager) getSystemService(WINDOW_SERVICE)).getDefaultDisplay().getRealMetrics(dm);
+        } catch (Exception e) {
+            dm = getResources().getDisplayMetrics();
+        }
+        int width = Math.max(dm.widthPixels, 1);
+        int height = Math.max(dm.heightPixels, 1);
+        int x = (int) (width * 0.55);
+        int y1 = (int) (height * 0.74);
+        int y2 = (int) (height * Math.max(0.18, 0.74 - distance));
+
+        for (int i = 0; i < passes; i++) {
+            if (snapshots.length() >= maxSnapshots) {
+                sendLog("extra_data_xml comment snapshot cap reached: " + snapshots.length());
+                return;
+            }
+            if (!performLocalSwipe(x, y1, x, y2, durationMs)) {
+                sendLog("extra_data_xml comment swipe unavailable");
+                return;
+            }
+            try {
+                Thread.sleep(pauseMs);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            String nextXml = dumpHierarchyViaU2(client);
+            if (nextXml != null && nextXml.contains("<hierarchy")) {
+                int nextBytes = nextXml.getBytes(StandardCharsets.UTF_8).length;
+                if (totalXmlBytes + nextBytes > maxXmlBytes) {
+                    sendLog("extra_data_xml comment XML byte cap reached: " + totalXmlBytes);
+                    return;
+                }
+                String digest = "";
+                try {
+                    digest = sha256Hex(nextXml);
+                } catch (Exception ignored) {}
+                if (!digest.isEmpty() && seenDigests.contains(digest)) {
+                    unchangedPasses += 1;
+                    if (noGrowthBreak > 0 && i + 1 >= minPasses && unchangedPasses >= noGrowthBreak) {
+                        sendLog("extra_data_xml comment no-growth break after " + (i + 1) + " passes");
+                        return;
+                    }
+                    continue;
+                }
+                if (!digest.isEmpty()) {
+                    seenDigests.add(digest);
+                }
+                snapshots.put(nextXml);
+                totalXmlBytes += nextBytes;
+                unchangedPasses = 0;
+            }
+        }
+    }
+
+    private int extraDataInt(@Nullable JSONObject context, String key, int defaultValue, int min, int max) {
+        if (context == null || !context.has(key)) return defaultValue;
+        try {
+            Object value = context.opt(key);
+            int parsed;
+            if (value instanceof Number) {
+                parsed = ((Number) value).intValue();
+            } else {
+                parsed = Integer.parseInt(String.valueOf(value).trim());
+            }
+            return Math.max(min, Math.min(max, parsed));
+        } catch (Exception ignored) {
+            return defaultValue;
+        }
+    }
+
+    private double extraDataDouble(@Nullable JSONObject context, String key, double defaultValue, double min, double max) {
+        if (context == null || !context.has(key)) return defaultValue;
+        try {
+            Object value = context.opt(key);
+            double parsed;
+            if (value instanceof Number) {
+                parsed = ((Number) value).doubleValue();
+            } else {
+                parsed = Double.parseDouble(String.valueOf(value).trim());
+            }
+            return Math.max(min, Math.min(max, parsed));
+        } catch (Exception ignored) {
+            return defaultValue;
+        }
+    }
+
+    private String dumpHierarchyViaU2(okhttp3.OkHttpClient client) {
+        String[] urls = new String[] {
+                "http://127.0.0.1:7912/dump/hierarchy"
+        };
+        boolean startedUiautomator = false;
+        for (String url : urls) {
+            for (int attempt = 0; attempt < 3; attempt++) {
+                try {
+                    okhttp3.Request req = new okhttp3.Request.Builder()
+                            .url(url)
+                            .get()
+                            .build();
+                    try (okhttp3.Response resp = client.newCall(req).execute()) {
+                        String body = resp.body() != null ? resp.body().string() : "";
+                        String xml = extractHierarchyXml(body);
+                        if (xml != null) {
+                            return xml;
+                        }
+                        if (!resp.isSuccessful()) {
+                            Log.d(TAG, "dumpHierarchyViaU2 HTTP " + resp.code() + ": " + truncateForLog(body, 240));
+                        }
+                    }
+                } catch (Exception e) {
+                    Log.d(TAG, "dumpHierarchyViaU2 failed " + url + ": " + e.getMessage());
+                }
+                if (!startedUiautomator && !isUiautomatorRunningViaAtx(client)) {
+                    startedUiautomator = startUiautomatorViaAtx(client);
+                    if (startedUiautomator) {
+                        try { Thread.sleep(1500); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+                        continue;
+                    }
+                }
+                try { Thread.sleep(350); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+            }
+        }
+        return null;
+    }
+
+    private boolean isUiautomatorRunningViaAtx(okhttp3.OkHttpClient client) {
+        try {
+            okhttp3.Request req = new okhttp3.Request.Builder()
+                    .url("http://127.0.0.1:7912/uiautomator")
+                    .get()
+                    .build();
+            try (okhttp3.Response resp = client.newCall(req).execute()) {
+                if (!resp.isSuccessful()) return false;
+                String body = resp.body() != null ? resp.body().string() : "";
+                JSONObject json = new JSONObject(body);
+                return json.optBoolean("running", false);
+            }
+        } catch (Exception e) {
+            Log.d(TAG, "isUiautomatorRunningViaAtx failed: " + e.getMessage());
+            return false;
+        }
+    }
+
+    private String extractHierarchyXml(String body) {
+        if (body == null || body.isEmpty()) return null;
+        if (body.contains("<hierarchy")) {
+            return body;
+        }
+        try {
+            JSONObject json = new JSONObject(body);
+            String result = json.optString("result", "");
+            if (result.contains("<hierarchy")) {
+                return result;
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    private boolean startUiautomatorViaAtx(okhttp3.OkHttpClient client) {
+        try {
+            okhttp3.RequestBody empty = okhttp3.RequestBody.create(new byte[0], null);
+            okhttp3.Request req = new okhttp3.Request.Builder()
+                    .url("http://127.0.0.1:7912/uiautomator")
+                    .post(empty)
+                    .build();
+            try (okhttp3.Response resp = client.newCall(req).execute()) {
+                String body = resp.body() != null ? resp.body().string() : "";
+                boolean ok = resp.isSuccessful();
+                Log.d(TAG, "startUiautomatorViaAtx HTTP " + resp.code() + ": " + truncateForLog(body, 240));
+                return ok;
+            }
+        } catch (Exception e) {
+            Log.d(TAG, "startUiautomatorViaAtx failed: " + e.getMessage());
+            return false;
+        }
+    }
+
+    private String truncateForLog(String value, int maxLen) {
+        if (value == null) return "";
+        if (value.length() <= maxLen) return value;
+        return value.substring(0, maxLen) + "...";
+    }
+
+    private boolean tapResolvedCommentTarget(JSONObject ingest) {
+        try {
+            JSONObject diagnostic = ingest.optJSONObject("diagnostic");
+            if (diagnostic == null) return false;
+            JSONObject target = diagnostic.optJSONObject("target");
+            if (target == null) return false;
+            JSONArray bounds = target.optJSONArray("bounds");
+            if (bounds == null || bounds.length() != 4) return false;
+            int x1 = bounds.optInt(0), y1 = bounds.optInt(1);
+            int x2 = bounds.optInt(2), y2 = bounds.optInt(3);
+            int cx = (x1 + x2) / 2;
+            int cy = (y1 + y2) / 2;
+            return performLocalTap(cx, cy, 50);
+        } catch (Exception e) {
+            sendLog("tapResolvedCommentTarget error: " + e.getMessage());
+            return false;
+        }
+    }
+
+    private static String sha256Hex(String text) throws Exception {
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        byte[] hash = digest.digest(text.getBytes(StandardCharsets.UTF_8));
+        StringBuilder sb = new StringBuilder(hash.length * 2);
+        for (byte b : hash) {
+            sb.append(String.format("%02x", b));
+        }
+        return sb.toString();
     }
 
     // Touch (tap/swipe) is via minitouch tunnel only — no injectTap/injectSwipe a11y in this service.
@@ -1613,6 +1959,58 @@ public class WsAgentService extends android.app.Service {
         inputManager.injectInputEvent(down);
         inputManager.injectInputEvent(up);
         down.recycle(); up.recycle();
+    }
+
+    private boolean performLocalTap(final int x, final int y, final int durationMs) {
+        if (TouchAccessibilityService.isAvailable()) {
+            CountDownLatch latch = new CountDownLatch(1);
+            mainHandler.post(() -> {
+                try {
+                    TouchAccessibilityService svc = TouchAccessibilityService.instance;
+                    if (svc != null) svc.doTap(x, y, Math.max(durationMs, 1));
+                } finally {
+                    latch.countDown();
+                }
+            });
+            try {
+                latch.await(500, TimeUnit.MILLISECONDS);
+                Thread.sleep(80);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+            return true;
+        }
+        if (Build.VERSION.SDK_INT < 34 && inputManager != null) {
+            injectTouchEvent(x, y);
+            return true;
+        }
+        return false;
+    }
+
+    private boolean performLocalSwipe(final int x1, final int y1, final int x2, final int y2, final int durationMs) {
+        if (TouchAccessibilityService.isAvailable()) {
+            CountDownLatch latch = new CountDownLatch(1);
+            mainHandler.post(() -> {
+                try {
+                    TouchAccessibilityService svc = TouchAccessibilityService.instance;
+                    if (svc != null) svc.doSwipe(x1, y1, x2, y2, Math.max(durationMs, 1));
+                } finally {
+                    latch.countDown();
+                }
+            });
+            try {
+                latch.await(500, TimeUnit.MILLISECONDS);
+                Thread.sleep(Math.max(durationMs, 1) + 120L);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+            return true;
+        }
+        if (Build.VERSION.SDK_INT < 34 && inputManager != null) {
+            injectSwipeEvent(x1, y1, x2, y2, Math.max(durationMs, 1));
+            return true;
+        }
+        return false;
     }
 
     private void injectSwipeEvent(int x1, int y1, int x2, int y2, int durationMs) {

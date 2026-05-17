@@ -301,6 +301,10 @@ class DeviceClient:
         self._ws_hierarchy_xml: Optional[str] = None
         self._ws_hierarchy_error: Optional[str] = None
         self._ws_hierarchy_a11y_available: bool = True  # optimistic, disabled on first "accessibility_not_available"
+        self._extra_data_event = threading.Event()
+        self._extra_data_lock = threading.Lock()
+        self._extra_data_result: Optional[Dict[str, Any]] = None
+        self._extra_data_request_id: str = ""
         self._event_recorder = None  # EventRecorder, injected by DeviceManager
         self._recovery_logger = self._setup_recovery_logger()
         # A11y gRPC routing controls (u2 path remains unchanged).
@@ -1616,6 +1620,45 @@ class DeviceClient:
         elif xml:
             self._ws_hierarchy_a11y_available = True  # re-enable if it starts working
         self._ws_hierarchy_event.set()
+
+    def on_agent_extra_data_result(self, payload: Dict[str, Any]) -> None:
+        request_id = str(payload.get("request_id") or "")
+        if self._extra_data_request_id and request_id != self._extra_data_request_id:
+            self._log(
+                f"extra_data_result ignored for stale request_id={request_id}",
+                level=logging.DEBUG,
+            )
+            return
+        self._extra_data_result = payload
+        self._extra_data_event.set()
+
+    def request_extra_data_xml(
+        self,
+        *,
+        endpoint: str,
+        strategy: str,
+        context: Dict[str, Any],
+        token: str = "",
+        timeout: float = 45.0,
+    ) -> Dict[str, Any]:
+        if self._agent_send is None:
+            return {"ok": False, "error": "no_agent"}
+        with self._extra_data_lock:
+            request_id = f"extra-{uuid.uuid4().hex[:10]}"
+            self._extra_data_request_id = request_id
+            self._extra_data_result = None
+            self._extra_data_event.clear()
+            self._send_to_agent({
+                "type": "extra_data_xml",
+                "request_id": request_id,
+                "endpoint": endpoint,
+                "strategy": strategy,
+                "context": context,
+                "extra_data_token": token,
+            })
+            if not self._extra_data_event.wait(timeout=timeout):
+                return {"ok": False, "error": f"extra_data timeout after {timeout:.1f}s", "request_id": request_id}
+            return self._extra_data_result or {"ok": False, "error": "missing_result", "request_id": request_id}
 
     def _hierarchy_via_ws(self, timeout: float = 5.0) -> Optional[str]:
         """Request hierarchy dump via gRPC a11y query, fallback to WS direct."""

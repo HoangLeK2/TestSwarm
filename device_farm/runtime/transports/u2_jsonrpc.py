@@ -6,8 +6,16 @@ import logging
 import re
 import threading
 import time
-from typing import Any, Callable, Dict, Iterator, Optional
+from typing import Any, Callable, Dict, Iterator, Optional, Tuple
 
+from runtime.u2_xpath import (
+    XPathElementNotFoundError,
+    format_xpath_eid,
+    node_bounds,
+    node_center,
+    normalize_u2_xpath,
+    parse_xpath_eid,
+)
 from runtime.xml_utils import XML_PARSE_ERRORS, parse_xml
 
 import requests
@@ -447,24 +455,130 @@ class _WatcherContext:
 
 # ── Element proxy ─────────────────────────────────────────────────────────────
 
+class _U2JsonRpcXMLElement:
+    """Single node matched by an XPath query (u2 ``XMLElement`` subset)."""
+
+    def __init__(
+        self,
+        client: "U2JsonRpcClient",
+        node: Any,
+        xpath_expr: str,
+        index: int = 0,
+    ) -> None:
+        self._client = client
+        self._node = node
+        self._xpath_expr = xpath_expr
+        self._index = index
+
+    @property
+    def text(self) -> str:
+        return (self._node.get("text") or "").strip()
+
+    @property
+    def attrib(self) -> Dict[str, str]:
+        return dict(self._node.attrib)
+
+    @property
+    def info(self) -> Dict[str, Any]:
+        b = node_bounds(self._node)
+        return {
+            "text": self.text,
+            "contentDescription": (self._node.get("content-desc") or "").strip(),
+            "resourceId": (self._node.get("resource-id") or "").strip(),
+            "className": (self._node.get("class") or "").strip(),
+            "bounds": b,
+            "clickable": (self._node.get("clickable") or "").lower() == "true",
+        }
+
+    def get_text(self) -> str:
+        return self.text
+
+    def center(self) -> Tuple[int, int]:
+        b = node_bounds(self._node)
+        if not b:
+            raise RuntimeError(f"xpath element has no bounds: {self._xpath_expr!r}")
+        return node_center(b)
+
+    def click(self) -> None:
+        cx, cy = self.center()
+        self._client._rpc("click", cx, cy, _timeout=self._client._touch_timeout)
+
+    def long_click(self, duration: float = 0.5) -> None:
+        cx, cy = self.center()
+        self._client._rpc(
+            "click", cx, cy, int(duration * 1000),
+            _timeout=self._client._touch_timeout + duration,
+        )
+
+
 class _U2JsonRpcElement:
     """
     Proxy for a UI element identified by a selector.
 
     Supports single-condition selectors (by/value) and multi-condition selectors
     (pre-built dict) created by U2JsonRpcClient.__call__(text="X", className="Y").
+
+    When ``by == "xpath"``, implements uiautomator2 ``XPathSelector`` surface:
+    click(timeout), click_exists, wait, wait_gone, get, get_text, set_text, all, …
     """
 
     def __init__(self, client: "U2JsonRpcClient", by: str, value: str,
-                 selector: Optional[Dict[str, Any]] = None) -> None:
+                 selector: Optional[Dict[str, Any]] = None,
+                 xpath_index: int = 0) -> None:
         self._client = client
         self._by = by
-        self._value = value
-        # Pre-built multi-condition selector (None → use _build_selector on demand)
+        if by == "xpath":
+            self._value = normalize_u2_xpath(value)
+        else:
+            self._value = value
         self._selector: Optional[Dict[str, Any]] = selector
+        self._xpath_index = max(0, int(xpath_index))
+
+    def _is_xpath(self) -> bool:
+        return self._by == "xpath"
+
+    def _xpath_query(self) -> str:
+        return U2JsonRpcClient._normalize_et_xpath(self._value)
+
+    def _xpath_find_nodes(self, xml: Optional[str] = None) -> list:
+        if xml is None:
+            xml = self._client.page_source()
+        if not xml:
+            return []
+        root = parse_xml(xml)
+        return root.findall(self._xpath_query())
+
+    def _xpath_get_node(self, xml: Optional[str] = None) -> Optional[Any]:
+        nodes = self._xpath_find_nodes(xml)
+        if self._xpath_index < len(nodes):
+            return nodes[self._xpath_index]
+        return None
+
+    def _xpath_element(self, xml: Optional[str] = None) -> Optional[_U2JsonRpcXMLElement]:
+        node = self._xpath_get_node(xml)
+        if node is None:
+            return None
+        return _U2JsonRpcXMLElement(
+            self._client, node, self._value, self._xpath_index,
+        )
+
+    def _native_proxy_for_xpath_node(self) -> Optional["_U2JsonRpcElement"]:
+        """Use resource-id / text / description for pinch when the XML node has them."""
+        node = self._xpath_get_node()
+        if node is None:
+            return None
+        rid = (node.get("resource-id") or "").strip()
+        if rid:
+            return _U2JsonRpcElement(self._client, "resource-id", rid)
+        txt = (node.get("text") or "").strip()
+        if txt:
+            return _U2JsonRpcElement(self._client, "text", txt)
+        desc = (node.get("content-desc") or "").strip()
+        if desc:
+            return _U2JsonRpcElement(self._client, "description", desc)
+        return None
 
     def _get_selector(self) -> Dict[str, Any]:
-        """Return the JSON-RPC selector dict (single or multi-condition)."""
         if self._selector is not None:
             return self._selector
         return self._client._build_selector(self._by, self._value)
@@ -473,9 +587,8 @@ class _U2JsonRpcElement:
 
     @property
     def exists(self) -> bool:
-        """Non-blocking check — True if element is currently on screen."""
-        if self._by == "xpath":
-            return self._client._find_element_xpath(self._value, 0) is not None
+        if self._is_xpath():
+            return self._xpath_get_node() is not None
         try:
             info = self._client._rpc("objInfo", self._get_selector())
             return bool(info)
@@ -487,15 +600,9 @@ class _U2JsonRpcElement:
 
     @property
     def count(self) -> int:
-        """Number of matching elements currently visible."""
-        if self._by == "xpath":
-            xpath_query = U2JsonRpcClient._normalize_et_xpath(self._value)
+        if self._is_xpath():
             try:
-                xml = self._client.page_source()
-                if not xml:
-                    return 0
-                root = parse_xml(xml)
-                return len(root.findall(xpath_query))
+                return len(self._xpath_find_nodes())
             except Exception:
                 return 0
         try:
@@ -504,10 +611,34 @@ class _U2JsonRpcElement:
         except Exception:
             return 0
 
+    def all(self) -> list:
+        """All xpath matches as ``_U2JsonRpcXMLElement`` (u2 ``XPathSelector.all()``)."""
+        if not self._is_xpath():
+            raise NotImplementedError("all() is only supported for xpath selectors")
+        nodes = self._xpath_find_nodes()
+        return [
+            _U2JsonRpcXMLElement(self._client, n, self._value, i)
+            for i, n in enumerate(nodes)
+        ]
+
+    def get_last_match(self) -> _U2JsonRpcXMLElement:
+        if not self._is_xpath():
+            raise NotImplementedError("get_last_match() is only for xpath")
+        el = self._xpath_element()
+        if el is None:
+            raise XPathElementNotFoundError(self)
+        return el
+
+    def match(self) -> Optional[_U2JsonRpcXMLElement]:
+        if not self._is_xpath():
+            raise NotImplementedError("match() is only for xpath")
+        return self._xpath_element()
+
     def __getitem__(self, index: int) -> "_U2JsonRpcElement":
-        """Return a proxy for the Nth matching element (0-based index)."""
-        if self._by == "xpath":
-            raise NotImplementedError("__getitem__ not supported for xpath elements")
+        if self._is_xpath():
+            return _U2JsonRpcElement(
+                self._client, "xpath", self._value, xpath_index=int(index),
+            )
         sel = dict(self._get_selector())
         sel["instance"] = index
         sel["mask"] = sel.get("mask", 0) | _MASK_INSTANCE
@@ -515,7 +646,11 @@ class _U2JsonRpcElement:
 
     # ── Actions ───────────────────────────────────────────────────────────────
 
-    def click(self) -> None:
+    def click(self, timeout: Optional[float] = None) -> None:
+        if self._is_xpath():
+            el = self.get(timeout=timeout)
+            el.click()
+            return
         if self._selector is not None:
             result = self._client._find_with_selector(self._selector)
             if result is None:
@@ -532,58 +667,145 @@ class _U2JsonRpcElement:
             raise RuntimeError(f"Element not found: {self._by}={self._value!r}")
         self._client.element_click(eid)
 
-    def wait(self, timeout: float = 10.0) -> bool:
-        """Wait for element to appear (server-side waitForExists, no polling)."""
-        if self._selector is not None:
-            return self._client._wait_with_selector(
-                self._selector, "waitForExists", timeout
-            )
-        return self._client._wait_for_exists(self._by, self._value, timeout)
+    def click_nowait(self) -> None:
+        if not self._is_xpath():
+            raise NotImplementedError("click_nowait() is only for xpath")
+        el = self._xpath_element()
+        if el is None:
+            raise XPathElementNotFoundError(self)
+        el.click()
 
-    def wait_gone(self, timeout: float = 10.0) -> bool:
-        """Wait for element to disappear (server-side waitUntilGone, no polling)."""
+    def click_exists(self, timeout: Optional[float] = None) -> bool:
+        if not self._is_xpath():
+            if timeout:
+                if not self.wait(timeout=timeout):
+                    return False
+            try:
+                self.click()
+                return True
+            except RuntimeError:
+                return False
+        try:
+            self.get(timeout=timeout).click()
+            return True
+        except XPathElementNotFoundError:
+            return False
+
+    def get(self, timeout: Optional[float] = None) -> _U2JsonRpcXMLElement:
+        if not self._is_xpath():
+            raise NotImplementedError("get() is only for xpath selectors")
+        wait_secs = (
+            timeout if timeout is not None else self._client._implicitly_wait
+        )
+        if not self.wait(timeout=wait_secs):
+            raise XPathElementNotFoundError(self)
+        el = self._xpath_element()
+        if el is None:
+            raise XPathElementNotFoundError(self)
+        return el
+
+    def get_text(self) -> str:
+        if self._is_xpath():
+            return self.get().get_text()
+        eid = self._client.find_element(self._by, self._value, timeout=0)
+        if eid is None:
+            raise XPathElementNotFoundError(self)
+        return self._client.element_text(eid)
+
+    def set_text(self, text: str) -> None:
+        if self._is_xpath():
+            el = self.get()
+            el.click()
+            time.sleep(0.15)
+            self._client.clear_text()
+            time.sleep(0.15)
+            self._client.send_keys(text)
+            return
+        eid = self._client.find_element(self._by, self._value)
+        if eid is None:
+            raise XPathElementNotFoundError(self)
+        self._client.element_click(eid)
+        time.sleep(0.15)
+        self._client.clear_text()
+        time.sleep(0.15)
+        self._client.send_keys(text)
+
+    def wait(self, timeout: Optional[float] = None) -> bool:
+        if self._is_xpath():
+            wait_secs = (
+                timeout if timeout is not None else self._client._implicitly_wait
+            )
+            deadline = time.monotonic() + max(wait_secs, 0)
+            while True:
+                if self.exists:
+                    return True
+                if time.monotonic() >= deadline:
+                    return False
+                time.sleep(0.2)
         if self._selector is not None:
             return self._client._wait_with_selector(
-                self._selector, "waitUntilGone", timeout
+                self._selector, "waitForExists", timeout or 10.0,
             )
-        return self._client._wait_until_gone(self._by, self._value, timeout)
+        return self._client._wait_for_exists(
+            self._by, self._value, timeout if timeout is not None else 10.0,
+        )
+
+    def wait_gone(self, timeout: Optional[float] = None) -> bool:
+        if self._is_xpath():
+            wait_secs = (
+                timeout if timeout is not None else self._client._implicitly_wait
+            )
+            deadline = time.monotonic() + max(wait_secs, 0)
+            while time.monotonic() < deadline:
+                if not self.exists:
+                    return True
+                time.sleep(0.2)
+            return False
+        if self._selector is not None:
+            return self._client._wait_with_selector(
+                self._selector, "waitUntilGone", timeout or 10.0,
+            )
+        return self._client._wait_until_gone(
+            self._by, self._value, timeout if timeout is not None else 10.0,
+        )
 
     def drag_to(self, x: int, y: int, duration: float = 0.5) -> None:
-        """Drag this element to absolute screen coordinates (x, y)."""
         steps = max(1, int(duration * 20))
         t = self._client._touch_timeout + duration
-        if self._by == "xpath":
-            result = self._client._find_element_xpath_with_bounds(self._value)
-            if result is None or not result.get("bounds"):
-                raise RuntimeError(f"drag_to: xpath element not found: {self._value!r}")
-            b = result["bounds"]
-            cx = (b["left"] + b["right"]) // 2
-            cy = (b["top"] + b["bottom"]) // 2
+        if self._is_xpath():
+            el = self.get(timeout=0)
+            cx, cy = el.center()
             self._client._rpc("drag", cx, cy, int(x), int(y), steps, _timeout=t)
-        else:
-            self._client._rpc(
-                "objDrag", self._get_selector(), int(x), int(y), steps, _timeout=t
-            )
+            return
+        self._client._rpc(
+            "objDrag", self._get_selector(), int(x), int(y), steps, _timeout=t,
+        )
 
     def pinch_in(self, percent: int = 50, steps: int = 10) -> None:
-        """Pinch in (zoom out). percent: 0–100 = how far to collapse."""
-        if self._by == "xpath":
-            raise NotImplementedError(
-                "pinch_in() is not supported for xpath elements — "
-                "use a native selector (text, resource-id, description) instead."
-            )
+        if self._is_xpath():
+            proxy = self._native_proxy_for_xpath_node()
+            if proxy is None:
+                raise RuntimeError(
+                    "pinch_in: xpath node has no text/resource-id/description "
+                    "for native pinch — use coordinates or a native selector"
+                )
+            proxy.pinch_in(percent=percent, steps=steps)
+            return
         self._client._rpc(
             "pinchIn", self._get_selector(), percent, steps,
             _timeout=self._client._touch_timeout + steps * 0.05,
         )
 
     def pinch_out(self, percent: int = 50, steps: int = 10) -> None:
-        """Pinch out (zoom in). percent: 0–100 = how far to expand."""
-        if self._by == "xpath":
-            raise NotImplementedError(
-                "pinch_out() is not supported for xpath elements — "
-                "use a native selector (text, resource-id, description) instead."
-            )
+        if self._is_xpath():
+            proxy = self._native_proxy_for_xpath_node()
+            if proxy is None:
+                raise RuntimeError(
+                    "pinch_out: xpath node has no text/resource-id/description "
+                    "for native pinch — use coordinates or a native selector"
+                )
+            proxy.pinch_out(percent=percent, steps=steps)
+            return
         self._client._rpc(
             "pinchOut", self._get_selector(), percent, steps,
             _timeout=self._client._touch_timeout + steps * 0.05,
@@ -825,6 +1047,95 @@ class U2JsonRpcClient:
                 return {"left": nums[0], "top": nums[1], "right": nums[2], "bottom": nums[3]}
         return None
 
+    def find_element_spec(self, spec: Any,
+                          timeout: Optional[float] = None) -> Optional[str]:
+        """Find element from ScenarioSelectorSpec (multi-field AND, xpath, chain→xpath)."""
+        from services.scenario_selector import (
+            ScenarioSelectorSpec,
+            _parse_selector_dict,
+            compile_chain_to_xpath,
+            spec_has_chain,
+            spec_to_rpc_selector,
+            spec_eid,
+        )
+        if isinstance(spec, dict):
+            spec = _parse_selector_dict(spec)
+        if not isinstance(spec, ScenarioSelectorSpec) or spec.is_empty():
+            return None
+        if spec_has_chain(spec):
+            xpath = compile_chain_to_xpath(spec)
+            if xpath:
+                eid = self._find_element_xpath(xpath, timeout)
+                return eid
+            return None
+        rpc = spec_to_rpc_selector(spec)
+        if "_xpath" in rpc:
+            return self._find_element_xpath(rpc["_xpath"], timeout)
+        wait_secs = timeout if timeout is not None else self._implicitly_wait
+        if wait_secs <= 0:
+            try:
+                info = self._rpc("objInfo", rpc)
+                if info:
+                    return spec_eid(spec)
+                return None
+            except RuntimeError as exc:
+                msg = str(exc).lower()
+                if "json-rpc error" in msg or "uiobjectnotfound" in msg:
+                    return None
+                raise
+        wait_ms = int(wait_secs * 1000)
+        rpc_timeout = wait_secs + 5.0
+        try:
+            found = self._rpc("waitForExists", rpc, wait_ms, _timeout=rpc_timeout)
+            if found:
+                return spec_eid(spec)
+            return None
+        except RuntimeError as exc:
+            msg = str(exc).lower()
+            if "json-rpc error" in msg or "uiobjectnotfound" in msg:
+                return None
+            raise
+
+    def find_element_with_bounds_spec(self, spec: Any,
+                                      timeout: Optional[float] = None
+                                      ) -> Optional[Dict[str, Any]]:
+        """Find element spec and return eid + bounds."""
+        from services.scenario_selector import (
+            ScenarioSelectorSpec,
+            _parse_selector_dict,
+            compile_chain_to_xpath,
+            spec_has_chain,
+            spec_to_rpc_selector,
+            spec_eid,
+        )
+        if isinstance(spec, dict):
+            spec = _parse_selector_dict(spec)
+        if not isinstance(spec, ScenarioSelectorSpec) or spec.is_empty():
+            return None
+        if spec_has_chain(spec):
+            xpath = compile_chain_to_xpath(spec)
+            if xpath:
+                return self._find_element_xpath_with_bounds(xpath)
+            return None
+        rpc = spec_to_rpc_selector(spec)
+        if "_xpath" in rpc:
+            return self._find_element_xpath_with_bounds(rpc["_xpath"])
+        eid = self.find_element_spec(spec, timeout=timeout or 0)
+        if not eid:
+            return None
+        try:
+            info = self._rpc("objInfo", rpc)
+            if not info:
+                return None
+            raw_bounds = info.get("bounds") or info.get("visibleBounds")
+            bounds = self._parse_bounds(raw_bounds)
+            return {"eid": eid, "bounds": bounds, "info": info}
+        except RuntimeError as exc:
+            msg = str(exc).lower()
+            if "json-rpc error" in msg or "uiobjectnotfound" in msg:
+                return None
+            raise
+
     def find_element(self, by: str, value: str,
                      timeout: Optional[float] = None) -> Optional[str]:
         """Find element using native waitForExists (server-side wait, timeout in ms).
@@ -870,11 +1181,12 @@ class U2JsonRpcClient:
             raise
 
     def _find_element_xpath(self, xpath_expr: str,
-                            timeout: Optional[float] = None) -> Optional[str]:
+                            timeout: Optional[float] = None,
+                            index: int = 0) -> Optional[str]:
         """Resolve xpath by dumping hierarchy XML and searching with ElementTree."""
-        xpath_query = self._normalize_et_xpath(xpath_expr)
+        expr = normalize_u2_xpath(xpath_expr)
+        xpath_query = self._normalize_et_xpath(expr)
         wait = timeout if timeout is not None else self._implicitly_wait
-        # Single check when timeout=0
         single_shot = wait <= 0
         deadline = time.monotonic() + max(wait, 0)
         while True:
@@ -884,11 +1196,11 @@ class U2JsonRpcClient:
                 xml = self.page_source(timeout=ps_timeout)
                 if xml:
                     root = parse_xml(xml)
-                    if root.findall(xpath_query):
-                        return f"xpath::{xpath_expr}"
+                    matches = root.findall(xpath_query)
+                    if len(matches) > index:
+                        return format_xpath_eid(expr, index)
             except Exception as exc:
                 logger.debug("xpath find failed for %r: %s", xpath_expr, exc)
-                # Don't abort — stale/empty hierarchy is transient; retry after delay
             if single_shot:
                 break
             remaining = deadline - time.monotonic()
@@ -929,10 +1241,11 @@ class U2JsonRpcClient:
         except Exception:
             return False
 
-    def find_element_with_bounds(self, by: str, value: str) -> Optional[Dict[str, Any]]:
+    def find_element_with_bounds(self, by: str, value: str,
+                                 index: int = 0) -> Optional[Dict[str, Any]]:
         """Find element and return {'eid': '...', 'bounds': {...}} or None. Single RPC call."""
         if by == "xpath":
-            return self._find_element_xpath_with_bounds(value)
+            return self._find_element_xpath_with_bounds(value, index=index)
         selector = self._build_selector(by, value)
         try:
             info = self._rpc("objInfo", selector)
@@ -947,22 +1260,22 @@ class U2JsonRpcClient:
                 return None
             raise
 
-    def _find_element_xpath_with_bounds(self, xpath_expr: str) -> Optional[Dict[str, Any]]:
+    def _find_element_xpath_with_bounds(self, xpath_expr: str,
+                                        index: int = 0) -> Optional[Dict[str, Any]]:
         """Resolve xpath via hierarchy XML, return eid + bounds."""
-        xpath_query = self._normalize_et_xpath(xpath_expr)
+        expr = normalize_u2_xpath(xpath_expr)
+        xpath_query = self._normalize_et_xpath(expr)
         try:
             xml = self.page_source(timeout=self._timeout)
             if not xml:
                 return None
             root = parse_xml(xml)
             matches = root.findall(xpath_query)
-            if not matches:
+            if index >= len(matches):
                 return None
-            node = matches[0]
-            bounds_str = node.get("bounds", "")
-            nums = [int(n) for n in re.findall(r"-?\d+", bounds_str)]
-            bounds = {"left": nums[0], "top": nums[1], "right": nums[2], "bottom": nums[3]} if len(nums) == 4 else None
-            return {"eid": f"xpath::{xpath_expr}", "bounds": bounds}
+            node = matches[index]
+            bounds = node_bounds(node)
+            return {"eid": format_xpath_eid(expr, index), "bounds": bounds}
         except Exception as exc:
             logger.debug("xpath_with_bounds failed for %r: %s", xpath_expr, exc)
             raise
@@ -982,23 +1295,43 @@ class U2JsonRpcClient:
         return q
 
     def element_click(self, eid: str) -> None:
-        """Click element by eid string (format: 'by::value').
+        """Click element by eid string (format: 'by::value' or 'xpath::{index}::{expr}').
 
         Resolves element bounds via find_element_with_bounds, then taps center.
         The JSON-RPC 'click(x, y)' only accepts coordinates, not a selector.
         """
-        by, _, value = eid.partition("::")
-        result = self.find_element_with_bounds(by, value)
+        if eid.startswith("xpath::"):
+            expr, index = parse_xpath_eid(eid)
+            result = self.find_element_with_bounds("xpath", expr, index=index)
+            label = eid
+        else:
+            by, _, value = eid.partition("::")
+            result = self.find_element_with_bounds(by, value)
+            label = f"{by}={value!r}"
         if result is None:
-            raise RuntimeError(f"element_click: element not found {by}={value!r}")
+            raise RuntimeError(f"element_click: element not found {label}")
         bounds = result.get("bounds")
         if not bounds:
-            raise RuntimeError(f"element_click: no bounds for {by}={value!r}")
+            raise RuntimeError(f"element_click: no bounds for {label}")
         cx = (bounds["left"] + bounds["right"]) // 2
         cy = (bounds["top"] + bounds["bottom"]) // 2
         self._rpc("click", cx, cy, _timeout=self._touch_timeout)
 
     def element_text(self, eid: str) -> str:
+        if eid.startswith("xpath::"):
+            expr, index = parse_xpath_eid(eid)
+            result = self._find_element_xpath_with_bounds(expr, index=index)
+            if not result:
+                return ""
+            xml = self.page_source(timeout=self._timeout)
+            if not xml:
+                return ""
+            root = parse_xml(xml)
+            q = self._normalize_et_xpath(normalize_u2_xpath(expr))
+            matches = root.findall(q)
+            if index < len(matches):
+                return (matches[index].get("text") or "").strip()
+            return ""
         by, _, value = eid.partition("::")
         selector = self._build_selector(by, value)
         try:
@@ -1054,8 +1387,15 @@ class U2JsonRpcClient:
 
     # ── App / Session API ─────────────────────────────────────────────────────
 
-    def app_start(self, package: str, activity: Optional[str] = None) -> None:
-        """Launch an app via `adb shell am start`.
+    def app_start(
+        self,
+        package: str,
+        activity: Optional[str] = None,
+        *,
+        stop: bool = False,
+        use_monkey: bool = False,
+    ) -> None:
+        """Launch an app via `adb shell am start` or monkey.
 
         android-uiautomator-server has no `startActivity` RPC — app launch must
         go through ADB. If no adb_shell callable was provided at construction,
@@ -1067,8 +1407,22 @@ class U2JsonRpcClient:
                 "app_start() requires an adb_shell callable. "
                 "Pass adb_shell=transport.shell_safe when constructing U2JsonRpcClient."
             )
+        if stop:
+            try:
+                self.app_stop(package)
+            except Exception:
+                self._adb_shell(f"am force-stop {package}")
+        if use_monkey:
+            self._adb_shell(
+                f"monkey -p {package} -c android.intent.category.LAUNCHER 1"
+            )
+            return
         if activity:
-            component = f"{package}/{activity}"
+            act = activity if activity.startswith(".") else activity
+            if "/" not in act:
+                component = f"{package}/{act}"
+            else:
+                component = act
             cmd = f"am start -n {component} -W"
         else:
             cmd = (
@@ -1080,7 +1434,22 @@ class U2JsonRpcClient:
         self._adb_shell(cmd)
 
     def app_stop(self, package: str) -> None:
-        self._rpc("stopPackage", package)
+        try:
+            self._rpc("stopPackage", package)
+        except Exception:
+            if self._adb_shell is not None:
+                self._adb_shell(f"am force-stop {package}")
+            else:
+                raise
+
+    def app_clear(self, package: str) -> None:
+        """Clear app data (`pm clear`). Requires adb_shell."""
+        if self._adb_shell is None:
+            raise RuntimeError(
+                "app_clear() requires an adb_shell callable. "
+                "Pass adb_shell=transport.shell_safe when constructing U2JsonRpcClient."
+            )
+        self._adb_shell(f"pm clear {package}")
 
     def app_wait(self, package: str, front: bool = False,
                  timeout: float = 20.0) -> bool:
@@ -1219,8 +1588,9 @@ class U2JsonRpcClient:
 
     # ── Element builder ───────────────────────────────────────────────────────
 
-    def xpath(self, xpath: str) -> _U2JsonRpcElement:
-        return _U2JsonRpcElement(self, "xpath", xpath)
+    def xpath(self, xpath_expr: str) -> _U2JsonRpcElement:
+        """uiautomator2-compatible XPath selector (supports ``@resource-id`` sugar)."""
+        return _U2JsonRpcElement(self, "xpath", xpath_expr)
 
     def watcher(self, name: str) -> _WatcherBuilder:
         """Register a named watcher rule.
@@ -1345,6 +1715,7 @@ class U2JsonRpcClient:
         _FIELD_MAP: Dict[str, tuple] = {
             "text":             ("text",        _MASK_TEXT),
             "textContains":     ("textContains", _MASK_TEXT_CONTAINS),
+            "textMatches":      ("textMatches", _MASK_TEXT_MATCHES),
             "textStartsWith":   ("textStartsWith", _MASK_TEXT_STARTSWITH),
             "resource-id":      ("resourceId",  _MASK_RESOURCE_ID),
             "id":               ("resourceId",  _MASK_RESOURCE_ID),
@@ -1355,11 +1726,32 @@ class U2JsonRpcClient:
             "accessibility id": ("description", _MASK_DESCRIPTION),
             "package":          ("packageName", _MASK_PACKAGE_NAME),
         }
+        _BOOL_MAP = {
+            "checkable": _MASK_CHECKABLE,
+            "checked": _MASK_CHECKED,
+            "clickable": _MASK_CLICKABLE,
+            "scrollable": _MASK_SCROLLABLE,
+            "enabled": _MASK_ENABLED,
+            "focused": _MASK_FOCUSED,
+            "selected": _MASK_SELECTED,
+        }
         mask = 0
         sel: Dict[str, Any] = {}
-        for by, value in conditions.items():
-            if by in _FIELD_MAP:
-                field, m = _FIELD_MAP[by]
+        for key, value in conditions.items():
+            if key in _BOOL_MAP and isinstance(value, bool):
+                if value:
+                    sel[key] = True
+                    mask |= _BOOL_MAP[key]
+                continue
+            if key in ("instance", "index"):
+                try:
+                    sel[key] = int(value)
+                    mask |= _MASK_INSTANCE if key == "instance" else _MASK_INDEX
+                except (TypeError, ValueError):
+                    pass
+                continue
+            if key in _FIELD_MAP:
+                field, m = _FIELD_MAP[key]
                 sel[field] = value
                 mask |= m
         sel["mask"] = mask

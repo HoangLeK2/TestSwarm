@@ -29,6 +29,8 @@ curl -s -X POST http://localhost:8081/api/auth/register \
   -d '{"email":"you@example.com","name":"You","password":"your-password","role":"operator"}' | jq .
 ```
 
+Backend tu dong tao default organization va owner membership cho user nay; khong can goi them `/api/organizations` o buoc dang ky.
+
 ---
 
 ## 3. Đăng nhập → lấy JWT

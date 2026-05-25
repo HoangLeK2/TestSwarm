@@ -16,11 +16,18 @@ def normalize_extract_step(raw_step: dict[str, Any]) -> dict[str, Any]:
     strategy = str(step.get("strategy") or "fb_posts")
     profile = str(step.get("extract_profile") or step.get("profile") or "")
 
-    # Backward compatibility: only apply profile defaults when profile is explicit.
-    if profile:
-        defaults = get_profile_defaults(profile, strategy)
+    resolved_profile = profile if profile and is_supported_profile(profile) else DEFAULT_EXTRACT_PROFILE
+    defaults = get_profile_defaults(resolved_profile, strategy)
+    if not defaults and strategy.endswith("_posts"):
+        # ig_posts / tiktok_posts / … reuse fb_posts expand defaults when no profile slice exists.
+        defaults = get_profile_defaults(resolved_profile, "fb_posts")
+    if defaults:
         for key, val in defaults.items():
             step.setdefault(key, val)
+    elif strategy.endswith("_posts"):
+        step.setdefault("expand_see_more", True)
+        step.setdefault("expand_see_more_max_passes", 4)
+        step.setdefault("expand_completion_retries", 4)
 
     step.setdefault("strategy", strategy)
     if profile:
@@ -59,7 +66,7 @@ def extract_data_var_for_strategy(step: dict[str, Any]) -> str:
     override = str(step.get("extract_var") or "").strip()
     if override:
         return override
-    if strategy == "fb_comments":
+    if strategy.endswith("_comments"):
         return "comments"
     if strategy == "text_nodes":
         return "text_nodes"

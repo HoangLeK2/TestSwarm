@@ -1,5 +1,4 @@
 import { ROUTES } from '@/config/routes';
-import { useOrganization } from '@/features/organization/hooks/use-organization';
 import { NavItem } from '@/types';
 import { useTranslations } from 'next-intl';
 
@@ -8,7 +7,6 @@ export function useNavItems(): {
   settingItems: NavItem[];
 } {
   const t = useTranslations('navigation');
-  const { currentOrg } = useOrganization();
   const baseItems: NavItem[] = [
     {
       title: t('nav_group_devices'),
@@ -92,12 +90,12 @@ export function useNavItems(): {
       items: [
         {
           title: t('organization_general'),
-          url: ROUTES.DASHBOARD.ORGANIZATION_SETTINGS(currentOrg?.id || ''),
+          url: ROUTES.DASHBOARD.ORGANIZATION,
           icon: 'settings'
         },
         {
           title: t('members'),
-          url: ROUTES.DASHBOARD.ORGANIZATION_MEMBER(currentOrg?.id || ''),
+          url: ROUTES.DASHBOARD.ORGANIZATION_MEMBER,
           icon: 'user'
         }
       ]

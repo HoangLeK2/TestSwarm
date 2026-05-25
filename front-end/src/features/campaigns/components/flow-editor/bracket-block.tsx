@@ -6,7 +6,8 @@ import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { ChevronDown, ChevronRight, Crosshair, Loader2, Play, Square, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { isContainerType, type FlowStep } from '../scenario-steps/types';
-import { BRACKET_COLORS, getStepTypeName, getStepSummary } from './constants';
+import { BRACKET_COLORS, getStepSummary } from './constants';
+import { useCampaignFlowI18n } from './flow-i18n';
 import { StepIcon } from './step-icon';
 import { StepCard } from './step-card';
 import { InsertGap } from './insert-button';
@@ -393,6 +394,7 @@ export function BracketBlock({
   campaignScenarios = [],
 }: BracketBlockProps) {
   const tFlow = useTranslations('campaignsFeature.flowBracket');
+  const { getStepTypeName } = useCampaignFlowI18n();
   const [collapsed, setCollapsed] = useState(false);
   const [editingChildPath, setEditingChildPath] = useState<{ listKey: string; ci: number } | null>(null);
   const editingChild = editingChildPath ? getChildStep(step, editingChildPath.listKey, editingChildPath.ci) : null;
@@ -418,7 +420,7 @@ export function BracketBlock({
       default:
         return getStepTypeName(step.type);
     }
-  }, [step.type, tFlow]);
+  }, [step.type, tFlow, getStepTypeName]);
   const summary = useMemo(() => {
     if (step.type === 'random_pick') {
       return tFlow('branchSummary', { count: step.branches?.length ?? 0 });

@@ -1638,6 +1638,9 @@ class DeviceAgentSession:
                             error=msg.get("error"),
                         )
 
+                    elif msg_type == "extra_data_result":
+                        device.on_agent_extra_data_result(msg)
+
                     else:
                         log.debug("Agent %s: unknown msg type: %r", serial, msg_type)
 

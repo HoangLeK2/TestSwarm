@@ -56,11 +56,11 @@ export function OrgSwitcher() {
   };
 
   const handleSettings = () => {
-    router.push(ROUTES.DASHBOARD.ORGANIZATION_SETTINGS(currentOrg?.id || ''));
+    router.push(ROUTES.DASHBOARD.ORGANIZATION);
   };
 
   const handleInviteMembers = () => {
-    router.push(ROUTES.DASHBOARD.ORGANIZATION_MEMBER(currentOrg?.id || ''));
+    router.push(ROUTES.DASHBOARD.ORGANIZATION_MEMBER);
   };
 
   const enableShowOrgList = organizations.length > 1;

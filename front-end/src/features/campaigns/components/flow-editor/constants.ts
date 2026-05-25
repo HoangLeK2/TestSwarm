@@ -4,7 +4,9 @@ export const STEP_COLORS: Record<string, string> = {
   tap: 'border-l-blue-500', tap_ratio: 'border-l-blue-500', tap_position: 'border-l-blue-500',
   tap_selector: 'border-l-blue-500', long_tap_selector: 'border-l-blue-500', swipe_ratio: 'border-l-blue-500',
   input_text: 'border-l-cyan-500', input_selector: 'border-l-cyan-500', key: 'border-l-cyan-500', key_back: 'border-l-cyan-500',
-  launch_app: 'border-l-indigo-500', open_url: 'border-l-indigo-500',
+  launch_app: 'border-l-indigo-500', stop_app: 'border-l-indigo-500', clear_app: 'border-l-indigo-500',
+  wait_app: 'border-l-indigo-500', push_file: 'border-l-indigo-500', pull_file: 'border-l-indigo-500',
+  open_url: 'border-l-indigo-500',
   scroll_down: 'border-l-indigo-500', scroll_to: 'border-l-indigo-500',
   wait: 'border-l-green-500', wait_element: 'border-l-green-500', wait_stable: 'border-l-green-500', verify_screen: 'border-l-green-500',
   assert_element: 'border-l-green-500', dismiss_popup: 'border-l-green-500',
@@ -85,106 +87,150 @@ const _INSERT_MENU_HIDDEN_TYPES = new Set<string>([
   'extract_screen_data',
 ]);
 
-export function getInsertMenuForUi(): typeof INSERT_MENU {
-  if (INSERT_MENU_SHOW_TEXT_EXTRACT_SHORTCUTS) return INSERT_MENU;
-  return INSERT_MENU.map((group) => ({
-    ...group,
-    items: group.items.filter((item) => !_INSERT_MENU_HIDDEN_TYPES.has(item.type)),
-  })).filter((group) => group.items.length > 0);
-}
+export type FlowInsertTranslator = (
+  key: string,
+  values?: Record<string, string | number>,
+) => string;
 
-export const INSERT_MENU = [
+export type FlowStepTranslator = (
+  key: string,
+  values?: Record<string, string | number>,
+) => string;
+
+/** Insert menu structure (labels resolved via i18n). */
+export const INSERT_MENU_DEF = [
   {
-    group: 'Thu thập dữ liệu',
-    description: 'Cào và lưu nội dung từ màn hình (tự động lưu khi bật)',
+    groupKey: 'dataCollection' as const,
     items: [
-      { type: 'extract', label: 'Trích xuất & Lưu dữ liệu' },
-      { type: 'save_extraction', label: 'Lưu dữ liệu riêng (nâng cao)' },
-      { type: 'extract_text_hierarchy', label: 'Trích xuất text từ hierarchy' },
-      { type: 'extract_text_ocr', label: 'OCR text từ screenshot' },
-      { type: 'extract_text_ai', label: 'AI extract text' },
-      { type: 'extract_screen_data', label: 'Extract dữ liệu màn hình (auto)' },
-    ]
+      'extract',
+      'save_extraction',
+      'extract_text_hierarchy',
+      'extract_text_ocr',
+      'extract_text_ai',
+      'extract_screen_data',
+    ],
   },
   {
-    group: 'Hành động',
-    description: 'Thao tác trực tiếp lên màn hình',
+    groupKey: 'actions' as const,
     items: [
-      { type: 'tap_selector', label: 'Chạm phần tử' },
-      { type: 'tap_ratio', label: 'Chạm tọa độ' },
-      { type: 'tap_position', label: 'Chạm vị trí cố định' },
-      { type: 'long_tap_selector', label: 'Nhấn giữ' },
-      { type: 'swipe_ratio', label: 'Vuốt' },
-      { type: 'input_text', label: 'Nhập văn bản' },
-      { type: 'input_selector', label: 'Nhập vào phần tử' },
-      { type: 'key', label: 'Nhấn phím' },
-      { type: 'key_back', label: 'Quay lại (Back)' },
-      { type: 'launch_app', label: 'Mở ứng dụng' },
-      { type: 'open_url', label: 'Mở URL' },
-      { type: 'scroll_down', label: 'Cuộn xuống' },
-      { type: 'scroll_to', label: 'Cuộn tới phần tử' },
-      { type: 'assert_element', label: 'Kiểm tra phần tử' },
-      { type: 'dismiss_popup', label: 'Đóng popup' },
-      { type: 'double_tap', label: 'Chạm đúp' },
-      { type: 'pinch', label: 'Phóng to/thu nhỏ' },
-      { type: 'drag', label: 'Kéo thả' },
-      { type: 'take_screenshot', label: 'Chụp màn hình' },
-      { type: 'set_clipboard', label: 'Ghi clipboard' },
-      { type: 'set_variable', label: 'Gán biến' },
-      { type: 'set_var', label: 'Gán biến (legacy)' },
-    ]
+      'tap_selector',
+      'tap_ratio',
+      'tap_position',
+      'long_tap_selector',
+      'swipe_ratio',
+      'input_text',
+      'input_selector',
+      'key',
+      'key_back',
+      'launch_app',
+      'stop_app',
+      'clear_app',
+      'wait_app',
+      'push_file',
+      'pull_file',
+      'open_url',
+      'scroll_down',
+      'scroll_to',
+      'assert_element',
+      'dismiss_popup',
+      'double_tap',
+      'pinch',
+      'drag',
+      'take_screenshot',
+      'set_clipboard',
+      'set_variable',
+      'set_var',
+    ],
   },
   {
-    group: 'Luồng',
-    description: 'Điều kiện, lặp, chờ — kiểm soát luồng chạy',
+    groupKey: 'flow' as const,
     items: [
-      { type: 'wait', label: 'Chờ (giây)' },
-      { type: 'wait_element', label: 'Chờ phần tử xuất hiện' },
-      { type: 'wait_stable', label: 'Chờ màn hình ổn định' },
-      { type: 'verify_screen', label: 'Xác minh màn hình (SSIM)' },
-      { type: 'if_element', label: 'Nếu phần tử tồn tại' },
-      { type: 'if_variable', label: 'Nếu biến thỏa điều kiện' },
-      { type: 'if', label: 'If tổng quát (condition)' },
-      { type: 'break_if', label: 'Break nếu thỏa condition' },
-      { type: 'loop', label: 'Vòng lặp (hỗ trợ biến)' },
-      { type: 'repeat', label: 'Lặp N lần' },
-      { type: 'repeat_until', label: 'Lặp cho đến khi' },
-      { type: 'random_pick', label: 'Chọn ngẫu nhiên' },
-      { type: 'run_scenario', label: 'Chạy kịch bản con' },
-    ]
+      'wait',
+      'wait_element',
+      'wait_stable',
+      'verify_screen',
+      'if_element',
+      'if_variable',
+      'if',
+      'break_if',
+      'loop',
+      'repeat',
+      'repeat_until',
+      'random_pick',
+      'run_scenario',
+    ],
   },
   {
-    group: 'Facebook chuyên biệt',
-    description: 'Các bước được làm sẵn cho thao tác trên Facebook',
-    items: [
-      { type: 'tap_fb_comment_button', label: 'Bấm nút Bình luận (tự chuyển "Tất cả bình luận", có nhánh OK / Không thấy)' },
-      { type: 'extract_fb_comments', label: 'Thu thập bình luận (đã preset: cuộn, dedupe, gắn bài cha)' },
-      { type: 'extract_fb_posts', label: 'Thu thập bài viết (đã preset: mở rộng "Xem thêm", dedupe)' },
-    ]
+    groupKey: 'facebook' as const,
+    items: ['tap_fb_comment_button', 'extract_fb_comments', 'extract_fb_posts'],
   },
-];
+] as const;
+
+export function getInsertMenuForUi(t: FlowInsertTranslator) {
+  const menu = INSERT_MENU_DEF.map((group) => ({
+    group: t(`groups.${group.groupKey}.title`),
+    description: t(`groups.${group.groupKey}.description`),
+    items: group.items
+      .filter((type) => INSERT_MENU_SHOW_TEXT_EXTRACT_SHORTCUTS || !_INSERT_MENU_HIDDEN_TYPES.has(type))
+      .map((type) => ({
+        type,
+        label: t(`items.${type}` as 'items.launch_app'),
+      })),
+  })).filter((group) => group.items.length > 0);
+  return menu;
+}
 
 export function getStepSummary(step: FlowStep): string {
   switch (step.type) {
     case 'tap': return step.selector ? `[${step.selector.by}] "${step.selector.value}"` : (step.fallback ? `(${step.fallback.rx}, ${step.fallback.ry})` : '');
-    case 'tap_selector': return `[${step.by}] "${step.value}"`;
+    case 'tap_selector': {
+      const by = step.selector?.by ?? step.by;
+      const val = step.selector?.value ?? step.value;
+      return `[${by}] "${val}"`;
+    }
     case 'tap_ratio': return `(${step.x}, ${step.y})`;
     case 'tap_position': return step.pos;
-    case 'long_tap_selector': return `[${step.by}] "${step.value}"`;
+    case 'long_tap_selector': {
+      const by = step.selector?.by ?? step.by;
+      const val = step.selector?.value ?? step.value;
+      return `[${by}] "${val}"`;
+    }
     case 'swipe_ratio': return `(${step.x1},${step.y1})→(${step.x2},${step.y2})`;
     case 'input_text': return `"${step.text}"`;
-    case 'input_selector': return `"${step.text}" → [${step.by}]`;
+    case 'input_selector': {
+      const by = step.selector?.by ?? step.by;
+      const val = step.selector?.value ?? step.value;
+      return `"${step.text}" → [${by}] "${val}"`;
+    }
     case 'key': return step.key;
     case 'launch_app': return step.package || '';
+    case 'stop_app':
+    case 'clear_app':
+    case 'wait_app':
+      return step.package || '';
+    case 'push_file': return `${step.local_path || ''} → ${step.remote_path || ''}`;
+    case 'pull_file': return `${step.remote_path || ''} → ${step.local_path || ''}`;
     case 'open_url': return step.url || '';
     case 'wait': return `${step.seconds}s`;
-    case 'wait_element': return `[${step.by}] "${step.value}"`;
-    case 'assert_element': return `[${step.by}] "${step.value}"`;
+    case 'wait_element': {
+      const by = step.selector?.by ?? step.by;
+      const val = step.selector?.value ?? step.value;
+      return `[${by}] "${val}"`;
+    }
+    case 'assert_element': {
+      const by = step.selector?.by ?? step.by;
+      const val = step.selector?.value ?? step.value;
+      return `[${by}] "${val}"`;
+    }
     case 'scroll_down': {
       const x = step.start_x_ratio != null ? ` @${step.start_x_ratio}` : '';
       return `×${step.repeats}${x}`;
     }
-    case 'scroll_to': return `[${step.by}] "${step.value}"`;
+    case 'scroll_to': {
+      const by = step.selector?.by ?? step.by;
+      const val = step.selector?.value ?? step.value;
+      return `[${by}] "${val}"`;
+    }
     case 'dismiss_popup': return '';
     case 'double_tap': return step.rx != null ? `(${step.rx}, ${step.ry})` : (step.x != null ? `(${step.x}, ${step.y})` : '');
     case 'pinch': return `scale=${step.scale ?? 0.5}`;
@@ -195,7 +241,11 @@ export function getStepSummary(step: FlowStep): string {
     case 'set_var': return `${step.key ?? ''} = ${JSON.stringify(step.value ?? '')}`;
     case 'repeat': return `${step.count}×`;
     case 'repeat_until': return `tối đa ${step.max_iterations}`;
-    case 'if_element': return `[${step.by}] "${step.value}"`;
+    case 'if_element': {
+      const by = step.selector?.by ?? step.by;
+      const val = step.selector?.value ?? step.value;
+      return `[${by}] "${val}"`;
+    }
     case 'if_variable': {
       const op = step.equals != null ? `== "${step.equals}"` : step.not_equals != null ? `!= "${step.not_equals}"` : step.contains != null ? `⊃ "${step.contains}"` : step.greater_than != null ? `> ${step.greater_than}` : '';
       return `${step.name} ${op}`;
@@ -226,17 +276,28 @@ export function getStepSummary(step: FlowStep): string {
  * `target`  — the main value/subject (shown prominently)
  * `selectorBadge` — selector type badge (text / resource-id / xpath …)
  */
-export function getStepDisplay(step: FlowStep): { target: string; selectorBadge?: string } {
+export function getStepDisplay(
+  step: FlowStep,
+  t?: FlowStepTranslator,
+): { target: string; selectorBadge?: string } {
+  const td = (key: string, values?: Record<string, string | number>) =>
+    t ? t(`display.${key}`, values) : '';
   const pct = (v: number) => `${Math.round(v * 100)}%`;
   switch (step.type) {
     case 'tap_selector':
     case 'long_tap_selector':
     case 'wait_element':
     case 'assert_element':
-    case 'scroll_to':
-      return { target: step.value ?? '', selectorBadge: step.by };
-    case 'input_selector':
-      return { target: step.value ?? '', selectorBadge: step.by };
+    case 'scroll_to': {
+      const by = step.selector?.by ?? step.by;
+      const val = step.selector?.value ?? step.value;
+      return { target: val ?? '', selectorBadge: by };
+    }
+    case 'input_selector': {
+      const by = step.selector?.by ?? step.by;
+      const val = step.selector?.value ?? step.value;
+      return { target: val ?? '', selectorBadge: by };
+    }
     case 'tap':
       return step.selector?.value
         ? { target: step.selector.value, selectorBadge: step.selector.by }
@@ -248,33 +309,73 @@ export function getStepDisplay(step: FlowStep): { target: string; selectorBadge?
     case 'input_text':
       return { target: step.text ?? '' };
     case 'wait':
-      return { target: step.seconds != null ? `${step.seconds} giây` : '' };
+      return {
+        target: step.seconds != null
+          ? (t ? td('waitSeconds', { seconds: step.seconds }) : `${step.seconds}s`)
+          : '',
+      };
     case 'key':
       return { target: step.key ?? '' };
     case 'launch_app':
       return { target: step.package ?? '' };
+    case 'stop_app':
+      return { target: step.package ?? '' };
+    case 'clear_app':
+      return { target: step.package ?? '' };
+    case 'wait_app':
+      return {
+        target: step.package
+          ? (t
+            ? td('waitAppTimeout', { package: step.package, timeout: step.timeout ?? 20 })
+            : `${step.package} (${step.timeout ?? 20}s)`)
+          : '',
+      };
+    case 'push_file':
+      return { target: step.remote_path ?? step.local_path ?? '' };
+    case 'pull_file':
+      return { target: step.local_path ?? step.remote_path ?? '' };
     case 'open_url':
       return { target: step.url ?? '' };
     case 'wait_stable':
-      return { target: step.timeout != null ? `timeout ${step.timeout}s` : '' };
+      return {
+        target: step.timeout != null
+          ? (t ? td('waitStableTimeout', { timeout: step.timeout }) : `timeout ${step.timeout}s`)
+          : '',
+      };
     case 'verify_screen':
-      return { target: step.ssim_threshold != null ? `SSIM ≥ ${step.ssim_threshold}` : 'verify screen' };
+      return {
+        target: step.ssim_threshold != null
+          ? (t ? td('verifySsim', { threshold: step.ssim_threshold }) : `SSIM ≥ ${step.ssim_threshold}`)
+          : (t ? td('verifyScreenDefault') : 'verify screen'),
+      };
     case 'dismiss_popup':
       return { target: step.retries != null ? `×${step.retries}` : '' };
     case 'tap_position':
       return { target: step.pos ?? '' };
     case 'scroll_down': {
       const x = step.start_x_ratio != null ? ` · x=${step.start_x_ratio}` : '';
-      return { target: step.repeats != null ? `${step.repeats} lần${x}` : '' };
+      return {
+        target: step.repeats != null
+          ? (t ? `${td('scrollRepeats', { count: step.repeats })}${x}` : `${step.repeats}×${x}`)
+          : '',
+      };
     }
     case 'set_variable':
       return { target: step.name ? `${step.name} = ${step.value ?? '…'}` : '' };
     case 'set_var':
       return { target: step.key ? `${step.key} = ${JSON.stringify(step.value ?? '')}` : '' };
     case 'repeat':
-      return { target: step.count != null ? `${step.count} lần` : '' };
+      return {
+        target: step.count != null
+          ? (t ? td('repeatCount', { count: step.count }) : `${step.count}×`)
+          : '',
+      };
     case 'repeat_until':
-      return { target: step.max_iterations != null ? `tối đa ${step.max_iterations} lần` : '' };
+      return {
+        target: step.max_iterations != null
+          ? (t ? td('repeatUntilMax', { max: step.max_iterations }) : `max ${step.max_iterations}`)
+          : '',
+      };
     case 'if_element':
       return { target: step.value ?? '', selectorBadge: step.by };
     case 'if_variable':
@@ -284,7 +385,11 @@ export function getStepDisplay(step: FlowStep): { target: string; selectorBadge?
           : '',
       };
     case 'random_pick':
-      return { target: `${step.branches?.length ?? 0} nhánh` };
+      return {
+        target: t
+          ? td('randomBranches', { count: step.branches?.length ?? 0 })
+          : `${step.branches?.length ?? 0}`,
+      };
     case 'run_scenario':
       return { target: step.scenario_name || step.scenario_id || '' };
     case 'if':
@@ -296,7 +401,15 @@ export function getStepDisplay(step: FlowStep): { target: string; selectorBadge?
     case 'tap_fb_comment_button': {
       const thenN = Array.isArray(step.then) ? step.then.length : 0;
       const elseN = Array.isArray(step.else) ? step.else.length : 0;
-      return { target: `Bấm Bình luận · OK ${thenN}${elseN ? ` / Không thấy ${elseN}` : ''}` };
+      if (t) {
+        return {
+          target: td('fbCommentSummary', {
+            thenCount: thenN,
+            elsePart: elseN ? td('fbCommentElse', { elseCount: elseN }) : '',
+          }),
+        };
+      }
+      return { target: `Comment · OK ${thenN}${elseN ? ` / miss ${elseN}` : ''}` };
     }
     case 'extract': {
       const base = localizeExtractStrategy(step.strategy);
@@ -329,29 +442,12 @@ export function getStepCategory(type: string): 'action' | 'flow' {
   return flowTypes.has(type) ? 'flow' : 'action';
 }
 
-/** Vietnamese step type names. */
-export function getStepTypeName(type: string): string {
-  const map: Record<string, string> = {
-    tap_selector: 'CHẠM', tap_ratio: 'CHẠM TỌA ĐỘ', tap_position: 'CHẠM VỊ TRÍ', tap: 'CHẠM',
-    long_tap_selector: 'NHẤN GIỮ', swipe_ratio: 'VUỐT',
-    input_text: 'NHẬP TEXT', input_selector: 'NHẬP VÀO', key: 'NHẤN PHÍM',
-    launch_app: 'MỞ APP', open_url: 'MỞ URL',
-    scroll_down: 'Cuộn xuống', scroll_to: 'Cuộn tới',
-    wait: 'CHỜ', wait_element: 'CHỜ PHẦN TỬ', wait_stable: 'CHỜ ỔN ĐỊNH', verify_screen: 'VERIFY SCREEN',
-    assert_element: 'KIỂM TRA', dismiss_popup: 'ĐÓNG POPUP',
-    double_tap: 'CHẠM ĐÚP', pinch: 'PHÓNG TO/THU', drag: 'KÉO THẢ',
-    take_screenshot: 'CHỤP MÀN HÌNH', set_clipboard: 'CLIPBOARD',
-    set_variable: 'Gán biến',
-    set_var: 'Gán biến (legacy)',
-    repeat: 'LẶP', repeat_until: 'LẶP CHO ĐẾN KHI',
-    if_element: 'NẾU PHẦN TỬ', if_variable: 'NẾU BIẾN', if: 'IF', break_if: 'BREAK IF',
-    random_pick: 'Chọn ngẫu nhiên', run_scenario: 'Chạy kịch bản con',
-    loop: 'VÒNG LẶP', extract: 'TRÍCH XUẤT', save_extraction: 'LƯU DỮ LIỆU (riêng)',
-    tap_fb_comment_button: 'BẤM NÚT BÌNH LUẬN (FB)',
-    extract_text_hierarchy: 'EXTRACT TEXT HIERARCHY',
-    extract_text_ocr: 'EXTRACT TEXT OCR',
-    extract_text_ai: 'EXTRACT TEXT AI',
-    extract_screen_data: 'EXTRACT SCREEN DATA',
-  };
-  return map[type] ?? type.toUpperCase();
+/** Localized step type badge (flow editor, monitor). */
+export function getStepTypeName(type: string, t?: FlowStepTranslator): string {
+  if (t) {
+    const key = `typeName.${type}`;
+    const label = t(key);
+    if (label !== key) return label;
+  }
+  return type.toUpperCase();
 }

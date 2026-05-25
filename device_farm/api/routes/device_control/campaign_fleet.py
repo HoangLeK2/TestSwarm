@@ -510,8 +510,9 @@ def build_campaign_fleet_router(
             except Exception as exc:
                 log.warning("interrupt: temporal unavailable for %s: %s", serial, exc)
 
-        # Force-reset so ws gate opens immediately (activity cancel is async)
-        device._scenario_active = 0
+        from tasks.scenario_task import force_clear_scenario_busy
+
+        force_clear_scenario_busy(device)
 
         return {"ok": True, "serial": serial, "cancelled_workflows": cancelled}
 

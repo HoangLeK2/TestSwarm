@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button';
 import { DeviceControlEmbed } from '@/features/devices/components/device-control-embed';
 import { useWorkflowProgress, useStepAction } from '../../hooks/use-campaigns';
 import type { WorkflowInfo } from '../../types';
-import { getStepTypeName } from '../flow-editor/constants';
+import { useCampaignFlowI18n } from '../flow-editor/flow-i18n';
 import { WorkflowStepList } from '../workflow-step-list';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -111,6 +111,7 @@ interface Props {
 
 export function WorkflowProgressCard({ wf, campaignId }: Props) {
   const t = useTranslations('campaignsFeature.list');
+  const { getStepTypeName } = useCampaignFlowI18n();
   const [expanded, setExpanded] = useState(false);
   const [dismissed, setDismissed] = useState(false);
 

@@ -67,6 +67,7 @@
         {
           "type": "extract",
           "strategy": "fb_posts",
+          "edge_extra_data": true,
           "expand_see_more": true,
           "stop_if_no_new": false,
           "collection": "${SAVE_COLLECTION}",
@@ -86,6 +87,7 @@
             {
               "type": "extract",
               "strategy": "fb_comments",
+              "edge_extra_data": true,
               "parent_post_id_var": "_fb_comment_parent_pid",
               "collection": "${SAVE_COLLECTION}",
               "platform": "facebook",
@@ -104,6 +106,7 @@
             {
               "type": "extract",
               "strategy": "fb_comments",
+              "edge_extra_data": true,
               "parent_post_id_var": "_fb_comment_parent_pid",
               "collection": "${SAVE_COLLECTION}",
               "platform": "facebook",

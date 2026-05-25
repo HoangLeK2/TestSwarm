@@ -52,6 +52,7 @@ async def register(body: RegisterRequest, db: DB):
     user = await repo.create_user(
         db, body.email, body.name, _pwd.hash(body.password), body.role
     )
+    await repo.create_personal_org_for_user(db, user)
     return UserOut(
         id=user.id, email=user.email, name=user.name,
         role=user.role, api_key=user.api_key,

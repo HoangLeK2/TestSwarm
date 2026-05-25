@@ -40,6 +40,7 @@ type RelayDeviceChoice = {
   relayId: string;
   relayLabel: string;
   serial: string;
+  deviceName?: string;
 };
 
 export function RegisterDeviceDialog({
@@ -76,11 +77,13 @@ export function RegisterDeviceDialog({
           relayId: agent.relay_id,
           relayLabel: agent.hostname || agent.relay_id,
           serial,
+          deviceName: agent.device_names?.[serial],
         });
       }
     }
     return choices;
   }, [relayAgents, registeredSerials]);
+  const hasRelayChoices = relayDeviceChoices.length > 0;
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
@@ -154,16 +157,12 @@ export function RegisterDeviceDialog({
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const choice = relayDeviceChoices.find((item) => item.id === selectedRelayDeviceId);
-    if (!choice) {
-      toast.error(t('errorNoDevice'));
-      return;
-    }
     setLoading(true);
     try {
       const displayName = [name.trim(), description.trim()].filter(Boolean).join(' — ');
-      const device = await relayAgentsApi.registerDevice(choice.relayId, choice.serial, {
-        name: displayName || choice.serial,
-      });
+      const device = choice
+        ? await relayAgentsApi.registerDevice(choice.relayId, choice.serial)
+        : await devicesApi.register({ name: displayName || name.trim() || undefined, description: '' });
       setRegisteredDevice(device);
       qrOpenedAtRef.current = Date.now();
       setStep('qr');
@@ -229,15 +228,17 @@ export function RegisterDeviceDialog({
             <p className='text-sm text-muted-foreground'>
               {t.rich('description', { strong: (c) => <strong>{c}</strong> })}
             </p>
-            <div className='space-y-2'>
-              <Label htmlFor='reg-name'>{t('nameLabel')}</Label>
-              <Input
-                id='reg-name'
-                placeholder={t('namePlaceholder')}
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
-            </div>
+            {!hasRelayChoices && (
+              <div className='space-y-2'>
+                <Label htmlFor='reg-name'>{t('nameLabel')}</Label>
+                <Input
+                  id='reg-name'
+                  placeholder={t('namePlaceholder')}
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                />
+              </div>
+            )}
             <div className='space-y-2'>
               <Label htmlFor='reg-relay-device'>{t('deviceLabel')}</Label>
               <Select
@@ -251,7 +252,7 @@ export function RegisterDeviceDialog({
                 <SelectContent className='z-[20002]'>
                   {relayDeviceChoices.map((choice) => (
                     <SelectItem key={choice.id} value={choice.id}>
-                      <span className='font-mono'>{choice.serial}</span>
+                      <span>{choice.deviceName || choice.serial}</span>
                       <span className='text-xs text-muted-foreground'> · {choice.relayLabel}</span>
                     </SelectItem>
                   ))}
@@ -261,18 +262,20 @@ export function RegisterDeviceDialog({
                 <p className='text-xs text-muted-foreground'>{t('noAvailableDevices')}</p>
               )}
             </div>
-            <div className='space-y-2'>
-              <Label htmlFor='reg-desc'>{t('descLabel')}</Label>
-              <Textarea
-                id='reg-desc'
-                placeholder={t('descPlaceholder')}
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                rows={2}
-                className='resize-none'
-              />
-            </div>
-            <Button type='submit' className='w-full' disabled={loading || relayDeviceChoices.length === 0}>
+            {!hasRelayChoices && (
+              <div className='space-y-2'>
+                <Label htmlFor='reg-desc'>{t('descLabel')}</Label>
+                <Textarea
+                  id='reg-desc'
+                  placeholder={t('descPlaceholder')}
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  rows={2}
+                  className='resize-none'
+                />
+              </div>
+            )}
+            <Button type='submit' className='w-full' disabled={loading}>
               {loading ? t('submitting') : t('submit')}
             </Button>
           </form>

@@ -78,9 +78,10 @@ function RelayAgentCard({ agent, registeredSerials, onDeviceRegistered }: RelayA
         ) : (
           realSerials.slice(0, 6).map(s => {
             const registered = registeredSerials?.has(s) ?? false;
+            const label = agent.device_names?.[s] || s;
             return (
               <span key={s} className='inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5'>
-                <span className='font-mono text-[10px]'>{s}</span>
+                <span className='max-w-[180px] truncate text-[10px]' title={s}>{label}</span>
                 {registered ? (
                   <span className='text-[10px] text-muted-foreground'>{t('registered')}</span>
                 ) : (

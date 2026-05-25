@@ -8,7 +8,10 @@ from typing import Any, Dict
 
 from tasks.scenario.steps import register_step
 from tasks.scenario.context import ScenarioContext
-from tasks.scenario.utils import _get_implicit_wait_config, _retry_find_element
+from tasks.scenario.utils import (
+    _get_implicit_wait_config, _retry_find_element, resolve_step_selector_fields,
+)
+from services.scenario_selector import selector_summary, spec_eid
 
 log = logging.getLogger(__name__)
 
@@ -93,13 +96,12 @@ def handle_input_text(sc: ScenarioContext, step: Dict[str, Any], idx: int, resul
 
 @register_step("input_selector")
 def handle_input_selector(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
-    by = str(step.get("by") or "resource-id")
-    value = str(step.get("value") or "").strip()
+    spec, by, value, _ = resolve_step_selector_fields(step)
     text = str(step.get("text") or "")
     clear_first = bool(step.get("clear_first", True))
-    if not value or not text:
+    if spec is None or spec.is_empty() or not text:
         result["ok"] = False
-        result["message"] = "input_selector: by/value/text required"
+        result["message"] = "input_selector: selector/value/text required"
         return
     try:
         u2 = sc.device.u2
@@ -111,18 +113,20 @@ def handle_input_selector(sc: ScenarioContext, step: Dict[str, Any], idx: int, r
         iw_timeout, iw_poll = _get_implicit_wait_config(step, sc.scenario_iw_config)
         eid = _retry_find_element(
             u2, by, value, timeout=iw_timeout, poll=iw_poll, cancel_event=sc.cancel_event,
+            spec=spec, device=sc.device,
         )
+        lbl = selector_summary(spec)
         if eid is None:
-            raise RuntimeError(f"element not visible after {iw_timeout:.0f}s: {by}={value!r}")
+            raise RuntimeError(f"element not visible after {iw_timeout:.0f}s: {lbl}")
         if isinstance(eid, dict):
-            eid = eid.get("eid", f"{by}::{value}")
+            eid = eid.get("eid", spec_eid(spec))
         u2.element_click(eid)
         time.sleep(0.3)
         if clear_first:
             u2.clear_text()
             time.sleep(0.3)
         u2.send_keys(text)
-        result["message"] = f"input_selector {by}={value!r} → {text!r}"
+        result["message"] = f"input_selector {lbl} → {text!r}"
     except Exception as exc:
         result["ok"] = False
         result["message"] = f"input_selector failed: {exc}"

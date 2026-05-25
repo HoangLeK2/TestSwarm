@@ -288,33 +288,46 @@ async def pick_next_batch(
         )
     )
 
-    if strategy == "least_recent":
-        # Oldest or never-used first; tie-break by position for determinism.
-        ordered_q = base_q.order_by(
-            AccountGroupMember.last_used_at.asc().nulls_first(),
-            AccountGroupMember.position.asc(),
+    usable_count_result = await db.execute(
+        select(func.count(AccountGroupMember.id))
+        .select_from(AccountGroupMember)
+        .join(Account, Account.id == AccountGroupMember.account_id)
+        .where(
+            AccountGroupMember.group_id == group_id,
+            Account.status == "active",
+            or_(
+                Account.cooldown_until.is_(None),
+                Account.cooldown_until <= now,
+            ),
         )
-    else:
-        # Round-robin default: stable positional order; we will slice ourselves.
-        ordered_q = base_q.order_by(AccountGroupMember.position.asc())
-
-    rows = (await db.execute(ordered_q)).all()
-    if not rows:
+    )
+    total = int(usable_count_result.scalar_one() or 0)
+    if total == 0:
         return []
 
-    total = len(rows)
+    want = min(count, total)
     picks: List[Tuple[str, Account]] = []
 
     if strategy == "least_recent":
-        picks = [(r[0], r[1]) for r in rows[: min(count, total)]]
+        ordered_q = base_q.order_by(
+            AccountGroupMember.last_used_at.asc().nulls_first(),
+            AccountGroupMember.position.asc(),
+        ).limit(want)
+        rows = (await db.execute(ordered_q)).all()
+        picks = [(r[0], r[1]) for r in rows]
     else:
-        # Wrap-around slice starting from the cursor.
-        # Note: rows are the *usable* subset, so cursor is interpreted modulo this
-        # subset. Across runs where membership changes, cursor semantics remain
-        # "advance forward", which is what operators expect.
-        start = cursor % total if total > 0 else 0
-        for i in range(min(count, total)):
-            picks.append((rows[(start + i) % total][0], rows[(start + i) % total][1]))
+        ordered_q = base_q.order_by(AccountGroupMember.position.asc())
+        start = cursor % total
+        first_take = min(want, total - start)
+        if first_take > 0:
+            rows1 = (
+                await db.execute(ordered_q.offset(start).limit(first_take))
+            ).all()
+            picks.extend((r[0], r[1]) for r in rows1)
+        remaining = want - len(picks)
+        if remaining > 0:
+            rows2 = (await db.execute(ordered_q.limit(remaining))).all()
+            picks.extend((r[0], r[1]) for r in rows2)
         new_cursor = (start + len(picks)) % total
         await db.execute(
             update(AccountGroup)
@@ -322,8 +335,6 @@ async def pick_next_batch(
             .values(rotation_cursor=new_cursor)
         )
 
-    # Bump last_used_at for picked members — used by the LRU strategy and by
-    # the UI to highlight stale accounts.
     member_ids = [m_id for m_id, _ in picks]
     if member_ids:
         await db.execute(

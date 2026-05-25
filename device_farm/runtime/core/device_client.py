@@ -79,6 +79,13 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
 class LatestFrameStore:
     """Latest-frame snapshot store with version/event signaling.
 
@@ -301,6 +308,10 @@ class DeviceClient:
         self._ws_hierarchy_xml: Optional[str] = None
         self._ws_hierarchy_error: Optional[str] = None
         self._ws_hierarchy_a11y_available: bool = True  # optimistic, disabled on first "accessibility_not_available"
+        self._extra_data_event = threading.Event()
+        self._extra_data_lock = threading.Lock()
+        self._extra_data_result: Optional[Dict[str, Any]] = None
+        self._extra_data_request_id: str = ""
         self._event_recorder = None  # EventRecorder, injected by DeviceManager
         self._recovery_logger = self._setup_recovery_logger()
         # A11y gRPC routing controls (u2 path remains unchanged).
@@ -1426,7 +1437,14 @@ class DeviceClient:
         """
         self._send_to_agent({"type": "shell", "cmd": cmd})
 
-    def launch_app(self, package: str, component: str | None = None) -> None:
+    def launch_app(
+        self,
+        package: str,
+        component: str | None = None,
+        *,
+        stop_before: bool = False,
+        use_monkey: bool = False,
+    ) -> None:
         """Launch app reliably: prefer ADB relay, then U2, then agent intent."""
         pkg = (package or "").strip()
         comp = (component or "").strip()
@@ -1436,6 +1454,11 @@ class DeviceClient:
             pkg = pkg.split("/", 1)[0].strip()
         if not pkg and not comp:
             return
+        if stop_before:
+            try:
+                self.stop_app(pkg)
+            except Exception as exc:
+                self._log(f"launch_app stop_before failed: {exc}", level=logging.DEBUG)
         # Path 1 (preferred): direct ADB shell via gRPC relay.
         # This is deterministic and independent from APK process privileges.
         try:
@@ -1450,7 +1473,11 @@ class DeviceClient:
                 if not serial_candidates:
                     serial_candidates = [self.serial]
                 launch_cmds: List[str] = []
-                if comp and "/" in comp:
+                if use_monkey and pkg:
+                    launch_cmds.append(
+                        f"monkey -p {pkg} -c android.intent.category.LAUNCHER 1"
+                    )
+                elif comp and "/" in comp:
                     launch_cmds.append(f"am start -W -n {comp}")
                 elif pkg:
                     launch_cmds.append(
@@ -1459,14 +1486,13 @@ class DeviceClient:
                         " -c android.intent.category.LAUNCHER"
                         f" -p {pkg}"
                     )
-                    # Some OEM/build variants fail to resolve MAIN/LAUNCHER with -p.
-                    # monkey often succeeds at launching the default launcher activity.
-                    launch_cmds.append(
-                        "monkey"
-                        f" -p {pkg}"
-                        " -c android.intent.category.LAUNCHER"
-                        " 1"
-                    )
+                    if not use_monkey:
+                        launch_cmds.append(
+                            "monkey"
+                            f" -p {pkg}"
+                            " -c android.intent.category.LAUNCHER"
+                            " 1"
+                        )
 
                 def _looks_failed(out: str | None) -> bool:
                     text = (out or "").strip().lower()
@@ -1523,7 +1549,12 @@ class DeviceClient:
                 activity: str | None = None
                 if comp and "/" in comp:
                     activity = comp.split("/", 1)[1].strip() or None
-                u2.app_start(pkg, activity=activity)
+                u2.app_start(
+                    pkg,
+                    activity=activity,
+                    stop=stop_before,
+                    use_monkey=use_monkey,
+                )
                 if not u2.app_wait(pkg, timeout=5.0):
                     self._log(
                         f"launch_app via u2 did not reach foreground: pkg={pkg} component={comp or '-'}",
@@ -1550,6 +1581,131 @@ class DeviceClient:
             send(payload)
         except Exception as exc:
             raise RuntimeError(f"launch_app: agent send failed: {exc}") from exc
+
+    def stop_app(self, package: str) -> None:
+        """Force-stop an app (`am force-stop` / u2 stopPackage)."""
+        pkg = (package or "").strip()
+        if not pkg:
+            return
+        try:
+            from runtime.transports.adb_relay_server import get_relay_manager
+            relay = get_relay_manager()
+            serial = self._resolve_relay_serial() or self._adb_serial or self.serial
+            if relay and self._loop and relay.relay_for_serial(serial):
+                fut = asyncio.run_coroutine_threadsafe(
+                    relay.adb_shell(serial, f"am force-stop {pkg}", timeout=15.0),
+                    self._loop,
+                )
+                fut.result(timeout=20.0)
+                return
+        except Exception as exc:
+            self._log(f"stop_app via adb relay failed: {exc}", level=logging.DEBUG)
+        with self._u2_lock:
+            u2 = self._u2
+        if u2 is not None:
+            u2.app_stop(pkg)
+            return
+        raise RuntimeError(f"stop_app: no adb relay or u2 for serial={self.serial}")
+
+    def clear_app(self, package: str) -> None:
+        """Clear app data (`pm clear`)."""
+        pkg = (package or "").strip()
+        if not pkg:
+            return
+        try:
+            from runtime.transports.adb_relay_server import get_relay_manager
+            relay = get_relay_manager()
+            serial = self._resolve_relay_serial() or self._adb_serial or self.serial
+            if relay and self._loop and relay.relay_for_serial(serial):
+                fut = asyncio.run_coroutine_threadsafe(
+                    relay.adb_shell(serial, f"pm clear {pkg}", timeout=30.0),
+                    self._loop,
+                )
+                out = fut.result(timeout=35.0) or ""
+                if "failed" in out.lower() or "error" in out.lower():
+                    raise RuntimeError(out.strip() or "pm clear failed")
+                return
+        except Exception as exc:
+            self._log(f"clear_app via adb relay failed: {exc}", level=logging.DEBUG)
+        with self._u2_lock:
+            u2 = self._u2
+        if u2 is not None and hasattr(u2, "app_clear"):
+            u2.app_clear(pkg)
+            return
+        raise RuntimeError(f"clear_app: no adb relay or u2 for serial={self.serial}")
+
+    def wait_app(self, package: str, *, front: bool = True, timeout: float = 20.0) -> bool:
+        """Wait until package is foreground (u2 app_wait or dumpsys poll)."""
+        pkg = (package or "").strip()
+        if not pkg:
+            return False
+        with self._u2_lock:
+            u2 = self._u2
+        if u2 is not None:
+            return bool(u2.app_wait(pkg, front=front, timeout=timeout))
+        try:
+            from runtime.transports.adb_relay_server import get_relay_manager
+            relay = get_relay_manager()
+            serial = self._resolve_relay_serial() or self._adb_serial or self.serial
+            if relay and self._loop and relay.relay_for_serial(serial):
+                deadline = time.monotonic() + timeout
+                while time.monotonic() < deadline:
+                    fut = asyncio.run_coroutine_threadsafe(
+                        relay.adb_shell(
+                            serial,
+                            "dumpsys activity activities | grep mResumedActivity",
+                            timeout=10.0,
+                        ),
+                        self._loop,
+                    )
+                    out = fut.result(timeout=12.0) or ""
+                    if pkg in out:
+                        return True
+                    time.sleep(0.5)
+                return False
+        except Exception as exc:
+            self._log(f"wait_app via adb relay failed: {exc}", level=logging.DEBUG)
+        return False
+
+    def push_file(
+        self,
+        local_path: str,
+        remote_path: str,
+        *,
+        mode: int | None = None,
+    ) -> None:
+        """Push a local file to the device (agent-boot u2 batch or u2 HTTP sync)."""
+        if self._batch_enabled():
+            actions: list[dict] = [
+                {"op": "push_file", "local_path": local_path, "remote_path": remote_path},
+            ]
+            if mode is not None:
+                actions[0]["mode"] = mode
+            results = self.u2_batch(actions, timeout=60.0)
+            if not results or not results[0].get("ok"):
+                err = (results[0].get("error") if results else None) or "push_file failed"
+                raise RuntimeError(err)
+            return
+        raise RuntimeError(
+            "push_file requires U2_BATCH_ENABLED and agent-boot relay "
+            f"(serial={self.serial})"
+        )
+
+    def pull_file(self, remote_path: str, local_path: str) -> None:
+        """Pull a device file to local path (agent-boot u2 batch)."""
+        if self._batch_enabled():
+            results = self.u2_batch(
+                [{"op": "pull_file", "remote_path": remote_path, "local_path": local_path}],
+                timeout=60.0,
+            )
+            if not results or not results[0].get("ok"):
+                err = (results[0].get("error") if results else None) or "pull_file failed"
+                raise RuntimeError(err)
+            return
+        raise RuntimeError(
+            "pull_file requires U2_BATCH_ENABLED and agent-boot relay "
+            f"(serial={self.serial})"
+        )
 
     def open_url(self, url: str, package: str | None = None) -> None:
         """
@@ -1616,6 +1772,87 @@ class DeviceClient:
         elif xml:
             self._ws_hierarchy_a11y_available = True  # re-enable if it starts working
         self._ws_hierarchy_event.set()
+
+    def on_agent_extra_data_result(self, payload: Dict[str, Any]) -> None:
+        request_id = str(payload.get("request_id") or "")
+        if self._extra_data_request_id and request_id != self._extra_data_request_id:
+            self._log(
+                f"extra_data_result ignored for stale request_id={request_id}",
+                level=logging.DEBUG,
+            )
+            return
+        self._extra_data_result = payload
+        self._extra_data_event.set()
+
+    async def _extra_data_via_relay_async(
+        self,
+        *,
+        strategy: str,
+        context: Dict[str, Any],
+        timeout: float,
+    ) -> Dict[str, Any]:
+        from runtime.transports.adb_relay_server import get_relay_manager
+
+        relay = get_relay_manager()
+        if relay is None:
+            return {"ok": False, "error": "no_relay_manager"}
+        serial = self._resolve_relay_serial()
+        if not relay.relay_for_serial(serial):
+            return {"ok": False, "error": "no_relay"}
+        result = await relay.extra_data(
+            serial=serial,
+            strategy=strategy,
+            context=context,
+            timeout=timeout,
+        )
+        if not result.get("ok"):
+            return {
+                "ok": False,
+                "error": str(result.get("error") or "extra_data_failed"),
+                "route": result.get("route", "relay_u2"),
+            }
+        ingest = result.get("ingest") if isinstance(result.get("ingest"), dict) else result
+        return {
+            "ok": True,
+            "ingest": ingest,
+            "route": result.get("route", "relay_u2"),
+            "request_id": result.get("id", ""),
+        }
+
+    def request_extra_data_xml(
+        self,
+        *,
+        endpoint: str = "",
+        strategy: str,
+        context: Dict[str, Any],
+        token: str = "",
+        timeout: float = 45.0,
+    ) -> Dict[str, Any]:
+        """PA B relay-only: dump + parse on agent-boot via relay.extra_data."""
+        del endpoint, token  # relay path does not use HTTP ingest or APK WS
+        if not _env_bool("EDGE_EXTRA_RELAY_ENABLED", True):
+            return {"ok": False, "error": "edge_extra_relay_disabled"}
+        if self._loop is None:
+            return {"ok": False, "error": "no_event_loop"}
+        try:
+            fut = asyncio.run_coroutine_threadsafe(
+                self._extra_data_via_relay_async(
+                    strategy=strategy,
+                    context=context,
+                    timeout=timeout,
+                ),
+                self._loop,
+            )
+            result = fut.result(timeout=timeout + 15.0)
+            if result.get("ok"):
+                self._log(
+                    f"edge_extra route=relay_u2 strategy={strategy}",
+                    level=logging.INFO,
+                )
+            return result
+        except Exception as exc:
+            self._log(f"edge_extra relay failed: {exc}", level=logging.WARNING)
+            return {"ok": False, "error": str(exc)}
 
     def _hierarchy_via_ws(self, timeout: float = 5.0) -> Optional[str]:
         """Request hierarchy dump via gRPC a11y query, fallback to WS direct."""

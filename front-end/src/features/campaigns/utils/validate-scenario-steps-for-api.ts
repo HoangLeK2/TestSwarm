@@ -3,6 +3,11 @@ export type ScenarioStepsValidation =
   | { ok: true }
   | { ok: false; message: string };
 
+export type ScenarioValidationTranslator = (
+  key: 'launchAppPackageRequired' | 'appPackageRequired' | 'filePathsRequired',
+  values?: Record<string, string | number>,
+) => string;
+
 function nonempty(s: unknown): string {
   return String(s ?? '').trim();
 }
@@ -12,12 +17,16 @@ function isVariableToken(v: unknown): boolean {
   return /^\$\{[^}]+\}$/.test(raw);
 }
 
-function validateStepsArray(steps: unknown, path: string): ScenarioStepsValidation {
+function validateStepsArray(
+  steps: unknown,
+  path: string,
+  tr?: ScenarioValidationTranslator,
+): ScenarioStepsValidation {
   if (!Array.isArray(steps)) {
     return { ok: false, message: `${path}: danh sách bước không hợp lệ` };
   }
   for (let i = 0; i < steps.length; i++) {
-    const r = validateStep(steps[i], `${path} → bước ${i + 1}`);
+    const r = validateStep(steps[i], `${path} → bước ${i + 1}`, tr);
     if (!r.ok) return r;
   }
   return { ok: true };
@@ -43,14 +52,18 @@ function validateConditionDict(cond: unknown, path: string): ScenarioStepsValida
   return { ok: true };
 }
 
-function validateStep(raw: unknown, path: string): ScenarioStepsValidation {
+function validateStep(
+  raw: unknown,
+  path: string,
+  tr?: ScenarioValidationTranslator,
+): ScenarioStepsValidation {
   if (raw === null || typeof raw !== 'object') {
     return { ok: false, message: `${path}: bước không hợp lệ` };
   }
   const s = raw as Record<string, unknown>;
-  const t = s.type;
+  const stepType = s.type;
 
-  switch (t) {
+  switch (stepType) {
     case 'if_element': {
       const v = nonempty(s.value);
       if (!v) {
@@ -60,11 +73,11 @@ function validateStep(raw: unknown, path: string): ScenarioStepsValidation {
       if (!Array.isArray(then) || then.length < 1) {
         return { ok: false, message: `${path} (if_element): nhánh "then" cần ít nhất 1 bước` };
       }
-      const rThen = validateStepsArray(then, `${path} (if_element) → then`);
+      const rThen = validateStepsArray(then, `${path} (if_element) → then`, tr);
       if (!rThen.ok) return rThen;
       const els = s.else;
       if (els != null && Array.isArray(els) && els.length > 0) {
-        const rElse = validateStepsArray(els, `${path} (if_element) → else`);
+        const rElse = validateStepsArray(els, `${path} (if_element) → else`, tr);
         if (!rElse.ok) return rElse;
       }
       return { ok: true };
@@ -78,11 +91,11 @@ function validateStep(raw: unknown, path: string): ScenarioStepsValidation {
       if (!Array.isArray(then) || then.length < 1) {
         return { ok: false, message: `${path} (if_variable): nhánh "then" cần ít nhất 1 bước` };
       }
-      const rThen = validateStepsArray(then, `${path} (if_variable) → then`);
+      const rThen = validateStepsArray(then, `${path} (if_variable) → then`, tr);
       if (!rThen.ok) return rThen;
       const els = s.else;
       if (els != null && Array.isArray(els) && els.length > 0) {
-        const rElse = validateStepsArray(els, `${path} (if_variable) → else`);
+        const rElse = validateStepsArray(els, `${path} (if_variable) → else`, tr);
         if (!rElse.ok) return rElse;
       }
       return { ok: true };
@@ -99,7 +112,7 @@ function validateStep(raw: unknown, path: string): ScenarioStepsValidation {
       if (!Array.isArray(inner) || inner.length < 1) {
         return { ok: false, message: `${path} (repeat): cần ít nhất 1 bước bên trong` };
       }
-      return validateStepsArray(inner, `${path} (repeat)`);
+      return validateStepsArray(inner, `${path} (repeat)`, tr);
     }
     case 'repeat_until': {
       const inner = s.steps;
@@ -108,7 +121,7 @@ function validateStep(raw: unknown, path: string): ScenarioStepsValidation {
       }
       const rc = validateConditionDict(s.condition, `${path} (repeat_until) condition`);
       if (!rc.ok) return rc;
-      return validateStepsArray(inner, `${path} (repeat_until)`);
+      return validateStepsArray(inner, `${path} (repeat_until)`, tr);
     }
     case 'random_pick': {
       const branches = s.branches;
@@ -124,7 +137,7 @@ function validateStep(raw: unknown, path: string): ScenarioStepsValidation {
             message: `${path} (random_pick) nhánh ${b + 1}: mỗi nhánh cần ít nhất 1 bước`,
           };
         }
-        const r = validateStepsArray(inner, `${path} (random_pick) nhánh ${b + 1}`);
+        const r = validateStepsArray(inner, `${path} (random_pick) nhánh ${b + 1}`, tr);
         if (!r.ok) return r;
       }
       return { ok: true };
@@ -139,7 +152,39 @@ function validateStep(raw: unknown, path: string): ScenarioStepsValidation {
     }
     case 'launch_app': {
       if (!nonempty(s.package)) {
-        return { ok: false, message: `${path} (launch_app): package không được để trống` };
+        return {
+          ok: false,
+          message: tr
+            ? tr('launchAppPackageRequired', { path })
+            : `${path} (launch_app): package không được để trống`,
+        };
+      }
+      return { ok: true };
+    }
+    case 'stop_app':
+    case 'clear_app':
+    case 'wait_app': {
+      if (!nonempty(s.package)) {
+        const st = String(s.type ?? 'app');
+        return {
+          ok: false,
+          message: tr
+            ? tr('appPackageRequired', { path, stepType: st })
+            : `${path} (${st}): package không được để trống`,
+        };
+      }
+      return { ok: true };
+    }
+    case 'push_file':
+    case 'pull_file': {
+      if (!nonempty(s.local_path) || !nonempty(s.remote_path)) {
+        const st = String(s.type ?? 'file');
+        return {
+          ok: false,
+          message: tr
+            ? tr('filePathsRequired', { path, stepType: st })
+            : `${path} (${st}): cần local_path và remote_path`,
+        };
       }
       return { ok: true };
     }
@@ -169,8 +214,12 @@ function validateStep(raw: unknown, path: string): ScenarioStepsValidation {
     case 'assert_element':
     case 'long_tap_selector':
     case 'scroll_to': {
-      if (!nonempty(s.value)) {
-        return { ok: false, message: `${path} (${String(t)}): value không được để trống` };
+      const sel = s.selector;
+      const val = sel && typeof sel === 'object'
+        ? nonempty((sel as { value?: unknown }).value)
+        : nonempty(s.value);
+      if (!val) {
+        return { ok: false, message: `${path} (${String(stepType)}): selector.value hoặc value không được để trống` };
       }
       return { ok: true };
     }
@@ -197,11 +246,14 @@ function validateStep(raw: unknown, path: string): ScenarioStepsValidation {
   }
 }
 
-export function validateScenarioStepsForApi(steps: unknown): ScenarioStepsValidation {
+export function validateScenarioStepsForApi(
+  steps: unknown,
+  tr?: ScenarioValidationTranslator,
+): ScenarioStepsValidation {
   if (!Array.isArray(steps)) {
     return { ok: false, message: 'Danh sách bước (steps) không hợp lệ' };
   }
-  return validateStepsArray(steps, 'Kịch bản');
+  return validateStepsArray(steps, 'Kịch bản', tr);
 }
 
 export { formatFarmApiError } from '@/lib/format-farm-api-error';

@@ -44,6 +44,22 @@ class AccountStatus(StrEnum):
     DISABLED = "disabled"
 
 
+class AccountEventType(StrEnum):
+    CREATED = "account.created"
+    UPDATED = "account.updated"
+    STATUS_CHANGED = "account.status_changed"
+    DELETED = "account.deleted"
+    DEVICE_ASSIGNED = "account.device_assigned"
+    DEVICE_UNASSIGNED = "account.device_unassigned"
+    PICKED = "account.picked"
+    USAGE_STARTED = "account.usage_started"
+    USAGE_ENDED = "account.usage_ended"
+    COOLDOWN_ENTERED = "account.cooldown_entered"
+    COOLDOWN_CLEARED = "account.cooldown_cleared"
+    SESSION_DEATH = "account.session_death"
+    BANNED = "account.banned"
+
+
 class DLQStatus(StrEnum):
     PENDING = "pending"
     RETRYING = "retrying"

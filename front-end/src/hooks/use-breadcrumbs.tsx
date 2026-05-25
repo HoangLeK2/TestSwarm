@@ -19,8 +19,14 @@ const routeMapping: Record<string, string[]> = {
   '/dashboard/settings': ['navigation.settings'],
   '/dashboard/inventory': ['navigation.dashboard', 'navigation.inventory'],
   '/dashboard/product/sync': ['navigation.sync'],
-  '/dashboard/org/:id/member': ['navigation.members'],
-  '/dashboard/org/:id': ['navigation.organization_general'],
+  '/dashboard/settings/organization/members': [
+    'navigation.settings',
+    'navigation.members'
+  ],
+  '/dashboard/settings/organization': [
+    'navigation.settings',
+    'navigation.organization_general'
+  ],
   '/dashboard/gln': ['navigation.dashboard', 'navigation.gln']
 };
 

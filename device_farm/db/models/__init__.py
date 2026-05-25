@@ -15,7 +15,7 @@ split into smaller modules for easier maintenance:
 
 from .enums import (  # noqa: F401 — re-export for convenient access
     UserRole, CampaignStatus, ExecutionStatus, ExecutionResultStatus,
-    AccountStatus, DLQStatus, RunStatus, ScheduleTargetType,
+    AccountStatus, AccountEventType, DLQStatus, RunStatus, ScheduleTargetType,
     McpSessionStatus,
 )
 from .user import User
@@ -26,6 +26,7 @@ from .campaign import Campaign, CampaignDevice, Scenario
 from .mcp_session import McpSession
 from .scenario_template import ScenarioTemplate
 from .account import Account, DeviceAccount
+from .account_event import AccountEvent
 from .account_group import AccountGroup, AccountGroupMember
 from .content import ContentItem, ContentCollection
 from .schedule import Schedule, ScheduleRun
@@ -34,7 +35,7 @@ from .scenario_version import ScenarioVersion
 from .execution_dlq import ExecutionDLQ
 from .u2_recovery import U2RecoveryEvent
 from .device_event import DeviceEvent
-from .relay_agent import RelayAgent
+from .relay_agent import RelayAgent, RelayAgentJob, RelayAgentJobItem, RelayAgentToken
 from .scenario_device_variable import ScenarioDeviceVariable
 from .notification import Notification, NotificationChannel
 from .activity import ActivityLog
@@ -54,6 +55,8 @@ __all__ = [
     "ScenarioTemplate",
     "Account",
     "DeviceAccount",
+    "AccountEvent",
+    "AccountEventType",
     "AccountGroup",
     "AccountGroupMember",
     "ContentItem",
@@ -68,6 +71,9 @@ __all__ = [
     "U2RecoveryEvent",
     "DeviceEvent",
     "RelayAgent",
+    "RelayAgentJob",
+    "RelayAgentJobItem",
+    "RelayAgentToken",
     "ScenarioDeviceVariable",
     "Notification",
     "NotificationChannel",

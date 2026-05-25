@@ -1,709 +1,629 @@
 """Step handlers: extract, extract_text_hierarchy, extract_text_ocr, extract_text_ai, extract_screen_data."""
 from __future__ import annotations
 
-import asyncio
-import concurrent.futures
-import importlib
 import json
 import logging
 import os
 import time
-import xml.etree.ElementTree as ET
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
+from urllib.parse import urlsplit
 
-from tasks.scenario.failure_bundle import capture_failure_bundle
 from tasks.scenario.steps import register_step
 from tasks.scenario.context import ScenarioContext
-from services.extraction_usecase import resolve_comment_parent_hash
 
 log = logging.getLogger(__name__)
 
+EDGE_CONTENT_STRATEGIES = {
+    "fb_posts",
+    "fb_comments",
+    "text_nodes",
+    "ig_posts",
+    "tiktok_posts",
+    "linkedin_posts",
+    "auto_posts",
+    "ig_comments",
+    "tiktok_comments",
+    "linkedin_comments",
+    "auto_comments",
+}
 
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.environ.get(name, str(default)))
-    except Exception:
-        return default
+COMMENT_STRATEGIES = {
+    "fb_comments",
+    "ig_comments",
+    "tiktok_comments",
+    "linkedin_comments",
+    "auto_comments",
+}
 
 
-def _chunks(items: list[dict], size: int):
-    size = max(1, size)
-    for i in range(0, len(items), size):
-        yield items[i:i + size]
+def _platform_for_strategy(strategy: str, step: Dict[str, Any]) -> str:
+    if step.get("platform"):
+        return str(step["platform"])
+    if strategy.startswith("ig_"):
+        return "instagram"
+    if strategy.startswith("tiktok_"):
+        return "tiktok"
+    if strategy.startswith("linkedin_"):
+        return "linkedin"
+    if strategy.startswith("auto_"):
+        return "auto"
+    if strategy == "text_nodes":
+        return str(step.get("platform") or "ui")
+    return "facebook"
 
-try:
-    _trace_log = importlib.import_module("structlog").get_logger("scenario_trace")
-except Exception:  # pragma: no cover — structlog optional
-    _trace_log = None
+
+def _content_type_for_strategy(strategy: str, step: Dict[str, Any]) -> str:
+    if step.get("content_type"):
+        return str(step["content_type"])
+    if strategy in COMMENT_STRATEGIES:
+        return "comment"
+    if strategy == "text_nodes":
+        return "text"
+    if strategy.startswith("tiktok_"):
+        return "video"
+    return "post"
 
 
-def _emit_extraction_event(sc: ScenarioContext, step_idx: int, diagnostic: Dict[str, Any],
-                           posts_added: int, bundle_path: Optional[str] = None) -> None:
-    """Emit one structlog ``extraction_result`` event per extract step."""
-    if _trace_log is None:
+def _data_var_for_edge_strategy(strategy: str, step: Dict[str, Any]) -> str:
+    explicit = step.get("data_var") or step.get("save_as")
+    if explicit:
+        return str(explicit)
+    if strategy == "text_nodes":
+        return "text_nodes"
+    if strategy in COMMENT_STRATEGIES:
+        return "comments"
+    return "posts"
+
+
+def _store_returned_items(ctx: Dict[str, Any], strategy: str, step: Dict[str, Any], items: list[Any]) -> None:
+    data_var = _data_var_for_edge_strategy(strategy, step)
+    if strategy == "text_nodes":
+        values = [
+            str(item.get("text") or item.get("body") or "").strip()
+            for item in items
+            if isinstance(item, dict) and str(item.get("text") or item.get("body") or "").strip()
+        ]
+    else:
+        values = [item for item in items if isinstance(item, dict)]
+    if not values:
+        ctx.setdefault(data_var, [])
         return
-    try:
-        device = sc.device
-        last_frame_t = float(getattr(device, "_last_frame_time", 0.0) or 0.0)
-        frame_age_ms = int((time.monotonic() - last_frame_t) * 1000) if last_frame_t > 0 else None
-        u2_hb_age = None
-        try:
-            pool_mod = importlib.import_module("agent_boot.relay.u2_session_pool")
-            heartbeat_age_fn = getattr(pool_mod, "heartbeat_age_ms", None)
-            if callable(heartbeat_age_fn):
-                u2_hb_age = heartbeat_age_fn(sc.serial)
-        except Exception:
-            u2_hb_age = None
-        _trace_log.info(
-            "extraction_result",
-            serial=sc.serial,
-            step_idx=step_idx,
-            reason_code=diagnostic.get("reason_code", "unknown"),
-            posts_added=posts_added,
-            posts_returned=diagnostic.get("posts_returned", 0),
-            truncated=diagnostic.get("truncated_post_count", 0),
-            candidate_clusters=diagnostic.get("candidate_clusters", 0),
-            filtered_junk=diagnostic.get("filtered_junk_count", 0),
-            anchor_button_found=diagnostic.get("anchor_button_found"),
-            parse_ms=diagnostic.get("elapsed_ms"),
-            frame_age_ms=frame_age_ms,
-            u2_heartbeat_age_ms=u2_hb_age,
-            bundle_path=bundle_path,
-        )
-    except Exception as exc:  # pragma: no cover
-        log.debug("extraction_result event emit failed: %s", exc)
+    bucket = ctx.setdefault(data_var, [])
+    if isinstance(bucket, list):
+        bucket.extend(values)
+    else:
+        ctx[data_var] = values
 
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _relay_extra_data_available(device: Any) -> bool:
+    """PA B: edge extract requires a relay mapping for this device."""
+    if not _env_bool("EDGE_EXTRA_RELAY_ENABLED", True):
+        return False
+    try:
+        from runtime.transports.adb_relay_server import get_relay_manager
+
+        relay = get_relay_manager()
+        if relay is None:
+            return False
+        resolve = getattr(device, "_resolve_relay_serial", None)
+        relay_serial = resolve() if callable(resolve) else getattr(device, "serial", "")
+        return bool(relay.relay_for_serial(str(relay_serial or "")))
+    except Exception:
+        return False
+
+
+def _edge_extra_should_return_items(step: Dict[str, Any], collection: Any) -> bool:
+    if "return_items" in step:
+        return _coerce_bool(step.get("return_items"), default=False)
+    if "edge_extra_return_items" in step:
+        return _coerce_bool(step.get("edge_extra_return_items"), default=False)
+    if step.get("save_as") or step.get("data_var"):
+        return True
+    return not bool(collection)
+
+
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def _is_loopback_endpoint(url: str) -> bool:
+    parts = _edge_extra_url_parts(url)
+    if parts is None:
+        return False
+    return parts[1] in _LOOPBACK_HOSTS
+
+
+def _edge_extra_endpoint(step: Dict[str, Any]) -> str:
+    endpoint = str(
+        step.get("edge_extra_agent_url")
+        or step.get("extra_data_agent_url")
+        or os.environ.get("EDGE_EXTRA_AGENT_URL")
+        or ""
+    ).strip()
+    if endpoint and not endpoint.rstrip("/").endswith("/extra-data/xml"):
+        endpoint = endpoint.rstrip("/") + "/extra-data/xml"
+    return endpoint
+
+
+def _edge_extra_endpoint_for_device(step: Dict[str, Any]) -> str:
+    """Endpoint forwarded to the phone APK — must be reachable from the device, not loopback."""
+    endpoint = _edge_extra_endpoint(step)
+    if not endpoint or not _is_loopback_endpoint(endpoint):
+        return endpoint
+    public = str(
+        step.get("edge_extra_agent_public_url")
+        or os.environ.get("EDGE_EXTRA_AGENT_PUBLIC_URL")
+        or ""
+    ).strip()
+    if not public:
+        return endpoint
+    if not public.rstrip("/").endswith("/extra-data/xml"):
+        public = public.rstrip("/") + "/extra-data/xml"
+    return public
+
+
+def _edge_extra_url_parts(url: str) -> tuple[str, str, int, str] | None:
+    try:
+        parsed = urlsplit(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            return None
+        port = parsed.port
+    except ValueError:
+        return None
+    if port is None:
+        port = 443 if parsed.scheme == "https" else 80
+    return parsed.scheme, parsed.hostname.lower(), port, parsed.path.rstrip("/") or "/"
+
+
+def _edge_extra_endpoint_matches(endpoint: str, allowed: str) -> bool:
+    ep = _edge_extra_url_parts(endpoint)
+    al = _edge_extra_url_parts(allowed)
+    if ep is None or al is None:
+        return False
+    ep_scheme, ep_host, ep_port, ep_path = ep
+    al_scheme, al_host, al_port, al_path = al
+    if (ep_scheme, ep_host, ep_port) != (al_scheme, al_host, al_port):
+        return False
+    if al_path in {"", "/"}:
+        return True
+    return ep_path == al_path or ep_path.startswith(al_path.rstrip("/") + "/")
+
+
+def _edge_extra_endpoint_allowed(endpoint: str) -> bool:
+    allowlist = [p.strip().rstrip("/") for p in os.environ.get("EDGE_EXTRA_AGENT_URL_ALLOWLIST", "").split(",") if p.strip()]
+    if _edge_extra_url_parts(endpoint) is None:
+        return False
+    if allowlist:
+        if any(_edge_extra_endpoint_matches(endpoint, prefix) for prefix in allowlist):
+            return True
+    else:
+        env_endpoint = os.environ.get("EDGE_EXTRA_AGENT_URL", "").strip().rstrip("/")
+        if env_endpoint and _edge_extra_endpoint_matches(endpoint, env_endpoint):
+            return True
+    public = os.environ.get("EDGE_EXTRA_AGENT_PUBLIC_URL", "").strip().rstrip("/")
+    if public and _edge_extra_endpoint_matches(endpoint, public):
+        loopback = os.environ.get("EDGE_EXTRA_AGENT_URL", "").strip().rstrip("/")
+        env_endpoint = os.environ.get("EDGE_EXTRA_AGENT_URL", "").strip().rstrip("/")
+        if loopback and (
+            (allowlist and any(_edge_extra_endpoint_matches(loopback, prefix) for prefix in allowlist))
+            or (not allowlist and env_endpoint and _edge_extra_endpoint_matches(loopback, env_endpoint))
+        ):
+            return True
+    return _env_bool("EDGE_EXTRA_ALLOW_STEP_ENDPOINT", False)
+
+
+def _resolve_user_id_for_edge(serial: str, scenario: Dict[str, Any]) -> str | None:
+    user_id = (scenario.get("_campaign_vars") or {}).get("__USER_ID__")
+    if user_id:
+        return str(user_id)
+    direct_uid = scenario.get("user_id") or scenario.get("__USER_ID__")
+    if direct_uid:
+        s = str(direct_uid).strip()
+        if s:
+            return s
+    try:
+        from db.database import run_activity_coro, activity_session
+        from db.crud.device import get_device_by_serial
+
+        async def _resolve():
+            async with activity_session() as db:
+                dev = await get_device_by_serial(db, serial)
+                return dev.user_id if dev else None
+
+        return run_activity_coro(_resolve())
+    except Exception:
+        return None
+
+
+def request_edge_extra_data(
+    *,
+    device: Any,
+    serial: str,
+    ctx: Dict[str, Any],
+    scenario: Dict[str, Any],
+    step: Dict[str, Any],
+    strategy: str,
+    result: Dict[str, Any],
+) -> bool:
+    has_edge_flag = "edge_extra_data" in step
+    explicit_enabled = (
+        _coerce_bool(step.get("edge_extra_data"), default=False)
+        if has_edge_flag
+        else strategy in EDGE_CONTENT_STRATEGIES
+    )
+    enabled = explicit_enabled or _env_bool("EDGE_EXTRA_DATA_ENABLED", False)
+    if not enabled:
+        return False
+    if not explicit_enabled and not _env_bool("EDGE_EXTRA_APPLY_GLOBALLY", False):
+        return False
+    if strategy not in EDGE_CONTENT_STRATEGIES:
+        return False
+    collection = step.get("collection")
+    if not _relay_extra_data_available(device):
+        result["ok"] = False
+        result["message"] = (
+            f"edge extra_data {strategy}: no relay for device "
+            "(start agent-boot relay and ensure device is registered)"
+        )
+        return True
+    if step.get("edge_extra_requires_context"):
+        log.info("[%s] edge extra_data skipped because step requires in-memory extraction context", serial)
+        result["ok"] = False
+        result["message"] = f"edge extra_data {strategy}: step requires in-memory extraction context"
+        return True
+
+    parent_post_id_var = step.get("parent_post_id_var")
+    parent_post_id = ctx.get(parent_post_id_var) if parent_post_id_var else ctx.get("_fb_comment_parent_pid")
+    parent_var = step.get("save_parent_id_var") or step.get("parent_id_var")
+    parent_id = ctx.get("_edge_comment_parent_base_hash") if strategy == "fb_comments" else None
+    if parent_id is None and parent_var:
+        parent_id = ctx.get(parent_var)
+    return_items = _edge_extra_should_return_items(step, collection)
+    context = {
+        "schema_version": 1,
+        "context_id": scenario.get("_execution_id") or scenario.get("_run_hash_scope") or serial,
+        "execution_id": scenario.get("_execution_id"),
+        "campaign_id": scenario.get("_campaign_id"),
+        "user_id": _resolve_user_id_for_edge(serial, scenario),
+        "device_serial": serial,
+        "collection": collection,
+        "platform": _platform_for_strategy(strategy, step),
+        "content_type": _content_type_for_strategy(strategy, step),
+        "scenario_name": scenario.get("name") or scenario.get("scenario_name"),
+        "hash_scope": scenario.get("_run_hash_scope") or scenario.get("_execution_id"),
+        "dedupe_field": step.get("dedupe_field"),
+        "tags": step.get("tags", ""),
+        "item_level": int(step.get("item_level") or (1 if strategy in COMMENT_STRATEGIES else 0)),
+        "parent_id": parent_id,
+        "parent_post_id": parent_post_id,
+        "post_key": step.get("post_key") or ctx.get("last_post_key"),
+        "max_items": int(step.get("max_items") or 50),
+        "source_index": int(ctx.get("_loop_iter", 0) or 0),
+        "persist": bool(collection),
+        "return_items": return_items,
+        "package_name": step.get("package_name") or step.get("current_package") or "",
+    }
+    for key in (
+        "comment_scroll_passes",
+        "comment_scroll_distance",
+        "comment_scroll_duration_ms",
+        "comment_scroll_pause_s",
+        "comment_no_growth_break",
+        "min_comment_scan_passes",
+        "expand_see_more",
+        "expand_see_more_max_passes",
+        "expand_see_more_scroll",
+        "expand_see_more_scroll_distance",
+        "expand_completion_retries",
+        "expand_see_more_wall_s",
+        "expand_see_more_fast",
+        "expand_see_more_xml_probe",
+        "expand_see_more_xml_probe_first",
+        "expand_selector_max_s",
+        "expand_see_more_xml_fallback",
+        "expand_selector_timeout_s",
+        "hierarchy_compressed",
+        "allow_a11y_xml_fallback",
+    ):
+        if key in step:
+            context[key] = step[key]
+    if strategy not in COMMENT_STRATEGIES and "expand_see_more" not in context:
+        from services.extract_profiles import DEFAULT_EXTRACT_PROFILE, get_profile_defaults
+        from services.scenario_step_contract import resolve_extract_profile
+
+        profile_name = resolve_extract_profile(step)
+        expand_defaults = get_profile_defaults(profile_name, strategy)
+        if not expand_defaults and strategy.endswith("_posts"):
+            expand_defaults = get_profile_defaults(profile_name, "fb_posts")
+        for ek, ev in expand_defaults.items():
+            context.setdefault(ek, ev)
+        context.setdefault("expand_see_more", True)
+        context.setdefault("expand_see_more_fast", True)
+        context.setdefault("expand_completion_retries", 1)
+        context.setdefault("expand_see_more_wall_s", 18)
+    timeout = float(step.get("edge_extra_timeout_s") or os.environ.get("EDGE_EXTRA_TIMEOUT_S", "60"))
+    try:
+        summary = device.request_extra_data_xml(
+            strategy=strategy,
+            context=context,
+            timeout=timeout,
+        )
+    except Exception as exc:
+        log.warning("[%s] edge extra_data failed before request: %s", serial, exc)
+        return False
+    if not summary.get("ok"):
+        log.warning("[%s] edge extra_data failed: %s", serial, summary.get("error") or summary)
+        result["ok"] = False
+        result["message"] = f"edge extra_data failed: {summary.get('error') or 'unknown'}"
+        result["edge_extra_summary"] = summary
+        return True
+    ingest = summary.get("ingest") if isinstance(summary.get("ingest"), dict) else summary
+    parsed_count = int(ingest.get("parsed_count", 0) or 0)
+    inserted_count = int(ingest.get("inserted_count", 0) or 0)
+    duplicate_count = int(ingest.get("duplicate_count", 0) or 0)
+    result["extracted"] = inserted_count if collection else parsed_count
+    result["duplicate_count"] = duplicate_count
+    edge_extra_summary = ingest
+    if not return_items and isinstance(ingest.get("items"), list):
+        edge_extra_summary = {k: v for k, v in ingest.items() if k != "items"}
+        edge_extra_summary["items_omitted"] = len(ingest["items"])
+    result["edge_extra_summary"] = edge_extra_summary
+    result["reason_code"] = ((ingest.get("diagnostic") or {}) if isinstance(ingest.get("diagnostic"), dict) else {}).get("reason_code", "ok")
+    items = ingest.get("items") if return_items and isinstance(ingest.get("items"), list) else []
+    if items:
+        _store_returned_items(ctx, strategy, step, items)
+        result["items"] = len(items)
+    result["message"] = (
+        f"edge extra_data {strategy}: parsed={parsed_count} "
+        f"inserted={inserted_count} duplicate={duplicate_count}"
+    )
+    log.info("[%s] %s", serial, result["message"])
+    return True
+
+
+_COMMENT_FILTER_MODES = frozenset({"most_relevant", "newest", "all_comments"})
+
+
+def resolve_step_comment_filter(step: Dict[str, Any]) -> Optional[str]:
+    """Target FB comment sort: most_relevant | newest | all_comments, or None to skip."""
+    raw = step.get("comment_filter")
+    if raw is not None and str(raw).strip():
+        mode = str(raw).strip().lower()
+        if mode in ("none", "skip", "off", "no", "default", "keep"):
+            return None
+        if mode in _COMMENT_FILTER_MODES:
+            return mode
+    if step.get("switch_to_all_comments") is False:
+        return None
+    return "all_comments"
+
+
+def request_edge_comment_target(
+    *,
+    device: Any,
+    serial: str,
+    ctx: Dict[str, Any],
+    scenario: Dict[str, Any],
+    step: Dict[str, Any],
+    result: Dict[str, Any],
+) -> dict[str, Any] | None:
+    if not _relay_extra_data_available(device):
+        result["ok"] = False
+        result["message"] = "tap_fb_comment_button: no relay for device"
+        return None
+    context = {
+        "schema_version": 1,
+        "context_id": scenario.get("_execution_id") or scenario.get("_run_hash_scope") or serial,
+        "execution_id": scenario.get("_execution_id"),
+        "campaign_id": scenario.get("_campaign_id"),
+        "user_id": _resolve_user_id_for_edge(serial, scenario),
+        "device_serial": serial,
+        "hash_scope": scenario.get("_run_hash_scope") or scenario.get("_execution_id"),
+        "dedupe_field": step.get("dedupe_field") or "post_key",
+        "source_index": int(ctx.get("_loop_iter", 0) or 0),
+        "switch_to_all_comments": bool(step.get("switch_to_all_comments", True)),
+        "post_tap_wait_s": float(step.get("post_tap_wait_s", 0.8) or 0.8),
+        "comment_filter_step_pause_s": float(step.get("comment_filter_step_pause_s", 0.45) or 0.45),
+    }
+    timeout = float(
+        step.get("edge_extra_timeout_s")
+        or os.environ.get("EDGE_COMMENT_TARGET_TIMEOUT_S", "12")
+    )
+    try:
+        strategy = "fb_comment_target_tap" if _env_bool("EDGE_COMMENT_TARGET_AGENT_TAP", True) else "fb_comment_target"
+        summary = device.request_extra_data_xml(
+            strategy=strategy,
+            context=context,
+            timeout=timeout,
+        )
+    except Exception as exc:
+        result["ok"] = False
+        result["message"] = f"tap_fb_comment_button: edge target request failed: {exc}"
+        return None
+    if not summary.get("ok"):
+        result["ok"] = False
+        result["edge_extra_summary"] = summary
+        result["message"] = f"tap_fb_comment_button: edge target failed: {summary.get('error') or 'unknown'}"
+        return None
+    ingest = summary.get("ingest") if isinstance(summary.get("ingest"), dict) else summary
+    diagnostic = ingest.get("diagnostic") if isinstance(ingest.get("diagnostic"), dict) else {}
+    target = diagnostic.get("target") if isinstance(diagnostic.get("target"), dict) else None
+    if target is not None:
+        target["_agent_tapped"] = bool(summary.get("agent_tapped"))
+    result["edge_extra_summary"] = ingest
+    result["agent_tapped"] = bool(summary.get("agent_tapped"))
+    result["reason_code"] = diagnostic.get("reason_code", "unknown")
+    return target
+
+
+def run_edge_comment_filter_switch(
+    *,
+    device: Any,
+    serial: str,
+    scenario: Dict[str, Any],
+    step: Dict[str, Any],
+    result: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Drive FB comment sort sheet via agent-boot (open sheet, tap chosen option)."""
+    target_filter = resolve_step_comment_filter(step)
+    report: Dict[str, Any] = {
+        "enabled": target_filter is not None,
+        "target_filter": target_filter,
+        "switched": False,
+        "steps": [],
+    }
+    if not target_filter:
+        report["reason_code"] = "disabled"
+        return report
+
+    if not _relay_extra_data_available(device):
+        report["reason_code"] = "no_relay"
+        return report
+
+    wait_s = float(step.get("post_tap_wait_s", 0.8) or 0.8)
+    context = {
+        "schema_version": 1,
+        "context_id": scenario.get("_execution_id") or scenario.get("_run_hash_scope") or serial,
+        "execution_id": scenario.get("_execution_id"),
+        "campaign_id": scenario.get("_campaign_id"),
+        "user_id": _resolve_user_id_for_edge(serial, scenario),
+        "device_serial": serial,
+        "comment_filter": target_filter,
+        "switch_to_all_comments": True,
+        "post_tap_wait_s": wait_s,
+        "comment_filter_step_pause_s": float(step.get("comment_filter_step_pause_s", 0.45) or 0.45),
+    }
+    timeout = float(
+        step.get("edge_extra_timeout_s")
+        or os.environ.get("EDGE_COMMENT_FILTER_TIMEOUT_S", "10")
+    )
+    step_pause = float(step.get("comment_filter_step_pause_s", 0.35) or 0.35)
+
+    if _env_bool("EDGE_COMMENT_FILTER_AGENT_APPLY", True):
+        apply_timeout = float(
+            step.get("edge_extra_timeout_s")
+            or os.environ.get("EDGE_COMMENT_FILTER_APPLY_TIMEOUT_S", "18")
+        )
+        try:
+            summary = device.request_extra_data_xml(
+                strategy="fb_comment_filter_apply",
+                context=context,
+                timeout=apply_timeout,
+            )
+        except Exception as exc:
+            report["reason_code"] = "request_failed"
+            report["error"] = str(exc)
+            result["edge_filter_summary"] = report
+            return report
+        if not summary.get("ok"):
+            report["reason_code"] = "ingest_failed"
+            report["error"] = summary.get("error")
+            result["edge_filter_summary"] = report
+            return report
+        ingest = summary.get("ingest") if isinstance(summary.get("ingest"), dict) else summary
+        diagnostic = ingest.get("diagnostic") if isinstance(ingest.get("diagnostic"), dict) else {}
+        report["steps"] = list(diagnostic.get("steps") or [])
+        report["switched"] = bool(diagnostic.get("switched"))
+        report["reason_code"] = str(diagnostic.get("reason_code") or "ok")
+        result["edge_filter_summary"] = report
+        return report
+
+    for _ in range(3):
+        try:
+            summary = device.request_extra_data_xml(
+                strategy="fb_comment_filter_next",
+                context=context,
+                timeout=timeout,
+            )
+        except Exception as exc:
+            report["reason_code"] = "request_failed"
+            report["error"] = str(exc)
+            break
+        if not summary.get("ok"):
+            report["reason_code"] = "ingest_failed"
+            report["error"] = summary.get("error")
+            break
+        ingest = summary.get("ingest") if isinstance(summary.get("ingest"), dict) else summary
+        diagnostic = ingest.get("diagnostic") if isinstance(ingest.get("diagnostic"), dict) else {}
+        phase = str(diagnostic.get("phase") or "done")
+        reason = str(diagnostic.get("reason_code") or "")
+        step_info = {"phase": phase, "reason_code": reason}
+        report["steps"].append(step_info)
+        if phase in {"done", "error"}:
+            if reason in {"already_on_filter", "already_all_comments"}:
+                report["switched"] = True
+            report["reason_code"] = reason or phase
+            break
+        tap = diagnostic.get("tap") if isinstance(diagnostic.get("tap"), dict) else None
+        bounds = tap.get("bounds") if tap else None
+        if not isinstance(bounds, list) or len(bounds) != 4:
+            report["reason_code"] = reason or "tap_missing"
+            break
+        x1, y1, x2, y2 = [int(v) for v in bounds]
+        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+        try:
+            device.tap(cx, cy)
+            step_info["tapped_at"] = [cx, cy]
+        except Exception as exc:
+            report["reason_code"] = "tap_failed"
+            report["error"] = str(exc)
+            break
+        if phase in {"select_option", "select_all"}:
+            report["switched"] = True
+            report["reason_code"] = reason or "ok"
+            break
+        if step_pause > 0:
+            time.sleep(step_pause)
+    else:
+        if "reason_code" not in report:
+            report["reason_code"] = "max_steps"
+    result["edge_filter_summary"] = report
+    return report
+
+
+def _try_edge_extra_data(sc: ScenarioContext, step: Dict[str, Any], strategy: str, result: Dict[str, Any]) -> bool:
+    return request_edge_extra_data(
+        device=sc.device,
+        serial=sc.serial,
+        ctx=sc.ctx,
+        scenario=sc.scenario,
+        step=step,
+        strategy=strategy,
+        result=result,
+    )
 
 @register_step("extract")
 def handle_extract(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
-    serial = sc.serial
-    device = sc.device
-    ctx = sc.ctx
+    from services.scenario_step_contract import normalize_extract_step
 
+    step = normalize_extract_step(step)
     strategy = str(step.get("strategy", "fb_posts"))
-    stop_if_no_new = bool(step.get("stop_if_no_new", False))
-    no_new_threshold = int(step.get("no_new_threshold", 3))
-    expand_see_more = bool(step.get("expand_see_more", True))
-    _ecr = step.get("expand_completion_retries", 3)
-    completion_retries = max(0, int(3 if _ecr is None else _ecr))
-
-    _em_passes = int(step.get("expand_see_more_max_passes", 2))
-    _em_scroll = bool(step.get("expand_see_more_scroll", False))
-    _em_scroll_dist = float(step.get("expand_see_more_scroll_distance", 0.3))
-    _lazy_rounds = int(step.get("expand_lazy_hydration_rounds", 6))
-    _prefetch_passes = int(step.get("expand_prefetch_scroll_passes", 0) or 0)
-    _lazy_scroll = float(step.get("expand_lazy_scroll_distance", _em_scroll_dist))
-
-    # Pre-expand
-    if strategy == "fb_posts" and expand_see_more:
-        try:
-            from tasks.fb_extract import expand_see_more_with_lazy_hydration
-            expand_see_more_with_lazy_hydration(device, max_rounds=max(3, _lazy_rounds), scroll_distance=max(0.12, _lazy_scroll))
-            time.sleep(0.35)
-        except Exception as exc:
-            log.warning("[%s] extract: pre-expand fb_posts failed: %s", serial, exc)
-
-    if strategy == "fb_comments" and expand_see_more:
-        try:
-            from tasks.fb_extract import _expand_see_more
-            _expand_see_more(device, max_passes=_em_passes, scroll_between=_em_scroll, scroll_distance=_em_scroll_dist)
-            time.sleep(0.55)
-        except Exception as exc:
-            log.warning("[%s] extract: pre-expand fb_comments failed: %s", serial, exc)
-
-    if strategy == "fb_posts" and expand_see_more and _prefetch_passes > 0:
-        try:
-            from tasks.fb_extract import prefetch_viewport_scrolls
-            prefetch_viewport_scrolls(device, passes=_prefetch_passes, distance=max(0.15, _em_scroll_dist),
-                                      pause_s=float(step.get("expand_prefetch_scroll_pause", 0.7)))
-        except Exception as exc:
-            log.warning("[%s] extract: prefetch_viewport_scrolls failed: %s", serial, exc)
-
-    xml = device.hierarchy_xml(force_refresh=True)
-    if not xml:
-        result["ok"] = False
-        result["message"] = "extract: hierarchy_xml returned None"
-        return
-
-    if strategy == "fb_posts":
-        _extract_fb_posts(sc, step, idx, result, xml, expand_see_more, completion_retries,
-                          _lazy_rounds, _lazy_scroll, stop_if_no_new, no_new_threshold)
-    elif strategy == "text_nodes":
-        _extract_text_nodes(sc, result, xml)
-    elif strategy == "fb_comments":
-        _extract_fb_comments(sc, step, idx, result, xml, stop_if_no_new, no_new_threshold)
-    elif strategy in ("ig_posts", "tiktok_posts", "linkedin_posts", "auto_posts"):
-        # Phase 3 — multi-platform extraction via BasePlatformParser.
-        _extract_multi_platform(sc, step, idx, result, xml, strategy)
-    elif strategy in ("ig_comments", "tiktok_comments", "linkedin_comments"):
-        _extract_multi_platform(sc, step, idx, result, xml, strategy)
-    else:
-        result["ok"] = False
-        result["message"] = f"extract: unknown strategy {strategy!r}"
-        return
-
-    # Inline auto-save (F1.4 save-partial)
-    # Originally gated on result.ok=True so failed-step extractions never
-    # persisted. Now: save regardless, so partial progress survives scenario
-    # aborts (session-death, stale frame, scroll fail). Dedup by content_hash
-    # at content_store layer makes re-runs idempotent.
-    _auto_save_coll = step.get("collection")
-    if _auto_save_coll:
-        _do_inline_auto_save(sc, step, strategy, result, _auto_save_coll)
-
-
-def _parse_posts_with_diag(xml: str, source_index: int) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-   
-    from tasks.fb_extract import (
-        _hierarchy_is_fb_comment_sheet,
-        _parse_xml,
-        parse_fb_posts_from_xml,
-        parse_fb_posts_from_xml_with_diagnostic,
-        is_fb_post_truncated,
-    )
-    root = _parse_xml(xml)
-    is_comment_sheet = bool(root is not None and _hierarchy_is_fb_comment_sheet(root))
-    posts = parse_fb_posts_from_xml(xml, source_index=source_index)
-    if posts:
-        return posts, {
-            "reason_code": "ok",
-            "posts_returned": len(posts),
-            "truncated_post_count": sum(1 for p in posts if is_fb_post_truncated(p)),
-            "candidate_clusters": len(posts),
-            "filtered_junk_count": 0,
-            "locale_tokens_hit": [],
-            "comment_sheet": is_comment_sheet,
-        }
-    if is_comment_sheet:
-        # Expanded Facebook views can be rendered as "comment sheet" while still
-        # containing a valid post body. We now let parser attempt extraction first;
-        # if nothing is found, treat as expected empty instead of hard wrong-screen.
-        return [], {
-            "reason_code": "comment_sheet_no_posts_expected",
-            "posts_returned": 0,
-            "truncated_post_count": 0,
-            "candidate_clusters": 0,
-            "filtered_junk_count": 0,
-            "locale_tokens_hit": [],
-            "comment_sheet": True,
-        }
-    _, diag = parse_fb_posts_from_xml_with_diagnostic(xml, source_index=source_index)
-    return posts, diag
-
-
-def _parse_comments_with_diag(
-    xml: str, parent_post_id: Optional[str], max_items: int,
-) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    """Same adapter pattern for comments — preserves test mocks."""
-    from tasks.fb_extract import (
-        _parse_xml,
-        _resolve_comment_region_anchors,
-        parse_fb_comments_from_xml,
-        parse_fb_comments_from_xml_with_diagnostic,
-    )
-    rows = parse_fb_comments_from_xml(xml, parent_post_id=parent_post_id, max_items=max_items)
-    if rows:
-        anchor_found = False
-        root = _parse_xml(xml)
-        if root is not None:
-            action_btn_y2, _action_btn_y_mid, _comment_y_max = _resolve_comment_region_anchors(
-                root,
-                parent_post_id,
-            )
-            anchor_found = action_btn_y2 is not None
-        body_rows = [r for r in rows if r.get("_type") != "post_stats"]
-        return rows, {
-            "reason_code": "ok",
-            "comments_returned": len(body_rows),
-            "anchor_button_found": anchor_found,
-            "nodes_in_band": len(rows),
-            "candidate_clusters": len(rows),
-            "locale_tokens_hit": [],
-            "has_header_stats": any(r.get("_type") == "post_stats" for r in rows),
-        }
-    _, diag = parse_fb_comments_from_xml_with_diagnostic(
-        xml, parent_post_id=parent_post_id, max_items=max_items,
-    )
-    return rows, diag
-
-
-def _extract_fb_posts(sc, step, idx, result, xml, expand_see_more, completion_retries, _lazy_rounds, _lazy_scroll, stop_if_no_new, no_new_threshold):
-    from tasks.fb_extract import (
-        _dedup,
-        is_fb_post_truncated,
-        expand_see_more_with_lazy_hydration,
-    )
-    from services.content_store import compute_content_hash
-
-    serial = sc.serial
-    device = sc.device
-    ctx = sc.ctx
-    scroll_idx = ctx.get("_loop_iter", 0)
-    new_posts, diagnostic = _parse_posts_with_diag(xml, source_index=scroll_idx)
-    reason_code = diagnostic.get("reason_code", "unknown")
-
-    # F1.8 session-death — short-circuit, do NOT treat as retriable empty feed.
-    if reason_code in ("login_screen", "rate_limited"):
-        ctx["_session_dead_reason"] = reason_code
-        ctx["_break"] = True
-        result["ok"] = False
-        result["reason_code"] = reason_code
-        result["message"] = f"extract fb_posts: {reason_code} detected — aborting scenario"
-        result["extract_diagnostic"] = diagnostic
-        execution_id = (sc.scenario or {}).get("_execution_id")
-        bundle = capture_failure_bundle(
-            device, ctx, execution_id, idx,
-            reason=reason_code, xml=xml, diagnostic=diagnostic,
-        )
-        if bundle:
-            result["failure_bundle"] = bundle
-        _emit_extraction_event(sc, idx, diagnostic, posts_added=0, bundle_path=bundle)
-        log.warning("[%s] %s", serial, result["message"])
-        return
-
-    def _snapshot(posts: List[Dict[str, Any]]) -> Tuple[int, int]:
-        unresolved = sum(1 for p in posts if is_fb_post_truncated(p))
-        total_len = sum(len(str(p.get("text") or "")) for p in posts)
-        return unresolved, total_len
-
-    unresolved_first, total_len_first = _snapshot(new_posts)
-
-    if expand_see_more and any(is_fb_post_truncated(p) for p in new_posts):
-        try:
-            expand_see_more_with_lazy_hydration(device, max_rounds=max(2, min(_lazy_rounds, 5)), scroll_distance=max(0.12, _lazy_scroll))
-            xml_h = device.hierarchy_xml(force_refresh=True)
-            if xml_h:
-                retry_posts, _ = _parse_posts_with_diag(xml_h, source_index=scroll_idx)
-                new_posts = _dedup(new_posts + retry_posts)
-        except Exception as exc:
-            log.warning("[%s] extract: mid-parse expand failed: %s", serial, exc)
-
-    unresolved_before, total_len_before = _snapshot(new_posts)
-    retries_done = 0
-    plateau = 0
-    if expand_see_more and unresolved_before > 0:
-        max_retries = max(1, min(4, completion_retries))
-        prev_unresolved, prev_total_len = unresolved_before, total_len_before
-        for _ in range(max_retries):
-            retries_done += 1
-            try:
-                expand_see_more_with_lazy_hydration(device, max_rounds=max(3, min(_lazy_rounds, 8)), scroll_distance=max(0.12, _lazy_scroll))
-                time.sleep(0.6)
-                xml_retry = device.hierarchy_xml(force_refresh=True)
-                if not xml_retry:
-                    break
-                retry_posts, _ = _parse_posts_with_diag(xml_retry, source_index=scroll_idx)
-                candidate_posts = _dedup(new_posts + (retry_posts or []))
-                curr_unresolved, curr_total_len = _snapshot(candidate_posts)
-                improved = curr_unresolved < prev_unresolved or curr_total_len > prev_total_len + 20
-                new_posts = candidate_posts
-                if improved:
-                    plateau = 0
-                else:
-                    plateau += 1
-                prev_unresolved, prev_total_len = curr_unresolved, curr_total_len
-                if curr_unresolved == 0 or plateau >= 2:
-                    break
-            except Exception as exc:
-                log.warning("[%s] extract: expand_completion retry failed: %s", serial, exc)
-                break
-
-    unresolved_after, total_len_after = _snapshot(new_posts)
-    result["extract_diagnostics"] = {
-        "unresolved_first_parse": unresolved_first, "total_len_first_parse": total_len_first,
-        "unresolved_before": unresolved_before, "unresolved_after": unresolved_after,
-        "total_len_before": total_len_before, "total_len_after": total_len_after,
-        "completion_retries": retries_done, "plateau_count": plateau,
-    }
-    prev_count = len(ctx["posts"])
-    ctx["posts"] = _dedup(ctx["posts"] + new_posts)
-    added = len(ctx["posts"]) - prev_count
-    result["extracted"] = added
-    result["total_posts"] = len(ctx["posts"])
-    result["message"] = f"extract fb_posts: +{added} new (total {len(ctx['posts'])})"
-    log.info(f"[{serial}] {result['message']}")
-
-    dedupe_field = str(step.get("dedupe_field") or "post_key")
-    ctx["_fb_posts_dedupe_field"] = dedupe_field
-    if new_posts:
-        ctx["_first_new_post_hash"] = compute_content_hash(new_posts[0], dedupe_field=dedupe_field)
-        # Accumulate pid→hash across batches so tap_fb_comment_button (or a
-        # late tap on a cached post) can still resolve the parent hash.
-        pid_map = ctx.setdefault("_post_id_map", {})
-        for p in new_posts:
-            _pid = p.get("_pid")
-            if _pid:
-                pid_map[_pid] = compute_content_hash(p, dedupe_field=dedupe_field)
-        _tpid = new_posts[0].get("_pid")
-        if _tpid:
-            ctx["_fb_comment_parent_pid"] = _tpid
-        else:
-            ctx.pop("_fb_comment_parent_pid", None)
-    else:
-        ctx.pop("_fb_comment_parent_pid", None)
-
-    # F1.7 — only count "parser OK but feed returned nothing" toward no-new
-    # streak. If parser failed (anchor_not_found, no_candidates, etc), we
-    # should NOT exit the loop — those are retriable/diagnostic failures, not
-    # end-of-feed.
-    if stop_if_no_new:
-        if added == 0 and reason_code == "ok":
-            _base_streak = ctx.get("_no_new_posts_streak", ctx.get("_no_new_streak", 0))
-            ctx["_no_new_posts_streak"] = _base_streak + 1
-            ctx["_no_new_streak"] = ctx["_no_new_posts_streak"]
-            if ctx["_no_new_posts_streak"] >= no_new_threshold:
-                ctx["_break"] = True
-                result["message"] += f" — breaking (no new for {ctx['_no_new_posts_streak']} scrolls)"
-        elif added > 0:
-            ctx["_no_new_posts_streak"] = 0
-            ctx["_no_new_streak"] = 0
-        # reason_code != "ok" and added == 0: do not touch streak.
-
-    # Failure bundle: any non-ok reason_code that didn't already capture above.
-    bundle_path: Optional[str] = None
-    if reason_code not in ("ok", "comment_sheet_no_posts_expected"):
-        execution_id = (sc.scenario or {}).get("_execution_id")
-        bundle_path = capture_failure_bundle(
-            device, ctx, execution_id, idx,
-            reason=reason_code, xml=xml, diagnostic=diagnostic,
-        )
-        if bundle_path:
-            result["failure_bundle"] = bundle_path
-
-    result["extract_diagnostic"] = diagnostic
-    result["reason_code"] = reason_code
-    _emit_extraction_event(sc, idx, diagnostic, posts_added=added, bundle_path=bundle_path)
-
-
-def _extract_text_nodes(sc, result, xml):
-    try:
-        root = ET.fromstring(xml)
-        texts = []
-        for node in root.iter():
-            t2 = (node.get("text") or "").strip()
-            if t2 and len(t2) > 2:
-                texts.append(t2)
-        sc.ctx.setdefault("text_nodes", [])
-        sc.ctx["text_nodes"].extend(texts)
-        result["extracted"] = len(texts)
-        result["message"] = f"extract text_nodes: {len(texts)} texts"
-    except Exception as exc:
-        result["ok"] = False
-        result["message"] = f"extract text_nodes failed: {exc}"
-
-
-def _extract_fb_comments(sc, step, idx, result, xml, stop_if_no_new, no_new_threshold):
-    from tasks.fb_extract import (
-        _dedup_comments,
-        _is_junk_parsed_comment_row,
-        _post_id_from_ctx,
-    )
-    from services.content_store import compute_content_hash
-
-    serial = sc.serial
-    ctx = sc.ctx
-    ctx["_active_comment_parent_hash"] = None
-    parent_post_id_var = step.get("parent_post_id_var")
-    max_items = int(step.get("max_items") or 50)
-    comment_scroll_passes = max(0, int(step.get("comment_scroll_passes", 0) or 0))
-    min_comment_scan_passes = max(0, int(step.get("min_comment_scan_passes", 0) or 0))
-    comment_no_growth_break = max(0, int(step.get("comment_no_growth_break", 0) or 0))
-    comment_scroll_distance = max(0.12, min(0.45, float(step.get("comment_scroll_distance", 0.28) or 0.28)))
-    comment_scroll_pause_s = max(0.1, float(step.get("comment_scroll_pause_s", 0.4) or 0.4))
-    comment_scroll_duration_ms = max(220, min(900, int(step.get("comment_scroll_duration_ms", 360) or 360)))
-    parent_post_id = _post_id_from_ctx(ctx, parent_post_id_var)
-    raw_items, cdiag = _parse_comments_with_diag(
-        xml, parent_post_id=parent_post_id, max_items=max_items,
-    )
-    creason = cdiag.get("reason_code", "unknown")
-    if creason in {"no_nodes_in_band", "empty_cluster"}:
-        # Transitional frame after comment-tap can still look like feed for a
-        # short moment. Retry a couple of fresh snapshots before giving up.
-        for _ in range(2):
-            time.sleep(0.35)
-            xml_retry = sc.device.hierarchy_xml(force_refresh=True)
-            if not xml_retry:
-                continue
-            rows_retry, diag_retry = _parse_comments_with_diag(
-                xml_retry, parent_post_id=parent_post_id, max_items=max_items,
-            )
-            reason_retry = diag_retry.get("reason_code", "unknown")
-            if reason_retry == "ok":
-                raw_items, cdiag, creason = rows_retry, diag_retry, reason_retry
-                break
-
-    # F1.8 session-death — short-circuit on comment screen too.
-    if creason in ("login_screen", "rate_limited"):
-        ctx["_session_dead_reason"] = creason
-        ctx["_break"] = True
-        result["ok"] = False
-        result["reason_code"] = creason
-        result["message"] = f"extract fb_comments: {creason} detected — aborting scenario"
-        result["extract_diagnostic"] = cdiag
-        execution_id = (sc.scenario or {}).get("_execution_id")
-        bundle = capture_failure_bundle(
-            sc.device, ctx, execution_id, idx,
-            reason=creason, xml=xml, diagnostic=cdiag,
-        )
-        if bundle:
-            result["failure_bundle"] = bundle
-        log.warning("[%s] %s", serial, result["message"])
-        return
-
-    post_stats = next((x for x in raw_items if x.get("_type") == "post_stats"), None)
-    new_comments = [x for x in raw_items if x.get("_type") != "post_stats" and not _is_junk_parsed_comment_row(x)]
-    # Progressive comment scan: pull more comments by scrolling in-sheet and
-    # merging snapshots. This uses template knobs that were previously ignored.
-    all_comments = list(new_comments)
-    no_growth_streak = 0
-    scan_passes_done = 0
-    if comment_scroll_passes > 0:
-        for _ in range(comment_scroll_passes):
-            if len(all_comments) >= max_items:
-                break
-            try:
-                sx = int(sc.w * 0.55)
-                sy1_ratio = 0.74
-                sy2_ratio = max(0.2, sy1_ratio - comment_scroll_distance)
-                sy1 = int(sc.h * sy1_ratio)
-                sy2 = int(sc.h * sy2_ratio)
-                sc.device.swipe(sx, sy1, sx, sy2, duration_ms=comment_scroll_duration_ms)
-                time.sleep(comment_scroll_pause_s)
-                xml_next = sc.device.hierarchy_xml(force_refresh=True)
-                if not xml_next:
-                    no_growth_streak += 1
-                else:
-                    rows_next, _diag_next = _parse_comments_with_diag(
-                        xml_next, parent_post_id=parent_post_id, max_items=max_items,
-                    )
-                    if _diag_next.get("reason_code") == "ok":
-                        ps_next = next((x for x in rows_next if x.get("_type") == "post_stats"), None)
-                        if ps_next and post_stats is None:
-                            post_stats = ps_next
-                    comments_next = [
-                        x for x in rows_next
-                        if x.get("_type") != "post_stats" and not _is_junk_parsed_comment_row(x)
-                    ]
-                    before = len(all_comments)
-                    all_comments = _dedup_comments(all_comments + comments_next)
-                    grew = len(all_comments) > before
-                    no_growth_streak = 0 if grew else (no_growth_streak + 1)
-                scan_passes_done += 1
-                if comment_no_growth_break > 0 and scan_passes_done >= min_comment_scan_passes:
-                    if no_growth_streak >= comment_no_growth_break:
-                        break
-            except Exception:
-                no_growth_streak += 1
-                scan_passes_done += 1
-                if comment_no_growth_break > 0 and scan_passes_done >= min_comment_scan_passes:
-                    if no_growth_streak >= comment_no_growth_break:
-                        break
-
-    parent_hash = resolve_comment_parent_hash(ctx, parent_post_id)
-    result["parent_hash_source"] = ctx.get("_comment_parent_resolve_source")
-    if parent_hash:
-        ctx["_active_comment_parent_hash"] = parent_hash
-
-    # In many FB layouts, comment sheet omits like/share text. Fallback to
-    # the already-extracted parent post stats from feed context.
-    post_stats_source = "comment_sheet"
-    if post_stats is None and parent_hash:
-        dedupe_field = str(ctx.get("_fb_posts_dedupe_field") or step.get("dedupe_field") or "post_key")
-        for post in (ctx.get("posts") or []):
-            try:
-                if compute_content_hash(post, dedupe_field=dedupe_field) != parent_hash:
-                    continue
-            except Exception:
-                continue
-            post_stats = {
-                "_type": "post_stats",
-                "reactions": post.get("reactions"),
-                "shares": post.get("shares"),
-                "comments": post.get("comments"),
-            }
-            post_stats_source = "feed_parent_fallback"
-            break
-
-    if post_stats:
-        if post_stats_source == "comment_sheet" and parent_hash:
-            dedupe_field = str(ctx.get("_fb_posts_dedupe_field") or step.get("dedupe_field") or "post_key")
-            for post in (ctx.get("posts") or []):
-                try:
-                    if compute_content_hash(post, dedupe_field=dedupe_field) != parent_hash:
-                        continue
-                except Exception:
-                    continue
-                post_stats["reactions"] = post_stats.get("reactions") or post.get("reactions")
-                post_stats["shares"] = post_stats.get("shares") or post.get("shares")
-                post_stats["comments"] = post_stats.get("comments") or post.get("comments")
-                break
-        ctx["_comment_view_stats"] = post_stats
-        result["post_stats_source"] = post_stats_source
-        if parent_hash:
-            try:
-                from db.database import activity_session, run_activity_coro
-                from db.crud.content import update_content_stats
-                from services.content_store import _safe_int
-                _ph, _ps, _serial = parent_hash, post_stats, serial
-
-                async def _do_update_stats():
-                    async with activity_session() as _db:
-                        updated = await update_content_stats(
-                            _db, content_hash=_ph,
-                            likes_count=_safe_int(_ps.get("reactions")),
-                            shares_count=_safe_int(_ps.get("shares")),
-                            comments_count=_safe_int(_ps.get("comments")),
-                        )
-                        if updated:
-                            await _db.commit()
-                            log.info(
-                                f"[{_serial}] post stats updated: hash={_ph[:12]} "
-                                f"reactions={_ps.get('reactions')} "
-                                f"shares={_ps.get('shares')} "
-                                f"comments={_ps.get('comments')} source={post_stats_source}"
-                            )
-
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                    pool.submit(run_activity_coro, _do_update_stats()).result(timeout=10)
-            except Exception as exc:
-                log.warning(f"[{serial}] update_content_stats failed: {exc}")
-
-    ctx.setdefault("comments", [])
-    prev_count = len(ctx["comments"])
-    ctx["comments"] = _dedup_comments(ctx["comments"] + all_comments)
-    added = len(ctx["comments"]) - prev_count
-    result["extracted"] = added
-    result["total_comments"] = len(ctx["comments"])
-    result["parent_post_id"] = parent_post_id
-    result["post_stats"] = post_stats
-    result["comment_scan_passes"] = scan_passes_done
-    result["message"] = f"extract fb_comments: +{added} new (total {len(ctx['comments'])}, post={parent_post_id})"
-
-    if stop_if_no_new:
-        if added == 0 and creason == "ok":
-            ctx["_no_new_comments_streak"] = ctx.get("_no_new_comments_streak", 0) + 1
-            ctx["_no_new_streak"] = ctx["_no_new_comments_streak"]
-            if ctx["_no_new_comments_streak"] >= no_new_threshold:
-                ctx["_break"] = True
-                result["message"] += f" — breaking comments loop (no new for {ctx['_no_new_comments_streak']} scrolls)"
-        elif added > 0:
-            ctx["_no_new_comments_streak"] = 0
-            ctx["_no_new_streak"] = 0
-
-    # Failure bundle for non-OK parse reasons.
-    if creason not in ("ok",):
-        execution_id = (sc.scenario or {}).get("_execution_id")
-        bundle_path = capture_failure_bundle(
-            sc.device, ctx, execution_id, idx,
-            reason=creason, xml=xml, diagnostic=cdiag,
-        )
-        if bundle_path:
-            result["failure_bundle"] = bundle_path
-    result["extract_diagnostic"] = cdiag
-    result["reason_code"] = creason
-    log.info(f"[{serial}] {result['message']}")
-
-
-def _do_inline_auto_save(sc, step, strategy, result, collection):
-    try:
-        from services.content_store import save_content_item
-
-        data_var = "comments" if strategy == "fb_comments" else ("text_nodes" if strategy == "text_nodes" else "posts")
-        data = sc.ctx.get(data_var, [])
-        items = [it for it in data if isinstance(it, dict)] if isinstance(data, list) else ([data] if isinstance(data, dict) else [])
-
-        if not items:
+    if strategy in EDGE_CONTENT_STRATEGIES:
+        if _try_edge_extra_data(sc, step, strategy, result):
             return
+        result["ok"] = False
+        result["message"] = (
+            f"extract {strategy}: device_farm content XML parser was removed; "
+            "enable edge_extra_data so phone/APK sends XML to agent-boot"
+        )
+        return
 
-        offsets = sc.ctx.setdefault("__save_extraction_offsets__", {})
-        start = int(offsets.get(data_var, 0) or 0)
-        batch = items[start:]
-        if not batch:
-            return
-
-        coll = collection
-        plat = step.get("platform")
-        ctype = step.get("content_type", "post")
-        dedup = step.get("dedupe_field")
-        tags = step.get("tags", "")
-        parent_var = step.get("save_parent_id_var")
-        parent_id = sc.ctx.get(parent_var) if parent_var else None
-        level = int(step.get("item_level") or 0)
-        dserial = sc.device.serial
-        user_id = (sc.scenario.get("_campaign_vars") or {}).get("__USER_ID__")
-        execution_id = sc.scenario.get("_execution_id")   # real DB FK — only set by Temporal
-        run_hash_scope = sc.scenario.get("_run_hash_scope") or execution_id  # per-run dedup scope, no FK
-        campaign_id = sc.scenario.get("_campaign_id")
-        snap = list(batch)
-
-        async def _resolve_user_id() -> str | None:
-            """Fallback to device owner when no auth context, to avoid orphaned data."""
-            if user_id:
-                return user_id
-            try:
-                from db.database import activity_session
-                from db.crud.device import get_device_by_serial
-                async with activity_session() as db:
-                    dev = await get_device_by_serial(db, dserial)
-                    return dev.user_id if dev else None
-            except Exception:
-                return None
-
-        async def _auto_save_all():
-            from db.database import activity_session
-
-            resolved_uid = await _resolve_user_id()
-            sv = dp = er = pc = 0
-            chunk_size = max(1, int(step.get("save_batch_size") or _env_int("EXTRACT_AUTO_SAVE_BATCH_SIZE", 100)))
-            for chunk in _chunks(snap, chunk_size):
-                async with activity_session() as db:
-                    chunk_processed = 0
-                    chunk_saved = 0
-                    chunk_dup = 0
-                    chunk_err = 0
-                    for it in chunk:
-                        try:
-                            r = await save_content_item(
-                                data=it, collection=coll, platform=plat, content_type=ctype,
-                                dedupe_field=dedup, tags=tags, device_serial=dserial,
-                                parent_id=parent_id, item_level=level, user_id=resolved_uid,
-                                campaign_id=campaign_id, execution_id=execution_id,
-                                hash_scope=run_hash_scope, db=db,
-                            )
-                            if r.get("saved"):
-                                chunk_saved += 1
-                            else:
-                                chunk_dup += 1
-                            chunk_processed += 1
-                        except Exception as exc:
-                            chunk_err += 1
-                            log.warning("[%s] extract auto-save failed: %s", dserial, exc)
-                            break
-                    sv += chunk_saved
-                    dp += chunk_dup
-                    er += chunk_err
-                    pc += chunk_processed
-                if chunk_err:
-                    break
-                if len(chunk) >= chunk_size and len(snap) > chunk_size:
-                    try:
-                        await asyncio.sleep(float(os.environ.get("EXTRACT_AUTO_SAVE_CHUNK_PAUSE_S", "0.02")))
-                    except Exception:
-                        pass
-            return sv, dp, er, pc
-
-        from db.database import run_activity_coro
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            saved, dup, err, proc = pool.submit(run_activity_coro, _auto_save_all()).result(timeout=120)
-
-        offsets[data_var] = start + proc
-        result["auto_save"] = {"saved": saved, "duplicate": dup, "errors": err}
-        result["message"] += f" | auto-save: saved={saved}, dup={dup}, err={err}"
-        log.info(f"[{sc.serial}] extract auto-save: saved={saved}, dup={dup}, err={err}")
-    except Exception as exc:
-        log.warning("[%s] extract auto-save failed: %s", sc.serial, exc)
-        result["auto_save_error"] = str(exc)
+    result["ok"] = False
+    result["message"] = f"extract: unknown strategy {strategy!r}"
 
 
 @register_step("extract_text_hierarchy")
@@ -934,69 +854,3 @@ def _summarize_hierarchy_for_llm(xml: str, max_nodes: int = 50) -> str:
         if len(lines) >= max_nodes:
             break
     return "\n".join(lines)
-
-
-def _extract_multi_platform(
-    sc: "ScenarioContext",
-    step: Dict[str, Any],
-    idx: int,
-    result: Dict[str, Any],
-    xml: str,
-    strategy: str,
-) -> None:
-    """Phase 3 — platform-agnostic post/comment extraction via BasePlatformParser.
-
-    Strategies: ig_posts, tiktok_posts, linkedin_posts, auto_posts (detect from
-    current app package), ig_comments, tiktok_comments, linkedin_comments.
-    """
-    from lxml import etree as _etree
-    from tasks.platform_detector import detect_parser, detect_from_hierarchy
-
-    try:
-        xml_root = _etree.fromstring(xml.encode("utf-8") if isinstance(xml, str) else xml)
-    except Exception as exc:
-        result["ok"] = False
-        result["message"] = f"extract_multi: XML parse failed: {exc}"
-        return
-
-    parser = None
-    is_comments = "_comments" in strategy
-    if strategy.startswith("auto_"):
-        pkg = getattr(sc.device, "current_package", None) or ""
-        parser = detect_parser(pkg) if pkg else None
-        if parser is None:
-            parser = detect_from_hierarchy(xml_root)
-    else:
-        platform_code = strategy.split("_", 1)[0]  # "ig", "tiktok", "linkedin"
-        pkg_map = {
-            "ig": "com.instagram.android",
-            "tiktok": "com.zhiliaoapp.musically",
-            "linkedin": "com.linkedin.android",
-        }
-        parser = detect_parser(pkg_map.get(platform_code, ""))
-
-    if parser is None:
-        result["ok"] = False
-        result["message"] = f"extract_multi: no parser for strategy {strategy!r}"
-        return
-
-    try:
-        if is_comments:
-            post_key = str(step.get("post_key") or sc.var_ctx.get("last_post_key") or "")
-            items = parser.parse_comments(xml_root, post_key)
-        else:
-            items = parser.parse_posts(xml_root)
-    except Exception as exc:
-        log.exception("extract_multi: parser %s failed", parser.__class__.__name__)
-        result["ok"] = False
-        result["message"] = f"extract_multi: parser failed: {exc}"
-        return
-
-    # Push into scenario ctx.posts for downstream save steps.
-    posts_bucket = sc.ctx.setdefault("posts", [])
-    for item in items:
-        posts_bucket.append(item.to_dict())
-
-    result["items"] = len(items)
-    result["platform"] = parser.platform
-    result["message"] = f"extract_multi: {len(items)} {parser.platform} items"

@@ -1,61 +1,132 @@
-"""Step handlers: launch_app, open_url, key, scroll_down, scroll_to."""
+"""Step handlers: launch_app, stop_app, clear_app, wait_app, push_file, pull_file, open_url, key, scroll."""
 from __future__ import annotations
 
 import logging
 import time
 from typing import Any, Dict
 
+from tasks.scenario.app_package import parse_step_package
 from tasks.scenario.steps import register_step
 from tasks.scenario.context import ScenarioContext
 
 log = logging.getLogger(__name__)
 
 
+def _poll_u2_ready(device: Any, serial: str, pkg: str) -> None:
+    _u2_poll_start = time.monotonic()
+    while time.monotonic() - _u2_poll_start < 8.0:
+        if getattr(device, "_u2", None) is not None:
+            break
+        time.sleep(0.5)
+    if getattr(device, "_u2", None) is None:
+        log.warning("[%s] launch_app %s: u2 not ready after 8s poll", serial, pkg)
+
+
 @register_step("launch_app")
 def handle_launch_app(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
-    app_field = step.get("app")
-    app_pkg = ""
-    app_component = ""
-    if isinstance(app_field, dict):
-        app_pkg = str(app_field.get("package") or app_field.get("app_package") or "").strip()
-        app_component = str(app_field.get("component") or app_field.get("activity") or "").strip()
-    elif isinstance(app_field, str):
-        app_pkg = app_field.strip()
-
-    raw_pkg = str(step.get("package") or step.get("app_package") or step.get("appPackage") or app_pkg or "").strip()
-    raw_component = str(step.get("component") or step.get("activity") or step.get("title") or app_component or "").strip()
-    pkg = raw_pkg
-    component = ""
-
-    if pkg and "/" in pkg:
-        component = pkg
-        pkg = pkg.split("/", 1)[0].strip()
-    if raw_component and "/" in raw_component:
-        component = raw_component
-        if not pkg:
-            pkg = raw_component.split("/", 1)[0].strip()
-    elif raw_component and not pkg:
-        pkg = raw_component
-
+    pkg, component = parse_step_package(step)
     if not pkg:
         result["ok"] = False
         result["message"] = "launch_app: empty package/component"
-    else:
-        try:
-            sc.device.launch_app(pkg, component=component or None)
-            launch_wait = float(step.get("wait_after", 2.0) or 2.0)
-            time.sleep(launch_wait)
-            log.info(f"[{sc.serial}] launch_app {pkg}: waited {launch_wait}s")
-            _u2_poll_start = time.monotonic()
-            while time.monotonic() - _u2_poll_start < 8.0:
-                if getattr(sc.device, "_u2", None) is not None:
-                    break
-                time.sleep(0.5)
-            if getattr(sc.device, "_u2", None) is None:
-                log.warning(f"[{sc.serial}] launch_app {pkg}: u2 not ready after 8s poll")
-        except Exception as exc:
+        return
+    try:
+        sc.device.launch_app(
+            pkg,
+            component=component or None,
+            stop_before=bool(step.get("stop_before") or step.get("stop")),
+            use_monkey=bool(step.get("use_monkey")),
+        )
+        launch_wait = float(step.get("wait_after", 2.0) or 2.0)
+        time.sleep(launch_wait)
+        log.info("[%s] launch_app %s: waited %ss", sc.serial, pkg, launch_wait)
+        _poll_u2_ready(sc.device, sc.serial, pkg)
+    except Exception as exc:
+        result["ok"] = False
+        result["message"] = f"launch_app({pkg}) failed: {exc}"
+
+
+@register_step("stop_app")
+def handle_stop_app(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
+    pkg, _ = parse_step_package(step)
+    if not pkg:
+        result["ok"] = False
+        result["message"] = "stop_app: empty package"
+        return
+    try:
+        sc.device.stop_app(pkg)
+        log.info("[%s] stop_app %s", sc.serial, pkg)
+    except Exception as exc:
+        result["ok"] = False
+        result["message"] = f"stop_app({pkg}) failed: {exc}"
+
+
+@register_step("clear_app")
+def handle_clear_app(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
+    pkg, _ = parse_step_package(step)
+    if not pkg:
+        result["ok"] = False
+        result["message"] = "clear_app: empty package"
+        return
+    try:
+        sc.device.clear_app(pkg)
+        log.info("[%s] clear_app %s", sc.serial, pkg)
+    except Exception as exc:
+        result["ok"] = False
+        result["message"] = f"clear_app({pkg}) failed: {exc}"
+
+
+@register_step("wait_app")
+def handle_wait_app(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
+    pkg, _ = parse_step_package(step)
+    if not pkg:
+        result["ok"] = False
+        result["message"] = "wait_app: empty package"
+        return
+    timeout = float(step.get("timeout", 20.0) or 20.0)
+    front = bool(step.get("front", True))
+    try:
+        ok = sc.device.wait_app(pkg, front=front, timeout=timeout)
+        if not ok:
             result["ok"] = False
-            result["message"] = f"launch_app({pkg}) failed: {exc}"
+            result["message"] = f"wait_app({pkg}): not in foreground within {timeout}s"
+        else:
+            result["message"] = f"wait_app({pkg}): foreground ok"
+    except Exception as exc:
+        result["ok"] = False
+        result["message"] = f"wait_app({pkg}) failed: {exc}"
+
+
+@register_step("push_file")
+def handle_push_file(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
+    local_path = str(step.get("local_path") or step.get("src") or "").strip()
+    remote_path = str(step.get("remote_path") or step.get("dst") or "").strip()
+    if not local_path or not remote_path:
+        result["ok"] = False
+        result["message"] = "push_file: local_path and remote_path required"
+        return
+    try:
+        mode = step.get("mode")
+        sc.device.push_file(local_path, remote_path, mode=mode)
+        log.info("[%s] push_file %s -> %s", sc.serial, local_path, remote_path)
+    except Exception as exc:
+        result["ok"] = False
+        result["message"] = f"push_file failed: {exc}"
+
+
+@register_step("pull_file")
+def handle_pull_file(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
+    remote_path = str(step.get("remote_path") or step.get("src") or "").strip()
+    local_path = str(step.get("local_path") or step.get("dst") or "").strip()
+    if not local_path or not remote_path:
+        result["ok"] = False
+        result["message"] = "pull_file: local_path and remote_path required"
+        return
+    try:
+        sc.device.pull_file(remote_path, local_path)
+        log.info("[%s] pull_file %s -> %s", sc.serial, remote_path, local_path)
+    except Exception as exc:
+        result["ok"] = False
+        result["message"] = f"pull_file failed: {exc}"
 
 
 @register_step("open_url")
@@ -140,14 +211,17 @@ def handle_scroll_down(sc: ScenarioContext, step: Dict[str, Any], idx: int, resu
 
 @register_step("scroll_to")
 def handle_scroll_to(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
-    by = str(step.get("by") or "text")
-    value = str(step.get("value") or "").strip()
+    from tasks.scenario.utils import resolve_step_selector_fields
+    from services.scenario_selector import selector_summary
+
+    spec, by, value, _ = resolve_step_selector_fields(step)
     direction = str(step.get("direction", "down") or "down")
     max_swipes = int(step.get("max_swipes", 5) or 5)
-    if not value:
+    if spec is None or spec.is_empty():
         result["ok"] = False
-        result["message"] = "scroll_to: empty value"
+        result["message"] = "scroll_to: empty selector"
         return
+    lbl = selector_summary(spec)
 
     sx = sc.w // 2
     if direction == "up":
@@ -159,10 +233,15 @@ def handle_scroll_to(sc: ScenarioContext, step: Dict[str, Any], idx: int, result
     for i in range(max_swipes):
         try:
             u2 = sc.device.u2
-            if u2 is not None and u2.find_element(by, value, timeout=0) is not None:
-                found = True
-                swipes_done = i
-                break
+            if u2 is not None:
+                if hasattr(u2, "find_element_spec"):
+                    hit = u2.find_element_spec(spec, timeout=0) is not None
+                else:
+                    hit = u2.find_element(by, value, timeout=0) is not None
+                if hit:
+                    found = True
+                    swipes_done = i
+                    break
         except Exception:
             pass
         try:
@@ -173,6 +252,6 @@ def handle_scroll_to(sc: ScenarioContext, step: Dict[str, Any], idx: int, result
         swipes_done = i + 1
     if not found:
         result["ok"] = False
-        result["message"] = f"scroll_to {by}={value!r} not found after {max_swipes} swipes"
+        result["message"] = f"scroll_to {lbl} not found after {max_swipes} swipes"
     else:
-        result["message"] = f"scroll_to found {by}={value!r} after {swipes_done} swipe(s)"
+        result["message"] = f"scroll_to found {lbl} after {swipes_done} swipe(s)"

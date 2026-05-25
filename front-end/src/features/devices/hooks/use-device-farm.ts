@@ -119,7 +119,8 @@ export function useDeviceFarm() {
                   touch_method:    msg.touch_method ?? d.touch_method,
                   minitouch_ready: msg.minitouch_ready ?? d.minitouch_ready,
                   u2_ready:        msg.u2_ready ?? d.u2_ready,
-                  scenario_active: msg.scenario_active ?? d.scenario_active,
+                  scenario_active:
+                    'scenario_active' in msg ? (msg.scenario_active ?? 0) : d.scenario_active,
                 }
               : d
           );

@@ -94,18 +94,29 @@ function mergeArray(arr: FlowStep[], fgId: string, patch: Partial<FlowStep> | ((
   return arr.map((x) => mergeOne(x, fgId, patch));
 }
 
-function mergeSelectorOntoStep(step: FlowStep, by: string, value: string): FlowStep {
+function mergeSelectorOntoStep(step: FlowStep, pick: { by: string; value: string; conditions?: Record<string, unknown>; instance?: number }): FlowStep {
+  const { by, value } = pick;
+  const selector = {
+    by,
+    value,
+    ...(pick.conditions && Object.keys(pick.conditions).length > 0 ? { conditions: pick.conditions } : {}),
+    ...(pick.instance != null ? { instance: pick.instance } : {}),
+  };
   if (step.type === 'tap') {
-    return { ...step, selector: { by, value } } as FlowStep;
+    return { ...step, selector, by, value } as FlowStep;
   }
-  return { ...step, by, value } as FlowStep;
+  return { ...step, selector, by, value } as FlowStep;
 }
 
 /** Apply mirror-picked selector to the step with this flowgram node id (shallow selector fields only). */
-export function mergeSelectorByFlowgramId(steps: FlowStep[], fgId: string, by: string, value: string): FlowStep[] {
+export function mergeSelectorByFlowgramId(
+  steps: FlowStep[],
+  fgId: string,
+  pick: { by: string; value: string; conditions?: Record<string, unknown>; instance?: number },
+): FlowStep[] {
   return mergeStepByFlowgramId(steps, fgId, (prev) => {
     if (!SELECTOR_STEP_TYPES.has(prev.type)) return prev;
-    return mergeSelectorOntoStep(prev, by, value);
+    return mergeSelectorOntoStep(prev, pick);
   });
 }
 

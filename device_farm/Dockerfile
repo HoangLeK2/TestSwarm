@@ -75,9 +75,9 @@ COPY --chown=farm:farm . .
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONPATH="/app"
 
-# Create directories for runtime data
-RUN mkdir -p /app/captures /app/data && \
-    chown -R farm:farm /app/captures /app/data
+# Create directories for runtime data (/app is root-owned; farm cannot mkdir here)
+RUN mkdir -p /app/captures /app/data /app/logs && \
+    chown -R farm:farm /app
 
 USER farm
 

@@ -11,6 +11,24 @@ import type {
   RoundRobinBody
 } from '../../device-farm/services/generated/DeviceFarmApi';
 
+export type AccountEventOut = {
+  id: string;
+  account_id: string;
+  event_type: string;
+  device_serial: string | null;
+  platform: string | null;
+  entity_type: string | null;
+  entity_id: string | null;
+  details: Record<string, unknown>;
+  created_at: string;
+};
+
+export type AccountEventListOut = {
+  items: AccountEventOut[];
+  next_cursor: string | null;
+  has_more: boolean;
+};
+
 export type {
   AccountOut,
   AccountCreate,
@@ -59,5 +77,12 @@ export const accountsApi = {
       })
       .then((r) => r.data),
   unassignDevice: (accountId: string, deviceId: string) =>
-    farmApi.delete(`/accounts/${accountId}/devices/${deviceId}`).then((r) => r.data)
+    farmApi.delete(`/accounts/${accountId}/devices/${deviceId}`).then((r) => r.data),
+  listEvents: (
+    accountId: string,
+    query?: { limit?: number; cursor?: string; event_type?: string }
+  ) =>
+    farmApi
+      .get<AccountEventListOut>(`/accounts/${accountId}/events`, { params: query })
+      .then((r) => r.data)
 };

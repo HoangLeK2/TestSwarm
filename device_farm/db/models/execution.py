@@ -79,6 +79,9 @@ class Execution(Base):
     user_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
+    account_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True
+    )
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

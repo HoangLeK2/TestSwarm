@@ -4,6 +4,7 @@ from __future__ import annotations
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../../../'))
 
+import threading
 from unittest.mock import patch
 
 
@@ -47,3 +48,21 @@ def test_loop_step_propagates_nested_failure():
 
     assert result["ok"] is False
     assert result["iterations"] == 2
+
+
+def test_loop_step_stops_when_cancel_event_set():
+    from tasks.scenario.steps.control_flow import handle_loop
+
+    sc = _make_sc()
+    sc.cancel_event = threading.Event()
+    sc.cancel_event.set()
+    step = {"type": "loop", "count": 5, "steps": [{"type": "wait"}]}
+    result = {"index": 0, "type": "loop", "ok": True}
+
+    with patch("tasks.scenario.steps.control_flow._run_nested") as run_nested:
+        handle_loop(sc, step, 0, result)
+
+    run_nested.assert_not_called()
+    assert result["ok"] is False
+    assert "cancelled" in result["message"]
+    assert result["iterations"] == 0

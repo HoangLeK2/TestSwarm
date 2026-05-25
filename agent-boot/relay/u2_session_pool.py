@@ -18,10 +18,12 @@ Feature-gated: only instantiated when U2_BATCH_ENABLED=true.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import time
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any, AsyncIterator, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +32,16 @@ REAP_INTERVAL_SECONDS     = 30.0
 CONNECT_TIMEOUT_SECONDS   = 8.0
 ALIVE_TIMEOUT_SECONDS     = 3.0    # hard cap on .alive / .running() probes
 HEARTBEAT_INTERVAL_SECONDS = 10.0  # how often the pool sweeps live sessions
+# Keep warm between rapid extra_data / tap round-trips (scrcpy can briefly kill u2d).
+HEARTBEAT_GRACE_AFTER_USE_SECONDS = 45.0
+# Skip .alive probe when session was used recently (avoids 3s timeout + reconnect storm).
+PREPARE_SKIP_ALIVE_SECONDS = 12.0
+
+# When extra_data collect holds the per-serial lock, nested run_locked must not re-enter.
+_active_session: contextvars.ContextVar[tuple[str, "_Entry"] | None] = contextvars.ContextVar(
+    "u2_active_session",
+    default=None,
+)
 
 
 @dataclass
@@ -78,6 +90,52 @@ class U2SessionPool:
                 await self._reconnect(entry)
             entry.last_used = time.monotonic()
         return entry.device
+
+    async def _prepare_entry(self, serial: str) -> _Entry:
+        async with self._global_lock:
+            entry = self._sessions.get(serial)
+        if entry is None:
+            entry = await self._connect(serial)
+        else:
+            recently_used = (
+                time.monotonic() - entry.last_used < PREPARE_SKIP_ALIVE_SECONDS
+            )
+            if not recently_used and not await self._is_alive(entry):
+                await self._reconnect(entry)
+        entry.last_used = time.monotonic()
+        return entry
+
+    @asynccontextmanager
+    async def session_scope(self, serial: str) -> AsyncIterator[Any]:
+        """Hold one u2 session + per-serial lock for a multi-batch collect (avoids heartbeat evict)."""
+        active = _active_session.get()
+        if active is not None and active[0] == serial:
+            yield active[1].device
+            return
+
+        entry = await self._prepare_entry(serial)
+        token = _active_session.set((serial, entry))
+        try:
+            async with entry.lock:
+                yield entry.device
+        finally:
+            entry.last_used = time.monotonic()
+            _active_session.reset(token)
+
+    async def run_locked(self, serial: str, fn: Callable[[Any], Any]) -> Any:
+        """Run sync fn(device) while holding the per-serial session lock (one connect)."""
+        active = _active_session.get()
+        if active is not None and active[0] == serial:
+            entry = active[1]
+            entry.last_used = time.monotonic()
+            return await self._loop.run_in_executor(None, fn, entry.device)
+
+        entry = await self._prepare_entry(serial)
+        async with entry.lock:
+            if not await self._is_alive(entry):
+                await self._reconnect(entry)
+            entry.last_used = time.monotonic()
+            return await self._loop.run_in_executor(None, fn, entry.device)
 
     async def evict(self, serial: str) -> None:
         async with self._global_lock:
@@ -217,6 +275,21 @@ class U2SessionPool:
                     if entry.lock.locked():
                         continue
                     if not await self._is_alive(entry):
+                        recently_used = (
+                            time.monotonic() - entry.last_used
+                            < HEARTBEAT_GRACE_AFTER_USE_SECONDS
+                        )
+                        if recently_used:
+                            try:
+                                await self._reconnect(entry)
+                            except Exception as exc:
+                                logger.debug(
+                                    "u2-pool: heartbeat reconnect failed serial=%s err=%s",
+                                    serial,
+                                    exc,
+                                )
+                            if await self._is_alive(entry):
+                                continue
                         async with self._global_lock:
                             current = self._sessions.get(serial)
                             if current is entry:

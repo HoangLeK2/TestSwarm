@@ -105,6 +105,7 @@ async def update_account(
     total_usage_minutes: Optional[float] = None,
     usage_today_minutes: Optional[float] = None,
     usage_reset_date: Optional[date] = None,
+    reload: bool = True,
 ) -> Optional[Account]:
     values: dict = {}
     if password_encrypted is not None:
@@ -131,11 +132,20 @@ async def update_account(
         values["usage_today_minutes"] = usage_today_minutes
     if usage_reset_date is not None:
         values["usage_reset_date"] = usage_reset_date
-    if values:
+    if not values:
+        return await get_account(db, account_id) if reload else None
+    if reload:
         await db.execute(
             update(Account).where(Account.id == account_id).values(**values)
         )
-    return await get_account(db, account_id)
+        return await get_account(db, account_id)
+    result = await db.execute(
+        update(Account)
+        .where(Account.id == account_id)
+        .values(**values)
+        .returning(Account)
+    )
+    return result.scalar_one_or_none()
 
 
 async def delete_account(db: AsyncSession, account_id: str) -> bool:

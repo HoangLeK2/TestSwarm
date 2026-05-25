@@ -5,7 +5,6 @@ import type { Device } from '../types';
 import { serialToId } from '../helpers';
 import { DeviceScreen } from './device-screen';
 import { DeviceControls } from './device-controls';
-import { DeviceSTFPanel } from './device-stf-panel';
 import { DeviceStepMonitor } from './device-step-monitor';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { DeviceAndroidFrame } from './device-android-frame';
@@ -56,6 +55,11 @@ export function DeviceTile({
 }: DeviceTileProps) {
   const t = useTranslations('devicesFarm');
   const id = serialToId(device.serial);
+  const title = device.display_name?.trim()
+    || device.name?.trim()
+    || `${device.brand} ${device.model}`.trim()
+    || device.serial;
+  const subtitle = device.serial !== title ? device.serial : `${device.brand} ${device.model}`.trim();
   const isActive =
     device.state && !['DISCONNECTED', 'DEAD'].includes(device.state.toUpperCase());
 
@@ -89,7 +93,7 @@ export function DeviceTile({
           <div className='flex flex-col gap-1'>
             <CardTitle className='flex items-center justify-between gap-2 text-xs'>
               <span className='truncate font-medium text-foreground'>
-                {device.brand} {device.model}
+                {title}
               </span>
               {!hideStepMonitor && (
                 <DeviceStepMonitor
@@ -98,9 +102,11 @@ export function DeviceTile({
                 />
               )}
             </CardTitle>
-            <span className='font-mono text-[10px] text-muted-foreground'>
-              {device.serial}
-            </span>
+            {subtitle && (
+              <span className='truncate font-mono text-[10px] text-muted-foreground'>
+                {subtitle}
+              </span>
+            )}
           </div>
         </CardHeader>
       )}
@@ -166,4 +172,3 @@ export function DeviceTile({
     </Card>
   );
 }
-

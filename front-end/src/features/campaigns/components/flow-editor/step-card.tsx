@@ -4,7 +4,8 @@ import { Trash2, Play, Loader2, CheckCircle2, XCircle, Crosshair, MousePointerCl
 import { useTranslations } from 'next-intl';
 import { cn } from '@/lib/utils';
 import type { FlowStep } from '../scenario-steps/types';
-import { STEP_COLORS, getStepTypeName, getStepDisplay, getStepCategory } from './constants';
+import { STEP_COLORS, getStepCategory } from './constants';
+import { useCampaignFlowI18n } from './flow-i18n';
 import { StepIcon } from './step-icon';
 
 /** Build an <img> src from a stored image value (base64, object-storage URL, or local /captures/ path). */
@@ -59,6 +60,7 @@ export function StepCard({
   onTogglePickSwipeCoords,
 }: Props) {
   const tFlow = useTranslations('campaignsFeature.flowBracket');
+  const { getStepTypeName, getStepDisplay } = useCampaignFlowI18n();
   const colorCls = STEP_COLORS[step.type] ?? 'border-l-gray-400';
   const typeName = getStepTypeName(step.type);
   const { target, selectorBadge } = getStepDisplay(step);

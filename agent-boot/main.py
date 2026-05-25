@@ -10,6 +10,7 @@ Modes:
 Config (via .env or environment):
   RELAY_SERVER    WebSocket server URL  (default: ws://localhost:8080/relay-agent)
   RELAY_API_KEY   API key for server auth
+  RELAY_ENROLLMENT_TOKEN  User-scoped token that owns this relay agent
 
 Quick start:
   cp .env.example .env   # fill in RELAY_SERVER + RELAY_API_KEY
@@ -90,6 +91,8 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="If u2/atx-agent not ready, deploy device_bundle.tar.gz and run launch.sh on device")
     parser.add_argument("--skip-u2", action="store_true",
                         help="Skip uiautomator2 APKs + atx-agent")
+    parser.add_argument("--force-u2-install", action="store_true",
+                        help="Reinstall uiautomator2 APKs even when already present")
     parser.add_argument("--skip-atx", action="store_true",
                         help="Skip atx-agent push (APKs still installed)")
     parser.add_argument("--skip-stf", action="store_true",
@@ -102,6 +105,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--relay-api-key", metavar="KEY",
                         default=_env("RELAY_API_KEY", ""),
                         help="API key (default: $RELAY_API_KEY)")
+    parser.add_argument("--relay-enrollment-token", metavar="TOKEN",
+                        default=_env("RELAY_ENROLLMENT_TOKEN", ""),
+                        help="User-scoped relay ownership token (default: $RELAY_ENROLLMENT_TOKEN)")
     parser.add_argument("--relay-id", metavar="ID",
                         default=_env("RELAY_ID", f"{socket.gethostname()}-{uuid.uuid4().hex[:6]}"),
                         help="Stable relay ID (default: $RELAY_ID or hostname+uuid)")
@@ -177,10 +183,12 @@ def _run_bootstrap(args: argparse.Namespace) -> bool:
         serials, stf_apk,
         relay_id=getattr(args, "relay_id", ""),
         api_key=getattr(args, "relay_api_key", ""),
+        enrollment_token=getattr(args, "relay_enrollment_token", ""),
         skip_tcpip=args.skip_tcpip,
         tcpip_port=args.tcpip_port,
         use_bundle=args.use_bundle,
         skip_u2=args.skip_u2,
+        force_u2_install=args.force_u2_install,
         skip_atx=args.skip_atx,
         skip_stf=args.skip_stf,
         ws_url=getattr(args, "ws_url", ""),
@@ -227,13 +235,31 @@ def _run_relay(args: argparse.Namespace) -> None:
     print(f"  Relay ID: {args.relay_id}", file=sys.stderr)
     print("  Ctrl+C to stop.\n", file=sys.stderr)
 
-    agent = RelayAgent(
-        server_url=args.relay_server,
-        api_key=args.relay_api_key or None,
-        relay_id=args.relay_id,
-        relay_mode=relay_mode,
-    )
-    asyncio.run(agent.run())
+    async def _run() -> None:
+        ingest = None
+        extra_enabled = os.environ.get("AGENT_BOOT_EXTRA_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+        content_enabled = os.environ.get("AGENT_BOOT_CONTENT_DB_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+        if extra_enabled or content_enabled:
+            from relay.extra_data.ingest import ExtraDataIngestServer
+
+            ingest = ExtraDataIngestServer()
+            await ingest.start()
+
+        agent = RelayAgent(
+            server_url=args.relay_server,
+            api_key=args.relay_api_key or None,
+            enrollment_token=args.relay_enrollment_token or None,
+            relay_id=args.relay_id,
+            relay_mode=relay_mode,
+            extra_ingest=ingest,
+        )
+        try:
+            await agent.run()
+        finally:
+            if ingest is not None:
+                await ingest.stop()
+
+    asyncio.run(_run())
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────

@@ -411,6 +411,23 @@ export function DeviceScreen({
     return () => clearInterval(t);
   }, [isActive, hasFrame, device.serial]);
 
+  // H264-primary: if relay sends HEVC or scrcpy is flapping, MJPEG is the fallback picture.
+  // Request IDR once after WS is up; re-arm MJPEG if still black after a few seconds.
+  useEffect(() => {
+    if (!isActive || !h264PrimaryMode || hasFrame) return;
+    const armMjpeg = setTimeout(() => {
+      setMjpegEnabled(true);
+      setMjpegFailed(false);
+    }, 2500);
+    const idr = setTimeout(() => {
+      if (wsConnected) requestIdr(device.serial);
+    }, 1500);
+    return () => {
+      clearTimeout(armMjpeg);
+      clearTimeout(idr);
+    };
+  }, [isActive, h264PrimaryMode, hasFrame, device.serial, wsConnected]);
+
   // ── Touch / gesture ──────────────────────────────────────────────────────
   const getCoordinateSpace = useCallback(() => {
     const canvas = canvasRef.current;

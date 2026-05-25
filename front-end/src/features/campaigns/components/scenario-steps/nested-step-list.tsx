@@ -42,8 +42,27 @@ function ActionStepFields({
   const t = useTranslations('campaignsFeature.scenarioStepsInline');
   switch (step.type) {
     case 'launch_app':
+    case 'stop_app':
+    case 'clear_app':
+    case 'wait_app':
       return (
         <input className={`${inputCls} w-48`} placeholder={t('placeholder.package')} value={step.package ?? ''} onChange={(e) => onChange('package', e.target.value)} />
+      );
+    case 'push_file':
+      return (
+        <div className='flex flex-1 gap-1 min-w-0'>
+          <input className={`${inputCls} flex-1 min-w-0`} placeholder='local' value={step.local_path ?? ''} onChange={(e) => onChange('local_path', e.target.value)} />
+          <span className='text-muted-foreground text-xs shrink-0'>→</span>
+          <input className={`${inputCls} flex-1 min-w-0`} placeholder='/sdcard/…' value={step.remote_path ?? ''} onChange={(e) => onChange('remote_path', e.target.value)} />
+        </div>
+      );
+    case 'pull_file':
+      return (
+        <div className='flex flex-1 gap-1 min-w-0'>
+          <input className={`${inputCls} flex-1 min-w-0`} placeholder='/sdcard/…' value={step.remote_path ?? ''} onChange={(e) => onChange('remote_path', e.target.value)} />
+          <span className='text-muted-foreground text-xs shrink-0'>→</span>
+          <input className={`${inputCls} flex-1 min-w-0`} placeholder='local' value={step.local_path ?? ''} onChange={(e) => onChange('local_path', e.target.value)} />
+        </div>
       );
     case 'open_url':
       return (

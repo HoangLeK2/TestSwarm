@@ -352,6 +352,11 @@ def build_scenarios_router(
                 {"error": "not owner of this trace"}, status_code=403
             )
         entry["event"].set()
+        device = manager.get_device(serial)
+        if device is not None:
+            from tasks.scenario_task import force_clear_scenario_busy
+
+            force_clear_scenario_busy(device)
         return {"ok": True, "serial": serial, "trace_id": trace_id, "cancelled": True}
 
     @router.post("/devices/{serial}/scenario/run")

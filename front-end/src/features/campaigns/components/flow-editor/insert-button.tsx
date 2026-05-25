@@ -13,9 +13,9 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 import { FLOW_ROW_DRAG_GUTTER_CLASS } from './flow-row-gutter';
-import { getInsertMenuForUi } from './constants';
 import { createDefaultStep, type FlowStep } from '../scenario-steps/types';
 import { StepIcon } from './step-icon';
+import { useCampaignFlowI18n } from './flow-i18n';
 
 interface Props {
   onInsert: (step: FlowStep) => void;
@@ -34,6 +34,8 @@ function InsertStepDropdown({
   contentAlign?: 'start' | 'center' | 'end';
   sideOffset?: number;
 }) {
+  const { getInsertMenu, tInsert } = useCampaignFlowI18n();
+  const insertMenu = getInsertMenu();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
@@ -43,7 +45,7 @@ function InsertStepDropdown({
         sideOffset={sideOffset}
         className='max-h-[min(22rem,75vh)] w-[min(18rem,calc(100vw-2rem))] overflow-y-auto p-1.5'
       >
-        {getInsertMenuForUi().map((group, gi) => (
+        {insertMenu.map((group, gi) => (
           <Fragment key={group.group}>
             {gi > 0 ? <DropdownMenuSeparator /> : null}
             <DropdownMenuLabel className='px-2.5 pb-0.5 pt-2'>
@@ -70,6 +72,7 @@ function InsertStepDropdown({
 }
 
 export function InsertButton({ onInsert }: Props) {
+  const { tInsert } = useCampaignFlowI18n();
   return (
     <div className='flex min-h-7 justify-end py-0.5 pr-0.5'>
       <InsertStepDropdown
@@ -82,7 +85,7 @@ export function InsertButton({ onInsert }: Props) {
             variant='outline'
             size='icon'
             className='size-7 shrink-0 rounded-full border border-dashed border-muted-foreground/40 text-muted-foreground hover:border-primary hover:text-primary'
-            aria-label='Thêm bước'
+            aria-label={tInsert('addStepAria')}
           >
             <Plus className='size-3' strokeWidth={2} />
           </Button>
@@ -99,6 +102,7 @@ export function InsertGap({
   onInsert,
   alignWithDragHandle = true,
 }: Props & { alignWithDragHandle?: boolean }) {
+  const { tInsert } = useCampaignFlowI18n();
   const track = (
     <div
       className={cn(
@@ -133,7 +137,7 @@ export function InsertGap({
                 'focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring',
                 'motion-safe:md:group-hover/ig:scale-[1.03]',
               )}
-              aria-label='Thêm bước'
+              aria-label={tInsert('addStepAria')}
             >
               <Plus className='size-3.5' strokeWidth={2} />
             </Button>

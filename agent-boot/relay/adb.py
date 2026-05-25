@@ -420,14 +420,50 @@ def _probe_capabilities(serial: str) -> dict:
         except Exception:
             return 0
 
+    def first_nonempty(*values: str) -> str:
+        for value in values:
+            value = (value or "").strip()
+            if value and value.lower() not in {"null", "unknown", "<unknown>"}:
+                return value
+        return ""
+
+    def wlan_addr() -> tuple[str, str]:
+        raw = shell("ip -o -4 addr show wlan0 2>/dev/null || ip -o -4 addr show 2>/dev/null")
+        for match in re.finditer(r"\binet\s+(\d+\.\d+\.\d+\.\d+)/(\d+)", raw):
+            ip = match.group(1)
+            prefix = match.group(2)
+            if not ip.startswith("127."):
+                return ip, f"{ip}/{prefix}"
+        return "", ""
+
     w, h = screen_dims()
+    brand = shell("getprop ro.product.brand").lower()
+    model = shell("getprop ro.product.model")
+    marketing_name = first_nonempty(
+        shell("getprop ro.product.marketname"),
+        shell("getprop ro.config.marketing_name"),
+        shell("getprop ro.product.vendor.marketname"),
+    )
+    device_name = first_nonempty(
+        shell("settings get global device_name"),
+        shell("settings get secure bluetooth_name"),
+        shell("getprop persist.sys.device_name"),
+        marketing_name,
+        model,
+    )
+    wifi_ip, wifi_cidr = wlan_addr()
     hw_serial = shell("getprop ro.boot.serialno").strip() or shell("getprop ro.serialno").strip()
     return {
         "sdk":             shell("getprop ro.build.version.sdk"),
         "android_version": shell("getprop ro.build.version.release"),
         "abi":             shell("getprop ro.product.cpu.abi"),
-        "brand":           shell("getprop ro.product.brand").lower(),
-        "model":           shell("getprop ro.product.model"),
+        "brand":           brand,
+        "model":           model,
+        "device_name":     device_name,
+        "marketing_name":  marketing_name,
+        "display_name":    first_nonempty(device_name, marketing_name, " ".join(p for p in [brand, model] if p)),
+        "wlan_ip":         wifi_ip,
+        "wlan_cidr":       wifi_cidr,
         "screen_width":    w,
         "screen_height":   h,
         "ram_gb":          ram_gb(),
@@ -488,6 +524,12 @@ def _push_atx_agent(serial: str, abi: str) -> tuple[str, int]:
 
 def _install_u2_apks(serial: str) -> tuple[str, int]:
     """Push and install uiautomator2 APKs onto the device."""
+    force_install = _os.getenv("AGENT_BOOT_FORCE_U2_INSTALL", "").strip().lower() in {"1", "true", "yes", "on"}
+    installed_main = _pkg_installed(serial, _U2_PKG)
+    installed_test = _pkg_installed(serial, _U2_TEST_PKG)
+    if installed_main and installed_test and not force_install:
+        return "u2 APKs already installed", 0
+
     assets = _assets_dir()
     # Look in assets/apks/ then assets/ directly
     apk_dirs = [assets / "apks", assets]
@@ -508,23 +550,80 @@ def _install_u2_apks(serial: str) -> tuple[str, int]:
         logger.warning(msg)
         return msg, -1
 
-    # Push both APKs then install
-    out, rc = _run("push", str(main_apk), "/data/local/tmp/u2-main.apk",
-                   serial=serial, timeout=120)
-    if rc != 0:
-        return f"push u2 main APK failed: {out}", -1
-    out, rc = _run("push", str(test_apk), "/data/local/tmp/u2-test.apk",
-                   serial=serial, timeout=120)
-    if rc != 0:
-        return f"push u2 test APK failed: {out}", -1
+    out_m = "Success"
+    out_t = "Success"
+    if force_install or not installed_main:
+        out, rc = _run("push", str(main_apk), "/data/local/tmp/u2-main.apk",
+                       serial=serial, timeout=120)
+        if rc != 0:
+            return f"push u2 main APK failed: {out}", -1
+        out_m, rc_m = _adb_shell(serial, "pm install -r /data/local/tmp/u2-main.apk", timeout=120)
+    if force_install or not installed_test:
+        out, rc = _run("push", str(test_apk), "/data/local/tmp/u2-test.apk",
+                       serial=serial, timeout=120)
+        if rc != 0:
+            return f"push u2 test APK failed: {out}", -1
+        out_t, rc_t = _adb_shell(serial, "pm install -r -t /data/local/tmp/u2-test.apk", timeout=120)
 
-    out_m, rc_m = _adb_shell(serial, "pm install -r /data/local/tmp/u2-main.apk", timeout=120)
-    out_t, rc_t = _adb_shell(serial, "pm install -r -t /data/local/tmp/u2-test.apk", timeout=120)
+    combined = f"{out_m}\n{out_t}"
+    if "INSTALL_FAILED_UPDATE_INCOMPATIBLE" in combined or "signatures do not match" in combined:
+        _adb_shell(serial, f"pm uninstall {_U2_TEST_PKG} 2>/dev/null || true", timeout=30)
+        _adb_shell(serial, f"pm uninstall {_U2_PKG} 2>/dev/null || true", timeout=30)
+        out, rc = _run("push", str(main_apk), "/data/local/tmp/u2-main.apk",
+                       serial=serial, timeout=120)
+        if rc != 0:
+            return f"push u2 main APK failed after uninstall: {out}", -1
+        out, rc = _run("push", str(test_apk), "/data/local/tmp/u2-test.apk",
+                       serial=serial, timeout=120)
+        if rc != 0:
+            return f"push u2 test APK failed after uninstall: {out}", -1
+        out_m, rc_m = _adb_shell(serial, "pm install -r /data/local/tmp/u2-main.apk", timeout=120)
+        out_t, rc_t = _adb_shell(serial, "pm install -r -t /data/local/tmp/u2-test.apk", timeout=120)
+
     _adb_shell(serial, "rm -f /data/local/tmp/u2-main.apk /data/local/tmp/u2-test.apk", timeout=10)
 
     if "Success" not in out_m or "Success" not in out_t:
         return f"u2 install failed: main={out_m!r} test={out_t!r}", -1
+    if installed_main or installed_test:
+        return "u2 APKs already installed; installed missing package(s)", 0
     return "u2 APKs installed", 0
+
+
+def _pkg_installed(serial: str, package: str) -> bool:
+    out, _ = _adb_shell(serial, f"pm path {package} 2>/dev/null || true", timeout=5)
+    return "package:" in out
+
+
+def _install_stf_apk(serial: str) -> tuple[str, int]:
+    if _pkg_installed(serial, _STF_PKG):
+        return "STFService already installed", 0
+
+    assets = _assets_dir()
+    candidates = [
+        assets / "apks" / "STFService.apk",
+        assets / "STFService.apk",
+    ]
+    apk_path = next((p for p in candidates if p.is_file()), None)
+    if apk_path is None:
+        return (
+            f"STFService.apk not found. Expected one of: {[str(p) for p in candidates]}. "
+            "Set AGENT_BOOT_ASSETS or put STFService.apk in agent-boot/assets/apks/.",
+            -1,
+        )
+
+    out, rc = _run("install", "-r", str(apk_path), serial=serial, timeout=180)
+    if rc != 0 or "Success" not in out:
+        return f"STFService install failed: {out}", -1
+    return "STFService installed", 0
+
+
+def _grant_stf_permissions(serial: str) -> list[str]:
+    notes: list[str] = []
+    for perm in ("android.permission.WRITE_SECURE_SETTINGS", "android.permission.READ_PHONE_STATE"):
+        out, rc = _adb_shell(serial, f"pm grant {_STF_PKG} {perm}", timeout=10)
+        if rc != 0 or "Exception" in out:
+            notes.append(f"pm grant {perm}: {out[:200]}")
+    return notes
 
 
 def _bootstrap_device(serial: str, timeout: int = 180) -> tuple[str, int]:
@@ -533,14 +632,27 @@ def _bootstrap_device(serial: str, timeout: int = 180) -> tuple[str, int]:
 
     1. Probe ABI
     2. Push atx-agent binary if missing
-    3. Install u2 APKs if missing
-    4. Start atx-agent (wait for port 7912)
-    5. Start atx-agent (wait for port 7912)
+    3. Install u2 APKs from the current bundle
+    4. Install STFService if missing
+    5. Apply permissions/stability settings
+    6. Start atx-agent (wait for port 7912)
+    7. Start u2 instrumentation
 
-    Returns ("bootstrap complete", 0) on success, error string + -1 on failure.
+    Returns a compact JSON summary on success, error string + -1 on failure.
     Designed to be idempotent — safe to call multiple times.
     """
+    import json as _json
+
     logger.info("[%s] Bootstrap starting", serial)
+    summary: dict[str, object] = {
+        "stf_installed": False,
+        "u2_ready": False,
+        "atx_ready": False,
+        "permissions_ok": True,
+        "wlan_ip": "",
+        "wlan_cidr": "",
+        "errors": [],
+    }
 
     # 1. Probe ABI
     abi, _ = _adb_shell(serial, "getprop ro.product.cpu.abi", timeout=5)
@@ -554,36 +666,57 @@ def _bootstrap_device(serial: str, timeout: int = 180) -> tuple[str, int]:
         msg, rc = _push_atx_agent(serial, abi)
         if rc != 0:
             logger.warning("[%s] atx-agent push skipped: %s", serial, msg)
-            # Non-fatal: device may already have atx-agent from a previous run
+            summary["errors"].append(msg)
         else:
             logger.info("[%s] %s", serial, msg)
 
-    # 3. Install u2 APKs if missing
-    out, _ = _adb_shell(serial, f"pm path {_U2_PKG} 2>/dev/null || echo missing", timeout=5)
-    if "package:" not in out:
-        msg, rc = _install_u2_apks(serial)
-        if rc != 0:
-            logger.warning("[%s] u2 APK install skipped: %s", serial, msg)
-            # Non-fatal: device may already have u2 installed
-        else:
-            logger.info("[%s] %s", serial, msg)
+    # 3. Ensure u2 APKs exist. Do not reinstall every bootstrap; Android package
+    # install can interrupt devices and adds unnecessary startup latency.
+    msg, rc = _install_u2_apks(serial)
+    if rc != 0:
+        logger.warning("[%s] u2 APK install failed: %s", serial, msg)
+        summary["errors"].append(msg)
+        return _json.dumps(summary), -1
+    else:
+        logger.info("[%s] %s", serial, msg)
 
-    # 4. Apply display/battery/Doze stability settings before starting services.
+    # 4. Install STFService before granting permissions and pushing connect URLs later.
+    msg, rc = _install_stf_apk(serial)
+    if rc != 0:
+        logger.warning("[%s] STFService install failed: %s", serial, msg)
+        summary["errors"].append(msg)
+        return _json.dumps(summary), -1
+    logger.info("[%s] %s", serial, msg)
+    summary["stf_installed"] = True
+
+    # 5. Apply display/battery/Doze stability settings before starting services.
     _apply_u2_stability_settings(serial)
+    permission_notes = _grant_stf_permissions(serial)
+    if permission_notes:
+        summary["permissions_ok"] = False
+        summary["errors"].extend(permission_notes)
 
-    # 5. Start atx-agent
+    # 6. Start atx-agent
     msg, rc = _restart_atx(serial, timeout=min(timeout // 2, 45))
     if rc != 0:
-        return f"atx-agent failed to start: {msg}", -1
+        summary["errors"].append(f"atx-agent failed to start: {msg}")
+        return _json.dumps(summary), -1
     logger.info("[%s] atx-agent ready", serial)
+    summary["atx_ready"] = True
 
-    # 6. Start u2 instrumentation
+    # 7. Start u2 instrumentation
     msg, rc = _restart_u2(serial, timeout=min(timeout // 2, 90))
     if rc != 0:
-        logger.warning("[%s] u2 failed to start: %s (continuing)", serial, msg)
-        # Non-fatal: atx-agent alone is sufficient for basic control
+        logger.warning("[%s] u2 failed to start: %s", serial, msg)
+        summary["errors"].append(f"u2 failed to start: {msg}")
+        return _json.dumps(summary), -1
     else:
         logger.info("[%s] u2 ready", serial)
+        summary["u2_ready"] = True
+
+    caps = _probe_capabilities(serial)
+    summary["wlan_ip"] = str(caps.get("wlan_ip") or "")
+    summary["wlan_cidr"] = str(caps.get("wlan_cidr") or "")
 
     logger.info("[%s] Bootstrap complete", serial)
-    return "bootstrap complete", 0
+    return _json.dumps(summary), 0

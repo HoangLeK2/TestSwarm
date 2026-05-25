@@ -6,29 +6,45 @@ from typing import Any, Final
 EXTRACT_STRATEGY_VERSION_DEFAULTS: dict[str, str] = {
     "fb_posts": "fb_posts:v1",
     "fb_comments": "fb_comments:v1",
+    "text_nodes": "text_nodes:v1",
+    "ig_posts": "ig_posts:v1",
+    "tiktok_posts": "tiktok_posts:v1",
+    "linkedin_posts": "linkedin_posts:v1",
+    "auto_posts": "auto_posts:v1",
+    "ig_comments": "ig_comments:v1",
+    "tiktok_comments": "tiktok_comments:v1",
+    "linkedin_comments": "linkedin_comments:v1",
+    "auto_comments": "auto_comments:v1",
 }
 
 DEFAULT_EXTRACT_PROFILE: Final[str] = "balanced"
 SUPPORTED_EXTRACT_PROFILES: Final[tuple[str, ...]] = ("balanced", "aggressive", "safe")
-SUPPORTED_EXTRACT_STRATEGIES: Final[tuple[str, ...]] = ("fb_posts", "fb_comments")
+SUPPORTED_EXTRACT_STRATEGIES: Final[tuple[str, ...]] = tuple(EXTRACT_STRATEGY_VERSION_DEFAULTS)
 
 _FB_POSTS_BALANCED: Final[dict[str, Any]] = {
     "expand_see_more": True,
-    "expand_see_more_max_passes": 4,
-    "expand_completion_retries": 4,
+    "expand_see_more_fast": True,
+    "expand_see_more_max_passes": 3,
+    "expand_completion_retries": 1,
     "expand_see_more_scroll_distance": 0.25,
+    "expand_see_more_wall_s": 18,
 }
 _FB_POSTS_AGGRESSIVE: Final[dict[str, Any]] = {
     "expand_see_more": True,
-    "expand_see_more_max_passes": 6,
-    "expand_completion_retries": 6,
+    "expand_see_more_fast": True,
+    "expand_see_more_max_passes": 5,
+    "expand_completion_retries": 2,
+    "expand_see_more_scroll": True,
     "expand_see_more_scroll_distance": 0.3,
+    "expand_see_more_wall_s": 28,
 }
 _FB_POSTS_SAFE: Final[dict[str, Any]] = {
     "expand_see_more": True,
-    "expand_see_more_max_passes": 3,
-    "expand_completion_retries": 2,
+    "expand_see_more_fast": True,
+    "expand_see_more_max_passes": 2,
+    "expand_completion_retries": 1,
     "expand_see_more_scroll_distance": 0.2,
+    "expand_see_more_wall_s": 12,
 }
 
 _FB_COMMENTS_BALANCED: Final[dict[str, Any]] = {
@@ -43,7 +59,7 @@ _FB_COMMENTS_BALANCED: Final[dict[str, Any]] = {
 }
 _FB_COMMENTS_AGGRESSIVE: Final[dict[str, Any]] = {
     "max_items": 700,
-    "comment_scroll_passes": 35,
+    "comment_scroll_passes": 20,
     "comment_scroll_distance": 0.75,
     "comment_scroll_pause_s": 0.9,
     "comment_no_growth_break": 7,

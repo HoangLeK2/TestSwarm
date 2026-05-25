@@ -58,7 +58,10 @@ async def upgrade(conn) -> None:
             f"""
             DO $$
             BEGIN
-                IF NOT EXISTS (
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.tables
+                    WHERE table_schema = 'public' AND table_name = '{table}'
+                ) AND NOT EXISTS (
                     SELECT 1 FROM pg_constraint WHERE conname = '{name}'
                 ) THEN
                     ALTER TABLE {table} ADD CONSTRAINT {name} CHECK ({expr});

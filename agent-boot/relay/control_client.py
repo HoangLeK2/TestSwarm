@@ -92,7 +92,11 @@ class AgentControlClient:
     async def _stream_once(self) -> None:
         from .grpc_gen import relay_pb2, relay_pb2_grpc
 
-        meta = [("x-relay-api-key", self._api_key)] if self._api_key else []
+        meta = []
+        if self._api_key:
+            meta.append(("x-relay-api-key", self._api_key))
+        if self._agent._enrollment_token:
+            meta.append(("x-relay-enrollment-token", self._agent._enrollment_token))
         stub = relay_pb2_grpc.AgentControlServiceStub(self._channel)
 
         send_q: asyncio.Queue = asyncio.Queue(maxsize=64)

@@ -46,7 +46,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "GROUP_NAME": "openclaw vn",
             "GROUP_TEXT": "OpenClaw VN · Truy cập",
             "MAX_SCROLLS": 540,
-            "MAX_COMMENT_SCROLLS": 35,
+            "MAX_COMMENT_SCROLLS": 20,
             "MAX_COMMENTS_PER_POST": 500,
             "MIN_COMMENT_SCAN_PASSES": 4,
             "COMMENT_NO_NEW_THRESHOLD": 3,
@@ -107,6 +107,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                     {
                         "type": "extract",
                         "strategy": "fb_posts",
+                        "edge_extra_data": True,
                         "extract_profile": "${EXTRACT_PROFILE}",
                         "strategy_version": "${FB_POSTS_STRATEGY_VERSION}",
                         "expand_see_more": True,
@@ -137,6 +138,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                             {
                                 "type": "extract",
                                 "strategy": "fb_comments",
+                                "edge_extra_data": True,
                                 "extract_profile": "${EXTRACT_PROFILE}",
                                 "strategy_version": "${FB_COMMENTS_STRATEGY_VERSION}",
                                 "parent_post_id_var": "_fb_comment_parent_pid",
@@ -204,7 +206,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "PROFILE_5_SEARCH": "tên profile 5",
             "PROFILE_5_ROW_TEXT": "Tên Profile 5 · Bạn bè",
             "MAX_SCROLLS_PER_PROFILE": 120,
-            "MAX_COMMENT_SCROLLS": 35,
+            "MAX_COMMENT_SCROLLS": 20,
             "MAX_COMMENTS_PER_POST": 500,
             "MIN_COMMENT_SCAN_PASSES": 4,
             "COMMENT_NO_NEW_THRESHOLD": 3,
@@ -351,6 +353,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                             {
                                 "type": "extract",
                                 "strategy": "fb_posts",
+                                "edge_extra_data": True,
                                 "extract_profile": "${EXTRACT_PROFILE}",
                                 "strategy_version": "${FB_POSTS_STRATEGY_VERSION}",
                                 "expand_see_more": True,
@@ -378,6 +381,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                                     {
                                         "type": "extract",
                                         "strategy": "fb_comments",
+                                        "edge_extra_data": True,
                                         "extract_profile": "${EXTRACT_PROFILE}",
                                         "strategy_version": "${FB_COMMENTS_STRATEGY_VERSION}",
                                         "parent_post_id_var": "_fb_comment_parent_pid",
@@ -440,7 +444,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "  GROUP_NAME: tên nhóm để tìm kiếm.\n"
             "  GROUP_XPATH: xpath hàng nhóm trong kết quả tìm kiếm.\n"
             "  MAX_SCROLLS: số vòng crawl (mặc định 540 ≈ 3h với ~20s/vòng).\n"
-            "  MAX_COMMENT_SCROLLS: số lần cuộn tối đa trong sheet bình luận (mặc định 35).\n"
+            "  MAX_COMMENT_SCROLLS: số lần cuộn tối đa trong sheet bình luận (mặc định 20).\n"
             "  MAX_COMMENTS_PER_POST: giới hạn số bình luận mỗi bài (mặc định 500).\n"
             "  MIN_COMMENT_SCAN_PASSES: số vòng cuộn tối thiểu dù đã đủ bình luận (mặc định 4).\n"
             "  COMMENT_NO_NEW_THRESHOLD: dừng cuộn bình luận sau N vòng không có thêm (mặc định 3).\n"
@@ -452,7 +456,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "GROUP_NAME": "openclaw vn",
             "GROUP_XPATH": "//*[@content-desc=\"OpenClaw VN · Truy cập\"]",
             "MAX_SCROLLS": 540,
-            "MAX_COMMENT_SCROLLS": 35,
+            "MAX_COMMENT_SCROLLS": 20,
             "MAX_COMMENTS_PER_POST": 500,
             "MIN_COMMENT_SCAN_PASSES": 4,
             "COMMENT_NO_NEW_THRESHOLD": 3,
@@ -519,6 +523,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                     {
                         "type": "extract",
                         "strategy": "fb_posts",
+                        "edge_extra_data": True,
                         "extract_profile": "${EXTRACT_PROFILE}",
                         "strategy_version": "${FB_POSTS_STRATEGY_VERSION}",
                         "expand_see_more": True,
@@ -549,6 +554,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                             {
                                 "type": "extract",
                                 "strategy": "fb_comments",
+                                "edge_extra_data": True,
                                 "extract_profile": "${EXTRACT_PROFILE}",
                                 "strategy_version": "${FB_COMMENTS_STRATEGY_VERSION}",
                                 "parent_post_id_var": "_fb_comment_parent_pid",
@@ -604,7 +610,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
         "variables": {
             "group_name": "openclaw vn",
             "MAX_SCROLLS": 540,
-            "MAX_COMMENT_SCROLLS": 35,
+            "MAX_COMMENT_SCROLLS": 20,
             "MAX_COMMENTS_PER_POST": 500,
             "MIN_COMMENT_SCAN_PASSES": 4,
             "COMMENT_NO_NEW_THRESHOLD": 3,
@@ -677,6 +683,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                     {
                         "type": "extract",
                         "strategy": "fb_posts",
+                        "edge_extra_data": True,
                         "extract_profile": "${EXTRACT_PROFILE}",
                         "strategy_version": "${FB_POSTS_STRATEGY_VERSION}",
                         "expand_see_more": True,
@@ -704,6 +711,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                             {
                                 "type": "extract",
                                 "strategy": "fb_comments",
+                                "edge_extra_data": True,
                                 "extract_profile": "${EXTRACT_PROFILE}",
                                 "strategy_version": "${FB_COMMENTS_STRATEGY_VERSION}",
                                 "parent_post_id_var": "_fb_comment_parent_pid",

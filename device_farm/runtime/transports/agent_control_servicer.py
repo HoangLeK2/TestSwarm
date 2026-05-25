@@ -16,6 +16,8 @@ import logging
 import uuid
 from typing import Callable, Optional
 
+import grpc
+
 log = logging.getLogger("agent_control")
 
 # Global singleton — set by grpc_relay_server.start_grpc_server()
@@ -94,6 +96,7 @@ class AgentControlServicer:
         relay_id: Optional[str] = None
         conn: Optional[ControlConnection] = None
         send_q: asyncio.Queue = asyncio.Queue(maxsize=128)
+        enrollment_token = _metadata_value(context, "x-relay-enrollment-token")
 
         async def _reader():
             nonlocal relay_id, conn
@@ -103,7 +106,28 @@ class AgentControlServicer:
 
                     if kind == "register":
                         r = msg.register
-                        relay_id = r.relay_id or f"ctrl-{uuid.uuid4().hex[:8]}"
+                        candidate_relay_id = r.relay_id or f"ctrl-{uuid.uuid4().hex[:8]}"
+                        if self._on_register:
+                            accepted = await _call_register_callback(self._on_register, {
+                                "relay_id": candidate_relay_id,
+                                "hostname": r.hostname,
+                                "ip":       r.ip,
+                                "version":  r.agent_version,
+                                "serials":  list(r.serials),
+                                "enrollment_token": enrollment_token,
+                            })
+                            if not accepted:
+                                log.warning(
+                                    "control channel rejected: relay_id=%s host=%s ip=%s",
+                                    candidate_relay_id, r.hostname, r.ip,
+                                )
+                                await context.abort(
+                                    grpc.StatusCode.PERMISSION_DENIED,
+                                    "invalid or missing relay enrollment token",
+                                )
+                                return
+
+                        relay_id = candidate_relay_id
                         conn = ControlConnection(relay_id, send_q)
                         conn.serials = set(r.serials)
                         self._conns[relay_id] = conn
@@ -118,19 +142,10 @@ class AgentControlServicer:
                         log.info("control channel registered: relay_id=%s host=%s ip=%s serials=%d",
                                  relay_id, r.hostname, r.ip, len(r.serials))
 
-                        if self._on_register:
-                            asyncio.create_task(_safe(self._on_register({
-                                "relay_id": relay_id,
-                                "hostname": r.hostname,
-                                "ip":       r.ip,
-                                "version":  r.agent_version,
-                                "serials":  list(r.serials),
-                            })))
-
                     elif kind == "heartbeat" and conn is not None:
                         h = msg.heartbeat
                         new_serials = set(h.serials)
-                        old_serials = {s for s, rid in self._serial_index.items() if rid == relay_id}
+                        old_serials = set(conn.serials)
                         for s in old_serials - new_serials:
                             self._serial_index.pop(s, None)
                         for s in new_serials:
@@ -149,9 +164,8 @@ class AgentControlServicer:
             finally:
                 if relay_id:
                     self._conns.pop(relay_id, None)
-                    for s in list(self._serial_index):
-                        if self._serial_index.get(s) == relay_id:
-                            del self._serial_index[s]
+                    for s in set(conn.serials) if conn is not None else ():
+                        self._serial_index.pop(s, None)
                     if self._on_offline:
                         asyncio.create_task(_safe(self._on_offline(relay_id)))
                     log.info("control channel disconnected: relay_id=%s", relay_id)
@@ -165,7 +179,12 @@ class AgentControlServicer:
                     break
                 yield out
         finally:
-            reader_task.cancel()
+            if not reader_task.done():
+                reader_task.cancel()
+            try:
+                await reader_task
+            except asyncio.CancelledError:
+                pass
 
     # ── Public API for REST endpoints ───────────────────────────────────────────
 
@@ -234,3 +253,33 @@ async def _safe(coro) -> None:
         await asyncio.wait_for(coro, timeout=2.0)
     except Exception as exc:
         log.warning("control persistence callback failed: %s", exc)
+
+
+def _metadata_value(context, key: str) -> str:
+    try:
+        metadata = context.invocation_metadata() or ()
+    except Exception:
+        return ""
+    wanted = key.lower()
+    for item in metadata:
+        try:
+            k = str(item.key).lower()
+            v = str(item.value)
+        except AttributeError:
+            try:
+                k = str(item[0]).lower()
+                v = str(item[1])
+            except Exception:
+                continue
+        if k == wanted:
+            return v.strip()
+    return ""
+
+
+async def _call_register_callback(callback, payload: dict) -> bool:
+    try:
+        result = await asyncio.wait_for(callback(payload), timeout=5.0)
+    except Exception as exc:
+        log.warning("control register callback failed: %s", exc)
+        return False
+    return result is not False

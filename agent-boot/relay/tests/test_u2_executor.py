@@ -19,7 +19,13 @@ def mock_device():
 @pytest.fixture
 def executor(event_loop, mock_device):
     pool = AsyncMock()
+
+    async def _run_locked(serial: str, fn):
+        return fn(mock_device)
+
+    pool.run_locked = AsyncMock(side_effect=_run_locked)
     pool.get_session = AsyncMock(return_value=mock_device)
+    pool.evict = AsyncMock()
     exc = U2Executor(pool=pool, loop=event_loop)
     return exc, mock_device, pool
 
@@ -33,7 +39,7 @@ async def test_run_batch_empty(executor):
     result = await exc.run_batch("serial", [], early_exit=True)
     assert result["ok"] is True
     assert result["results"] == []
-    pool.get_session.assert_not_called()
+    pool.run_locked.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -120,7 +126,8 @@ async def test_unknown_op_fails_cleanly(executor):
 @pytest.mark.asyncio
 async def test_session_unavailable(event_loop):
     pool = AsyncMock()
-    pool.get_session = AsyncMock(side_effect=RuntimeError("no device"))
+    pool.run_locked = AsyncMock(side_effect=RuntimeError("no device"))
+    pool.evict = AsyncMock()
     exc = U2Executor(pool=pool, loop=event_loop)
 
     result = await exc.run_batch("serial", [{"op": "click", "x": 1, "y": 2}])
@@ -129,6 +136,26 @@ async def test_session_unavailable(event_loop):
     # Phase 2 moved get_session into the per-action loop so errors are attributed
     # to the specific action that tried to acquire the session.
     assert "no device" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_dump_hierarchy_prefers_http_dump(event_loop, mock_device):
+    pool = AsyncMock()
+
+    async def _run_locked(serial: str, fn):
+        return fn(mock_device)
+
+    pool.run_locked = AsyncMock(side_effect=_run_locked)
+    xml = '<?xml version="1.0"?><hierarchy><node /></hierarchy>'
+    exc = U2Executor(
+        pool=pool,
+        loop=event_loop,
+        http_dump=lambda _s, _t, _c: xml,
+    )
+    result = await exc.run_batch("serial", [{"op": "dump_hierarchy", "timeout": 5.0}])
+    assert result["ok"] is True
+    assert result["results"][0]["value"] == xml
+    mock_device.dump_hierarchy.assert_not_called()
 
 
 @pytest.mark.asyncio

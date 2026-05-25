@@ -10,6 +10,43 @@ export type SelectorBy =
   | 'descriptionContains'
   | 'descriptionStartsWith';
 
+/** Extra AND conditions (uiautomator2 selector fields). */
+export type SelectorConditions = {
+  className?: string;
+  resourceId?: string;
+  textContains?: string;
+  clickable?: boolean;
+  enabled?: boolean;
+  instance?: number;
+  index?: number;
+  [key: string]: string | number | boolean | undefined;
+};
+
+export type ChainOp = 'child' | 'sibling' | 'relative' | 'child_by_text' | 'child_by_description';
+
+export type ChainStep = {
+  op: ChainOp;
+  target?: { by?: SelectorBy; value?: string; conditions?: SelectorConditions; className?: string };
+  direction?: 'left' | 'right' | 'up' | 'down';
+  text?: string;
+  description?: string;
+  allow_scroll_search?: boolean;
+};
+
+/** Canonical nested selector for tap_selector, wait_element, etc. */
+export type ScenarioSelector = {
+  by: SelectorBy;
+  value: string;
+  conditions?: SelectorConditions;
+  instance?: number;
+  index?: number;
+  xpath?: string;
+  chain?: ChainStep;
+  bounds?: number[];
+};
+
+export type SelectorFallback = { rx: number; ry: number };
+
 /** Screen context captured at record time. Executor uses to verify correct screen. */
 export type ScreenContext = {
   package?: string;
@@ -26,26 +63,82 @@ export type ScreenContext = {
  */
 export type TapStep = {
   type: 'tap';
-  selector?: { by: SelectorBy; value: string };
-  fallback?: { rx: number; ry: number };
+  selector?: ScenarioSelector;
+  fallback?: SelectorFallback;
   screen?: ScreenContext;
   timeout?: number;
 };
 
 export type ScenarioStep =
-  | { type: 'launch_app'; package: string; wait_after?: number }
+  | {
+      type: 'launch_app';
+      package: string;
+      wait_after?: number;
+      activity?: string;
+      component?: string;
+      stop_before?: boolean;
+      use_monkey?: boolean;
+    }
+  | { type: 'stop_app'; package: string }
+  | { type: 'clear_app'; package: string }
+  | { type: 'wait_app'; package: string; timeout?: number; front?: boolean }
+  | { type: 'push_file'; local_path: string; remote_path: string; mode?: number }
+  | { type: 'pull_file'; local_path: string; remote_path: string }
   | { type: 'open_url'; url: string; package?: string }
   | { type: 'wait'; seconds: number }
   | { type: 'tap_ratio'; x: number; y: number }
   | { type: 'tap_position'; pos: 'top_left' | 'top_center' | 'top_right' | 'middle_left' | 'middle_center' | 'middle_right' | 'bottom_left' | 'bottom_center' | 'bottom_right' | 'search_bar' }
   | { type: 'swipe_ratio'; x1: number; y1: number; x2: number; y2: number; duration_ms?: number }
   | TapStep
-  | { type: 'tap_selector'; by: SelectorBy; value: string; fallback_rx?: number; fallback_ry?: number; timeout?: number }
-  | { type: 'wait_element'; by: SelectorBy; value: string; timeout?: number; poll?: number }
-  | { type: 'assert_element'; by: SelectorBy; value: string; timeout?: number; poll?: number }
-  | { type: 'input_selector'; by: SelectorBy; value: string; text: string; clear_first?: boolean }
-  | { type: 'long_tap_selector'; by: SelectorBy; value: string; duration_ms?: number }
-  | { type: 'scroll_to'; by: SelectorBy; value: string; direction?: 'down' | 'up'; max_swipes?: number }
+  | {
+      type: 'tap_selector';
+      selector?: ScenarioSelector;
+      by?: SelectorBy;
+      value?: string;
+      fallback?: SelectorFallback;
+      fallback_rx?: number;
+      fallback_ry?: number;
+      timeout?: number;
+    }
+  | {
+      type: 'wait_element';
+      selector?: ScenarioSelector;
+      by?: SelectorBy;
+      value?: string;
+      timeout?: number;
+      poll?: number;
+    }
+  | {
+      type: 'assert_element';
+      selector?: ScenarioSelector;
+      by?: SelectorBy;
+      value?: string;
+      timeout?: number;
+      poll?: number;
+    }
+  | {
+      type: 'input_selector';
+      selector?: ScenarioSelector;
+      by?: SelectorBy;
+      value?: string;
+      text: string;
+      clear_first?: boolean;
+    }
+  | {
+      type: 'long_tap_selector';
+      selector?: ScenarioSelector;
+      by?: SelectorBy;
+      value?: string;
+      duration_ms?: number;
+    }
+  | {
+      type: 'scroll_to';
+      selector?: ScenarioSelector;
+      by?: SelectorBy;
+      value?: string;
+      direction?: 'down' | 'up';
+      max_swipes?: number;
+    }
   | { type: 'input_text'; text: string; via: 'u2' | 'a11y_key' }
   | { type: 'key'; key: string }
   | {

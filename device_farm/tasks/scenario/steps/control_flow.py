@@ -6,13 +6,18 @@ import logging
 import random
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from tasks.scenario.steps import register_step
 from tasks.scenario.context import ScenarioContext
 from tasks.scenario.utils import _evaluate_condition, _eval_ru_condition, _wait_for_element
 
 log = logging.getLogger(__name__)
+
+
+def _cancelled(sc: ScenarioContext) -> bool:
+    return sc.cancel_event is not None and sc.cancel_event.is_set()
+
 
 # Per-execution asyncio.Lock for serializing loop_state writes.
 # Keyed by execution_id; leaks are bounded since executions finish.
@@ -82,6 +87,10 @@ def handle_loop(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dic
     sub_results = []
     actual_iters = 0
     for i in range(resume_from, iterations):
+        if _cancelled(sc):
+            result["ok"] = False
+            result["message"] = "loop: cancelled by user"
+            break
         if use_while and not _evaluate_condition(sc.device, while_cond, sc.ctx):
             break
         sc.ctx["_loop_iter"] = i
@@ -229,6 +238,10 @@ def handle_repeat(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: D
 
     sub_results: List[Dict[str, Any]] = []
     for i in range(n):
+        if _cancelled(sc):
+            result["ok"] = False
+            result["message"] = "repeat: cancelled by user"
+            break
         sc.var_ctx.set("__LOOP_INDEX__", i)
         iter_res = _run_nested(sc, sub_steps)
         sub_results.append({"iteration": i, "result": iter_res})
@@ -262,6 +275,10 @@ def handle_repeat_until(sc: ScenarioContext, step: Dict[str, Any], idx: int, res
     actual_iters = 0
     condition_met = False
     for i in range(max_iter):
+        if _cancelled(sc):
+            result["ok"] = False
+            result["message"] = "repeat_until: cancelled by user"
+            break
         sc.var_ctx.set("__LOOP_INDEX__", i)
         if _eval_ru_condition(sc.device, condition, sc.var_ctx):
             condition_met = True
@@ -284,15 +301,16 @@ def handle_repeat_until(sc: ScenarioContext, step: Dict[str, Any], idx: int, res
 
 @register_step("if_element")
 def handle_if_element(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
-    by = str(step.get("by") or "")
-    value = str(step.get("value") or "").strip()
+    from tasks.scenario.utils import resolve_step_selector_fields, _retry_find_element
+
+    spec, by, value, _ = resolve_step_selector_fields(step)
     timeout = float(step.get("timeout", 3.0) or 3.0)
     then_steps = step.get("then") or []
     else_steps = step.get("else") or []
 
-    if not by or not value:
+    if spec is None or spec.is_empty():
         result["ok"] = False
-        result["message"] = "if_element: missing by/value"
+        result["message"] = "if_element: missing selector"
         return
 
     element_found = False
@@ -300,7 +318,9 @@ def handle_if_element(sc: ScenarioContext, step: Dict[str, Any], idx: int, resul
         sc.device.ensure_u2_healthy()
         u2 = sc.device.u2
         if u2 is not None:
-            eid = _wait_for_element(u2, by, value, timeout=timeout)
+            eid = _retry_find_element(
+                u2, by, value, timeout=timeout, poll=0.3, spec=spec, device=sc.device,
+            )
             element_found = eid is not None
     except Exception as exc:
         log.debug(f"[{sc.serial}] if_element u2 check error: {exc}")
@@ -322,287 +342,96 @@ def handle_if_element(sc: ScenarioContext, step: Dict[str, Any], idx: int, resul
         result["message"] = f"if_element(element_found={element_found}): no steps for {branch_name}, skip"
 
 
-# ── Facebook comment filter switch (bundled into tap_fb_comment_button) ──────
-# When comment sheet opens, FB defaults to "Most relevant" — misses comments.
-# Switch to "All comments" (+ spam) to crawl the full volume.
-#
-# FB stores these as content-desc on the indicator row and option button.
-# Known content-desc strings (update here if FB changes wording):
-#   Indicator VN: "Đang hiển thị Phù hợp nhất bình luận. Nhấn để thay đổi bộ lọc bình luận."
-#   Option VN:    "Tất cả bình luận, Hiển thị tất cả bình luận, bao gồm cả nội dung có thể là spam."
-#   Indicator EN: "Showing Most Relevant comments. Tap to change comment filter."
-#   Option EN:    "All Comments, Show all comments, including those that may be spam."
-
-# Indicator row — the tappable row showing current filter mode.
-# Ordered: most-specific first (exact substring), then fuzzy fallback.
-_FB_FILTER_INDICATOR_XPATHS = [
-    # VN exact fragments (content-desc)
-    "//*[contains(@content-desc,'Phù hợp nhất bình luận') and contains(@content-desc,'thay đổi bộ lọc')]",
-    "//*[contains(@content-desc,'Phù hợp nhất') and contains(@content-desc,'bình luận')]",
-    # VN text attribute fallback
-    "//*[contains(@text,'Phù hợp nhất') and contains(@text,'bình luận')]",
-    # EN exact (content-desc)
-    "//*[contains(@content-desc,'Most Relevant') and contains(@content-desc,'comment filter')]",
-    "//*[contains(@content-desc,'Most Relevant') or contains(@content-desc,'Most relevant')]",
-    # EN text fallback
-    "//*[contains(@text,'Most Relevant') or contains(@text,'Most relevant')]",
-]
-
-# "All comments" option in the filter menu (appears after tapping indicator).
-# FB uses a long content-desc including the spam disclaimer — match on key substring.
-_FB_ALL_COMMENTS_OPTION_XPATHS = [
-    # VN — content-desc contains spam-hint phrase (most specific)
-    "//*[contains(@content-desc,'Tất cả bình luận') and contains(@content-desc,'spam')]",
-    # VN — content-desc, plain
-    "//*[contains(@content-desc,'Tất cả bình luận')]",
-    # VN — text attribute
-    "//*[contains(@text,'Tất cả') and contains(@text,'bình luận')]",
-    # EN — content-desc contains spam phrase
-    "//*[contains(@content-desc,'All Comments') and contains(@content-desc,'spam')]",
-    "//*[contains(@content-desc,'All comments') and contains(@content-desc,'spam')]",
-    # EN — plain
-    "//*[contains(@content-desc,'All Comments') or contains(@content-desc,'All comments')]",
-    "//*[contains(@text,'All comments') or contains(@text,'All Comments')]",
-]
-
-
-def _find_and_tap_by_xpaths(device, xml: str, xpaths: List[str]) -> Optional[str]:
-    """Parse XML once, test xpaths with lxml, tap the first match by bounds.
-
-    Returns the matching xpath string, or None if nothing matched / tap failed.
-    Zero u2 round-trips for the search itself.
-    """
-    import re as _re
-    try:
-        from lxml import etree as _et
-        root = _et.fromstring(xml.encode() if isinstance(xml, str) else xml)
-    except Exception:
-        return None
-
-    for xp in xpaths:
-        try:
-            nodes = root.xpath(xp)
-        except Exception:
-            continue
-        if not nodes:
-            continue
-        node = nodes[0]
-        m = _re.match(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", node.get("bounds") or "")
-        if not m:
-            continue
-        x1, y1, x2, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
-        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-        try:
-            device.tap(cx, cy)
-            return xp
-        except Exception:
-            continue
-    return None
-
-
-def _fb_switch_to_all_comments(
-    sc: ScenarioContext,
-    *,
-    wait_stable_s: float = 0.5,
-    indicator_timeout: float = 3.0,
-    option_wait_s: float = 0.4,
-) -> Dict[str, Any]:
-    """Switch FB comment filter from "Most Relevant" to "All Comments".
-
-    Fast path: get XML once → test all xpaths in Python (lxml, no round-trips)
-    → tap by bounds. Two XML fetches total (one per step).
-    Best-effort: any failure returns report with switched=False.
-    """
-    report: Dict[str, Any] = {"indicator": None, "option": None, "switched": False}
-    device = sc.device
-
-    # Wait for comment sheet animation before probing.
-    time.sleep(wait_stable_s)
-
-    # Step 1 — find indicator row in XML, tap it.
-    deadline = time.monotonic() + indicator_timeout
-    indicator_hit = None
-    while time.monotonic() < deadline:
-        xml = device.hierarchy_xml(force_refresh=True)
-        if xml:
-            hit = _find_and_tap_by_xpaths(device, xml, _FB_FILTER_INDICATOR_XPATHS)
-            if hit:
-                indicator_hit = hit
-                log.debug(f"[filter-switch] indicator tapped: {hit}")
-                break
-        time.sleep(0.3)
-
-    report["indicator"] = indicator_hit
-    if not indicator_hit:
-        log.debug("[filter-switch] no indicator — already All, or too few comments")
-        return report
-
-    # Step 2 — option menu appears; get fresh XML and tap "All comments".
-    time.sleep(option_wait_s)
-    xml = device.hierarchy_xml(force_refresh=True)
-    if xml:
-        hit = _find_and_tap_by_xpaths(device, xml, _FB_ALL_COMMENTS_OPTION_XPATHS)
-        if hit:
-            report["option"] = hit
-            report["switched"] = True
-            log.debug(f"[filter-switch] option tapped: {hit}")
-            # Brief settle for comment list to repaint under new filter.
-            time.sleep(0.5)
-            return report
-
-    log.debug("[filter-switch] indicator tapped but option not found")
-    return report
-
-
 @register_step("tap_fb_comment_button")
 def handle_tap_fb_comment_button(
     sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any],
 ) -> None:
-    """Atomic resolve+tap of topmost visible FB feed ``Bình luận`` button.
+    """Resolve the visible FB comment button via agent-boot, then tap locally."""
+    from tasks.scenario.steps.extraction import request_edge_comment_target
 
-    Control-flow shape (like ``if_element``):
-      - ``then`` / ``else``: nested step lists. ``then`` runs only after a
-        successful resolve+tap; ``else`` runs when no button was found / tap
-        failed. Users do not need an auxiliary flag variable.
-
-    Built-in post-tap behavior:
-      - ``switch_to_all_comments`` (default True): automatically switch the
-        comment filter from "Most relevant" to "All comments" (VN + EN
-        locales) BEFORE running ``then``. Removes the manual if_element
-        chain previously required in every template.
-
-    On success, ctx is updated so downstream ``extract fb_comments`` links
-    comments to the correct post:
-      - ``_fb_comment_parent_pid``   = _pid of the tapped row
-      - ``_post_id_map[_pid]``       = sha256 content_hash (accumulated)
-      - ``_active_comment_parent_hash`` = same hash
-
-    Step params (all optional):
-      - ``timeout`` (default 6.0): seconds to poll for a visible button.
-      - ``poll`` (default 0.4): polling interval.
-      - ``dedupe_field`` (default "post_key"): hash field for the post.
-      - ``ignore_error`` (default True): miss does NOT fail scenario — the
-        ``else`` branch runs (or nothing runs if ``else`` is empty).
-      - ``post_tap_wait_s`` (default 0.8): settle delay after tap before the
-        auto filter switch peeks at the XML.
-    """
-    from tasks.fb_extract import resolve_topmost_comment_target_from_xml
-    from services.content_store import compute_content_hash
-
-    timeout = float(step.get("timeout", 6.0) or 6.0)
-    poll = max(0.1, float(step.get("poll", 0.4) or 0.4))
-    dedupe_field = str(step.get("dedupe_field") or sc.ctx.get("_fb_posts_dedupe_field") or "post_key")
-    enter_comment_sheet_timeout = float(step.get("enter_comment_sheet_timeout", 1.8) or 1.8)
+    target = request_edge_comment_target(
+        device=sc.device,
+        serial=sc.serial,
+        ctx=sc.ctx,
+        scenario=sc.scenario,
+        step=step,
+        result=result,
+    )
     ignore_error = bool(step.get("ignore_error", True))
-    switch_filter = bool(step.get("switch_to_all_comments", True))
-    post_tap_wait_s = float(step.get("post_tap_wait_s", 0.8) or 0.8)
-    pre_scroll = bool(step.get("pre_scroll", False))
-    pre_scroll_distance = float(step.get("pre_scroll_distance", 0.24) or 0.24)
     then_steps = step.get("then") or []
     else_steps = step.get("else") or []
 
-    device = sc.device
-    ctx = sc.ctx
-
-    # Optional light scroll to expose the action bar when the topmost post is tall.
-    if pre_scroll:
-        try:
-            device.swipe_ratio(0.5, 0.72, 0.5, 0.72 - pre_scroll_distance)
-            time.sleep(0.4)
-        except Exception:
-            pass
-
-    deadline = time.monotonic() + timeout
-    post = None
-    btn = None
-    while True:
-        xml = device.hierarchy_xml(force_refresh=True)
-        if xml:
-            post, btn = resolve_topmost_comment_target_from_xml(xml)
-            if post and btn:
-                break
-        if time.monotonic() >= deadline:
-            break
-        time.sleep(poll)
-
     tapped = False
-    pid = None
-    post_hash = None
-    if post and btn and post.get("_pid"):
-        pid = post["_pid"]
-        post_hash = compute_content_hash(post, dedupe_field=dedupe_field)
-        x1, y1, x2, y2 = btn
-        cx = (x1 + x2) // 2
-        cy = (y1 + y2) // 2
-        try:
-            device.tap(cx, cy)
-            # Confirm we actually entered the comment sheet; in real devices
-            # the tap may hit but transition can fail/lag and we remain on feed.
+    if target:
+        bounds = target.get("bounds")
+        if isinstance(bounds, list) and len(bounds) == 4:
+            x1, y1, x2, y2 = [int(v) for v in bounds]
+            cx = (x1 + x2) // 2
+            cy = (y1 + y2) // 2
             try:
-                from tasks.fb_extract import _hierarchy_is_fb_comment_sheet, _parse_xml
-
-                deadline_enter = time.monotonic() + max(0.5, enter_comment_sheet_timeout)
-                while time.monotonic() < deadline_enter:
-                    _xml = device.hierarchy_xml(force_refresh=True)
-                    _root = _parse_xml(_xml) if _xml else None
-                    if _root is not None and _hierarchy_is_fb_comment_sheet(_root):
-                        tapped = True
-                        break
-                    time.sleep(0.15)
-            except Exception:
-                # Fallback to previous behavior if classifier fails.
+                agent_tapped = bool(target.get("_agent_tapped"))
+                if not agent_tapped:
+                    sc.device.tap(cx, cy)
                 tapped = True
-            if tapped:
-                pid_map = ctx.setdefault("_post_id_map", {})
-                pid_map[pid] = post_hash
-                ctx["_fb_comment_parent_pid"] = pid
-                ctx["_active_comment_parent_hash"] = post_hash
-                ctx["_first_new_post_hash"] = post_hash
-                # Keep a richer post anchor so downstream comment extraction can
-                # still map parent hash when pid-based linkage is missing.
-                ctx["_active_comment_parent_anchor"] = {
-                    "post_key": post.get("post_key"),
-                    "stable_post_id": post.get("stable_post_id"),
-                    "fb_post_id": post.get("fb_post_id"),
-                    "author": post.get("author"),
-                    "timestamp": post.get("timestamp"),
-                    "text_prefix": str(post.get("text") or "")[:220],
+                parent_base_hash = target.get("parent_base_hash")
+                if parent_base_hash:
+                    sc.ctx["_edge_comment_parent_base_hash"] = parent_base_hash
+                if target.get("parent_id"):
+                    sc.ctx["_active_comment_parent_hash"] = target.get("parent_id")
+                    sc.ctx["_first_new_post_hash"] = target.get("parent_id")
+                if target.get("pid"):
+                    sc.ctx["_fb_comment_parent_pid"] = target.get("pid")
+                sc.ctx["_active_comment_parent_anchor"] = {
+                    "post_key": target.get("post_key"),
+                    "stable_post_id": target.get("stable_post_id"),
+                    "fb_post_id": target.get("fb_post_id"),
+                    "author": target.get("author"),
+                    "timestamp": target.get("timestamp"),
+                    "text_prefix": target.get("text_prefix"),
                 }
-            result["_pid"] = pid
-            result["_bounds"] = [x1, y1, x2, y2]
-            result["tapped_at"] = [cx, cy]
-            log.info(
-                f"[{sc.serial}] tap_fb_comment_button: pid={pid} "
-                f"hash={post_hash[:12]} at ({cx},{cy}) entered_sheet={tapped}"
-            )
-            time.sleep(0.3)
-        except Exception as exc:
-            log.warning(f"[{sc.serial}] tap_fb_comment_button: tap failed: {exc}")
+                result["tapped_at"] = [cx, cy]
+                result["agent_tapped"] = agent_tapped
+                result["_bounds"] = bounds
+                result["_pid"] = target.get("pid")
+                result["parent_id"] = target.get("parent_id")
+            except Exception as exc:
+                result["ok"] = False
+                result["message"] = f"tap_fb_comment_button: tap failed: {exc}"
+                return
 
-    # Auto filter switch — only when tap succeeded and user didn't opt out.
-    if tapped and switch_filter:
+    from tasks.scenario.steps.extraction import (
+        resolve_step_comment_filter,
+        run_edge_comment_filter_switch,
+    )
+
+    if tapped and resolve_step_comment_filter(step):
         try:
-            fsw = _fb_switch_to_all_comments(sc, wait_stable_s=post_tap_wait_s)
-            result["filter_switch"] = fsw
-            if fsw.get("switched"):
-                log.info(
-                    f"[{sc.serial}] tap_fb_comment_button: switched to All comments "
-                    f"(option={fsw.get('option')})"
-                )
-        except Exception as exc:
-            log.warning(
-                f"[{sc.serial}] tap_fb_comment_button: filter switch failed: {exc}"
+            result["filter_switch"] = run_edge_comment_filter_switch(
+                device=sc.device,
+                serial=sc.serial,
+                scenario=sc.scenario,
+                step=step,
+                result=result,
             )
+        except Exception as exc:
+            log.warning("[%s] tap_fb_comment_button: filter switch failed: %s", sc.serial, exc)
+        settle_s = float(
+            step.get("comment_filter_settle_s", step.get("post_tap_wait_s", 0.6)) or 0.6
+        )
+        if settle_s > 0:
+            time.sleep(settle_s)
 
     branch_steps = then_steps if tapped else else_steps
     branch_name = "then" if tapped else "else"
     result["tapped"] = tapped
     result["branch"] = branch_name
 
-    if not tapped and not ignore_error:
-        result["ok"] = False
-        result["message"] = "tap_fb_comment_button: no visible Bình luận button"
-        return
+    if not tapped:
+        result["message"] = result.get("message") or "tap_fb_comment_button: no visible comment button"
+        if not ignore_error:
+            result["ok"] = False
+            return
+        result["ok"] = True
 
     if branch_steps:
         sub = _run_nested(sc, branch_steps)
@@ -610,15 +439,16 @@ def handle_tap_fb_comment_button(
         if not sub.get("success"):
             result["ok"] = False
             result["message"] = f"tap_fb_comment_button: {branch_name} branch failed"
-        else:
-            result["message"] = (
-                f"tap_fb_comment_button(tapped={tapped}): took {branch_name}"
-                + (f" pid={pid}" if pid else "")
-            )
-    else:
-        result["message"] = (
-            f"tap_fb_comment_button(tapped={tapped}): no steps for {branch_name}, skip"
-        )
+            return
+        result["ok"] = True
+        result["message"] = f"tap_fb_comment_button(tapped={tapped}): took {branch_name}"
+        return
+
+    result["ok"] = True
+    result["message"] = (
+        f"tap_fb_comment_button(tapped={tapped}): "
+        f"{'tapped correct post comment button' if tapped else 'no steps for else, skip'}"
+    )
 
 
 @register_step("if_variable")

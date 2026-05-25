@@ -62,8 +62,9 @@ export const ROUTES = {
   DASHBOARD: {
     ROOT: '/dashboard',
     ORGANIZATION: '/dashboard/settings/organization',
-    ORGANIZATION_MEMBER: (id: string) => `/dashboard/org/${id}/member`,
-    ORGANIZATION_SETTINGS: (id: string) => `/dashboard/org/${id}`,
+    ORGANIZATION_MEMBER: '/dashboard/settings/organization/members',
+    /** @deprecated Use ORGANIZATION; org is resolved from context, not URL. */
+    ORGANIZATION_SETTINGS: (_id?: string) => '/dashboard/settings/organization',
     ORGANIZATION_EDIT: (id: string) => `/dashboard/settings/organization/${id}`,
     PRODUCT: {
       ROOT: '/dashboard/product',

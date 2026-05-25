@@ -1055,6 +1055,22 @@ def _try_publish_status(device: "DeviceClient") -> None:
         pass
 
 
+def force_clear_scenario_busy(device: "DeviceClient") -> None:
+    """Reset scenario-active gates immediately (preview cancel / interrupt).
+
+    The scenario thread may still be winding down on a long step; clearing the
+    counter and publishing status lets manual control resume without waiting.
+    """
+    lock = getattr(device, "_scenario_active_lock", None)
+    if lock is not None:
+        with lock:
+            device._scenario_active = 0
+    else:
+        device._scenario_active = 0
+    _try_publish_status(device)
+    _try_publish_scenario_active_redis(device)
+
+
 def _try_publish_scenario_active_redis(device: "DeviceClient") -> None:
     """Best-effort: publish scenario_active to Redis for cross-process WS/API gates.
 
@@ -2132,368 +2148,32 @@ def _run_scenario_task_legacy(
             """Extract UI data (posts, text nodes) from current screen into context."""
             step = normalize_extract_step(step)
             strategy = str(step.get("strategy", "fb_posts"))
-            stop_if_no_new = bool(step.get("stop_if_no_new", False))
-            no_new_threshold = int(step.get("no_new_threshold", 3))
-            expand_see_more = bool(step.get("expand_see_more", True))
-            _ecr = step.get("expand_completion_retries", 3)
-            completion_retries = max(0, int(3 if _ecr is None else _ecr))
+            from tasks.scenario.steps.extraction import EDGE_CONTENT_STRATEGIES
 
-            _em_passes = int(step.get("expand_see_more_max_passes", 2))
-            _em_scroll = bool(step.get("expand_see_more_scroll", False))
-            _em_scroll_dist = float(step.get("expand_see_more_scroll_distance", 0.3))
-            _lazy_rounds = int(step.get("expand_lazy_hydration_rounds", 6))
-            _prefetch_passes = int(step.get("expand_prefetch_scroll_passes", 0) or 0)
-            _lazy_scroll = float(step.get("expand_lazy_scroll_distance", _em_scroll_dist))
+            if strategy in EDGE_CONTENT_STRATEGIES:
+                from tasks.scenario.steps.extraction import request_edge_extra_data
 
-            # Always pre-expand posts: when expand_completion_retries > 0 the retry loop
-            # only runs if is_fb_post_truncated() is true — the parser can omit the
-            # "… Xem thêm" suffix, so skipping pre-expand meant never tapping See more.
-            if strategy == "fb_posts" and expand_see_more:
-                try:
-                    from tasks.fb_extract import expand_see_more_with_lazy_hydration
-                    expand_see_more_with_lazy_hydration(
-                        device,
-                        max_rounds=max(3, _lazy_rounds),
-                        scroll_distance=max(0.12, _lazy_scroll),
-                    )
-                    time.sleep(0.35)
-                except Exception as exc:
-                    log.warning("[%s] extract: pre-expand fb_posts (See more / lazy) failed: %s", serial, exc)
-
-            if strategy == "fb_comments" and expand_see_more:
-                # Expand truncated long comments before parsing
-                try:
-                    from tasks.fb_extract import _expand_see_more
-                    _expand_see_more(
-                        device,
-                        max_passes=_em_passes,
-                        scroll_between=_em_scroll,
-                        scroll_distance=_em_scroll_dist,
-                    )
-                    time.sleep(0.55)
-                except Exception as exc:
-                    log.warning("[%s] extract: pre-expand fb_comments (See more) failed: %s", serial, exc)
-
-            if strategy == "fb_posts" and expand_see_more and _prefetch_passes > 0:
-                try:
-                    from tasks.fb_extract import prefetch_viewport_scrolls
-                    prefetch_viewport_scrolls(
-                        device,
-                        passes=_prefetch_passes,
-                        distance=max(0.15, _em_scroll_dist),
-                        pause_s=float(step.get("expand_prefetch_scroll_pause", 0.7)),
-                    )
-                except Exception as exc:
-                    log.warning("[%s] extract: prefetch_viewport_scrolls failed: %s", serial, exc)
-
-            xml = device.hierarchy_xml(force_refresh=True)
-            if not xml:
+                if request_edge_extra_data(
+                    device=device,
+                    serial=serial,
+                    ctx=ctx,
+                    scenario=scenario,
+                    step=step,
+                    strategy=strategy,
+                    result=step_result,
+                ):
+                    results.append(step_result)
+                    continue
                 step_result["ok"] = False
-                step_result["message"] = "extract: hierarchy_xml returned None"
-            else:
-                if strategy == "fb_posts":
-                    from tasks.fb_extract import (
-                        parse_fb_posts_from_xml,
-                        _dedup,
-                        is_fb_post_truncated,
-                        expand_see_more_with_lazy_hydration,
-                    )
-                    from services.content_store import compute_content_hash
-                    scroll_idx = ctx.get("_loop_iter", 0)
-                    new_posts = parse_fb_posts_from_xml(xml, source_index=scroll_idx)
+                step_result["message"] = (
+                    f"extract {strategy}: device_farm content XML parser was removed; "
+                    "enable edge_extra_data so phone/APK sends XML to agent-boot"
+                )
+                results.append(step_result)
+                continue
 
-                    def _snapshot(posts: List[Dict[str, Any]]) -> Tuple[int, int]:
-                        unresolved = sum(1 for _p in posts if is_fb_post_truncated(_p))
-                        total_len = sum(len(str(_p.get("text") or "")) for _p in posts)
-                        return unresolved, total_len
-
-                    unresolved_first, total_len_first = _snapshot(new_posts)
-
-                    if expand_see_more and any(is_fb_post_truncated(p) for p in new_posts):
-                        try:
-                            expand_see_more_with_lazy_hydration(
-                                device,
-                                max_rounds=max(2, min(_lazy_rounds, 5)),
-                                scroll_distance=max(0.12, _lazy_scroll),
-                            )
-                            xml_h = device.hierarchy_xml(force_refresh=True)
-                            if xml_h:
-                                new_posts = _dedup(
-                                    new_posts
-                                    + parse_fb_posts_from_xml(xml_h, source_index=scroll_idx)
-                                )
-                        except Exception as exc:
-                            log.warning("[%s] extract: mid-parse expand (truncated posts) failed: %s", serial, exc)
-
-                    unresolved_before, total_len_before = _snapshot(new_posts)
-                    retries_done = 0
-                    plateau = 0
-                    if expand_see_more and unresolved_before > 0:
-                        max_retries = max(1, min(4, completion_retries))
-                        prev_unresolved, prev_total_len = unresolved_before, total_len_before
-
-                        for _ in range(max_retries):
-                            retries_done += 1
-                            try:
-                                expand_see_more_with_lazy_hydration(
-                                    device,
-                                    max_rounds=max(3, min(_lazy_rounds, 8)),
-                                    scroll_distance=max(0.12, _lazy_scroll),
-                                )
-                                time.sleep(0.6)
-                                xml_retry = device.hierarchy_xml(force_refresh=True)
-                                if not xml_retry:
-                                    break
-                                retry_posts = parse_fb_posts_from_xml(xml_retry, source_index=scroll_idx)
-                                # Merge instead of replacing so we do not lose posts if viewport
-                                # drifts during expansion/re-parse cycles.
-                                candidate_posts = _dedup(new_posts + (retry_posts or []))
-                                curr_unresolved, curr_total_len = _snapshot(candidate_posts)
-                                improved = (
-                                    (curr_unresolved < prev_unresolved)
-                                    or (curr_total_len > prev_total_len + 20)
-                                )
-                                new_posts = candidate_posts
-                                if improved:
-                                    plateau = 0
-                                else:
-                                    plateau += 1
-                                prev_unresolved, prev_total_len = curr_unresolved, curr_total_len
-                                if curr_unresolved == 0 or plateau >= 2:
-                                    break
-                            except Exception as exc:
-                                log.warning("[%s] extract: expand_completion retry failed: %s", serial, exc)
-                                break
-
-                    unresolved_after, total_len_after = _snapshot(new_posts)
-                    step_result["extract_diagnostics"] = {
-                        "unresolved_first_parse": unresolved_first,
-                        "total_len_first_parse": total_len_first,
-                        "unresolved_before": unresolved_before,
-                        "unresolved_after": unresolved_after,
-                        "total_len_before": total_len_before,
-                        "total_len_after": total_len_after,
-                        "completion_retries": retries_done,
-                        "plateau_count": plateau,
-                    }
-                    prev_count = len(ctx["posts"])
-                    ctx["posts"] = _dedup(ctx["posts"] + new_posts)
-                    added = len(ctx["posts"]) - prev_count
-                    step_result["extracted"] = added
-                    step_result["total_posts"] = len(ctx["posts"])
-                    step_result["message"] = f"extract fb_posts: +{added} new (total {len(ctx['posts'])})"
-                    log.info(
-                        f"[{serial}] extract fb_posts diagnostics: "
-                        f"unresolved {unresolved_before}->{unresolved_after}, "
-                        f"len {total_len_before}->{total_len_after}, retries={retries_done}, plateau={plateau}"
-                    )
-                    log.info(f"[{serial}] {step_result['message']}")
-                    # Track first VISIBLE post for comment linking.
-                    # Uses new_posts[0] (topmost post on screen), NOT the first "new" post,
-                    # because tap_selector("Bình luận") taps the topmost button on screen.
-                    # Even if new_posts[0] is a duplicate, its content_hash exists in DB.
-                    _post_dedupe_field = str(step.get("dedupe_field") or "post_key")
-                    ctx["_fb_posts_dedupe_field"] = _post_dedupe_field
-                    if new_posts:
-                        ctx["_first_new_post_hash"] = compute_content_hash(
-                            new_posts[0], dedupe_field=_post_dedupe_field
-                        )
-                        # Accumulate pid→hash across batches so tap_fb_comment_button
-                        # (or a late tap on a cached post) can still resolve the parent.
-                        # Previous behavior overwrote each batch, dropping older pids.
-                        pid_map = ctx.setdefault("_post_id_map", {})
-                        for _p in new_posts:
-                            _p_pid = _p.get("_pid")
-                            if _p_pid:
-                                pid_map[_p_pid] = compute_content_hash(_p, dedupe_field=_post_dedupe_field)
-                        # Top-of-feed _pid fallback. Still useful when tap_fb_comment_button
-                        # is not used, but is OVERRIDDEN by that step on success to match
-                        # the actual tapped post.
-                        _tpid = new_posts[0].get("_pid")
-                        if _tpid:
-                            ctx["_fb_comment_parent_pid"] = _tpid
-                        else:
-                            ctx.pop("_fb_comment_parent_pid", None)
-                    else:
-                        ctx.pop("_fb_comment_parent_pid", None)
-                    # Track no-new streak for auto-break
-                    if stop_if_no_new:
-                        if added == 0:
-                            _base_streak = ctx.get("_no_new_posts_streak", ctx.get("_no_new_streak", 0))
-                            ctx["_no_new_posts_streak"] = _base_streak + 1
-                            # Backward compatibility for existing flows/conditions.
-                            ctx["_no_new_streak"] = ctx["_no_new_posts_streak"]
-                            if ctx["_no_new_posts_streak"] >= no_new_threshold:
-                                ctx["_break"] = True
-                                step_result["message"] += (
-                                    f" — breaking (no new for {ctx['_no_new_posts_streak']} scrolls)"
-                                )
-                        else:
-                            ctx["_no_new_posts_streak"] = 0
-                            ctx["_no_new_streak"] = 0
-                elif strategy == "text_nodes":
-                    import xml.etree.ElementTree as ET
-                    try:
-                        root = ET.fromstring(xml)
-                        texts = []
-                        for node in root.iter():
-                            t2 = (node.get("text") or "").strip()
-                            if t2 and len(t2) > 2:
-                                texts.append(t2)
-                        ctx.setdefault("text_nodes", [])
-                        ctx["text_nodes"].extend(texts)
-                        step_result["extracted"] = len(texts)
-                        step_result["message"] = f"extract text_nodes: {len(texts)} texts"
-                    except Exception as exc:
-                        step_result["ok"] = False
-                        step_result["message"] = f"extract text_nodes failed: {exc}"
-                elif strategy == "fb_comments":
-                    from tasks.fb_extract import (
-                        parse_fb_comments_from_xml,
-                        _dedup_comments,
-                        _is_junk_parsed_comment_row,
-                        _post_id_from_ctx,
-                    )
-                    # Prevent stale linkage from previous comment screens.
-                    ctx["_active_comment_parent_hash"] = None
-                    parent_post_id_var = step.get("parent_post_id_var")
-                    max_items = int(step.get("max_items") or 50)
-                    parent_post_id = _post_id_from_ctx(ctx, parent_post_id_var)
-                    raw_items = parse_fb_comments_from_xml(
-                        xml, parent_post_id=parent_post_id, max_items=max_items,
-                    )
-                    # Separate post_stats sentinel from actual comments
-                    post_stats = next((x for x in raw_items if x.get("_type") == "post_stats"), None)
-                    new_comments = [
-                        x
-                        for x in raw_items
-                        if x.get("_type") != "post_stats"
-                        and not _is_junk_parsed_comment_row(x)
-                    ]
-
-                    # If comment view exposes better reaction/share counts, update parent post.
-                    # Prefer _post_id_map lookup (reliable: MD5 from comment view header → SHA256)
-                    # over _first_new_post_hash (unreliable: assumes topmost feed post).
-                    if post_stats:
-                        ctx["_comment_view_stats"] = post_stats
-                        parent_hash = resolve_comment_parent_hash(ctx, parent_post_id)
-                        if parent_hash:
-                            # Persist resolved parent for downstream save_extraction(parent_id_var=...).
-                            ctx["_active_comment_parent_hash"] = parent_hash
-                        if parent_hash:
-                            try:
-                                import concurrent.futures as _cf
-                                from db.database import activity_session, run_activity_coro
-                                from db.crud.content import update_content_stats
-                                from services.content_store import _safe_int
-                                _ph = parent_hash
-                                _ps = post_stats
-                                _serial = serial
-
-                                async def _do_update_stats():
-                                    async with activity_session() as _db:
-                                        updated = await update_content_stats(
-                                            _db,
-                                            content_hash=_ph,
-                                            likes_count=_safe_int(_ps.get("reactions")),
-                                            shares_count=_safe_int(_ps.get("shares")),
-                                            comments_count=_safe_int(_ps.get("comments")),
-                                        )
-                                        if updated:
-                                            await _db.commit()
-                                            log.info(
-                                                f"[{_serial}] post stats updated: "
-                                                f"hash={_ph[:12]} "
-                                                f"reactions={_ps.get('reactions')} "
-                                                f"shares={_ps.get('shares')}"
-                                            )
-
-                                with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
-                                    _pool.submit(run_activity_coro, _do_update_stats()).result(timeout=10)
-                            except Exception as exc:
-                                log.warning(f"[{serial}] update_content_stats failed: {exc}")
-                    else:
-                        # Keep parent link stable even when header stats are not visible.
-                        parent_hash = resolve_comment_parent_hash(ctx, parent_post_id)
-                        if parent_hash:
-                            ctx["_active_comment_parent_hash"] = parent_hash
-
-                    ctx.setdefault("comments", [])
-                    prev_count = len(ctx["comments"])
-                    ctx["comments"] = _dedup_comments(ctx["comments"] + new_comments)
-                    added = len(ctx["comments"]) - prev_count
-                    step_result["extracted"] = added
-                    step_result["total_comments"] = len(ctx["comments"])
-                    step_result["parent_post_id"] = parent_post_id
-                    step_result["post_stats"] = post_stats
-                    step_result["message"] = (
-                        f"extract fb_comments: +{added} new "
-                        f"(total {len(ctx['comments'])}, post={parent_post_id})"
-                    )
-                    if stop_if_no_new:
-                        if added == 0:
-                            ctx["_no_new_comments_streak"] = ctx.get("_no_new_comments_streak", 0) + 1
-                            # Backward compatibility for flows still checking legacy key.
-                            ctx["_no_new_streak"] = ctx["_no_new_comments_streak"]
-                            if ctx["_no_new_comments_streak"] >= no_new_threshold:
-                                ctx["_break"] = True
-                                step_result["message"] += (
-                                    f" — breaking comments loop (no new for {ctx['_no_new_comments_streak']} scrolls)"
-                                )
-                        else:
-                            ctx["_no_new_comments_streak"] = 0
-                            ctx["_no_new_streak"] = 0
-                    log.info(f"[{serial}] {step_result['message']}")
-                else:
-                    step_result["ok"] = False
-                    step_result["message"] = f"extract: unknown strategy {strategy!r}"
-
-                # ── Inline auto-save: when collection is set, save immediately ──
-                _auto_save_coll = step.get("collection")
-                if _auto_save_coll and step_result.get("ok", True):
-                    try:
-                        _auto_data_var = extract_data_var_for_strategy(step)
-                        _auto_data = ctx.get(_auto_data_var)
-                        _auto_offsets = ctx.setdefault("__save_extraction_offsets__", {})
-                        _as_parent_var = step.get("parent_id_var")
-                        _as_parent_id = ctx.get(_as_parent_var) if _as_parent_var else None
-                        _as_level = int(step.get("item_level") or 0)
-                        _report, _updated_offsets = _run_async_coro_sync(
-                            persist_data_items(
-                                data=_auto_data,
-                                data_var=_auto_data_var,
-                                offsets=_auto_offsets,
-                                collection=_auto_save_coll,
-                                platform=step.get("platform"),
-                                content_type=step.get("content_type", "post"),
-                                dedupe_field=step.get("dedupe_field"),
-                                tags=step.get("tags", ""),
-                                device_serial=device.serial,
-                                campaign_id=(scenario.get("campaign_id")),
-                                execution_id=(scenario.get("execution_id") or scenario.get("run_id")),
-                                parent_id=_as_parent_id,
-                                item_level=_as_level,
-                                user_id=(scenario.get("_campaign_vars") or {}).get("__USER_ID__"),
-                                batch_size=step.get("save_batch_size"),
-                            )
-                        )
-                        ctx["__save_extraction_offsets__"] = _updated_offsets
-                        step_result["auto_save"] = {
-                            "saved": _report.saved_count,
-                            "duplicate": _report.duplicate_count,
-                            "errors": _report.error_count,
-                        }
-                        step_result["message"] += (
-                            f" | auto-save: saved={_report.saved_count}, "
-                            f"dup={_report.duplicate_count}, err={_report.error_count}"
-                        )
-                        log.info(
-                            f"[{serial}] extract auto-save: saved={_report.saved_count}, "
-                            f"dup={_report.duplicate_count}, err={_report.error_count}"
-                        )
-                    except Exception as _as_exc:
-                        log.warning("[%s] extract auto-save failed: %s", serial, _as_exc)
-                        step_result["auto_save_error"] = str(_as_exc)
+            step_result["ok"] = False
+            step_result["message"] = f"extract: unknown strategy {strategy!r}"
 
         # ── DF-009: OCR & Screen Text Extraction ──────────────────────────
         elif t == "extract_text_hierarchy":

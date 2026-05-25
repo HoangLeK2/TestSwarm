@@ -21,6 +21,7 @@ from unittest.mock import MagicMock, Mock, call, patch
 import pytest
 
 from core.config import Config
+from runtime.u2_xpath import XPathElementNotFoundError
 from runtime.core.device_client import DeviceClient
 from runtime.core.watchdog import WatchdogThread
 from runtime.transports.u2_jsonrpc import (
@@ -365,13 +366,16 @@ class TestXpathElementGestures:
 
     # ── drag_to ─────────────────────────────────────────────────────────────
 
+    _SAMPLE_XML = """<?xml version="1.0"?><hierarchy>
+      <node text="Home" bounds="[0,0][100,50]"/>
+      <node text="X" bounds="[0,0][10,10]"/>
+      <node text="Map" bounds="[0,0][100,50]"/>
+    </hierarchy>"""
+
     def test_drag_to_xpath_calls_drag_not_objdrag(self):
         """For xpath element, drag_to uses coordinate-based drag(), not objDrag(selector)."""
         c = _client()
-        bounds = {"left": 0, "top": 0, "right": 100, "bottom": 50}
-        c._find_element_xpath_with_bounds = Mock(
-            return_value={"eid": "xpath:://*[@text='Home']", "bounds": bounds}
-        )
+        c.page_source = Mock(return_value=self._SAMPLE_XML)
         rpc_calls = []
         c._rpc = lambda method, *a, **kw: rpc_calls.append((method, a))
 
@@ -385,10 +389,7 @@ class TestXpathElementGestures:
     def test_drag_to_xpath_passes_element_center(self):
         """drag_to derives source coordinates from element center, not xpath string."""
         c = _client()
-        bounds = {"left": 10, "top": 20, "right": 110, "bottom": 60}  # center=(60, 40)
-        c._find_element_xpath_with_bounds = Mock(
-            return_value={"eid": "xpath:://*", "bounds": bounds}
-        )
+        c.page_source = Mock(return_value=self._SAMPLE_XML)
         drag_args = {}
 
         def fake_rpc(method, *args, **kw):
@@ -400,20 +401,20 @@ class TestXpathElementGestures:
 
         assert drag_args, "drag RPC never called"
         x1, y1 = drag_args["args"][0], drag_args["args"][1]
-        assert x1 == 60, f"Expected source cx=60, got {x1}"
-        assert y1 == 40, f"Expected source cy=40, got {y1}"
+        assert x1 == 5, f"Expected source cx=5, got {x1}"
+        assert y1 == 5, f"Expected source cy=5, got {y1}"
 
     def test_drag_to_xpath_raises_when_element_not_found(self):
         c = _client()
-        c._find_element_xpath_with_bounds = Mock(return_value=None)
-        with pytest.raises(RuntimeError, match="not found"):
+        c.page_source = Mock(return_value=self._SAMPLE_XML)
+        with pytest.raises(XPathElementNotFoundError):
             c.xpath('//*[@text="Missing"]').drag_to(200, 200)
 
     def test_drag_to_xpath_raises_when_bounds_is_none(self):
         c = _client()
-        c._find_element_xpath_with_bounds = Mock(return_value={"eid": "x", "bounds": None})
-        with pytest.raises(RuntimeError, match="not found"):
-            c.xpath('//*[@text="Missing"]').drag_to(200, 200)
+        c.page_source = Mock(return_value='<?xml version="1.0"?><hierarchy><node text="NoBounds"/></hierarchy>')
+        with pytest.raises(RuntimeError, match="bounds"):
+            c.xpath('//*[@text="NoBounds"]').drag_to(200, 200)
 
     def test_drag_to_non_xpath_calls_objdrag(self):
         """Non-xpath drag_to still uses objDrag(selector, …) — regression check."""
@@ -426,10 +427,13 @@ class TestXpathElementGestures:
 
     # ── pinch_in ────────────────────────────────────────────────────────────
 
-    def test_pinch_in_xpath_raises_not_implemented(self):
+    def test_pinch_in_xpath_delegates_to_native_text_selector(self):
         c = _client()
-        with pytest.raises(NotImplementedError, match="pinch_in"):
-            c.xpath('//*[@text="Map"]').pinch_in()
+        c.page_source = Mock(return_value=self._SAMPLE_XML)
+        rpc_calls = []
+        c._rpc = lambda method, *a, **kw: rpc_calls.append(method)
+        c.xpath('//*[@text="Map"]').pinch_in()
+        assert "pinchIn" in rpc_calls
 
     def test_pinch_in_non_xpath_calls_pinch_in_rpc(self):
         c = _client()
@@ -440,10 +444,13 @@ class TestXpathElementGestures:
 
     # ── pinch_out ───────────────────────────────────────────────────────────
 
-    def test_pinch_out_xpath_raises_not_implemented(self):
+    def test_pinch_out_xpath_delegates_to_native_text_selector(self):
         c = _client()
-        with pytest.raises(NotImplementedError, match="pinch_out"):
-            c.xpath('//*[@text="Map"]').pinch_out()
+        c.page_source = Mock(return_value=self._SAMPLE_XML)
+        rpc_calls = []
+        c._rpc = lambda method, *a, **kw: rpc_calls.append(method)
+        c.xpath('//*[@text="Map"]').pinch_out()
+        assert "pinchOut" in rpc_calls
 
     def test_pinch_out_non_xpath_calls_pinch_out_rpc(self):
         c = _client()
@@ -452,17 +459,17 @@ class TestXpathElementGestures:
         c(text="Map").pinch_out(percent=50, steps=10)
         assert "pinchOut" in rpc_calls
 
-    def test_pinch_in_error_message_includes_suggestion(self):
+    def test_pinch_in_without_native_attrs_raises(self):
         c = _client()
-        with pytest.raises(NotImplementedError) as exc_info:
-            c.xpath('//*[@text="X"]').pinch_in()
-        assert "native selector" in str(exc_info.value).lower()
+        c.page_source = Mock(return_value='<?xml version="1.0"?><hierarchy><node bounds="[0,0][10,10]"/></hierarchy>')
+        with pytest.raises(RuntimeError, match="pinch_in"):
+            c.xpath("//node[@bounds]").pinch_in()
 
-    def test_pinch_out_error_message_includes_suggestion(self):
+    def test_pinch_out_without_native_attrs_raises(self):
         c = _client()
-        with pytest.raises(NotImplementedError) as exc_info:
-            c.xpath('//*[@text="X"]').pinch_out()
-        assert "native selector" in str(exc_info.value).lower()
+        c.page_source = Mock(return_value='<?xml version="1.0"?><hierarchy><node bounds="[0,0][10,10]"/></hierarchy>')
+        with pytest.raises(RuntimeError, match="pinch_out"):
+            c.xpath("//node[@bounds]").pinch_out()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

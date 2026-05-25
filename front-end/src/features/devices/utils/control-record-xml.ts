@@ -1,5 +1,23 @@
+import type { ScenarioSelectorShape } from '../lib/scenario-selector-step';
 import { fetchHierarchy } from '../services/api';
+import { enrichSelectorFromNode } from './enrich-selector-from-xml';
 import { isAmbiguousLauncherResourceId } from './hierarchy-tree';
+
+export type XmlSelectorPick = {
+  by: 'resource-id' | 'text' | 'description' | 'xpath' | 'class name';
+  value: string;
+  selector: ScenarioSelectorShape;
+  bounds?: {
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+    rx1: number;
+    ry1: number;
+    rx2: number;
+    ry2: number;
+  };
+};
 
 /**
  * Normalize Android hierarchy XML before hashing.
@@ -47,15 +65,8 @@ export function hashXml(xml: string): number {
 export function findSelectorInXml(
   xmlStr: string,
   rx: number,
-  ry: number
-): {
-  by: 'resource-id' | 'text' | 'description' | 'xpath' | 'class name';
-  value: string;
-  bounds?: {
-    left: number; top: number; right: number; bottom: number;
-    rx1: number; ry1: number; rx2: number; ry2: number;
-  };
-} | null {
+  ry: number,
+): XmlSelectorPick | null {
   let doc: Document;
   try {
     doc = new DOMParser().parseFromString(xmlStr, 'text/xml');
@@ -85,16 +96,6 @@ export function findSelectorInXml(
   }
 
   const BOUNDS = /\[(\d+),(\d+)\]\[(\d+),(\d+)\]/;
-  const CONTAINER_CLASSES = new Set([
-    'android.widget.FrameLayout',
-    'android.widget.LinearLayout',
-    'android.widget.RelativeLayout',
-    'android.view.View',
-    'android.view.ViewGroup',
-    'androidx.constraintlayout.widget.ConstraintLayout',
-    'android.widget.ScrollView',
-    'androidx.recyclerview.widget.RecyclerView',
-  ]);
 
   type Cand = {
     node: Element;
@@ -102,6 +103,11 @@ export function findSelectorInXml(
     area: number;
     clickable: boolean;
     clickableAncestor: Element | null;
+  };
+
+  type Sel = {
+    by: 'resource-id' | 'text' | 'description' | 'xpath' | 'class name';
+    value: string;
   };
 
   // Build parent map once for ancestor walk
@@ -116,6 +122,71 @@ export function findSelectorInXml(
       if (cur.getAttribute('clickable') === 'true') return cur;
       cur = parentOf.get(cur) ?? null;
     }
+    return null;
+  };
+
+  /** Prefer nodes with content-desc / text / resource-id over bare layout containers. */
+  const scoreCandidate = (c: Cand): number => {
+    const n = c.node;
+    const desc = (n.getAttribute('content-desc') ?? '').trim();
+    const text = (n.getAttribute('text') ?? '').trim();
+    const rid = (n.getAttribute('resource-id') ?? '').trim();
+    let score = 0;
+    if (desc) score += 4000;
+    if (text && text.length < 120) score += 3000;
+    if (rid && rid.includes('/')) score += 2000;
+    if (c.clickable) score += 1000;
+    // Smaller area wins among same score tier (more specific target)
+    score -= c.area / 50_000;
+    return score;
+  };
+
+  const tryPrimaryOnNode = (n: Element): Sel | null => {
+    const rid = (n.getAttribute('resource-id') ?? '').trim();
+    const desc = (n.getAttribute('content-desc') ?? '').trim();
+    const text = (n.getAttribute('text') ?? '').trim();
+    const pkg = (n.getAttribute('package') ?? '').trim();
+    const ambiguousLauncher = rid ? isAmbiguousLauncherResourceId(rid, pkg) : false;
+    const ridUnique = !!rid && !ambiguousLauncher && (ridCount.get(rid) ?? 0) === 1;
+    const textUnique = !!text && text.length < 80 && (textCount.get(text) ?? 0) === 1;
+    const descUnique = !!desc && desc.length < 80 && (descCount.get(desc) ?? 0) === 1;
+
+    if (ambiguousLauncher && text && text.length < 120) return { by: 'text', value: text };
+    if (ambiguousLauncher && desc && desc.length < 80) return { by: 'description', value: desc };
+    if (ridUnique) return { by: 'resource-id', value: rid };
+    if (descUnique) return { by: 'description', value: desc };
+    if (textUnique) return { by: 'text', value: text };
+    if (rid && rid.includes('/')) return { by: 'resource-id', value: rid };
+    if (desc && desc.length < 120) return { by: 'description', value: desc };
+    if (text && text.length < 80) return { by: 'text', value: text };
+    return null;
+  };
+
+  /** Resolve primary selector on node, ancestors, then descendants (never @bounds xpath). */
+  const pickPrimaryForNode = (start: Element): { sel: Sel; anchor: Element } | null => {
+    let cur: Element | null = start;
+    while (cur) {
+      const s = tryPrimaryOnNode(cur);
+      if (s) return { sel: s, anchor: cur };
+      cur = parentOf.get(cur) ?? null;
+    }
+    const childNodes: Element[] = [];
+    const walk = (el: Element) => {
+      for (let i = 0; i < el.children.length; i++) {
+        const ch = el.children[i];
+        if (ch.tagName === 'node') {
+          childNodes.push(ch);
+          walk(ch);
+        }
+      }
+    };
+    walk(start);
+    for (const ch of childNodes) {
+      const s = tryPrimaryOnNode(ch);
+      if (s) return { sel: s, anchor: ch };
+    }
+    const cls = (start.getAttribute('class') ?? '').trim();
+    if (cls) return { sel: { by: 'class name', value: cls }, anchor: start };
     return null;
   };
 
@@ -167,76 +238,54 @@ export function findSelectorInXml(
     pool = promoted.length > 0 ? promoted : candidates;
   }
 
-  pool.sort((a, b) => a.area - b.area);
+  pool.sort((a, b) => scoreCandidate(b) - scoreCandidate(a));
   const chosen = pool[0];
   const { node, x1, y1, x2, y2 } = chosen;
 
-  const rid = (node.getAttribute('resource-id') ?? '').trim();
-  const desc = (node.getAttribute('content-desc') ?? '').trim();
-  const text = (node.getAttribute('text') ?? '').trim();
-  const pkg = (node.getAttribute('package') ?? '').trim();
-  const cls = (node.getAttribute('class') ?? '').trim();
+  const picked = pickPrimaryForNode(node);
+  if (!picked) return null;
+  const { sel, anchor } = picked;
 
-  const ambiguousLauncher = rid ? isAmbiguousLauncherResourceId(rid, pkg) : false;
-  const ridUnique = !!rid && !ambiguousLauncher && (ridCount.get(rid) ?? 0) === 1;
-  const textUnique = !!text && text.length < 80 && (textCount.get(text) ?? 0) === 1;
-  const descUnique = !!desc && desc.length < 80 && (descCount.get(desc) ?? 0) === 1;
-
-  type Sel = {
-    by: 'resource-id' | 'text' | 'description' | 'xpath' | 'class name';
-    value: string;
-  };
-  let sel: Sel | null = null;
-
-  if (ambiguousLauncher && text && text.length < 120) {
-    sel = { by: 'text', value: text };
-  } else if (ambiguousLauncher && desc && desc.length < 80) {
-    sel = { by: 'description', value: desc };
-  } else if (ridUnique) {
-    sel = { by: 'resource-id', value: rid };
-  } else if (descUnique) {
-    sel = { by: 'description', value: desc };
-  } else if (textUnique) {
-    sel = { by: 'text', value: text };
-  } else if (rid && rid.includes('/')) {
-    // Non-unique rid: pin with clickable=true + instance index restricted to clickable hits
-    const sameRid = allNodes.filter((n) => (n.getAttribute('resource-id') ?? '') === rid);
-    const clickableSameRid = sameRid.filter((n) => n.getAttribute('clickable') === 'true');
-    if (clickableSameRid.length >= 1 && clickableSameRid.includes(node)) {
-      const idx = clickableSameRid.indexOf(node);
-      sel = {
-        by: 'xpath',
-        value: `(//*[@resource-id="${rid}" and @clickable="true"])[${idx + 1}]`,
-      };
-    } else {
-      const idx = sameRid.indexOf(node);
-      sel = { by: 'xpath', value: `(//*[@resource-id="${rid}"])[${idx + 1}]` };
-    }
-  } else if (desc) {
-    sel = { by: 'description', value: desc };
-  } else if (text && text.length < 80) {
-    sel = { by: 'text', value: text };
-  } else if (cls) {
-    // Last resort — pin by class + bounds (bounds always unique per screen)
-    if (CONTAINER_CLASSES.has(cls)) {
-      sel = {
-        by: 'xpath',
-        value: `//*[@class="${cls}" and @bounds="[${x1},${y1}][${x2},${y2}]"]`,
-      };
-    } else {
-      sel = { by: 'class name', value: cls };
-    }
-  }
-
-  if (!sel) return null;
+  const selector = enrichSelectorFromNode(anchor, sel, allNodes);
   return {
     by: sel.by,
     value: sel.value,
+    selector,
     bounds: {
       left: x1, top: y1, right: x2, bottom: y2,
       rx1: x1 / dw, ry1: y1 / dh, rx2: x2 / dw, ry2: y2 / dh,
     },
   };
+}
+
+/** Pick at center of a hierarchy tree node's bounds (tree row click). */
+export function findSelectorForTreeNode(
+  xmlStr: string,
+  bounds: [number, number, number, number] | null,
+): XmlSelectorPick | null {
+  if (!bounds || !xmlStr?.trim()) return null;
+  const [x1, y1, x2, y2] = bounds;
+  if (x2 <= x1 || y2 <= y1) return null;
+  let doc: Document;
+  try {
+    doc = new DOMParser().parseFromString(xmlStr, 'text/xml');
+  } catch {
+    return null;
+  }
+  const allNodes = Array.from(doc.getElementsByTagName('node'));
+  let dw = 1080;
+  let dh = 1920;
+  for (const n of allNodes) {
+    const m = /\[0,0\]\[(\d+),(\d+)\]/.exec(n.getAttribute('bounds') ?? '');
+    if (m) {
+      dw = parseInt(m[1], 10);
+      dh = parseInt(m[2], 10);
+      break;
+    }
+  }
+  const rx = (x1 + x2) / 2 / dw;
+  const ry = (y1 + y2) / 2 / dh;
+  return findSelectorInXml(xmlStr, rx, ry);
 }
 
 export function getScreenSignature(xml: string): { package: string; texts: string[] } {

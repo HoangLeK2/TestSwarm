@@ -108,7 +108,13 @@ def _same_lan_ip(left: str, right: str, cidr: str = "") -> bool:
     return ipaddress.ip_network(f"{l_ip}/64", strict=False) == ipaddress.ip_network(f"{r_ip}/64", strict=False)
 
 
+# TEMP: set True to re-enable same-WiFi/LAN gate for relay device visibility & claim.
+RELAY_SAME_WIFI_FILTER_ENABLED = False
+
+
 def serial_is_same_lan(serial: str, relay_row, caps: dict | None = None) -> bool:
+    if not RELAY_SAME_WIFI_FILTER_ENABLED:
+        return True
     caps = caps if caps is not None else get_live_caps(serial)
     wlan_ip = str(caps.get("wlan_ip") or "").strip()
     wlan_cidr = str(caps.get("wlan_cidr") or "").strip()
@@ -238,7 +244,8 @@ async def claim_relay_serial(db: AsyncSession, relay_row, *, serial: str, user_i
         raise RelayOnboardingError(409, "serial is not reported by this relay agent")
 
     caps = get_live_caps(serial)
-    if not serial_is_same_lan(serial, relay_row, caps):
+    # TEMP: same-WiFi/LAN check disabled (RELAY_SAME_WIFI_FILTER_ENABLED=False).
+    if RELAY_SAME_WIFI_FILTER_ENABLED and not serial_is_same_lan(serial, relay_row, caps):
         raise RelayOnboardingError(403, "device is not on the same WiFi/LAN as this relay agent")
 
     all_devices = await repo.list_devices_by_serial_aliases(db, _aliases_for_lookup([serial]))

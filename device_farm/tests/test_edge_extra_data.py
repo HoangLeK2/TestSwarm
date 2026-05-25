@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from types import SimpleNamespace
 
 from tasks.scenario.steps import control_flow
@@ -33,10 +34,14 @@ def _ctx(device):
     )
 
 
+@pytest.fixture(autouse=True)
+def _relay_available(monkeypatch):
+    monkeypatch.setattr(extraction_mod, "_relay_extra_data_available", lambda _device: True)
+
+
 def test_try_edge_extra_data_success(monkeypatch) -> None:
     monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
-    monkeypatch.setenv("EDGE_EXTRA_AGENT_URL", "http://agent.local:8765")
-    monkeypatch.setenv("EDGE_EXTRA_TOKEN", "secret")
+    monkeypatch.setenv("EDGE_EXTRA_RELAY_ENABLED", "1")
     device = _FakeDevice({
         "ok": True,
         "ingest": {
@@ -46,6 +51,7 @@ def test_try_edge_extra_data_success(monkeypatch) -> None:
             "diagnostic": {"reason_code": "ok"},
             "items": [{"post_key": "p1", "text": "hello"}],
         },
+        "route": "relay_u2",
     })
     sc = _ctx(device)
     result = {}
@@ -60,19 +66,36 @@ def test_try_edge_extra_data_success(monkeypatch) -> None:
     assert handled is True
     assert result["extracted"] == 1
     assert result["duplicate_count"] == 1
-    assert device.calls[0]["endpoint"] == "http://agent.local:8765/extra-data/xml"
+    assert device.calls[0]["strategy"] == "fb_posts"
     assert device.calls[0]["context"]["user_id"] == "user"
-    assert device.calls[0]["token"] == "secret"
+    assert "endpoint" not in device.calls[0]
     assert device.calls[0]["context"]["persist"] is True
     assert device.calls[0]["context"]["return_items"] is False
     assert result["edge_extra_summary"]["items_omitted"] == 1
     assert "posts" not in sc.ctx
 
 
+def test_try_edge_extra_data_no_relay(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    monkeypatch.setattr(extraction_mod, "_relay_extra_data_available", lambda _d: False)
+    device = _FakeDevice({"ok": True})
+    result = {}
+
+    handled = extraction_mod._try_edge_extra_data(
+        _ctx(device),
+        {"collection": "fb", "edge_extra_data": True},
+        "fb_posts",
+        result,
+    )
+
+    assert handled is True
+    assert result["ok"] is False
+    assert "no relay" in result["message"]
+    assert device.calls == []
+
+
 def test_try_edge_extra_data_can_return_items_when_requested(monkeypatch) -> None:
     monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
-    monkeypatch.setenv("EDGE_EXTRA_AGENT_URL", "http://agent.local:8765")
-    monkeypatch.setenv("EDGE_EXTRA_TOKEN", "secret")
     device = _FakeDevice({
         "ok": True,
         "ingest": {
@@ -105,9 +128,7 @@ def test_try_edge_extra_data_can_return_items_when_requested(monkeypatch) -> Non
 
 def test_try_edge_extra_data_reports_failure_without_server_fallback(monkeypatch) -> None:
     monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
-    monkeypatch.setenv("EDGE_EXTRA_AGENT_URL", "http://agent.local:8765")
-    monkeypatch.setenv("EDGE_EXTRA_TOKEN", "secret")
-    device = _FakeDevice({"ok": False, "error": "boom"})
+    device = _FakeDevice({"ok": False, "error": "no_relay"})
     result = {}
 
     handled = extraction_mod._try_edge_extra_data(
@@ -119,13 +140,11 @@ def test_try_edge_extra_data_reports_failure_without_server_fallback(monkeypatch
 
     assert handled is True
     assert result["ok"] is False
-    assert "boom" in result["message"]
+    assert "no_relay" in result["message"]
 
 
 def test_try_edge_extra_data_defaults_content_strategy_to_agent_boot(monkeypatch) -> None:
     monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
-    monkeypatch.setenv("EDGE_EXTRA_AGENT_URL", "http://agent.local:8765")
-    monkeypatch.setenv("EDGE_EXTRA_TOKEN", "secret")
     device = _FakeDevice({"ok": True, "ingest": {"parsed_count": 0, "inserted_count": 0}})
     result = {}
 
@@ -142,8 +161,6 @@ def test_try_edge_extra_data_defaults_content_strategy_to_agent_boot(monkeypatch
 
 def test_text_nodes_routes_to_agent_boot_without_collection(monkeypatch) -> None:
     monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
-    monkeypatch.setenv("EDGE_EXTRA_AGENT_URL", "http://agent.local:8765")
-    monkeypatch.setenv("EDGE_EXTRA_TOKEN", "secret")
     device = _FakeDevice({
         "ok": True,
         "ingest": {
@@ -174,8 +191,6 @@ def test_text_nodes_routes_to_agent_boot_without_collection(monkeypatch) -> None
 
 def test_non_fb_content_strategy_routes_to_agent_boot(monkeypatch) -> None:
     monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
-    monkeypatch.setenv("EDGE_EXTRA_AGENT_URL", "http://agent.local:8765")
-    monkeypatch.setenv("EDGE_EXTRA_TOKEN", "secret")
     device = _FakeDevice({
         "ok": True,
         "ingest": {
@@ -207,9 +222,22 @@ def test_edge_extra_endpoint_allowlist_rejects_host_prefix_spoof(monkeypatch) ->
     assert extraction_mod._edge_extra_endpoint_allowed("http://agent.local:8766/extra-data/xml") is False
 
 
+def test_edge_extra_endpoint_for_device_rewrites_loopback_to_public(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_EXTRA_AGENT_URL", "http://127.0.0.1:8765")
+    monkeypatch.setenv("EDGE_EXTRA_AGENT_PUBLIC_URL", "http://192.168.1.50:8765")
+
+    endpoint = extraction_mod._edge_extra_endpoint_for_device({})
+    assert endpoint == "http://192.168.1.50:8765/extra-data/xml"
+
+
+def test_edge_extra_endpoint_for_device_keeps_lan_url(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_EXTRA_AGENT_URL", "http://192.168.1.10:8765")
+
+    endpoint = extraction_mod._edge_extra_endpoint_for_device({})
+    assert endpoint == "http://192.168.1.10:8765/extra-data/xml"
+
+
 def test_tap_fb_comment_button_resolves_target_via_agent_boot(monkeypatch) -> None:
-    monkeypatch.setenv("EDGE_EXTRA_AGENT_URL", "http://agent.local:8765")
-    monkeypatch.setenv("EDGE_EXTRA_TOKEN", "secret")
     device = _FakeDevice({
         "ok": True,
         "ingest": {
@@ -236,7 +264,7 @@ def test_tap_fb_comment_button_resolves_target_via_agent_boot(monkeypatch) -> No
 
     control_flow.handle_tap_fb_comment_button(
         sc,
-        {"edge_extra_agent_url": "http://agent.local:8765", "edge_extra_token": "secret"},
+        {},
         0,
         result,
     )
@@ -249,8 +277,6 @@ def test_tap_fb_comment_button_resolves_target_via_agent_boot(monkeypatch) -> No
 
 
 def test_tap_fb_comment_button_skips_server_tap_when_agent_tapped(monkeypatch) -> None:
-    monkeypatch.setenv("EDGE_EXTRA_AGENT_URL", "http://agent.local:8765")
-    monkeypatch.setenv("EDGE_EXTRA_TOKEN", "secret")
     device = _FakeDevice({
         "ok": True,
         "agent_tapped": True,
@@ -272,7 +298,7 @@ def test_tap_fb_comment_button_skips_server_tap_when_agent_tapped(monkeypatch) -
 
     control_flow.handle_tap_fb_comment_button(
         _ctx(device),
-        {"edge_extra_agent_url": "http://agent.local:8765", "edge_extra_token": "secret"},
+        {},
         0,
         result,
     )
@@ -284,8 +310,6 @@ def test_tap_fb_comment_button_skips_server_tap_when_agent_tapped(monkeypatch) -
 
 def test_try_edge_extra_data_uses_base_parent_hash_for_comments(monkeypatch) -> None:
     monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
-    monkeypatch.setenv("EDGE_EXTRA_AGENT_URL", "http://agent.local:8765")
-    monkeypatch.setenv("EDGE_EXTRA_TOKEN", "secret")
     device = _FakeDevice({
         "ok": True,
         "ingest": {
@@ -318,8 +342,6 @@ def test_try_edge_extra_data_uses_base_parent_hash_for_comments(monkeypatch) -> 
 
 def test_try_edge_extra_data_forwards_comment_scroll_context(monkeypatch) -> None:
     monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
-    monkeypatch.setenv("EDGE_EXTRA_AGENT_URL", "http://agent.local:8765")
-    monkeypatch.setenv("EDGE_EXTRA_TOKEN", "secret")
     device = _FakeDevice({"ok": True, "ingest": {"parsed_count": 0, "inserted_count": 0}})
 
     handled = extraction_mod._try_edge_extra_data(
@@ -345,14 +367,12 @@ def test_try_edge_extra_data_forwards_comment_scroll_context(monkeypatch) -> Non
 
 
 def test_tap_fb_comment_button_ignore_error_keeps_step_ok(monkeypatch) -> None:
-    monkeypatch.setenv("EDGE_EXTRA_AGENT_URL", "http://agent.local:8765")
-    monkeypatch.setenv("EDGE_EXTRA_TOKEN", "secret")
     device = _FakeDevice({"ok": False, "error": "not_found"})
     result = {}
 
     control_flow.handle_tap_fb_comment_button(
         _ctx(device),
-        {"edge_extra_agent_url": "http://agent.local:8765", "edge_extra_token": "secret"},
+        {},
         0,
         result,
     )

@@ -19,6 +19,10 @@ import {
 import { parseHierarchySelectorNodes } from '../utils/hierarchy-selectors';
 import { createDefaultStep } from '@/features/campaigns/components/scenario-steps/types';
 import { validateScenarioStepsForApi } from '@/features/campaigns/utils/validate-scenario-steps-for-api';
+import {
+  buildRecordedTapStep,
+  normalizeSelectorStepFields,
+} from '../lib/scenario-selector-step';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import { useTranslations } from 'next-intl';
 
@@ -103,7 +107,7 @@ function sanitizeScenarioStep(step: any): any {
         : br
     );
   }
-  return next;
+  return normalizeSelectorStepFields(next);
 }
 
 function sanitizeScenarioStepsForApi(input: unknown): any[] {
@@ -325,7 +329,16 @@ export function useControlRecord(
 
           let recordedStepId: string;
           if (sel) {
-            recordedStepId = recordStep({ type: 'tap', selector: { by: sel.by, value: sel.value }, fallback: { rx, ry }, screen } as ScenarioStep);
+            recordedStepId = recordStep(
+              buildRecordedTapStep({
+                by: sel.by,
+                value: sel.value,
+                selector: sel.selector,
+                rx,
+                ry,
+                screen,
+              }) as ScenarioStep,
+            );
             toast.success(t('toast.tapRecorded', { by: sel.by, value: sel.value.slice(0, 40) }), { duration: 2000 });
           } else {
             recordedStepId = recordStep({ type: 'tap', fallback: { rx, ry }, screen } as ScenarioStep);
@@ -848,7 +861,9 @@ export function useControlRecord(
     const value = selectorValue.trim();
     wsSend({ type: 'tap_selector', serial: selectedDevice.serial, by, value });
     if (recording) {
-      recordStep({ type: 'tap', selector: { by, value } } as ScenarioStep);
+      recordStep(
+        buildRecordedTapStep({ by, value, rx: 0.5, ry: 0.5, selector: { by: by as any, value } }) as ScenarioStep,
+      );
     }
     toast.success(t('toast.tapSelectorSuccess', { by, value: value.slice(0, 30) }));
   }, [selectedDevice, selectorBy, selectorValue, wsSend, recording, recordStep, t]);

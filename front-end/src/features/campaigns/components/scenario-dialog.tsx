@@ -31,7 +31,11 @@ import {
 import { Separator } from '@/components/ui/separator';
 import { Textarea } from '@/components/ui/textarea';
 import { FileText, Trash2, Circle, Square, RefreshCw, Sparkles, FolderOpen, MousePointerClick, Move, List, GitBranch, Loader2 } from 'lucide-react';
-import { cancelPreviewStream, fetchHierarchy, previewScenario, previewScenarioStream } from '@/features/devices/services/api';
+import { cancelPreviewStream, fetchHierarchy, interruptDevice, previewScenario, previewScenarioStream } from '@/features/devices/services/api';
+import {
+  createPreviewRunSession,
+  type ActivePreviewTrace,
+} from '@/features/devices/lib/preview-run-session';
 import type { FixedLayoutPluginContext } from '@flowgram.ai/fixed-layout-editor';
 import { StepDetailPanel } from './flow-editor/step-detail-panel';
 import type { FlowStep } from './scenario-steps/types';
@@ -52,6 +56,7 @@ import { stepsToGraph } from '../utils/steps-to-graph';
 import type { FlowNode, FlowEdge } from './scenario-steps/types';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import { findSelectorInXml } from '@/features/devices/utils/control-record-xml';
+import { buildTapSelectorStep, normalizeSelectorStepFields } from '@/features/devices/lib/scenario-selector-step';
 import { useConfirm } from '@/providers/modal-provider';
 
 const DynamicFlowgramCanvas = dynamic(
@@ -158,7 +163,7 @@ function sanitizeScenarioStep(step: any): any {
     });
   }
 
-  return next;
+  return normalizeSelectorStepFields(next);
 }
 
 function sanitizeScenarioStepsForApi(input: unknown): any[] {
@@ -311,52 +316,81 @@ function coerceSteps(raw: any[]): Step[] {
           y2: Number(s.y2 ?? 0.5),
           duration_ms: Number(s.duration_ms ?? 300)
         };
-      case 'tap_selector':
-        return {
+      case 'tap_selector': {
+        const by = normalizeSelectorBy(s.selector?.by ?? s.by, 'text');
+        const value = String(s.selector?.value ?? s.value ?? '');
+        return normalizeSelectorStepFields({
           type: 'tap_selector',
-          by: normalizeSelectorBy(s.by, 'text'),
-          value: String(s.value ?? ''),
-          ...(s.fallback_rx != null ? { fallback_rx: Number(s.fallback_rx) } : {}),
-          ...(s.fallback_ry != null ? { fallback_ry: Number(s.fallback_ry) } : {}),
+          selector: { by, value },
+          by,
+          value,
+          ...(s.fallback && typeof s.fallback === 'object'
+            ? { fallback: s.fallback }
+            : s.fallback_rx != null && s.fallback_ry != null
+              ? { fallback: { rx: Number(s.fallback_rx), ry: Number(s.fallback_ry) }, fallback_rx: Number(s.fallback_rx), fallback_ry: Number(s.fallback_ry) }
+              : {}),
           ...(s.timeout != null ? { timeout: Number(s.timeout) } : {}),
-        };
-      case 'wait_element':
-        return {
+        }) as Step;
+      }
+      case 'wait_element': {
+        const by = normalizeSelectorBy(s.selector?.by ?? s.by, 'text');
+        const value = String(s.selector?.value ?? s.value ?? '');
+        return normalizeSelectorStepFields({
           type: 'wait_element',
-          by: normalizeSelectorBy(s.by, 'text'),
-          value: String(s.value ?? ''),
+          selector: { by, value },
+          by,
+          value,
           timeout: Number(s.timeout ?? 10),
-        };
-      case 'assert_element':
-        return {
+          ...(s.poll != null ? { poll: Number(s.poll) } : {}),
+        }) as Step;
+      }
+      case 'assert_element': {
+        const by = normalizeSelectorBy(s.selector?.by ?? s.by, 'text');
+        const value = String(s.selector?.value ?? s.value ?? '');
+        return normalizeSelectorStepFields({
           type: 'assert_element',
-          by: normalizeSelectorBy(s.by, 'text'),
-          value: String(s.value ?? ''),
+          selector: { by, value },
+          by,
+          value,
           timeout: Number(s.timeout ?? 5),
-        };
-      case 'input_selector':
-        return {
+          ...(s.poll != null ? { poll: Number(s.poll) } : {}),
+        }) as Step;
+      }
+      case 'input_selector': {
+        const by = normalizeSelectorBy(s.selector?.by ?? s.by, 'resource-id');
+        const value = String(s.selector?.value ?? s.value ?? '');
+        return normalizeSelectorStepFields({
           type: 'input_selector',
-          by: normalizeSelectorBy(s.by, 'resource-id'),
-          value: String(s.value ?? ''),
+          selector: { by, value },
+          by,
+          value,
           text: String(s.text ?? ''),
           clear_first: s.clear_first !== false,
-        };
-      case 'long_tap_selector':
-        return {
+        }) as Step;
+      }
+      case 'long_tap_selector': {
+        const by = normalizeSelectorBy(s.selector?.by ?? s.by, 'text');
+        const value = String(s.selector?.value ?? s.value ?? '');
+        return normalizeSelectorStepFields({
           type: 'long_tap_selector',
-          by: normalizeSelectorBy(s.by, 'text'),
-          value: String(s.value ?? ''),
+          selector: { by, value },
+          by,
+          value,
           duration_ms: Number(s.duration_ms ?? 800),
-        };
-      case 'scroll_to':
-        return {
+        }) as Step;
+      }
+      case 'scroll_to': {
+        const by = normalizeSelectorBy(s.selector?.by ?? s.by, 'text');
+        const value = String(s.selector?.value ?? s.value ?? '');
+        return normalizeSelectorStepFields({
           type: 'scroll_to',
-          by: normalizeSelectorBy(s.by, 'text'),
-          value: String(s.value ?? ''),
+          selector: { by, value },
+          by,
+          value,
           direction: s.direction === 'up' ? 'up' : 'down',
           max_swipes: Number(s.max_swipes ?? 5),
-        };
+        }) as Step;
+      }
       case 'wait_stable':
         return {
           type: 'wait_stable',
@@ -422,6 +456,7 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
   const [rawJson, setRawJson] = useState('');
   const tScenarioForm = useTranslations('components.scenariosForm');
   const tCommon = useTranslations('common');
+  const tScenarioValidation = useTranslations('campaignsFeature.scenarioValidation');
   const confirm = useConfirm();
   const { data: accountGroups = [] } = useAccountGroups();
   const [deviceModel, setDeviceModel] = useState('');
@@ -473,17 +508,42 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
   // Captured from the server's 'start' SSE event. Lets Stop / dialog-close
   // hit the explicit cancel endpoint instead of relying on the SSE disconnect
   // detector (which can lag ~100ms and waits for a step boundary anyway).
-  const activePreviewRef = useRef<{ serial: string; traceId: string } | null>(null);
+  const activePreviewRef = useRef<ActivePreviewTrace | null>(null);
+  const previewRunIdRef = useRef(0);
+  const previewSession = useMemo(
+    () => createPreviewRunSession(activePreviewRef, previewRunIdRef),
+    [],
+  );
 
   const hardStopPreview = useCallback(() => {
     flowRunAbortRef.current?.abort();
     stepRunAbortRef.current?.abort();
-    const active = activePreviewRef.current;
+    const active = previewSession.takeActiveForCancel();
     if (active) {
       cancelPreviewStream(active.serial, active.traceId).catch(() => undefined);
-      activePreviewRef.current = null;
+      interruptDevice(active.serial).catch(() => undefined);
     }
-  }, []);
+    setStepRunStates((s) => {
+      const hadRunning = Object.values(s).some((st) => st === 'running');
+      if (!hadRunning) return s;
+      const n = { ...s };
+      for (const k of Object.keys(n)) {
+        if (n[k] === 'running') delete n[k];
+      }
+      return n;
+    });
+    setFlowRunStates((s) => {
+      const hadRunning = Object.values(s).some((st) => st === 'running');
+      if (!hadRunning) return s;
+      const n = { ...s };
+      for (const k of Object.keys(n)) {
+        if (n[k] === 'running') delete n[k];
+      }
+      return n;
+    });
+    flowRunningIdsRef.current.clear();
+    queueMicrotask(() => toast.info('Đã dừng chạy thử'));
+  }, [previewSession]);
 
   // Dialog close / tab close / Next.js route change all end up unmounting
   // this component. Make sure the scenario actually stops server-side.
@@ -566,23 +626,19 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
       flowRunAbortRef.current?.abort();
       const ctrl = new AbortController();
       flowRunAbortRef.current = ctrl;
+      const runId = previewSession.beginRun();
       const payload = JSON.parse(JSON.stringify(step)) as Record<string, any>;
       delete payload._fgId;
       try {
         await previewScenarioStream(
           serial,
           [payload],
-          (ev) => {
-            if (ev.event === 'start' && typeof ev.trace_id === 'string') {
-              activePreviewRef.current = { serial, traceId: ev.trace_id };
-            } else if (ev.event === 'done' || ev.event === 'error') {
-              activePreviewRef.current = null;
-            }
+          previewSession.makeStreamHandler(runId, serial, (ev) => {
             if (ev.event === 'step_done') {
               setFlowRunStates((s) => ({ ...s, [fgId]: ev.ok ? 'ok' : 'error' }));
               if (!ev.ok) toast.error(String(ev.message ?? 'Step lỗi'));
             }
-          },
+          }),
           ctrl.signal,
           flattenVarDefs(variables),
         );
@@ -592,7 +648,7 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
           toast.error(String(e));
         }
       } finally {
-        activePreviewRef.current = null;
+        previewSession.onStreamEnd(runId);
         flowRunningIdsRef.current.delete(fgId);
         setTimeout(() => {
           setFlowRunStates((s) => {
@@ -603,7 +659,7 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
         }, 2800);
       }
     },
-    [previewSerial, variables],
+    [previewSerial, variables, previewSession],
   );
 
   const handleFlowDetailChange = useCallback(
@@ -649,6 +705,7 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
       stepRunAbortRef.current?.abort();
       const ctrl = new AbortController();
       stepRunAbortRef.current = ctrl;
+      const runId = previewSession.beginRun();
 
       setStepRunStates((s) => ({ ...s, [runKey]: 'running' }));
       const payload = JSON.parse(JSON.stringify(step)) as Record<string, unknown>;
@@ -658,17 +715,12 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
         await previewScenarioStream(
           serial,
           [payload],
-          (ev) => {
-            if (ev.event === 'start' && typeof ev.trace_id === 'string') {
-              activePreviewRef.current = { serial, traceId: ev.trace_id };
-            } else if (ev.event === 'done' || ev.event === 'error') {
-              activePreviewRef.current = null;
-            }
+          previewSession.makeStreamHandler(runId, serial, (ev) => {
             if (ev.event === 'step_done') {
               setStepRunStates((s) => ({ ...s, [runKey]: ev.ok ? 'ok' : 'error' }));
               if (!ev.ok) toast.error(String(ev.message ?? 'Step lỗi'));
             }
-          },
+          }),
           ctrl.signal,
           flattenVarDefs(variables),
         );
@@ -684,7 +736,7 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
           toast.error(String(e));
         }
       } finally {
-        activePreviewRef.current = null;
+        previewSession.onStreamEnd(runId);
         if (!ctrl.signal.aborted) {
           setTimeout(() => {
             setStepRunStates((s) => {
@@ -696,7 +748,7 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
         }
       }
     },
-    [previewSerial, devices, stepRunStates, variables],
+    [previewSerial, devices, stepRunStates, variables, previewSession],
   );
 
   const handleFetchXml = async () => {
@@ -777,7 +829,16 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
     if (xml) {
       const sel = findSelectorInXml(xml, rx, ry);
       if (sel) {
-        appendStepsWithGraphSync((prev) => [...prev, { type: 'tap_selector', by: sel.by, value: sel.value, fallback_rx: rx3, fallback_ry: ry3 }]);
+        appendStepsWithGraphSync((prev) => [
+          ...prev,
+          buildTapSelectorStep({
+            by: sel.by,
+            value: sel.value,
+            selector: sel.selector,
+            rx: rx3,
+            ry: ry3,
+          }) as Step,
+        ]);
         toast.success(`tap_selector by=${sel.by}: "${sel.value}"`, { duration: 2000 });
       } else {
         // XML có nhưng không tìm thấy element có text/id — flat XML (STF u2 limitation)
@@ -994,7 +1055,9 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
 
   const handleSave = () => {
     const sanitizedSteps = sanitizeScenarioStepsForApi(steps);
-    const check = validateScenarioStepsForApi(sanitizedSteps);
+    const check = validateScenarioStepsForApi(sanitizedSteps, (key, values) =>
+      tScenarioValidation(key, values),
+    );
     if (!check.ok) {
       toast.error(check.message);
       return;

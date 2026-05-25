@@ -97,9 +97,15 @@ import {
 } from '@/features/campaigns/components/flow-editor';
 import { StepIcon } from '@/features/campaigns/components/flow-editor/step-icon';
 import type { FlowStep } from '@/features/campaigns/components/scenario-steps/types';
-import { findSelectorInXml } from '../utils/control-record-xml';
+import { findSelectorForTreeNode, findSelectorInXml } from '../utils/control-record-xml';
+import type { ScenarioSelectorShape } from '../lib/scenario-selector-step';
+import { buildSelectorStep } from '../lib/scenario-selector-step';
 import { parseHierarchyTree, findNodeIdAtRatio } from '../utils/hierarchy-tree';
-import { previewScenarioStream, cancelPreviewStream } from '../services/api';
+import { previewScenarioStream, cancelPreviewStream, interruptDevice } from '../services/api';
+import {
+  createPreviewRunSession,
+  type ActivePreviewTrace,
+} from '../lib/preview-run-session';
 import { devicesApi } from '../services/manage-api';
 import { useTranslations } from 'next-intl';
 import type { FixedLayoutPluginContext } from '@flowgram.ai/fixed-layout-editor';
@@ -293,7 +299,12 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
   // abort the fetch AND hit the server's explicit cancel endpoint — the SSE
   // disconnect check on the server can lag a cycle on slow networks, and
   // the user expected the scenario to stop the moment they leave the page.
-  const activePreviewRef = useRef<{ serial: string; traceId: string } | null>(null);
+  const activePreviewRef = useRef<ActivePreviewTrace | null>(null);
+  const previewRunIdRef = useRef(0);
+  const previewSession = useMemo(
+    () => createPreviewRunSession(activePreviewRef, previewRunIdRef),
+    [],
+  );
 
   // Hard stop on unmount: abort both in-flight previews and POST the explicit
   // cancel route so the server drops the scenario even if it hasn't yet
@@ -302,11 +313,11 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
     const hardStop = () => {
       stepRunAbortRef.current?.abort();
       flowRunLeafAbortRef.current?.abort();
-      const active = activePreviewRef.current;
+      const active = previewSession.takeActiveForCancel();
       if (active) {
         // Fire-and-forget — we're unmounting, no point awaiting.
         cancelPreviewStream(active.serial, active.traceId).catch(() => undefined);
-        activePreviewRef.current = null;
+        interruptDevice(active.serial).catch(() => undefined);
       }
     };
     const onPageHide = () => hardStop();
@@ -315,7 +326,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
       window.removeEventListener('pagehide', onPageHide);
       hardStop();
     };
-  }, []);
+  }, [previewSession]);
 
   const handleStopInlineRun = useCallback(() => {
     // Three-pronged stop so the scenario exits quickly regardless of where
@@ -325,10 +336,12 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
     //   3) also stop any flow-leaf run that may be active
     stepRunAbortRef.current?.abort();
     flowRunLeafAbortRef.current?.abort();
-    const active = activePreviewRef.current;
+    const active = previewSession.takeActiveForCancel();
     if (active) {
       cancelPreviewStream(active.serial, active.traceId).catch(() => undefined);
-      activePreviewRef.current = null;
+      interruptDevice(active.serial).catch(() => undefined);
+    } else if (device.selectedDevice?.serial) {
+      interruptDevice(device.selectedDevice.serial).catch(() => undefined);
     }
     setStepRunStates((s) => {
       const hadRunning = Object.values(s).some((st) => st === 'running');
@@ -340,7 +353,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
       queueMicrotask(() => toast.info('Đã dừng chạy thử'));
       return n;
     });
-  }, []);
+  }, [previewSession, device.selectedDevice?.serial]);
 
   // Variables for step execution (synced from loaded scenario, editable inline)
   const [scenarioVariables, setScenarioVariables] = useState<Record<string, any>>(
@@ -603,23 +616,19 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
       flowRunLeafAbortRef.current?.abort();
       const ctrl = new AbortController();
       flowRunLeafAbortRef.current = ctrl;
+      const runId = previewSession.beginRun();
       const payload = JSON.parse(JSON.stringify(step)) as Record<string, unknown>;
       delete payload._fgId;
       try {
         await previewScenarioStream(
           serial,
           [payload],
-          (ev) => {
-            if (ev.event === 'start' && typeof ev.trace_id === 'string') {
-              activePreviewRef.current = { serial, traceId: ev.trace_id };
-            } else if (ev.event === 'done' || ev.event === 'error') {
-              activePreviewRef.current = null;
-            }
+          previewSession.makeStreamHandler(runId, serial, (ev) => {
             if (ev.event === 'step_done') {
               setFlowRunStates((s) => ({ ...s, [fgId]: ev.ok ? 'ok' : 'error' }));
               if (!ev.ok) toast.error(String(ev.message ?? 'Step lỗi'));
             }
-          },
+          }),
           ctrl.signal,
           scenarioVariables,
           null,
@@ -632,7 +641,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           toast.error(String(e));
         }
       } finally {
-        activePreviewRef.current = null;
+        previewSession.onStreamEnd(runId);
         flowRunningFgIdsRef.current.delete(fgId);
         setTimeout(() => {
           setFlowRunStates((s) => {
@@ -643,7 +652,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
         }, 2800);
       }
     },
-    [activeScenarioId, device.selectedDevice, scenarioVariables, inlineScenarioDeviceVars],
+    [activeScenarioId, device.selectedDevice, scenarioVariables, inlineScenarioDeviceVars, previewSession],
   );
 
   const handleFlowDetailChange = useCallback(
@@ -685,6 +694,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
       stepRunAbortRef.current?.abort();
       const ctrl = new AbortController();
       stepRunAbortRef.current = ctrl;
+      const runId = previewSession.beginRun();
       const label = /^\d+$/.test(runKey) ? `Bước ${Number(runKey) + 1}` : 'Bước';
       setStepRunStates((s) => ({ ...s, [runKey]: 'running' }));
       const serial = device.selectedDevice.serial;
@@ -692,17 +702,12 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
         await previewScenarioStream(
           serial,
           [step as Record<string, any>],
-          (event) => {
-            if (event.event === 'start' && typeof event.trace_id === 'string') {
-              activePreviewRef.current = { serial, traceId: event.trace_id };
-            } else if (event.event === 'done' || event.event === 'error') {
-              activePreviewRef.current = null;
-            }
+          previewSession.makeStreamHandler(runId, serial, (event) => {
             if (event.event === 'step_done') {
               setStepRunStates((s) => ({ ...s, [runKey]: event.ok ? 'ok' : 'error' }));
               if (!event.ok) toast.error(`${label}: ${event.message ?? 'Lỗi'}`);
             }
-          },
+          }),
           ctrl.signal,
           scenarioVariables,
           null,
@@ -721,7 +726,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           toast.error(`${label}: ${String(e)}`);
         }
       } finally {
-        activePreviewRef.current = null;
+        previewSession.onStreamEnd(runId);
         if (!ctrl.signal.aborted) {
           setTimeout(() => setStepRunStates((s) => {
             const n = { ...s };
@@ -731,7 +736,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
         }
       }
     },
-    [activeScenarioId, device.selectedDevice, stepRunStates, scenarioVariables, inlineScenarioDeviceVars],
+    [activeScenarioId, device.selectedDevice, stepRunStates, scenarioVariables, inlineScenarioDeviceVars, previewSession],
   );
 
   const addStepFromSelector = useCallback(
@@ -739,15 +744,17 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
       const by = selector.by as string;
       const value = selector.value;
       if (!value) return;
-      const newStep: FlowStep = stepType === 'tap_selector'
-        ? { type: 'tap_selector', by, value }
-        : stepType === 'long_tap_selector'
-        ? { type: 'long_tap_selector', by, value, duration_ms: 800 }
-        : stepType === 'wait_element'
-        ? { type: 'wait_element', by, value, timeout: 10 }
-        : stepType === 'assert_element'
-        ? { type: 'assert_element', by, value, timeout: 5 }
-        : { type: 'input_selector', by, value, text: '', clear_first: true };
+      const newStep: FlowStep = (
+        stepType === 'tap_selector'
+          ? buildSelectorStep('tap_selector', by, value)
+          : stepType === 'long_tap_selector'
+            ? buildSelectorStep('long_tap_selector', by, value, { duration_ms: 800 })
+            : stepType === 'wait_element'
+              ? buildSelectorStep('wait_element', by, value, { timeout: 10 })
+              : stepType === 'assert_element'
+                ? buildSelectorStep('assert_element', by, value, { timeout: 5 })
+                : buildSelectorStep('input_selector', by, value, { text: '', clear_first: true })
+      ) as FlowStep;
       const id = `step-${Date.now()}-${steps.items.length}`;
       steps.setItems([...(steps.items as any[]), { ...newStep, _id: id }] as any);
       toast.success(`Đã thêm bước ${stepType}`);
@@ -772,10 +779,10 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
   ]);
 
   const applySelectorPick = useCallback(
-    (by: string, value: string, fallback?: { rx: number; ry: number } | null) => {
+    (pick: ScenarioSelectorShape, fallback?: { rx: number; ry: number } | null) => {
       if (!selectorPickTarget) return;
       const raw = steps.items as FlowStep[];
-      const next = applySelectorToSteps(raw, selectorPickTarget, by, value, fallback ?? null);
+      const next = applySelectorToSteps(raw, selectorPickTarget, pick, fallback ?? null);
       if (next === raw) {
         toast.warning(t('pickSelectorNoElement'));
         return;
@@ -786,15 +793,22 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           _id: (s as { _id?: string })._id || `step-${Date.now()}-${i}`,
         })) as any,
       );
-      selector.setBy(by as typeof selector.by);
-      selector.setValue(value);
+      selector.setBy(pick.by as typeof selector.by);
+      selector.setValue(pick.value);
       setSelectorPickTarget(null);
+      const condHint =
+        pick.conditions && Object.keys(pick.conditions).length > 0
+          ? ` · +${Object.keys(pick.conditions).length} điều kiện`
+          : '';
+      const instHint = pick.instance != null ? ` · instance=${pick.instance}` : '';
       if (fallback) {
         toast.success(
-          `${t('pickSelectorApplied', { by, value: value.slice(0, 48) })} · fallback=(${fallback.rx.toFixed(3)}, ${fallback.ry.toFixed(3)})`,
+          `${t('pickSelectorApplied', { by: pick.by, value: pick.value.slice(0, 48) })}${condHint}${instHint} · fallback=(${fallback.rx.toFixed(3)}, ${fallback.ry.toFixed(3)})`,
         );
       } else {
-        toast.success(t('pickSelectorApplied', { by, value: value.slice(0, 48) }));
+        toast.success(
+          `${t('pickSelectorApplied', { by: pick.by, value: pick.value.slice(0, 48) })}${condHint}${instHint}`,
+        );
       }
     },
     [selectorPickTarget, steps, selector, t],
@@ -901,7 +915,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           setFlowSelectorPickFgId(null);
           return;
         }
-        const merged = mergeSelectorByFlowgramId(steps.items as FlowStep[], fgId, sel.by, sel.value.trim());
+        const merged = mergeSelectorByFlowgramId(steps.items as FlowStep[], fgId, sel.selector);
         try {
           const synced = applyStepsToFlowgramDocument(ctx, merged);
           flowStepsRef.current = synced as typeof steps.items;
@@ -938,7 +952,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
       if (selectorPickTarget) {
         const sel = findSelectorInXml(hierarchy.xml, rx, ry);
         if (sel?.value) {
-          applySelectorPick(sel.by, sel.value, { rx: rx3, ry: ry3 });
+          applySelectorPick(sel.selector, { rx: rx3, ry: ry3 });
         } else {
           toast.warning(t('pickSelectorNoElement'));
         }
@@ -1132,8 +1146,14 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                 setHighlightBounds(bounds);
                 if (nodeId != null) setSelectedNodeId(nodeId);
                 if (selectorPickTarget) {
-                  if (value?.trim()) applySelectorPick(by, value.trim());
-                  else toast.warning(t('pickSelectorNoElement'));
+                  const rich = findSelectorForTreeNode(hierarchy.xml, bounds);
+                  if (rich?.value?.trim()) {
+                    applySelectorPick(rich.selector);
+                  } else if (value?.trim()) {
+                    applySelectorPick({ by: by as ScenarioSelectorShape['by'], value: value.trim() });
+                  } else {
+                    toast.warning(t('pickSelectorNoElement'));
+                  }
                   return;
                 }
                 selector.setBy(by as typeof selector.by);

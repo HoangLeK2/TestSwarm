@@ -135,7 +135,20 @@ async def upsert_relay_agent(
         .returning(RelayAgent)
     )
     result = await db.execute(stmt)
-    return result.scalar_one()
+    row = result.scalar_one()
+    # One physical host should not leave many stale "online" rows when relay_id changes.
+    if hostname and ip:
+        await db.execute(
+            update(RelayAgent)
+            .where(
+                RelayAgent.relay_id != relay_id,
+                RelayAgent.hostname == hostname,
+                RelayAgent.ip == ip,
+                RelayAgent.status == "online",
+            )
+            .values(status="offline", disconnected_at=now)
+        )
+    return row
 
 
 async def update_relay_heartbeat(

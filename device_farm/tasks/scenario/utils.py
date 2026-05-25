@@ -173,55 +173,112 @@ def _wait_for_element(
 
 def _retry_find_element(
     u2,
-    by: str,
-    value: str,
+    by: Optional[str] = None,
+    value: Optional[str] = None,
     timeout: float = 10.0,
     poll: float = 0.5,
     cancel_event: Optional["threading.Event"] = None,
+    *,
+    spec: Optional[Any] = None,
+    device: Optional["DeviceClient"] = None,
 ) -> Optional[Any]:
     """Find element with a polling retry loop. Returns element id/dict or None.
 
-    If ``cancel_event`` is provided, the loop checks it between probes so a
-    user-triggered Stop does not have to wait out the full ``timeout``.
+    Accepts legacy ``by``/``value`` or a ``ScenarioSelectorSpec`` via ``spec``.
+    Chain selectors route through agent-boot batch when available.
     """
-    if u2 is None:
+    from services.scenario_selector import (
+        ScenarioSelectorSpec,
+        compile_chain_to_xpath,
+        spec_eid,
+        spec_has_chain,
+        spec_to_agent_payload,
+    )
+
+    if spec is None and by and value:
+        spec = ScenarioSelectorSpec(by=str(by), value=str(value))
+    if u2 is None or spec is None or spec.is_empty():
         return None
 
     deadline = time.monotonic() + max(0.0, float(timeout))
     probe_timeout = min(0.5, max(0.05, float(poll)))
+    summary = f"{spec.by}={spec.value!r}"
 
     def _probe() -> Optional[Any]:
         try:
-            eid = u2.find_element(by, value, timeout=probe_timeout)
+            if spec_has_chain(spec):
+                if device is not None and device._batch_enabled():
+                    payload = spec_to_agent_payload(spec)
+                    results = device.u2_batch(
+                        [{"op": "exists_spec", "spec": payload, "timeout": probe_timeout}],
+                        timeout=probe_timeout + 10.0,
+                    )
+                    if results and results[0]:
+                        return {"eid": spec_eid(spec), "bounds": None}
+                elif device is not None and not device._batch_enabled():
+                    log.warning(
+                        "chain selector %s requires agent-boot batch; trying xpath/json-rpc fallback",
+                        summary,
+                    )
+                if hasattr(u2, "find_element_spec"):
+                    eid = u2.find_element_spec(spec, timeout=probe_timeout)
+                    if eid is not None:
+                        return eid
+                return None
+            if hasattr(u2, "find_element_spec"):
+                eid = u2.find_element_spec(spec, timeout=probe_timeout)
+            else:
+                pby, pval = spec.primary_by_value()
+                eid = u2.find_element(pby, pval, timeout=probe_timeout)
             if eid is None:
                 return None
-            if hasattr(u2, "find_element_with_bounds"):
+            if hasattr(u2, "find_element_with_bounds_spec"):
                 try:
-                    result = u2.find_element_with_bounds(by, value)
+                    result = u2.find_element_with_bounds_spec(spec)
+                    if result:
+                        return result
+                except Exception:
+                    pass
+            elif hasattr(u2, "find_element_with_bounds"):
+                pby, pval = spec.primary_by_value()
+                try:
+                    result = u2.find_element_with_bounds(pby, pval)
                     if result:
                         return result
                 except Exception:
                     pass
             return eid
         except Exception as exc:
-            log.debug("_retry_find_element %s=%r probe error: %s", by, value, exc)
+            log.debug("_retry_find_element %s probe error: %s", summary, exc)
             return None
 
     while True:
         if cancel_event is not None and cancel_event.is_set():
-            log.info("_retry_find_element cancelled by user (by=%s value=%r)", by, value)
+            log.info("_retry_find_element cancelled by user (%s)", summary)
             return None
         found = _probe()
         if found is not None:
             return found
         if time.monotonic() >= deadline:
             return None
-        # Chunked sleep so cancel_event checks land within ~poll seconds even
-        # for long timeouts.
         chunk = min(poll, max(0.0, deadline - time.monotonic()))
         if chunk <= 0:
             return None
         time.sleep(chunk)
+
+
+def resolve_step_selector_fields(
+    step: Dict[str, Any],
+) -> Tuple[Optional[Any], Optional[str], Optional[str], Tuple[Optional[float], Optional[float]]]:
+    """Return (spec, by, value, (fallback_rx, fallback_ry)) from a scenario step."""
+    from services.scenario_selector import normalize_step_selector, get_step_fallback
+
+    spec = normalize_step_selector(step)
+    fb = get_step_fallback(step)
+    if spec is None or spec.is_empty():
+        return None, None, None, fb
+    by, value = spec.primary_by_value()
+    return spec, by, value, fb
 
 
 # ── Implicit wait config ──────────────────────────────────────────────────────
@@ -429,6 +486,7 @@ def _execute_tap(
     element_image: Optional[bytes] = None,
     image_threshold: float = 0.7,
     screenshot_anchor: Optional[Dict[str, Any]] = None,
+    spec: Optional[Any] = None,
 ) -> Tuple[bool, str, Optional[Dict[str, int]]]:
     """
     Full tap pipeline: selector → image match (ROI→full) → position fallback.
@@ -438,29 +496,80 @@ def _execute_tap(
     from runtime.element_resolver import (
         ElementResolver, phase_selector, phase_image, phase_ratio, phase_healing,
     )
+    from services.scenario_selector import (
+        ScenarioSelectorSpec,
+        normalize_step_selector,
+        selector_summary,
+        spec_has_chain,
+        spec_to_agent_payload,
+    )
 
     serial = device.serial
     w = device.screen_width or 1080
     h = device.screen_height or 1920
     u2 = device.u2
 
-    effective_by = by
-    effective_value = value
-    if by == "class name" and value in _CONTAINER_CLASSES:
-        log.debug(f"[{serial}] selector class={value!r} is container — skip to fallback")
+    if spec is None and by and value:
+        spec = ScenarioSelectorSpec(by=str(by), value=str(value))
+
+    if spec and spec_has_chain(spec) and device._batch_enabled():
+        try:
+            flow_result = device._u2_batch.flow(
+                "wait_and_click_spec",
+                {
+                    "spec": spec_to_agent_payload(spec),
+                    "wait_timeout": min(float(timeout), 60.0),
+                },
+                timeout=float(timeout) + 15.0,
+            )
+            if flow_result.get("clicked"):
+                bounds = flow_result.get("bounds")
+                if isinstance(bounds, dict):
+                    pass
+                elif isinstance(bounds, str):
+                    nums = [int(n) for n in re.findall(r"-?\d+", bounds)]
+                    if len(nums) == 4:
+                        bounds = {"left": nums[0], "top": nums[1], "right": nums[2], "bottom": nums[3]}
+                    else:
+                        bounds = None
+                else:
+                    bounds = None
+                return True, f"chain selector {selector_summary(spec)}", bounds
+        except Exception as exc:
+            log.warning("[%s] wait_and_click_spec failed: %s", serial, exc)
+
+    effective_by = spec.by if spec else by
+    effective_value = spec.value if spec else value
+    if effective_by == "class name" and effective_value in _CONTAINER_CLASSES:
+        log.debug(f"[{serial}] selector class={effective_value!r} is container — skip to fallback")
         effective_by = None
         effective_value = None
+        spec = None
 
     phases = []
 
-    has_selector = bool(u2 and effective_by and effective_value)
-    if has_selector:
+    has_selector = bool(u2 and spec and not spec.is_empty()) or bool(u2 and effective_by and effective_value)
+    if has_selector and spec:
+        def _phase_spec():
+            return phase_selector(
+                u2, effective_by, effective_value,
+                fallback_rx, fallback_ry,
+                implicit_wait_timeout, implicit_wait_poll,
+                w, h,
+                find_fn=lambda u, b, v, timeout=10.0, poll=0.5, cancel_event=None, **kw: _retry_find_element(
+                    u, timeout=timeout, poll=poll, cancel_event=cancel_event, spec=spec, device=device,
+                ),
+            )
+        phases.append(_phase_spec)
+    elif has_selector:
         phases.append(lambda: phase_selector(
             u2, effective_by, effective_value,
             fallback_rx, fallback_ry,
             implicit_wait_timeout, implicit_wait_poll,
             w, h,
-            find_fn=_retry_find_element,
+            find_fn=lambda u, b, v, timeout=10.0, poll=0.5, cancel_event=None, **kw: _retry_find_element(
+                u, b, v, timeout=timeout, poll=poll, cancel_event=cancel_event, device=device,
+            ),
         ))
 
     if has_selector and fallback_rx is not None and fallback_ry is not None:
@@ -499,16 +608,21 @@ def _execute_tap(
             log.info(f"[{serial}] tap: recovered after hierarchy refresh")
 
     if not result.hit:
-        return False, f"selector {by}={value!r} not found, no fallback position", None
+        lbl = selector_summary(spec) if spec else f"{by}={value!r}"
+        return False, f"selector {lbl} not found, no fallback position", None
 
     if result.x == -1 and result.y == -1:
         try:
-            eid_result = _retry_find_element(u2, effective_by, effective_value, timeout=1.0, poll=0.3)
+            eid_result = _retry_find_element(
+                u2, effective_by, effective_value, timeout=1.0, poll=0.3, spec=spec, device=device,
+            )
             if eid_result is not None:
-                eid = eid_result.get("eid", f"{effective_by}::{effective_value}") if isinstance(eid_result, dict) else eid_result
+                from services.scenario_selector import spec_eid
+                eid = eid_result.get("eid", spec_eid(spec) if spec else f"{effective_by}::{effective_value}") if isinstance(eid_result, dict) else eid_result
                 u2.element_click(eid)
             else:
-                return False, f"selector {by}={value!r} lost before click", None
+                lbl = selector_summary(spec) if spec else f"{by}={value!r}"
+                return False, f"selector {lbl} lost before click", None
         except Exception as exc:
             return False, f"element_click failed: {exc}", None
     else:

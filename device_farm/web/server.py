@@ -173,6 +173,35 @@ def create_app(
             LifecyclePhase.BACKGROUND, "heartbeat", lambda: heartbeat(manager),
         )
 
+        if config.database.enabled:
+
+            async def _account_maintenance_loop() -> None:
+                import asyncio as _aio
+                from services.account_manager import (
+                    check_and_reset_cooldowns,
+                    reset_daily_usage,
+                )
+
+                tick = 0
+                while True:
+                    await _aio.sleep(300)
+                    tick += 1
+                    try:
+                        await check_and_reset_cooldowns()
+                    except Exception as exc:
+                        log.warning("account cooldown reset failed: %s", exc)
+                    if tick % 288 == 0:
+                        try:
+                            await reset_daily_usage()
+                        except Exception as exc:
+                            log.warning("account daily usage reset failed: %s", exc)
+
+            lifecycle.register_task(
+                LifecyclePhase.BACKGROUND,
+                "account-maintenance",
+                _account_maintenance_loop,
+            )
+
         # ── Prometheus metrics collector (tạm tắt) ──
         # async def _metrics_collector() -> None:
         #     from web.metrics import (

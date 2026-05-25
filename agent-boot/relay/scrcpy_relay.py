@@ -120,14 +120,18 @@ _H264_BASELINE_DEFAULT = os.environ.get("SCRCPY_H264_BASELINE", "true").strip().
     "no",
     "off",
 }
+# Empty by default: the web dashboard decodes H.264 (avc1) only. Auto HEVC leaves the
+# canvas black on Vivo/Oppo while scrcpy logs show "handshake OK" + capture resets.
+# Opt in per deploy: SCRCPY_HEVC_OEM_ALLOWLIST=vivo,oppo,realme,oneplus
 _HEVC_OEM_ALLOWLIST = {
     s.strip().lower()
-    for s in os.environ.get(
-        "SCRCPY_HEVC_OEM_ALLOWLIST",
-        "vivo,oppo,realme,oneplus",
-    ).split(",")
+    for s in os.environ.get("SCRCPY_HEVC_OEM_ALLOWLIST", "").split(",")
     if s.strip()
 }
+# Qualcomm Vivo builds: prefer HW H.264 when codec stays h264 and encoder is unset.
+_VIVO_H264_ENCODER_DEFAULT = os.environ.get(
+    "SCRCPY_VIVO_H264_ENCODER", "c2.qti.avc.encoder"
+).strip()
 
 
 def _per_serial_env(base: str, serial: str, fallback: str) -> str:
@@ -635,6 +639,20 @@ class ScrcpyRelaySession:
                     oem or "?",
                     model or "?",
                 )
+        elif (
+            codec == "h264"
+            and not encoder
+            and oem == "vivo"
+            and _VIVO_H264_ENCODER_DEFAULT
+            and not _codec_explicit_for_serial(self._serial)
+        ):
+            encoder = _VIVO_H264_ENCODER_DEFAULT
+            logger.info(
+                "[%s] vivo H.264 encoder pin: %s (model=%s)",
+                self._serial,
+                encoder,
+                model or "?",
+            )
         encoder_arg = f" video_encoder={encoder}" if encoder else ""
         if encoder or codec != "h264":
             logger.info(

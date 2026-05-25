@@ -23,21 +23,28 @@ SUPPORTED_EXTRACT_STRATEGIES: Final[tuple[str, ...]] = tuple(EXTRACT_STRATEGY_VE
 
 _FB_POSTS_BALANCED: Final[dict[str, Any]] = {
     "expand_see_more": True,
-    "expand_see_more_max_passes": 4,
-    "expand_completion_retries": 4,
+    "expand_see_more_fast": True,
+    "expand_see_more_max_passes": 3,
+    "expand_completion_retries": 1,
     "expand_see_more_scroll_distance": 0.25,
+    "expand_see_more_wall_s": 18,
 }
 _FB_POSTS_AGGRESSIVE: Final[dict[str, Any]] = {
     "expand_see_more": True,
-    "expand_see_more_max_passes": 6,
-    "expand_completion_retries": 6,
+    "expand_see_more_fast": True,
+    "expand_see_more_max_passes": 5,
+    "expand_completion_retries": 2,
+    "expand_see_more_scroll": True,
     "expand_see_more_scroll_distance": 0.3,
+    "expand_see_more_wall_s": 28,
 }
 _FB_POSTS_SAFE: Final[dict[str, Any]] = {
     "expand_see_more": True,
-    "expand_see_more_max_passes": 3,
-    "expand_completion_retries": 2,
+    "expand_see_more_fast": True,
+    "expand_see_more_max_passes": 2,
+    "expand_completion_retries": 1,
     "expand_see_more_scroll_distance": 0.2,
+    "expand_see_more_wall_s": 12,
 }
 
 _FB_COMMENTS_BALANCED: Final[dict[str, Any]] = {

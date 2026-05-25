@@ -235,14 +235,6 @@ def _run_relay(args: argparse.Namespace) -> None:
     print(f"  Relay ID: {args.relay_id}", file=sys.stderr)
     print("  Ctrl+C to stop.\n", file=sys.stderr)
 
-    agent = RelayAgent(
-        server_url=args.relay_server,
-        api_key=args.relay_api_key or None,
-        enrollment_token=args.relay_enrollment_token or None,
-        relay_id=args.relay_id,
-        relay_mode=relay_mode,
-    )
-
     async def _run() -> None:
         ingest = None
         extra_enabled = os.environ.get("AGENT_BOOT_EXTRA_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
@@ -252,6 +244,15 @@ def _run_relay(args: argparse.Namespace) -> None:
 
             ingest = ExtraDataIngestServer()
             await ingest.start()
+
+        agent = RelayAgent(
+            server_url=args.relay_server,
+            api_key=args.relay_api_key or None,
+            enrollment_token=args.relay_enrollment_token or None,
+            relay_id=args.relay_id,
+            relay_mode=relay_mode,
+            extra_ingest=ingest,
+        )
         try:
             await agent.run()
         finally:

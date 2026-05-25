@@ -3,14 +3,17 @@
 import { useEffect, useState } from 'react';
 import { Crosshair, MousePointerClick, Move } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { VariableEditor } from '@/components/variable-editor';
+import { RepeatUntilFields } from '../scenario-steps/control-flow-editors';
 import { RunScenarioFields, type RunScenarioCampaignOption } from '../scenario-steps/run-scenario-editor';
 import type { FlowStep } from '../scenario-steps/types';
-import { getStepTypeName } from './constants';
+import { useCampaignFlowI18n } from './flow-i18n';
 import { StepIcon } from './step-icon';
+
 interface Props {
   step: FlowStep;
   onChange: (step: FlowStep) => void;
@@ -162,6 +165,29 @@ function VariableInsertSelect({
   );
 }
 
+function patchSelector(step: FlowStep, patch: { by?: string; value?: string; conditions?: Record<string, unknown>; instance?: number; chain?: Record<string, unknown> }): FlowStep {
+  const cur = (step as { selector?: { by?: string; value?: string; conditions?: Record<string, unknown>; instance?: number; chain?: Record<string, unknown> } }).selector ?? {};
+  const by = patch.by ?? cur.by ?? (step as { by?: string }).by ?? 'text';
+  const value = patch.value ?? cur.value ?? (step as { value?: string }).value ?? '';
+  const selector: Record<string, unknown> = { ...cur, by, value };
+  if (patch.conditions !== undefined) {
+    if (patch.conditions && Object.keys(patch.conditions).length > 0) {
+      selector.conditions = patch.conditions;
+    } else {
+      delete selector.conditions;
+    }
+  }
+  if (patch.instance !== undefined) {
+    if (patch.instance != null) selector.instance = patch.instance;
+    else delete selector.instance;
+  }
+  if (patch.chain !== undefined) {
+    if (patch.chain) selector.chain = patch.chain;
+    else delete selector.chain;
+  }
+  return { ...step, selector, by, value } as FlowStep;
+}
+
 function SelectorFields({ step, onChange, onRequestPickSelector, availableVariables, t }: {
   step: FlowStep;
   onChange: (s: FlowStep) => void;
@@ -169,6 +195,32 @@ function SelectorFields({ step, onChange, onRequestPickSelector, availableVariab
   availableVariables: string[];
   t: ReturnType<typeof useTranslations>;
 }) {
+  const sel = (step as { selector?: { by?: string; value?: string; conditions?: Record<string, unknown>; instance?: number; chain?: Record<string, unknown> } }).selector;
+  const by = sel?.by ?? (step as { by?: string }).by ?? 'text';
+  const value = sel?.value ?? (step as { value?: string }).value ?? '';
+  const [chainOpen, setChainOpen] = useState(false);
+  const [chainJson, setChainJson] = useState('');
+  const conditions = (sel?.conditions ?? {}) as Record<string, unknown>;
+  const className = String(conditions.className ?? '');
+  const packageName = String(conditions.packageName ?? '');
+  const clickable = conditions.clickable === true;
+
+  useEffect(() => {
+    if (!chainOpen) return;
+    setChainJson(sel?.chain ? JSON.stringify({ chain: sel.chain }, null, 2) : '{\n  "chain": { "op": "child", "target": { "className": "android.widget.Switch" } }\n}');
+  }, [chainOpen, sel?.chain]);
+
+  const patchConditions = (patch: Record<string, unknown>) => {
+    const next = { ...conditions };
+    for (const [k, v] of Object.entries(patch)) {
+      if (v === '' || v === false || v == null) delete next[k];
+      else next[k] = v;
+    }
+    onChange(patchSelector(step, {
+      conditions: Object.keys(next).length > 0 ? next : undefined,
+    }));
+  };
+
   return (
     <>
       <div className='flex items-center justify-between'>
@@ -186,20 +238,93 @@ function SelectorFields({ step, onChange, onRequestPickSelector, availableVariab
         )}
       </div>
       <F label='Loại selector'>
-        <select className='w-full rounded border bg-background px-2 py-1.5 text-xs' value={step.by ?? 'text'} onChange={(e) => onChange({ ...step, by: e.target.value })}>
+        <select className='w-full rounded border bg-background px-2 py-1.5 text-xs' value={by} onChange={(e) => onChange(patchSelector(step, { by: e.target.value }))}>
           {SELECTOR_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
         </select>
       </F>
       <F label='Giá trị selector'>
         <div className={valueInsertRowClassName()}>
-          <Input className='h-9 min-w-0 flex-1 text-xs' value={step.value ?? ''} onChange={(e) => onChange({ ...step, value: e.target.value })} placeholder='VD: Đăng nhập hoặc com.app:id/btn' />
+          <Input className='h-9 min-w-0 flex-1 text-xs' value={value} onChange={(e) => onChange(patchSelector(step, { value: e.target.value }))} placeholder='VD: Đăng nhập hoặc com.app:id/btn' />
           <VariableInsertSelect
             availableVariables={availableVariables}
             t={t}
-            onInsert={(token) => onChange({ ...step, value: insertToken(step.value ?? '', token) })}
+            onInsert={(token) => onChange(patchSelector(step, { value: insertToken(value, token) }))}
           />
         </div>
       </F>
+      <p className='text-[10px] text-muted-foreground'>
+        Điều kiện khớp element tự điền khi <strong>Chọn từ màn hình</strong> hoặc ghi record — không cần gõ JSON.
+      </p>
+      <F label='className'>
+        <Input
+          className='h-8 text-xs font-mono'
+          value={className}
+          onChange={(e) => patchConditions({ className: e.target.value.trim() })}
+          placeholder='android.widget.TextView'
+        />
+      </F>
+      <label className='flex items-center gap-2 text-[11px]'>
+        <input
+          type='checkbox'
+          checked={clickable}
+          onChange={(e) => patchConditions({ clickable: e.target.checked ? true : undefined })}
+        />
+        clickable
+      </label>
+      <F label='packageName'>
+        <Input
+          className='h-8 text-xs font-mono'
+          value={packageName}
+          onChange={(e) => patchConditions({ packageName: e.target.value.trim() })}
+          placeholder='com.example.app'
+        />
+      </F>
+      <F label='Instance (thứ tự khi trùng)'>
+        <Input
+          type='number'
+          min={0}
+          className='h-8 w-24 text-xs'
+          value={sel?.instance ?? ''}
+          onChange={(e) => {
+            const n = e.target.value === '' ? undefined : Math.max(0, parseInt(e.target.value, 10) || 0);
+            onChange(patchSelector(step, { instance: n }));
+          }}
+          placeholder='0'
+        />
+      </F>
+      <button
+        type='button'
+        className='text-[11px] text-primary underline-offset-2 hover:underline'
+        onClick={() => setChainOpen((v) => !v)}
+      >
+        {chainOpen ? 'Ẩn chain (JSON)' : 'Chain u2 (child / sibling — JSON)'}
+      </button>
+      {chainOpen && (
+        <div className='space-y-1'>
+          <textarea
+            className='min-h-[100px] w-full rounded border bg-background p-2 font-mono text-[10px]'
+            value={chainJson}
+            onChange={(e) => setChainJson(e.target.value)}
+          />
+          <Button
+            size='sm'
+            variant='secondary'
+            className='h-7 text-[10px]'
+            onClick={() => {
+              try {
+                const parsed = JSON.parse(chainJson) as Record<string, unknown>;
+                onChange(patchSelector(step, {
+                  chain: parsed.chain as Record<string, unknown> | undefined,
+                }));
+              } catch {
+                toast.error('JSON chain không hợp lệ');
+              }
+            }}
+          >
+            Áp dụng chain
+          </Button>
+        </div>
+      )}
     </>
   );
 }
@@ -215,6 +340,8 @@ export function StepDetailPanel({
   campaignScenarios = [],
 }: Props) {
   const t = useTranslations('campaignsFeature.stepEditor');
+  const tApp = useTranslations('campaignsFeature.stepEditor.appLifecycle');
+  const { getStepTypeName } = useCampaignFlowI18n();
   const typeName = getStepTypeName(step.type);
   const update = (fields: Partial<FlowStep>) => onChange({ ...step, ...fields });
   const isVarRef = (v: string) => /^\$\{[^}]+\}$/.test(v);
@@ -335,12 +462,72 @@ export function StepDetailPanel({
 
         {step.type === 'launch_app' && (
           <>
-            <F label='Tên package'>
-              <Input className='h-8 text-xs font-mono' value={step.package ?? ''} onChange={(e) => update({ package: e.target.value })} placeholder='com.android.chrome' />
+            <F label={tApp('packageLabel')}>
+              <Input className='h-8 text-xs font-mono' value={step.package ?? ''} onChange={(e) => update({ package: e.target.value })} placeholder={tApp('placeholderChrome')} />
             </F>
-            <F label='Wait sau khi mở app (giây)'>
+            <F label={tApp('activityLabel')}>
+              <Input className='h-8 text-xs font-mono' value={step.activity ?? step.component ?? ''} onChange={(e) => update({ activity: e.target.value || undefined, component: e.target.value || undefined })} placeholder={tApp('activityPlaceholder')} />
+            </F>
+            <div className='flex flex-col gap-2'>
+              <label className='flex items-center gap-2 text-xs'>
+                <input type='checkbox' className='h-3.5 w-3.5' checked={!!step.stop_before} onChange={(e) => update({ stop_before: e.target.checked })} />
+                {tApp('stopBefore')}
+              </label>
+              <label className='flex items-center gap-2 text-xs'>
+                <input type='checkbox' className='h-3.5 w-3.5' checked={!!step.use_monkey} onChange={(e) => update({ use_monkey: e.target.checked })} />
+                {tApp('useMonkey')}
+              </label>
+            </div>
+            <F label={tApp('waitAfterLaunch')}>
               <Input type='number' min={0} step={0.1} className='h-8 w-28 text-xs' value={step.wait_after ?? 2} onChange={(e) => update({ wait_after: Number(e.target.value) || 0 })} />
             </F>
+          </>
+        )}
+
+        {step.type === 'stop_app' && (
+          <F label={tApp('packageLabel')}>
+            <Input className='h-8 text-xs font-mono' value={step.package ?? ''} onChange={(e) => update({ package: e.target.value })} placeholder={tApp('placeholderPackage')} />
+          </F>
+        )}
+
+        {step.type === 'clear_app' && (
+          <>
+            <F label={tApp('packageLabel')}>
+              <Input className='h-8 text-xs font-mono' value={step.package ?? ''} onChange={(e) => update({ package: e.target.value })} placeholder={tApp('placeholderPackage')} />
+            </F>
+            <p className='text-[10px] text-amber-600 dark:text-amber-400'>{tApp('clearWarning')}</p>
+          </>
+        )}
+
+        {step.type === 'wait_app' && (
+          <>
+            <F label={tApp('packageLabel')}>
+              <Input className='h-8 text-xs font-mono' value={step.package ?? ''} onChange={(e) => update({ package: e.target.value })} placeholder={tApp('placeholderPackage')} />
+            </F>
+            <F label={tApp('timeoutSeconds')}>
+              <Input type='number' min={0.5} step={0.5} className='h-8 w-28 text-xs' value={step.timeout ?? 20} onChange={(e) => update({ timeout: Number(e.target.value) || 20 })} />
+            </F>
+            <label className='flex items-center gap-2 text-xs'>
+              <input type='checkbox' className='h-3.5 w-3.5' checked={step.front !== false} onChange={(e) => update({ front: e.target.checked })} />
+              {tApp('waitForeground')}
+            </label>
+          </>
+        )}
+
+        {(step.type === 'push_file' || step.type === 'pull_file') && (
+          <>
+            <F label={step.type === 'push_file' ? tApp('localPathPush') : tApp('localPathPull')}>
+              <Input className='h-8 text-xs font-mono' value={step.local_path ?? ''} onChange={(e) => update({ local_path: e.target.value })} placeholder={tApp('placeholderLocal')} />
+            </F>
+            <F label={step.type === 'push_file' ? tApp('remotePathPush') : tApp('remotePathPull')}>
+              <Input className='h-8 text-xs font-mono' value={step.remote_path ?? ''} onChange={(e) => update({ remote_path: e.target.value })} placeholder={tApp('placeholderRemote')} />
+            </F>
+            {step.type === 'push_file' && (
+              <F label={tApp('fileMode')}>
+                <Input type='number' className='h-8 w-28 text-xs font-mono' value={step.mode ?? ''} placeholder={tApp('fileModePlaceholder')} onChange={(e) => update({ mode: e.target.value ? Number(e.target.value) : undefined })} />
+              </F>
+            )}
+            <p className='text-[10px] text-muted-foreground'>{tApp('fileTransferHint')}</p>
           </>
         )}
 
@@ -743,7 +930,14 @@ export function StepDetailPanel({
 
         {step.type === 'repeat' && (<><F label='Số lần lặp'><Input type='number' min={1} className='h-8 w-24 text-xs' value={step.count ?? 3} onChange={(e) => update({ count: Number(e.target.value) })} /></F><F label='Delay giữa các lần (giây)'><Input type='number' min={0} step={0.5} className='h-8 w-24 text-xs' value={step.delay_between ?? 0} onChange={(e) => update({ delay_between: Number(e.target.value) })} /></F></>)}
 
-        {step.type === 'repeat_until' && <F label='Tối đa lặp'><Input type='number' min={1} className='h-8 w-24 text-xs' value={step.max_iterations ?? 50} onChange={(e) => update({ max_iterations: Number(e.target.value) })} /></F>}
+        {step.type === 'repeat_until' && (
+          <F label='Điều kiện dừng'>
+            <RepeatUntilFields
+              step={step}
+              onChange={(f, v) => update({ [f]: v } as Partial<FlowStep>)}
+            />
+          </F>
+        )}
 
         {step.type === 'if_element' && (
           <>

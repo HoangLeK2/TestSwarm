@@ -11,11 +11,14 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable, Optional, TypeVar
 
 from relay.u2_session_pool import U2SessionPool
+from relay.u2_xpath_util import normalize_u2_xpath
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 MAX_BATCH_ACTIONS = 100
 MAX_FLOW_TIMEOUT = 60.0
@@ -53,9 +56,8 @@ async def _run_with_retry(
     dead session. Non-session errors (ValueError, selector errors, etc.) are
     re-raised immediately — only transport-level failures trigger retry.
     """
-    dev = await pool.get_session(serial)
     try:
-        return await loop.run_in_executor(None, fn, dev)
+        return await pool.run_locked(serial, fn)
     except Exception as exc:
         if not _looks_like_dead_session(exc):
             raise
@@ -64,8 +66,7 @@ async def _run_with_retry(
             exc, serial,
         )
         await pool.evict(serial)
-        dev = await pool.get_session(serial)
-        return await loop.run_in_executor(None, fn, dev)
+        return await pool.run_locked(serial, fn)
 
 # ── Selector resolver ──────────────────────────────────────────────────────────
 
@@ -73,19 +74,138 @@ _SELECTOR_KEYS = frozenset({
     "text", "textContains", "textStartsWith", "textMatches",
     "description", "descriptionContains", "descriptionStartsWith",
     "resourceId", "className", "packageName", "instance", "index",
+    "clickable", "checked", "checkable", "enabled", "scrollable", "focused", "selected",
 })
+
+_BOOL_KEYS = frozenset({"clickable", "checked", "checkable", "enabled", "scrollable", "focused", "selected"})
 
 
 def _resolve(dev: Any, selector: dict) -> Any:
     """Map JSON selector dict → uiautomator2 UiObject or XPath selector."""
     if not selector:
         raise ValueError("selector required")
+    if "spec" in selector:
+        return _resolve_spec(dev, selector["spec"])
     if "xpath" in selector:
-        return dev.xpath(selector["xpath"])
+        return dev.xpath(normalize_u2_xpath(selector["xpath"]))
     kwargs = {k: v for k, v in selector.items() if k in _SELECTOR_KEYS}
     if not kwargs:
         raise ValueError(f"unrecognised selector keys: {list(selector)}")
     return dev(**kwargs)
+
+
+def _target_kwargs(target: dict) -> dict:
+    if not isinstance(target, dict):
+        return {}
+    if target.get("xpath"):
+        return {"xpath": target["xpath"]}
+    cond = target.get("conditions") or {}
+    kwargs: dict = {}
+    by = str(target.get("by") or "").strip()
+    value = str(target.get("value") or "").strip()
+    if by == "resource-id" and value:
+        kwargs["resourceId"] = value
+    elif by == "class name" and value:
+        kwargs["className"] = value
+    elif by == "description" and value:
+        kwargs["description"] = value
+    elif by == "text" and value:
+        kwargs["text"] = value
+    for k, v in cond.items():
+        if k in _SELECTOR_KEYS and v is not None:
+            if k in _BOOL_KEYS:
+                if v:
+                    kwargs[k] = True
+            else:
+                kwargs[k] = v
+    for k, v in target.items():
+        if k in _SELECTOR_KEYS and k not in kwargs and v is not None:
+            if k in _BOOL_KEYS:
+                if v:
+                    kwargs[k] = True
+            else:
+                kwargs[k] = v
+    for k in ("className", "resourceId", "text", "description"):
+        if k in target and target[k] is not None and k not in kwargs:
+            kwargs[k] = target[k]
+    return kwargs
+
+
+def _anchor_kwargs(spec: dict) -> dict:
+    if spec.get("xpath"):
+        return {"xpath": spec["xpath"]}
+    by = str(spec.get("by") or "text").strip()
+    value = str(spec.get("value") or "").strip()
+    cond = spec.get("conditions") or {}
+    kwargs: dict = {}
+    if by == "resource-id" and value:
+        kwargs["resourceId"] = value
+    elif by in ("class name", "className") and value:
+        kwargs["className"] = value
+    elif by in ("description", "content-desc") and value:
+        kwargs["description"] = value
+    elif by == "text" and value:
+        kwargs["text"] = value
+    for k, v in cond.items():
+        if k in _SELECTOR_KEYS and v is not None:
+            if k in _BOOL_KEYS:
+                if v:
+                    kwargs[k] = True
+            else:
+                kwargs[k] = v
+    if spec.get("instance") is not None:
+        kwargs["instance"] = int(spec["instance"])
+    if spec.get("index") is not None:
+        kwargs["index"] = int(spec["index"])
+    if not kwargs and value:
+        kwargs["text"] = value
+    return kwargs
+
+
+def _apply_chain(anchor: Any, chain: dict) -> Any:
+    op = str(chain.get("op") or "").strip()
+    if op == "child":
+        return anchor.child(**_target_kwargs(chain.get("target") or {}))
+    if op == "sibling":
+        return anchor.sibling(**_target_kwargs(chain.get("target") or {}))
+    if op == "relative":
+        direction = str(chain.get("direction") or "right").strip().lower()
+        method = getattr(anchor, direction, None)
+        if method is None:
+            raise ValueError(f"unsupported relative direction: {direction!r}")
+        return method(**_target_kwargs(chain.get("target") or {}))
+    if op == "child_by_text":
+        text = chain.get("text") or ""
+        target = chain.get("target") or {}
+        tk = _target_kwargs(target)
+        allow = bool(chain.get("allow_scroll_search", False))
+        return anchor.child_by_text(text, allow_scroll_search=allow, **tk)
+    if op == "child_by_description":
+        desc = chain.get("description") or ""
+        target = chain.get("target") or {}
+        tk = _target_kwargs(target)
+        allow = bool(chain.get("allow_scroll_search", False))
+        return anchor.child_by_description(desc, allow_scroll_search=allow, **tk)
+    raise ValueError(f"unsupported chain op: {op!r}")
+
+
+def _resolve_spec(dev: Any, spec: dict) -> Any:
+    """Resolve nested scenario selector spec (anchor + optional chain)."""
+    if not spec:
+        raise ValueError("spec required")
+    if spec.get("xpath"):
+        return dev.xpath(normalize_u2_xpath(spec["xpath"]))
+    kwargs = _anchor_kwargs(spec)
+    if not kwargs:
+        raise ValueError(f"empty anchor in spec: {spec!r}")
+    if "xpath" in kwargs:
+        obj = dev.xpath(normalize_u2_xpath(kwargs["xpath"]))
+    else:
+        obj = dev(**kwargs)
+    chain = spec.get("chain")
+    if isinstance(chain, dict) and chain.get("op"):
+        obj = _apply_chain(obj, chain)
+    return obj
 
 
 # ── Primitive op implementations (blocking) ────────────────────────────────────
@@ -134,6 +254,46 @@ def _op_wait_gone(dev: Any, act: dict) -> bool:
     return bool(_resolve(dev, act["selector"]).wait_gone(timeout=float(act.get("timeout", 5))))
 
 
+def _op_click_selector(dev: Any, act: dict) -> bool:
+    """Tap when selector exists; returns False if not found (no exception)."""
+    sel = _resolve(dev, act.get("selector", {}))
+    timeout = float(act.get("timeout", 1.0))
+    if hasattr(sel, "click_exists"):
+        return bool(sel.click_exists(timeout=timeout))
+    if sel.wait(timeout=timeout):
+        sel.click()
+        return True
+    return False
+
+
+def _op_click_spec(dev: Any, act: dict) -> bool:
+    spec = act.get("spec") or {}
+    timeout = float(act.get("timeout", 1.0))
+    sel = _resolve_spec(dev, spec)
+    if hasattr(sel, "click_exists"):
+        return bool(sel.click_exists(timeout=timeout))
+    if sel.wait(timeout=timeout):
+        sel.click()
+        return True
+    return False
+
+
+def _op_exists_spec(dev: Any, act: dict) -> bool:
+    spec = act.get("spec") or {}
+    timeout = float(act.get("timeout", 1.0))
+    sel = _resolve_spec(dev, spec)
+    if hasattr(sel, "exists"):
+        return bool(sel.exists(timeout=timeout))
+    return bool(sel.wait(timeout=timeout))
+
+
+def _op_wait_exists_spec(dev: Any, act: dict) -> bool:
+    spec = act.get("spec") or {}
+    timeout = float(act.get("timeout", 5.0))
+    sel = _resolve_spec(dev, spec)
+    return bool(sel.wait(timeout=min(timeout, MAX_FLOW_TIMEOUT)))
+
+
 def _op_dump(dev: Any, act: dict) -> str:
     return dev.dump_hierarchy(compressed=bool(act.get("compressed", False)))
 
@@ -143,18 +303,87 @@ def _op_screenshot(dev: Any, act: dict) -> str:
     return base64.b64encode(png).decode("ascii")
 
 
+def _op_app_start(dev: Any, act: dict) -> None:
+    pkg = str(act.get("package") or "").strip()
+    if not pkg:
+        raise ValueError("app_start: package required")
+    activity = act.get("activity")
+    kwargs: dict[str, Any] = {
+        "stop": bool(act.get("stop") or act.get("stop_before")),
+        "use_monkey": bool(act.get("use_monkey")),
+    }
+    if activity:
+        dev.app_start(pkg, str(activity), **kwargs)
+    else:
+        dev.app_start(pkg, **kwargs)
+
+
+def _op_app_stop(dev: Any, act: dict) -> None:
+    pkg = str(act.get("package") or "").strip()
+    if not pkg:
+        raise ValueError("app_stop: package required")
+    dev.app_stop(pkg)
+
+
+def _op_app_clear(dev: Any, act: dict) -> None:
+    pkg = str(act.get("package") or "").strip()
+    if not pkg:
+        raise ValueError("app_clear: package required")
+    dev.app_clear(pkg)
+
+
+def _op_app_wait(dev: Any, act: dict) -> int:
+    pkg = str(act.get("package") or "").strip()
+    if not pkg:
+        raise ValueError("app_wait: package required")
+    timeout = float(act.get("timeout", 20.0))
+    front = bool(act.get("front", True))
+    pid = dev.app_wait(pkg, front=front, timeout=timeout)
+    return int(pid or 0)
+
+
+def _op_push_file(dev: Any, act: dict) -> None:
+    local_path = str(act.get("local_path") or act.get("src") or "").strip()
+    remote_path = str(act.get("remote_path") or act.get("dst") or "").strip()
+    if not local_path or not remote_path:
+        raise ValueError("push_file: local_path and remote_path required")
+    mode = act.get("mode")
+    if mode is not None:
+        dev.push(local_path, remote_path, mode=int(mode))
+    else:
+        dev.push(local_path, remote_path)
+
+
+def _op_pull_file(dev: Any, act: dict) -> None:
+    remote_path = str(act.get("remote_path") or act.get("src") or "").strip()
+    local_path = str(act.get("local_path") or act.get("dst") or "").strip()
+    if not local_path or not remote_path:
+        raise ValueError("pull_file: local_path and remote_path required")
+    dev.pull(remote_path, local_path)
+
+
 _OP_TABLE: dict[str, Any] = {
     "click":          _op_click,
+    "click_selector": _op_click_selector,
+    "click_spec":     _op_click_spec,
     "long_click":     _op_long_click,
     "swipe":          _op_swipe,
     "exists":         _op_exists,
+    "exists_spec":    _op_exists_spec,
     "get_text":       _op_get_text,
     "set_text":       _op_set_text,
     "press_key":      _op_press_key,
     "wait_exists":    _op_wait_exists,
+    "wait_exists_spec": _op_wait_exists_spec,
     "wait_gone":      _op_wait_gone,
     "dump_hierarchy": _op_dump,
     "screenshot":     _op_screenshot,
+    "app_start":      _op_app_start,
+    "app_stop":       _op_app_stop,
+    "app_clear":      _op_app_clear,
+    "app_wait":       _op_app_wait,
+    "push_file":      _op_push_file,
+    "pull_file":      _op_pull_file,
 }
 
 # ── Named flow implementations (blocking) ─────────────────────────────────────
@@ -179,6 +408,25 @@ def _flow_wait_and_click(dev: Any, p: dict) -> dict:
         return {"found": False, "clicked": False}
     sel.click()
     return {"found": True, "clicked": True}
+
+
+def _flow_wait_and_click_spec(dev: Any, p: dict) -> dict:
+    """Wait for scenario selector spec (incl. chain), then click."""
+    spec = p.get("spec") or {}
+    wt = min(float(p.get("wait_timeout", 10.0)), MAX_FLOW_TIMEOUT)
+    sel = _resolve_spec(dev, spec)
+    found = bool(sel.wait(timeout=wt))
+    if not found:
+        return {"found": False, "clicked": False}
+    bounds = None
+    try:
+        info = sel.info
+        if isinstance(info, dict):
+            bounds = info.get("bounds")
+    except Exception:
+        pass
+    sel.click()
+    return {"found": True, "clicked": True, "bounds": bounds}
 
 
 def _flow_find_get_text(dev: Any, p: dict) -> dict:
@@ -230,6 +478,7 @@ def _flow_input_and_confirm(dev: Any, p: dict) -> dict:
 _FLOW_TABLE: dict[str, Any] = {
     "find_click_wait":   _flow_find_click_wait,
     "wait_and_click":    _flow_wait_and_click,
+    "wait_and_click_spec": _flow_wait_and_click_spec,
     "find_get_text":     _flow_find_get_text,
     "swipe_until_found": _flow_swipe_until_found,
     "input_and_confirm": _flow_input_and_confirm,
@@ -239,9 +488,23 @@ _FLOW_TABLE: dict[str, Any] = {
 # ── Executor ───────────────────────────────────────────────────────────────────
 
 class U2Executor:
-    def __init__(self, pool: U2SessionPool, loop: asyncio.AbstractEventLoop) -> None:
+    def __init__(
+        self,
+        pool: U2SessionPool,
+        loop: asyncio.AbstractEventLoop,
+        *,
+        http_dump: Optional[Callable[[str, float, bool], str]] = None,
+    ) -> None:
         self._pool = pool
         self._loop = loop
+        self._http_dump = http_dump
+
+    async def with_session(self, serial: str, coro: Callable[[], Awaitable[T]]) -> T:
+        """Keep one warm u2 session for expand + dump (no reconnect between batches)."""
+        if hasattr(self._pool, "session_scope"):
+            async with self._pool.session_scope(serial):
+                return await coro()
+        return await coro()
 
     async def run_batch(
         self,
@@ -256,31 +519,58 @@ class U2Executor:
             logger.warning("u2_batch: %d actions exceeds cap %d, truncating", len(actions), MAX_BATCH_ACTIONS)
             actions = actions[:MAX_BATCH_ACTIONS]
 
-        results: list[dict] = []
-        for idx, act in enumerate(actions):
-            op = act.get("op", "")
-            fn = _OP_TABLE.get(op)
-            if fn is None:
-                results.append({"op": op, "ok": False, "error": f"unknown op: {op}"})
-                if early_exit:
-                    return {"ok": False, "stopped_at": idx, "results": results,
-                            "error": f"action[{idx}] unknown op: {op}"}
-                continue
-            try:
-                value = await _run_with_retry(
-                    self._pool, self._loop, serial,
-                    lambda d, _fn=fn, _act=act: _fn(d, _act),
-                )
-                entry: dict = {"op": op, "ok": True}
-                if value is not None:
-                    entry["value"] = value
-                results.append(entry)
-            except Exception as exc:
-                results.append({"op": op, "ok": False, "error": str(exc)})
-                if early_exit:
-                    return {"ok": False, "stopped_at": idx, "results": results,
-                            "error": f"action[{idx}] {op}: {exc}"}
-        return {"ok": True, "stopped_at": None, "results": results, "error": None}
+        def _run_actions(dev: Any) -> dict:
+            results: list[dict] = []
+            for idx, act in enumerate(actions):
+                op = act.get("op", "")
+                fn = _OP_TABLE.get(op)
+                if fn is None:
+                    results.append({"op": op, "ok": False, "error": f"unknown op: {op}"})
+                    if early_exit:
+                        return {
+                            "ok": False,
+                            "stopped_at": idx,
+                            "results": results,
+                            "error": f"action[{idx}] unknown op: {op}",
+                        }
+                    continue
+                try:
+                    if op == "dump_hierarchy" and self._http_dump is not None:
+                        timeout = float(act.get("timeout") or act.get("timeout_s") or 5.0)
+                        compressed = bool(act.get("compressed", False))
+                        value = self._http_dump(serial, timeout, compressed)
+                        if not value:
+                            logger.debug(
+                                "u2_batch: atx-http dump empty serial=%s — fallback to u2 dump_hierarchy",
+                                serial,
+                            )
+                            value = fn(dev, act)
+                    else:
+                        value = fn(dev, act)
+                    entry: dict = {"op": op, "ok": True}
+                    if value is not None:
+                        entry["value"] = value
+                    results.append(entry)
+                except Exception as exc:
+                    results.append({"op": op, "ok": False, "error": str(exc)})
+                    if early_exit:
+                        return {
+                            "ok": False,
+                            "stopped_at": idx,
+                            "results": results,
+                            "error": f"action[{idx}] {op}: {exc}",
+                        }
+            return {"ok": True, "stopped_at": None, "results": results, "error": None}
+
+        try:
+            return await _run_with_retry(
+                self._pool,
+                self._loop,
+                serial,
+                _run_actions,
+            )
+        except Exception as exc:
+            return {"ok": False, "stopped_at": 0, "results": [], "error": str(exc)}
 
     async def execute_flow(self, serial: str, flow: str, params: dict) -> dict:
         fn = _FLOW_TABLE.get(flow)
@@ -295,3 +585,18 @@ class U2Executor:
         except Exception as exc:
             logger.warning("u2_flow %s failed serial=%s: %s", flow, serial, exc)
             return {"ok": False, "value": None, "error": str(exc)}
+
+    async def window_size(self, serial: str) -> tuple[int, int]:
+        """Return (width, height) from u2 for swipe geometry."""
+        try:
+            size = await _run_with_retry(
+                self._pool,
+                self._loop,
+                serial,
+                lambda d: d.window_size(),
+            )
+            if isinstance(size, (list, tuple)) and len(size) >= 2:
+                return int(size[0]), int(size[1])
+        except Exception as exc:
+            logger.debug("window_size failed serial=%s: %s", serial, exc)
+        return 1080, 2340

@@ -110,6 +110,23 @@ def _coerce_bool(value: Any, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _relay_extra_data_available(device: Any) -> bool:
+    """PA B: edge extract requires a relay mapping for this device."""
+    if not _env_bool("EDGE_EXTRA_RELAY_ENABLED", True):
+        return False
+    try:
+        from runtime.transports.adb_relay_server import get_relay_manager
+
+        relay = get_relay_manager()
+        if relay is None:
+            return False
+        resolve = getattr(device, "_resolve_relay_serial", None)
+        relay_serial = resolve() if callable(resolve) else getattr(device, "serial", "")
+        return bool(relay.relay_for_serial(str(relay_serial or "")))
+    except Exception:
+        return False
+
+
 def _edge_extra_should_return_items(step: Dict[str, Any], collection: Any) -> bool:
     if "return_items" in step:
         return _coerce_bool(step.get("return_items"), default=False)
@@ -118,6 +135,16 @@ def _edge_extra_should_return_items(step: Dict[str, Any], collection: Any) -> bo
     if step.get("save_as") or step.get("data_var"):
         return True
     return not bool(collection)
+
+
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def _is_loopback_endpoint(url: str) -> bool:
+    parts = _edge_extra_url_parts(url)
+    if parts is None:
+        return False
+    return parts[1] in _LOOPBACK_HOSTS
 
 
 def _edge_extra_endpoint(step: Dict[str, Any]) -> str:
@@ -130,6 +157,23 @@ def _edge_extra_endpoint(step: Dict[str, Any]) -> str:
     if endpoint and not endpoint.rstrip("/").endswith("/extra-data/xml"):
         endpoint = endpoint.rstrip("/") + "/extra-data/xml"
     return endpoint
+
+
+def _edge_extra_endpoint_for_device(step: Dict[str, Any]) -> str:
+    """Endpoint forwarded to the phone APK — must be reachable from the device, not loopback."""
+    endpoint = _edge_extra_endpoint(step)
+    if not endpoint or not _is_loopback_endpoint(endpoint):
+        return endpoint
+    public = str(
+        step.get("edge_extra_agent_public_url")
+        or os.environ.get("EDGE_EXTRA_AGENT_PUBLIC_URL")
+        or ""
+    ).strip()
+    if not public:
+        return endpoint
+    if not public.rstrip("/").endswith("/extra-data/xml"):
+        public = public.rstrip("/") + "/extra-data/xml"
+    return public
 
 
 def _edge_extra_url_parts(url: str) -> tuple[str, str, int, str] | None:
@@ -164,10 +208,21 @@ def _edge_extra_endpoint_allowed(endpoint: str) -> bool:
     if _edge_extra_url_parts(endpoint) is None:
         return False
     if allowlist:
-        return any(_edge_extra_endpoint_matches(endpoint, prefix) for prefix in allowlist)
-    env_endpoint = os.environ.get("EDGE_EXTRA_AGENT_URL", "").strip().rstrip("/")
-    if env_endpoint:
-        return _edge_extra_endpoint_matches(endpoint, env_endpoint)
+        if any(_edge_extra_endpoint_matches(endpoint, prefix) for prefix in allowlist):
+            return True
+    else:
+        env_endpoint = os.environ.get("EDGE_EXTRA_AGENT_URL", "").strip().rstrip("/")
+        if env_endpoint and _edge_extra_endpoint_matches(endpoint, env_endpoint):
+            return True
+    public = os.environ.get("EDGE_EXTRA_AGENT_PUBLIC_URL", "").strip().rstrip("/")
+    if public and _edge_extra_endpoint_matches(endpoint, public):
+        loopback = os.environ.get("EDGE_EXTRA_AGENT_URL", "").strip().rstrip("/")
+        env_endpoint = os.environ.get("EDGE_EXTRA_AGENT_URL", "").strip().rstrip("/")
+        if loopback and (
+            (allowlist and any(_edge_extra_endpoint_matches(loopback, prefix) for prefix in allowlist))
+            or (not allowlist and env_endpoint and _edge_extra_endpoint_matches(loopback, env_endpoint))
+        ):
+            return True
     return _env_bool("EDGE_EXTRA_ALLOW_STEP_ENDPOINT", False)
 
 
@@ -218,26 +273,12 @@ def request_edge_extra_data(
     if strategy not in EDGE_CONTENT_STRATEGIES:
         return False
     collection = step.get("collection")
-    endpoint = _edge_extra_endpoint(step)
-    if not endpoint:
+    if not _relay_extra_data_available(device):
         result["ok"] = False
         result["message"] = (
-            f"edge extra_data {strategy}: missing EDGE_EXTRA_AGENT_URL "
-            "or step.edge_extra_agent_url"
+            f"edge extra_data {strategy}: no relay for device "
+            "(start agent-boot relay and ensure device is registered)"
         )
-        return True
-    if not _edge_extra_endpoint_allowed(endpoint):
-        log.warning("[%s] edge extra_data endpoint not allowlisted: %s", serial, endpoint)
-        result["ok"] = False
-        result["message"] = (
-            f"edge extra_data {strategy}: endpoint not allowlisted: {endpoint}"
-        )
-        return True
-    token = str(step.get("edge_extra_token") or os.environ.get("EDGE_EXTRA_TOKEN") or "").strip()
-    if not token and not _env_bool("EDGE_EXTRA_ALLOW_UNAUTH", False):
-        log.warning("[%s] edge extra_data token missing; device_farm content XML parser is disabled", serial)
-        result["ok"] = False
-        result["message"] = f"edge extra_data {strategy}: missing EDGE_EXTRA_TOKEN"
         return True
     if step.get("edge_extra_requires_context"):
         log.info("[%s] edge extra_data skipped because step requires in-memory extraction context", serial)
@@ -288,17 +329,37 @@ def request_edge_extra_data(
         "expand_see_more_scroll",
         "expand_see_more_scroll_distance",
         "expand_completion_retries",
+        "expand_see_more_wall_s",
+        "expand_see_more_fast",
+        "expand_see_more_xml_probe",
+        "expand_see_more_xml_probe_first",
+        "expand_selector_max_s",
+        "expand_see_more_xml_fallback",
+        "expand_selector_timeout_s",
+        "hierarchy_compressed",
         "allow_a11y_xml_fallback",
     ):
         if key in step:
             context[key] = step[key]
-    timeout = float(step.get("edge_extra_timeout_s") or os.environ.get("EDGE_EXTRA_TIMEOUT_S", "45"))
+    if strategy not in COMMENT_STRATEGIES and "expand_see_more" not in context:
+        from services.extract_profiles import DEFAULT_EXTRACT_PROFILE, get_profile_defaults
+        from services.scenario_step_contract import resolve_extract_profile
+
+        profile_name = resolve_extract_profile(step)
+        expand_defaults = get_profile_defaults(profile_name, strategy)
+        if not expand_defaults and strategy.endswith("_posts"):
+            expand_defaults = get_profile_defaults(profile_name, "fb_posts")
+        for ek, ev in expand_defaults.items():
+            context.setdefault(ek, ev)
+        context.setdefault("expand_see_more", True)
+        context.setdefault("expand_see_more_fast", True)
+        context.setdefault("expand_completion_retries", 1)
+        context.setdefault("expand_see_more_wall_s", 18)
+    timeout = float(step.get("edge_extra_timeout_s") or os.environ.get("EDGE_EXTRA_TIMEOUT_S", "60"))
     try:
         summary = device.request_extra_data_xml(
-            endpoint=endpoint,
             strategy=strategy,
             context=context,
-            token=token,
             timeout=timeout,
         )
     except Exception as exc:
@@ -360,19 +421,9 @@ def request_edge_comment_target(
     step: Dict[str, Any],
     result: Dict[str, Any],
 ) -> dict[str, Any] | None:
-    endpoint = _edge_extra_endpoint(step)
-    if not endpoint:
+    if not _relay_extra_data_available(device):
         result["ok"] = False
-        result["message"] = "tap_fb_comment_button: edge extra_data endpoint missing"
-        return None
-    if not _edge_extra_endpoint_allowed(endpoint):
-        result["ok"] = False
-        result["message"] = f"tap_fb_comment_button: endpoint not allowlisted: {endpoint}"
-        return None
-    token = str(step.get("edge_extra_token") or os.environ.get("EDGE_EXTRA_TOKEN") or "").strip()
-    if not token and not _env_bool("EDGE_EXTRA_ALLOW_UNAUTH", False):
-        result["ok"] = False
-        result["message"] = "tap_fb_comment_button: edge extra_data token missing"
+        result["message"] = "tap_fb_comment_button: no relay for device"
         return None
     context = {
         "schema_version": 1,
@@ -388,14 +439,15 @@ def request_edge_comment_target(
         "post_tap_wait_s": float(step.get("post_tap_wait_s", 0.8) or 0.8),
         "comment_filter_step_pause_s": float(step.get("comment_filter_step_pause_s", 0.45) or 0.45),
     }
-    timeout = float(step.get("edge_extra_timeout_s") or os.environ.get("EDGE_EXTRA_TIMEOUT_S", "45"))
+    timeout = float(
+        step.get("edge_extra_timeout_s")
+        or os.environ.get("EDGE_COMMENT_TARGET_TIMEOUT_S", "12")
+    )
     try:
         strategy = "fb_comment_target_tap" if _env_bool("EDGE_COMMENT_TARGET_AGENT_TAP", True) else "fb_comment_target"
         summary = device.request_extra_data_xml(
-            endpoint=endpoint,
             strategy=strategy,
             context=context,
-            token=token,
             timeout=timeout,
         )
     except Exception as exc:
@@ -438,19 +490,11 @@ def run_edge_comment_filter_switch(
         report["reason_code"] = "disabled"
         return report
 
-    endpoint = _edge_extra_endpoint(step)
-    if not endpoint or not _edge_extra_endpoint_allowed(endpoint):
-        report["reason_code"] = "endpoint_unavailable"
-        return report
-    token = str(step.get("edge_extra_token") or os.environ.get("EDGE_EXTRA_TOKEN") or "").strip()
-    if not token and not _env_bool("EDGE_EXTRA_ALLOW_UNAUTH", False):
-        report["reason_code"] = "token_missing"
+    if not _relay_extra_data_available(device):
+        report["reason_code"] = "no_relay"
         return report
 
     wait_s = float(step.get("post_tap_wait_s", 0.8) or 0.8)
-    if wait_s > 0:
-        time.sleep(wait_s)
-
     context = {
         "schema_version": 1,
         "context_id": scenario.get("_execution_id") or scenario.get("_run_hash_scope") or serial,
@@ -463,16 +507,46 @@ def run_edge_comment_filter_switch(
         "post_tap_wait_s": wait_s,
         "comment_filter_step_pause_s": float(step.get("comment_filter_step_pause_s", 0.45) or 0.45),
     }
-    timeout = float(step.get("edge_extra_timeout_s") or os.environ.get("EDGE_EXTRA_TIMEOUT_S", "45"))
-    step_pause = float(step.get("comment_filter_step_pause_s", 0.45) or 0.45)
+    timeout = float(
+        step.get("edge_extra_timeout_s")
+        or os.environ.get("EDGE_COMMENT_FILTER_TIMEOUT_S", "10")
+    )
+    step_pause = float(step.get("comment_filter_step_pause_s", 0.35) or 0.35)
 
-    for _ in range(4):
+    if _env_bool("EDGE_COMMENT_FILTER_AGENT_APPLY", True):
+        apply_timeout = float(
+            step.get("edge_extra_timeout_s")
+            or os.environ.get("EDGE_COMMENT_FILTER_APPLY_TIMEOUT_S", "18")
+        )
         try:
             summary = device.request_extra_data_xml(
-                endpoint=endpoint,
+                strategy="fb_comment_filter_apply",
+                context=context,
+                timeout=apply_timeout,
+            )
+        except Exception as exc:
+            report["reason_code"] = "request_failed"
+            report["error"] = str(exc)
+            result["edge_filter_summary"] = report
+            return report
+        if not summary.get("ok"):
+            report["reason_code"] = "ingest_failed"
+            report["error"] = summary.get("error")
+            result["edge_filter_summary"] = report
+            return report
+        ingest = summary.get("ingest") if isinstance(summary.get("ingest"), dict) else summary
+        diagnostic = ingest.get("diagnostic") if isinstance(ingest.get("diagnostic"), dict) else {}
+        report["steps"] = list(diagnostic.get("steps") or [])
+        report["switched"] = bool(diagnostic.get("switched"))
+        report["reason_code"] = str(diagnostic.get("reason_code") or "ok")
+        result["edge_filter_summary"] = report
+        return report
+
+    for _ in range(3):
+        try:
+            summary = device.request_extra_data_xml(
                 strategy="fb_comment_filter_next",
                 context=context,
-                token=token,
                 timeout=timeout,
             )
         except Exception as exc:

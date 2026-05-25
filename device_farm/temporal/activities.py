@@ -717,6 +717,46 @@ class DeviceActivities:
                                 error=error_msg,
                             )
                         await db.commit()
+                    # Account usage end + timeline event
+                    if device_serial:
+                        try:
+                            from db.crud.execution import get_execution
+                            from services.account_manager import end_account_usage
+
+                            async with activity_session() as udb:
+                                ex = await get_execution(udb, execution_id)
+                                if ex:
+                                    usage_map = (ex.meta or {}).get("account_usage") or {}
+                                    info = usage_map.get(device_serial)
+                                    if info and info.get("account_id"):
+                                        started_raw = info.get("started_at")
+                                        duration_min = 0.0
+                                        if started_raw:
+                                            from datetime import datetime, timezone as _tz2
+                                            started = datetime.fromisoformat(
+                                                str(started_raw).replace("Z", "+00:00")
+                                            )
+                                            duration_min = max(
+                                                0.0,
+                                                (
+                                                    datetime.now(_tz2.utc) - started
+                                                ).total_seconds()
+                                                / 60.0,
+                                            )
+                                        await end_account_usage(
+                                            str(info["account_id"]),
+                                            duration_min,
+                                            device_serial=device_serial,
+                                            entity_type="execution",
+                                            entity_id=execution_id,
+                                            end_reason="passed" if success else "failed",
+                                        )
+                        except Exception as usage_exc:
+                            log.warning(
+                                "finalize_campaign: account usage end failed (%s): %s",
+                                device_serial,
+                                usage_exc,
+                            )
                 log.info(
                     "finalize_campaign: execution_result %s/%s → %s",
                     execution_id, device_serial, er_status,

@@ -9,7 +9,8 @@ from tasks.scenario.steps import register_step
 from tasks.scenario.context import ScenarioContext
 from tasks.scenario.utils import (
     _execute_tap, _get_implicit_wait_config, _decode_element_image,
-    _auto_dismiss_popup, _CONTAINER_CLASSES,
+    _auto_dismiss_popup, _CONTAINER_CLASSES, resolve_step_selector_fields,
+    _retry_find_element,
 )
 
 log = logging.getLogger(__name__)
@@ -17,13 +18,8 @@ log = logging.getLogger(__name__)
 
 @register_step("tap")
 def handle_tap(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
-    selector = step.get("selector") or {}
-    fallback = step.get("fallback") or {}
+    spec, sel_by, sel_value, (fallback_rx, fallback_ry) = resolve_step_selector_fields(step)
     screen_ctx = step.get("screen") or {}
-    sel_by = str(selector.get("by") or "") or None
-    sel_value = str(selector.get("value") or "").strip() or None
-    fallback_rx = fallback.get("rx")
-    fallback_ry = fallback.get("ry")
     tap_timeout = float(step.get("timeout", 4.0) or 4.0)
 
     has_real_selector = (
@@ -61,7 +57,7 @@ def handle_tap(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict
         timeout=tap_timeout, retries=1,
         implicit_wait_timeout=iw_timeout, implicit_wait_poll=iw_poll,
         element_image=elem_img_bytes, image_threshold=sc.va_image_threshold,
-        screenshot_anchor=ss_anchor,
+        screenshot_anchor=ss_anchor, spec=spec,
     )
 
     # Auto-dismiss popup on failure
@@ -78,7 +74,7 @@ def handle_tap(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict
                     timeout=tap_timeout, retries=1,
                     implicit_wait_timeout=iw_timeout, implicit_wait_poll=iw_poll,
                     element_image=elem_img_bytes, image_threshold=sc.va_image_threshold,
-                    screenshot_anchor=ss_anchor,
+                    screenshot_anchor=ss_anchor, spec=spec,
                 )
 
     result["ok"] = ok
@@ -178,14 +174,11 @@ def handle_swipe_ratio(sc: ScenarioContext, step: Dict[str, Any], idx: int, resu
 
 @register_step("tap_selector")
 def handle_tap_selector(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
-    by = str(step.get("by") or "text")
-    value = str(step.get("value") or "").strip()
-    fallback_rx = step.get("fallback_rx")
-    fallback_ry = step.get("fallback_ry")
+    spec, by, value, (fallback_rx, fallback_ry) = resolve_step_selector_fields(step)
     sel_timeout = float(step.get("timeout", 8.0) or 8.0)
-    if not value:
+    if spec is None or spec.is_empty():
         result["ok"] = False
-        result["message"] = "tap_selector: empty value"
+        result["message"] = "tap_selector: empty selector"
         return
 
     elem_img_bytes = _decode_element_image(step.get("element_image"))
@@ -196,6 +189,7 @@ def handle_tap_selector(sc: ScenarioContext, step: Dict[str, Any], idx: int, res
         timeout=sel_timeout, retries=1,
         implicit_wait_timeout=iw_timeout, implicit_wait_poll=iw_poll,
         element_image=elem_img_bytes, image_threshold=sc.va_image_threshold,
+        spec=spec,
     )
 
     if not ok:
@@ -211,6 +205,7 @@ def handle_tap_selector(sc: ScenarioContext, step: Dict[str, Any], idx: int, res
                     timeout=sel_timeout, retries=1,
                     implicit_wait_timeout=iw_timeout, implicit_wait_poll=iw_poll,
                     element_image=elem_img_bytes, image_threshold=sc.va_image_threshold,
+                    spec=spec,
                 )
     result["ok"] = ok
     if msg:
@@ -221,6 +216,47 @@ def handle_tap_selector(sc: ScenarioContext, step: Dict[str, Any], idx: int, res
         result["_bounds"] = tap_bounds
     if ok:
         time.sleep(0.3)
+
+
+@register_step("long_tap_selector")
+def handle_long_tap_selector(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
+    from services.scenario_selector import selector_summary
+
+    spec, by, value, _ = resolve_step_selector_fields(step)
+    duration_ms = int(step.get("duration_ms", 800) or 800)
+    if spec is None or spec.is_empty():
+        result["ok"] = False
+        result["message"] = "long_tap_selector: empty selector"
+        return
+    try:
+        u2 = sc.device.u2
+        if u2 is None:
+            sc.device.ensure_u2_healthy()
+            u2 = sc.device.u2
+        if u2 is None:
+            raise RuntimeError("u2 not available")
+        iw_timeout, iw_poll = _get_implicit_wait_config(step, sc.scenario_iw_config)
+        found = _retry_find_element(
+            u2, by, value, timeout=iw_timeout, poll=iw_poll, spec=spec, device=sc.device,
+        )
+        if found is None:
+            raise RuntimeError(f"element not visible: {selector_summary(spec)}")
+        if hasattr(u2, "find_element_with_bounds_spec"):
+            info = u2.find_element_with_bounds_spec(spec)
+        elif hasattr(u2, "find_element_with_bounds"):
+            info = u2.find_element_with_bounds(by, value)
+        else:
+            info = None
+        bounds = (info or {}).get("bounds") if isinstance(info, dict) else None
+        if not bounds:
+            raise RuntimeError(f"element bounds not found: {selector_summary(spec)}")
+        cx = (bounds.get("left", 0) + bounds.get("right", 0)) // 2
+        cy = (bounds.get("top", 0) + bounds.get("bottom", 0)) // 2
+        u2.long_click(cx, cy, duration_ms / 1000.0)
+        result["message"] = f"long_tap_selector {selector_summary(spec)} ({duration_ms}ms)"
+    except Exception as exc:
+        result["ok"] = False
+        result["message"] = f"long_tap_selector failed: {exc}"
 
 
 @register_step("double_tap")

@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime, timezone
 from typing import Any, Dict, Tuple
 
 from db.database import AsyncSessionLocal
 from db import crud as repo
 from db.crud.default_scenario import DEVICE_CONTEXT_KEY
-from db.crud.scenario_device_variable import get_scenario_device_variables
+from db.crud.scenario_device_variable import get_scenario_device_variables_bulk
 from common.variable_resolver import normalize_device_vars
 
 log = logging.getLogger(__name__)
@@ -86,9 +87,22 @@ async def _build_per_scenario_device_vars(
                 "account_group.pick scenario=%s group=%s requested=%d granted=%d",
                 scen.id, group_id, len(devices), granted,
             )
+            from services.account_event_recorder import get_account_event_recorder
+
+            rec = get_account_event_recorder()
             for idx, device in enumerate(devices):
                 if idx < granted:
-                    per_device[device.id] = _account_to_vars(accounts[idx])
+                    acc = accounts[idx]
+                    per_device[device.id] = _account_to_vars(acc)
+                    rec.record(
+                        account_id=acc.id,
+                        event_type="account.picked",
+                        platform=acc.platform,
+                        entity_type="account_group",
+                        entity_id=group_id,
+                        device_serial=device.serial,
+                        details={"scenario_id": scen.id, "position": idx},
+                    )
                 else:
                     # Group exhausted for this device — leave vars empty so the
                     # scenario can detect and abort if it references __ACCOUNT_*.
@@ -105,14 +119,14 @@ async def _build_per_scenario_device_runtime_vars(
     scenarios: list,
     devices: list,
 ) -> Dict[str, Dict[str, Dict[str, Any]]]:
+    scenario_ids = [s.id for s in scenarios]
+    device_ids = [d.id for d in devices]
+    bulk = await get_scenario_device_variables_bulk(db, scenario_ids, device_ids)
     out: Dict[str, Dict[str, Dict[str, Any]]] = {}
     for scen in scenarios:
         per_device: Dict[str, Dict[str, Any]] = {}
         for device in devices:
-            try:
-                raw = await get_scenario_device_variables(db, scen.id, device.id)
-            except Exception:
-                raw = {}
+            raw = bulk.get((scen.id, device.id), {})
             per_device[device.id] = normalize_device_vars(raw)
         out[scen.id] = per_device
     return out
@@ -321,6 +335,42 @@ async def enqueue_campaign_run_temporal(
         # start — if a later dispatch happens, it must see the advanced cursor.
         await account_db.commit()
 
+    from services.account_event_recorder import get_account_event_recorder
+    from services.account_manager import start_account_usage
+
+    account_usage_meta: Dict[str, Dict[str, Any]] = {}
+    started_accounts: set[str] = set()
+    for device in devices:
+        acct_id: str | None = None
+        platform: str | None = None
+        for scen in scenarios:
+            vars_ = per_scenario_device_vars.get(scen.id, {}).get(device.id, {})
+            aid = vars_.get("__ACCOUNT_ID__")
+            if aid:
+                acct_id = str(aid)
+                platform = str(vars_.get("__ACCOUNT_PLATFORM__") or campaign_platform)
+                break
+        if not acct_id:
+            continue
+        now_iso = datetime.now(timezone.utc).isoformat()
+        account_usage_meta[device.serial] = {
+            "account_id": acct_id,
+            "platform": platform,
+            "started_at": now_iso,
+        }
+        if acct_id not in started_accounts:
+            started_accounts.add(acct_id)
+            await start_account_usage(
+                acct_id,
+                user_id=str(campaign.user_id) if getattr(campaign, "user_id", None) else None,
+                device_serial=device.serial,
+                platform=platform,
+                entity_type="execution",
+                entity_id=execution_id,
+            )
+
+    await get_account_event_recorder().flush_all()
+
     # Guardrail: fb_groups_per_device requires unique per-device group value
     # from scenario_device_variables. Device vars share the same namespace as
     # global vars and override them at dispatch time.
@@ -427,10 +477,11 @@ async def enqueue_campaign_run_temporal(
         await update_execution(
             db, execution_id,
             meta={
-                **execution_record.meta,
+                **(execution_record.meta or {}),
                 "workflow_ids": workflow_ids,
                 "scenario_ids": [s.id for s in scenarios if s.steps],
                 "execution_mode": "device_sequence",
+                "account_usage": account_usage_meta,
             },
         )
         await db.commit()

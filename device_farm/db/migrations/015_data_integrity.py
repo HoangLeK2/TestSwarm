@@ -22,10 +22,19 @@ async def upgrade(conn) -> None:
             ON content_collections(user_id);
         """
     )
+    # content_exports was optional (create_all / legacy); dropped in 031_drop_content_exports
     await conn.exec_driver_sql(
         """
-        CREATE INDEX IF NOT EXISTS idx_content_exports_user
-            ON content_exports(user_id);
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = 'content_exports'
+            ) THEN
+                CREATE INDEX IF NOT EXISTS idx_content_exports_user
+                    ON content_exports(user_id);
+            END IF;
+        END $$;
         """
     )
 

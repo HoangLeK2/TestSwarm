@@ -350,8 +350,15 @@ def parse_fb_comments_from_xml_with_diagnostic(
         _is_comment_reaction_count_row,
         _is_compact_comment_action_label,
         _is_comment_left_avatar_name_strip,
+        _is_junk_parsed_comment_row,
     )
-    from .parser import _collect_text_nodes, _infer_screen_size, _parse_xml, _scan_special_screen
+    from .parser import (
+        _collect_text_nodes,
+        _hierarchy_is_fb_comment_sheet,
+        _infer_screen_size,
+        _parse_xml,
+        _scan_special_screen,
+    )
     from .post_extractor import _compute_post_id_from_nodes
     from .feed_pipeline import _extract_header_stats
 
@@ -378,6 +385,13 @@ def parse_fb_comments_from_xml_with_diagnostic(
     special = _scan_special_screen(root)
     if special:
         return [], _diag(special)
+
+    if not _hierarchy_is_fb_comment_sheet(root):
+        return [], _diag(
+            "not_comment_sheet",
+            anchor_button_found=False,
+            nodes_in_band=0,
+        )
 
     all_nodes = _collect_text_nodes(root, toolbar_cutoff_y=200)
     if not all_nodes:
@@ -437,7 +451,7 @@ def parse_fb_comments_from_xml_with_diagnostic(
             break
         cluster_min_x = min((n["bounds"][0] for n in cluster if n["bounds"]), default=150)
         comment = _extract_comment(cluster, parent_post_id, cluster_min_x=cluster_min_x)
-        if not comment or _is_comment_row_parse_noise(comment):
+        if not comment or _is_comment_row_parse_noise(comment) or _is_junk_parsed_comment_row(comment):
             continue
         if _is_duplicate_short_author_footer_row(comment, last_kept_body):
             continue

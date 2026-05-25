@@ -112,24 +112,110 @@ class ScreenContext(BaseModel):
     screenshot_anchor: Optional[ScreenshotAnchor] = None  # ROI for fast image match
 
 # ---------------------------------------------------------------------------
-# Selector sub-model (for tap step)
+# Selector sub-models (nested ScenarioSelector + chain ops)
 # ---------------------------------------------------------------------------
 
+class SelectorConditions(BaseModel):
+    """Extra AND conditions (uiautomator2 selector fields)."""
+    model_config = {"extra": "allow"}
+
+    text: Optional[str] = None
+    textContains: Optional[str] = None
+    textMatches: Optional[str] = None
+    textStartsWith: Optional[str] = None
+    resourceId: Optional[str] = None
+    className: Optional[str] = None
+    description: Optional[str] = None
+    descriptionContains: Optional[str] = None
+    packageName: Optional[str] = None
+    clickable: Optional[bool] = None
+    checked: Optional[bool] = None
+    checkable: Optional[bool] = None
+    enabled: Optional[bool] = None
+    scrollable: Optional[bool] = None
+    focused: Optional[bool] = None
+    selected: Optional[bool] = None
+    instance: Optional[int] = Field(None, ge=0)
+    index: Optional[int] = Field(None, ge=0)
+
+
+class ChainTarget(BaseModel):
+    by: Optional[SelectorBy] = None
+    value: Optional[str] = None
+    conditions: Optional[SelectorConditions] = None
+
+
+class ChainStep(BaseModel):
+    """Single uiautomator2 chain op applied after anchor selector."""
+    op: Literal[
+        "child", "sibling", "relative",
+        "child_by_text", "child_by_description",
+    ]
+    target: Optional[ChainTarget] = None
+    direction: Optional[Literal["left", "right", "up", "down"]] = None
+    text: Optional[str] = None
+    description: Optional[str] = None
+    allow_scroll_search: Optional[bool] = None
+
+
+class ScenarioSelector(BaseModel):
+    """Canonical nested selector (tap_selector, wait_element, …)."""
+    by: SelectorBy = "text"
+    value: str = Field(min_length=1)
+    conditions: Optional[SelectorConditions] = None
+    instance: Optional[int] = Field(None, ge=0)
+    index: Optional[int] = Field(None, ge=0)
+    xpath: Optional[str] = None
+    chain: Optional[ChainStep] = None
+    bounds: Optional[List[int]] = None
+
+
 class TapSelector(BaseModel):
+    """Legacy tap nested selector — alias of primary by/value."""
     by: SelectorBy
     value: str = Field(min_length=1)
+
+
+class SelectorFallback(BaseModel):
+    rx: float = Field(ge=0.0, le=1.0)
+    ry: float = Field(ge=0.0, le=1.0)
+
 
 class TapFallback(BaseModel):
     rx: float = Field(ge=0.0, le=1.0)
     ry: float = Field(ge=0.0, le=1.0)
+
+
+def _selector_step_validate_legacy(model: Any) -> Any:
+    """Ensure nested selector or legacy by/value is present on selector steps."""
+    sel = getattr(model, "selector", None)
+    by = getattr(model, "by", None)
+    value = getattr(model, "value", None)
+    has_nested = sel is not None and (
+        (isinstance(sel, ScenarioSelector) and (sel.value or "").strip())
+        or (isinstance(sel, dict) and str(sel.get("value") or "").strip())
+    )
+    has_legacy = bool(str(by or "").strip() and str(value or "").strip())
+    if not has_nested and not has_legacy:
+        raise ValueError("selector or by/value required")
+    return model
 
 # ---------------------------------------------------------------------------
 # Condition sub-models (for control flow steps)
 # ---------------------------------------------------------------------------
 
 class ElementCondition(BaseModel):
-    by: SelectorBy = "text"
-    value: str = Field(min_length=1)
+    by: Optional[SelectorBy] = "text"
+    value: Optional[str] = None
+    selector: Optional[ScenarioSelector] = None
+
+    @model_validator(mode="after")
+    def selector_or_legacy(self):
+        if self.selector is not None and (self.selector.value or "").strip():
+            return self
+        if self.value and str(self.value).strip():
+            return self
+        raise ValueError("element condition requires selector.value or value")
 
 class ConditionDict(BaseModel):
     """Condition for repeat_until / break_if / loop while."""
@@ -159,6 +245,35 @@ class LaunchAppStep(StepBase):
     type: Literal["launch_app"]
     package: str = Field(min_length=1)
     wait_after: float = Field(2.0, ge=0, le=30)
+    activity: Optional[str] = None
+    component: Optional[str] = None
+    stop_before: bool = False
+    use_monkey: bool = False
+
+class StopAppStep(StepBase):
+    type: Literal["stop_app"]
+    package: str = Field(min_length=1)
+
+class ClearAppStep(StepBase):
+    type: Literal["clear_app"]
+    package: str = Field(min_length=1)
+
+class WaitAppStep(StepBase):
+    type: Literal["wait_app"]
+    package: str = Field(min_length=1)
+    timeout: float = Field(20.0, ge=0.1, le=120)
+    front: bool = True
+
+class PushFileStep(StepBase):
+    type: Literal["push_file"]
+    local_path: str = Field(min_length=1)
+    remote_path: str = Field(min_length=1)
+    mode: Optional[int] = None
+
+class PullFileStep(StepBase):
+    type: Literal["pull_file"]
+    local_path: str = Field(min_length=1)
+    remote_path: str = Field(min_length=1)
 
 class OpenUrlStep(StepBase):
     type: Literal["open_url"]
@@ -179,7 +294,7 @@ class WaitStep(StepBase):
 
 class TapStep(StepBase):
     type: Literal["tap"]
-    selector: Optional[TapSelector] = None
+    selector: Optional[Union[TapSelector, ScenarioSelector]] = None
     fallback: Optional[TapFallback] = None
     screen: Optional[ScreenContext] = None
     timeout: float = Field(4.0, ge=0.1, le=60)
@@ -205,49 +320,85 @@ class SwipeRatioStep(StepBase):
 
 class TapSelectorStep(StepBase):
     type: Literal["tap_selector"]
-    by: SelectorBy = "text"
-    value: str = Field(min_length=1)
+    selector: Optional[ScenarioSelector] = None
+    by: Optional[SelectorBy] = "text"
+    value: Optional[str] = None
+    fallback: Optional[SelectorFallback] = None
     fallback_rx: Optional[float] = Field(None, ge=0.0, le=1.0)
     fallback_ry: Optional[float] = Field(None, ge=0.0, le=1.0)
     timeout: float = Field(8.0, ge=0.1, le=60)
     implicit_wait: Optional[ImplicitWait] = None
     element_image: Optional[str] = None  # base64 for visual anchoring
 
+    @model_validator(mode="after")
+    def _sel(self):
+        return _selector_step_validate_legacy(self)
+
+
 class WaitElementStep(StepBase):
     type: Literal["wait_element"]
-    by: SelectorBy = "text"
-    value: str = Field(min_length=1)
+    selector: Optional[ScenarioSelector] = None
+    by: Optional[SelectorBy] = "text"
+    value: Optional[str] = None
     timeout: float = Field(10.0, ge=0.1, le=120)
     poll: float = Field(0.5, ge=0.1, le=10)
 
+    @model_validator(mode="after")
+    def _sel(self):
+        return _selector_step_validate_legacy(self)
+
+
 class AssertElementStep(StepBase):
     type: Literal["assert_element"]
-    by: SelectorBy = "text"
-    value: str = Field(min_length=1)
+    selector: Optional[ScenarioSelector] = None
+    by: Optional[SelectorBy] = "text"
+    value: Optional[str] = None
     timeout: float = Field(5.0, ge=0.1, le=60)
     poll: float = Field(0.5, ge=0.1, le=10)
 
+    @model_validator(mode="after")
+    def _sel(self):
+        return _selector_step_validate_legacy(self)
+
+
 class InputSelectorStep(StepBase):
     type: Literal["input_selector"]
-    by: SelectorBy = "resource-id"
-    value: str = Field(min_length=1)
+    selector: Optional[ScenarioSelector] = None
+    by: Optional[SelectorBy] = "resource-id"
+    value: Optional[str] = None
     text: str
     clear_first: bool = True
     implicit_wait: Optional[ImplicitWait] = None
 
+    @model_validator(mode="after")
+    def _sel(self):
+        return _selector_step_validate_legacy(self)
+
+
 class LongTapSelectorStep(StepBase):
     type: Literal["long_tap_selector"]
-    by: SelectorBy = "text"
-    value: str = Field(min_length=1)
+    selector: Optional[ScenarioSelector] = None
+    by: Optional[SelectorBy] = "text"
+    value: Optional[str] = None
     duration_ms: int = Field(800, ge=100, le=10000)
     implicit_wait: Optional[ImplicitWait] = None
 
+    @model_validator(mode="after")
+    def _sel(self):
+        return _selector_step_validate_legacy(self)
+
+
 class ScrollToStep(StepBase):
     type: Literal["scroll_to"]
-    by: SelectorBy = "text"
-    value: str = Field(min_length=1)
+    selector: Optional[ScenarioSelector] = None
+    by: Optional[SelectorBy] = "text"
+    value: Optional[str] = None
     direction: Literal["down", "up"] = "down"
     max_swipes: int = Field(5, ge=1, le=50)
+
+    @model_validator(mode="after")
+    def _sel(self):
+        return _selector_step_validate_legacy(self)
 
 class InputTextStep(StepBase):
     type: Literal["input_text"]
@@ -316,12 +467,17 @@ class RepeatUntilStep(StepBase):
 
 class IfElementStep(StepBase):
     type: Literal["if_element"]
-    by: SelectorBy = "text"
-    value: str = Field(min_length=1)
+    selector: Optional[ScenarioSelector] = None
+    by: Optional[SelectorBy] = "text"
+    value: Optional[str] = None
     then: List[StepModel] = Field(min_length=1)
     timeout: float = Field(3.0, ge=0.1, le=60)
     # pydantic: "else" is a reserved word → alias
     else_steps: Optional[List[StepModel]] = Field(None, alias="else")
+
+    @model_validator(mode="after")
+    def _sel(self):
+        return _selector_step_validate_legacy(self)
 
 class IfVariableStep(StepBase):
     type: Literal["if_variable"]
@@ -477,6 +633,11 @@ def _step_discriminator(v: Any) -> str:
 StepModel = Annotated[
     Union[
         Annotated[LaunchAppStep, Tag("launch_app")],
+        Annotated[StopAppStep, Tag("stop_app")],
+        Annotated[ClearAppStep, Tag("clear_app")],
+        Annotated[WaitAppStep, Tag("wait_app")],
+        Annotated[PushFileStep, Tag("push_file")],
+        Annotated[PullFileStep, Tag("pull_file")],
         Annotated[OpenUrlStep, Tag("open_url")],
         Annotated[WaitStep, Tag("wait")],
         Annotated[TapStep, Tag("tap")],

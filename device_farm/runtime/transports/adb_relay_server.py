@@ -919,6 +919,40 @@ class AdbRelayManager:
             reply_id=req_id, timeout=timeout,
         )
 
+    async def extra_data(
+        self,
+        serial: str,
+        strategy: str,
+        context: dict,
+        timeout: float = 45.0,
+    ) -> dict:
+        """PA B: relay-only edge extract — u2 dump + ingest on agent-boot."""
+        conn = self.relay_for_serial(serial)
+        if conn is None:
+            return {"ok": False, "error": f"no relay for serial={serial!r}"}
+        actual = self.resolve_serial(serial)
+        req_id = f"extra-{uuid.uuid4().hex[:10]}"
+        grace = max(5.0, min(30.0, timeout * 0.15))
+        result = await conn.send_json_request(
+            msg={
+                "type": "extra_data",
+                "id": req_id,
+                "serial": actual,
+                "strategy": strategy,
+                "context": context or {},
+                "timeout_s": timeout,
+            },
+            reply_id=req_id,
+            timeout=timeout,
+            timeout_grace=grace,
+        )
+        if result.get("type") != "extra_data_result":
+            return {
+                "ok": False,
+                "error": str(result.get("error") or result.get("body") or "invalid_extra_data_result"),
+            }
+        return result
+
     # ── A11y action relay (gRPC/WS meta JSON channel) ────────────────────────
 
     def next_a11y_seq(self, serial: str) -> int:
@@ -1184,7 +1218,7 @@ class WsRelayAgentSession:
                         },
                     )
 
-                elif mtype in ("u2_batch_result", "u2_flow_result"):
+                elif mtype in ("u2_batch_result", "u2_flow_result", "extra_data_result"):
                     if conn is None:
                         continue
                     conn.resolve(msg.get("id", ""), msg)

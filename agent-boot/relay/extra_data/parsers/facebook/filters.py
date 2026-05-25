@@ -9,9 +9,11 @@ from .constants import (
     _CMT_BADGE_LABELS,
     _CMT_EMPTY_BODY_JUNK_AUTHOR,
     _CMT_NOISE_TEXTS,
+    _RE_CMT_HIDDEN_COMMENTS,
     _RE_CMT_REACTIONS,
     _RE_CMT_REACTIONS_EN,
     _RE_CMT_TS_SHARE,
+    _RE_CMT_VIEW_REPLIES,
     _RE_COMMENT_REACTIONS_LABEL,
     _RE_IMAGE_TYPE,
     _RE_LEAKED_REL_TIME_AS_LABEL,
@@ -278,9 +280,28 @@ def _is_cmt_chrome_search_or_post_menu_text(text: str) -> bool:
     return False
 
 
+def _is_feed_comment_preview_chrome(text: str) -> bool:
+    """Rows from feed post cards, not the comment sheet ('Xem N câu trả lời', …)."""
+    t = (text or "").strip()
+    if not t:
+        return False
+    if _RE_CMT_VIEW_REPLIES.match(t):
+        return True
+    if _RE_CMT_HIDDEN_COMMENTS.search(t):
+        return True
+    tl = t.lower()
+    if tl.startswith("xem bình luận") or tl.startswith("view comment"):
+        return True
+    if "xem thêm câu trả lời" in tl or "see more replies" in tl:
+        return True
+    return False
+
+
 def _is_cmt_noise(text: str) -> bool:
     t = text.strip()
     tl = t.lower()
+    if _is_feed_comment_preview_chrome(t):
+        return True
     if not tl or tl in _CMT_NOISE_TEXTS:
         return True
     if _is_cmt_chrome_search_or_post_menu_text(t):
@@ -383,6 +404,8 @@ def _is_comment_row_parse_noise(c: Dict[str, Any]) -> bool:
     if author == "đóng":
         return True
     if author in ("xem thêm", "see more"):
+        return True
+    if _is_feed_comment_preview_chrome(author_raw) or _is_feed_comment_preview_chrome(text_raw):
         return True
     if "lựa chọn khác cho bài viết" in author or "lựa chọn khác cho bài viết" in text:
         return True

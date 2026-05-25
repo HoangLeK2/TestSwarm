@@ -40,7 +40,9 @@ from api.schemas.account import (
     RoundRobinBody,
     SetPrimaryBody,
 )
+from api.schemas.account_event import AccountEventListOut, AccountEventOut
 from common.crypto import encrypt_password
+from db.crud.account_event import list_account_events
 from db.crud.account import (
     _BULK_BATCH_SIZE,
     _insert_batch,
@@ -59,8 +61,15 @@ from db.crud.account import (
     unassign_account_from_device,
     update_account,
 )
+from db.models.enums import AccountEventType
+from services.account_event_recorder import get_account_event_recorder
 
 router = APIRouter(tags=["accounts"])
+
+
+async def _commit_and_flush_events(db) -> None:
+    await db.commit()
+    await get_account_event_recorder().flush_all()
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -165,7 +174,14 @@ async def create_account_endpoint(body: AccountCreate, db: DB, user: CurrentUser
         user_id=user.id,
         account_metadata=body.account_metadata,
     )
-    await db.commit()
+    get_account_event_recorder().record(
+        account_id=account.id,
+        event_type=AccountEventType.CREATED,
+        user_id=user.id,
+        platform=account.platform,
+        details={"username": account.username},
+    )
+    await _commit_and_flush_events(db)
     account = await get_account(db, account.id)
     return _account_to_out(account)
 
@@ -308,12 +324,39 @@ async def get_account_endpoint(account_id: str, db: DB, user: CurrentUser):
     return _account_to_detail_out(account)
 
 
+@router.get("/accounts/{account_id}/events", response_model=AccountEventListOut)
+async def list_account_events_endpoint(
+    account_id: str,
+    db: DB,
+    user: CurrentUser,
+    limit: int = Query(50, ge=1, le=200),
+    cursor: Optional[str] = Query(None),
+    event_type: Optional[str] = Query(None),
+):
+    """Paginated account profile / session timeline (newest first)."""
+    account = await _get_account_or_404(account_id, db)
+    if account.user_id and account.user_id != user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    items, next_cursor, has_more = await list_account_events(
+        db,
+        account_id,
+        limit=limit,
+        cursor=cursor,
+        event_type=event_type,
+    )
+    return AccountEventListOut(
+        items=[AccountEventOut.model_validate(row) for row in items],
+        next_cursor=next_cursor,
+        has_more=has_more,
+    )
+
+
 @router.patch("/accounts/{account_id}", response_model=AccountOut)
 async def update_account_endpoint(
     account_id: str, body: AccountUpdate, db: DB, user: CurrentUser
 ):
     """Update account fields. Password (if provided) is re-encrypted before storage."""
-    await _get_account_or_404(account_id, db)
+    existing = await _get_account_or_404(account_id, db)
     enc_pw = encrypt_password(body.password) if body.password else None
     account = await update_account(
         db,
@@ -325,16 +368,29 @@ async def update_account_endpoint(
         proxy_id=body.proxy_id,
         account_metadata=body.account_metadata,
     )
-    await db.commit()
+    get_account_event_recorder().record(
+        account_id=account_id,
+        event_type=AccountEventType.UPDATED,
+        user_id=user.id,
+        platform=existing.platform,
+    )
+    await _commit_and_flush_events(db)
     return _account_to_out(account)
 
 
 @router.delete("/accounts/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_account_endpoint(account_id: str, db: DB, user: CurrentUser):
     """Delete account and all its device links (cascade)."""
-    await _get_account_or_404(account_id, db)
+    existing = await _get_account_or_404(account_id, db)
+    get_account_event_recorder().record(
+        account_id=account_id,
+        event_type=AccountEventType.DELETED,
+        user_id=user.id,
+        platform=existing.platform,
+        details={"username": existing.username},
+    )
     await delete_account(db, account_id)
-    await db.commit()
+    await _commit_and_flush_events(db)
 
 
 @router.patch("/accounts/{account_id}/status", response_model=AccountOut)
@@ -342,14 +398,30 @@ async def update_account_status(
     account_id: str, body: AccountStatusUpdate, db: DB, user: CurrentUser
 ):
     """Manually set account status (active / banned / cooldown / disabled)."""
-    await _get_account_or_404(account_id, db)
-    # Clear cooldown_until when manually resetting to active.
+    existing = await _get_account_or_404(account_id, db)
+    old_status = existing.status
     extra: dict = {}
     if body.status == "active":
         extra["cooldown_until"] = None
         extra["usage_today_minutes"] = 0.0
     account = await update_account(db, account_id, status=body.status, **extra)
-    await db.commit()
+    rec = get_account_event_recorder()
+    rec.record(
+        account_id=account_id,
+        event_type=AccountEventType.STATUS_CHANGED,
+        user_id=user.id,
+        platform=existing.platform,
+        details={"old_status": old_status, "new_status": body.status},
+    )
+    if body.status == "banned":
+        rec.record(
+            account_id=account_id,
+            event_type=AccountEventType.BANNED,
+            user_id=user.id,
+            platform=existing.platform,
+            details={"source": "manual"},
+        )
+    await _commit_and_flush_events(db)
     return _account_to_out(account)
 
 
@@ -377,7 +449,15 @@ async def assign_device_to_account(
     link = await assign_account_to_device(
         db, body.device_id, account_id, is_primary=body.is_primary
     )
-    await db.commit()
+    get_account_event_recorder().record(
+        account_id=account_id,
+        event_type=AccountEventType.DEVICE_ASSIGNED,
+        user_id=user.id,
+        entity_type="device",
+        entity_id=body.device_id,
+        details={"is_primary": body.is_primary},
+    )
+    await _commit_and_flush_events(db)
     return _link_to_out(link)
 
 
@@ -391,7 +471,15 @@ async def unassign_device_from_account(
     """Remove a device-account link."""
     await _get_account_or_404(account_id, db)
     removed = await unassign_account_from_device(db, device_id, account_id)
-    await db.commit()
+    if removed:
+        get_account_event_recorder().record(
+            account_id=account_id,
+            event_type=AccountEventType.DEVICE_UNASSIGNED,
+            user_id=user.id,
+            entity_type="device",
+            entity_id=device_id,
+        )
+    await _commit_and_flush_events(db)
     return {"ok": removed, "account_id": account_id, "device_id": device_id}
 
 

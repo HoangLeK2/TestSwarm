@@ -5,10 +5,15 @@ from typing import Any, List, Optional, Tuple
 _SEE_MORE_EXPAND_PHRASES: Tuple[str, ...] = (
     "see more",
     "xem thêm",
+    "xemthem",
+    "view more",
     "view more comments",
     "view more replies",
     "xem thêm bình luận",
     "xem thêm câu trả lời",
+    "xem bài viết đầy đủ",
+    "xem toàn bộ",
+    "đọc thêm",
 )
 
 _SEE_MORE_TAP_CENTER_DEDUP_PX: int = 52

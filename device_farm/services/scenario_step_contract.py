@@ -16,15 +16,18 @@ def normalize_extract_step(raw_step: dict[str, Any]) -> dict[str, Any]:
     strategy = str(step.get("strategy") or "fb_posts")
     profile = str(step.get("extract_profile") or step.get("profile") or "")
 
-    if profile:
-        defaults = get_profile_defaults(profile, strategy)
+    resolved_profile = profile if profile and is_supported_profile(profile) else DEFAULT_EXTRACT_PROFILE
+    defaults = get_profile_defaults(resolved_profile, strategy)
+    if not defaults and strategy.endswith("_posts"):
+        # ig_posts / tiktok_posts / … reuse fb_posts expand defaults when no profile slice exists.
+        defaults = get_profile_defaults(resolved_profile, "fb_posts")
+    if defaults:
         for key, val in defaults.items():
             step.setdefault(key, val)
-    elif strategy == "fb_comments":
-        # Edge path: STF scrolls inside one extra_data request when comment_scroll_passes > 0.
-        defaults = get_profile_defaults(DEFAULT_EXTRACT_PROFILE, strategy)
-        for key, val in defaults.items():
-            step.setdefault(key, val)
+    elif strategy.endswith("_posts"):
+        step.setdefault("expand_see_more", True)
+        step.setdefault("expand_see_more_max_passes", 4)
+        step.setdefault("expand_completion_retries", 4)
 
     step.setdefault("strategy", strategy)
     if profile:

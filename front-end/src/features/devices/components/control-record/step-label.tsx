@@ -40,14 +40,36 @@ export function ControlRecordStepLabel({ step }: { step: ScenarioStep }) {
           launch {step.package}
         </span>
       );
-    case 'tap_selector':
+    case 'tap': {
+      const by = step.selector?.by ?? (step as { by?: string }).by;
+      const val = step.selector?.value ?? (step as { value?: string }).value;
+      if (by && val) {
+        return (
+          <span className='flex items-center gap-1.5'>
+            <MousePointer className='size-3.5' />
+            tap [{by}] {val.slice(0, 20)}
+            {val.length > 20 ? '…' : ''}
+          </span>
+        );
+      }
       return (
         <span className='flex items-center gap-1.5'>
           <MousePointer className='size-3.5' />
-          tap_selector {step.by}={step.value.slice(0, 20)}
-          {step.value.length > 20 ? '…' : ''}
+          tap ({(step.fallback?.rx ?? 0.5) * 100}%, {(step.fallback?.ry ?? 0.5) * 100}%)
         </span>
       );
+    }
+    case 'tap_selector': {
+      const by = step.selector?.by ?? step.by;
+      const val = step.selector?.value ?? step.value ?? '';
+      return (
+        <span className='flex items-center gap-1.5'>
+          <MousePointer className='size-3.5' />
+          tap_selector [{by}] {val.slice(0, 20)}
+          {val.length > 20 ? '…' : ''}
+        </span>
+      );
+    }
     default:
       return <span className='font-mono text-muted-foreground'>{step.type}</span>;
   }

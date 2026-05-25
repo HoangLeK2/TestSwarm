@@ -113,6 +113,7 @@ class RelayAgent:
         relay_id: str,
         relay_mode: str = "ws",
         enrollment_token: Optional[str] = None,
+        extra_ingest: Any = None,
     ) -> None:
         self._api_key   = api_key
         self._relay_id  = relay_id
@@ -151,6 +152,7 @@ class RelayAgent:
         self._u2_batch_enabled = os.getenv("U2_BATCH_ENABLED", "true").lower() in ("1", "true")
         self._u2_pool: Optional[U2SessionPool] = None
         self._u2_executor: Optional[Any] = None
+        self._extra_ingest = extra_ingest
         # A11y control-plane workers
         self._a11y_max_queue = int(os.getenv("A11Y_MAX_QUEUE_PER_DEVICE", "100"))
         self._a11y_state: dict[str, dict[str, Any]] = {}
@@ -196,6 +198,8 @@ class RelayAgent:
             state["cfg"] = cfg
 
         for serial in self._registry.online_serials:
+            if serial in self._tcp_suppressed_for_usb:
+                continue
             state = self._scrcpy_desired.get(serial)
             if state:
                 continue
@@ -228,7 +232,11 @@ class RelayAgent:
             self._u2_pool = U2SessionPool(loop=loop)
             await self._u2_pool.start()
             from relay.u2_executor import U2Executor
-            self._u2_executor = U2Executor(pool=self._u2_pool, loop=loop)
+            self._u2_executor = U2Executor(
+                pool=self._u2_pool,
+                loop=loop,
+                http_dump=self._dump_hierarchy_http_sync,
+            )
             logger.info("u2 batch/flow enabled (U2_BATCH_ENABLED=true)")
 
         attempt    = 0
@@ -545,6 +553,9 @@ class RelayAgent:
             if not ctx.capabilities:
                 caps = await loop.run_in_executor(None, _probe_capabilities, serial)
                 self._registry.set_capabilities(serial, caps)
+                wlan_ip = str((caps or {}).get("wlan_ip") or "").strip()
+                if wlan_ip and ":" not in serial:
+                    self._atx_lan_host_cache[serial] = wlan_ip
                 logger.info("capabilities %s: %s", serial, caps)
             pairs = await loop.run_in_executor(
                 None,
@@ -557,6 +568,17 @@ class RelayAgent:
                     self._atx_lan_host_cache[usb_s] = tcp_s.rsplit(":", 1)[0]
             for tcp_s, _usb_s in pairs or []:
                 await self._scrcpy_mgr.stop_session(tcp_s, reason="manual_stop")
+                tcp_state = self._scrcpy_desired.pop(tcp_s, None)
+                if tcp_state is not None:
+                    restart_task = tcp_state.get("restart_task")
+                    if restart_task and not restart_task.done():
+                        restart_task.cancel()
+                    logger.info(
+                        "scrcpy: dropped duplicate TCP desired state %s (USB anchor %s)",
+                        tcp_s,
+                        _usb_s,
+                    )
+                self._scrcpy_logical_to_adb.pop(tcp_s, None)
             if self._scrcpy_auto_resume_enabled:
                 self._ensure_default_scrcpy_desired()
                 await self._resume_desired_scrcpy_sessions(send_queue, loop, source="device-online")
@@ -709,6 +731,9 @@ class RelayAgent:
 
         elif mtype == "u2_flow":
             asyncio.create_task(self._handle_u2_flow(msg, send_queue))
+
+        elif mtype == "extra_data":
+            asyncio.create_task(self._handle_extra_data(msg, send_queue))
 
         elif mtype == "a11y_action":
             await self._handle_a11y_action(msg, send_queue, loop)
@@ -975,6 +1000,36 @@ class RelayAgent:
                 "data": {},
             }
 
+    def _dump_hierarchy_http_sync(
+        self,
+        serial: str,
+        timeout: float,
+        compressed: bool = False,
+    ) -> str:
+        """Fast path: atx-agent GET /dump/hierarchy (~4–5s on device). Empty → caller falls back to u2."""
+        path = "/dump/hierarchy"
+        if compressed:
+            path = f"{path}?compressed=1"
+        r = self._do_u2_http(
+            serial,
+            "GET",
+            path,
+            "",
+            "application/json",
+            max(1.0, min(float(timeout), 15.0)),
+        )
+        body = str(r.get("body") or "")
+        if r.get("ok") and _looks_like_hierarchy_xml(body):
+            return body
+        if body and not r.get("ok"):
+            logger.debug(
+                "atx-http dump failed serial=%s status=%s: %s",
+                serial,
+                r.get("status"),
+                body[:120],
+            )
+        return ""
+
     def _execute_dump_hierarchy(self, serial: str, payload: dict) -> tuple[bool, str, dict]:
         """
         Query lane only: use atx-agent dumpHierarchy endpoint.
@@ -1162,6 +1217,134 @@ class RelayAgent:
         result["id"] = msg.get("id", "")
         result["flow"] = msg.get("flow", "")
         await send_queue.put(json.dumps(result))
+
+    async def _handle_extra_data(self, msg: dict, send_queue: asyncio.Queue) -> None:
+        """PA B: u2 dump + in-process ingest; reply extra_data_result."""
+        req_id = str(msg.get("id", "") or "")
+        serial = str(msg.get("serial", "") or "")
+        strategy = str(msg.get("strategy", "fb_posts") or "fb_posts")
+        context = msg.get("context") if isinstance(msg.get("context"), dict) else {}
+        reply: dict[str, Any] = {
+            "type": "extra_data_result",
+            "id": req_id,
+            "ok": False,
+            "route": "relay_u2",
+            "error": "",
+        }
+        if not serial:
+            reply["error"] = "serial_required"
+            await send_queue.put(json.dumps(reply))
+            return
+        if self._u2_executor is None:
+            reply["error"] = "u2_batch_not_enabled"
+            await send_queue.put(json.dumps(reply))
+            return
+        if self._extra_ingest is None:
+            reply["error"] = "extra_data_not_configured"
+            await send_queue.put(json.dumps(reply))
+            return
+
+        from relay.extra_data.collector import (
+            build_ingest_payload,
+            collect_fb_comment_filter_apply,
+            collect_fb_comment_target_with_tap,
+            collect_xml_snapshots,
+        )
+        from relay.extra_data.ingest import _parse_items
+
+        expand_on = bool(context.get("expand_see_more"))
+        logger.info(
+            "extra_data start serial=%s strategy=%s expand_see_more=%s",
+            serial,
+            strategy,
+            expand_on,
+        )
+        try:
+            if strategy == "fb_comment_filter_apply":
+                report, collect_err = await collect_fb_comment_filter_apply(
+                    self._u2_executor,
+                    serial,
+                    context,
+                )
+                if collect_err:
+                    reply["error"] = collect_err
+                else:
+                    reply["ok"] = True
+                    reply["ingest"] = {"ok": True, "diagnostic": report}
+                await send_queue.put(json.dumps(reply))
+                return
+
+            if strategy == "fb_comment_target_tap":
+                snapshots, collect_err, agent_tapped, diagnostic = (
+                    await collect_fb_comment_target_with_tap(
+                        self._u2_executor,
+                        serial,
+                        context,
+                    )
+                )
+                if collect_err:
+                    reply["error"] = collect_err
+                    await send_queue.put(json.dumps(reply))
+                    return
+                reply["ok"] = True
+                reply["ingest"] = {"ok": True, "diagnostic": diagnostic}
+                if agent_tapped:
+                    reply["agent_tapped"] = True
+                await send_queue.put(json.dumps(reply))
+                return
+
+            if strategy in {"fb_comment_target", "fb_comment_filter_next"}:
+                snapshots, collect_err = await collect_xml_snapshots(
+                    self._u2_executor,
+                    serial,
+                    strategy,
+                    context,
+                )
+                if collect_err:
+                    reply["error"] = collect_err
+                    await send_queue.put(json.dumps(reply))
+                    return
+                primary = snapshots[0] if snapshots else ""
+                parse_strategy = (
+                    "fb_comment_target"
+                    if strategy == "fb_comment_target"
+                    else strategy
+                )
+                _, diagnostic = _parse_items(parse_strategy, primary, context)
+                reply["ok"] = True
+                reply["ingest"] = {"ok": True, "diagnostic": diagnostic}
+                await send_queue.put(json.dumps(reply))
+                return
+
+            snapshots, collect_err = await collect_xml_snapshots(
+                self._u2_executor,
+                serial,
+                strategy,
+                context,
+            )
+            if collect_err:
+                reply["error"] = collect_err
+                await send_queue.put(json.dumps(reply))
+                return
+
+            payload = build_ingest_payload(
+                serial=serial,
+                strategy=strategy,
+                context=context,
+                snapshots=snapshots,
+                request_id=req_id,
+            )
+            ingest = await self._extra_ingest.process_payload(payload)
+            if ingest.get("ok"):
+                reply["ok"] = True
+                reply["ingest"] = ingest
+            else:
+                reply["error"] = str(ingest.get("error") or "ingest_failed")
+                reply["ingest"] = ingest
+        except Exception as exc:
+            logger.warning("extra_data failed serial=%s strategy=%s: %s", serial, strategy, exc)
+            reply["error"] = str(exc)
+        await send_queue.put(json.dumps(reply))
 
     def _execute_command(
         self,
@@ -1368,6 +1551,8 @@ class RelayAgent:
         abnormal_reasons = {"zombie_thread", "runtime_error", "startup_failure"}
         only_abnormal = source == "session-stopped"
         for logical, state in list(self._scrcpy_desired.items()):
+            if logical in self._tcp_suppressed_for_usb:
+                continue
             if not state.get("desired", False):
                 continue
             if state.get("manual_stop", False):

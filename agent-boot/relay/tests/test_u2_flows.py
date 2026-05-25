@@ -14,6 +14,11 @@ def executor_with_device(event_loop):
     pool = AsyncMock()
     dev = MagicMock()
     pool.get_session = AsyncMock(return_value=dev)
+
+    async def _run_locked(_serial, fn):
+        return fn(dev)
+
+    pool.run_locked = AsyncMock(side_effect=_run_locked)
     exc = U2Executor(pool=pool, loop=event_loop)
     return exc, dev
 

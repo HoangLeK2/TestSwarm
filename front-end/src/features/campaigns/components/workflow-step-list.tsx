@@ -18,7 +18,7 @@ import {
 import { cn } from '@/lib/utils';
 import { Progress } from '@/components/ui/progress';
 import { scenariosApi } from '../services/api';
-import { getStepDisplay, getStepTypeName } from './flow-editor/constants';
+import { useCampaignFlowI18n } from './flow-editor/flow-i18n';
 import { useWorkflowProgress, useWorkflowSteps } from '../hooks/use-campaigns';
 import type { StepLogEntry, WorkflowInfo } from '../types';
 import type { FlowStep } from './scenario-steps/types';
@@ -53,9 +53,10 @@ export function StepRow({
   isPending: boolean;
 }) {
   const t = useTranslations('campaignsFeature.list');
+  const { getStepTypeName, getStepDisplay: getStepDisplayI18n } = useCampaignFlowI18n();
   const type = stepDef?.type ?? logEntry?.step_type ?? logEntry?.type ?? (isCurrentlyRunning ? currentStepType : '');
   const userTitle = (stepDef as Record<string, unknown> | undefined)?.['title'] as string | undefined;
-  const { target } = stepDef ? getStepDisplay(stepDef) : { target: '' };
+  const { target } = stepDef ? getStepDisplayI18n(stepDef) : { target: '' };
   const label = userTitle?.trim() || (type ? getStepTypeName(type) : t('monitorStepFallback', { n: index + 1 }));
   const sublabel = !userTitle?.trim() && target ? target : undefined;
   const depth = logEntry?.depth ?? 0;

@@ -26,6 +26,7 @@ from api.schemas.relay_agent import (
 from db import crud as repo
 from services import pairing as _pairing_mod
 from services import relay_onboarding
+from services.relay_onboarding import RELAY_SAME_WIFI_FILTER_ENABLED
 
 router = APIRouter(prefix="/relay-agents", tags=["relay-agents"])
 
@@ -121,6 +122,8 @@ def _same_lan_ip(left: str, right: str, cidr: str = "") -> bool:
 
 
 def _serial_is_same_wifi(serial: str, row, caps: dict | None = None) -> bool:
+    if not RELAY_SAME_WIFI_FILTER_ENABLED:
+        return True
     caps = caps if caps is not None else _get_live_caps(serial)
     wlan_ip = str(caps.get("wlan_ip") or "").strip()
     wlan_cidr = str(caps.get("wlan_cidr") or "").strip()
@@ -195,6 +198,35 @@ def _cached_live_caps(serial: str, caps_by_serial: dict[str, dict]) -> dict:
     if serial not in caps_by_serial:
         caps_by_serial[serial] = _get_live_caps(serial)
     return caps_by_serial[serial]
+
+
+def _relay_host_key(row) -> tuple[str, str]:
+    hostname = str(getattr(row, "hostname", "") or getattr(row, "relay_id", "") or "").strip().lower()
+    ip = str(getattr(row, "ip", "") or "").strip()
+    return hostname, ip
+
+
+def _dedupe_relay_rows(rows: list) -> list:
+    """Keep one row per host (hostname+ip): prefer online, then newest heartbeat."""
+    best: dict[tuple[str, str], object] = {}
+    for row in rows:
+        key = _relay_host_key(row)
+        if not key[0]:
+            key = (str(getattr(row, "relay_id", "") or "").strip().lower(), key[1])
+        prev = best.get(key)
+        if prev is None:
+            best[key] = row
+            continue
+
+        def _rank(r) -> tuple[int, float]:
+            online = 1 if str(getattr(r, "status", "") or "") == "online" else 0
+            hb = getattr(r, "last_heartbeat_at", None) or getattr(r, "connected_at", None)
+            ts = hb.timestamp() if hb is not None else 0.0
+            return online, ts
+
+        if _rank(row) > _rank(prev):
+            best[key] = row
+    return list(best.values())
 
 
 def _relay_to_out_same_wifi(
@@ -366,7 +398,7 @@ async def _dispatch_relay_job(
 
 @router.get("", response_model=list[RelayAgentOut])
 async def list_relay_agents(db: DB, user: CurrentUser):
-    rows = await repo.list_relay_agents(db, user_id=user.id)
+    rows = _dedupe_relay_rows(await repo.list_relay_agents(db, user_id=user.id))
     devices = await repo.list_devices(db)
     owner_by_alias = _device_owner_aliases(devices)
     caps_by_serial: dict[str, dict] = {}
@@ -547,8 +579,9 @@ async def register_relay_device(
         raise HTTPException(status_code=400, detail="invalid device serial")
     if serial not in set(row.serials or []):
         raise HTTPException(status_code=409, detail="serial is not reported by this relay agent")
-    if not _serial_is_same_wifi(serial, row):
-        raise HTTPException(status_code=403, detail="device is not on the same WiFi/LAN as this relay agent")
+    # TEMP: same-WiFi/LAN check disabled (RELAY_SAME_WIFI_FILTER_ENABLED=False).
+    # if not _serial_is_same_wifi(serial, row):
+    #     raise HTTPException(status_code=403, detail="device is not on the same WiFi/LAN as this relay agent")
 
     all_devices = await repo.list_devices(db)
     existing = _find_matching_device(serial, all_devices)
@@ -608,8 +641,9 @@ async def push_connect_url_to_device(
     serial = (serial or "").strip()
     if serial not in set(row.serials or []):
         raise HTTPException(status_code=409, detail="serial is not reported by this relay agent")
-    if not _serial_is_same_wifi(serial, row):
-        raise HTTPException(status_code=403, detail="device is not on the same WiFi/LAN as this relay agent")
+    # TEMP: same-WiFi/LAN check disabled (RELAY_SAME_WIFI_FILTER_ENABLED=False).
+    # if not _serial_is_same_wifi(serial, row):
+    #     raise HTTPException(status_code=403, detail="device is not on the same WiFi/LAN as this relay agent")
     all_devices = await repo.list_devices(db)
 
     device = None

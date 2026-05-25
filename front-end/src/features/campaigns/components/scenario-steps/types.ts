@@ -28,6 +28,11 @@ import {
   Clipboard,
   Zap,
   ShieldCheck,
+  SquareX,
+  Eraser,
+  AppWindow,
+  Upload,
+  Download,
 } from 'lucide-react';
 
 /** Generate a unique step ID. */
@@ -53,6 +58,11 @@ export type ControlFlowType =
 
 export type ActionType =
   | 'launch_app'
+  | 'stop_app'
+  | 'clear_app'
+  | 'wait_app'
+  | 'push_file'
+  | 'pull_file'
   | 'open_url'
   | 'wait'
   | 'tap_position'
@@ -117,6 +127,11 @@ export function getStepIcon(type: string): LucideIcon {
     case 'random_pick': return Dices;
     case 'run_scenario': return Package;
     case 'launch_app': return Smartphone;
+    case 'stop_app': return SquareX;
+    case 'clear_app': return Eraser;
+    case 'wait_app': return AppWindow;
+    case 'push_file': return Upload;
+    case 'pull_file': return Download;
     case 'open_url': return Globe;
     case 'wait': return Hourglass;
     case 'tap':
@@ -180,6 +195,11 @@ export function getStepLabel(step: FlowStep): string {
     case 'save_extraction': return `save_extraction → ${step.collection ?? 'default'}`;
 
     case 'launch_app': return `launch_app ${step.package || ''}`;
+    case 'stop_app': return `stop_app ${step.package || ''}`;
+    case 'clear_app': return `clear_app ${step.package || ''}`;
+    case 'wait_app': return `wait_app ${step.package || ''}`;
+    case 'push_file': return `push ${step.local_path || ''} → ${step.remote_path || ''}`;
+    case 'pull_file': return `pull ${step.remote_path || ''} → ${step.local_path || ''}`;
     case 'open_url': return `open_url ${step.url || ''}`;
     case 'wait': return `wait ${step.seconds ?? 0}s`;
     case 'tap_ratio': return `tap (${step.x}, ${step.y})`;
@@ -208,6 +228,11 @@ export function getStepLabel(step: FlowStep): string {
 /** All step types for the dropdown. */
 export const ALL_STEP_TYPES: { value: string; label: string; group: 'action' | 'control' | 'variable' }[] = [
   { value: 'launch_app', label: 'launch_app', group: 'action' },
+  { value: 'stop_app', label: 'stop_app', group: 'action' },
+  { value: 'clear_app', label: 'clear_app', group: 'action' },
+  { value: 'wait_app', label: 'wait_app', group: 'action' },
+  { value: 'push_file', label: 'push_file', group: 'action' },
+  { value: 'pull_file', label: 'pull_file', group: 'action' },
   { value: 'open_url', label: 'open_url', group: 'action' },
   { value: 'wait', label: 'wait', group: 'action' },
   { value: 'tap_ratio', label: 'tap_ratio', group: 'action' },
@@ -270,23 +295,44 @@ export function createDefaultStep(type: string, afterOrder?: string | null, befo
         type: 'break_if',
         condition: { element_exists: { by: 'text', value: '' } },
       };
-    case 'if_element': return { ...base, type: 'if_element', by: 'text', value: '', timeout: 3, then: [], else: [] };
+    case 'if_element':
+      return { ...base, type: 'if_element', selector: { by: 'text', value: '' }, by: 'text', value: '', timeout: 3, then: [], else: [] };
     case 'if_variable': return { ...base, type: 'if_variable', name: '', equals: '', then: [], else: [] };
     case 'random_pick': return { ...base, type: 'random_pick', branches: [{ weight: 1, steps: [] }] };
     case 'run_scenario': return { ...base, type: 'run_scenario', scenario_name: '', variables: {} };
-    case 'launch_app': return { ...base, type: 'launch_app', package: '', wait_after: 2 };
+    case 'launch_app': return { ...base, type: 'launch_app', package: '', wait_after: 2, stop_before: false, use_monkey: false };
+    case 'stop_app': return { ...base, type: 'stop_app', package: '' };
+    case 'clear_app': return { ...base, type: 'clear_app', package: '' };
+    case 'wait_app': return { ...base, type: 'wait_app', package: '', timeout: 20, front: true };
+    case 'push_file': return { ...base, type: 'push_file', local_path: '', remote_path: '/sdcard/' };
+    case 'pull_file': return { ...base, type: 'pull_file', local_path: '', remote_path: '/sdcard/' };
     case 'open_url': return { ...base, type: 'open_url', url: '' };
     case 'wait': return { ...base, type: 'wait', seconds: 1 };
     case 'tap_ratio': return { ...base, type: 'tap_ratio', x: 0.5, y: 0.5 };
-    case 'tap_selector': return { ...base, type: 'tap_selector', by: 'text', value: '', timeout: 8, fallback_rx: 0.5, fallback_ry: 0.5 };
+    case 'tap_selector':
+      return {
+        ...base,
+        type: 'tap_selector',
+        selector: { by: 'text', value: '' },
+        by: 'text',
+        value: '',
+        timeout: 8,
+        fallback: { rx: 0.5, ry: 0.5 },
+        fallback_rx: 0.5,
+        fallback_ry: 0.5,
+      };
     case 'tap_fb_comment_button': return { ...base, type: 'tap_fb_comment_button', timeout: 6, poll: 0.4, dedupe_field: 'post_key', comment_filter: 'all_comments', switch_to_all_comments: true, post_tap_wait_s: 0.8, ignore_error: true, pre_scroll: false, pre_scroll_distance: 0.24, then: [], else: [] };
     case 'tap_position': return { ...base, type: 'tap_position', pos: 'middle_center' };
     case 'swipe_ratio': return { ...base, type: 'swipe_ratio', x1: 0.5, y1: 0.8, x2: 0.5, y2: 0.2, duration_ms: 300 };
     case 'input_text': return { ...base, type: 'input_text', via: 'u2', text: '' };
-    case 'input_selector': return { ...base, type: 'input_selector', by: 'resource-id', value: '', text: '', clear_first: true };
-    case 'wait_element': return { ...base, type: 'wait_element', by: 'text', value: '', timeout: 10, poll: 0.5 };
-    case 'assert_element': return { ...base, type: 'assert_element', by: 'text', value: '', timeout: 5, poll: 0.5 };
-    case 'long_tap_selector': return { ...base, type: 'long_tap_selector', by: 'text', value: '', duration_ms: 800 };
+    case 'input_selector':
+      return { ...base, type: 'input_selector', selector: { by: 'resource-id', value: '' }, by: 'resource-id', value: '', text: '', clear_first: true };
+    case 'wait_element':
+      return { ...base, type: 'wait_element', selector: { by: 'text', value: '' }, by: 'text', value: '', timeout: 10, poll: 0.5 };
+    case 'assert_element':
+      return { ...base, type: 'assert_element', selector: { by: 'text', value: '' }, by: 'text', value: '', timeout: 5, poll: 0.5 };
+    case 'long_tap_selector':
+      return { ...base, type: 'long_tap_selector', selector: { by: 'text', value: '' }, by: 'text', value: '', duration_ms: 800 };
     case 'scroll_down':
       return {
         ...base,
@@ -298,7 +344,8 @@ export function createDefaultStep(type: string, afterOrder?: string | null, befo
         duration_ms: 520,
         pause_seconds: 0.6,
       };
-    case 'scroll_to': return { ...base, type: 'scroll_to', by: 'text', value: '', direction: 'down', max_swipes: 5 };
+    case 'scroll_to':
+      return { ...base, type: 'scroll_to', selector: { by: 'text', value: '' }, by: 'text', value: '', direction: 'down', max_swipes: 5 };
     case 'wait_stable': return { ...base, type: 'wait_stable', timeout: 5, stable_duration: 0.4 };
     case 'verify_screen': return { ...base, type: 'verify_screen', screenshot: '', ssim_threshold: 0.75, timeout: 8, poll: 0.5 };
     case 'dismiss_popup': return { ...base, type: 'dismiss_popup', retries: 3 };
@@ -329,7 +376,7 @@ export function createDefaultStep(type: string, afterOrder?: string | null, befo
         collection: '${SAVE_COLLECTION}',
         platform: 'facebook',
         content_type: 'group_post',
-        dedupe_field: 'text',
+        dedupe_field: 'post_key',
       };
     // Shortcut — creates an `extract` step preset for FB comments. Mirrors what
     // fb_group_1h templates use inside `tap_fb_comment_button.then`. User can

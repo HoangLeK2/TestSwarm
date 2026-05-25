@@ -10,7 +10,8 @@ import type { BulkImportBody, RoundRobinBody } from '../../device-farm/services/
 const KEYS = {
   list: ['accounts'] as const,
   detail: (id: string) => ['accounts', id] as const,
-  devices: (id: string) => ['accounts', id, 'devices'] as const
+  devices: (id: string) => ['accounts', id, 'devices'] as const,
+  events: (id: string, cursor?: string) => ['accounts', id, 'events', cursor] as const
 };
 
 export function useAccounts(query?: {
@@ -31,6 +32,21 @@ export function useAccount(accountId: string) {
     queryKey: KEYS.detail(accountId),
     queryFn: () => accountsApi.get(accountId),
     enabled: !!accountId
+  });
+}
+
+export function useAccountEvents(
+  accountId: string,
+  opts?: { enabled?: boolean; cursor?: string; limit?: number }
+) {
+  return useQuery({
+    queryKey: KEYS.events(accountId, opts?.cursor),
+    queryFn: () =>
+      accountsApi.listEvents(accountId, {
+        limit: opts?.limit ?? 50,
+        cursor: opts?.cursor
+      }),
+    enabled: !!accountId && (opts?.enabled ?? true)
   });
 }
 

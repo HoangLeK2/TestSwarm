@@ -14,6 +14,11 @@ from tasks.scenario.utils import _evaluate_condition, _eval_ru_condition, _wait_
 
 log = logging.getLogger(__name__)
 
+
+def _cancelled(sc: ScenarioContext) -> bool:
+    return sc.cancel_event is not None and sc.cancel_event.is_set()
+
+
 # Per-execution asyncio.Lock for serializing loop_state writes.
 # Keyed by execution_id; leaks are bounded since executions finish.
 _LOOP_PERSIST_LOCKS: Dict[str, asyncio.Lock] = {}
@@ -82,6 +87,10 @@ def handle_loop(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dic
     sub_results = []
     actual_iters = 0
     for i in range(resume_from, iterations):
+        if _cancelled(sc):
+            result["ok"] = False
+            result["message"] = "loop: cancelled by user"
+            break
         if use_while and not _evaluate_condition(sc.device, while_cond, sc.ctx):
             break
         sc.ctx["_loop_iter"] = i
@@ -229,6 +238,10 @@ def handle_repeat(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: D
 
     sub_results: List[Dict[str, Any]] = []
     for i in range(n):
+        if _cancelled(sc):
+            result["ok"] = False
+            result["message"] = "repeat: cancelled by user"
+            break
         sc.var_ctx.set("__LOOP_INDEX__", i)
         iter_res = _run_nested(sc, sub_steps)
         sub_results.append({"iteration": i, "result": iter_res})
@@ -262,6 +275,10 @@ def handle_repeat_until(sc: ScenarioContext, step: Dict[str, Any], idx: int, res
     actual_iters = 0
     condition_met = False
     for i in range(max_iter):
+        if _cancelled(sc):
+            result["ok"] = False
+            result["message"] = "repeat_until: cancelled by user"
+            break
         sc.var_ctx.set("__LOOP_INDEX__", i)
         if _eval_ru_condition(sc.device, condition, sc.var_ctx):
             condition_met = True
@@ -284,15 +301,16 @@ def handle_repeat_until(sc: ScenarioContext, step: Dict[str, Any], idx: int, res
 
 @register_step("if_element")
 def handle_if_element(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
-    by = str(step.get("by") or "")
-    value = str(step.get("value") or "").strip()
+    from tasks.scenario.utils import resolve_step_selector_fields, _retry_find_element
+
+    spec, by, value, _ = resolve_step_selector_fields(step)
     timeout = float(step.get("timeout", 3.0) or 3.0)
     then_steps = step.get("then") or []
     else_steps = step.get("else") or []
 
-    if not by or not value:
+    if spec is None or spec.is_empty():
         result["ok"] = False
-        result["message"] = "if_element: missing by/value"
+        result["message"] = "if_element: missing selector"
         return
 
     element_found = False
@@ -300,7 +318,9 @@ def handle_if_element(sc: ScenarioContext, step: Dict[str, Any], idx: int, resul
         sc.device.ensure_u2_healthy()
         u2 = sc.device.u2
         if u2 is not None:
-            eid = _wait_for_element(u2, by, value, timeout=timeout)
+            eid = _retry_find_element(
+                u2, by, value, timeout=timeout, poll=0.3, spec=spec, device=sc.device,
+            )
             element_found = eid is not None
     except Exception as exc:
         log.debug(f"[{sc.serial}] if_element u2 check error: {exc}")
@@ -396,7 +416,7 @@ def handle_tap_fb_comment_button(
         except Exception as exc:
             log.warning("[%s] tap_fb_comment_button: filter switch failed: %s", sc.serial, exc)
         settle_s = float(
-            step.get("comment_filter_settle_s", step.get("post_tap_wait_s", 1.0)) or 1.0
+            step.get("comment_filter_settle_s", step.get("post_tap_wait_s", 0.6)) or 0.6
         )
         if settle_s > 0:
             time.sleep(settle_s)

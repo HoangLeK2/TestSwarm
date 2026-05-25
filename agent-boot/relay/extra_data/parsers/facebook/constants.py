@@ -120,6 +120,14 @@ _RE_CMT_REPLY_BTN = re.compile(r"^Trả lời bình luận của (.+?),", re.IGN
 _RE_CMT_REACTIONS = re.compile(r"^(\d[\d.,]*[KMkm]?)\s+cảm xúc$", re.IGNORECASE)
 _RE_CMT_REACTIONS_EN = re.compile(r"^(\d[\d.,]*[KMkm]?)\s+reactions?\s*$", re.IGNORECASE)
 _RE_CMT_TS_SHARE = re.compile(r"•\s*Chia sẻ với.*$", re.IGNORECASE)
+_RE_CMT_VIEW_REPLIES = re.compile(
+    r"^xem\s+\d+[\d.,]*\s+câu\s+trả\s+lời(?:\s+cho\b.*)?\s*$",
+    re.IGNORECASE,
+)
+_RE_CMT_HIDDEN_COMMENTS = re.compile(
+    r"bình luận.*bị\s+ẩn|comments?.*hidden|hidden.*comments?",
+    re.IGNORECASE,
+)
 _RE_COMMENT_NAME_DOT_SUFFIX = re.compile(r"^(.{2,60}?)\s*[•·]\s*(.+)$")
 _RE_LEAKED_REL_TIME_AS_LABEL = re.compile(
     r"^\d+\s*(?:giây|phút|giờ|ngày|tuần|tháng|năm)\s*(?:trước)?$",

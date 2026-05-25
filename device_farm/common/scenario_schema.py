@@ -6,6 +6,11 @@ from typing import Any, Dict, List
 
 SCENARIO_STEP_TYPES = [
     "launch_app",
+    "stop_app",
+    "clear_app",
+    "wait_app",
+    "push_file",
+    "pull_file",
     "open_url",
     "wait",
     "tap_position",
@@ -50,8 +55,33 @@ SCENARIO_STEP_TYPES = [
 STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
     "launch_app": {
         "required": ["package"],
-        "optional": ["wait_after"],
-        "description": "Open app by package name. wait_after (float, default 2.5s) — wait for app to load before next step.",
+        "optional": ["wait_after", "activity", "component", "stop_before", "use_monkey"],
+        "description": "Open app by package. Optional activity/component, stop_before, use_monkey. wait_after (default 2s).",
+    },
+    "stop_app": {
+        "required": ["package"],
+        "optional": [],
+        "description": "Force-stop app (am force-stop / u2 stopPackage).",
+    },
+    "clear_app": {
+        "required": ["package"],
+        "optional": [],
+        "description": "Clear app data (pm clear). Removes login state.",
+    },
+    "wait_app": {
+        "required": ["package"],
+        "optional": ["timeout", "front"],
+        "description": "Wait until app is in foreground (default timeout 20s).",
+    },
+    "push_file": {
+        "required": ["local_path", "remote_path"],
+        "optional": ["mode"],
+        "description": "Push local file to device path (requires agent-boot u2 session).",
+    },
+    "pull_file": {
+        "required": ["local_path", "remote_path"],
+        "optional": [],
+        "description": "Pull device file to local path (requires agent-boot u2 session).",
     },
     "open_url": {
         "required": ["url"],
@@ -95,18 +125,22 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
         "description": "Swipe giữa hai điểm tỷ lệ (0–1). duration_ms mặc định 300.",
     },
     "tap_selector": {
-        "required": ["by", "value"],
-        "optional": ["fallback_rx", "fallback_ry", "timeout", "implicit_wait"],
+        "required": [],
+        "optional": [
+            "selector", "by", "value", "fallback", "fallback_rx", "fallback_ry",
+            "timeout", "implicit_wait", "element_image",
+        ],
         "description": (
-            "Tap theo uiautomator2 selector. by: resource-id | text | xpath | class name. "
-            "timeout (float, mặc định 5s): đợi element tối đa N giây trước khi fail. "
-            "implicit_wait: Tenacity retry-until-visible (default 10s/0.5s poll). "
-            "fallback_rx/ry: tọa độ ratio fallback nếu không tìm thấy element."
+            "Tap theo uiautomator2 selector. "
+            "selector: {by, value, conditions?, instance?, chain?} (canonical) hoặc legacy by/value. "
+            "conditions: AND fields (className, resourceId, clickable, …). "
+            "chain: child | sibling | relative | child_by_text | child_by_description. "
+            "fallback / fallback_rx/ry: tọa độ ratio khi không tìm thấy element."
         ),
     },
     "wait_element": {
-        "required": ["by", "value"],
-        "optional": ["timeout", "poll"],
+        "required": [],
+        "optional": ["selector", "by", "value", "timeout", "poll"],
         "description": (
             "⚡ PREFERRED thay cho 'wait N giây'. "
             "Poll liên tục cho đến khi element xuất hiện (mặc định timeout=10s). "
@@ -115,8 +149,8 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
         ),
     },
     "assert_element": {
-        "required": ["by", "value"],
-        "optional": ["timeout"],
+        "required": [],
+        "optional": ["selector", "by", "value", "timeout", "poll"],
         "description": (
             "✓ Xác nhận element đang hiển thị. Fail scenario ngay nếu không thấy element. "
             "Dùng để kiểm tra đang đúng màn hình trước khi thao tác tiếp. "
@@ -124,8 +158,8 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
         ),
     },
     "input_selector": {
-        "required": ["by", "value", "text"],
-        "optional": ["clear_first", "implicit_wait"],
+        "required": ["text"],
+        "optional": ["selector", "by", "value", "clear_first", "implicit_wait"],
         "description": (
             "Tìm input field theo selector, xóa nội dung cũ (clear_first=true mặc định), "
             "rồi gõ text. implicit_wait: Tenacity retry-until-visible (default 10s/0.5s poll). "
@@ -133,16 +167,16 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
         ),
     },
     "long_tap_selector": {
-        "required": ["by", "value"],
-        "optional": ["duration_ms", "implicit_wait"],
+        "required": [],
+        "optional": ["selector", "by", "value", "duration_ms", "implicit_wait"],
         "description": (
             "Long press element tìm theo selector. duration_ms mặc định 800ms. "
             "implicit_wait: Tenacity retry-until-visible (default 10s/0.5s poll)."
         ),
     },
     "scroll_to": {
-        "required": ["by", "value"],
-        "optional": ["direction", "max_swipes"],
+        "required": [],
+        "optional": ["selector", "by", "value", "direction", "max_swipes"],
         "description": (
             "Scroll (swipe) cho đến khi element xuất hiện. "
             "direction: down (mặc định) | up. max_swipes mặc định 5."
@@ -235,13 +269,11 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
         ),
     },
     "if_element": {
-        "required": ["by", "value", "then"],
-        "optional": ["timeout", "else"],
+        "required": ["then"],
+        "optional": ["selector", "by", "value", "timeout", "else"],
         "description": (
-            "Re nhánh theo sự tồn tại của element. "
-            "Nếu element tìm thấy trong timeout giây → chạy then. Nếu không → chạy else (nếu có). "
-            "timeout: thời gian tối đa chờ element (mặc định 3s). "
-            "by: text | resource-id | xpath."
+            "Rẽ nhánh theo sự tồn tại của element. "
+            "selector hoặc by/value; chain/conditions hỗ trợ như tap_selector."
         ),
     },
     "if_variable": {

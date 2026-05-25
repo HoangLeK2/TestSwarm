@@ -223,6 +223,15 @@ class RedisConfig:
 
 
 @dataclass
+class AccountHistoryConfig:
+    """Account profile timeline (account_events table)."""
+    enabled: bool = True
+    max_batch_size: int = 100
+    max_pending: int = 1000
+    retention_days: int = 90
+
+
+@dataclass
 class SafeModeConfig:
     """Operator-level switch for restricted / low-bandwidth deployments.
 
@@ -259,6 +268,7 @@ class Config:
     object_storage: ObjectStorageConfig = field(default_factory=ObjectStorageConfig)
     relay: RelayConfig = field(default_factory=RelayConfig)
     redis: RedisConfig = field(default_factory=RedisConfig)
+    account_history: AccountHistoryConfig = field(default_factory=AccountHistoryConfig)
     safe_mode: SafeModeConfig = field(default_factory=SafeModeConfig)
     target_app: str = ""
     force_u2_mode: bool = False
@@ -602,6 +612,13 @@ def load_config(path: str = "config.yaml") -> Config:
         object_storage=_build_object_storage_config(raw),
         relay=_build_relay_config(raw.get("relay", {})),
         redis=_build_redis_config(raw.get("redis", {})),
+        account_history=AccountHistoryConfig(
+            **{
+                k: v
+                for k, v in (raw.get("account_history") or {}).items()
+                if k in AccountHistoryConfig.__dataclass_fields__
+            }
+        ),
         safe_mode=_build_safe_mode_config(raw.get("safe_mode", {})),
         target_app=raw.get("target_app", ""),
         force_u2_mode=bool(raw.get("force_u2_mode", False)),

@@ -96,11 +96,11 @@ def capture_post_step(
         # Build selector dict
         step_selector: Optional[Dict[str, str]] = None
         if t in ("tap", "tap_selector", "wait_element", "assert_element",
-                 "input_selector", "long_tap_selector", "scroll_to"):
-            sel = step.get("selector") or {}
-            s_by = str(sel.get("by") or step.get("by") or "").strip()
-            s_val = str(sel.get("value") or step.get("value") or "").strip()
-            if s_by and s_val:
+                 "input_selector", "long_tap_selector", "scroll_to", "if_element"):
+            from services.scenario_selector import normalize_step_selector
+            spec = normalize_step_selector(step)
+            if spec and not spec.is_empty():
+                s_by, s_val = spec.primary_by_value()
                 step_selector = {"by": s_by, "value": s_val}
 
         cap = _capture_step_screenshot(

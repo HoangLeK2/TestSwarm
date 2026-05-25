@@ -2,10 +2,30 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.scenario_device_variable import ScenarioDeviceVariable
+
+
+async def get_scenario_device_variables_bulk(
+    db: AsyncSession,
+    scenario_ids: list[str],
+    device_ids: list[str],
+) -> dict[tuple[str, str], dict[str, Any]]:
+    """Load all (scenario_id, device_id) variable maps in one query."""
+    if not scenario_ids or not device_ids:
+        return {}
+    result = await db.execute(
+        select(ScenarioDeviceVariable).where(
+            ScenarioDeviceVariable.scenario_id.in_(scenario_ids),
+            ScenarioDeviceVariable.device_id.in_(device_ids),
+        )
+    )
+    return {
+        (row.scenario_id, row.device_id): dict(row.vars or {})
+        for row in result.scalars().all()
+    }
 
 
 async def get_scenario_device_variables(

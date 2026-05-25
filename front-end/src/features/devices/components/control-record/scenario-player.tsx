@@ -29,7 +29,7 @@ import {
   Braces,
 } from 'lucide-react';
 import { useCampaigns, useScenarios } from '@/features/campaigns/hooks/use-campaigns';
-import { cancelPreviewStream, previewScenarioStream, type PreviewStepResult } from '../../services/api';
+import { cancelPreviewStream, interruptDevice, previewScenarioStream, type PreviewStepResult } from '../../services/api';
 import { accountGroupsApi } from '@/features/account-groups/services/api';
 import { useAccountGroups } from '@/features/account-groups/hooks/use-account-groups';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -181,6 +181,7 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedStep
     const active = activePreviewRef.current;
     if (active) {
       cancelPreviewStream(active.serial, active.traceId).catch(() => undefined);
+      interruptDevice(active.serial).catch(() => undefined);
       activePreviewRef.current = null;
     }
   }, []);

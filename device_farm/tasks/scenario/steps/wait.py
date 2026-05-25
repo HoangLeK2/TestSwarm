@@ -9,7 +9,9 @@ from tasks.scenario.steps import register_step
 from tasks.scenario.context import ScenarioContext
 from tasks.scenario.utils import (
     _retry_find_element, _wait_screen_stable, _auto_dismiss_popup,
+    resolve_step_selector_fields,
 )
+from services.scenario_selector import selector_summary
 
 log = logging.getLogger(__name__)
 
@@ -33,48 +35,50 @@ def handle_wait(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dic
 
 @register_step("wait_element")
 def handle_wait_element(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
-    by = str(step.get("by") or "text")
-    value = str(step.get("value") or "").strip()
+    spec, by, value, _ = resolve_step_selector_fields(step)
     timeout = float(step.get("timeout", 10.0) or 10.0)
-    if not value:
+    if spec is None or spec.is_empty():
         result["ok"] = False
-        result["message"] = "wait_element: empty value"
+        result["message"] = "wait_element: empty selector"
         return
     u2 = sc.device.u2
     iw_poll = float(step.get("poll", 0.5) or 0.5)
+    lbl = selector_summary(spec)
     eid = _retry_find_element(
         u2, by, value, timeout=timeout, poll=iw_poll, cancel_event=sc.cancel_event,
+        spec=spec, device=sc.device,
     ) if u2 else None
     if eid is None:
         result["ok"] = False
         if sc.cancel_event is not None and sc.cancel_event.is_set():
-            result["message"] = f"wait_element cancelled ({by}={value!r})"
+            result["message"] = f"wait_element cancelled ({lbl})"
         else:
-            result["message"] = f"wait_element {by}={value!r} not found after {timeout:.0f}s"
+            result["message"] = f"wait_element {lbl} not found after {timeout:.0f}s"
     else:
-        result["message"] = f"wait_element found {by}={value!r}"
+        result["message"] = f"wait_element found {lbl}"
 
 
 @register_step("assert_element")
 def handle_assert_element(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
-    by = str(step.get("by") or "text")
-    value = str(step.get("value") or "").strip()
+    spec, by, value, _ = resolve_step_selector_fields(step)
     timeout = float(step.get("timeout", 5.0) or 5.0)
-    if not value:
+    if spec is None or spec.is_empty():
         result["ok"] = False
-        result["message"] = "assert_element: empty value"
+        result["message"] = "assert_element: empty selector"
         return
     u2 = sc.device.u2
     iw_poll = float(step.get("poll", 0.5) or 0.5)
+    lbl = selector_summary(spec)
     eid = _retry_find_element(
         u2, by, value, timeout=timeout, poll=iw_poll, cancel_event=sc.cancel_event,
+        spec=spec, device=sc.device,
     ) if u2 else None
     if eid is None:
         result["ok"] = False
         if sc.cancel_event is not None and sc.cancel_event.is_set():
-            result["message"] = f"assert_element cancelled ({by}={value!r})"
+            result["message"] = f"assert_element cancelled ({lbl})"
         else:
-            result["message"] = f"assert_element FAILED: {by}={value!r} not visible after {timeout:.0f}s"
+            result["message"] = f"assert_element FAILED: {lbl} not visible after {timeout:.0f}s"
 
 
 @register_step("wait_stable")

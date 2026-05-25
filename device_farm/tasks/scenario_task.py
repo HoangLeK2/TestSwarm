@@ -1055,6 +1055,22 @@ def _try_publish_status(device: "DeviceClient") -> None:
         pass
 
 
+def force_clear_scenario_busy(device: "DeviceClient") -> None:
+    """Reset scenario-active gates immediately (preview cancel / interrupt).
+
+    The scenario thread may still be winding down on a long step; clearing the
+    counter and publishing status lets manual control resume without waiting.
+    """
+    lock = getattr(device, "_scenario_active_lock", None)
+    if lock is not None:
+        with lock:
+            device._scenario_active = 0
+    else:
+        device._scenario_active = 0
+    _try_publish_status(device)
+    _try_publish_scenario_active_redis(device)
+
+
 def _try_publish_scenario_active_redis(device: "DeviceClient") -> None:
     """Best-effort: publish scenario_active to Redis for cross-process WS/API gates.
 

@@ -109,6 +109,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         default="com.android.settings",
         help="app để mở và đi vài bước (default: Settings, không cần mạng).",
     )
+    ap.add_argument(
+        "--rotate",
+        action="store_true",
+        help="cycle orientation portrait → landscape → portrait trong kịch bản (mặc định tắt).",
+    )
     args = ap.parse_args(argv)
 
     serial = args.serial.strip()
@@ -192,6 +197,8 @@ def main(argv: Optional[list[str]] = None) -> int:
 
         @step("orientation_cycle_offline")
         def _rotate() -> None:
+            if not args.rotate:
+                return
             orig = d.orientation
             try:
                 d.set_orientation("l")

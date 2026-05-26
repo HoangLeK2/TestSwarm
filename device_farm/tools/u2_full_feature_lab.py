@@ -803,6 +803,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--connect-timeout", type=int, default=10)
     ap.add_argument("--u2-connect-timeout", type=float, default=60.0)
     ap.add_argument("--steps", default="", help="Chạy các bước cụ thể (tên, cách nhau bằng dấu phẩy)")
+    ap.add_argument(
+        "--rotate",
+        action="store_true",
+        help="Cho phép step 'rotation' (mặc định tắt để tránh tự xoay khi chạy kịch bản).",
+    )
     ap.add_argument("--stop-on-fail", action="store_true", help="Dừng ngay khi có bước thất bại")
     args = ap.parse_args(argv)
 
@@ -847,6 +852,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         (name, fn) for name, fn in ALL_STEPS
         if not selected_names or name in selected_names
     ]
+    if not args.rotate:
+        if selected_names and "rotation" in selected_names:
+            print("[u2] NOTE: step 'rotation' bị tắt. Muốn chạy hãy thêm --rotate.", flush=True)
+        steps_to_run = [(name, fn) for name, fn in steps_to_run if name != "rotation"]
 
     runner = Runner(d=d, out=out_dir, timeout=args.timeout)
 

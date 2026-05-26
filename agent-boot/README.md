@@ -60,6 +60,8 @@ uv run main.py --ws-url ws://host:8081/device-agent  # auto-connect STFService
 | `SCRCPY_VIDEO_ENCODER` | *(auto)* | Force encoder cụ thể, e.g. `c2.android.avc.encoder` |
 | `SCRCPY_FRAME_TIMEOUT_S` | `30` | Giây không có frame trước khi scrcpy restart |
 | `AUTO_OPEN_STF_APP` | `0` | Set `1` để tự mở STFService UI sau bootstrap |
+| `AGENT_BOOT_LOCK_ROTATION` | `1` | Tắt auto-rotate + khóa dọc khi bootstrap / stability settings |
+| `AGENT_BOOT_LOCK_ROTATION_AFTER_SHELL` | `1` | Khóa lại sau mỗi lệnh `adb shell` từ farm (chống kịch bản bật lại xoay) |
 | `AGENT_BOOT_EXTRA_ENABLED` | `0` | Bật HTTP ingest `POST /extra-data/xml` cho phone/APK gửi XML trực tiếp về agent |
 | `AGENT_BOOT_EXTRA_TOKEN` | *(bắt buộc)* | Shared token; APK gửi qua header `X-Agent-Boot-Extra-Token` |
 | `AGENT_BOOT_EXTRA_ALLOW_UNAUTH` | `0` | Chỉ bật cho local debug; cho phép ingest không token |

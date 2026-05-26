@@ -26,6 +26,8 @@ from relay.adb           import (
     _restart_u2, _restart_atx, _probe_capabilities,
     _resolve_device_lan_ip,
     _screencap, _bootstrap_device,
+    lock_portrait_rotation,
+    lock_rotation_after_shell_enabled,
     reconcile_usb_preferred_for_duplicate_devices,
 )
 from relay.mdns          import start_mdns_discovery
@@ -1403,6 +1405,8 @@ class RelayAgent:
                 output, rc = self._restart_scrcpy_sync(serial, timeout)
             else:
                 output, rc = _adb_shell(serial, cmd, timeout=timeout)
+                if lock_rotation_after_shell_enabled():
+                    lock_portrait_rotation(serial)
 
             return json.dumps({
                 "type":      "result",

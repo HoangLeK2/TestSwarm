@@ -285,6 +285,7 @@ def _restart_u2(serial: str, timeout: int = 60) -> tuple[str, int]:
     while time.monotonic() < deadline:
         time.sleep(1.0)
         if _device_port_listening(serial, 9008):
+            lock_portrait_rotation(serial)
             return "u2 started", 0
     log_tail, _ = _adb_shell(serial, "tail -n 40 /data/local/tmp/u2.log 2>/dev/null || true", timeout=5)
     return f"u2 did not start within timeout; log_tail={log_tail[-1000:]}", -1
@@ -329,6 +330,32 @@ def _restart_atx(serial: str, timeout: int = 30) -> tuple[str, int]:
     return f"atx-agent did not start within timeout; last_ping={last_ping}; log_tail={log_tail[-1000:]}", -1
 
 
+def _lock_rotation_enabled() -> bool:
+    """Env AGENT_BOOT_LOCK_ROTATION (default on)."""
+    raw = _os.environ.get("AGENT_BOOT_LOCK_ROTATION", "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def lock_rotation_after_shell_enabled() -> bool:
+    """Re-apply lock after each ADB shell from device_farm (default on).
+
+    Env: AGENT_BOOT_LOCK_ROTATION_AFTER_SHELL=0 to disable.
+    """
+    raw = _os.environ.get("AGENT_BOOT_LOCK_ROTATION_AFTER_SHELL", "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def lock_portrait_rotation(serial: str) -> None:
+    """Disable auto-rotate and lock portrait (best-effort, idempotent)."""
+    if not _lock_rotation_enabled():
+        return
+    for cmd in (
+        "settings put system accelerometer_rotation 0",
+        "settings put system user_rotation 0",
+    ):
+        _adb_shell(serial, cmd, timeout=5)
+
+
 def _apply_u2_stability_settings(serial: str) -> None:
     """
     Best-effort Android/OEM settings that keep u2 alive on aggressive ROMs.
@@ -357,6 +384,7 @@ def _apply_u2_stability_settings(serial: str) -> None:
     ]
     for cmd in commands:
         _adb_shell(serial, cmd, timeout=5)
+    lock_portrait_rotation(serial)
 
 
 def _run_bytes(
@@ -718,5 +746,6 @@ def _bootstrap_device(serial: str, timeout: int = 180) -> tuple[str, int]:
     summary["wlan_ip"] = str(caps.get("wlan_ip") or "")
     summary["wlan_cidr"] = str(caps.get("wlan_cidr") or "")
 
+    lock_portrait_rotation(serial)
     logger.info("[%s] Bootstrap complete", serial)
     return _json.dumps(summary), 0

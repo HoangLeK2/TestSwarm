@@ -13,6 +13,7 @@ import base64
 import logging
 from typing import Any, Awaitable, Callable, Optional, TypeVar
 
+from relay.adb import lock_portrait_rotation, lock_rotation_after_shell_enabled
 from relay.u2_session_pool import U2SessionPool
 from relay.u2_xpath_util import normalize_u2_xpath
 
@@ -547,6 +548,8 @@ class U2Executor:
                             value = fn(dev, act)
                     else:
                         value = fn(dev, act)
+                    if op == "app_start" and act.get("use_monkey") and lock_rotation_after_shell_enabled():
+                        lock_portrait_rotation(serial)
                     entry: dict = {"op": op, "ok": True}
                     if value is not None:
                         entry["value"] = value

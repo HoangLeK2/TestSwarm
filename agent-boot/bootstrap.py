@@ -579,6 +579,8 @@ def _ensure_stability_settings(serial: str) -> None:
     for label, cmd in [
         ("svc power stayon=true", "svc power stayon true"),
         ("screen_off_timeout=max", "settings put system screen_off_timeout 2147483647"),
+        ("auto-rotate off", "settings put system accelerometer_rotation 0"),
+        ("lock portrait", "settings put system user_rotation 0"),
         ("STF Doze whitelist", f"dumpsys deviceidle whitelist +{_STF_PKG} 2>/dev/null || true"),
         ("u2 Doze whitelist", "dumpsys deviceidle whitelist +com.github.uiautomator 2>/dev/null || true"),
         ("u2-test Doze whitelist", "dumpsys deviceidle whitelist +com.github.uiautomator.test 2>/dev/null || true"),

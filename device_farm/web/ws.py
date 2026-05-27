@@ -301,21 +301,9 @@ class WebSocketManager:
         log.info(f"Frontend WS connected: {conn_id}")
         try:
             ws_send_lock = self._conn_send_locks[conn_id]
-            sender_tasks = [
-                asyncio.create_task(
-                    self._device_sender(
-                        ws=ws,
-                        device=device,
-                        ws_send_lock=ws_send_lock,
-                    ),
-                    name=f"ws-device-sender-{conn_id}-{device.serial}",
-                )
-                for device in visible_devs
-            ]
-            for task, device in zip(sender_tasks, visible_devs):
-                setattr(task, "_device_serial", device.serial)
             async with self._lock:
-                self._conn_sender_groups[conn_id] = sender_tasks
+                # Video senders are spawned on-demand via watch_serial/unwatch_serial.
+                self._conn_sender_groups[conn_id] = []
             send_task = asyncio.create_task(self._sender_ctrl(ws, ctrl_q, ws_send_lock))
             recv_task = asyncio.create_task(self._receiver(ws))
             # Ping loop keeps TCP alive; excluded from wait so silent failures don't tear down connection.
@@ -323,20 +311,6 @@ class WebSocketManager:
             done, pending = await asyncio.wait(
                 [send_task, recv_task], return_when=asyncio.FIRST_COMPLETED
             )
-            # If any device sender dies early, keep connection alive and let others continue.
-            # Cleanup() in finally will cancel remaining sender tasks on disconnect.
-            for task in sender_tasks:
-                if task.done():
-                    try:
-                        exc = task.exception()
-                        if exc is not None:
-                            log.warning(
-                                "ws sender task ended for serial=%s: %s",
-                                getattr(task, "_device_serial", "unknown"),
-                                exc.__class__.__name__,
-                            )
-                    except Exception:
-                        pass
             ping_task.cancel()
             for t in pending:
                 t.cancel()
@@ -402,36 +376,7 @@ class WebSocketManager:
                 ctrl_q.put_nowait(device.status_dict())
             except Exception:
                 pass
-            # Start isolated sender for this new device on this connection.
-            async def _spawn_sender(
-                *,
-                target_conn_id=conn_id,
-                target_ws=ws,
-                target_device=device,
-            ) -> None:
-                async with self._lock:
-                    group = self._conn_sender_groups.get(target_conn_id, [])
-                    # One sender per device serial per connection.
-                    if any(
-                        getattr(t, "_device_serial", None) == target_device.serial and not t.done()
-                        for t in group
-                    ):
-                        return
-                    ws_send_lock = self._conn_send_locks.get(target_conn_id)
-                    if ws_send_lock is None:
-                        return
-                    task = asyncio.create_task(
-                        self._device_sender(ws=target_ws, device=target_device, ws_send_lock=ws_send_lock),
-                        name=f"ws-device-sender-{target_conn_id}-{target_device.serial}",
-                    )
-                    setattr(task, "_device_serial", target_device.serial)
-                    group.append(task)
-                    self._conn_sender_groups[target_conn_id] = group
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(_spawn_sender())
-            except RuntimeError:
-                pass
+            # Video senders are spawned on-demand via watch_serial/unwatch_serial.
 
     async def _sender_ctrl(
         self,
@@ -464,32 +409,15 @@ class WebSocketManager:
         device,
         ws_send_lock: asyncio.Lock,
     ) -> None:
-        """Per-device event-driven sender, isolated per connection."""
-        last_version = -1
-        timeout_streak = 0
-        congestion = False
-        dropped_version_total = 0
-        sent_total = 0
-        lag_sum_ms = 0.0
-        last_stats_ts = time.monotonic()
+        """Per-device sender for H264 binary frames on one websocket connection."""
+        frame_q: asyncio.Queue = asyncio.Queue(maxsize=8)
 
         def _request_idr_recover(*, force: bool = False) -> None:
-            """IDR request — heals decoder reference chain after any drop.
-
-            force=False (default): throttled at scrcpy_control._idr_min_interval_s
-            (default 1.0s) so N concurrent drop bursts produce at most 1 IDR/sec.
-            force=True: bypass throttle. Used on new-sender bootstrap so every
-            new viewer is guaranteed one IDR request regardless of throttle
-            window from prior viewers.
-            """
             recv = getattr(device, "_scrcpy_receiver", None)
             ctrl = getattr(recv, "control", None) if recv is not None else None
             if ctrl is None:
                 return
-            if force:
-                fn = getattr(ctrl, "request_idr", None)
-            else:
-                fn = getattr(ctrl, "_request_idr_throttled", None) or getattr(ctrl, "request_idr", None)
+            fn = getattr(ctrl, "request_idr", None) if force else (getattr(ctrl, "_request_idr_throttled", None) or getattr(ctrl, "request_idr", None))
             if fn is None:
                 return
             try:
@@ -497,118 +425,69 @@ class WebSocketManager:
             except Exception:
                 pass
 
-        # Freeze bootstrap refs and send under the same lock used by live sends.
-        # max_key_age_s=60 — accept stale IDR. Even a stale keyframe unblocks
-        # the browser decoder (waitIdr=true) so subsequent live P-frames are
-        # dropped cleanly instead of leaving decoder null. The forced IDR below
-        # then replaces it with a fresh keyframe within ~100ms.
-        cfg_ref, key_ref = device.get_stream_bootstrap(max_key_age_s=60.0)
-        try:
-            async with ws_send_lock:
-                if cfg_ref:
-                    await asyncio.wait_for(ws.send_bytes(cfg_ref), timeout=0.2)
-                if key_ref:
-                    await asyncio.wait_for(ws.send_bytes(key_ref), timeout=0.2)
-        except asyncio.TimeoutError:
-            # Do not kill sender on bootstrap timeout. Live frames will still
-            # carry fresh state and late keyframes can recover decoder.
-            pass
-        except Exception:
-            return
+        def _frame_is_key(frame: object) -> bool:
+            # Layout: [0x11][slen][serial][width:2][height:2][is_key:1]...
+            if not isinstance(frame, (bytes, bytearray)) or len(frame) < 8:
+                return False
+            if frame[0] != 0x11:
+                return False
+            try:
+                slen = int(frame[1])
+                key_idx = 6 + slen
+                return 0 <= key_idx < len(frame) and frame[key_idx] == 0x01
+            except Exception:
+                return False
 
-        # New sender attach — always force one IDR (bypass throttle) so every
-        # new viewer gets a fresh keyframe within ~100ms regardless of whether
-        # a stale key was cached. Without force, a recent throttle window from
-        # another viewer would block the request and leave browser black until
-        # the next natural IDR (~14s) or until user refresh.
-        _request_idr_recover(force=True)
-
-        # Retry until first keyframe is actually sent. The first force above
-        # can silently no-op if scrcpy handshake isn't complete yet (ctrl=None)
-        # or if MSG_RESET_VIDEO was dropped. Without retry, the browser stays
-        # black until the user moves the screen (natural IDR on scene change).
+        sent_total = 0
+        dropped_total = 0
+        last_stats_ts = time.monotonic()
         saw_key_sent = False
         last_force_idr_ts = time.monotonic()
 
-        while True:
-            # Periodic kick: if no keyframe sent yet, keep forcing IDR every
-            # ~0.5s. Covers two cases that the one-shot force above misses:
-            # (a) scrcpy handshake still in progress (ctrl=None at attach);
-            # (b) only P-frames arriving so browser's waitIdr=true drops them.
-            # Shorter interval trades a few extra MSG_RESET_VIDEO sends for
-            # faster cold-start first-frame latency (user-visible black time).
-            if not saw_key_sent:
-                now_ts = time.monotonic()
-                if (now_ts - last_force_idr_ts) >= 0.5:
-                    _request_idr_recover(force=True)
-                    last_force_idr_ts = now_ts
+        try:
+            # Viewer refcount: drives DeviceClient auto-start/auto-stop.
             try:
-                await asyncio.wait_for(
-                    device.wait_for_stream_update(last_version),
-                    timeout=1.5,
-                )
+                device.subscribe_frames(frame_q)
+            except Exception:
+                pass
+
+            # Bootstrap cached config/key quickly (helps late-join).
+            cfg_ref, key_ref = device.get_stream_bootstrap(max_key_age_s=60.0)
+            try:
+                async with ws_send_lock:
+                    if cfg_ref:
+                        await asyncio.wait_for(ws.send_bytes(cfg_ref), timeout=0.2)
+                    if key_ref:
+                        await asyncio.wait_for(ws.send_bytes(key_ref), timeout=0.2)
             except asyncio.TimeoutError:
-                continue
-            try:
-                frame, version, frame_ts, is_key = device.get_stream_snapshot()
-                if frame is None:
-                    # No frame payload yet (e.g. only version bootstrap state).
-                    # Advance cursor to avoid hot-looping at 100% CPU.
-                    if version > last_version:
-                        last_version = version
-                    await asyncio.sleep(0.01)
-                    continue
-                if version == last_version:
-                    await asyncio.sleep(0)
-                    continue
-                if version < last_version:
+                pass
+            except Exception:
+                return
+
+            # Ensure first-frame latency: force at least one IDR.
+            _request_idr_recover(force=True)
+
+            while True:
+                if not saw_key_sent and (time.monotonic() - last_force_idr_ts) >= 0.5:
+                    _request_idr_recover(force=True)
+                    last_force_idr_ts = time.monotonic()
+
+                try:
+                    frame = await asyncio.wait_for(frame_q.get(), timeout=1.5)
+                except asyncio.TimeoutError:
                     continue
 
-                version_gap = version - last_version - 1
-                if version_gap > 0:
-                    dropped_version_total += version_gap
-                    if not is_key:
-                        # Any skipped P-frame breaks the browser decoder reference chain → freeze.
-                        # Request IDR immediately regardless of congestion state.
-                        _request_idr_recover()
-                lag_ms = max(0.0, (time.monotonic() - frame_ts) * 1000.0)
-                if not congestion and (lag_ms > 100.0 or version_gap > 4):
-                    congestion = True
-                elif congestion and lag_ms < 50.0:
-                    congestion = False
+                is_key = _frame_is_key(frame)
+                if is_key:
+                    saw_key_sent = True
 
-                # If the latest snapshot is already old, sending a delta frame
-                # makes the browser decode history and then stutter back to live.
-                # Drop stale deltas, request an IDR, and wait for a keyframe.
-                if (
-                    STREAM_STALE_DELTA_DROP_MS > 0
-                    and lag_ms > STREAM_STALE_DELTA_DROP_MS
-                    and not is_key
-                ):
-                    dropped_version_total += 1
-                    last_version = version
-                    _request_idr_recover()
-                    continue
-
-                # In congestion with large gaps, skip non-key deltas (IDR already requested above).
-                if congestion and version_gap > 8 and not is_key:
-                    last_version = version
-                    continue
-
-                send_started = time.monotonic()
-                # Keep latency low under multi-device contention:
-                # if another sender currently owns the socket, drop this stale frame
-                # and wait for a fresher snapshot instead of blocking.
                 try:
                     await asyncio.wait_for(
                         ws_send_lock.acquire(),
                         timeout=STREAM_WS_LOCK_WAIT_MS / 1000.0,
                     )
                 except asyncio.TimeoutError:
-                    last_version = version
-                    # Drop on lock contention. Always recover — if we drop a
-                    # keyframe, every subsequent P-frame references something
-                    # the browser never decoded → silent corruption.
+                    dropped_total += 1
                     _request_idr_recover()
                     continue
                 try:
@@ -621,46 +500,27 @@ class WebSocketManager:
                     raise
                 finally:
                     ws_send_lock.release()
-                send_elapsed_ms = (time.monotonic() - send_started) * 1000.0
-                timeout_streak = 0
-                last_version = version
-                sent_total += 1
-                lag_sum_ms += lag_ms
-                if is_key:
-                    saw_key_sent = True
 
-                # Cooperative yield for fairness under multi-device load.
+                sent_total += 1
                 await asyncio.sleep(0)
 
                 now = time.monotonic()
-                if now - last_stats_ts >= 5.0 and sent_total > 0:
-                    avg_lag = lag_sum_ms / max(sent_total, 1)
-                    log.info(
-                        "[WS device sender] serial=%s sent=%d dropped=%d avg_lag_ms=%.1f send_ms=%.1f congestion=%s",
-                        getattr(device, "serial", "unknown"),
-                        sent_total,
-                        dropped_version_total,
-                        avg_lag,
-                        send_elapsed_ms,
-                        congestion,
-                    )
+                if now - last_stats_ts >= 5.0:
+                    if sent_total or dropped_total:
+                        log.info(
+                            "[WS device sender] serial=%s sent=%d dropped=%d",
+                            getattr(device, "serial", "unknown"),
+                            sent_total,
+                            dropped_total,
+                        )
                     sent_total = 0
-                    lag_sum_ms = 0.0
-                    dropped_version_total = 0
+                    dropped_total = 0
                     last_stats_ts = now
-            except asyncio.TimeoutError:
-                timeout_streak += 1
-                await asyncio.sleep(min(0.5 * timeout_streak, 2.0))
-                if timeout_streak > 3:
-                    try:
-                        await ws.close(code=1011)
-                    except Exception:
-                        pass
-                    return
-            except asyncio.CancelledError:
-                raise
+        finally:
+            try:
+                device.unsubscribe_frames(frame_q)
             except Exception:
-                return
+                pass
 
     async def _receiver(self, ws: WebSocket) -> None:
         loop = asyncio.get_running_loop()
@@ -691,6 +551,40 @@ class WebSocketManager:
                 allowed_serials = self._allowed_serials.get(conn_id)
                 if allowed_serials is not None and serial not in allowed_serials:
                     continue
+
+            # On-demand video senders (per connection + per serial).
+            if msg_type in ("watch_serial", "unwatch_serial"):
+                if not serial or conn_id is None:
+                    continue
+                if msg_type == "watch_serial":
+                    device = self.manager.get_device(serial)
+                    if not device:
+                        continue
+                    async with self._lock:
+                        ws_send_lock = self._conn_send_locks.get(conn_id)
+                        if ws_send_lock is None:
+                            continue
+                        group = self._conn_sender_groups.get(conn_id, [])
+                        if any(
+                            getattr(t, "_device_serial", None) == serial and not t.done()
+                            for t in group
+                        ):
+                            continue
+                        task = asyncio.create_task(
+                            self._device_sender(ws=ws, device=device, ws_send_lock=ws_send_lock),
+                            name=f"ws-device-sender-{conn_id}-{serial}",
+                        )
+                        setattr(task, "_device_serial", serial)
+                        group.append(task)
+                        self._conn_sender_groups[conn_id] = group
+                else:
+                    async with self._lock:
+                        group = self._conn_sender_groups.get(conn_id, [])
+                        for t in list(group):
+                            if getattr(t, "_device_serial", None) == serial and not t.done():
+                                t.cancel()
+                        self._conn_sender_groups[conn_id] = group
+                continue
             device = self.manager.get_device(serial) if serial else None
             if not device:
                 continue

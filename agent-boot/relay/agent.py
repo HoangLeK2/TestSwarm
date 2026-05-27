@@ -172,7 +172,8 @@ class RelayAgent:
         self._scrcpy_desired: dict[str, dict[str, Any]] = {}
         self._active_send_queue: Optional[FairSendQueue] = None
         self._active_loop: Optional[asyncio.AbstractEventLoop] = None
-        self._scrcpy_auto_resume_enabled = os.getenv("SCRCPY_AUTO_RESUME", "true").lower() in ("1", "true", "yes", "on")
+        # Viewer-gated default: do not auto-start scrcpy for every online device.
+        self._scrcpy_auto_resume_enabled = os.getenv("SCRCPY_AUTO_RESUME", "false").lower() in ("1", "true", "yes", "on")
 
         self._u2_batch_enabled = os.getenv("U2_BATCH_ENABLED", "true").lower() in ("1", "true")
         self._u2_pool: Optional[U2SessionPool] = None

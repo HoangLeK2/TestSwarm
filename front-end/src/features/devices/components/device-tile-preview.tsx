@@ -169,16 +169,55 @@ export function DeviceTilePreview({
 
   useLayoutEffect(() => {
     if (!streamingConfig || streamingConfig.mode !== 'continuous') return;
-    const serverWants =
-      device.relay_scrcpy_enabled !== undefined && device.relay_scrcpy_enabled !== null
-        ? Boolean(device.relay_scrcpy_enabled)
-        : Boolean(streamingConfig.autoAttachScrcpy);
-    setRelayStreamOn(serverWants);
+    // When server auto-attach is disabled (viewer-gated), default to ON for tiles
+    // that are actually decoding H264 (claimed slot). DB override still wins.
+    if (device.relay_scrcpy_enabled !== undefined && device.relay_scrcpy_enabled !== null) {
+      setRelayStreamOn(Boolean(device.relay_scrcpy_enabled));
+      return;
+    }
+    if (streamingConfig.autoAttachScrcpy === false) {
+      setRelayStreamOn(Boolean(allowH264));
+      return;
+    }
+    setRelayStreamOn(Boolean(streamingConfig.autoAttachScrcpy));
   }, [
     streamingConfig?.mode,
     streamingConfig?.autoAttachScrcpy,
     device.serial,
     device.relay_scrcpy_enabled,
+    allowH264,
+  ]);
+
+  // Viewer-gated streaming: attach on mount (when we have an H264 slot), detach on cleanup.
+  useEffect(() => {
+    if (!isContinuous || !isActive) return;
+    if (!allowH264) return;
+    if (!streamingConfig || streamingConfig.mode !== 'continuous') return;
+    if (streamingConfig.autoAttachScrcpy !== false) return;
+    if (!relayStreamOn) return;
+
+    let detachScheduled = false;
+    const serial = device.serial;
+
+    farmApi
+      .post(`/devices/${encodeURIComponent(serial)}/scrcpy/attach`, {})
+      .catch(() => {});
+
+    return () => {
+      if (detachScheduled) return;
+      detachScheduled = true;
+      farmApi
+        .post(`/devices/${encodeURIComponent(serial)}/scrcpy/detach`, {})
+        .catch(() => {});
+    };
+  }, [
+    allowH264,
+    device.serial,
+    isActive,
+    isContinuous,
+    relayStreamOn,
+    streamingConfig?.autoAttachScrcpy,
+    streamingConfig?.mode,
   ]);
 
   const onRelayStreamChange = useCallback(

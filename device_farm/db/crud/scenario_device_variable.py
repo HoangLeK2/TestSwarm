@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 from sqlalchemy import delete, select
@@ -22,9 +23,15 @@ async def get_scenario_device_variables_bulk(
             ScenarioDeviceVariable.device_id.in_(device_ids),
         )
     )
+    scalars = result.scalars()
+    if inspect.isawaitable(scalars):
+        scalars = await scalars
+    rows = scalars.all()
+    if inspect.isawaitable(rows):
+        rows = await rows
     return {
         (row.scenario_id, row.device_id): dict(row.vars or {})
-        for row in result.scalars().all()
+        for row in rows
     }
 
 

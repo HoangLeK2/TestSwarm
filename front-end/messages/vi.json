@@ -1441,6 +1441,7 @@
     "previewScrollToLoad": "Cuộn tới đây để tải preview",
     "noConnectedDevices": "Chưa có thiết bị nào kết nối",
     "noConnectedDevicesHint": "Server trên cloud: thiết bị chủ động kết nối lên server. Mở app Chức năng thiết bị → dán link (hoặc quét QR). Nhiều thiết bị có thể kết nối cùng lúc.",
+    "gridPageSummary": "Trang {page}/{pages} · hiển thị {shown}/{total} thiết bị",
     "connectDevice": "Kết nối thiết bị",
     "addDevice": "Thêm thiết bị",
     "controlAndRecord": "Điều khiển & ghi kịch bản",

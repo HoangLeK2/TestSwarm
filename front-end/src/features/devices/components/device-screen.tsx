@@ -197,6 +197,41 @@ export function DeviceScreen({
     streamingFlags === null || !isContinuous || screenStreamOn;
   const h264PrimaryMode = isContinuous && relayH264Allowed;
 
+  // Viewer-gated streaming: when the server no longer auto-attaches scrcpy, the
+  // device screen should attach on mount and detach on unmount.
+  useEffect(() => {
+    if (!isContinuous || !isActive) return;
+    if (streamingAutoAttach !== false) return;
+    if (!screenStreamOn) return;
+
+    let detachScheduled = false;
+    const serial = device.serial;
+
+    farmApi
+      .post(`/devices/${encodeURIComponent(serial)}/scrcpy/attach`, {})
+      .catch(() => {});
+
+    const onPageHide = () => {
+      if (detachScheduled) return;
+      detachScheduled = true;
+      farmApi
+        .post(`/devices/${encodeURIComponent(serial)}/scrcpy/detach`, {})
+        .catch(() => {});
+    };
+
+    window.addEventListener('pagehide', onPageHide);
+    return () => {
+      window.removeEventListener('pagehide', onPageHide);
+      onPageHide();
+    };
+  }, [
+    device.serial,
+    isActive,
+    isContinuous,
+    screenStreamOn,
+    streamingAutoAttach,
+  ]);
+
   const onScreenStreamChange = useCallback(
     async (checked: boolean) => {
       if (!isContinuous || !isActive) return;

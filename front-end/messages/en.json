@@ -1437,6 +1437,7 @@
     "previewScrollToLoad": "Scroll here to load preview",
     "noConnectedDevices": "No connected devices",
     "noConnectedDevicesHint": "Cloud server mode: devices actively connect to server. Open STFService app → paste link (or scan QR). Multiple devices can connect at once.",
+    "gridPageSummary": "Page {page}/{pages} · showing {shown}/{total} devices",
     "connectDevice": "Connect device",
     "addDevice": "Add device",
     "controlAndRecord": "Control & record scenario",

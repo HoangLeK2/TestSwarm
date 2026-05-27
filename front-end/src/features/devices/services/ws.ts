@@ -88,6 +88,9 @@ let idleCloseTimer: ReturnType<typeof setTimeout> | undefined;
 let lastMessageTime = 0;
 let lastForcedReconnectAt = 0;
 const lastIdrRequestBySerial = new Map<string, number>();
+// Backend can spawn per-serial sender tasks on demand. Track refs so we only
+// watch serials that at least one component is decoding.
+const watchRefCountBySerial = new Map<string, number>();
 
 function decodeSerial(buf: ArrayBuffer, slen: number): string {
   if (!textDecoder || slen <= 0 || buf.byteLength < 2 + slen) return '';
@@ -157,6 +160,14 @@ function connectShared() {
       clearTimeout(reconnectTimer);
       reconnectTimer = undefined;
     }
+    // Re-assert watched serials after reconnect.
+    watchRefCountBySerial.forEach((_count, serial) => {
+      try {
+        ws.send(JSON.stringify({ type: 'watch_serial', serial }));
+      } catch {
+        // ignore; reconnect loop will retry
+      }
+    });
     broadcast({ type: 'ws_status', connected: true });
   };
 
@@ -250,6 +261,17 @@ export function subscribeBinaryFrames(
 ): () => void {
   const listener: BinaryListener = { fn: onBinary, serial };
   binaryListeners.add(listener);
+  if (serial) {
+    const prev = watchRefCountBySerial.get(serial) ?? 0;
+    watchRefCountBySerial.set(serial, prev + 1);
+    if (prev === 0 && sharedSocket?.readyState === WebSocket.OPEN) {
+      try {
+        sharedSocket.send(JSON.stringify({ type: 'watch_serial', serial }));
+      } catch {
+        // ignore; next connect will re-assert
+      }
+    }
+  }
   // Replay cached config + keyframe so late-arriving hooks (common case: hook
   // mounts after WS bootstrap) get both SPS/PPS and an IDR immediately.
   // config must come before keyframe so the decoder can initialise.
@@ -295,6 +317,22 @@ export function subscribeBinaryFrames(
   }
   return () => {
     binaryListeners.delete(listener);
+    if (serial) {
+      const prev = watchRefCountBySerial.get(serial) ?? 0;
+      const next = Math.max(0, prev - 1);
+      if (next === 0) {
+        watchRefCountBySerial.delete(serial);
+        if (sharedSocket?.readyState === WebSocket.OPEN) {
+          try {
+            sharedSocket.send(JSON.stringify({ type: 'unwatch_serial', serial }));
+          } catch {
+            // ignore; socket may be closing
+          }
+        }
+      } else {
+        watchRefCountBySerial.set(serial, next);
+      }
+    }
     if (listeners.size === 0) disconnectSharedIfIdle();
   };
 }

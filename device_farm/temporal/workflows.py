@@ -1325,6 +1325,17 @@ class ScenarioStepsWorkflow:
             sub_def = (registry.get("by_campaign_name") or {}).get(scenario_name)
         if sub_def is None and scenario_name:
             sub_def = (registry.get("by_template_name") or {}).get(scenario_name)
+        # Backward-compat: some campaigns store steps only in ScenarioTemplates
+        # and keep Scenario.steps empty. If we resolved by_id but the definition
+        # has no steps, fall back to template lookup by name.
+        if (
+            sub_def is not None
+            and not (sub_def.get("steps") or [])
+            and scenario_name
+        ):
+            template_def = (registry.get("by_template_name") or {}).get(scenario_name)
+            if template_def and (template_def.get("steps") or []):
+                sub_def = template_def
 
         if sub_def is None:
             return (

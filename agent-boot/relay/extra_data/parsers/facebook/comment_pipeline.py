@@ -507,6 +507,48 @@ def parse_fb_comments_from_xml(
     return rows
 
 
+def resolve_comment_scroll_swipe_from_xml(
+    xml: str,
+    *,
+    distance_ratio: float = 0.22,
+) -> Optional[Tuple[int, int, int, int]]:
+    """
+    Swipe inside the main scrollable comment list (RecyclerView), not screen-fixed
+    coords that can land on clickable rows.
+    Returns (fx, fy, tx, ty) finger-up swipe to reveal more comments below.
+    """
+    from .parser import _parse_bounds, _parse_xml, _pick_feed_container
+    from .shared import XPATH_LIST, XPATH_RECYCLER
+
+    root = _parse_xml(xml)
+    if root is None:
+        return None
+    containers = root.xpath(XPATH_RECYCLER) or root.xpath(XPATH_LIST)
+    if not containers:
+        return None
+    feed = _pick_feed_container(containers, root)
+    bounds = _parse_bounds(feed)
+    if not bounds:
+        return None
+    x1, y1, x2, y2 = bounds
+    width = max(1, x2 - x1)
+    height = max(1, y2 - y1)
+    if height < 80:
+        return None
+
+    cx = x1 + width // 2
+    pad_y = max(8, int(height * 0.06))
+    inner_top = y1 + pad_y
+    inner_bottom = y2 - pad_y
+    inner_h = max(1, inner_bottom - inner_top)
+    ratio = max(0.08, min(0.75, float(distance_ratio)))
+    fy = inner_top + int(inner_h * 0.72)
+    ty = inner_top + int(inner_h * max(0.12, 0.72 - ratio))
+    if ty >= fy:
+        ty = max(inner_top, fy - max(48, int(inner_h * ratio)))
+    return cx, fy, cx, ty
+
+
 __all__ = [
     "_find_binh_luan_button_in_element",
     "_legacy_last_binh_luan_anchors",
@@ -515,6 +557,7 @@ __all__ = [
     "resolve_topmost_comment_target_from_xml",
     "parse_fb_comments_from_xml_with_diagnostic",
     "parse_fb_comments_from_xml",
+    "resolve_comment_scroll_swipe_from_xml",
     "_post_id_from_ctx",
 ]
 

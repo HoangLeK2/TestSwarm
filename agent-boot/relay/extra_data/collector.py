@@ -499,30 +499,39 @@ async def _collect_comment_snapshots(
     duration_ms = _int_context(context, "comment_scroll_duration_ms", 340, 120, 1600)
     pause_s = _float_context(context, "comment_scroll_pause_s", 0.30, 0.05, 4.0)
 
+    from relay.extra_data.parsers.facebook.comment_pipeline import resolve_comment_scroll_swipe_from_xml
+
     snapshots: list[str] = [initial_xml]
     seen: set[str] = {_sha256_hex(initial_xml)}
     total_xml_bytes = len(initial_xml.encode("utf-8"))
     unchanged_passes = 0
-
-    width, height = await _window_size(executor, serial)
-    x = int(width * 0.55)
-    y1 = int(height * 0.74)
-    y2 = int(height * max(0.18, 0.74 - distance))
+    scroll_xml = initial_xml
     duration_s = max(0.12, duration_ms / 1000.0)
+
+    async def _swipe_coords() -> tuple[int, int, int, int]:
+        node_swipe = resolve_comment_scroll_swipe_from_xml(scroll_xml, distance_ratio=distance)
+        if node_swipe:
+            return node_swipe
+        width, height = await _window_size(executor, serial)
+        x = int(width * 0.55)
+        fy = int(height * 0.74)
+        ty = int(height * max(0.18, 0.74 - distance))
+        return x, fy, x, ty
 
     for i in range(passes):
         if len(snapshots) >= max_snapshots:
             logger.info("[%s] extra_data comment snapshot cap reached: %d", serial, len(snapshots))
             break
 
+        fx, fy, tx, ty = await _swipe_coords()
         swipe_result = await executor.run_batch(
             serial,
             [{
                 "op": "swipe",
-                "fx": x,
-                "fy": y1,
-                "tx": x,
-                "ty": y2,
+                "fx": fx,
+                "fy": fy,
+                "tx": tx,
+                "ty": ty,
                 "duration": duration_s,
             }],
             early_exit=True,
@@ -555,6 +564,7 @@ async def _collect_comment_snapshots(
         snapshots.append(next_xml)
         total_xml_bytes += next_bytes
         unchanged_passes = 0
+        scroll_xml = next_xml
 
     return snapshots
 

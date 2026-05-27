@@ -531,7 +531,40 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
         }),
       );
     },
-    onSuccess: () => {
+    onSuccess: async () => {
+      if (!activeCampaignId || !activeScenarioId) {
+        toast.success(tDvDlg('saveAllSuccess'));
+        setDeviceVarDialogOpen(false);
+        return;
+      }
+      try {
+        const devices = campaignDevicesQuery.data ?? [];
+        const entries = await Promise.all(
+          devices.map(async (d) => {
+            const res = await campaignsApi.getScenarioDeviceVariables(
+              activeCampaignId,
+              activeScenarioId,
+              d.id,
+            );
+            return [d.id, (res.vars ?? {}) as Record<string, any>] as const;
+          }),
+        );
+        setDeviceVarJsonDrafts(
+          Object.fromEntries(
+            entries.map(([deviceId, vars]) => [
+              deviceId,
+              formatInitialDeviceVars(vars, scenarioVariables),
+            ]),
+          ),
+        );
+        setDeviceVarEnabledByDevice(
+          Object.fromEntries(
+            entries.map(([deviceId, vars]) => [deviceId, Object.keys(vars).length > 0]),
+          ),
+        );
+      } catch {
+        /* drafts may be stale until dialog reopens; server still has saved vars */
+      }
       toast.success(tDvDlg('saveAllSuccess'));
       setDeviceVarDialogOpen(false);
     },
@@ -1336,6 +1369,8 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                 preloadedSteps={steps.items.length > 0 ? (steps.items as any[]) : undefined}
                 preloadedName={save.editingContext?.name}
                 preloadedVariables={scenarioVariables}
+                preloadedScenarioId={activeScenarioId}
+                preloadedScenarioDeviceVars={inlineScenarioDeviceVars}
                 preloadedAccountGroupId={saveAccountGroupId || save.editingContext?.accountGroupId || null}
                 deviceBusy={(selectedDevice.state || '').replace('DeviceState.', '') === 'BUSY'}
               />

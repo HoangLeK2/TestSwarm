@@ -360,8 +360,16 @@ class ExtraDataIngestServer:
             async with self._parse_sem:
                 loop = asyncio.get_running_loop()
                 parse_started = time.perf_counter()
+                # Route XML parsing to the dedicated CPU pool when available.
+                # Falls back to the default pool when the relay runtime is
+                # not initialised (tests / standalone use).
+                try:
+                    from relay.runtime import cpu_executor as _cpu_exec
+                    _parse_ex = _cpu_exec()
+                except Exception:
+                    _parse_ex = None
                 items, diagnostic, snapshots = await loop.run_in_executor(
-                    None,
+                    _parse_ex,
                     _parse_payload_items,
                     strategy,
                     xml,

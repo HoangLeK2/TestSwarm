@@ -52,6 +52,11 @@ def _normalize_vars(raw: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def normalize_variable_map(raw: dict[str, Any] | None) -> dict[str, Any]:
+    """Normalize campaign/scenario variable maps (plain values or template metadata)."""
+    return _normalize_vars(dict(raw or {}))
+
+
 def normalize_device_vars(raw: dict[str, Any] | None) -> dict[str, Any]:
     """Return per-device variable overrides in the same namespace as globals."""
     return dict(raw or {})

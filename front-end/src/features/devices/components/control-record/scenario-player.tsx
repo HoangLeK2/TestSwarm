@@ -147,6 +147,10 @@ interface ScenarioPlayerProps {
   preloadedName?: string;
   /** Variables for template substitution (e.g. APP_PACKAGE) when using preloadedSteps. */
   preloadedVariables?: Record<string, any>;
+  /** When set, server loads fresh campaign/scenario/device vars from DB. */
+  preloadedScenarioId?: string | null;
+  /** Per-device overrides for the active scenario (unsaved draft or post-save). */
+  preloadedScenarioDeviceVars?: Record<string, any> | null;
   /** Optional account group to rotate accounts from on each preview run. */
   preloadedAccountGroupId?: string | null;
   /** When true, device is running a campaign — block preview start. */
@@ -157,7 +161,19 @@ interface ScenarioPlayerProps {
   registerStop?: (fn: (() => void) | null) => void;
 }
 
-export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedSteps, preloadedName, preloadedVariables, preloadedAccountGroupId, deviceBusy = false, registerStop }: ScenarioPlayerProps) {
+export function ScenarioPlayer({
+  serial,
+  onClose,
+  onPlayingChange,
+  preloadedSteps,
+  preloadedName,
+  preloadedVariables,
+  preloadedScenarioId,
+  preloadedScenarioDeviceVars,
+  preloadedAccountGroupId,
+  deviceBusy = false,
+  registerStop,
+}: ScenarioPlayerProps) {
   const t = useTranslations('devicesControlRecord.scenarioPlayer');
   const { data: campaigns = [] } = useCampaigns();
   const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(null);
@@ -342,6 +358,8 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedStep
           // on the server.
           mergedVars,
           null,
+          preloadedScenarioId ?? null,
+          preloadedScenarioDeviceVars ?? null,
         );
       }
     } catch (e) {
@@ -355,7 +373,18 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedStep
       abortRef.current = null;
       activePreviewRef.current = null;
     }
-  }, [activeSteps, baseActiveVariables, serial, loopCount, currentStepIndex, deviceBusy, ensureAccountVars, buildVariables]);
+  }, [
+    activeSteps,
+    baseActiveVariables,
+    serial,
+    loopCount,
+    currentStepIndex,
+    deviceBusy,
+    ensureAccountVars,
+    buildVariables,
+    preloadedScenarioId,
+    preloadedScenarioDeviceVars,
+  ]);
 
   const handleStop = useCallback(() => {
     // Three-pronged stop: abort SSE fetch, hit explicit cancel route with
@@ -400,6 +429,8 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedStep
         ctrl.signal,
         mergedVars,
         null,
+        preloadedScenarioId ?? null,
+        preloadedScenarioDeviceVars ?? null,
       );
     } catch (e) {
       if (!ctrl.signal.aborted) {
@@ -412,7 +443,17 @@ export function ScenarioPlayer({ serial, onClose, onPlayingChange, preloadedStep
       activePreviewRef.current = null;
       if (!ctrl.signal.aborted) setStepCursor(idx + 1);
     }
-  }, [activeSteps, serial, playing, stepCursor, deviceBusy]);
+  }, [
+    activeSteps,
+    serial,
+    playing,
+    stepCursor,
+    deviceBusy,
+    ensureAccountVars,
+    buildVariables,
+    preloadedScenarioId,
+    preloadedScenarioDeviceVars,
+  ]);
 
   // Step 1: Select campaign (skip if preloaded)
   if (!preloadedSteps && !selectedCampaignId) {

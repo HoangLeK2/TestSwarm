@@ -21,6 +21,7 @@ import asyncio
 import contextvars
 import logging
 import time
+from concurrent.futures import Executor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable, Optional
@@ -59,13 +60,27 @@ class U2SessionPool:
         self,
         loop: asyncio.AbstractEventLoop,
         connect_fn: Optional[Callable] = None,
+        executor: Optional[Executor] = None,
     ) -> None:
         self._loop = loop
         self._connect_fn = connect_fn
+        self._executor = executor
         self._sessions: dict[str, _Entry] = {}
         self._global_lock = asyncio.Lock()
         self._reaper_task: Optional[asyncio.Task] = None
         self._heartbeat_task: Optional[asyncio.Task] = None
+
+    def _resolve_executor(self) -> Optional[Executor]:
+        """Lazy import of runtime pool so tests can pass `executor=None`."""
+        if self._executor is not None:
+            return self._executor
+        try:
+            from relay.runtime import u2_executor_pool
+            self._executor = u2_executor_pool()
+            return self._executor
+        except Exception:
+            # Tests / standalone use: fall back to default pool.
+            return None
 
     async def start(self) -> None:
         self._reaper_task = self._loop.create_task(self._reap_loop())
@@ -124,18 +139,19 @@ class U2SessionPool:
 
     async def run_locked(self, serial: str, fn: Callable[[Any], Any]) -> Any:
         """Run sync fn(device) while holding the per-serial session lock (one connect)."""
+        ex = self._resolve_executor()
         active = _active_session.get()
         if active is not None and active[0] == serial:
             entry = active[1]
             entry.last_used = time.monotonic()
-            return await self._loop.run_in_executor(None, fn, entry.device)
+            return await self._loop.run_in_executor(ex, fn, entry.device)
 
         entry = await self._prepare_entry(serial)
         async with entry.lock:
             if not await self._is_alive(entry):
                 await self._reconnect(entry)
             entry.last_used = time.monotonic()
-            return await self._loop.run_in_executor(None, fn, entry.device)
+            return await self._loop.run_in_executor(ex, fn, entry.device)
 
     async def evict(self, serial: str) -> None:
         async with self._global_lock:
@@ -160,7 +176,7 @@ class U2SessionPool:
         fn = self._get_connect_fn()
         host = serial.rsplit(":", 1)[0] if ":" in serial else serial
         dev = await asyncio.wait_for(
-            self._loop.run_in_executor(None, fn, host),
+            self._loop.run_in_executor(self._resolve_executor(), fn, host),
             timeout=CONNECT_TIMEOUT_SECONDS,
         )
         entry = _Entry(device=dev, last_used=time.monotonic(), serial=serial)
@@ -180,11 +196,12 @@ class U2SessionPool:
         if reset is unavailable or fails.
         """
         dev = entry.device
+        ex = self._resolve_executor()
         reset_fn = getattr(dev, "reset_uiautomator", None)
         if callable(reset_fn):
             try:
                 await asyncio.wait_for(
-                    self._loop.run_in_executor(None, reset_fn),
+                    self._loop.run_in_executor(ex, reset_fn),
                     timeout=CONNECT_TIMEOUT_SECONDS * 2,
                 )
                 if await self._is_alive(entry):
@@ -200,7 +217,7 @@ class U2SessionPool:
         fn = self._get_connect_fn()
         host = entry.serial.rsplit(":", 1)[0] if ":" in entry.serial else entry.serial
         entry.device = await asyncio.wait_for(
-            self._loop.run_in_executor(None, fn, host),
+            self._loop.run_in_executor(ex, fn, host),
             timeout=CONNECT_TIMEOUT_SECONDS,
         )
         logger.info("u2-pool: reconnected serial=%s", entry.serial)
@@ -215,7 +232,7 @@ class U2SessionPool:
             return bool(
                 await asyncio.wait_for(
                     self._loop.run_in_executor(
-                        None, lambda: entry.device.alive
+                        self._resolve_executor(), lambda: entry.device.alive
                     ),
                     timeout=ALIVE_TIMEOUT_SECONDS,
                 )

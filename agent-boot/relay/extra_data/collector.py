@@ -20,6 +20,22 @@ def _collect_lock(serial: str) -> asyncio.Lock:
     return lock
 
 
+def release_collect_lock(serial: str) -> None:
+    """Drop the per-serial collect lock if it is idle.
+
+    Called from the device-offline cascade in the relay agent so phones that
+    are cycled (cradle / USB replug) do not slowly grow this map. Safe to
+    call when a lock is held — in that case we leave it in place and the
+    holder will finish normally; the next OFFLINE event will free it.
+    """
+    lock = _collect_locks.get(serial)
+    if lock is None:
+        return
+    if lock.locked():
+        return
+    _collect_locks.pop(serial, None)
+
+
 _COMMENT_STRATEGIES = frozenset({
     "fb_comments",
     "ig_comments",

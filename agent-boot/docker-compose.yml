@@ -1,0 +1,13 @@
+# macOS: ADB server must run on the host (USB). Use ./scripts/docker-up.sh instead of
+# raw `docker compose up` so host adb listens on 0.0.0.0:5037 for the container.
+services:
+  agent-boot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      ADB_SERVER_SOCKET: tcp:host.docker.internal:5037
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Default: one-shot ADB check. Run relay: ./scripts/docker-up.sh run --rm agent-boot ...
+    command: ["bash", "-lc", "adb -H host.docker.internal -P 5037 devices"]

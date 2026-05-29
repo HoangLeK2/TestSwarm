@@ -1,31 +1,29 @@
 FROM python:3.13-slim
 
-WORKDIR /app
-
 # System deps:
-# - android adb: talk to devices (Linux hosts only; on macOS, ADB is typically on host)
-# - ca-certificates/curl: basic TLS + health/debug
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends \
+# - adb client (talks to host adb server via TCP)
+# - curl/ca-certificates for uv installer
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    adb \
+    android-sdk-platform-tools \
     ca-certificates \
     curl \
-    android-sdk-platform-tools \
   && rm -rf /var/lib/apt/lists/*
 
-# uv is used by this repo to resolve/install deps (uv.lock present).
-RUN python -m pip install --no-cache-dir --upgrade pip uv
+WORKDIR /app
 
-COPY ./pyproject.toml ./uv.lock ./README.md* ./main.py ./
-COPY ./relay ./relay
-COPY ./bootstrap.py ./bootstrap.py
+# Install uv (matches customer install path behavior, but inside container).
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:${PATH}"
 
-# Install dependencies exactly as locked.
+# Install Python deps (cached layer).
+COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONDONTWRITEBYTECODE=1
+# App source
+COPY . .
 
-# Default to relay-only; bootstrap typically needs USB access + device APKs.
-ENTRYPOINT ["/app/.venv/bin/python", "main.py"]
-CMD ["--relay-only"]
+# Default: use host adb server (Docker Desktop macOS).
+ENV ADB_SERVER_SOCKET="tcp:host.docker.internal:5037"
 
+CMD ["bash", "-lc", "adb -H host.docker.internal -P 5037 devices"]

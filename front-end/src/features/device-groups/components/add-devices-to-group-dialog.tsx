@@ -21,14 +21,19 @@ interface Props {
   existingDeviceIds?: string[];
 }
 
-export function AddDevicesToGroupDialog({ groupId, existingDeviceIds = [] }: Props) {
+export function AddDevicesToGroupDialog({
+  groupId,
+  existingDeviceIds = []
+}: Props) {
   const t = useTranslations('deviceGroupsFeature.addDevicesDialog');
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const { data: devices } = useDevices();
   const { mutate, isPending } = useAddDevicesToGroup();
 
-  const available = (devices ?? []).filter((d) => !existingDeviceIds.includes(d.id));
+  const available = (devices ?? []).filter(
+    (d) => !existingDeviceIds.includes(d.id)
+  );
 
   const toggle = (id: string) => {
     setSelected((prev) =>
@@ -75,7 +80,9 @@ export function AddDevicesToGroupDialog({ groupId, existingDeviceIds = [] }: Pro
                 onCheckedChange={() => toggle(d.id)}
               />
               <div className='min-w-0 flex-1'>
-                <p className='truncate text-sm font-medium'>{d.name || d.serial}</p>
+                <p className='truncate text-sm font-medium'>
+                  {d.name || d.serial}
+                </p>
                 <p className='text-xs text-muted-foreground'>
                   {d.brand} {d.model}
                 </p>
@@ -88,9 +95,7 @@ export function AddDevicesToGroupDialog({ groupId, existingDeviceIds = [] }: Pro
           disabled={isPending || selected.length === 0}
           className='w-full'
         >
-          {isPending
-            ? t('adding')
-            : t('submit', { count: selected.length })}
+          {isPending ? t('adding') : t('submit', { count: selected.length })}
         </Button>
       </DialogContent>
     </Dialog>

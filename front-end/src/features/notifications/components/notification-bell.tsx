@@ -2,7 +2,13 @@
 
 import { useCallback, useEffect } from 'react';
 import { toast } from 'sonner';
-import { Bell, CheckCheck, ExternalLink, Loader2, Settings } from 'lucide-react';
+import {
+  Bell,
+  CheckCheck,
+  ExternalLink,
+  Loader2,
+  Settings
+} from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { Link } from '@/i18n/navigation';
@@ -25,7 +31,10 @@ import {
   useNotifications,
   useUnreadNotificationCount
 } from '../hooks/use-notifications';
-import type { NotificationItem, NotificationListResponse } from '../services/api';
+import type {
+  NotificationItem,
+  NotificationListResponse
+} from '../services/api';
 
 function timeAgo(iso: string) {
   const diff = Date.now() - new Date(iso).getTime();
@@ -111,7 +120,9 @@ export function NotificationBell() {
       if (item.event === 'device.reconnect') {
         return {
           title: t('eventTitles.deviceReconnect', { label }),
-          body: t('eventBodies.deviceReconnect', { serial: String(data.serial ?? '') })
+          body: t('eventBodies.deviceReconnect', {
+            serial: String(data.serial ?? '')
+          })
         };
       }
       if (item.event === 'task.failed' && data.raw_event === 'error') {
@@ -133,13 +144,22 @@ export function NotificationBell() {
       qc.setQueryData<NotificationListResponse>(
         [...notificationKeys.list, 12],
         (current) => ({
-          total: Math.max(current?.total ?? 0, (current?.notifications.length ?? 0) + 1),
+          total: Math.max(
+            current?.total ?? 0,
+            (current?.notifications.length ?? 0) + 1
+          ),
           offset: current?.offset ?? 0,
           limit: current?.limit ?? 12,
-          notifications: mergeNotification(current?.notifications ?? [], incoming)
+          notifications: mergeNotification(
+            current?.notifications ?? [],
+            incoming
+          )
         })
       );
-      qc.setQueryData<number>(notificationKeys.unreadCount, (current) => (current ?? 0) + 1);
+      qc.setQueryData<number>(
+        notificationKeys.unreadCount,
+        (current) => (current ?? 0) + 1
+      );
       toast(translated.title, {
         description: translated.body ?? undefined,
         duration: 7000
@@ -197,7 +217,9 @@ export function NotificationBell() {
                 {t('loading')}
               </div>
             ) : notifications.length === 0 ? (
-              <div className='py-10 text-center text-sm text-muted-foreground'>{t('empty')}</div>
+              <div className='py-10 text-center text-sm text-muted-foreground'>
+                {t('empty')}
+              </div>
             ) : (
               notifications.map((item) => {
                 const translated = getNotificationText(item);
@@ -215,7 +237,12 @@ export function NotificationBell() {
           </div>
         </ScrollArea>
         <div className='border-t p-2'>
-          <Button variant='ghost' size='sm' className='w-full justify-center gap-1.5' asChild>
+          <Button
+            variant='ghost'
+            size='sm'
+            className='w-full justify-center gap-1.5'
+            asChild
+          >
             <Link href={ROUTES.NOTIFICATIONS.ROOT}>
               {t('manageChannels')}
               <ExternalLink size={13} />

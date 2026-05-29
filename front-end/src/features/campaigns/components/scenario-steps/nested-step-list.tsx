@@ -26,7 +26,10 @@ import {
   IfVariableFields,
   RandomPickFields
 } from './control-flow-editors';
-import { RunScenarioFields, type RunScenarioFieldPatch } from './run-scenario-editor';
+import {
+  RunScenarioFields,
+  type RunScenarioFieldPatch
+} from './run-scenario-editor';
 
 // ─── Step field inline editor (for action steps) ─────────────────────────────
 
@@ -46,37 +49,99 @@ function ActionStepFields({
     case 'clear_app':
     case 'wait_app':
       return (
-        <input className={`${inputCls} w-48`} placeholder={t('placeholder.package')} value={step.package ?? ''} onChange={(e) => onChange('package', e.target.value)} />
+        <input
+          className={`${inputCls} w-48`}
+          placeholder={t('placeholder.package')}
+          value={step.package ?? ''}
+          onChange={(e) => onChange('package', e.target.value)}
+        />
       );
     case 'push_file':
       return (
-        <div className='flex flex-1 gap-1 min-w-0'>
-          <input className={`${inputCls} flex-1 min-w-0`} placeholder='local' value={step.local_path ?? ''} onChange={(e) => onChange('local_path', e.target.value)} />
-          <span className='text-muted-foreground text-xs shrink-0'>→</span>
-          <input className={`${inputCls} flex-1 min-w-0`} placeholder='/sdcard/…' value={step.remote_path ?? ''} onChange={(e) => onChange('remote_path', e.target.value)} />
+        <div className='flex min-w-0 flex-1 gap-1'>
+          <input
+            className={`${inputCls} min-w-0 flex-1`}
+            placeholder='local'
+            value={step.local_path ?? ''}
+            onChange={(e) => onChange('local_path', e.target.value)}
+          />
+          <span className='shrink-0 text-xs text-muted-foreground'>→</span>
+          <input
+            className={`${inputCls} min-w-0 flex-1`}
+            placeholder='/sdcard/…'
+            value={step.remote_path ?? ''}
+            onChange={(e) => onChange('remote_path', e.target.value)}
+          />
         </div>
       );
     case 'pull_file':
       return (
-        <div className='flex flex-1 gap-1 min-w-0'>
-          <input className={`${inputCls} flex-1 min-w-0`} placeholder='/sdcard/…' value={step.remote_path ?? ''} onChange={(e) => onChange('remote_path', e.target.value)} />
-          <span className='text-muted-foreground text-xs shrink-0'>→</span>
-          <input className={`${inputCls} flex-1 min-w-0`} placeholder='local' value={step.local_path ?? ''} onChange={(e) => onChange('local_path', e.target.value)} />
+        <div className='flex min-w-0 flex-1 gap-1'>
+          <input
+            className={`${inputCls} min-w-0 flex-1`}
+            placeholder='/sdcard/…'
+            value={step.remote_path ?? ''}
+            onChange={(e) => onChange('remote_path', e.target.value)}
+          />
+          <span className='shrink-0 text-xs text-muted-foreground'>→</span>
+          <input
+            className={`${inputCls} min-w-0 flex-1`}
+            placeholder='local'
+            value={step.local_path ?? ''}
+            onChange={(e) => onChange('local_path', e.target.value)}
+          />
         </div>
       );
     case 'open_url':
       return (
-        <input className={`${inputCls} flex-1`} placeholder={t('placeholder.url')} value={step.url ?? ''} onChange={(e) => onChange('url', e.target.value)} />
+        <input
+          className={`${inputCls} flex-1`}
+          placeholder={t('placeholder.url')}
+          value={step.url ?? ''}
+          onChange={(e) => onChange('url', e.target.value)}
+        />
+      );
+    case 'install_apk':
+      return (
+        <input
+          className={`${inputCls} flex-1 font-mono`}
+          placeholder='https://…/app.apk'
+          value={step.url ?? ''}
+          onChange={(e) => onChange('url', e.target.value)}
+        />
       );
     case 'wait':
       return (
-        <input type='number' min={0} step={0.5} className={`${inputCls} w-16`} value={step.seconds ?? 1} onChange={(e) => onChange('seconds', Number(e.target.value) || 0)} />
+        <input
+          type='number'
+          min={0}
+          step={0.5}
+          className={`${inputCls} w-16`}
+          value={step.seconds ?? 1}
+          onChange={(e) => onChange('seconds', Number(e.target.value) || 0)}
+        />
       );
     case 'tap_ratio':
       return (
         <div className='flex gap-1'>
-          <input type='number' step={0.01} min={0} max={1} className={`${inputCls} w-16`} value={step.x ?? 0.5} onChange={(e) => onChange('x', parseFloat(e.target.value) || 0)} />
-          <input type='number' step={0.01} min={0} max={1} className={`${inputCls} w-16`} value={step.y ?? 0.5} onChange={(e) => onChange('y', parseFloat(e.target.value) || 0)} />
+          <input
+            type='number'
+            step={0.01}
+            min={0}
+            max={1}
+            className={`${inputCls} w-16`}
+            value={step.x ?? 0.5}
+            onChange={(e) => onChange('x', parseFloat(e.target.value) || 0)}
+          />
+          <input
+            type='number'
+            step={0.01}
+            min={0}
+            max={1}
+            className={`${inputCls} w-16`}
+            value={step.y ?? 0.5}
+            onChange={(e) => onChange('y', parseFloat(e.target.value) || 0)}
+          />
         </div>
       );
     case 'tap_selector':
@@ -85,39 +150,92 @@ function ActionStepFields({
     case 'scroll_to':
       return (
         <div className='flex gap-1'>
-          <select className={`${inputCls} w-24`} value={step.by ?? 'text'} onChange={(e) => onChange('by', e.target.value)}>
-            {['text', 'resource-id', 'xpath', 'class name', 'description'].map((o) => <option key={o} value={o}>{o}</option>)}
+          <select
+            className={`${inputCls} w-24`}
+            value={step.by ?? 'text'}
+            onChange={(e) => onChange('by', e.target.value)}
+          >
+            {['text', 'resource-id', 'xpath', 'class name', 'description'].map(
+              (o) => (
+                <option key={o} value={o}>
+                  {o}
+                </option>
+              )
+            )}
           </select>
-          <input className={`${inputCls} flex-1 min-w-[80px]`} value={step.value ?? ''} onChange={(e) => onChange('value', e.target.value)} />
+          <input
+            className={`${inputCls} min-w-[80px] flex-1`}
+            value={step.value ?? ''}
+            onChange={(e) => onChange('value', e.target.value)}
+          />
         </div>
       );
     case 'input_selector':
       return (
         <div className='flex flex-wrap gap-1'>
-          <select className={`${inputCls} w-24`} value={step.by ?? 'resource-id'} onChange={(e) => onChange('by', e.target.value)}>
-            {['text', 'resource-id', 'xpath', 'class name'].map((o) => <option key={o} value={o}>{o}</option>)}
+          <select
+            className={`${inputCls} w-24`}
+            value={step.by ?? 'resource-id'}
+            onChange={(e) => onChange('by', e.target.value)}
+          >
+            {['text', 'resource-id', 'xpath', 'class name'].map((o) => (
+              <option key={o} value={o}>
+                {o}
+              </option>
+            ))}
           </select>
-          <input className={`${inputCls} w-28`} placeholder={t('placeholder.selector')} value={step.value ?? ''} onChange={(e) => onChange('value', e.target.value)} />
-          <input className={`${inputCls} flex-1 min-w-[80px]`} placeholder={t('placeholder.textToInput')} value={step.text ?? ''} onChange={(e) => onChange('text', e.target.value)} />
+          <input
+            className={`${inputCls} w-28`}
+            placeholder={t('placeholder.selector')}
+            value={step.value ?? ''}
+            onChange={(e) => onChange('value', e.target.value)}
+          />
+          <input
+            className={`${inputCls} min-w-[80px] flex-1`}
+            placeholder={t('placeholder.textToInput')}
+            value={step.text ?? ''}
+            onChange={(e) => onChange('text', e.target.value)}
+          />
         </div>
       );
     case 'input_text':
       return (
-        <input className={`${inputCls} flex-1`} placeholder={t('placeholder.textToInput')} value={step.text ?? ''} onChange={(e) => onChange('text', e.target.value)} />
+        <input
+          className={`${inputCls} flex-1`}
+          placeholder={t('placeholder.textToInput')}
+          value={step.text ?? ''}
+          onChange={(e) => onChange('text', e.target.value)}
+        />
       );
     case 'set_variable':
       return (
         <div className='flex gap-1'>
-          <input className={`${inputCls} w-24 font-mono`} placeholder={t('placeholder.varName')} value={step.name ?? ''} onChange={(e) => onChange('name', e.target.value)} />
+          <input
+            className={`${inputCls} w-24 font-mono`}
+            placeholder={t('placeholder.varName')}
+            value={step.name ?? ''}
+            onChange={(e) => onChange('name', e.target.value)}
+          />
           <span className='text-[11px] text-muted-foreground'>=</span>
-          <input className={`${inputCls} flex-1`} placeholder={t('placeholder.valueOrBuiltin')} value={step.value ?? ''} onChange={(e) => onChange('value', e.target.value)} />
+          <input
+            className={`${inputCls} flex-1`}
+            placeholder={t('placeholder.valueOrBuiltin')}
+            value={step.value ?? ''}
+            onChange={(e) => onChange('value', e.target.value)}
+          />
         </div>
       );
     case 'scroll_down':
       return (
-        <div className='flex flex-1 min-w-0 items-center gap-1'>
-          <input type='number' min={1} className={`${inputCls} w-14 shrink-0`} value={step.repeats ?? 1} onChange={(e) => onChange('repeats', Number(e.target.value) || 1)} />
-          <span className='text-[10px] text-muted-foreground shrink-0'>x</span>
+        <div className='flex min-w-0 flex-1 items-center gap-1'>
+          <input
+            type='number'
+            min={1}
+            className={`${inputCls} w-14 shrink-0`}
+            value={step.repeats ?? 1}
+            onChange={(e) => onChange('repeats', Number(e.target.value) || 1)}
+          />
+          <span className='shrink-0 text-[10px] text-muted-foreground'>x</span>
           <input
             className={`${inputCls} min-w-0 flex-1 font-mono`}
             placeholder='0.18'
@@ -141,7 +259,12 @@ function ActionStepFields({
       );
     case 'key':
       return (
-        <input className={`${inputCls} w-24`} placeholder={t('placeholder.key')} value={step.key ?? ''} onChange={(e) => onChange('key', e.target.value)} />
+        <input
+          className={`${inputCls} w-24`}
+          placeholder={t('placeholder.key')}
+          value={step.key ?? ''}
+          onChange={(e) => onChange('key', e.target.value)}
+        />
       );
     default:
       return null;
@@ -219,7 +342,9 @@ function StepRow({
 
   const removeBranch = useCallback(
     (bi: number) => {
-      const branches = (step.branches ?? []).filter((_: any, i: number) => i !== bi);
+      const branches = (step.branches ?? []).filter(
+        (_: any, i: number) => i !== bi
+      );
       onUpdate({ ...step, branches });
     },
     [step, onUpdate]
@@ -244,22 +369,42 @@ function StepRow({
   );
 
   return (
-    <div className={cn('rounded-md border', depth > 0 && 'border-dashed', controlFlow && 'border-primary/30 bg-primary/[0.02]')}>
+    <div
+      className={cn(
+        'rounded-md border',
+        depth > 0 && 'border-dashed',
+        controlFlow && 'border-primary/30 bg-primary/[0.02]'
+      )}
+    >
       {/* Header row */}
       <div className='flex items-center gap-1 px-2 py-1.5'>
         {/* Reorder */}
         <div className='flex flex-col'>
-          <button type='button' className='text-muted-foreground hover:text-foreground disabled:opacity-20' disabled={index === 0} onClick={() => onMove(-1)}>
+          <button
+            type='button'
+            className='text-muted-foreground hover:text-foreground disabled:opacity-20'
+            disabled={index === 0}
+            onClick={() => onMove(-1)}
+          >
             <ArrowUp size={10} />
           </button>
-          <button type='button' className='text-muted-foreground hover:text-foreground disabled:opacity-20' disabled={index === totalSiblings - 1} onClick={() => onMove(1)}>
+          <button
+            type='button'
+            className='text-muted-foreground hover:text-foreground disabled:opacity-20'
+            disabled={index === totalSiblings - 1}
+            onClick={() => onMove(1)}
+          >
             <ArrowDown size={10} />
           </button>
         </div>
 
         {/* Collapse toggle for control flow */}
         {controlFlow && (
-          <button type='button' className='text-muted-foreground hover:text-foreground' onClick={() => setCollapsed((v) => !v)}>
+          <button
+            type='button'
+            className='text-muted-foreground hover:text-foreground'
+            onClick={() => setCollapsed((v) => !v)}
+          >
             {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
           </button>
         )}
@@ -268,27 +413,35 @@ function StepRow({
         <span className='text-sm' title={step.type}>
           <Icon size={14} className='inline-block align-middle' />
         </span>
-        <span className='text-[10px] font-mono text-muted-foreground'>{prefix}</span>
+        <span className='font-mono text-[10px] text-muted-foreground'>
+          {prefix}
+        </span>
 
         {/* Type selector */}
         <select
-          className='border rounded bg-background px-1 py-0.5 text-[11px] font-medium'
+          className='rounded border bg-background px-1 py-0.5 text-[11px] font-medium'
           value={step.type}
           onChange={(e) => handleTypeChange(e.target.value)}
         >
           <optgroup label={t('group.actions')}>
             {ALL_STEP_TYPES.filter((t) => t.group === 'action').map((t) => (
-              <option key={t.value} value={t.value}>{t.label}</option>
+              <option key={t.value} value={t.value}>
+                {t.label}
+              </option>
             ))}
           </optgroup>
           <optgroup label={t('group.variables')}>
             {ALL_STEP_TYPES.filter((t) => t.group === 'variable').map((t) => (
-              <option key={t.value} value={t.value}>{t.label}</option>
+              <option key={t.value} value={t.value}>
+                {t.label}
+              </option>
             ))}
           </optgroup>
           <optgroup label={t('group.controlFlow')}>
             {ALL_STEP_TYPES.filter((t) => t.group === 'control').map((t) => (
-              <option key={t.value} value={t.value}>{t.label}</option>
+              <option key={t.value} value={t.value}>
+                {t.label}
+              </option>
             ))}
           </optgroup>
         </select>
@@ -301,17 +454,31 @@ function StepRow({
         )}
 
         {/* Control flow params */}
-        {step.type === 'repeat' && <RepeatFields step={step} onChange={updateField} />}
-        {step.type === 'repeat_until' && <RepeatUntilFields step={step} onChange={updateField} />}
-        {step.type === 'if_element' && <IfElementFields step={step} onChange={updateField} />}
-        {step.type === 'if_variable' && <IfVariableFields step={step} onChange={updateField} />}
-        {step.type === 'random_pick' && <RandomPickFields step={step} onChange={updateField} />}
+        {step.type === 'repeat' && (
+          <RepeatFields step={step} onChange={updateField} />
+        )}
+        {step.type === 'repeat_until' && (
+          <RepeatUntilFields step={step} onChange={updateField} />
+        )}
+        {step.type === 'if_element' && (
+          <IfElementFields step={step} onChange={updateField} />
+        )}
+        {step.type === 'if_variable' && (
+          <IfVariableFields step={step} onChange={updateField} />
+        )}
+        {step.type === 'random_pick' && (
+          <RandomPickFields step={step} onChange={updateField} />
+        )}
 
         {/* Delete - only show for non run_scenario (which has its own full section below) */}
         {step.type === 'run_scenario' && null}
 
         {/* Delete */}
-        <button type='button' className='ml-auto shrink-0 p-0.5 text-destructive hover:bg-destructive/10 rounded' onClick={onRemove}>
+        <button
+          type='button'
+          className='ml-auto shrink-0 rounded p-0.5 text-destructive hover:bg-destructive/10'
+          onClick={onRemove}
+        >
           <Trash2 size={12} />
         </button>
       </div>
@@ -366,17 +533,21 @@ function StepRow({
                     <span className='text-[10px] font-medium text-muted-foreground'>
                       {t('branchLabel', { name: String.fromCharCode(65 + bi) })}
                     </span>
-                    <span className='text-[10px] text-muted-foreground'>{t('weightLabel')}</span>
+                    <span className='text-[10px] text-muted-foreground'>
+                      {t('weightLabel')}
+                    </span>
                     <input
                       type='number'
                       min={1}
-                      className='w-12 border rounded px-1 py-0.5 bg-background text-[11px]'
+                      className='w-12 rounded border bg-background px-1 py-0.5 text-[11px]'
                       value={branch.weight ?? 1}
-                      onChange={(e) => updateBranchWeight(bi, Number(e.target.value) || 1)}
+                      onChange={(e) =>
+                        updateBranchWeight(bi, Number(e.target.value) || 1)
+                      }
                     />
                     <button
                       type='button'
-                      className='ml-auto p-0.5 text-destructive hover:bg-destructive/10 rounded'
+                      className='ml-auto rounded p-0.5 text-destructive hover:bg-destructive/10'
                       onClick={() => removeBranch(bi)}
                     >
                       <Trash2 size={10} />
@@ -391,7 +562,13 @@ function StepRow({
                   />
                 </div>
               ))}
-              <Button type='button' size='sm' variant='ghost' className='h-6 text-[10px]' onClick={addBranch}>
+              <Button
+                type='button'
+                size='sm'
+                variant='ghost'
+                className='h-6 text-[10px]'
+                onClick={addBranch}
+              >
                 <Plus size={10} className='mr-1' />
                 {t('addBranch')}
               </Button>
@@ -473,7 +650,13 @@ export function NestedStepList({
           totalSiblings={steps.length}
         />
       ))}
-      <Button type='button' size='sm' variant='ghost' className='h-6 text-[10px] text-muted-foreground' onClick={() => addStep()}>
+      <Button
+        type='button'
+        size='sm'
+        variant='ghost'
+        className='h-6 text-[10px] text-muted-foreground'
+        onClick={() => addStep()}
+      >
         <Plus size={10} className='mr-1' />
         {depth === 0 ? t('addStep') : t('add')}
       </Button>

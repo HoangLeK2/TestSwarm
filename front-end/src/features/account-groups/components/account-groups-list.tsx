@@ -1,9 +1,9 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { useTranslations } from 'next-intl';
+import { useLocale, useTranslations } from 'next-intl';
 import { formatDistanceToNow } from 'date-fns';
-import { vi } from 'date-fns/locale';
+import { enUS, vi } from 'date-fns/locale';
 import { Pencil, Search, Trash2, Users, Users2 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -46,11 +46,17 @@ import { formatFarmApiError } from '@/lib/format-farm-api-error';
 
 export function AccountGroupsList() {
   const t = useTranslations('accountGroupsFeature');
+  const locale = useLocale();
+  const dateLocale = locale === 'vi' ? vi : enUS;
   const [platform, setPlatform] = useState<string>('all');
   const [search, setSearch] = useState('');
   const [editTarget, setEditTarget] = useState<AccountGroupOut | null>(null);
-  const [manageTarget, setManageTarget] = useState<AccountGroupOut | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<AccountGroupOut | null>(null);
+  const [manageTarget, setManageTarget] = useState<AccountGroupOut | null>(
+    null
+  );
+  const [deleteTarget, setDeleteTarget] = useState<AccountGroupOut | null>(
+    null
+  );
 
   const { data: groups, isLoading, error } = useAccountGroups();
   const deleteMutation = useDeleteAccountGroup();
@@ -92,7 +98,7 @@ export function AccountGroupsList() {
   return (
     <div className='space-y-6'>
       {isLoading ? (
-        <p className='text-sm text-muted-foreground'>{t('pageTitle')}...</p>
+        <p className='text-sm text-muted-foreground'>{t('loading')}</p>
       ) : error ? (
         <p className='text-sm text-destructive'>
           {formatFarmApiError(error, t('pageTitle'))}
@@ -194,7 +200,7 @@ export function AccountGroupsList() {
                         <span className='whitespace-nowrap text-[11px] text-muted-foreground'>
                           {formatDistanceToNow(new Date(g.updated_at), {
                             addSuffix: true,
-                            locale: vi
+                            locale: dateLocale
                           })}
                         </span>
                       </TableCell>

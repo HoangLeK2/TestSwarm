@@ -136,10 +136,7 @@ export function EditGroupDialog({
                       </Label>
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <Info
-                            size={13}
-                            className='text-muted-foreground'
-                          />
+                          <Info size={13} className='text-muted-foreground' />
                         </TooltipTrigger>
                         <TooltipContent>
                           {t('rotationRoundRobinHint')}
@@ -159,10 +156,7 @@ export function EditGroupDialog({
                       </Label>
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <Info
-                            size={13}
-                            className='text-muted-foreground'
-                          />
+                          <Info size={13} className='text-muted-foreground' />
                         </TooltipTrigger>
                         <TooltipContent>
                           {t('rotationLeastRecentHint')}
@@ -184,9 +178,7 @@ export function EditGroupDialog({
             </p>
           )}
           <Button type='submit' className='w-full' disabled={isPending}>
-            {isPending
-              ? t('editDialog.submitting')
-              : t('editDialog.submit')}
+            {isPending ? t('editDialog.submitting') : t('editDialog.submit')}
           </Button>
         </form>
       </DialogContent>

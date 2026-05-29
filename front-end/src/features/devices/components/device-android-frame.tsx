@@ -27,10 +27,22 @@ function screenContentInsetPx(screenWidth: number): number {
 }
 
 /** Android phone frame for farm tiles — stream fills the mock screen (status/nav hidden). */
-export function DeviceAndroidFrame({ screenWidth, deviceWidth, deviceHeight, className, children }: Props) {
-  const clipRadius = useMemo(() => mockupInnerCornerRadiusPx(screenWidth), [screenWidth]);
+export function DeviceAndroidFrame({
+  screenWidth,
+  deviceWidth,
+  deviceHeight,
+  className,
+  children
+}: Props) {
+  const clipRadius = useMemo(
+    () => mockupInnerCornerRadiusPx(screenWidth),
+    [screenWidth]
+  );
   const inset = useMemo(() => screenContentInsetPx(screenWidth), [screenWidth]);
-  const innerRadius = useMemo(() => Math.max(2, clipRadius - inset), [clipRadius, inset]);
+  const innerRadius = useMemo(
+    () => Math.max(2, clipRadius - inset),
+    [clipRadius, inset]
+  );
 
   // Constrain content height to device's real aspect ratio so object-cover never
   // over-scales and clips the horizontal axis. The mockup lib uses ~9:20 internally;
@@ -41,7 +53,7 @@ export function DeviceAndroidFrame({ screenWidth, deviceWidth, deviceHeight, cla
       deviceWidth && deviceHeight && deviceWidth > 0
         ? Math.round(contentWidth * (deviceHeight / deviceWidth))
         : undefined,
-    [contentWidth, deviceWidth, deviceHeight],
+    [contentWidth, deviceWidth, deviceHeight]
   );
 
   return (
@@ -55,7 +67,7 @@ export function DeviceAndroidFrame({ screenWidth, deviceWidth, deviceHeight, cla
         'drop-shadow-[0_12px_28px_rgba(2,6,23,0.24)]',
         // Lib always paints a fake punch-hole when hideStatusBar — no prop to disable it.
         '[&>div>div>div>:last-child]:hidden',
-        className,
+        className
       )}
     >
       <div
@@ -66,7 +78,7 @@ export function DeviceAndroidFrame({ screenWidth, deviceWidth, deviceHeight, cla
           className='w-full min-w-0 flex-shrink-0 overflow-hidden bg-black'
           style={{
             borderRadius: innerRadius,
-            height: streamHeight !== undefined ? `${streamHeight}px` : '100%',
+            height: streamHeight !== undefined ? `${streamHeight}px` : '100%'
           }}
         >
           {children}

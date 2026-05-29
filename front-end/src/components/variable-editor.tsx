@@ -1,42 +1,102 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef, KeyboardEvent } from 'react';
-import { Plus, Trash2, ChevronDown, ChevronRight, Info, Copy, Check } from 'lucide-react';
+import {
+  Plus,
+  Trash2,
+  ChevronDown,
+  ChevronRight,
+  Copy,
+  Check,
+  CircleHelp,
+  Braces
+} from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
 } from '@/components/ui/select';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger
+} from '@/components/ui/popover';
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger
+} from '@/components/ui/collapsible';
 import { cn } from '@/lib/utils';
-
 
 type VarType = 'string' | 'number' | 'list';
 
 type VarEntry = {
   key: string;
   type: VarType;
-  strVal: string;   // for string / number
-  listVal: string[]; // for list
+  strVal: string;
+  listVal: string[];
 };
-
 
 const BUILTINS = [
   { name: '${__NOW__}', descKey: 'builtins.now', group: 'system' },
   { name: '${__DATE__}', descKey: 'builtins.date', group: 'system' },
   { name: '${__TIME__}', descKey: 'builtins.time', group: 'system' },
-  { name: '${__DEVICE_SERIAL__}', descKey: 'builtins.deviceSerial', group: 'system' },
-  { name: '${__DEVICE_MODEL__}', descKey: 'builtins.deviceModel', group: 'system' },
-  { name: '${__RANDOM_INT_1_100__}', descKey: 'builtins.randomInt', group: 'system' },
-  { name: '${__RANDOM_UUID__}', descKey: 'builtins.randomUuid', group: 'system' },
+  {
+    name: '${__DEVICE_SERIAL__}',
+    descKey: 'builtins.deviceSerial',
+    group: 'system'
+  },
+  {
+    name: '${__DEVICE_MODEL__}',
+    descKey: 'builtins.deviceModel',
+    group: 'system'
+  },
+  {
+    name: '${__RANDOM_INT_1_100__}',
+    descKey: 'builtins.randomInt',
+    group: 'system'
+  },
+  {
+    name: '${__RANDOM_UUID__}',
+    descKey: 'builtins.randomUuid',
+    group: 'system'
+  },
   { name: '${__STEP_INDEX__}', descKey: 'builtins.stepIndex', group: 'system' },
-  { name: '${__ACCOUNT_ID__}', descKey: 'builtins.accountId', group: 'account' },
-  { name: '${__ACCOUNT_USERNAME__}', descKey: 'builtins.accountUsername', group: 'account' },
-  { name: '${__ACCOUNT_PASSWORD__}', descKey: 'builtins.accountPassword', group: 'account' },
-  { name: '${__ACCOUNT_DISPLAY_NAME__}', descKey: 'builtins.accountDisplayName', group: 'account' },
-  { name: '${__ACCOUNT_PLATFORM__}', descKey: 'builtins.accountPlatform', group: 'account' },
+  {
+    name: '${__ACCOUNT_ID__}',
+    descKey: 'builtins.accountId',
+    group: 'account'
+  },
+  {
+    name: '${__ACCOUNT_USERNAME__}',
+    descKey: 'builtins.accountUsername',
+    group: 'account'
+  },
+  {
+    name: '${__ACCOUNT_PASSWORD__}',
+    descKey: 'builtins.accountPassword',
+    group: 'account'
+  },
+  {
+    name: '${__ACCOUNT_DISPLAY_NAME__}',
+    descKey: 'builtins.accountDisplayName',
+    group: 'account'
+  },
+  {
+    name: '${__ACCOUNT_PLATFORM__}',
+    descKey: 'builtins.accountPlatform',
+    group: 'account'
+  }
 ] as const;
+
+const SYSTEM_BUILTINS = BUILTINS.filter((b) => b.group === 'system');
+const ACCOUNT_BUILTINS = BUILTINS.filter((b) => b.group === 'account');
 
 function toEntries(vars: Record<string, any>): VarEntry[] {
   return Object.entries(vars).map(([key, value]) => {
@@ -46,7 +106,12 @@ function toEntries(vars: Record<string, any>): VarEntry[] {
     if (typeof value === 'number') {
       return { key, type: 'number', strVal: String(value), listVal: [] };
     }
-    return { key, type: 'string', strVal: typeof value === 'string' ? value : JSON.stringify(value), listVal: [] };
+    return {
+      key,
+      type: 'string',
+      strVal: typeof value === 'string' ? value : JSON.stringify(value),
+      listVal: []
+    };
   });
 }
 
@@ -66,13 +131,15 @@ function toRecord(entries: VarEntry[]): Record<string, any> {
   return result;
 }
 
-// ── List tag input ─────────────────────────────────────────────────────────────
+function countDefined(entries: VarEntry[]) {
+  return entries.filter((e) => e.key.trim()).length;
+}
 
 function ListTagInput({
   tags,
   onChange,
   disabled,
-  t,
+  t
 }: {
   tags: string[];
   onChange: (tags: string[]) => void;
@@ -99,10 +166,12 @@ function ListTagInput({
   };
 
   return (
-    <div className={cn(
-      'flex min-h-8 flex-wrap items-center gap-1 rounded-md border bg-background px-2 py-1 text-xs focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/50',
-      disabled && 'opacity-50 cursor-not-allowed',
-    )}>
+    <div
+      className={cn(
+        'flex min-h-9 flex-wrap items-center gap-1 rounded-md border bg-background px-2 py-1.5 text-xs focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/50',
+        disabled && 'cursor-not-allowed opacity-50'
+      )}
+    >
       {tags.map((tag, i) => (
         <Badge
           key={i}
@@ -138,13 +207,11 @@ function ListTagInput({
   );
 }
 
-// ── Type selector ──────────────────────────────────────────────────────────────
-
 function TypeSelect({
   value,
   onChange,
   disabled,
-  t,
+  t
 }: {
   value: VarType;
   onChange: (t: VarType) => void;
@@ -152,8 +219,12 @@ function TypeSelect({
   t: (key: string) => string;
 }) {
   return (
-    <Select value={value} onValueChange={(v) => onChange(v as VarType)} disabled={disabled}>
-      <SelectTrigger size='sm' className='w-[100px] shrink-0 text-xs'>
+    <Select
+      value={value}
+      onValueChange={(v) => onChange(v as VarType)}
+      disabled={disabled}
+    >
+      <SelectTrigger size='sm' className='h-8 w-[96px] shrink-0 text-xs'>
         <SelectValue />
       </SelectTrigger>
       <SelectContent className='z-[10001]'>
@@ -165,9 +236,166 @@ function TypeSelect({
   );
 }
 
-// ── Main component ─────────────────────────────────────────────────────────────
+function VarCard({
+  entry,
+  index,
+  disabled,
+  copiedKey,
+  onUpdate,
+  onRemove,
+  onCopyToken,
+  getValuePlaceholder,
+  t
+}: {
+  entry: VarEntry;
+  index: number;
+  disabled?: boolean;
+  copiedKey: string | null;
+  onUpdate: (index: number, patch: Partial<VarEntry>) => void;
+  onRemove: (index: number) => void;
+  onCopyToken: (key: string) => void;
+  getValuePlaceholder: (entry: VarEntry) => string;
+  t: (key: string, values?: Record<string, string>) => string;
+}) {
+  const token = entry.key.trim() ? `\${${entry.key}}` : '';
+  const copied = copiedKey === entry.key;
 
-export type VariableEntry = VarEntry; // re-export for external use if needed
+  return (
+    <div className='rounded-lg border border-border/60 bg-muted/15 p-3 transition-colors hover:border-border'>
+      <div className='flex items-start gap-2'>
+        <Input
+          value={entry.key}
+          onChange={(e) => onUpdate(index, { key: e.target.value })}
+          placeholder={t('keyPlaceholder')}
+          disabled={disabled}
+          title={entry.key}
+          className='h-8 min-w-0 flex-1 font-mono text-xs'
+        />
+        <TypeSelect
+          value={entry.type}
+          onChange={(type) =>
+            onUpdate(index, { type, strVal: '', listVal: [] })
+          }
+          disabled={disabled}
+          t={t}
+        />
+        <Button
+          type='button'
+          size='icon'
+          variant='ghost'
+          className='size-8 shrink-0 text-muted-foreground hover:text-destructive'
+          disabled={disabled}
+          onClick={() => onRemove(index)}
+          title={t('removeVariable')}
+        >
+          <Trash2 size={14} />
+        </Button>
+      </div>
+
+      <div className='mt-2'>
+        {entry.type === 'list' ? (
+          <ListTagInput
+            tags={entry.listVal}
+            onChange={(tags) => onUpdate(index, { listVal: tags })}
+            disabled={disabled}
+            t={t}
+          />
+        ) : (
+          <Input
+            type={entry.type === 'number' ? 'number' : 'text'}
+            value={entry.strVal}
+            onChange={(e) => onUpdate(index, { strVal: e.target.value })}
+            placeholder={getValuePlaceholder(entry)}
+            disabled={disabled}
+            title={entry.strVal}
+            className='h-8 w-full text-xs'
+          />
+        )}
+      </div>
+
+      {token ? (
+        <div className='mt-2.5 flex flex-wrap items-center gap-2 border-t border-border/40 pt-2.5'>
+          <code className='rounded-md bg-primary/5 px-2 py-0.5 font-mono text-[11px] text-primary'>
+            {token}
+          </code>
+          <Button
+            type='button'
+            size='sm'
+            variant='secondary'
+            className='h-7 gap-1 text-[11px]'
+            disabled={disabled}
+            onClick={() => onCopyToken(entry.key)}
+          >
+            {copied ? (
+              <Check size={12} className='text-green-600' />
+            ) : (
+              <Copy size={12} />
+            )}
+            {copied ? t('copied') : t('copy')}
+          </Button>
+          <span className='text-[11px] text-muted-foreground'>
+            {t('useInSteps')}
+          </span>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function BuiltinGroup({
+  title,
+  items,
+  copiedKey,
+  onCopy,
+  t
+}: {
+  title: string;
+  items: (typeof BUILTINS)[number][];
+  copiedKey: string | null;
+  onCopy: (name: string) => void;
+  t: (key: string) => string;
+}) {
+  return (
+    <Collapsible>
+      <CollapsibleTrigger className='flex w-full items-center gap-2 rounded-md px-1 py-1.5 text-left text-xs font-medium text-foreground hover:bg-muted/50 [&[data-state=open]>svg:first-child]:rotate-90'>
+        <ChevronRight size={14} className='shrink-0 transition-transform' />
+        <span className='flex-1'>{title}</span>
+        <Badge variant='secondary' className='h-5 text-[10px] font-normal'>
+          {items.length}
+        </Badge>
+      </CollapsibleTrigger>
+      <CollapsibleContent className='pt-1'>
+        <div className='grid gap-1 sm:grid-cols-2'>
+          {items.map((b) => (
+            <button
+              key={b.name}
+              type='button'
+              onClick={() => onCopy(b.name)}
+              className='flex flex-col items-start rounded-md px-2 py-1.5 text-left hover:bg-muted/60 focus:bg-muted/60 focus:outline-none'
+              title={`Copy ${b.name}`}
+            >
+              <span className='flex items-center gap-1.5'>
+                {copiedKey === b.name ? (
+                  <Check size={11} className='text-green-600' />
+                ) : (
+                  <Copy size={11} className='text-muted-foreground' />
+                )}
+                <code className='font-mono text-[10px] text-primary'>
+                  {b.name}
+                </code>
+              </span>
+              <span className='pl-5 text-[10px] leading-snug text-muted-foreground'>
+                {t(b.descKey)}
+              </span>
+            </button>
+          ))}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+export type VariableEntry = VarEntry;
 
 interface Props {
   variables: Record<string, any>;
@@ -175,16 +403,28 @@ interface Props {
   disabled?: boolean;
   /** Show built-in variables reference panel */
   showBuiltins?: boolean;
+  /** Toolbar: add, guide, builtins toggle */
+  showToolbar?: boolean;
+  /** Hint below the variable list */
+  showFooterTip?: boolean;
 }
 
-export function VariableEditor({ variables, onChange, disabled, showBuiltins = true }: Props) {
+export function VariableEditor({
+  variables,
+  onChange,
+  disabled,
+  showBuiltins = true,
+  showToolbar = true,
+  showFooterTip = true
+}: Props) {
   const t = useTranslations('components.variableEditor');
-  const [entries, setEntries] = useState<VarEntry[]>(() => toEntries(variables));
+  const [entries, setEntries] = useState<VarEntry[]>(() =>
+    toEntries(variables)
+  );
   const [builtinsOpen, setBuiltinsOpen] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const internalChange = useRef(false);
 
-  // Sync from parent only for external resets (not our own onChange)
   useEffect(() => {
     if (internalChange.current) {
       internalChange.current = false;
@@ -199,14 +439,14 @@ export function VariableEditor({ variables, onChange, disabled, showBuiltins = t
       internalChange.current = true;
       onChange(toRecord(newEntries));
     },
-    [onChange],
+    [onChange]
   );
 
   const update = useCallback(
     (index: number, patch: Partial<VarEntry>) => {
       commit(entries.map((e, i) => (i === index ? { ...e, ...patch } : e)));
     },
-    [entries, commit],
+    [entries, commit]
   );
 
   const add = useCallback(() => {
@@ -215,24 +455,24 @@ export function VariableEditor({ variables, onChange, disabled, showBuiltins = t
 
   const remove = useCallback(
     (index: number) => commit(entries.filter((_, i) => i !== index)),
-    [entries, commit],
+    [entries, commit]
   );
 
-  const copyToken = useCallback(async (key: string) => {
-    if (!key.trim()) return;
-    const token = `\${${key}}`;
+  const copyToClipboard = useCallback(async (text: string, id: string) => {
     const markCopied = () => {
-      setCopiedKey(key);
-      window.setTimeout(() => setCopiedKey((current) => (current === key ? null : current)), 1200);
+      setCopiedKey(id);
+      window.setTimeout(
+        () => setCopiedKey((current) => (current === id ? null : id)),
+        1200
+      );
     };
     try {
-      await navigator.clipboard.writeText(token);
+      await navigator.clipboard.writeText(text);
       markCopied();
     } catch {
-      // Fallback for contexts without Clipboard API (mirrors use-control-record.ts::copyJson).
       try {
         const el = document.createElement('textarea');
-        el.value = token;
+        el.value = text;
         el.style.cssText = 'position:fixed;opacity:0;top:0;left:0';
         document.body.appendChild(el);
         el.focus();
@@ -241,209 +481,196 @@ export function VariableEditor({ variables, onChange, disabled, showBuiltins = t
         document.body.removeChild(el);
         markCopied();
       } catch {
-        // Ignore clipboard failures to keep editor interactions simple.
+        // ignore
       }
     }
   }, []);
 
-  const copyBuiltin = useCallback(async (name: string) => {
-    const markCopied = () => {
-      setCopiedKey(name);
-      window.setTimeout(() => setCopiedKey((current) => (current === name ? null : current)), 1200);
-    };
-    try {
-      await navigator.clipboard.writeText(name);
-      markCopied();
-    } catch {
-      try {
-        const el = document.createElement('textarea');
-        el.value = name;
-        el.style.cssText = 'position:fixed;opacity:0;top:0;left:0';
-        document.body.appendChild(el);
-        el.focus();
-        el.select();
-        document.execCommand('copy');
-        document.body.removeChild(el);
-        markCopied();
-      } catch {
-        // swallow
-      }
-    }
-  }, []);
+  const copyToken = useCallback(
+    (key: string) => {
+      if (!key.trim()) return;
+      void copyToClipboard(`\${${key}}`, key);
+    },
+    [copyToClipboard]
+  );
 
-  const getValuePlaceholder = useCallback((entry: VarEntry) => {
-    if (entry.type === 'number') {
-      return t('valuePlaceholderNumber');
-    }
-    if (entry.type === 'string') {
-      return entry.key
-        ? t('valuePlaceholderStringWithRef', { key: entry.key })
-        : t('valuePlaceholderString');
-    }
-    return '';
-  }, [t]);
+  const copyBuiltin = useCallback(
+    (name: string) => {
+      void copyToClipboard(name, name);
+    },
+    [copyToClipboard]
+  );
+
+  const getValuePlaceholder = useCallback(
+    (entry: VarEntry) => {
+      if (entry.type === 'number') {
+        return t('valuePlaceholderNumber');
+      }
+      if (entry.type === 'string') {
+        return entry.key
+          ? t('valuePlaceholderStringWithRef', { key: entry.key })
+          : t('valuePlaceholderString');
+      }
+      return '';
+    },
+    [t]
+  );
+
+  const definedCount = countDefined(entries);
 
   return (
     <div className='space-y-3'>
-      <div className='rounded-md border bg-muted/20 px-3 py-2 text-[11px] text-muted-foreground'>
-        <p className='font-medium text-foreground'>{t('quickGuide.title')}</p>
-        <p className='mt-1'>{t('quickGuide.step1')}</p>
-        <p>{t('quickGuide.step2')}</p>
-        <p>
-          {t('quickGuide.step3Prefix')}{' '}
-          <code className='rounded bg-muted px-1 font-mono'>{'${ten_bien}'}</code>.
-        </p>
-      </div>
-
-      {/* Header row — hidden on narrow; labels duplicated inline on small screens below */}
-      {entries.length > 0 && (
-        <div className='hidden gap-2 px-0.5 lg:flex'>
-          <span className='min-w-[200px] flex-[2] text-[10px] font-medium uppercase tracking-wide text-muted-foreground'>{t('columns.variableName')}</span>
-          <span className='w-[110px] text-[10px] font-medium uppercase tracking-wide text-muted-foreground'>{t('columns.type')}</span>
-          <span className='flex-[3] text-[10px] font-medium uppercase tracking-wide text-muted-foreground'>{t('columns.value')}</span>
-          <span className='w-7' />
-        </div>
-      )}
-
-      {/* Rows — stack vertically on narrow panels so full variable name never gets cropped */}
-      {entries.map((entry, i) => (
-        <div
-          key={i}
-          className='flex flex-col gap-2 rounded-md border border-transparent p-2 hover:border-muted lg:flex-row lg:items-start lg:gap-2 lg:border-0 lg:p-0 lg:hover:border-transparent'
-        >
-          {/* Key */}
-          <div className='min-w-0 flex-1 space-y-1 lg:min-w-[200px] lg:flex-[2]'>
-            <Input
-              value={entry.key}
-              onChange={(e) => update(i, { key: e.target.value })}
-              placeholder={t('keyPlaceholder')}
-              disabled={disabled}
-              title={entry.key}
-              className='h-8 w-full font-mono text-xs'
-            />
-            {entry.key.trim() && (
-              <button
-                type='button'
-                className='flex max-w-full items-center gap-1 truncate text-[10px] text-primary hover:underline'
-                onClick={() => copyToken(entry.key)}
-                title={`Copy \${${entry.key}}`}
-              >
-                {copiedKey === entry.key ? <Check size={10} className='shrink-0' /> : <Copy size={10} className='shrink-0' />}
-                <code className='truncate font-mono'>{`\${${entry.key}}`}</code>
-              </button>
-            )}
-          </div>
-
-          {/* Type + Value + Delete — in a row on narrow so they fit one line */}
-          <div className='flex items-start gap-2 lg:contents'>
-            <TypeSelect
-              value={entry.type}
-              onChange={(t) => update(i, { type: t, strVal: '', listVal: [] })}
-              disabled={disabled}
-              t={t}
-            />
-
-            {/* Value */}
-            <div className='min-w-0 flex-1 lg:flex-[3]'>
-              {entry.type === 'list' ? (
-                <ListTagInput
-                  tags={entry.listVal}
-                  onChange={(tags) => update(i, { listVal: tags })}
-                  disabled={disabled}
-                  t={t}
-                />
-              ) : (
-                <Input
-                  type={entry.type === 'number' ? 'number' : 'text'}
-                  value={entry.strVal}
-                  onChange={(e) => update(i, { strVal: e.target.value })}
-                  placeholder={getValuePlaceholder(entry)}
-                  disabled={disabled}
-                  title={entry.strVal}
-                  className='h-8 w-full text-xs'
-                />
-              )}
-            </div>
-
-            {/* Delete */}
+      {showToolbar ? (
+        <div className='flex flex-wrap items-center gap-2'>
+          <Button
+            type='button'
+            size='sm'
+            disabled={disabled}
+            onClick={add}
+            className='h-8 gap-1 text-xs'
+          >
+            <Plus size={14} />
+            {t('addVariable')}
+          </Button>
+          {showBuiltins ? (
             <Button
               type='button'
-              size='icon'
-              variant='ghost'
-              className='mt-0.5 size-7 shrink-0 text-muted-foreground hover:text-destructive'
+              size='sm'
+              variant='outline'
               disabled={disabled}
-              onClick={() => remove(i)}
-              title={t('addVariable')}
+              className={cn(
+                'h-8 text-xs',
+                builtinsOpen && 'border-primary/30 bg-primary/[0.04]'
+              )}
+              onClick={() => setBuiltinsOpen((v) => !v)}
             >
-              <Trash2 size={12} />
+              {builtinsOpen ? (
+                <ChevronDown size={14} className='mr-1' />
+              ) : (
+                <ChevronRight size={14} className='mr-1' />
+              )}
+              {t('builtinsTitle')}
             </Button>
-          </div>
+          ) : null}
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                type='button'
+                size='sm'
+                variant='ghost'
+                className='h-8 gap-1 text-xs text-muted-foreground'
+              >
+                <CircleHelp size={14} />
+                {t('quickGuide.title')}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent
+              className='z-[10001] w-80 space-y-2 p-3 text-xs'
+              align='start'
+            >
+              <p className='font-medium text-foreground'>
+                {t('quickGuide.title')}
+              </p>
+              <p className='text-muted-foreground'>{t('quickGuide.step1')}</p>
+              <p className='text-muted-foreground'>{t('quickGuide.step2')}</p>
+              <p className='text-muted-foreground'>
+                {t('quickGuide.step3Prefix')}{' '}
+                <code className='rounded bg-muted px-1 font-mono'>
+                  {'${ten_bien}'}
+                </code>
+                .
+              </p>
+            </PopoverContent>
+          </Popover>
+          {definedCount > 0 ? (
+            <Badge variant='secondary' className='ml-auto h-6 text-[11px]'>
+              {t('variableCount', { count: definedCount })}
+            </Badge>
+          ) : null}
         </div>
-      ))}
+      ) : null}
 
-      {entries.length === 0 && (
-        <div className='rounded-md border border-dashed px-3 py-3 text-xs text-muted-foreground'>
-          <p className='font-medium'>{t('emptyTitle')}</p>
-          <p className='mt-0.5 text-[11px]'>
-            {t('emptyHintPrefix')}{' '}
-            <code className='rounded bg-muted px-1 font-mono'>{'${ten_bien}'}</code>.
+      {entries.length === 0 ? (
+        <div className='flex flex-col items-center gap-3 rounded-lg border border-dashed border-border/80 bg-muted/10 px-4 py-8 text-center'>
+          <div className='flex size-10 items-center justify-center rounded-full bg-muted/60'>
+            <Braces size={18} className='text-muted-foreground' />
+          </div>
+          <div className='space-y-1'>
+            <p className='text-sm font-medium text-foreground'>
+              {t('emptyTitle')}
+            </p>
+            <p className='text-[11px] text-muted-foreground'>
+              {t('emptyHintPrefix')}{' '}
+              <code className='rounded bg-muted px-1 font-mono'>
+                {'${ten_bien}'}
+              </code>
+              .
+            </p>
+          </div>
+          <Button
+            type='button'
+            size='sm'
+            disabled={disabled}
+            onClick={add}
+            className='h-8 gap-1 text-xs'
+          >
+            <Plus size={14} />
+            {t('emptyCreateFirst')}
+          </Button>
+        </div>
+      ) : (
+        <div className='space-y-2'>
+          {entries.map((entry, i) => (
+            <VarCard
+              key={i}
+              entry={entry}
+              index={i}
+              disabled={disabled}
+              copiedKey={copiedKey}
+              onUpdate={update}
+              onRemove={remove}
+              onCopyToken={copyToken}
+              getValuePlaceholder={getValuePlaceholder}
+              t={t}
+            />
+          ))}
+        </div>
+      )}
+
+      {showFooterTip ? (
+        <p className='rounded-md bg-muted/40 px-2.5 py-2 text-[11px] leading-relaxed text-muted-foreground'>
+          {t('footerTipLead')}{' '}
+          <code className='rounded bg-muted/80 px-1 py-0.5 font-mono text-[11px] text-foreground'>
+            {'${'}
+          </code>{' '}
+          {t('footerTipTrail')}
+        </p>
+      ) : null}
+
+      {showBuiltins && builtinsOpen ? (
+        <div className='space-y-2 rounded-lg border border-border/60 bg-muted/15 p-3'>
+          <p className='text-xs font-semibold text-foreground'>
+            {t('builtinsReferenceTitle')}
+          </p>
+          <BuiltinGroup
+            title={t('builtinGroups.system')}
+            items={SYSTEM_BUILTINS}
+            copiedKey={copiedKey}
+            onCopy={copyBuiltin}
+            t={t}
+          />
+          <BuiltinGroup
+            title={t('builtinGroups.account')}
+            items={ACCOUNT_BUILTINS}
+            copiedKey={copiedKey}
+            onCopy={copyBuiltin}
+            t={t}
+          />
+          <p className='text-[10px] text-muted-foreground'>
+            {t('systemAccountHint')}
           </p>
         </div>
-      )}
-
-      {/* Add button */}
-      <Button
-        type='button'
-        size='sm'
-        variant='outline'
-        disabled={disabled}
-        onClick={add}
-        className='h-7 text-xs'
-      >
-        <Plus size={12} className='mr-1' />
-        {t('addVariable')}
-      </Button>
-
-      {/* Built-in variables reference */}
-      {showBuiltins && (
-        <div className='rounded-md border bg-muted/30'>
-          <button
-            type='button'
-            className='flex w-full items-center gap-1.5 px-3 py-2 text-left text-[11px] text-muted-foreground hover:text-foreground'
-            onClick={() => setBuiltinsOpen((v) => !v)}
-          >
-            {builtinsOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-            <Info size={11} />
-            <span className='font-medium'>{t('builtinsTitle')}</span>
-          </button>
-          {builtinsOpen && (
-            <div className='space-y-2 border-t px-3 py-2'>
-              <div className='grid grid-cols-2 gap-x-4 gap-y-1'>
-                {BUILTINS.map((b) => (
-                  <button
-                    key={b.name}
-                    type='button'
-                    onClick={() => copyBuiltin(b.name)}
-                    className='flex flex-col items-start rounded px-1 py-0.5 text-left hover:bg-muted/60 focus:bg-muted/60 focus:outline-none'
-                    title={`Copy ${b.name}`}
-                  >
-                    <span className='flex items-center gap-1'>
-                      {copiedKey === b.name ? (
-                        <Check size={10} className='text-green-600' />
-                      ) : (
-                        <Copy size={10} className='text-muted-foreground' />
-                      )}
-                      <code className='text-[10px] font-mono text-primary'>{b.name}</code>
-                    </span>
-                    <span className='pl-3.5 text-[10px] text-muted-foreground'>{t(b.descKey)}</span>
-                  </button>
-                ))}
-              </div>
-              <p className='text-[10px] text-muted-foreground'>{t('systemAccountHint')}</p>
-            </div>
-          )}
-        </div>
-      )}
+      ) : null}
     </div>
   );
 }

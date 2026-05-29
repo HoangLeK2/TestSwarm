@@ -4,11 +4,11 @@ export {
   applySelectorToSteps,
   isSelectorPickableStep,
   selectorPickTargetEquals,
-  type SelectorPickTarget,
+  type SelectorPickTarget
 } from './selector-pick';
 export {
   applyTapPointToSteps,
   applySwipeSegmentToSteps,
   coordinatePickTargetEquals,
-  type CoordinatePickTarget,
+  type CoordinatePickTarget
 } from './coordinate-pick';

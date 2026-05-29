@@ -195,10 +195,7 @@ export default function SignUpPage() {
                 {errors.password.message}
               </p>
             ) : (
-              <p
-                id='password-hint'
-                className='text-xs text-muted-foreground'
-              >
+              <p id='password-hint' className='text-xs text-muted-foreground'>
                 {tAuth('errors.passwordMinLength')}
               </p>
             )}

@@ -15,9 +15,9 @@ export const scenarioNodeRegistries: FlowNodeRegistry[] = [
       return {
         id: `action_${uuidv4().slice(0, 8)}`,
         type: 'action',
-        data: { step: { type: 'tap_selector', by: 'text', value: '' } },
+        data: { step: { type: 'tap_selector', by: 'text', value: '' } }
       };
-    },
+    }
   },
 
   // ── Sub-scenario (run_scenario) ───────────────────────────────────────────
@@ -29,9 +29,9 @@ export const scenarioNodeRegistries: FlowNodeRegistry[] = [
       return {
         id: `sub_${uuidv4().slice(0, 8)}`,
         type: 'sub_scenario',
-        data: { step: { type: 'run_scenario', scenario_name: '' } },
+        data: { step: { type: 'run_scenario', scenario_name: '' } }
       };
-    },
+    }
   },
 
   // ── Condition / branch (if_element, if_variable, random_pick) ────────────
@@ -44,23 +44,31 @@ export const scenarioNodeRegistries: FlowNodeRegistry[] = [
       return {
         id,
         type: 'condition',
-        data: { step: { type: 'if_element', by: 'text', value: '', then: [], else: [] } },
+        data: {
+          step: {
+            type: 'if_element',
+            by: 'text',
+            value: '',
+            then: [],
+            else: []
+          }
+        },
         blocks: [
           {
             id: `${id}_then`,
             type: 'block',
             data: { title: 'Nếu đúng (then)' },
-            blocks: [],
+            blocks: []
           },
           {
             id: `${id}_else`,
             type: 'block',
             data: { title: 'Nếu sai (else)' },
-            blocks: [],
-          },
-        ],
+            blocks: []
+          }
+        ]
       };
-    },
+    }
   },
 
   // ── Loop node (repeat / repeat_until / loop) ──────────────────────────────
@@ -79,10 +87,10 @@ export const scenarioNodeRegistries: FlowNodeRegistry[] = [
             id: `${id}_body`,
             type: 'block',
             data: { title: 'Thân vòng lặp' },
-            blocks: [],
-          },
-        ],
+            blocks: []
+          }
+        ]
       };
-    },
-  },
+    }
+  }
 ];

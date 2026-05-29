@@ -18,13 +18,27 @@ const SELECTOR_OPTIONS = [
   'description',
   'descriptionContains',
   'descriptionStartsWith',
-  'content-desc',
+  'content-desc'
 ] as const;
 
-function SelectorSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+function SelectorSelect({
+  value,
+  onChange
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
   return (
-    <select className={`${inputCls} w-28`} value={value} onChange={(e) => onChange(e.target.value)}>
-      {SELECTOR_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
+    <select
+      className={`${inputCls} w-28`}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+    >
+      {SELECTOR_OPTIONS.map((o) => (
+        <option key={o} value={o}>
+          {o}
+        </option>
+      ))}
     </select>
   );
 }
@@ -58,9 +72,13 @@ export function RepeatFields({ step, onChange }: FieldProps) {
 /** repeat_until — condition, max_iterations */
 export function RepeatUntilFields({ step, onChange }: FieldProps) {
   const condition = step.condition ?? {};
-  const condType = condition.element_exists ? 'element_exists' :
-    condition.element_not_exists ? 'element_not_exists' :
-    condition.variable_equals ? 'variable_equals' : 'element_exists';
+  const condType = condition.element_exists
+    ? 'element_exists'
+    : condition.element_not_exists
+      ? 'element_not_exists'
+      : condition.variable_equals
+        ? 'variable_equals'
+        : 'element_exists';
   const condData = condition[condType] ?? {};
 
   const updateCondition = (type: string, data: any) => {
@@ -74,7 +92,14 @@ export function RepeatUntilFields({ step, onChange }: FieldProps) {
         <select
           className={`${inputCls} w-36`}
           value={condType}
-          onChange={(e) => updateCondition(e.target.value, condType === 'variable_equals' ? { name: '', value: '' } : { by: 'text', value: '' })}
+          onChange={(e) =>
+            updateCondition(
+              e.target.value,
+              condType === 'variable_equals'
+                ? { name: '', value: '' }
+                : { by: 'text', value: '' }
+            )
+          }
         >
           <option value='element_exists'>element_exists</option>
           <option value='element_not_exists'>element_not_exists</option>
@@ -86,17 +111,24 @@ export function RepeatUntilFields({ step, onChange }: FieldProps) {
           min={1}
           className={`${inputCls} w-16`}
           value={step.max_iterations ?? 50}
-          onChange={(e) => onChange('max_iterations', Number(e.target.value) || 50)}
+          onChange={(e) =>
+            onChange('max_iterations', Number(e.target.value) || 50)
+          }
         />
       </div>
       {condType !== 'variable_equals' ? (
         <div className='flex items-center gap-2'>
-          <SelectorSelect value={condData.by ?? 'text'} onChange={(v) => updateCondition(condType, { ...condData, by: v })} />
+          <SelectorSelect
+            value={condData.by ?? 'text'}
+            onChange={(v) => updateCondition(condType, { ...condData, by: v })}
+          />
           <input
             className={`${inputCls} flex-1`}
             placeholder='selector value'
             value={condData.value ?? ''}
-            onChange={(e) => updateCondition(condType, { ...condData, value: e.target.value })}
+            onChange={(e) =>
+              updateCondition(condType, { ...condData, value: e.target.value })
+            }
           />
         </div>
       ) : (
@@ -105,14 +137,24 @@ export function RepeatUntilFields({ step, onChange }: FieldProps) {
             className={`${inputCls} w-28`}
             placeholder='variable name'
             value={condData.name ?? ''}
-            onChange={(e) => updateCondition('variable_equals', { ...condData, name: e.target.value })}
+            onChange={(e) =>
+              updateCondition('variable_equals', {
+                ...condData,
+                name: e.target.value
+              })
+            }
           />
           <span className={labelCls}>=</span>
           <input
             className={`${inputCls} flex-1`}
             placeholder='expected value'
             value={condData.value ?? ''}
-            onChange={(e) => updateCondition('variable_equals', { ...condData, value: e.target.value })}
+            onChange={(e) =>
+              updateCondition('variable_equals', {
+                ...condData,
+                value: e.target.value
+              })
+            }
           />
         </div>
       )}
@@ -125,9 +167,12 @@ export function IfElementFields({ step, onChange }: FieldProps) {
   return (
     <div className='flex flex-wrap items-center gap-2'>
       <span className={labelCls}>if</span>
-      <SelectorSelect value={step.by ?? 'text'} onChange={(v) => onChange('by', v)} />
+      <SelectorSelect
+        value={step.by ?? 'text'}
+        onChange={(v) => onChange('by', v)}
+      />
       <input
-        className={`${inputCls} flex-1 min-w-[120px]`}
+        className={`${inputCls} min-w-[120px] flex-1`}
         placeholder='element value'
         value={step.value ?? ''}
         onChange={(e) => onChange('value', e.target.value)}
@@ -147,10 +192,16 @@ export function IfElementFields({ step, onChange }: FieldProps) {
 
 /** if_variable — name, condition operator, value */
 export function IfVariableFields({ step, onChange }: FieldProps) {
-  const op = step.equals != null ? 'equals' :
-    step.not_equals != null ? 'not_equals' :
-    step.contains != null ? 'contains' :
-    step.greater_than != null ? 'greater_than' : 'equals';
+  const op =
+    step.equals != null
+      ? 'equals'
+      : step.not_equals != null
+        ? 'not_equals'
+        : step.contains != null
+          ? 'contains'
+          : step.greater_than != null
+            ? 'greater_than'
+            : 'equals';
 
   const opValue = step[op] ?? '';
 
@@ -163,7 +214,13 @@ export function IfVariableFields({ step, onChange }: FieldProps) {
     cleaned[newOp] = opValue;
     // Replace entire step
     Object.keys(cleaned).forEach((k) => {
-      if (k !== 'type' && k !== 'name' && k !== 'then' && k !== 'else' && k !== newOp) {
+      if (
+        k !== 'type' &&
+        k !== 'name' &&
+        k !== 'then' &&
+        k !== 'else' &&
+        k !== newOp
+      ) {
         onChange(k, undefined);
       }
     });
@@ -179,14 +236,18 @@ export function IfVariableFields({ step, onChange }: FieldProps) {
         value={step.name ?? ''}
         onChange={(e) => onChange('name', e.target.value)}
       />
-      <select className={`${inputCls} w-28`} value={op} onChange={(e) => handleOpChange(e.target.value)}>
+      <select
+        className={`${inputCls} w-28`}
+        value={op}
+        onChange={(e) => handleOpChange(e.target.value)}
+      >
         <option value='equals'>==</option>
         <option value='not_equals'>!=</option>
         <option value='contains'>contains</option>
         <option value='greater_than'>&gt;</option>
       </select>
       <input
-        className={`${inputCls} flex-1 min-w-[80px]`}
+        className={`${inputCls} min-w-[80px] flex-1`}
         placeholder='value'
         value={opValue}
         onChange={(e) => onChange(op, e.target.value)}
@@ -218,7 +279,8 @@ export function RandomPickFields({ step, onChange }: FieldProps) {
   const branches = step.branches ?? [];
   return (
     <div className='text-[11px] text-muted-foreground'>
-      {branches.length} branch(es) — weights: [{branches.map((b: any) => b.weight ?? 1).join(', ')}]
+      {branches.length} branch(es) — weights: [
+      {branches.map((b: any) => b.weight ?? 1).join(', ')}]
     </div>
   );
 }

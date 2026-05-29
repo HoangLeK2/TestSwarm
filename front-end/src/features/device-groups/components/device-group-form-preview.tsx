@@ -17,7 +17,6 @@ type Props = {
   devicesLabel: string;
 };
 
-
 export function DeviceGroupFormPreview({
   name,
   description,
@@ -37,7 +36,9 @@ export function DeviceGroupFormPreview({
     <div className='space-y-2 rounded-lg border bg-muted/40 p-3'>
       <div className='space-y-0.5'>
         <p className='text-xs font-semibold leading-tight'>{title}</p>
-        <p className='text-[11px] leading-snug text-muted-foreground'>{caption}</p>
+        <p className='text-[11px] leading-snug text-muted-foreground'>
+          {caption}
+        </p>
       </div>
       <div
         className='rounded-md border bg-background p-3 shadow-sm transition-colors'

@@ -7,6 +7,31 @@ import { useMemo } from 'react';
 //mapping for breadcrumbs
 const routeMapping: Record<string, string[]> = {
   '/dashboard': [],
+  '/dashboard/campaigns': ['navigation.dashboard', 'navigation.campaigns'],
+  '/dashboard/devices': ['navigation.dashboard', 'navigation.devices'],
+  '/dashboard/schedules': ['navigation.dashboard', 'navigation.schedules'],
+  '/dashboard/activity-history': [
+    'navigation.dashboard',
+    'navigation.activity_history'
+  ],
+  '/dashboard/scenario-templates': [
+    'navigation.dashboard',
+    'navigation.scenario_templates'
+  ],
+  '/dashboard/device-groups': [
+    'navigation.dashboard',
+    'navigation.device_groups'
+  ],
+  '/dashboard/accounts': ['navigation.dashboard', 'navigation.accounts'],
+  '/dashboard/device-farm/account-groups': [
+    'navigation.dashboard',
+    'navigation.account_groups'
+  ],
+  '/dashboard/content': ['navigation.dashboard', 'navigation.content'],
+  '/dashboard/relay-agents': [
+    'navigation.dashboard',
+    'navigation.relay_agents'
+  ],
   '/dashboard/product': ['navigation.dashboard', 'navigation.products'],
   '/dashboard/profile': ['navigation.dashboard', 'navigation.profile'],
   '/dashboard/statistic': ['navigation.dashboard', 'navigation.statistic'],
@@ -83,6 +108,20 @@ export function useBreadcrumbs() {
       let title = segment.charAt(0).toUpperCase() + segment.slice(1);
       try {
         if (segment === 'dashboard') title = t('navigation.dashboard');
+        else if (segment === 'campaigns') title = t('navigation.campaigns');
+        else if (segment === 'devices') title = t('navigation.devices');
+        else if (segment === 'schedules') title = t('navigation.schedules');
+        else if (segment === 'device-groups')
+          title = t('navigation.device_groups');
+        else if (segment === 'accounts') title = t('navigation.accounts');
+        else if (segment === 'account-groups')
+          title = t('navigation.account_groups');
+        else if (segment === 'scenario-templates')
+          title = t('navigation.scenario_templates');
+        else if (segment === 'device-farm') title = t('navigation.device_farm');
+        else if (segment === 'content') title = t('navigation.content');
+        else if (segment === 'relay-agents')
+          title = t('navigation.relay_agents');
         else if (segment === 'product') title = t('navigation.products');
         else if (segment === 'profile') title = t('navigation.profile');
         else if (segment === 'edit') title = t('common.edit');

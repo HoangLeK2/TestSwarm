@@ -24,14 +24,10 @@ const DateRangeContext = React.createContext<DateRangeContextValue | null>(
 );
 
 export function DateRangeProvider({ children }: { children: React.ReactNode }) {
-  const [dateRange, setDateRange] = React.useState<DateRangeValue>(
-    DEFAULT_DATE_RANGE
-  );
+  const [dateRange, setDateRange] =
+    React.useState<DateRangeValue>(DEFAULT_DATE_RANGE);
 
-  const value = React.useMemo(
-    () => ({ dateRange, setDateRange }),
-    [dateRange]
-  );
+  const value = React.useMemo(() => ({ dateRange, setDateRange }), [dateRange]);
 
   return (
     <DateRangeContext.Provider value={value}>

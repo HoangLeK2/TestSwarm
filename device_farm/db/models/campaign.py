@@ -14,6 +14,7 @@ from .utils import _now, _uuid
 class Campaign(Base):
 
     __tablename__ = "campaigns"
+    __table_args__ = (UniqueConstraint("user_id", "name"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(255), nullable=False)

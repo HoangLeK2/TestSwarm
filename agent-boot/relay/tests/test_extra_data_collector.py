@@ -29,6 +29,7 @@ class _FakeExecutor:
         self.batches: list[list[dict]] = []
         self.clicks: list[tuple[int, int]] = []
         self.selector_clicks = 0
+        self.press_back_calls = 0
 
     async def run_batch(self, serial: str, actions: list[dict], early_exit: bool = True) -> dict:
         self.batches.append(actions)
@@ -46,6 +47,9 @@ class _FakeExecutor:
                 self.selector_clicks += 1
                 hit = self.selector_clicks <= 1
                 results.append({"op": op, "ok": True, "value": hit})
+            elif op == "press_key":
+                self.press_back_calls += 1
+                results.append({"op": op, "ok": True})
             else:
                 return {"ok": False, "results": results, "error": "unexpected"}
         return {"ok": True, "results": results}
@@ -314,15 +318,19 @@ async def test_collect_fb_comment_target_with_tap_same_session() -> None:
     diagnostic = {
         "reason_code": "ok",
         "target": {"bounds": [100, 200, 300, 250]},
+        "alternates": [],
     }
     with patch(
         "relay.extra_data.ingest._parse_items",
         return_value=([], diagnostic),
+    ), patch(
+        "relay.extra_data.collector._diag_sheet_opened",
+        return_value=True,
     ):
         snapshots, err, tapped, diagnostic = await collect_fb_comment_target_with_tap(
             exec_,
             "dev1",
-            {},
+            {"post_tap_wait_s": 0.0},
         )
     assert err is None
     assert tapped is True
@@ -330,6 +338,83 @@ async def test_collect_fb_comment_target_with_tap_same_session() -> None:
     assert exec_.clicks == [(200, 225)]
     assert exec_.session_scope_calls == 1
     assert diagnostic.get("reason_code") == "ok"
+    assert diagnostic.get("verified") is True
+    assert diagnostic.get("chosen_index") == 0
+    assert exec_.press_back_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_collect_fb_comment_target_retries_when_sheet_did_not_open() -> None:
+    exec_ = _SessionFakeExecutor()
+    diagnostic = {
+        "reason_code": "ok",
+        "target": {"bounds": [100, 200, 300, 250], "post_key": "primary"},
+        "alternates": [{"bounds": [400, 500, 600, 560], "post_key": "alt-1"}],
+        "candidate_count": 2,
+    }
+    verify_sequence = iter([False, True])  # first tap fails, retry succeeds
+
+    def _fake_verify(_xml):
+        return next(verify_sequence)
+
+    with patch(
+        "relay.extra_data.ingest._parse_items",
+        return_value=([], diagnostic),
+    ), patch(
+        "relay.extra_data.collector._diag_sheet_opened",
+        side_effect=_fake_verify,
+    ):
+        snapshots, err, tapped, diag = await collect_fb_comment_target_with_tap(
+            exec_,
+            "dev1",
+            {
+                "post_tap_wait_s": 0.0,
+                "comment_target_verify_back_settle_s": 0.0,
+                "comment_target_verify_max_retries": 1,
+            },
+        )
+
+    assert err is None
+    assert tapped is True
+    assert snapshots == [_SAMPLE_XML]
+    assert exec_.clicks == [(200, 225), (500, 530)]
+    assert exec_.press_back_calls == 1
+    assert diag["verified"] is True
+    assert diag["chosen_index"] == 1
+    assert diag["target"]["post_key"] == "alt-1"
+    assert len(diag["verify_attempts"]) == 2
+    assert diag["verify_attempts"][0]["verified"] is False
+    assert diag["verify_attempts"][0].get("back_pressed") is True
+
+
+@pytest.mark.asyncio
+async def test_collect_fb_comment_target_skips_verify_when_disabled() -> None:
+    exec_ = _SessionFakeExecutor()
+    diagnostic = {
+        "reason_code": "ok",
+        "target": {"bounds": [100, 200, 300, 250], "post_key": "primary"},
+        "alternates": [{"bounds": [400, 500, 600, 560], "post_key": "alt-1"}],
+    }
+    with patch(
+        "relay.extra_data.ingest._parse_items",
+        return_value=([], diagnostic),
+    ), patch(
+        "relay.extra_data.collector._diag_sheet_opened",
+    ) as mock_verify:
+        snapshots, err, tapped, diag = await collect_fb_comment_target_with_tap(
+            exec_,
+            "dev1",
+            {"post_tap_wait_s": 0.0, "comment_target_verify": False},
+        )
+
+    assert err is None
+    assert tapped is True
+    assert snapshots == [_SAMPLE_XML]
+    assert exec_.clicks == [(200, 225)]
+    assert exec_.press_back_calls == 0
+    assert diag["target"]["post_key"] == "primary"
+    assert diag["chosen_index"] == 0
+    assert mock_verify.call_count == 0
 
 
 @pytest.mark.asyncio

@@ -5,7 +5,7 @@ import {
   fetchSafeMode,
   getSafeModeSync,
   subscribeSafeMode,
-  type SafeMode,
+  type SafeMode
 } from './safe-mode';
 
 /** Hook that returns the current safe-mode flags, kicking off a one-time fetch. */

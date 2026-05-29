@@ -6,7 +6,7 @@ import {
   SheetContent,
   SheetHeader,
   SheetTitle,
-  SheetTrigger,
+  SheetTrigger
 } from '@/components/ui/sheet';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -16,9 +16,16 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
+  SelectValue
 } from '@/components/ui/select';
-import { Bell, WifiOff, Wifi, AlertTriangle, Skull, Loader2 } from 'lucide-react';
+import {
+  Bell,
+  WifiOff,
+  Wifi,
+  AlertTriangle,
+  Skull,
+  Loader2
+} from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import type { DeviceEvent } from '../types';
 import { fetchEvents } from '../services/api';
@@ -35,7 +42,7 @@ const EVENT_ICONS: Record<string, typeof WifiOff> = {
   connected: Wifi,
   reconnected: Wifi,
   error: AlertTriangle,
-  dead: Skull,
+  dead: Skull
 };
 
 const EVENT_COLORS: Record<string, string> = {
@@ -43,7 +50,7 @@ const EVENT_COLORS: Record<string, string> = {
   connected: 'text-emerald-500',
   reconnected: 'text-emerald-500',
   error: 'text-amber-500',
-  dead: 'text-destructive',
+  dead: 'text-destructive'
 };
 
 function timeAgo(isoStr: string): string {
@@ -81,7 +88,11 @@ function deviceName(evt: DeviceEvent): { name: string; serial: string } {
 
 const PAGE_SIZE = 50;
 
-export function EventLogPanel({ realtimeEvents, unreadCount, onOpen }: EventLogPanelProps) {
+export function EventLogPanel({
+  realtimeEvents,
+  unreadCount,
+  onOpen
+}: EventLogPanelProps) {
   const t = useTranslations('devicesFarm.eventLog');
   const [filterEvent, setFilterEvent] = useState<string>('all');
   const [filterSerial, setFilterSerial] = useState<string>('all');
@@ -99,7 +110,7 @@ export function EventLogPanel({ realtimeEvents, unreadCount, onOpen }: EventLogP
     try {
       const res = await fetchEvents({ limit: PAGE_SIZE, offset });
       const newEvents = res.events ?? [];
-      setDbEvents((prev) => reset ? newEvents : [...prev, ...newEvents]);
+      setDbEvents((prev) => (reset ? newEvents : [...prev, ...newEvents]));
       setDbOffset(offset + newEvents.length);
       setDbHasMore(newEvents.length >= PAGE_SIZE);
     } catch {
@@ -109,15 +120,18 @@ export function EventLogPanel({ realtimeEvents, unreadCount, onOpen }: EventLogP
     }
   }, []);
 
-  const handleOpenChange = useCallback((open: boolean) => {
-    if (open) {
-      onOpen();
-      hasFetchedRef.current = true;
-      setDbOffset(0);
-      setDbHasMore(true);
-      loadFromDb(0, true);
-    }
-  }, [onOpen, loadFromDb]);
+  const handleOpenChange = useCallback(
+    (open: boolean) => {
+      if (open) {
+        onOpen();
+        hasFetchedRef.current = true;
+        setDbOffset(0);
+        setDbHasMore(true);
+        loadFromDb(0, true);
+      }
+    },
+    [onOpen, loadFromDb]
+  );
 
   const handleLoadMore = useCallback(() => {
     if (!dbLoading && dbHasMore) {
@@ -130,12 +144,21 @@ export function EventLogPanel({ realtimeEvents, unreadCount, onOpen }: EventLogP
     const seen = new Set<string>();
     const merged: DeviceEvent[] = [];
     for (const evt of realtimeEvents) {
-      if (!seen.has(evt.id)) { seen.add(evt.id); merged.push(evt); }
+      if (!seen.has(evt.id)) {
+        seen.add(evt.id);
+        merged.push(evt);
+      }
     }
     for (const evt of dbEvents) {
-      if (!seen.has(evt.id)) { seen.add(evt.id); merged.push(evt); }
+      if (!seen.has(evt.id)) {
+        seen.add(evt.id);
+        merged.push(evt);
+      }
     }
-    merged.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    merged.sort(
+      (a, b) =>
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
     return merged;
   })();
 
@@ -149,51 +172,55 @@ export function EventLogPanel({ realtimeEvents, unreadCount, onOpen }: EventLogP
   return (
     <Sheet onOpenChange={handleOpenChange}>
       <SheetTrigger asChild>
-        <Button variant="outline" size="sm" className="relative gap-1.5">
+        <Button variant='outline' size='sm' className='relative gap-1.5'>
           <Bell size={14} />
-          <span className="hidden sm:inline text-[10px]">{t('title')}</span>
+          <span className='hidden text-[10px] sm:inline'>{t('title')}</span>
           {unreadCount > 0 && (
             <Badge
-              variant="destructive"
-              className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[9px]"
+              variant='destructive'
+              className='absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[9px]'
             >
               {unreadCount > 99 ? '99+' : unreadCount}
             </Badge>
           )}
         </Button>
       </SheetTrigger>
-      <SheetContent side="right" className="flex w-full flex-col sm:max-w-md">
+      <SheetContent side='right' className='flex w-full flex-col sm:max-w-md'>
         <SheetHeader>
-          <SheetTitle className="flex items-center gap-2">
+          <SheetTitle className='flex items-center gap-2'>
             <Bell size={16} />
             {t('title')}
-            <Badge variant="outline" className="text-[10px]">
+            <Badge variant='outline' className='text-[10px]'>
               {filtered.length} {t('events')}
             </Badge>
           </SheetTitle>
         </SheetHeader>
 
         {/* Filters */}
-        <div className="flex gap-2 px-1 pb-2">
+        <div className='flex gap-2 px-1 pb-2'>
           <Select value={filterEvent} onValueChange={setFilterEvent}>
-            <SelectTrigger className="h-7 text-[11px]">
+            <SelectTrigger className='h-7 text-[11px]'>
               <SelectValue placeholder={t('filterEvent')} />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">{t('allEvents')}</SelectItem>
-              <SelectItem value="disconnected">{t('eventDisconnected')}</SelectItem>
-              <SelectItem value="connected">{t('eventConnected')}</SelectItem>
-              <SelectItem value="reconnected">{t('eventReconnected')}</SelectItem>
-              <SelectItem value="error">{t('eventError')}</SelectItem>
-              <SelectItem value="dead">{t('eventDead')}</SelectItem>
+              <SelectItem value='all'>{t('allEvents')}</SelectItem>
+              <SelectItem value='disconnected'>
+                {t('eventDisconnected')}
+              </SelectItem>
+              <SelectItem value='connected'>{t('eventConnected')}</SelectItem>
+              <SelectItem value='reconnected'>
+                {t('eventReconnected')}
+              </SelectItem>
+              <SelectItem value='error'>{t('eventError')}</SelectItem>
+              <SelectItem value='dead'>{t('eventDead')}</SelectItem>
             </SelectContent>
           </Select>
           <Select value={filterSerial} onValueChange={setFilterSerial}>
-            <SelectTrigger className="h-7 text-[11px]">
+            <SelectTrigger className='h-7 text-[11px]'>
               <SelectValue placeholder={t('filterDevice')} />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">{t('allDevices')}</SelectItem>
+              <SelectItem value='all'>{t('allDevices')}</SelectItem>
               {serials.map((s) => (
                 <SelectItem key={s} value={s}>
                   {s}
@@ -204,16 +231,16 @@ export function EventLogPanel({ realtimeEvents, unreadCount, onOpen }: EventLogP
         </div>
 
         {/* Event list */}
-        <ScrollArea className="flex-1">
-          <div className="flex flex-col gap-1 px-1 pb-4">
+        <ScrollArea className='flex-1'>
+          <div className='flex flex-col gap-1 px-1 pb-4'>
             {dbLoading && filtered.length === 0 && (
-              <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
-                <Loader2 size={16} className="animate-spin" />
+              <div className='flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground'>
+                <Loader2 size={16} className='animate-spin' />
                 {t('loading')}
               </div>
             )}
             {!dbLoading && filtered.length === 0 && (
-              <div className="py-12 text-center text-sm text-muted-foreground">
+              <div className='py-12 text-center text-sm text-muted-foreground'>
                 {t('noEvents')}
               </div>
             )}
@@ -224,30 +251,32 @@ export function EventLogPanel({ realtimeEvents, unreadCount, onOpen }: EventLogP
               return (
                 <div
                   key={evt.id}
-                  className="flex items-start gap-2.5 rounded-md border border-border/50 bg-card/50 px-3 py-2"
+                  className='flex items-start gap-2.5 rounded-md border border-border/50 bg-card/50 px-3 py-2'
                 >
                   <Icon size={14} className={`mt-0.5 shrink-0 ${color}`} />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between gap-1.5">
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        <span className={`text-xs font-medium shrink-0 ${color}`}>
+                  <div className='min-w-0 flex-1'>
+                    <div className='flex items-center justify-between gap-1.5'>
+                      <div className='flex min-w-0 items-center gap-1.5'>
+                        <span
+                          className={`shrink-0 text-xs font-medium ${color}`}
+                        >
                           {t(`event_${evt.event}`)}
                         </span>
-                        <span className="truncate text-xs text-foreground">
+                        <span className='truncate text-xs text-foreground'>
                           {name}
                         </span>
                         {serial && (
-                          <span className="shrink-0 text-[10px] text-muted-foreground">
+                          <span className='shrink-0 text-[10px] text-muted-foreground'>
                             {serial}
                           </span>
                         )}
                       </div>
-                      <span className="shrink-0 text-[10px] text-muted-foreground/60">
+                      <span className='shrink-0 text-[10px] text-muted-foreground/60'>
                         {timeAgo(evt.created_at)}
                       </span>
                     </div>
                     {evt.reason && (
-                      <div className="mt-0.5 text-[11px] text-muted-foreground">
+                      <div className='mt-0.5 text-[11px] text-muted-foreground'>
                         {evt.reason}
                       </div>
                     )}
@@ -259,14 +288,14 @@ export function EventLogPanel({ realtimeEvents, unreadCount, onOpen }: EventLogP
             {/* Load more button */}
             {dbHasMore && filtered.length > 0 && (
               <Button
-                variant="ghost"
-                size="sm"
-                className="mx-auto mt-2 text-[11px]"
+                variant='ghost'
+                size='sm'
+                className='mx-auto mt-2 text-[11px]'
                 onClick={handleLoadMore}
                 disabled={dbLoading}
               >
                 {dbLoading ? (
-                  <Loader2 size={14} className="mr-1.5 animate-spin" />
+                  <Loader2 size={14} className='mr-1.5 animate-spin' />
                 ) : null}
                 {t('loadMore')}
               </Button>

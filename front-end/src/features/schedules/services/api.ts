@@ -59,4 +59,3 @@ export const schedulesApi = {
       .get<ScheduleRunOut>(`/schedules/${scheduleId}/runs/${runId}`)
       .then((r) => r.data)
 };
-

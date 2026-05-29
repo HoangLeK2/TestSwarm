@@ -11,7 +11,9 @@ export async function createOrganization(payload: {
   businessEmail?: string | null;
   businessLogo?: string | null;
 }): Promise<ProtoOrganization> {
-  const { data } = await farmApi.post<ProtoOrganization>('/organizations', payload);
+  const { data } = await farmApi.post<ProtoOrganization>(
+    '/organizations',
+    payload
+  );
   return data;
 }
-

@@ -18,7 +18,13 @@ export function ImportAccountsDialog() {
   const t = useTranslations('accountsFeature.importDialog');
   const [open, setOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
-  const { mutate, isPending, data: result, error, reset } = useBulkImportAccountsCsv();
+  const {
+    mutate,
+    isPending,
+    data: result,
+    error,
+    reset
+  } = useBulkImportAccountsCsv();
 
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];

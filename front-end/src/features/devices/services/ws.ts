@@ -39,7 +39,9 @@ function buildDeviceFarmWsUrl(): string {
     envUrl.trim() !== '' &&
     !envUrl.includes('localhost') &&
     !envUrl.includes('127.0.0.1');
-  const baseUrl = useEnv ? (normalizeWsUrl(envUrl, scheme) ?? fallbackUrl) : fallbackUrl;
+  const baseUrl = useEnv
+    ? (normalizeWsUrl(envUrl, scheme) ?? fallbackUrl)
+    : fallbackUrl;
 
   const authToken = tokenStorage.getAuthToken();
   let url = baseUrl;
@@ -47,9 +49,10 @@ function buildDeviceFarmWsUrl(): string {
     const key = 'devicefarm_ws_session_id';
     let sessionId = window.sessionStorage.getItem(key);
     if (!sessionId) {
-      sessionId = (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
-        ? crypto.randomUUID()
-        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      sessionId =
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
       window.sessionStorage.setItem(key, sessionId);
     }
     url += `${url.includes('?') ? '&' : '?'}session_id=${encodeURIComponent(sessionId)}`;
@@ -63,7 +66,8 @@ function buildDeviceFarmWsUrl(): string {
 const listeners = new Set<(msg: WsMessage) => void>();
 type BinaryListener = { fn: (buf: ArrayBuffer) => void; serial?: string };
 const binaryListeners = new Set<BinaryListener>();
-const textDecoder = typeof TextDecoder !== 'undefined' ? new TextDecoder() : null;
+const textDecoder =
+  typeof TextDecoder !== 'undefined' ? new TextDecoder() : null;
 
 // Cache last H264 config frame (0x10) per serial so late-arriving binary listeners
 // (hooks that mount after the WS was already open) get the SPS/PPS immediately.
@@ -97,7 +101,11 @@ function decodeSerial(buf: ArrayBuffer, slen: number): string {
   return textDecoder.decode(new Uint8Array(buf, 2, slen));
 }
 
-function isH264KeyFrame(view: DataView, buf: ArrayBuffer, slen: number): boolean {
+function isH264KeyFrame(
+  view: DataView,
+  buf: ArrayBuffer,
+  slen: number
+): boolean {
   const doff = 2 + slen + 4;
   return buf.byteLength > doff && view.getUint8(doff) !== 0;
 }
@@ -137,6 +145,23 @@ function handleTextMessage(raw: string) {
   }
 }
 
+function sendWatchSerial(serial: string) {
+  if (!serial || sharedSocket?.readyState !== WebSocket.OPEN) return;
+  try {
+    sharedSocket.send(JSON.stringify({ type: 'watch_serial', serial }));
+  } catch {
+    // socket may be closing; onopen will re-assert watches
+  }
+}
+
+/** Re-assert watch_serial when a viewer is active (idempotent on server). */
+export function ensureWatchSerial(serial: string) {
+  if (!serial) return;
+  const prev = watchRefCountBySerial.get(serial) ?? 0;
+  if (prev <= 0) return;
+  sendWatchSerial(serial);
+}
+
 function connectShared() {
   if (
     sharedSocket?.readyState === WebSocket.CONNECTING ||
@@ -162,11 +187,7 @@ function connectShared() {
     }
     // Re-assert watched serials after reconnect.
     watchRefCountBySerial.forEach((_count, serial) => {
-      try {
-        ws.send(JSON.stringify({ type: 'watch_serial', serial }));
-      } catch {
-        // ignore; reconnect loop will retry
-      }
+      sendWatchSerial(serial);
     });
     broadcast({ type: 'ws_status', connected: true });
   };
@@ -264,13 +285,16 @@ export function subscribeBinaryFrames(
   if (serial) {
     const prev = watchRefCountBySerial.get(serial) ?? 0;
     watchRefCountBySerial.set(serial, prev + 1);
-    if (prev === 0 && sharedSocket?.readyState === WebSocket.OPEN) {
-      try {
-        sharedSocket.send(JSON.stringify({ type: 'watch_serial', serial }));
-      } catch {
-        // ignore; next connect will re-assert
-      }
+    if (prev === 0) {
+      sendWatchSerial(serial);
     }
+  }
+  if (
+    !sharedSocket ||
+    sharedSocket.readyState === WebSocket.CLOSED ||
+    sharedSocket.readyState === WebSocket.CLOSING
+  ) {
+    connectShared();
   }
   // Replay cached config + keyframe so late-arriving hooks (common case: hook
   // mounts after WS bootstrap) get both SPS/PPS and an IDR immediately.
@@ -293,7 +317,10 @@ export function subscribeBinaryFrames(
       });
     }
   } else if (lastConfigBySerial.size > 0 || lastKeyBySerial.size > 0) {
-    const serials = new Set([...Array.from(lastConfigBySerial.keys()), ...Array.from(lastKeyBySerial.keys())]);
+    const serials = new Set([
+      ...Array.from(lastConfigBySerial.keys()),
+      ...Array.from(lastKeyBySerial.keys())
+    ]);
     const toReplay: ArrayBuffer[] = [];
     serials.forEach((serial) => {
       const cfg = lastConfigBySerial.get(serial);
@@ -324,7 +351,9 @@ export function subscribeBinaryFrames(
         watchRefCountBySerial.delete(serial);
         if (sharedSocket?.readyState === WebSocket.OPEN) {
           try {
-            sharedSocket.send(JSON.stringify({ type: 'unwatch_serial', serial }));
+            sharedSocket.send(
+              JSON.stringify({ type: 'unwatch_serial', serial })
+            );
           } catch {
             // ignore; socket may be closing
           }
@@ -371,6 +400,7 @@ export function isCachedKeyFrameStale(serial: string): boolean {
  */
 export function requestIdr(serial: string, minIntervalMs = 700): void {
   if (!serial) return;
+  ensureWatchSerial(serial);
   const now = Date.now();
   const last = lastIdrRequestBySerial.get(serial) ?? 0;
   if (minIntervalMs > 0 && now - last < minIntervalMs) return;
@@ -384,7 +414,10 @@ export function requestIdr(serial: string, minIntervalMs = 700): void {
   }
 }
 
-export function notifyDecoderBackpressure(serial: string, minIntervalMs = 500): void {
+export function notifyDecoderBackpressure(
+  serial: string,
+  minIntervalMs = 500
+): void {
   if (!serial) return;
   waitForKeyBySerial.add(serial);
   requestIdr(serial, minIntervalMs);
@@ -413,7 +446,9 @@ export function reconnectDeviceFarmSocket(reason = 'stream_recovery'): void {
 }
 
 /** One browser-wide socket; multiple React trees/components share it. */
-export function subscribeDeviceFarm(onMessage: (msg: WsMessage) => void): () => void {
+export function subscribeDeviceFarm(
+  onMessage: (msg: WsMessage) => void
+): () => void {
   listeners.add(onMessage);
   if (listeners.size === 1) {
     connectShared();
@@ -436,6 +471,6 @@ export function createWs(onMessage: (msg: WsMessage) => void) {
     },
     close() {
       unsubscribe();
-    },
+    }
   };
 }

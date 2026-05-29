@@ -18,8 +18,15 @@ function systemUiRank(pkg: string): number {
   return 0;
 }
 
-export function parseHierarchySelectorNodes(hierarchyXml: string): HierarchyParsedNode[] {
-  if (!hierarchyXml || hierarchyXml.startsWith('Lỗi:') || hierarchyXml.startsWith('Error:')) return [];
+export function parseHierarchySelectorNodes(
+  hierarchyXml: string
+): HierarchyParsedNode[] {
+  if (
+    !hierarchyXml ||
+    hierarchyXml.startsWith('Lỗi:') ||
+    hierarchyXml.startsWith('Error:')
+  )
+    return [];
   try {
     const parser = new DOMParser();
     const doc = parser.parseFromString(hierarchyXml, 'text/xml');

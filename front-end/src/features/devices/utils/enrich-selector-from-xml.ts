@@ -13,10 +13,15 @@ const CONTAINER_CLASSES = new Set([
   'android.view.ViewGroup',
   'androidx.constraintlayout.widget.ConstraintLayout',
   'android.widget.ScrollView',
-  'androidx.recyclerview.widget.RecyclerView',
+  'androidx.recyclerview.widget.RecyclerView'
 ]);
 
-type PrimaryBy = 'resource-id' | 'text' | 'description' | 'xpath' | 'class name';
+type PrimaryBy =
+  | 'resource-id'
+  | 'text'
+  | 'description'
+  | 'xpath'
+  | 'class name';
 
 function isSystemPackage(pkg: string): boolean {
   return !pkg || pkg === 'android' || pkg.startsWith('com.android.systemui');
@@ -37,7 +42,10 @@ function primaryMatches(node: Element, by: PrimaryBy, value: string): boolean {
   }
 }
 
-function conditionsMatch(node: Element, conditions: Record<string, unknown>): boolean {
+function conditionsMatch(
+  node: Element,
+  conditions: Record<string, unknown>
+): boolean {
   for (const [key, expected] of Object.entries(conditions)) {
     if (expected == null) continue;
     if (key === 'className') {
@@ -51,11 +59,13 @@ function conditionsMatch(node: Element, conditions: Record<string, unknown>): bo
       continue;
     }
     if (key === 'packageName') {
-      if ((node.getAttribute('package') ?? '') !== String(expected)) return false;
+      if ((node.getAttribute('package') ?? '') !== String(expected))
+        return false;
       continue;
     }
     if (key === 'resourceId') {
-      if ((node.getAttribute('resource-id') ?? '') !== String(expected)) return false;
+      if ((node.getAttribute('resource-id') ?? '') !== String(expected))
+        return false;
       continue;
     }
     if (key === 'enabled') {
@@ -67,7 +77,10 @@ function conditionsMatch(node: Element, conditions: Record<string, unknown>): bo
   return true;
 }
 
-function buildConditions(node: Element, primary: { by: PrimaryBy; value: string }): Record<string, unknown> {
+function buildConditions(
+  node: Element,
+  primary: { by: PrimaryBy; value: string }
+): Record<string, unknown> {
   const cls = (node.getAttribute('class') ?? '').trim();
   const pkg = (node.getAttribute('package') ?? '').trim();
   const rid = (node.getAttribute('resource-id') ?? '').trim();
@@ -100,7 +113,7 @@ function buildConditions(node: Element, primary: { by: PrimaryBy; value: string 
 export function enrichSelectorFromNode(
   node: Element,
   primary: { by: PrimaryBy; value: string },
-  allNodes: Element[],
+  allNodes: Element[]
 ): ScenarioSelectorShape {
   if (primary.by === 'xpath') {
     return { by: 'xpath', value: primary.value };
@@ -108,7 +121,9 @@ export function enrichSelectorFromNode(
 
   const conditions = buildConditions(node, primary);
   let matches = allNodes.filter(
-    (n) => primaryMatches(n, primary.by, primary.value) && conditionsMatch(n, conditions),
+    (n) =>
+      primaryMatches(n, primary.by, primary.value) &&
+      conditionsMatch(n, conditions)
   );
 
   // Relax package if over-filtered (e.g. transient overlay)
@@ -116,7 +131,9 @@ export function enrichSelectorFromNode(
     const { packageName: _pkg, ...rest } = conditions;
     const relaxed = { ...rest };
     matches = allNodes.filter(
-      (n) => primaryMatches(n, primary.by, primary.value) && conditionsMatch(n, relaxed),
+      (n) =>
+        primaryMatches(n, primary.by, primary.value) &&
+        conditionsMatch(n, relaxed)
     );
     if (matches.length > 0) {
       delete conditions.packageName;
@@ -127,7 +144,8 @@ export function enrichSelectorFromNode(
   if (matches.length === 0 && conditions.resourceId) {
     const { resourceId: _rid, ...rest } = conditions;
     matches = allNodes.filter(
-      (n) => primaryMatches(n, primary.by, primary.value) && conditionsMatch(n, rest),
+      (n) =>
+        primaryMatches(n, primary.by, primary.value) && conditionsMatch(n, rest)
     );
     if (matches.length > 0) {
       delete conditions.resourceId;
@@ -142,7 +160,7 @@ export function enrichSelectorFromNode(
 
   const spec: ScenarioSelectorShape = {
     by: primary.by as ScenarioSelectorShape['by'],
-    value: primary.value,
+    value: primary.value
   };
   if (Object.keys(conditions).length > 0) {
     spec.conditions = conditions;

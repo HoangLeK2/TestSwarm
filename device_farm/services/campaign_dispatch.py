@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict, Tuple
@@ -21,6 +22,14 @@ log = logging.getLogger(__name__)
 # Colons (:) are reserved as segment separators; quotes/backslashes risk
 # injection into Temporal query string filter expressions.
 _CAMPAIGN_ID_RE = re.compile(r'^[\w\-]{1,128}$')
+
+
+def _offline_dismiss_minutes() -> int:
+    raw = os.environ.get("DEVICE_FARM_DLQ_OFFLINE_DISMISS_MINUTES", "5")
+    try:
+        return max(1, min(10_080, int(raw)))
+    except ValueError:
+        return 5
 
 
 def _account_to_vars(account) -> Dict[str, Any]:
@@ -288,6 +297,20 @@ async def enqueue_campaign_run_temporal(
         if not devices:
             return {"error": "Campaign has no devices"}, 400
 
+        from services.device_liveness import filter_live_devices_for_dispatch
+
+        devices, skipped_devices = await filter_live_devices_for_dispatch(
+            db,
+            devices,
+            offline_after_minutes=_offline_dismiss_minutes(),
+        )
+        if not devices:
+            return {
+                "error": "No online devices available for campaign dispatch",
+                "campaign_id": campaign_id,
+                "skipped_offline_device_serials": [d.serial for d in skipped_devices],
+            }, 400
+
         scenarios = await repo.list_scenarios(db, campaign_id)
         if not scenarios:
             return {
@@ -510,6 +533,7 @@ async def enqueue_campaign_run_temporal(
                 "scenario_ids": [s.id for s in scenarios if s.steps],
                 "execution_mode": "device_sequence",
                 "account_usage": account_usage_meta,
+                "skipped_offline_device_serials": [d.serial for d in skipped_devices],
             },
         )
         await db.commit()
@@ -519,6 +543,7 @@ async def enqueue_campaign_run_temporal(
         "execution_id": execution_id,
         "status": "running",
         "device_serials": [d.serial for d in devices],
+        "skipped_offline_device_serials": [d.serial for d in skipped_devices],
         "workflow_ids": workflow_ids,
         "scenarios_count": len(scenarios),
         "execution_engine": "temporal",

@@ -27,6 +27,8 @@ _EXPORT_FIELDS = [
     "likes_count", "comments_count", "shares_count", "views_count",
     "tags", "device_serial", "campaign_id", "execution_id",
     "scenario_name", "item_level", "parent_id",
+    # Join key (used to validate parent-child correctness)
+    "content_hash",
     "extracted_at", "content_date", "created_at",
 ]
 
@@ -40,6 +42,7 @@ def _item_row(item) -> list:
         item.likes_count, item.comments_count, item.shares_count, item.views_count,
         item.tags, item.device_serial, item.campaign_id, item.execution_id,
         item.scenario_name, item.item_level, item.parent_id,
+        item.content_hash,
         item.extracted_at.isoformat() if item.extracted_at else None,
         item.content_date.isoformat() if item.content_date else None,
         item.created_at.isoformat() if item.created_at else None,

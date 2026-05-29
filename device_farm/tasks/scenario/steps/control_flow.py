@@ -362,7 +362,11 @@ def handle_tap_fb_comment_button(
     else_steps = step.get("else") or []
 
     tapped = False
-    if target:
+    if result.get("reason_code") == "already_on_comment_sheet":
+        tapped = True
+        sc.ctx["_active_comment_anchor_verified"] = True
+        result["message"] = "tap_fb_comment_button: comment sheet already open"
+    elif target:
         bounds = target.get("bounds")
         if isinstance(bounds, list) and len(bounds) == 4:
             x1, y1, x2, y2 = [int(v) for v in bounds]
@@ -389,11 +393,19 @@ def handle_tap_fb_comment_button(
                     "timestamp": target.get("timestamp"),
                     "text_prefix": target.get("text_prefix"),
                 }
+                edge_summary = result.get("edge_extra_summary") if isinstance(result.get("edge_extra_summary"), dict) else None
+                diag = edge_summary.get("diagnostic") if isinstance(edge_summary, dict) and isinstance(edge_summary.get("diagnostic"), dict) else None
+                verified = bool(diag.get("verified")) if diag else (not agent_tapped)
+                sc.ctx["_active_comment_anchor_verified"] = verified
                 result["tapped_at"] = [cx, cy]
                 result["agent_tapped"] = agent_tapped
                 result["_bounds"] = bounds
                 result["_pid"] = target.get("pid")
                 result["parent_id"] = target.get("parent_id")
+                result["target_score"] = target.get("score")
+                result["target_chosen_index"] = diag.get("chosen_index") if diag else None
+                result["target_verified"] = verified
+                result["target_candidate_count"] = diag.get("candidate_count") if diag else None
             except Exception as exc:
                 result["ok"] = False
                 result["message"] = f"tap_fb_comment_button: tap failed: {exc}"

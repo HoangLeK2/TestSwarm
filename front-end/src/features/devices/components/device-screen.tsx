@@ -1,6 +1,12 @@
 'use client';
 
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState
+} from 'react';
 import { useGesture } from '@use-gesture/react';
 import type { Device } from '../types';
 import { serialToId } from '../helpers';
@@ -9,9 +15,15 @@ import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 import { tokenStorage } from '@/lib/token-storage';
 import { useH264Video } from '../hooks/use-h264-canvas';
-import { reconnectDeviceFarmSocket, requestIdr, subscribeDeviceFarm } from '../services/ws';
+import {
+  ensureWatchSerial,
+  reconnectDeviceFarmSocket,
+  requestIdr,
+  subscribeDeviceFarm
+} from '../services/ws';
 import { useTranslations } from 'next-intl';
 import { SHOW_RELAY_SCRCPY_UI_TOGGLE } from '../streaming-ui-flags';
+import { Badge } from '@/components/ui/badge';
 
 type Size = { width: number; height: number };
 
@@ -32,7 +44,7 @@ function getObjectCoverRect(
   sourceH: number,
   displayW: number,
   displayH: number,
-  align: 'center' | 'bottom',
+  align: 'center' | 'bottom'
 ): ObjectFitRect {
   if (sourceW <= 0 || sourceH <= 0 || displayW <= 0 || displayH <= 0) {
     return { left: 0, top: 0, width: displayW, height: displayH, scale: 1 };
@@ -45,10 +57,9 @@ function getObjectCoverRect(
     top: align === 'bottom' ? displayH - height : (displayH - height) / 2,
     width,
     height,
-    scale,
+    scale
   };
 }
-
 
 interface DeviceScreenProps {
   device: Device;
@@ -56,9 +67,21 @@ interface DeviceScreenProps {
   mode: 'tap' | 'swipe';
   onTap?: (rx: number, ry: number) => void;
   /** Normalized 0–1 coords + duration (ms), after a completed swipe drag (not drag mode). */
-  onSwipe?: (rx1: number, ry1: number, rx2: number, ry2: number, durationMs: number) => void;
+  onSwipe?: (
+    rx1: number,
+    ry1: number,
+    rx2: number,
+    ry2: number,
+    durationMs: number
+  ) => void;
   /** Normalized 0–1 + duration when gesture mode is drag. */
-  onDragGesture?: (rx1: number, ry1: number, rx2: number, ry2: number, durationMs: number) => void;
+  onDragGesture?: (
+    rx1: number,
+    ry1: number,
+    rx2: number,
+    ry2: number,
+    durationMs: number
+  ) => void;
   apiBase?: string;
   /** Highlight bounds overlay [x1, y1, x2, y2] in device pixels */
   highlightBounds?: [number, number, number, number] | null;
@@ -83,12 +106,12 @@ export function DeviceScreen({
   gestureMode,
   captionBelowFrame = false,
   streamCoverAlign = 'bottom',
-  interactive = true,
+  interactive = true
 }: DeviceScreenProps) {
   const t = useTranslations('devicesFarm');
-  const wrapRef    = useRef<HTMLDivElement>(null);
-  const canvasRef  = useRef<HTMLCanvasElement>(null);
-  const imageRef   = useRef<HTMLImageElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
   const draggedRef = useRef(false);
   const dragStartRef = useRef<{ x: number; y: number } | null>(null);
   const onSwipeRef = useRef(onSwipe);
@@ -103,19 +126,33 @@ export function DeviceScreen({
   const [wrapSize, setWrapSize] = useState<Size>({ width: 0, height: 0 });
 
   const id = serialToId(device.serial);
-  const dw = device.screen_width  || 1080;
+  const dw = device.screen_width || 1080;
   const dh = device.screen_height || 1920;
 
   const isActive =
-    device.state && !['DISCONNECTED', 'DEAD'].includes(device.state.toUpperCase());
+    device.state &&
+    !['DISCONNECTED', 'DEAD'].includes(device.state.toUpperCase());
+
+  const isUnresponsive = isActive && !hasFrame && loadingElapsedSec >= 12;
 
   // Track whether jmuxer has delivered at least one H264 frame
   const [h264Active, setH264Active] = useState(false);
-  const h264TimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  const h264StableTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  const h264StallFallbackTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  const h264WarmupRef = React.useRef<{ startedAt: number; frames: number }>({ startedAt: 0, frames: 0 });
-  const h264RecoveryBurstRef = React.useRef<{ firstAt: number; count: number }>({ firstAt: 0, count: 0 });
+  const h264TimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+  const h264StableTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+  const h264StallFallbackTimerRef = React.useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
+  const h264WarmupRef = React.useRef<{ startedAt: number; frames: number }>({
+    startedAt: 0,
+    frames: 0
+  });
+  const h264RecoveryBurstRef = React.useRef<{ firstAt: number; count: number }>(
+    { firstAt: 0, count: 0 }
+  );
   const [mjpegEnabled, setMjpegEnabled] = useState(true);
   const [h264Stalled, setH264Stalled] = useState(false);
   const [h264RestartKey, setH264RestartKey] = useState(0);
@@ -131,10 +168,16 @@ export function DeviceScreen({
   const streamingAutoAttach = streamingFlags?.autoAttach;
 
   const updateStreamSize = useCallback((width: number, height: number) => {
-    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return;
+    if (
+      !Number.isFinite(width) ||
+      !Number.isFinite(height) ||
+      width <= 0 ||
+      height <= 0
+    )
+      return;
     const next = { width: Math.round(width), height: Math.round(height) };
     setStreamSize((prev) =>
-      prev?.width === next.width && prev?.height === next.height ? prev : next,
+      prev?.width === next.width && prev?.height === next.height ? prev : next
     );
   }, []);
 
@@ -146,7 +189,9 @@ export function DeviceScreen({
       setWrapSize((prev) => {
         const width = Math.round(rect.width);
         const height = Math.round(rect.height);
-        return prev.width === width && prev.height === height ? prev : { width, height };
+        return prev.width === width && prev.height === height
+          ? prev
+          : { width, height };
       });
     };
     update();
@@ -158,12 +203,14 @@ export function DeviceScreen({
   useEffect(() => {
     let cancelled = false;
     farmApi
-      .get<{ streaming_mode?: string; streaming_auto_attach_scrcpy?: boolean }>('/config')
+      .get<{ streaming_mode?: string; streaming_auto_attach_scrcpy?: boolean }>(
+        '/config'
+      )
       .then((res) => {
         if (cancelled) return;
         setStreamingFlags({
           mode: String(res.data?.streaming_mode ?? 'periodic'),
-          autoAttach: Boolean(res.data?.streaming_auto_attach_scrcpy ?? true),
+          autoAttach: Boolean(res.data?.streaming_auto_attach_scrcpy ?? true)
         });
       })
       .catch(() => {
@@ -175,19 +222,29 @@ export function DeviceScreen({
     };
   }, []);
 
-  /** Sync from server (default on). Matches grid tile when UI toggle is hidden. */
+  /** Sync from server (default on). Control page always streams when relay toggle is hidden. */
   useLayoutEffect(() => {
     if (!streamingMode) return;
     if (streamingMode !== 'continuous') {
       setScreenStreamOn(true);
       return;
     }
+    if (!SHOW_RELAY_SCRCPY_UI_TOGGLE) {
+      setScreenStreamOn(true);
+      return;
+    }
     const serverWants =
-      device.relay_scrcpy_enabled !== undefined && device.relay_scrcpy_enabled !== null
+      device.relay_scrcpy_enabled !== undefined &&
+      device.relay_scrcpy_enabled !== null
         ? Boolean(device.relay_scrcpy_enabled)
         : Boolean(streamingAutoAttach ?? true);
     setScreenStreamOn(serverWants);
-  }, [streamingMode, streamingAutoAttach, device.serial, device.relay_scrcpy_enabled]);
+  }, [
+    streamingMode,
+    streamingAutoAttach,
+    device.serial,
+    device.relay_scrcpy_enabled
+  ]);
 
   // Until /api/config returns, assume non-continuous (fail-open: keep legacy full stream).
   const isContinuous =
@@ -207,8 +264,13 @@ export function DeviceScreen({
     let detachScheduled = false;
     const serial = device.serial;
 
+    ensureWatchSerial(serial);
     farmApi
       .post(`/devices/${encodeURIComponent(serial)}/scrcpy/attach`, {})
+      .then(() => {
+        ensureWatchSerial(serial);
+        requestIdr(serial);
+      })
       .catch(() => {});
 
     const onPageHide = () => {
@@ -222,14 +284,15 @@ export function DeviceScreen({
     window.addEventListener('pagehide', onPageHide);
     return () => {
       window.removeEventListener('pagehide', onPageHide);
-      onPageHide();
+      // Do not detach on React effect re-runs (config load, screenStreamOn sync).
+      // Server auto-stops after idle; pagehide handles tab close / navigation.
     };
   }, [
     device.serial,
     isActive,
     isContinuous,
     screenStreamOn,
-    streamingAutoAttach,
+    streamingAutoAttach
   ]);
 
   const onScreenStreamChange = useCallback(
@@ -238,9 +301,15 @@ export function DeviceScreen({
       setStreamToggleBusy(true);
       try {
         if (checked) {
-          await farmApi.post(`/devices/${encodeURIComponent(device.serial)}/scrcpy/attach`, {});
+          await farmApi.post(
+            `/devices/${encodeURIComponent(device.serial)}/scrcpy/attach`,
+            {}
+          );
         } else {
-          await farmApi.post(`/devices/${encodeURIComponent(device.serial)}/scrcpy/detach`, {});
+          await farmApi.post(
+            `/devices/${encodeURIComponent(device.serial)}/scrcpy/detach`,
+            {}
+          );
         }
         setScreenStreamOn(checked);
         if (!checked) {
@@ -255,9 +324,13 @@ export function DeviceScreen({
           setMjpegEnabled(true);
         }
       } catch (err) {
-        const msg = err && typeof err === 'object' && 'response' in err
-          ? String((err as { response?: { data?: { error?: string } } }).response?.data?.error ?? '')
-          : '';
+        const msg =
+          err && typeof err === 'object' && 'response' in err
+            ? String(
+                (err as { response?: { data?: { error?: string } } }).response
+                  ?.data?.error ?? ''
+              )
+            : '';
         toast.error(
           checked ? t('screenStreamAttachError') : t('screenStreamDetachError'),
           { description: msg || undefined }
@@ -278,7 +351,14 @@ export function DeviceScreen({
     const base = `${deviceFarmBackendBase}/stream/${encodeURIComponent(device.serial)}?fps=${fps}`;
     const token = tokenStorage.getAuthToken();
     return token ? `${base}&token=${encodeURIComponent(token)}` : base;
-  }, [isActive, mjpegEnabled, device.serial, h264PrimaryMode, h264Active, h264Stalled]);
+  }, [
+    isActive,
+    mjpegEnabled,
+    device.serial,
+    h264PrimaryMode,
+    h264Active,
+    h264Stalled
+  ]);
 
   useEffect(() => {
     setMjpegFailed(false);
@@ -286,12 +366,10 @@ export function DeviceScreen({
 
   // Always pass real serial so binary frames are subscribed immediately on mount.
   // jmuxer gracefully handles missing MSE via onError — MJPEG fallback stays visible.
-  useH264Video(
-    isActive && relayH264Allowed ? device.serial : '',
-    canvasRef,
-    {
-      restartKey: h264RestartKey,
-      onFrame: useCallback((frame?: { mostlyBlack: boolean }) => {
+  useH264Video(isActive && relayH264Allowed ? device.serial : '', canvasRef, {
+    restartKey: h264RestartKey,
+    onFrame: useCallback(
+      (frame?: { mostlyBlack: boolean }) => {
         const canvas = canvasRef.current;
         if (canvas?.width && canvas?.height) {
           updateStreamSize(canvas.width, canvas.height);
@@ -313,7 +391,7 @@ export function DeviceScreen({
         // frozen even though the decoder has recovered.
         const now = Date.now();
         const warm = h264WarmupRef.current;
-        if (warm.startedAt === 0 || (now - warm.startedAt) > 1500) {
+        if (warm.startedAt === 0 || now - warm.startedAt > 1500) {
           warm.startedAt = now;
           warm.frames = 1;
         } else {
@@ -336,8 +414,11 @@ export function DeviceScreen({
           if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
           h264TimeoutRef.current = setTimeout(() => setH264Active(false), 8000);
         }
-      }, [hasFrame, h264Active, h264PrimaryMode, h264Stalled, updateStreamSize]),
-      onStall: useCallback((reason: 'no_packets' | 'decoder_stalled') => {
+      },
+      [hasFrame, h264Active, h264PrimaryMode, h264Stalled, updateStreamSize]
+    ),
+    onStall: useCallback(
+      (reason: 'no_packets' | 'decoder_stalled') => {
         const now = Date.now();
         const burst = h264RecoveryBurstRef.current;
         if (burst.firstAt === 0 || now - burst.firstAt > 45_000) {
@@ -377,9 +458,10 @@ export function DeviceScreen({
           burst.count = 0;
           reconnectDeviceFarmSocket('repeated_h264_stall');
         }
-      }, [hasFrame]),
-    }
-  );
+      },
+      [hasFrame]
+    )
+  });
 
   // Reset h264Active when device changes or goes offline
   useEffect(() => {
@@ -391,7 +473,8 @@ export function DeviceScreen({
     h264WarmupRef.current = { startedAt: 0, frames: 0 };
     if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
     if (h264StableTimerRef.current) clearTimeout(h264StableTimerRef.current);
-    if (h264StallFallbackTimerRef.current) clearTimeout(h264StallFallbackTimerRef.current);
+    if (h264StallFallbackTimerRef.current)
+      clearTimeout(h264StallFallbackTimerRef.current);
   }, [device.serial, isActive, relayH264Allowed]);
 
   // Once H264 is rendering, stop MJPEG network fetches entirely. Until then,
@@ -494,13 +577,18 @@ export function DeviceScreen({
       sourceW: Math.max(1, sourceW || targetW || 1),
       sourceH: Math.max(1, sourceH || targetH || 1),
       targetW: Math.max(1, targetW || sourceW || 1),
-      targetH: Math.max(1, targetH || sourceH || 1),
+      targetH: Math.max(1, targetH || sourceH || 1)
     };
   }, [dh, dw, h264Active, streamSize]);
 
   /** Mirror CSS object-cover exactly, then convert stream ratio to device pixels. */
   const clientToDevice = useCallback(
-    (displayX: number, displayY: number, displayW: number, displayH: number) => {
+    (
+      displayX: number,
+      displayY: number,
+      displayW: number,
+      displayH: number
+    ) => {
       const { sourceW, sourceH, targetW, targetH } = getCoordinateSpace();
       if (displayW <= 0 || displayH <= 0 || sourceW <= 0 || sourceH <= 0) {
         const rx = 0.5;
@@ -511,11 +599,17 @@ export function DeviceScreen({
           rx,
           ry,
           srcW: sourceW,
-          srcH: sourceH,
+          srcH: sourceH
         };
       }
 
-      const fit = getObjectCoverRect(sourceW, sourceH, displayW, displayH, streamCoverAlign);
+      const fit = getObjectCoverRect(
+        sourceW,
+        sourceH,
+        displayW,
+        displayH,
+        streamCoverAlign
+      );
       const sourceX = clamp((displayX - fit.left) / fit.scale, 0, sourceW);
       const sourceY = clamp((displayY - fit.top) / fit.scale, 0, sourceH);
       const rx = clamp(sourceX / sourceW, 0, 1);
@@ -528,27 +622,42 @@ export function DeviceScreen({
         rx,
         ry,
         srcW: sourceW,
-        srcH: sourceH,
+        srcH: sourceH
       };
     },
     [getCoordinateSpace, streamCoverAlign]
   );
 
   const highlightStyle = React.useMemo<React.CSSProperties | undefined>(() => {
-    if (!highlightBounds || wrapSize.width <= 0 || wrapSize.height <= 0) return undefined;
+    if (!highlightBounds || wrapSize.width <= 0 || wrapSize.height <= 0)
+      return undefined;
     const { sourceW, sourceH, targetW, targetH } = getCoordinateSpace();
-    const fit = getObjectCoverRect(sourceW, sourceH, wrapSize.width, wrapSize.height, streamCoverAlign);
+    const fit = getObjectCoverRect(
+      sourceW,
+      sourceH,
+      wrapSize.width,
+      wrapSize.height,
+      streamCoverAlign
+    );
     const [x1, y1, x2, y2] = highlightBounds;
     return {
       left: `${fit.left + (x1 / targetW) * fit.width}px`,
       top: `${fit.top + (y1 / targetH) * fit.height}px`,
       width: `${((x2 - x1) / targetW) * fit.width}px`,
-      height: `${((y2 - y1) / targetH) * fit.height}px`,
+      height: `${((y2 - y1) / targetH) * fit.height}px`
     };
-  }, [getCoordinateSpace, highlightBounds, streamCoverAlign, wrapSize.height, wrapSize.width]);
+  }, [
+    getCoordinateSpace,
+    highlightBounds,
+    streamCoverAlign,
+    wrapSize.height,
+    wrapSize.width
+  ]);
 
   const streamObjectClass =
-    streamCoverAlign === 'bottom' ? 'object-cover object-bottom' : 'object-cover object-center';
+    streamCoverAlign === 'bottom'
+      ? 'object-cover object-bottom'
+      : 'object-cover object-center';
 
   const requestStreamRefreshAfterInput = useCallback(() => {
     if (!isActive || !relayH264Allowed) return;
@@ -563,27 +672,57 @@ export function DeviceScreen({
       onDrag: (state) => {
         if (!state || state.first) return;
         const { last, xy, initial } = state;
-        const elapsed = 'elapsed' in state ? (state as { elapsed?: number }).elapsed ?? 300 : 300;
+        const elapsed =
+          'elapsed' in state
+            ? ((state as { elapsed?: number }).elapsed ?? 300)
+            : 300;
         if (!xy || !initial) return;
-        if (xy[0] !== initial[0] || xy[1] !== initial[1]) draggedRef.current = true;
+        if (xy[0] !== initial[0] || xy[1] !== initial[1])
+          draggedRef.current = true;
         if (!last) return;
         if (xy[0] !== initial[0] || xy[1] !== initial[1]) {
           const r = wrapRef.current?.getBoundingClientRect();
           if (!r) return;
-          const p1 = clientToDevice(initial[0] - r.left, initial[1] - r.top, r.width, r.height);
-          const p2 = clientToDevice(xy[0] - r.left, xy[1] - r.top, r.width, r.height);
-          const rx1 = parseFloat((p1.rx ?? (p1.x / dw)).toFixed(4));
-          const ry1 = parseFloat((p1.ry ?? (p1.y / dh)).toFixed(4));
-          const rx2 = parseFloat((p2.rx ?? (p2.x / dw)).toFixed(4));
-          const ry2 = parseFloat((p2.ry ?? (p2.y / dh)).toFixed(4));
+          const p1 = clientToDevice(
+            initial[0] - r.left,
+            initial[1] - r.top,
+            r.width,
+            r.height
+          );
+          const p2 = clientToDevice(
+            xy[0] - r.left,
+            xy[1] - r.top,
+            r.width,
+            r.height
+          );
+          const rx1 = parseFloat((p1.rx ?? p1.x / dw).toFixed(4));
+          const ry1 = parseFloat((p1.ry ?? p1.y / dh).toFixed(4));
+          const rx2 = parseFloat((p2.rx ?? p2.x / dw).toFixed(4));
+          const ry2 = parseFloat((p2.ry ?? p2.y / dh).toFixed(4));
           if (gestureMode === 'drag') {
             const ms = 1000;
-            wsSend({ type: 'drag', serial: device.serial, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, ms });
+            wsSend({
+              type: 'drag',
+              serial: device.serial,
+              x1: p1.x,
+              y1: p1.y,
+              x2: p2.x,
+              y2: p2.y,
+              ms
+            });
             requestStreamRefreshAfterInput();
             onDragGestureRef.current?.(rx1, ry1, rx2, ry2, ms);
           } else {
             const ms = Math.max(300, Math.min(elapsed, 1000));
-            wsSend({ type: 'swipe', serial: device.serial, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, ms });
+            wsSend({
+              type: 'swipe',
+              serial: device.serial,
+              x1: p1.x,
+              y1: p1.y,
+              x2: p2.x,
+              y2: p2.y,
+              ms
+            });
             requestStreamRefreshAfterInput();
             onSwipeRef.current?.(rx1, ry1, rx2, ry2, ms);
           }
@@ -594,21 +733,45 @@ export function DeviceScreen({
         const r = wrapRef.current?.getBoundingClientRect();
         if (!r) return;
         const origin = state.origin as [number, number];
-        const p = clientToDevice(origin[0] - r.left, origin[1] - r.top, r.width, r.height);
+        const p = clientToDevice(
+          origin[0] - r.left,
+          origin[1] - r.top,
+          r.width,
+          r.height
+        );
         const scale = (state as { offset?: [number, number] }).offset?.[0] ?? 1;
-        wsSend({ type: 'pinch', serial: device.serial, cx: p.x, cy: p.y, scale, ms: 400 });
+        wsSend({
+          type: 'pinch',
+          serial: device.serial,
+          cx: p.x,
+          cy: p.y,
+          scale,
+          ms: 400
+        });
         requestStreamRefreshAfterInput();
-      },
+      }
     },
-    { drag: { threshold: 5 }, pointer: { touch: true }, event: { passive: false } }
+    {
+      drag: { threshold: 5 },
+      pointer: { touch: true },
+      event: { passive: false }
+    }
   );
 
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
-      if (draggedRef.current) { draggedRef.current = false; return; }
+      if (draggedRef.current) {
+        draggedRef.current = false;
+        return;
+      }
       const el = wrapRef.current ?? e.currentTarget;
       const rect = el.getBoundingClientRect();
-      const p    = clientToDevice(e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height);
+      const p = clientToDevice(
+        e.clientX - rect.left,
+        e.clientY - rect.top,
+        rect.width,
+        rect.height
+      );
 
       if (gestureMode === 'double_tap') {
         wsSend({ type: 'double_tap', serial: device.serial, x: p.x, y: p.y });
@@ -624,7 +787,15 @@ export function DeviceScreen({
         onTap(p.rx, p.ry);
       }
     },
-    [mode, gestureMode, clientToDevice, wsSend, device.serial, onTap, requestStreamRefreshAfterInput]
+    [
+      mode,
+      gestureMode,
+      clientToDevice,
+      wsSend,
+      device.serial,
+      onTap,
+      requestStreamRefreshAfterInput
+    ]
   );
 
   const handleDoubleClick = useCallback(
@@ -632,11 +803,23 @@ export function DeviceScreen({
       if (mode !== 'tap' || gestureMode === 'double_tap') return; // double_tap mode uses single click
       const el = wrapRef.current ?? e.currentTarget;
       const rect = el.getBoundingClientRect();
-      const p    = clientToDevice(e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height);
+      const p = clientToDevice(
+        e.clientX - rect.left,
+        e.clientY - rect.top,
+        rect.width,
+        rect.height
+      );
       wsSend({ type: 'double_tap', serial: device.serial, x: p.x, y: p.y });
       requestStreamRefreshAfterInput();
     },
-    [mode, gestureMode, clientToDevice, wsSend, device.serial, requestStreamRefreshAfterInput]
+    [
+      mode,
+      gestureMode,
+      clientToDevice,
+      wsSend,
+      device.serial,
+      requestStreamRefreshAfterInput
+    ]
   );
 
   const handleWheel = useCallback(
@@ -645,9 +828,21 @@ export function DeviceScreen({
       e.preventDefault();
       const el = wrapRef.current ?? e.currentTarget;
       const rect = el.getBoundingClientRect();
-      const p    = clientToDevice(e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height);
+      const p = clientToDevice(
+        e.clientX - rect.left,
+        e.clientY - rect.top,
+        rect.width,
+        rect.height
+      );
       const scale = e.deltaY < 0 ? 2.0 : 0.5; // scroll up = zoom in, down = zoom out
-      wsSend({ type: 'pinch', serial: device.serial, cx: p.x, cy: p.y, scale, ms: 400 });
+      wsSend({
+        type: 'pinch',
+        serial: device.serial,
+        cx: p.x,
+        cy: p.y,
+        scale,
+        ms: 400
+      });
       requestStreamRefreshAfterInput();
     },
     [clientToDevice, wsSend, device.serial, requestStreamRefreshAfterInput]
@@ -662,10 +857,15 @@ export function DeviceScreen({
         onDoubleClick={interactive ? handleDoubleClick : undefined}
         onWheel={interactive ? handleWheel : undefined}
         className={`relative min-h-0 w-full flex-1 overflow-hidden bg-black ${
-          !interactive ? 'cursor-default' :
-          gestureMode === 'double_tap' ? 'cursor-cell' :
-          gestureMode === 'drag' ? 'cursor-grab' :
-          mode === 'swipe' ? 'cursor-crosshair' : 'cursor-pointer'
+          !interactive
+            ? 'cursor-default'
+            : gestureMode === 'double_tap'
+              ? 'cursor-cell'
+              : gestureMode === 'drag'
+                ? 'cursor-grab'
+                : mode === 'swipe'
+                  ? 'cursor-crosshair'
+                  : 'cursor-pointer'
         }`}
         id={`wrap-${id}`}
       >
@@ -676,7 +876,7 @@ export function DeviceScreen({
             ref={imageRef}
             src={mjpegUrl}
             alt={`${device.brand} ${device.model}`}
-            className={`absolute inset-0 h-full w-full ${streamObjectClass} transition-opacity duration-500 ${h264Active ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
+            className={`absolute inset-0 h-full w-full ${streamObjectClass} transition-opacity duration-500 ${h264Active ? 'pointer-events-none opacity-0' : 'opacity-100'}`}
             onLoad={() => {
               setHasFrame(true);
               const img = imageRef.current;
@@ -702,15 +902,41 @@ export function DeviceScreen({
             style={highlightStyle}
           />
         )}
+
+        {/* Status badge: avoid "loading forever" when offline/unresponsive */}
+        <div className='pointer-events-none absolute left-2 top-2 flex items-center gap-2'>
+          {!isActive ? (
+            <Badge
+              variant='outline'
+              className='border-red-500/30 bg-red-500/10 text-[10px] text-red-700 dark:text-red-300'
+            >
+              {t('badgeOffline')}
+            </Badge>
+          ) : isUnresponsive ? (
+            <Badge
+              variant='outline'
+              className='border-amber-500/30 bg-amber-500/10 text-[10px] text-amber-800 dark:text-amber-200'
+            >
+              {t('badgeUnresponsive')}
+            </Badge>
+          ) : null}
+        </div>
+
         {!hasFrame && isActive && (
           <div
             className='absolute inset-0 flex items-center justify-center text-xs text-muted-foreground'
             style={{ pointerEvents: 'none' }}
           >
             <div className='flex flex-col items-center gap-2 rounded-md bg-black/40 px-3 py-2 backdrop-blur-[1px]'>
-              <div className='h-4 w-4 animate-spin rounded-full border-2 border-zinc-400 border-t-transparent' />
+              {!isUnresponsive && (
+                <div className='h-4 w-4 animate-spin rounded-full border-2 border-zinc-400 border-t-transparent' />
+              )}
               <div className='text-[11px] text-zinc-200'>
-                {wsConnected ? t('streamWaitingFirstFrame') : t('streamConnecting')}
+                {isUnresponsive
+                  ? t('streamUnresponsive')
+                  : wsConnected
+                    ? t('streamWaitingFirstFrame')
+                    : t('streamConnecting')}
               </div>
               <div className='text-[10px] text-zinc-400'>
                 {loadingElapsedSec}s
@@ -740,7 +966,11 @@ export function DeviceScreen({
       )}
       {!captionBelowFrame && (
         <div className='mt-1 flex shrink-0 justify-center px-1 text-[10px] text-muted-foreground'>
-          <span className='truncate text-center font-mono' id={`app-${id}`} title={device.current_app ?? ''}>
+          <span
+            className='truncate text-center font-mono'
+            id={`app-${id}`}
+            title={device.current_app ?? ''}
+          >
             {(device.current_app ?? '—').split('.').slice(-1)[0] ?? '—'}
           </span>
         </div>

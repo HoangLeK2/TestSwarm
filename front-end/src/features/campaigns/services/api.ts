@@ -12,8 +12,9 @@ import type {
   TaskOut,
   WorkflowProgress,
   DlqEntry,
+  DlqSummary,
   ExecutionOut,
-  ExecutionArtifact,
+  ExecutionArtifact
 } from '../types';
 
 export type {
@@ -29,8 +30,9 @@ export type {
   TaskOut,
   WorkflowProgress,
   DlqEntry,
+  DlqSummary,
   ExecutionOut,
-  ExecutionArtifact,
+  ExecutionArtifact
 } from '../types';
 
 export type StepActionResponse = {
@@ -56,12 +58,18 @@ export const campaignsApi = {
     farmApi.post<CampaignOut>('/campaigns', data).then((r) => r.data),
   get: (id: string) =>
     farmApi.get<CampaignOut>(`/campaigns/${id}`).then((r) => r.data),
-  delete: (id: string) => farmApi.delete(`/campaigns/${id}`).then((r) => r.data),
+  delete: (id: string) =>
+    farmApi.delete(`/campaigns/${id}`).then((r) => r.data),
   updateStatus: (id: string, status: CampaignStatus) =>
-    farmApi.patch<CampaignOut>(`/campaigns/${id}/status`, { status }).then((r) => r.data),
+    farmApi
+      .patch<CampaignOut>(`/campaigns/${id}/status`, { status })
+      .then((r) => r.data),
   run: (id: string, deviceSerials?: string[]) =>
     farmApi
-      .post<CampaignRunResponse>(`/campaigns/${id}/run`, deviceSerials?.length ? { device_serials_override: deviceSerials } : {})
+      .post<CampaignRunResponse>(
+        `/campaigns/${id}/run`,
+        deviceSerials?.length ? { device_serials_override: deviceSerials } : {}
+      )
       .then((r) => r.data),
   compileScenario: (
     id: string,
@@ -74,9 +82,13 @@ export const campaignsApi = {
   ) =>
     farmApi
       .post<CampaignOut>(`/campaigns/${id}/compile-scenario`, {
-        ...(options?.instructions ? { instructions: options.instructions } : {}),
+        ...(options?.instructions
+          ? { instructions: options.instructions }
+          : {}),
         ...(options?.uiXml ? { ui_xml: options.uiXml } : {}),
-        ...(options?.deviceSerial ? { device_serial: options.deviceSerial } : {}),
+        ...(options?.deviceSerial
+          ? { device_serial: options.deviceSerial }
+          : {}),
         ...(options?.deviceContext && Object.keys(options.deviceContext).length
           ? { device_context: options.deviceContext }
           : {})
@@ -86,15 +98,21 @@ export const campaignsApi = {
     farmApi
       .post<StepActionResponse>(`/campaigns/${id}/step-action`, {
         action,
-        ...(deviceSerial ? { device_serial: deviceSerial } : {}),
+        ...(deviceSerial ? { device_serial: deviceSerial } : {})
       })
       .then((r) => r.data),
   getDevices: (id: string) =>
-    farmApi.get<CampaignDeviceOut[]>(`/campaigns/${id}/devices`).then((r) => r.data),
+    farmApi
+      .get<CampaignDeviceOut[]>(`/campaigns/${id}/devices`)
+      .then((r) => r.data),
   addDevice: (id: string, deviceId: string) =>
-    farmApi.post(`/campaigns/${id}/devices`, { device_id: deviceId }).then((r) => r.data),
+    farmApi
+      .post(`/campaigns/${id}/devices`, { device_id: deviceId })
+      .then((r) => r.data),
   removeDevice: (campaignId: string, deviceId: string) =>
-    farmApi.delete(`/campaigns/${campaignId}/devices/${deviceId}`).then((r) => r.data),
+    farmApi
+      .delete(`/campaigns/${campaignId}/devices/${deviceId}`)
+      .then((r) => r.data),
   updateScenario: (id: string, scenario: Record<string, any>) =>
     farmApi
       .patch<CampaignOut>(`/campaigns/${id}/scenario`, { scenario })
@@ -110,49 +128,75 @@ export const campaignsApi = {
     }
   ) =>
     farmApi
-      .post<ScenarioOut>(`/campaigns/${campaignId}/scenarios/${scenarioId}/compile`, {
-        ...(options?.instructions ? { instructions: options.instructions } : {}),
-        ...(options?.uiXml ? { ui_xml: options.uiXml } : {}),
-        ...(options?.deviceSerial ? { device_serial: options.deviceSerial } : {}),
-        ...(options?.deviceContext ? { device_context: options.deviceContext } : {})
-      })
+      .post<ScenarioOut>(
+        `/campaigns/${campaignId}/scenarios/${scenarioId}/compile`,
+        {
+          ...(options?.instructions
+            ? { instructions: options.instructions }
+            : {}),
+          ...(options?.uiXml ? { ui_xml: options.uiXml } : {}),
+          ...(options?.deviceSerial
+            ? { device_serial: options.deviceSerial }
+            : {}),
+          ...(options?.deviceContext
+            ? { device_context: options.deviceContext }
+            : {})
+        }
+      )
       .then((r) => r.data),
-  getScenarioDeviceVariables: (campaignId: string, scenarioId: string, deviceId: string) =>
+  getScenarioDeviceVariables: (
+    campaignId: string,
+    scenarioId: string,
+    deviceId: string
+  ) =>
     farmApi
       .get<ScenarioDeviceVariablesOut>(
-        `/campaigns/${campaignId}/scenarios/${scenarioId}/devices/${deviceId}/variables`,
+        `/campaigns/${campaignId}/scenarios/${scenarioId}/devices/${deviceId}/variables`
       )
       .then((r) => r.data),
   replaceScenarioDeviceVariables: (
     campaignId: string,
     scenarioId: string,
     deviceId: string,
-    body: ScenarioDeviceVariablesBody,
+    body: ScenarioDeviceVariablesBody
   ) =>
     farmApi
       .put<ScenarioDeviceVariablesOut>(
         `/campaigns/${campaignId}/scenarios/${scenarioId}/devices/${deviceId}/variables`,
-        body,
+        body
       )
-      .then((r) => r.data),
+      .then((r) => r.data)
 };
 
 export const scenariosApi = {
   list: (campaignId: string) =>
-    farmApi.get<ScenarioOut[]>(`/campaigns/${campaignId}/scenarios`).then((r) => r.data),
+    farmApi
+      .get<ScenarioOut[]>(`/campaigns/${campaignId}/scenarios`)
+      .then((r) => r.data),
   create: (campaignId: string, data: ScenarioCreate) =>
-    farmApi.post<ScenarioOut>(`/campaigns/${campaignId}/scenarios`, data).then((r) => r.data),
+    farmApi
+      .post<ScenarioOut>(`/campaigns/${campaignId}/scenarios`, data)
+      .then((r) => r.data),
   get: (campaignId: string, scenarioId: string) =>
-    farmApi.get<ScenarioOut>(`/campaigns/${campaignId}/scenarios/${scenarioId}`).then((r) => r.data),
+    farmApi
+      .get<ScenarioOut>(`/campaigns/${campaignId}/scenarios/${scenarioId}`)
+      .then((r) => r.data),
   update: (campaignId: string, scenarioId: string, data: ScenarioUpdate) =>
     farmApi
-      .patch<ScenarioOut>(`/campaigns/${campaignId}/scenarios/${scenarioId}`, data)
+      .patch<ScenarioOut>(
+        `/campaigns/${campaignId}/scenarios/${scenarioId}`,
+        data
+      )
       .then((r) => r.data),
   delete: (campaignId: string, scenarioId: string) =>
-    farmApi.delete(`/campaigns/${campaignId}/scenarios/${scenarioId}`).then((r) => r.data),
+    farmApi
+      .delete(`/campaigns/${campaignId}/scenarios/${scenarioId}`)
+      .then((r) => r.data),
   reorder: (campaignId: string, orderedIds: string[]) =>
     farmApi
-      .post<ScenarioOut[]>(`/campaigns/${campaignId}/scenarios/reorder`, { ordered_ids: orderedIds })
+      .post<
+        ScenarioOut[]
+      >(`/campaigns/${campaignId}/scenarios/reorder`, { ordered_ids: orderedIds })
       .then((r) => r.data),
   compile: (
     campaignId: string,
@@ -165,12 +209,21 @@ export const scenariosApi = {
     }
   ) =>
     farmApi
-      .post<ScenarioOut>(`/campaigns/${campaignId}/scenarios/${scenarioId}/compile`, {
-        ...(options?.instructions ? { instructions: options.instructions } : {}),
-        ...(options?.uiXml ? { ui_xml: options.uiXml } : {}),
-        ...(options?.deviceSerial ? { device_serial: options.deviceSerial } : {}),
-        ...(options?.deviceContext ? { device_context: options.deviceContext } : {})
-      })
+      .post<ScenarioOut>(
+        `/campaigns/${campaignId}/scenarios/${scenarioId}/compile`,
+        {
+          ...(options?.instructions
+            ? { instructions: options.instructions }
+            : {}),
+          ...(options?.uiXml ? { ui_xml: options.uiXml } : {}),
+          ...(options?.deviceSerial
+            ? { device_serial: options.deviceSerial }
+            : {}),
+          ...(options?.deviceContext
+            ? { device_context: options.deviceContext }
+            : {})
+        }
+      )
       .then((r) => r.data)
 };
 
@@ -184,27 +237,39 @@ export const workflowsApi = {
       .get<WorkflowProgress>(`/workflows/${workflowId}/progress`)
       .then((r) => r.data),
   pause: (workflowId: string) =>
-    farmApi.post(`/workflows/${encodeURIComponent(workflowId)}/pause`).then((r) => r.data),
+    farmApi
+      .post(`/workflows/${encodeURIComponent(workflowId)}/pause`)
+      .then((r) => r.data),
   resume: (workflowId: string) =>
-    farmApi.post(`/workflows/${encodeURIComponent(workflowId)}/resume`).then((r) => r.data),
+    farmApi
+      .post(`/workflows/${encodeURIComponent(workflowId)}/resume`)
+      .then((r) => r.data),
   cancel: (workflowId: string) =>
-    farmApi.post(`/workflows/${encodeURIComponent(workflowId)}/cancel`).then((r) => r.data),
+    farmApi
+      .post(`/workflows/${encodeURIComponent(workflowId)}/cancel`)
+      .then((r) => r.data),
   listForDevice: (serial: string) =>
     farmApi
-      .get<{ serial: string; workflows: import('../types').WorkflowInfo[]; temporal_available: boolean }>(
-        `/devices/${encodeURIComponent(serial)}/running-workflows`,
-      )
+      .get<{
+        serial: string;
+        workflows: import('../types').WorkflowInfo[];
+        temporal_available: boolean;
+      }>(`/devices/${encodeURIComponent(serial)}/running-workflows`)
       .then((r) => r.data),
   steps: (workflowId: string) =>
     farmApi
-      .get<import('../types').WorkflowStepLog>(`/workflows/${encodeURIComponent(workflowId)}/steps`)
-      .then((r) => r.data),
+      .get<
+        import('../types').WorkflowStepLog
+      >(`/workflows/${encodeURIComponent(workflowId)}/steps`)
+      .then((r) => r.data)
 };
 
 export const tasksApi = {
   list: (taskIds?: string[]) =>
     farmApi
-      .get<TaskOut[]>(taskIds?.length ? `/tasks?ids=${taskIds.join(',')}` : '/tasks')
+      .get<
+        TaskOut[]
+      >(taskIds?.length ? `/tasks?ids=${taskIds.join(',')}` : '/tasks')
       .then((r) => r.data),
   listByPrefix: (namePrefix: string) =>
     farmApi
@@ -213,21 +278,38 @@ export const tasksApi = {
 };
 
 export const dlqApi = {
-  list: (params?: { status?: string; campaignId?: string; offset?: number; limit?: number }) =>
+  list: (params?: {
+    status?: string;
+    campaignId?: string;
+    offset?: number;
+    limit?: number;
+  }) =>
     farmApi
       .get<DlqEntry[]>('/executions/dlq', {
         params: {
           ...(params?.status ? { status: params.status } : {}),
           ...(params?.campaignId ? { campaign_id: params.campaignId } : {}),
           ...(params?.offset != null ? { offset: params.offset } : {}),
-          ...(params?.limit != null ? { limit: params.limit } : {}),
-        },
+          ...(params?.limit != null ? { limit: params.limit } : {})
+        }
+      })
+      .then((r) => r.data),
+  summary: (params?: { campaignId?: string }) =>
+    farmApi
+      .get<DlqSummary>('/executions/dlq/summary', {
+        params: {
+          ...(params?.campaignId ? { campaign_id: params.campaignId } : {})
+        }
       })
       .then((r) => r.data),
   retry: (dlqId: string) =>
-    farmApi.post<DlqEntry>(`/executions/dlq/${encodeURIComponent(dlqId)}/retry`).then((r) => r.data),
+    farmApi
+      .post<DlqEntry>(`/executions/dlq/${encodeURIComponent(dlqId)}/retry`)
+      .then((r) => r.data),
   dismiss: (dlqId: string) =>
-    farmApi.delete(`/executions/dlq/${encodeURIComponent(dlqId)}`).then((r) => r.data),
+    farmApi
+      .delete(`/executions/dlq/${encodeURIComponent(dlqId)}`)
+      .then((r) => r.data)
 };
 
 export const executionsApi = {
@@ -237,12 +319,26 @@ export const executionsApi = {
         params: {
           ...(params?.campaignId ? { campaign_id: params.campaignId } : {}),
           ...(params?.limit != null ? { limit: params.limit } : {}),
-          ...(params?.offset != null ? { offset: params.offset } : {}),
-        },
+          ...(params?.offset != null ? { offset: params.offset } : {})
+        }
       })
+      .then((r) => r.data),
+  summary: (executionId: string) =>
+    farmApi
+      .get<{
+        total_devices: number;
+        passed: number;
+        failed: number;
+        running: number;
+        pending: number;
+        error: number;
+        total_content_items: number;
+      }>(`/executions/${encodeURIComponent(executionId)}/summary`)
       .then((r) => r.data),
   listArtifacts: (executionId: string) =>
     farmApi
-      .get<ExecutionArtifact[]>(`/executions/${encodeURIComponent(executionId)}/artifacts`)
-      .then((r) => r.data),
+      .get<
+        ExecutionArtifact[]
+      >(`/executions/${encodeURIComponent(executionId)}/artifacts`)
+      .then((r) => r.data)
 };

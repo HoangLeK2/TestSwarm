@@ -12,7 +12,7 @@ import {
   AlertDialogDescription,
   AlertDialogFooter,
   AlertDialogHeader,
-  AlertDialogTitle,
+  AlertDialogTitle
 } from '@/components/ui/alert-dialog';
 import { DeviceTile } from './device-tile';
 import { SafeModeBanner } from '@/features/core/components/safe-mode-banner';
@@ -24,14 +24,14 @@ import {
   DeviceVarsJsonPanel,
   formatInitialDeviceVars,
   mergeCampaignScenarioVariables,
-  parseDeviceVarsJson,
+  parseDeviceVarsJson
 } from '@/components/device-vars-json-panel';
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
+  SelectValue
 } from '@/components/ui/select';
 import {
   Circle,
@@ -56,21 +56,32 @@ import {
   PackagePlus,
   Code2,
   GitBranch,
-  List,
+  List
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 
 // Dynamic import để tránh lỗi InversifyJS "Ambiguous FlowRendererRegistry" khi SSR
 const FlowgramCanvas = dynamic(
-  () => import('@/features/scenario-templates/components/scenario-flow-editor/canvas').then((m) => m.FlowgramCanvas),
-  { ssr: false, loading: () => <div className='flex flex-1 items-center justify-center text-xs text-muted-foreground'>Đang tải canvas…</div> },
+  () =>
+    import(
+      '@/features/scenario-templates/components/scenario-flow-editor/canvas'
+    ).then((m) => m.FlowgramCanvas),
+  {
+    ssr: false,
+    loading: () => (
+      <div className='flex flex-1 items-center justify-center text-xs text-muted-foreground'>
+        Đang tải canvas…
+      </div>
+    )
+  }
 );
 import { VariableEditor } from '@/components/variable-editor';
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
-  DialogTitle,
+  DialogTitle
 } from '@/components/ui/dialog';
 import { ROUTES } from '@/config/routes';
 import { toast } from 'sonner';
@@ -78,13 +89,14 @@ import { cn } from '@/lib/utils';
 import {
   Tooltip,
   TooltipContent,
-  TooltipTrigger,
+  TooltipTrigger
 } from '@/components/ui/tooltip';
 import { useControlRecord } from '../hooks/use-control-record';
 import { campaignsApi } from '@/features/campaigns/services/api';
 import { useScenarioTemplates } from '@/features/scenario-templates/hooks/use-scenario-templates';
 import type { ScenarioTemplateOut } from '@/features/scenario-templates/services/api';
 import { useAccountGroups } from '@/features/account-groups/hooks/use-account-groups';
+import { EmptyNodePicker } from './control-record/empty-node-picker';
 import { XmlTreeViewer } from './control-record/xml-tree-viewer';
 import { ScenarioPlayer } from './control-record/scenario-player';
 import { FlowEditor } from '@/features/campaigns/components/flow-editor';
@@ -93,18 +105,25 @@ import {
   applyTapPointToSteps,
   applySwipeSegmentToSteps,
   type SelectorPickTarget,
-  type CoordinatePickTarget,
+  type CoordinatePickTarget
 } from '@/features/campaigns/components/flow-editor';
 import { StepIcon } from '@/features/campaigns/components/flow-editor/step-icon';
 import type { FlowStep } from '@/features/campaigns/components/scenario-steps/types';
-import { findSelectorForTreeNode, findSelectorInXml } from '../utils/control-record-xml';
+import {
+  findSelectorForTreeNode,
+  findSelectorInXml
+} from '../utils/control-record-xml';
 import type { ScenarioSelectorShape } from '../lib/scenario-selector-step';
 import { buildSelectorStep } from '../lib/scenario-selector-step';
 import { parseHierarchyTree, findNodeIdAtRatio } from '../utils/hierarchy-tree';
-import { previewScenarioStream, cancelPreviewStream, interruptDevice } from '../services/api';
+import {
+  previewScenarioStream,
+  cancelPreviewStream,
+  interruptDevice
+} from '../services/api';
 import {
   createPreviewRunSession,
-  type ActivePreviewTrace,
+  type ActivePreviewTrace
 } from '../lib/preview-run-session';
 import { devicesApi } from '../services/manage-api';
 import { useTranslations } from 'next-intl';
@@ -114,7 +133,7 @@ import {
   findStepByFlowgramId,
   mergeSelectorByFlowgramId,
   mergeStepByFlowgramId,
-  patchStepByFlowgramId,
+  patchStepByFlowgramId
 } from '@/features/scenario-templates/components/scenario-flow-editor/patch-step-tree';
 import { isSelectorPickableStep } from '@/features/campaigns/components/flow-editor/selector-pick';
 import { applyStepsToFlowgramDocument } from '@/features/scenario-templates/components/scenario-flow-editor/flow-doc-sync';
@@ -129,7 +148,13 @@ import type { FlowgramRunState } from '@/features/scenario-templates/components/
 function flattenVarDefs(vars: Record<string, any>): Record<string, any> {
   const out: Record<string, any> = {};
   for (const [k, v] of Object.entries(vars)) {
-    if (v !== null && typeof v === 'object' && !Array.isArray(v) && 'type' in v && 'default' in v) {
+    if (
+      v !== null &&
+      typeof v === 'object' &&
+      !Array.isArray(v) &&
+      'type' in v &&
+      'default' in v
+    ) {
       out[k] = v.default;
     } else {
       out[k] = v;
@@ -139,39 +164,70 @@ function flattenVarDefs(vars: Record<string, any>): Record<string, any> {
 }
 
 /** Bounded label for device Select (long model/serial otherwise breaks the top bar). */
-function formatDeviceSelectLabel(d: { brand: string; model: string; serial: string }) {
+function formatDeviceSelectLabel(d: {
+  brand: string;
+  model: string;
+  serial: string;
+}) {
   const left = `${d.brand} ${d.model}`.trim().replace(/\s+/g, ' ');
   const s = d.serial;
   const serialShort = s.length > 16 ? `${s.slice(0, 7)}…${s.slice(-6)}` : s;
   if (!left) return serialShort;
   const maxLeft = 26;
-  const leftShort = left.length > maxLeft ? `${left.slice(0, maxLeft - 1)}…` : left;
+  const leftShort =
+    left.length > maxLeft ? `${left.slice(0, maxLeft - 1)}…` : left;
   return `${leftShort} — ${serialShort}`;
 }
 
-function deviceSelectFullTitle(d: { brand: string; model: string; serial: string }) {
+function deviceSelectFullTitle(d: {
+  brand: string;
+  model: string;
+  serial: string;
+}) {
   const left = `${d.brand} ${d.model}`.trim();
   return left ? `${left} — ${d.serial}` : d.serial;
 }
 
-type Props = { initialSerial?: string | null; initialCampaignId?: string | null; initialScenarioId?: string | null; initialTemplateId?: string | null };
+type Props = {
+  initialSerial?: string | null;
+  initialCampaignId?: string | null;
+  initialScenarioId?: string | null;
+  initialTemplateId?: string | null;
+};
 
-const ENABLE_FLOWGRAM_CONTROL_UI = false;  // UI flowgram disabled 
+const ENABLE_FLOWGRAM_CONTROL_UI = false; // UI flowgram disabled
 
-export function ControlRecordView({ initialSerial, initialCampaignId, initialScenarioId, initialTemplateId }: Props = {}) {
+export function ControlRecordView({
+  initialSerial,
+  initialCampaignId,
+  initialScenarioId,
+  initialTemplateId
+}: Props = {}) {
   const t = useTranslations('devicesControlRecord.view');
   const tDv = useTranslations('components.deviceVarsJson');
   const tDvDlg = useTranslations('devicesControlRecord.deviceVarsDialog');
   const tModal = useTranslations('components.modal');
-  const { error, device, record, steps, save, hierarchy, selector } = useControlRecord(initialSerial, initialCampaignId, initialScenarioId, initialTemplateId);
+  const tVar = useTranslations('components.variableEditor');
+  const { error, device, record, steps, save, hierarchy, selector } =
+    useControlRecord(
+      initialSerial,
+      initialCampaignId,
+      initialScenarioId,
+      initialTemplateId
+    );
   const { setSkipTapRecordingWhilePick } = record;
-  const { read_only: safeReadOnly, stream_hierarchy: safeHierarchy } = useSafeMode();
+  const { read_only: safeReadOnly, stream_hierarchy: safeHierarchy } =
+    useSafeMode();
 
-  const [highlightBounds, setHighlightBounds] = useState<[number, number, number, number] | null>(null);
+  const [highlightBounds, setHighlightBounds] = useState<
+    [number, number, number, number] | null
+  >(null);
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null);
   const [playerMode, setPlayerMode] = useState(false);
-  const [selectorPickTarget, setSelectorPickTarget] = useState<SelectorPickTarget | null>(null);
-  const [coordinatePickTarget, setCoordinatePickTarget] = useState<CoordinatePickTarget | null>(null);
+  const [selectorPickTarget, setSelectorPickTarget] =
+    useState<SelectorPickTarget | null>(null);
+  const [coordinatePickTarget, setCoordinatePickTarget] =
+    useState<CoordinatePickTarget | null>(null);
   const mirrorColRef = useRef<HTMLDivElement>(null);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [flowMode, setFlowMode] = useState(false);
@@ -189,7 +245,8 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
   // (see below — hook is called unconditionally; React-Query is cheap to keep
   // alive). `previewTemplate` holds the template being inspected before load.
   const templatesQuery = useScenarioTemplates();
-  const [previewTemplate, setPreviewTemplate] = useState<ScenarioTemplateOut | null>(null);
+  const [previewTemplate, setPreviewTemplate] =
+    useState<ScenarioTemplateOut | null>(null);
 
   // Account-group picker for the Save dialog. `'_none'` = do not bind.
   // On open, we hydrate from editingContext so a user returning to edit a
@@ -203,19 +260,32 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
       setSaveAccountGroupId('');
     }
   }, [save.editingContext]);
-  const [flowRunStates, setFlowRunStates] = useState<Record<string, FlowgramRunState>>({});
-  const [flowCoordPick, setFlowCoordPick] = useState<null | { fgId: string; kind: 'tap' | 'swipe' }>(null);
+  const [flowRunStates, setFlowRunStates] = useState<
+    Record<string, FlowgramRunState>
+  >({});
+  const [flowCoordPick, setFlowCoordPick] = useState<null | {
+    fgId: string;
+    kind: 'tap' | 'swipe';
+  }>(null);
   /** Flow mode: chọn selector từ mirror cho node đang chọn (giống pick trên danh sách). */
-  const [flowSelectorPickFgId, setFlowSelectorPickFgId] = useState<string | null>(null);
+  const [flowSelectorPickFgId, setFlowSelectorPickFgId] = useState<
+    string | null
+  >(null);
   const flowCtxRef = useRef<FixedLayoutPluginContext | null>(null);
   const stepsItemsRef = useRef(steps.items);
   const flowSelectedFgIdRef = useRef<string | null>(null);
-  const flowDetailDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flowDetailDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+  const flowDetailPendingRef = useRef<FlowStep | null>(null);
+  const flowDetailSyncingRef = useRef(false);
   const flowRunLeafAbortRef = useRef<AbortController | null>(null);
   const flowRunningFgIdsRef = useRef<Set<string>>(new Set());
   const [varDialogOpen, setVarDialogOpen] = useState(false);
   const [deviceVarDialogOpen, setDeviceVarDialogOpen] = useState(false);
-  const [selectedScenarioDeviceId, setSelectedScenarioDeviceId] = useState<string | null>(null);
+  const [selectedScenarioDeviceId, setSelectedScenarioDeviceId] = useState<
+    string | null
+  >(null);
   const [installDialogOpen, setInstallDialogOpen] = useState(false);
   const [installUrl, setInstallUrl] = useState('');
   const [jsonDialogOpen, setJsonDialogOpen] = useState(false);
@@ -226,22 +296,149 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
   const [playerPlaying, setPlayerPlaying] = useState(false);
   const stopPlayerRef = useRef<(() => void) | null>(null);
   const [exitConfirm, setExitConfirm] = useState<null | (() => void)>(null);
-  const guardWhilePlaying = useCallback(
+
+  const setCoordinatePickTargetSafe = useCallback(
+    (next: CoordinatePickTarget | null) => {
+      if (next != null && record.recording) {
+        toast.warning('Tắt chế độ ghi trước khi lấy tọa độ từ mirror.');
+        return;
+      }
+      setCoordinatePickTarget(next);
+    },
+    [record.recording]
+  );
+
+  useEffect(() => {
+    if (coordinatePickTarget || flowCoordPick || flowSelectorPickFgId) {
+      queueMicrotask(() =>
+        mirrorColRef.current?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'nearest'
+        })
+      );
+    }
+  }, [coordinatePickTarget, flowCoordPick, flowSelectorPickFgId]);
+
+  // Hierarchy changed => stale node bounds/highlight must be cleared.
+  useEffect(() => {
+    setHighlightBounds(null);
+    setSelectedNodeId(null);
+  }, [hierarchy.xml]);
+
+  // Inline step runner (step-by-step without entering player mode)
+  const [stepRunStates, setStepRunStates] = useState<
+    Record<string, 'idle' | 'running' | 'ok' | 'error'>
+  >({});
+  const stepRunAbortRef = useRef<AbortController | null>(null);
+  // Track active SSE preview trace so unmount (navigation away) can both
+  // abort the fetch AND hit the server's explicit cancel endpoint — the SSE
+  // disconnect check on the server can lag a cycle on slow networks, and
+  // the user expected the scenario to stop the moment they leave the page.
+  const activePreviewRef = useRef<ActivePreviewTrace | null>(null);
+  const previewRunIdRef = useRef(0);
+  const previewSession = useMemo(
+    () => createPreviewRunSession(activePreviewRef, previewRunIdRef),
+    []
+  );
+  const selectedSerialForStopRef = useRef<string | null>(null);
+  useEffect(() => {
+    selectedSerialForStopRef.current =
+      device.selectedDevice?.serial?.trim() ?? null;
+  }, [device.selectedDevice?.serial]);
+
+  // Hard stop on unmount: abort in-flight previews and cancel server-side.
+  useEffect(() => {
+    const hardStop = () => {
+      stepRunAbortRef.current?.abort();
+      flowRunLeafAbortRef.current?.abort();
+      const active = previewSession.takeActiveForCancel();
+      const serial = selectedSerialForStopRef.current;
+      if (active) {
+        cancelPreviewStream(active.serial, active.traceId).catch(
+          () => undefined
+        );
+        interruptDevice(active.serial).catch(() => undefined);
+      } else if (serial) {
+        interruptDevice(serial).catch(() => undefined);
+      }
+    };
+    const onPageHide = () => hardStop();
+    window.addEventListener('pagehide', onPageHide);
+    return () => {
+      window.removeEventListener('pagehide', onPageHide);
+      hardStop();
+    };
+  }, [previewSession]);
+
+  const handleStopInlineRun = useCallback(() => {
+    // Three-pronged stop so the scenario exits quickly regardless of where
+    // the executor is stuck:
+    //   1) abort() closes the SSE fetch → server notices disconnect (~100ms)
+    //   2) explicit cancel route sets cancel_event immediately (no polling lag)
+    //   3) interrupt also cancels any preview without a captured trace_id
+    stepRunAbortRef.current?.abort();
+    flowRunLeafAbortRef.current?.abort();
+    const serial = device.selectedDevice?.serial?.trim();
+    const active = previewSession.takeActiveForCancel();
+    if (active) {
+      cancelPreviewStream(active.serial, active.traceId).catch(() => undefined);
+      interruptDevice(active.serial).catch(() => undefined);
+    } else if (serial) {
+      interruptDevice(serial).catch(() => undefined);
+    }
+    flowRunningFgIdsRef.current.clear();
+    const hadRunning =
+      Object.values(stepRunStates).some((st) => st === 'running') ||
+      Object.values(flowRunStates).some((st) => st === 'running');
+    setStepRunStates((s) => {
+      if (!Object.values(s).some((st) => st === 'running')) return s;
+      const n = { ...s };
+      for (const k of Object.keys(n)) {
+        if (n[k] === 'running') delete n[k];
+      }
+      return n;
+    });
+    setFlowRunStates((s) => {
+      if (!Object.values(s).some((st) => st === 'running')) return s;
+      const n = { ...s };
+      for (const k of Object.keys(n)) {
+        if (n[k] === 'running') delete n[k];
+      }
+      return n;
+    });
+    if (hadRunning) {
+      queueMicrotask(() => toast.info('Đã dừng chạy thử'));
+    }
+  }, [
+    previewSession,
+    device.selectedDevice?.serial,
+    stepRunStates,
+    flowRunStates
+  ]);
+
+  const inlinePreviewRunning = useMemo(
+    () =>
+      Object.values(stepRunStates).some((st) => st === 'running') ||
+      Object.values(flowRunStates).some((st) => st === 'running'),
+    [stepRunStates, flowRunStates]
+  );
+  const previewBlocking = playerPlaying || inlinePreviewRunning;
+
+  // Farm back button, device switch, player close — confirm before leaving while preview runs.
+  const guardWhilePreviewActive = useCallback(
     (action: () => void) => {
-      if (playerPlaying) {
+      if (previewBlocking) {
         setExitConfirm(() => action);
       } else {
         action();
       }
     },
-    [playerPlaying],
+    [previewBlocking]
   );
 
-  // Global guard: while preview is running, intercept ANY <a> click on the
-  // page (sidebar, header nav, …) and show the exit confirm. Without this,
-  // Next.js client-side navigation skips the local Farm-button guard.
+  // Global guard: intercept sidebar/header links while preview is running.
   useEffect(() => {
-    if (!playerPlaying) return;
+    if (!previewBlocking) return;
     const onClick = (e: MouseEvent) => {
       if (e.defaultPrevented) return;
       if (e.button !== 0) return;
@@ -265,123 +462,42 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
       document.removeEventListener('click', onClick, true);
       window.removeEventListener('beforeunload', onBeforeUnload);
     };
-  }, [playerPlaying, router]);
-
-  const setCoordinatePickTargetSafe = useCallback(
-    (next: CoordinatePickTarget | null) => {
-      if (next != null && record.recording) {
-        toast.warning('Tắt chế độ ghi trước khi lấy tọa độ từ mirror.');
-        return;
-      }
-      setCoordinatePickTarget(next);
-    },
-    [record.recording],
-  );
-
-  useEffect(() => {
-    if (coordinatePickTarget || flowCoordPick || flowSelectorPickFgId) {
-      queueMicrotask(() =>
-        mirrorColRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }),
-      );
-    }
-  }, [coordinatePickTarget, flowCoordPick, flowSelectorPickFgId]);
-
-  // Hierarchy changed => stale node bounds/highlight must be cleared.
-  useEffect(() => {
-    setHighlightBounds(null);
-    setSelectedNodeId(null);
-  }, [hierarchy.xml]);
-
-  // Inline step runner (step-by-step without entering player mode)
-  const [stepRunStates, setStepRunStates] = useState<Record<string, 'idle' | 'running' | 'ok' | 'error'>>({});
-  const stepRunAbortRef = useRef<AbortController | null>(null);
-  // Track active SSE preview trace so unmount (navigation away) can both
-  // abort the fetch AND hit the server's explicit cancel endpoint — the SSE
-  // disconnect check on the server can lag a cycle on slow networks, and
-  // the user expected the scenario to stop the moment they leave the page.
-  const activePreviewRef = useRef<ActivePreviewTrace | null>(null);
-  const previewRunIdRef = useRef(0);
-  const previewSession = useMemo(
-    () => createPreviewRunSession(activePreviewRef, previewRunIdRef),
-    [],
-  );
-
-  // Hard stop on unmount: abort both in-flight previews and POST the explicit
-  // cancel route so the server drops the scenario even if it hasn't yet
-  // noticed the TCP close. Also fire on pagehide (tab close / back-forward).
-  useEffect(() => {
-    const hardStop = () => {
-      stepRunAbortRef.current?.abort();
-      flowRunLeafAbortRef.current?.abort();
-      const active = previewSession.takeActiveForCancel();
-      if (active) {
-        // Fire-and-forget — we're unmounting, no point awaiting.
-        cancelPreviewStream(active.serial, active.traceId).catch(() => undefined);
-        interruptDevice(active.serial).catch(() => undefined);
-      }
-    };
-    const onPageHide = () => hardStop();
-    window.addEventListener('pagehide', onPageHide);
-    return () => {
-      window.removeEventListener('pagehide', onPageHide);
-      hardStop();
-    };
-  }, [previewSession]);
-
-  const handleStopInlineRun = useCallback(() => {
-    // Three-pronged stop so the scenario exits quickly regardless of where
-    // the executor is stuck:
-    //   1) abort() closes the SSE fetch → server notices disconnect (~100ms)
-    //   2) explicit cancel route sets cancel_event immediately (no polling lag)
-    //   3) also stop any flow-leaf run that may be active
-    stepRunAbortRef.current?.abort();
-    flowRunLeafAbortRef.current?.abort();
-    const active = previewSession.takeActiveForCancel();
-    if (active) {
-      cancelPreviewStream(active.serial, active.traceId).catch(() => undefined);
-      interruptDevice(active.serial).catch(() => undefined);
-    } else if (device.selectedDevice?.serial) {
-      interruptDevice(device.selectedDevice.serial).catch(() => undefined);
-    }
-    setStepRunStates((s) => {
-      const hadRunning = Object.values(s).some((st) => st === 'running');
-      if (!hadRunning) return s;
-      const n = { ...s };
-      for (const k of Object.keys(n)) {
-        if (n[k] === 'running') delete n[k];
-      }
-      queueMicrotask(() => toast.info('Đã dừng chạy thử'));
-      return n;
-    });
-  }, [previewSession, device.selectedDevice?.serial]);
+  }, [previewBlocking, router]);
 
   // Variables for step execution (synced from loaded scenario, editable inline)
-  const [scenarioVariables, setScenarioVariables] = useState<Record<string, any>>(
-    () => flattenVarDefs(save.editingContext?.variables ?? {})
-  );
-  const [deviceVarJsonDrafts, setDeviceVarJsonDrafts] = useState<Record<string, string>>({});
-  const [deviceVarEnabledByDevice, setDeviceVarEnabledByDevice] = useState<Record<string, boolean>>({});
-  const [pendingScenarioDeviceVarsDraftMap, setPendingScenarioDeviceVarsDraftMap] = useState<
-    Record<string, Record<string, any>> | null
-  >(null);
+  const [scenarioVariables, setScenarioVariables] = useState<
+    Record<string, any>
+  >(() => flattenVarDefs(save.editingContext?.variables ?? {}));
+  const [deviceVarJsonDrafts, setDeviceVarJsonDrafts] = useState<
+    Record<string, string>
+  >({});
+  const [deviceVarEnabledByDevice, setDeviceVarEnabledByDevice] = useState<
+    Record<string, boolean>
+  >({});
+  const [
+    pendingScenarioDeviceVarsDraftMap,
+    setPendingScenarioDeviceVarsDraftMap
+  ] = useState<Record<string, Record<string, any>> | null>(null);
   const activeCampaignId = save.editingContext?.campaignId ?? null;
   const activeScenarioId = save.editingContext?.scenarioId ?? null;
   const selectedSerial = device.selectedDevice?.serial ?? null;
   const devicesQuery = useQuery({
     queryKey: ['control-record-device-map'],
     queryFn: devicesApi.list,
-    staleTime: 15_000,
+    staleTime: 15_000
   });
   const selectedDeviceId = useMemo(() => {
     if (!selectedSerial) return null;
-    return devicesQuery.data?.find((d) => d.serial === selectedSerial)?.id ?? null;
+    return (
+      devicesQuery.data?.find((d) => d.serial === selectedSerial)?.id ?? null
+    );
   }, [devicesQuery.data, selectedSerial]);
   const deviceVarsParseMsgs = useMemo(
     () => ({
       invalidJson: tDv('parseInvalidJson'),
-      invalidRoot: tDv('parseInvalidRoot'),
+      invalidRoot: tDv('parseInvalidRoot')
     }),
-    [tDv],
+    [tDv]
   );
   const inlineScenarioDeviceVars = useMemo(() => {
     if (!selectedDeviceId) return null;
@@ -394,21 +510,26 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
       return null;
     }
     return Object.keys(vars).length > 0 ? vars : null;
-  }, [selectedDeviceId, deviceVarJsonDrafts, deviceVarEnabledByDevice, deviceVarsParseMsgs]);
+  }, [
+    selectedDeviceId,
+    deviceVarJsonDrafts,
+    deviceVarEnabledByDevice,
+    deviceVarsParseMsgs
+  ]);
   const hasEnabledDeviceVars = useMemo(
     () => Object.values(deviceVarEnabledByDevice).some(Boolean),
-    [deviceVarEnabledByDevice],
+    [deviceVarEnabledByDevice]
   );
   const campaignDevicesQuery = useQuery({
     queryKey: ['campaign-devices', activeCampaignId],
     enabled: !!activeCampaignId,
-    queryFn: () => campaignsApi.getDevices(activeCampaignId!),
+    queryFn: () => campaignsApi.getDevices(activeCampaignId!)
   });
   const campaignForGlobalVarsQuery = useQuery({
     queryKey: ['campaign', activeCampaignId, 'global-vars-preview'],
     enabled: deviceVarDialogOpen && !!activeCampaignId,
     queryFn: () => campaignsApi.get(activeCampaignId!),
-    staleTime: 30_000,
+    staleTime: 30_000
   });
   useEffect(() => {
     if (!deviceVarDialogOpen) return;
@@ -418,17 +539,32 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
       return;
     }
     const firstCampaignDeviceId = campaignDevicesQuery.data?.[0]?.id ?? null;
-    if (firstCampaignDeviceId) setSelectedScenarioDeviceId(firstCampaignDeviceId);
-  }, [deviceVarDialogOpen, selectedScenarioDeviceId, selectedDeviceId, campaignDevicesQuery.data]);
+    if (firstCampaignDeviceId)
+      setSelectedScenarioDeviceId(firstCampaignDeviceId);
+  }, [
+    deviceVarDialogOpen,
+    selectedScenarioDeviceId,
+    selectedDeviceId,
+    campaignDevicesQuery.data
+  ]);
   const selectedDeviceLabel = useMemo(() => {
     const source = campaignDevicesQuery.data ?? devicesQuery.data ?? [];
-    const d = source.find((x) => x.id === (selectedScenarioDeviceId ?? selectedDeviceId));
+    const d = source.find(
+      (x) => x.id === (selectedScenarioDeviceId ?? selectedDeviceId)
+    );
     if (!d) return tDvDlg('noDeviceSelected');
     const model = `${d.brand || ''} ${d.model || ''}`.trim();
     return model ? `${model} (${d.serial})` : d.serial;
-  }, [campaignDevicesQuery.data, devicesQuery.data, selectedScenarioDeviceId, selectedDeviceId, tDvDlg]);
+  }, [
+    campaignDevicesQuery.data,
+    devicesQuery.data,
+    selectedScenarioDeviceId,
+    selectedDeviceId,
+    tDvDlg
+  ]);
   const currentDeviceVarJsonDraft = selectedScenarioDeviceId
-    ? deviceVarJsonDrafts[selectedScenarioDeviceId] ?? formatInitialDeviceVars({}, scenarioVariables)
+    ? (deviceVarJsonDrafts[selectedScenarioDeviceId] ??
+      formatInitialDeviceVars({}, scenarioVariables))
     : formatInitialDeviceVars({}, scenarioVariables);
   const currentDeviceVarsEnabled = selectedScenarioDeviceId
     ? deviceVarEnabledByDevice[selectedScenarioDeviceId] === true
@@ -441,36 +577,64 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
     } catch (err) {
       return err instanceof Error ? err.message : tDv('parseUnknown');
     }
-  }, [currentDeviceVarJsonDraft, currentDeviceVarsEnabled, deviceVarsParseMsgs, tDv]);
+  }, [
+    currentDeviceVarJsonDraft,
+    currentDeviceVarsEnabled,
+    deviceVarsParseMsgs,
+    tDv
+  ]);
   const deviceVarGlobalPreview = useMemo(
     () =>
       mergeCampaignScenarioVariables(
         campaignForGlobalVarsQuery.data?.variables,
-        scenarioVariables,
+        scenarioVariables
       ),
-    [campaignForGlobalVarsQuery.data?.variables, scenarioVariables],
+    [campaignForGlobalVarsQuery.data?.variables, scenarioVariables]
   );
-  const setCurrentDeviceVarsEnabled = useCallback((enabled: boolean) => {
-    if (!selectedScenarioDeviceId) return;
-    setDeviceVarEnabledByDevice((prev) => ({ ...prev, [selectedScenarioDeviceId]: enabled }));
-    setDeviceVarJsonDrafts((prev) => ({
-      ...prev,
-      [selectedScenarioDeviceId]: prev[selectedScenarioDeviceId] ?? formatInitialDeviceVars({}, scenarioVariables),
-    }));
-  }, [scenarioVariables, selectedScenarioDeviceId]);
-  const setCurrentDeviceVarJsonDraft = useCallback((value: string) => {
-    if (!selectedScenarioDeviceId) return;
-    setDeviceVarJsonDrafts((prev) => ({ ...prev, [selectedScenarioDeviceId]: value }));
-  }, [selectedScenarioDeviceId]);
+  const setCurrentDeviceVarsEnabled = useCallback(
+    (enabled: boolean) => {
+      if (!selectedScenarioDeviceId) return;
+      setDeviceVarEnabledByDevice((prev) => ({
+        ...prev,
+        [selectedScenarioDeviceId]: enabled
+      }));
+      setDeviceVarJsonDrafts((prev) => ({
+        ...prev,
+        [selectedScenarioDeviceId]:
+          prev[selectedScenarioDeviceId] ??
+          formatInitialDeviceVars({}, scenarioVariables)
+      }));
+    },
+    [scenarioVariables, selectedScenarioDeviceId]
+  );
+  const setCurrentDeviceVarJsonDraft = useCallback(
+    (value: string) => {
+      if (!selectedScenarioDeviceId) return;
+      setDeviceVarJsonDrafts((prev) => ({
+        ...prev,
+        [selectedScenarioDeviceId]: value
+      }));
+    },
+    [selectedScenarioDeviceId]
+  );
   const scenarioDeviceVarsQuery = useQuery({
-    queryKey: ['scenario-device-vars', activeCampaignId, activeScenarioId, selectedScenarioDeviceId],
-    enabled: deviceVarDialogOpen && !!activeCampaignId && !!activeScenarioId && !!selectedScenarioDeviceId,
+    queryKey: [
+      'scenario-device-vars',
+      activeCampaignId,
+      activeScenarioId,
+      selectedScenarioDeviceId
+    ],
+    enabled:
+      deviceVarDialogOpen &&
+      !!activeCampaignId &&
+      !!activeScenarioId &&
+      !!selectedScenarioDeviceId,
     queryFn: () =>
       campaignsApi.getScenarioDeviceVariables(
         activeCampaignId!,
         activeScenarioId!,
-        selectedScenarioDeviceId!,
-      ),
+        selectedScenarioDeviceId!
+      )
   });
   useEffect(() => {
     if (!deviceVarDialogOpen) return;
@@ -493,24 +657,44 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
     (async () => {
       const entries = await Promise.all(
         devices.map(async (d) => {
-          const res = await campaignsApi.getScenarioDeviceVariables(activeCampaignId!, activeScenarioId, d.id);
+          const res = await campaignsApi.getScenarioDeviceVariables(
+            activeCampaignId!,
+            activeScenarioId,
+            d.id
+          );
           return [d.id, (res.vars ?? {}) as Record<string, any>] as const;
-        }),
+        })
       );
       if (cancelled) return;
       const seeded: Record<string, string> = Object.fromEntries(
-        entries.map(([deviceId, vars]) => [deviceId, formatInitialDeviceVars(vars, scenarioVariables)]),
+        entries.map(([deviceId, vars]) => [
+          deviceId,
+          formatInitialDeviceVars(vars, scenarioVariables)
+        ])
       );
       const enabled: Record<string, boolean> = Object.fromEntries(
-        entries.map(([deviceId, vars]) => [deviceId, Object.keys(vars).length > 0]),
+        entries.map(([deviceId, vars]) => [
+          deviceId,
+          Object.keys(vars).length > 0
+        ])
       );
       setDeviceVarJsonDrafts(seeded);
       setDeviceVarEnabledByDevice(enabled);
-    })().catch((err) => toast.error(tDvDlg('loadVarsError', { message: String(err) })));
+    })().catch((err) =>
+      toast.error(tDvDlg('loadVarsError', { message: String(err) }))
+    );
     return () => {
       cancelled = true;
     };
-  }, [deviceVarDialogOpen, campaignDevicesQuery.data, activeCampaignId, activeScenarioId, pendingScenarioDeviceVarsDraftMap, scenarioVariables, tDvDlg]);
+  }, [
+    deviceVarDialogOpen,
+    campaignDevicesQuery.data,
+    activeCampaignId,
+    activeScenarioId,
+    pendingScenarioDeviceVarsDraftMap,
+    scenarioVariables,
+    tDvDlg
+  ]);
   const saveScenarioDeviceVarsMutation = useMutation({
     mutationFn: async (drafts: Record<string, string>) => {
       if (!activeCampaignId || !activeScenarioId) return;
@@ -520,15 +704,23 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           let vars: Record<string, any> = {};
           if (deviceVarEnabledByDevice[d.id] === true) {
             try {
-              vars = parseDeviceVarsJson(drafts[d.id] ?? '{}', deviceVarsParseMsgs);
+              vars = parseDeviceVarsJson(
+                drafts[d.id] ?? '{}',
+                deviceVarsParseMsgs
+              );
             } catch {
               throw new Error(tDv('invalidAtDevice', { serial: d.serial }));
             }
           }
-          return campaignsApi.replaceScenarioDeviceVariables(activeCampaignId, activeScenarioId, d.id, {
-            vars,
-          });
-        }),
+          return campaignsApi.replaceScenarioDeviceVariables(
+            activeCampaignId,
+            activeScenarioId,
+            d.id,
+            {
+              vars
+            }
+          );
+        })
       );
     },
     onSuccess: async () => {
@@ -544,23 +736,26 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
             const res = await campaignsApi.getScenarioDeviceVariables(
               activeCampaignId,
               activeScenarioId,
-              d.id,
+              d.id
             );
             return [d.id, (res.vars ?? {}) as Record<string, any>] as const;
-          }),
+          })
         );
         setDeviceVarJsonDrafts(
           Object.fromEntries(
             entries.map(([deviceId, vars]) => [
               deviceId,
-              formatInitialDeviceVars(vars, scenarioVariables),
-            ]),
-          ),
+              formatInitialDeviceVars(vars, scenarioVariables)
+            ])
+          )
         );
         setDeviceVarEnabledByDevice(
           Object.fromEntries(
-            entries.map(([deviceId, vars]) => [deviceId, Object.keys(vars).length > 0]),
-          ),
+            entries.map(([deviceId, vars]) => [
+              deviceId,
+              Object.keys(vars).length > 0
+            ])
+          )
         );
       } catch {
         /* drafts may be stale until dialog reopens; server still has saved vars */
@@ -568,7 +763,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
       toast.success(tDvDlg('saveAllSuccess'));
       setDeviceVarDialogOpen(false);
     },
-    onError: (err) => toast.error(String(err)),
+    onError: (err) => toast.error(String(err))
   });
   useEffect(() => {
     if (!pendingScenarioDeviceVarsDraftMap) return;
@@ -578,19 +773,31 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
     Promise.all(
       devices.map((d) => {
         const vars = pendingScenarioDeviceVarsDraftMap[d.id] ?? {};
-        return campaignsApi.replaceScenarioDeviceVariables(activeCampaignId, activeScenarioId, d.id, {
-          vars,
-        });
-      }),
+        return campaignsApi.replaceScenarioDeviceVariables(
+          activeCampaignId,
+          activeScenarioId,
+          d.id,
+          {
+            vars
+          }
+        );
+      })
     )
       .then(() => {
         toast.success('Đã áp dụng biến thiết bị vào scenario vừa lưu');
         setPendingScenarioDeviceVarsDraftMap(null);
       })
       .catch((err) => {
-        toast.error(`Không áp dụng được biến thiết bị sau khi lưu scenario: ${String(err)}`);
+        toast.error(
+          `Không áp dụng được biến thiết bị sau khi lưu scenario: ${String(err)}`
+        );
       });
-  }, [pendingScenarioDeviceVarsDraftMap, activeCampaignId, activeScenarioId, campaignDevicesQuery.data]);
+  }, [
+    pendingScenarioDeviceVarsDraftMap,
+    activeCampaignId,
+    activeScenarioId,
+    campaignDevicesQuery.data
+  ]);
 
   useEffect(() => {
     if (save.editingContext?.variables) {
@@ -621,8 +828,16 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
       setFlowDetailStep(null);
       return;
     }
-    const found = findStepByFlowgramId(steps.items as FlowStep[], flowSelectedFgId);
-    setFlowDetailStep(found ? (JSON.parse(JSON.stringify(found)) as FlowStep) : null);
+    if (flowDetailDebounceRef.current || flowDetailSyncingRef.current) {
+      return;
+    }
+    const found = findStepByFlowgramId(
+      steps.items as FlowStep[],
+      flowSelectedFgId
+    );
+    setFlowDetailStep(
+      found ? (JSON.parse(JSON.stringify(found)) as FlowStep) : null
+    );
   }, [flowSelectedFgId, steps.items]);
 
   useEffect(() => {
@@ -650,7 +865,10 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
       const ctrl = new AbortController();
       flowRunLeafAbortRef.current = ctrl;
       const runId = previewSession.beginRun();
-      const payload = JSON.parse(JSON.stringify(step)) as Record<string, unknown>;
+      const payload = JSON.parse(JSON.stringify(step)) as Record<
+        string,
+        unknown
+      >;
       delete payload._fgId;
       try {
         await previewScenarioStream(
@@ -658,7 +876,10 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           [payload],
           previewSession.makeStreamHandler(runId, serial, (ev) => {
             if (ev.event === 'step_done') {
-              setFlowRunStates((s) => ({ ...s, [fgId]: ev.ok ? 'ok' : 'error' }));
+              setFlowRunStates((s) => ({
+                ...s,
+                [fgId]: ev.ok ? 'ok' : 'error'
+              }));
               if (!ev.ok) toast.error(String(ev.message ?? 'Step lỗi'));
             }
           }),
@@ -666,7 +887,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           scenarioVariables,
           null,
           activeScenarioId,
-          inlineScenarioDeviceVars,
+          inlineScenarioDeviceVars
         );
       } catch (e) {
         if (!ctrl.signal.aborted) {
@@ -685,28 +906,54 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
         }, 2800);
       }
     },
-    [activeScenarioId, device.selectedDevice, scenarioVariables, inlineScenarioDeviceVars, previewSession],
+    [
+      activeScenarioId,
+      device.selectedDevice,
+      scenarioVariables,
+      inlineScenarioDeviceVars,
+      previewSession
+    ]
   );
 
   const handleFlowDetailChange = useCallback(
     (next: FlowStep) => {
-      setFlowDetailStep(JSON.parse(JSON.stringify(next)) as FlowStep);
-      if (flowDetailDebounceRef.current) clearTimeout(flowDetailDebounceRef.current);
+      const cloned = JSON.parse(JSON.stringify(next)) as FlowStep;
+      flowDetailPendingRef.current = cloned;
+      setFlowDetailStep(cloned);
+      if (flowDetailDebounceRef.current)
+        clearTimeout(flowDetailDebounceRef.current);
       flowDetailDebounceRef.current = setTimeout(() => {
+        flowDetailDebounceRef.current = null;
         const fgId = flowSelectedFgIdRef.current;
         const ctx = flowCtxRef.current;
-        if (!fgId || !ctx) return;
-        const patched = patchStepByFlowgramId(stepsItemsRef.current as FlowStep[], fgId, next);
+        const latest = flowDetailPendingRef.current;
+        if (!fgId || !ctx || !latest) return;
+        flowDetailSyncingRef.current = true;
+        const patched = patchStepByFlowgramId(
+          stepsItemsRef.current as FlowStep[],
+          fgId,
+          latest
+        );
         try {
           const synced = applyStepsToFlowgramDocument(ctx, patched);
           flowStepsRef.current = synced as typeof steps.items;
           steps.setItems(synced as typeof steps.items);
+          const updated = findStepByFlowgramId(synced, fgId);
+          if (updated) {
+            const normalized = JSON.parse(
+              JSON.stringify(updated)
+            ) as FlowStep;
+            flowDetailPendingRef.current = normalized;
+            setFlowDetailStep(normalized);
+          }
         } catch (e) {
           toast.error(`Không áp dụng được lên canvas: ${String(e)}`);
+        } finally {
+          flowDetailSyncingRef.current = false;
         }
       }, 240);
     },
-    [steps],
+    [steps]
   );
 
   const flowWorkbench = useMemo(
@@ -715,20 +962,25 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
       selectedFgId: flowSelectedFgId,
       setSelectedFgId: setFlowSelectedFgId,
       runStates: flowRunStates,
-      onRunLeafStep: handleFlowRunLeaf,
+      onRunLeafStep: handleFlowRunLeaf
     }),
-    [device.selectedDevice, flowSelectedFgId, flowRunStates, handleFlowRunLeaf],
+    [device.selectedDevice, flowSelectedFgId, flowRunStates, handleFlowRunLeaf]
   );
 
   const handleRunStep = useCallback(
     async (step: FlowStep, runKey: string) => {
-      if (!device.selectedDevice) { toast.warning('Chưa chọn thiết bị'); return; }
+      if (!device.selectedDevice) {
+        toast.warning('Chưa chọn thiết bị');
+        return;
+      }
       if (stepRunStates[runKey] === 'running') return;
       stepRunAbortRef.current?.abort();
       const ctrl = new AbortController();
       stepRunAbortRef.current = ctrl;
       const runId = previewSession.beginRun();
-      const label = /^\d+$/.test(runKey) ? `Bước ${Number(runKey) + 1}` : 'Bước';
+      const label = /^\d+$/.test(runKey)
+        ? `Bước ${Number(runKey) + 1}`
+        : 'Bước';
       setStepRunStates((s) => ({ ...s, [runKey]: 'running' }));
       const serial = device.selectedDevice.serial;
       try {
@@ -737,7 +989,10 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           [step as Record<string, any>],
           previewSession.makeStreamHandler(runId, serial, (event) => {
             if (event.event === 'step_done') {
-              setStepRunStates((s) => ({ ...s, [runKey]: event.ok ? 'ok' : 'error' }));
+              setStepRunStates((s) => ({
+                ...s,
+                [runKey]: event.ok ? 'ok' : 'error'
+              }));
               if (!event.ok) toast.error(`${label}: ${event.message ?? 'Lỗi'}`);
             }
           }),
@@ -745,7 +1000,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           scenarioVariables,
           null,
           activeScenarioId,
-          inlineScenarioDeviceVars,
+          inlineScenarioDeviceVars
         );
       } catch (e) {
         if (ctrl.signal.aborted) {
@@ -761,19 +1016,37 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
       } finally {
         previewSession.onStreamEnd(runId);
         if (!ctrl.signal.aborted) {
-          setTimeout(() => setStepRunStates((s) => {
-            const n = { ...s };
-            if (n[runKey] !== 'running') delete n[runKey];
-            return n;
-          }), 3000);
+          setTimeout(
+            () =>
+              setStepRunStates((s) => {
+                const n = { ...s };
+                if (n[runKey] !== 'running') delete n[runKey];
+                return n;
+              }),
+            3000
+          );
         }
       }
     },
-    [activeScenarioId, device.selectedDevice, stepRunStates, scenarioVariables, inlineScenarioDeviceVars, previewSession],
+    [
+      activeScenarioId,
+      device.selectedDevice,
+      stepRunStates,
+      scenarioVariables,
+      inlineScenarioDeviceVars,
+      previewSession
+    ]
   );
 
   const addStepFromSelector = useCallback(
-    (stepType: 'tap_selector' | 'long_tap_selector' | 'wait_element' | 'assert_element' | 'input_selector') => {
+    (
+      stepType:
+        | 'tap_selector'
+        | 'long_tap_selector'
+        | 'wait_element'
+        | 'assert_element'
+        | 'input_selector'
+    ) => {
       const by = selector.by as string;
       const value = selector.value;
       if (!value) return;
@@ -781,18 +1054,26 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
         stepType === 'tap_selector'
           ? buildSelectorStep('tap_selector', by, value)
           : stepType === 'long_tap_selector'
-            ? buildSelectorStep('long_tap_selector', by, value, { duration_ms: 800 })
+            ? buildSelectorStep('long_tap_selector', by, value, {
+                duration_ms: 800
+              })
             : stepType === 'wait_element'
               ? buildSelectorStep('wait_element', by, value, { timeout: 10 })
               : stepType === 'assert_element'
                 ? buildSelectorStep('assert_element', by, value, { timeout: 5 })
-                : buildSelectorStep('input_selector', by, value, { text: '', clear_first: true })
+                : buildSelectorStep('input_selector', by, value, {
+                    text: '',
+                    clear_first: true
+                  })
       ) as FlowStep;
       const id = `step-${Date.now()}-${steps.items.length}`;
-      steps.setItems([...(steps.items as any[]), { ...newStep, _id: id }] as any);
+      steps.setItems([
+        ...(steps.items as any[]),
+        { ...newStep, _id: id }
+      ] as any);
       toast.success(`Đã thêm bước ${stepType}`);
     },
-    [selector.by, selector.value, steps],
+    [selector.by, selector.value, steps]
   );
 
   useEffect(() => {
@@ -800,7 +1081,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
       selectorPickTarget != null ||
         coordinatePickTarget != null ||
         flowCoordPick != null ||
-        flowSelectorPickFgId != null,
+        flowSelectorPickFgId != null
     );
     return () => setSkipTapRecordingWhilePick(false);
   }, [
@@ -808,14 +1089,22 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
     coordinatePickTarget,
     flowCoordPick,
     flowSelectorPickFgId,
-    setSkipTapRecordingWhilePick,
+    setSkipTapRecordingWhilePick
   ]);
 
   const applySelectorPick = useCallback(
-    (pick: ScenarioSelectorShape, fallback?: { rx: number; ry: number } | null) => {
+    (
+      pick: ScenarioSelectorShape,
+      fallback?: { rx: number; ry: number } | null
+    ) => {
       if (!selectorPickTarget) return;
       const raw = steps.items as FlowStep[];
-      const next = applySelectorToSteps(raw, selectorPickTarget, pick, fallback ?? null);
+      const next = applySelectorToSteps(
+        raw,
+        selectorPickTarget,
+        pick,
+        fallback ?? null
+      );
       if (next === raw) {
         toast.warning(t('pickSelectorNoElement'));
         return;
@@ -823,8 +1112,8 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
       steps.setItems(
         next.map((s: FlowStep, i: number) => ({
           ...s,
-          _id: (s as { _id?: string })._id || `step-${Date.now()}-${i}`,
-        })) as any,
+          _id: (s as { _id?: string })._id || `step-${Date.now()}-${i}`
+        })) as any
       );
       selector.setBy(pick.by as typeof selector.by);
       selector.setValue(pick.value);
@@ -833,37 +1122,53 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
         pick.conditions && Object.keys(pick.conditions).length > 0
           ? ` · +${Object.keys(pick.conditions).length} điều kiện`
           : '';
-      const instHint = pick.instance != null ? ` · instance=${pick.instance}` : '';
+      const instHint =
+        pick.instance != null ? ` · instance=${pick.instance}` : '';
       if (fallback) {
         toast.success(
-          `${t('pickSelectorApplied', { by: pick.by, value: pick.value.slice(0, 48) })}${condHint}${instHint} · fallback=(${fallback.rx.toFixed(3)}, ${fallback.ry.toFixed(3)})`,
+          `${t('pickSelectorApplied', { by: pick.by, value: pick.value.slice(0, 48) })}${condHint}${instHint} · fallback=(${fallback.rx.toFixed(3)}, ${fallback.ry.toFixed(3)})`
         );
       } else {
         toast.success(
-          `${t('pickSelectorApplied', { by: pick.by, value: pick.value.slice(0, 48) })}${condHint}${instHint}`,
+          `${t('pickSelectorApplied', { by: pick.by, value: pick.value.slice(0, 48) })}${condHint}${instHint}`
         );
       }
     },
-    [selectorPickTarget, steps, selector, t],
+    [selectorPickTarget, steps, selector, t]
   );
 
   const handleScreenSwipe = useCallback(
-    (rx1: number, ry1: number, rx2: number, ry2: number, durationMs: number) => {
+    (
+      rx1: number,
+      ry1: number,
+      rx2: number,
+      ry2: number,
+      durationMs: number
+    ) => {
       const x1 = parseFloat(rx1.toFixed(3));
       const y1 = parseFloat(ry1.toFixed(3));
       const x2 = parseFloat(rx2.toFixed(3));
       const y2 = parseFloat(ry2.toFixed(3));
       const duration_ms = Math.round(Math.max(100, Math.min(durationMs, 2000)));
 
-      if (showFlowUi && flowCoordPick?.kind === 'swipe' && flowCtxRef.current && flowCoordPick.fgId) {
+      if (
+        showFlowUi &&
+        flowCoordPick?.kind === 'swipe' &&
+        flowCtxRef.current &&
+        flowCoordPick.fgId
+      ) {
         const ctx = flowCtxRef.current;
         const fgId = flowCoordPick.fgId;
-        const merged = mergeStepByFlowgramId(steps.items as FlowStep[], fgId, (prev) => {
-          if (prev.type === 'swipe_ratio') {
-            return { ...prev, x1, y1, x2, y2, duration_ms } as FlowStep;
+        const merged = mergeStepByFlowgramId(
+          steps.items as FlowStep[],
+          fgId,
+          (prev) => {
+            if (prev.type === 'swipe_ratio') {
+              return { ...prev, x1, y1, x2, y2, duration_ms } as FlowStep;
+            }
+            return prev;
           }
-          return prev;
-        });
+        );
         try {
           const synced = applyStepsToFlowgramDocument(ctx, merged);
           flowStepsRef.current = synced as typeof steps.items;
@@ -872,27 +1177,47 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           toast.error(`Canvas: ${String(e)}`);
         }
         setFlowCoordPick(null);
-        toast.success(`Đã gán swipe_ratio: (${x1}, ${y1}) → (${x2}, ${y2})`, { duration: 2500 });
+        toast.success(`Đã gán swipe_ratio: (${x1}, ${y1}) → (${x2}, ${y2})`, {
+          duration: 2500
+        });
         return;
       }
 
       if (coordinatePickTarget?.mode !== 'swipe_segment') return;
       const raw = steps.items as FlowStep[];
-      const next = applySwipeSegmentToSteps(raw, coordinatePickTarget, rx1, ry1, rx2, ry2, durationMs);
+      const next = applySwipeSegmentToSteps(
+        raw,
+        coordinatePickTarget,
+        rx1,
+        ry1,
+        rx2,
+        ry2,
+        durationMs
+      );
       if (next === raw) {
         toast.warning('Bước đích phải là swipe_ratio.');
       } else {
         steps.setItems(
           next.map((s: FlowStep, i: number) => ({
             ...s,
-            _id: (s as { _id?: string })._id || `step-${Date.now()}-${i}`,
-          })) as any,
+            _id: (s as { _id?: string })._id || `step-${Date.now()}-${i}`
+          })) as any
         );
         setCoordinatePickTarget(null);
-        toast.success(`Đã cập nhật đoạn vuốt: (${x1}, ${y1}) → (${x2}, ${y2})`, { duration: 2500 });
+        toast.success(
+          `Đã cập nhật đoạn vuốt: (${x1}, ${y1}) → (${x2}, ${y2})`,
+          { duration: 2500 }
+        );
       }
     },
-    [coordinatePickTarget, showFlowUi, flowCoordPick, steps, device.selectedDevice, hierarchy],
+    [
+      coordinatePickTarget,
+      showFlowUi,
+      flowCoordPick,
+      steps,
+      device.selectedDevice,
+      hierarchy
+    ]
   );
 
   // When user taps the phone screen → hierarchy highlight + optional selector pick
@@ -907,21 +1232,34 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
       const rx3 = parseFloat(rx.toFixed(3));
       const ry3 = parseFloat(ry.toFixed(3));
 
-      if (showFlowUi && flowCoordPick?.kind === 'tap' && flowCtxRef.current && flowCoordPick.fgId) {
+      if (
+        showFlowUi &&
+        flowCoordPick?.kind === 'tap' &&
+        flowCtxRef.current &&
+        flowCoordPick.fgId
+      ) {
         const ctx = flowCtxRef.current;
         const fgId = flowCoordPick.fgId;
-        const merged = mergeStepByFlowgramId(steps.items as FlowStep[], fgId, (prev) => {
-          if (prev.type === 'tap_ratio') return { ...prev, x: rx3, y: ry3 } as FlowStep;
-          if (prev.type === 'tap') {
-            const t = prev as FlowStep & { fallback?: { rx?: number; ry?: number } };
-            return {
-              ...t,
-              fallback: { ...(t.fallback ?? {}), rx: rx3, ry: ry3 },
-            } as FlowStep;
+        const merged = mergeStepByFlowgramId(
+          steps.items as FlowStep[],
+          fgId,
+          (prev) => {
+            if (prev.type === 'tap_ratio')
+              return { ...prev, x: rx3, y: ry3 } as FlowStep;
+            if (prev.type === 'tap') {
+              const t = prev as FlowStep & {
+                fallback?: { rx?: number; ry?: number };
+              };
+              return {
+                ...t,
+                fallback: { ...(t.fallback ?? {}), rx: rx3, ry: ry3 }
+              } as FlowStep;
+            }
+            if (prev.type === 'swipe_ratio')
+              return { ...prev, x1: rx3, y1: ry3 } as FlowStep;
+            return prev;
           }
-          if (prev.type === 'swipe_ratio') return { ...prev, x1: rx3, y1: ry3 } as FlowStep;
-          return prev;
-        });
+        );
         try {
           const synced = applyStepsToFlowgramDocument(ctx, merged);
           flowStepsRef.current = synced as typeof steps.items;
@@ -930,7 +1268,9 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           toast.error(`Canvas: ${String(e)}`);
         }
         setFlowCoordPick(null);
-        toast.success(`Đã gán tọa độ (${rx3}, ${ry3}) cho node`, { duration: 2000 });
+        toast.success(`Đã gán tọa độ (${rx3}, ${ry3}) cho node`, {
+          duration: 2000
+        });
         return;
       }
 
@@ -948,7 +1288,11 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           setFlowSelectorPickFgId(null);
           return;
         }
-        const merged = mergeSelectorByFlowgramId(steps.items as FlowStep[], fgId, sel.selector);
+        const merged = mergeSelectorByFlowgramId(
+          steps.items as FlowStep[],
+          fgId,
+          sel.selector
+        );
         try {
           const synced = applyStepsToFlowgramDocument(ctx, merged);
           flowStepsRef.current = synced as typeof steps.items;
@@ -960,7 +1304,12 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
         setFlowSelectorPickFgId(null);
         selector.setBy(sel.by as typeof selector.by);
         selector.setValue(sel.value.trim());
-        toast.success(t('pickSelectorApplied', { by: sel.by, value: sel.value.trim().slice(0, 48) }));
+        toast.success(
+          t('pickSelectorApplied', {
+            by: sel.by,
+            value: sel.value.trim().slice(0, 48)
+          })
+        );
         return;
       }
 
@@ -968,16 +1317,20 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
         const raw = steps.items as FlowStep[];
         const next = applyTapPointToSteps(raw, coordinatePickTarget, rx, ry);
         if (next === raw) {
-          toast.warning('Bước đích phải là tap_ratio hoặc tap (tọa độ dự phòng).');
+          toast.warning(
+            'Bước đích phải là tap_ratio hoặc tap (tọa độ dự phòng).'
+          );
         } else {
           steps.setItems(
             next.map((s: FlowStep, i: number) => ({
               ...s,
-              _id: (s as { _id?: string })._id || `step-${Date.now()}-${i}`,
-            })) as any,
+              _id: (s as { _id?: string })._id || `step-${Date.now()}-${i}`
+            })) as any
           );
           setCoordinatePickTarget(null);
-          toast.success(`Đã cập nhật tọa độ chạm: (${rx3}, ${ry3})`, { duration: 2500 });
+          toast.success(`Đã cập nhật tọa độ chạm: (${rx3}, ${ry3})`, {
+            duration: 2500
+          });
         }
         return;
       }
@@ -1003,8 +1356,8 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
       flowCoordPick,
       flowSelectorPickFgId,
       device.selectedDevice,
-      selector,
-    ],
+      selector
+    ]
   );
 
   // ── Error / empty states ─────────────────────────────────────────────────
@@ -1021,12 +1374,18 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
   // anyway so user sees XML / mirror / scenario columns. Phone column shows
   // the existing "Chọn thiết bị từ thanh trên" placeholder when selectedDevice
   // is null.
-  if (device.connectedDevices.length === 0 && !save.editingContext && !save.templateContext) {
+  if (
+    device.connectedDevices.length === 0 &&
+    !save.editingContext &&
+    !save.templateContext
+  ) {
     return (
       <div className='flex flex-col items-center justify-center rounded-lg border border-dashed border-border py-20 text-center'>
         <Video className='mb-3 size-10 text-muted-foreground/40' />
         <p className='mb-1 text-base font-medium'>{t('noDeviceConnected')}</p>
-        <p className='mb-4 text-sm text-muted-foreground'>{t('noDeviceConnectMessage')}</p>
+        <p className='mb-4 text-sm text-muted-foreground'>
+          {t('noDeviceConnectMessage')}
+        </p>
         <Button asChild size='sm' variant='outline'>
           <Link href={ROUTES.DEVICES.MANAGE}>
             <ArrowLeft className='mr-1.5 size-4' />
@@ -1040,8 +1399,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
   const { selectedDevice } = device;
 
   return (
-    <div className='flex h-[calc(100vh-80px)] flex-col overflow-hidden bg-background'>
-
+    <div className='flex h-[calc(100vh-80px)] min-h-0 flex-col overflow-hidden bg-background'>
       <SafeModeBanner className='mx-3 mt-2' />
 
       {/* ── Top bar ─────────────────────────────────────────────────────── */}
@@ -1051,7 +1409,9 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           variant='ghost'
           size='sm'
           className='-ml-1 shrink-0 gap-1.5 text-muted-foreground hover:text-foreground'
-          onClick={() => guardWhilePlaying(() => router.push(ROUTES.DEVICES.ROOT))}
+          onClick={() =>
+            guardWhilePreviewActive(() => router.push(ROUTES.DEVICES.ROOT))
+          }
         >
           <ArrowLeft className='size-3.5' />
           Farm
@@ -1074,12 +1434,12 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
         </div>
 
         {save.editingContext && (
-          <span className='shrink-0 inline-flex items-center rounded-full border border-amber-400/40 bg-amber-400/10 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300'>
+          <span className='inline-flex shrink-0 items-center rounded-full border border-amber-400/40 bg-amber-400/10 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300'>
             Đang chỉnh sửa
           </span>
         )}
         {save.templateContext && (
-          <span className='shrink-0 inline-flex items-center rounded-full border border-emerald-400/40 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300'>
+          <span className='inline-flex shrink-0 items-center rounded-full border border-emerald-400/40 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300'>
             {t('templateBadge')}
           </span>
         )}
@@ -1088,12 +1448,14 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
         <div className='min-w-0 max-w-[min(280px,calc(100vw-14rem))] shrink'>
           <Select
             value={device.selectedSerial ?? ''}
-            onValueChange={(v) => guardWhilePlaying(() => device.setSelectedSerial(v || null))}
+            onValueChange={(v) =>
+              guardWhilePreviewActive(() => device.setSelectedSerial(v || null))
+            }
           >
             <SelectTrigger
               className={cn(
                 'h-8 w-full min-w-0 max-w-full overflow-hidden text-xs',
-                '[&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate [&_[data-slot=select-value]]:text-left',
+                '[&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate [&_[data-slot=select-value]]:text-left'
               )}
             >
               <SelectValue placeholder={t('selectPhonePlaceholder')} />
@@ -1107,8 +1469,10 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                   className='text-xs'
                 >
                   <span className='inline-flex min-w-0 max-w-full items-center gap-1'>
-                    <span className='min-w-0 truncate'>{formatDeviceSelectLabel(d)}</span>
-                    {(((d.state || '').replace('DeviceState.', '') === 'BUSY') ||
+                    <span className='min-w-0 truncate'>
+                      {formatDeviceSelectLabel(d)}
+                    </span>
+                    {((d.state || '').replace('DeviceState.', '') === 'BUSY' ||
                       (d.scenario_active ?? 0) > 0) && (
                       <span className='shrink-0 rounded bg-amber-400/20 px-1 py-0.5 text-[9px] font-medium text-amber-700 dark:text-amber-300'>
                         chiến dịch
@@ -1122,13 +1486,20 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
         </div>
 
         {/* WS status dot */}
-        <span className={cn(
-          'shrink-0 inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-[11px] font-medium',
-          device.wsConnected
-            ? 'border-green-500/20 bg-green-500/10 text-green-700 dark:text-green-400'
-            : 'border-red-500/20 bg-red-500/10 text-red-600 dark:text-red-400',
-        )}>
-          <span className={cn('size-1.5 rounded-full', device.wsConnected ? 'bg-green-500' : 'bg-red-500')} />
+        <span
+          className={cn(
+            'inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-1 text-[11px] font-medium',
+            device.wsConnected
+              ? 'border-green-500/20 bg-green-500/10 text-green-700 dark:text-green-400'
+              : 'border-red-500/20 bg-red-500/10 text-red-600 dark:text-red-400'
+          )}
+        >
+          <span
+            className={cn(
+              'size-1.5 rounded-full',
+              device.wsConnected ? 'bg-green-500' : 'bg-red-500'
+            )}
+          />
           {device.wsConnected ? t('wsConnected') : t('wsDisconnected')}
         </span>
 
@@ -1139,7 +1510,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           <Button
             size='sm'
             variant={flowMode ? 'default' : 'outline'}
-            className='h-8 gap-1.5 shrink-0 text-xs'
+            className='h-8 shrink-0 gap-1.5 text-xs'
             onClick={() => {
               if (!flowMode) {
                 flowStepsRef.current = steps.items;
@@ -1149,9 +1520,17 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
               }
               setFlowMode((v) => !v);
             }}
-            title={flowMode ? 'Chuyển về danh sách bước' : 'Chuyển sang Flow Editor trực quan'}
+            title={
+              flowMode
+                ? 'Chuyển về danh sách bước'
+                : 'Chuyển sang Flow Editor trực quan'
+            }
           >
-            {flowMode ? <List className='size-3.5' /> : <GitBranch className='size-3.5' />}
+            {flowMode ? (
+              <List className='size-3.5' />
+            ) : (
+              <GitBranch className='size-3.5' />
+            )}
             {flowMode ? 'Danh sách' : 'Flow'}
           </Button>
         )}
@@ -1159,12 +1538,15 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
 
       {/* ── Main: cây XML + mirror + editor (Danh sách hoặc Flow cùng khung) ── */}
       <div className='flex flex-1 overflow-hidden'>
-
         {/* ── COL 1: UI Hierarchy tree ──────────────────────────────────── */}
-        <div className={cn(
-          'flex shrink-0 flex-col border-r border-border/60 bg-muted/10 transition-all duration-200',
-          leftCollapsed || !safeHierarchy ? 'w-0 overflow-hidden' : 'w-[320px]',
-        )}>
+        <div
+          className={cn(
+            'flex shrink-0 flex-col border-r border-border/60 bg-muted/10 transition-all duration-200',
+            leftCollapsed || !safeHierarchy
+              ? 'w-0 overflow-hidden'
+              : 'w-[280px]'
+          )}
+        >
           {/* Tree */}
           <div className='min-h-0 flex-1 overflow-hidden'>
             {!safeHierarchy ? (
@@ -1172,44 +1554,59 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                 Safe mode: không stream cây giao diện.
               </div>
             ) : (
-            <XmlTreeViewer
-              xml={hierarchy.xml}
-              loading={hierarchy.loading}
-              onNodeSelect={({ bounds, by, value, nodeId }) => {
-                setHighlightBounds(bounds);
-                if (nodeId != null) setSelectedNodeId(nodeId);
-                if (selectorPickTarget) {
-                  const rich = findSelectorForTreeNode(hierarchy.xml, bounds);
-                  if (rich?.value?.trim()) {
-                    applySelectorPick(rich.selector);
-                  } else if (value?.trim()) {
-                    applySelectorPick({ by: by as ScenarioSelectorShape['by'], value: value.trim() });
-                  } else {
-                    toast.warning(t('pickSelectorNoElement'));
+              <XmlTreeViewer
+                xml={hierarchy.xml}
+                loading={hierarchy.loading}
+                deviceActive={Boolean(
+                  selectedDevice?.state &&
+                    !['DISCONNECTED', 'DEAD'].includes(
+                      String(selectedDevice.state).toUpperCase()
+                    )
+                )}
+                wsConnected={Boolean(device.wsConnected)}
+                onNodeSelect={({ bounds, by, value, nodeId }) => {
+                  setHighlightBounds(bounds);
+                  if (nodeId != null) setSelectedNodeId(nodeId);
+                  if (selectorPickTarget) {
+                    const rich = findSelectorForTreeNode(hierarchy.xml, bounds);
+                    if (rich?.value?.trim()) {
+                      applySelectorPick(rich.selector);
+                    } else if (value?.trim()) {
+                      applySelectorPick({
+                        by: by as ScenarioSelectorShape['by'],
+                        value: value.trim()
+                      });
+                    } else {
+                      toast.warning(t('pickSelectorNoElement'));
+                    }
+                    return;
                   }
-                  return;
-                }
-                selector.setBy(by as typeof selector.by);
-                selector.setValue(value);
-              }}
-              selectedNodeId={selectedNodeId}
-              onRefresh={() => selectedDevice && hierarchy.refresh()}
-              autoRefresh={hierarchy.autoRefresh}
-              onAutoRefreshChange={hierarchy.setAutoRefresh}
-            />
+                  selector.setBy(by as typeof selector.by);
+                  selector.setValue(value);
+                }}
+                selectedNodeId={selectedNodeId}
+                onRefresh={() => selectedDevice && hierarchy.refresh()}
+                autoRefresh={hierarchy.autoRefresh}
+                onAutoRefreshChange={hierarchy.setAutoRefresh}
+              />
             )}
           </div>
 
           {/* Selector bar */}
-          <div className={cn(
-            'shrink-0 border-t border-border/60 px-2.5 py-2',
-            selector.value ? 'bg-primary/5' : 'bg-muted/30',
-          )}>
+          <div
+            className={cn(
+              'shrink-0 border-t border-border/60 px-2.5 py-2',
+              selector.value ? 'bg-primary/5' : 'bg-muted/30'
+            )}
+          >
             {selector.value ? (
               <>
                 <div className='flex items-center gap-1.5 pb-1.5'>
                   <span className='min-w-0 flex-1 truncate font-mono text-[10px] text-muted-foreground'>
-                    <span className='font-bold text-primary'>[{selector.by}]</span> {selector.value}
+                    <span className='font-bold text-primary'>
+                      [{selector.by}]
+                    </span>{' '}
+                    {selector.value}
                   </span>
                   <Button
                     size='sm'
@@ -1227,72 +1624,86 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                     Safe mode: không cho điều khiển / thêm bước.
                   </p>
                 ) : (
-                <div className='flex flex-wrap gap-1'>
-                  <Tooltip delayDuration={300}>
-                    <TooltipTrigger asChild>
-                      <button
-                        type='button'
-                        onClick={() => addStepFromSelector('tap_selector')}
-                        className='flex items-center gap-0.5 rounded bg-blue-500/10 px-1.5 py-0.5 text-[9px] font-medium text-blue-700 hover:bg-blue-500/20 dark:text-blue-400'
-                      >
-                        <MousePointerClick className='size-2.5' /> Tap
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side='top' className='text-[10px]'>Thêm bước tap_selector</TooltipContent>
-                  </Tooltip>
-                  <Tooltip delayDuration={300}>
-                    <TooltipTrigger asChild>
-                      <button
-                        type='button'
-                        onClick={() => addStepFromSelector('long_tap_selector')}
-                        className='flex items-center gap-0.5 rounded bg-purple-500/10 px-1.5 py-0.5 text-[9px] font-medium text-purple-700 hover:bg-purple-500/20 dark:text-purple-400'
-                      >
-                        <MousePointerClick className='size-2.5' /> Long
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side='top' className='text-[10px]'>Thêm bước long_tap_selector</TooltipContent>
-                  </Tooltip>
-                  <Tooltip delayDuration={300}>
-                    <TooltipTrigger asChild>
-                      <button
-                        type='button'
-                        onClick={() => addStepFromSelector('wait_element')}
-                        className='flex items-center gap-0.5 rounded bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-medium text-amber-700 hover:bg-amber-500/20 dark:text-amber-400'
-                      >
-                        <Timer className='size-2.5' /> Wait
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side='top' className='text-[10px]'>Thêm bước wait_element</TooltipContent>
-                  </Tooltip>
-                  <Tooltip delayDuration={300}>
-                    <TooltipTrigger asChild>
-                      <button
-                        type='button'
-                        onClick={() => addStepFromSelector('assert_element')}
-                        className='flex items-center gap-0.5 rounded bg-green-500/10 px-1.5 py-0.5 text-[9px] font-medium text-green-700 hover:bg-green-500/20 dark:text-green-400'
-                      >
-                        <CheckSquare className='size-2.5' /> Assert
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side='top' className='text-[10px]'>Thêm bước assert_element</TooltipContent>
-                  </Tooltip>
-                  <Tooltip delayDuration={300}>
-                    <TooltipTrigger asChild>
-                      <button
-                        type='button'
-                        onClick={() => addStepFromSelector('input_selector')}
-                        className='flex items-center gap-0.5 rounded bg-orange-500/10 px-1.5 py-0.5 text-[9px] font-medium text-orange-700 hover:bg-orange-500/20 dark:text-orange-400'
-                      >
-                        <Keyboard className='size-2.5' /> Input
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side='top' className='text-[10px]'>Thêm bước input_selector</TooltipContent>
-                  </Tooltip>
-                </div>
+                  <div className='flex flex-wrap gap-1'>
+                    <Tooltip delayDuration={300}>
+                      <TooltipTrigger asChild>
+                        <button
+                          type='button'
+                          onClick={() => addStepFromSelector('tap_selector')}
+                          className='flex items-center gap-0.5 rounded bg-blue-500/10 px-1.5 py-0.5 text-[9px] font-medium text-blue-700 hover:bg-blue-500/20 dark:text-blue-400'
+                        >
+                          <MousePointerClick className='size-2.5' /> Tap
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side='top' className='text-[10px]'>
+                        Thêm bước tap_selector
+                      </TooltipContent>
+                    </Tooltip>
+                    <Tooltip delayDuration={300}>
+                      <TooltipTrigger asChild>
+                        <button
+                          type='button'
+                          onClick={() =>
+                            addStepFromSelector('long_tap_selector')
+                          }
+                          className='flex items-center gap-0.5 rounded bg-purple-500/10 px-1.5 py-0.5 text-[9px] font-medium text-purple-700 hover:bg-purple-500/20 dark:text-purple-400'
+                        >
+                          <MousePointerClick className='size-2.5' /> Long
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side='top' className='text-[10px]'>
+                        Thêm bước long_tap_selector
+                      </TooltipContent>
+                    </Tooltip>
+                    <Tooltip delayDuration={300}>
+                      <TooltipTrigger asChild>
+                        <button
+                          type='button'
+                          onClick={() => addStepFromSelector('wait_element')}
+                          className='flex items-center gap-0.5 rounded bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-medium text-amber-700 hover:bg-amber-500/20 dark:text-amber-400'
+                        >
+                          <Timer className='size-2.5' /> Wait
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side='top' className='text-[10px]'>
+                        Thêm bước wait_element
+                      </TooltipContent>
+                    </Tooltip>
+                    <Tooltip delayDuration={300}>
+                      <TooltipTrigger asChild>
+                        <button
+                          type='button'
+                          onClick={() => addStepFromSelector('assert_element')}
+                          className='flex items-center gap-0.5 rounded bg-green-500/10 px-1.5 py-0.5 text-[9px] font-medium text-green-700 hover:bg-green-500/20 dark:text-green-400'
+                        >
+                          <CheckSquare className='size-2.5' /> Assert
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side='top' className='text-[10px]'>
+                        Thêm bước assert_element
+                      </TooltipContent>
+                    </Tooltip>
+                    <Tooltip delayDuration={300}>
+                      <TooltipTrigger asChild>
+                        <button
+                          type='button'
+                          onClick={() => addStepFromSelector('input_selector')}
+                          className='flex items-center gap-0.5 rounded bg-orange-500/10 px-1.5 py-0.5 text-[9px] font-medium text-orange-700 hover:bg-orange-500/20 dark:text-orange-400'
+                        >
+                          <Keyboard className='size-2.5' /> Input
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side='top' className='text-[10px]'>
+                        Thêm bước input_selector
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
                 )}
               </>
             ) : (
-              <p className='text-[10px] text-muted-foreground'>{t('selectorBarHint')}</p>
+              <p className='text-[10px] text-muted-foreground'>
+                {t('selectorBarHint')}
+              </p>
             )}
           </div>
         </div>
@@ -1304,23 +1715,28 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           className='relative z-10 flex w-4 shrink-0 items-center justify-center border-r border-border/40 bg-muted/20 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground'
           title={leftCollapsed ? 'Mở cây giao diện' : 'Thu cây giao diện'}
         >
-          {leftCollapsed ? <ChevronRight className='size-3' /> : <ChevronLeft className='size-3' />}
+          {leftCollapsed ? (
+            <ChevronRight className='size-3' />
+          ) : (
+            <ChevronLeft className='size-3' />
+          )}
         </button>
 
         {/* ── COL 2: Phone screen (centered) ───────────────────────────── */}
         <div
           ref={mirrorColRef}
-          className='flex w-[clamp(360px,34vw,520px)] shrink-0 flex-col items-center border-r border-border/60 bg-muted/20 overflow-y-auto'
+          className='flex min-h-0 w-[clamp(300px,28vw,440px)] shrink-0 flex-col overflow-y-auto overflow-x-hidden border-r border-border/60 bg-muted/20'
         >
           {selectedDevice ? (
             <>
-              {(((selectedDevice.state || '').replace('DeviceState.', '') === 'BUSY') ||
+              {((selectedDevice.state || '').replace('DeviceState.', '') ===
+                'BUSY' ||
                 (selectedDevice.scenario_active ?? 0) > 0) && (
-                <div className='flex w-full items-center gap-2 border-b border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300'>
+                <div className='flex w-full shrink-0 items-center gap-2 border-b border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300'>
                   <span>{t('takeover.manualControlBlocked')}</span>
                 </div>
               )}
-              <div className='w-full max-w-[460px] p-3'>
+              <div className='flex w-full justify-center p-3'>
                 <DeviceTile
                   device={selectedDevice}
                   logLines={device.logs[selectedDevice.serial] ?? []}
@@ -1331,6 +1747,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                   onTap={handleScreenTap}
                   hideHeader
                   hideStepMonitor
+                  minimalRailControls
                   onSwipe={
                     coordinatePickTarget?.mode === 'swipe_segment' ||
                     (showFlowUi && flowCoordPick?.kind === 'swipe')
@@ -1338,50 +1755,78 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                       : undefined
                   }
                   highlightBounds={highlightBounds}
-                  hideControls={((selectedDevice.state || '').replace('DeviceState.', '') === 'BUSY') ||
-                    (selectedDevice.scenario_active ?? 0) > 0}
-                  hideDeviceFunctions={((selectedDevice.state || '').replace('DeviceState.', '') === 'BUSY') ||
-                    (selectedDevice.scenario_active ?? 0) > 0}
-                  readOnlyPreview={((selectedDevice.state || '').replace('DeviceState.', '') === 'BUSY') ||
-                    (selectedDevice.scenario_active ?? 0) > 0}
+                  hideControls={
+                    (selectedDevice.state || '').replace('DeviceState.', '') ===
+                      'BUSY' || (selectedDevice.scenario_active ?? 0) > 0
+                  }
+                  hideDeviceFunctions={
+                    (selectedDevice.state || '').replace('DeviceState.', '') ===
+                      'BUSY' || (selectedDevice.scenario_active ?? 0) > 0
+                  }
+                  readOnlyPreview={
+                    (selectedDevice.state || '').replace('DeviceState.', '') ===
+                      'BUSY' || (selectedDevice.scenario_active ?? 0) > 0
+                  }
                 />
               </div>
             </>
           ) : (
             <div className='flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center'>
-              <Video className='size-8 text-muted-foreground/30' strokeWidth={1.25} />
-              <p className='text-xs text-muted-foreground'>Chọn thiết bị từ thanh trên</p>
+              <Video
+                className='size-8 text-muted-foreground/30'
+                strokeWidth={1.25}
+              />
+              <p className='text-xs text-muted-foreground'>
+                Chọn thiết bị từ thanh trên
+              </p>
             </div>
           )}
         </div>
 
         {/* ── COL 3: Recording / scenario editor ───────────────────────── */}
         <div className='flex min-w-0 flex-1 flex-col overflow-hidden'>
-
           {playerMode && selectedDevice ? (
             /* Player mode — fill column; list scrolls inside ScenarioPlayer */
             <div className='flex min-h-0 flex-1 flex-col overflow-hidden p-4'>
               <ScenarioPlayer
                 serial={selectedDevice.serial}
-                onClose={() => guardWhilePlaying(() => setPlayerMode(false))}
-                onPlayingChange={(p) => { hierarchy.setPaused(p); setPlayerPlaying(p); }}
-                registerStop={(fn) => { stopPlayerRef.current = fn; }}
-                preloadedSteps={steps.items.length > 0 ? (steps.items as any[]) : undefined}
+                onClose={() =>
+                  guardWhilePreviewActive(() => setPlayerMode(false))
+                }
+                onPlayingChange={(p) => {
+                  hierarchy.setPaused(p);
+                  setPlayerPlaying(p);
+                }}
+                registerStop={(fn) => {
+                  stopPlayerRef.current = fn;
+                }}
+                preloadedSteps={
+                  steps.items.length > 0 ? (steps.items as any[]) : undefined
+                }
                 preloadedName={save.editingContext?.name}
                 preloadedVariables={scenarioVariables}
                 preloadedScenarioId={activeScenarioId}
                 preloadedScenarioDeviceVars={inlineScenarioDeviceVars}
-                preloadedAccountGroupId={saveAccountGroupId || save.editingContext?.accountGroupId || null}
-                deviceBusy={(selectedDevice.state || '').replace('DeviceState.', '') === 'BUSY'}
+                preloadedAccountGroupId={
+                  saveAccountGroupId ||
+                  save.editingContext?.accountGroupId ||
+                  null
+                }
+                deviceBusy={
+                  (selectedDevice.state || '').replace('DeviceState.', '') ===
+                  'BUSY'
+                }
               />
             </div>
           ) : (
-            <>
+            <div className='flex min-h-0 flex-1 flex-col overflow-hidden'>
               {/* Selector pick banner */}
               {selectorPickTarget && (
                 <div className='flex shrink-0 items-center gap-2 border-b border-amber-400/30 bg-amber-50/80 px-4 py-2 dark:bg-amber-950/20'>
                   <Crosshair className='size-3.5 shrink-0 text-amber-600' />
-                  <p className='flex-1 text-[11px] text-amber-800 dark:text-amber-300'>{t('pickSelectorBanner')}</p>
+                  <p className='flex-1 text-[11px] text-amber-800 dark:text-amber-300'>
+                    {t('pickSelectorBanner')}
+                  </p>
                   <button
                     type='button'
                     className='text-[10px] text-amber-700 underline underline-offset-2 hover:no-underline dark:text-amber-400'
@@ -1396,7 +1841,8 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                 <div className='flex shrink-0 items-center gap-2 border-b border-sky-400/35 bg-sky-50/90 px-4 py-2 dark:bg-sky-950/25'>
                   <MousePointerClick className='size-3.5 shrink-0 text-sky-700 dark:text-sky-400' />
                   <p className='flex-1 text-[11px] text-sky-900 dark:text-sky-200'>
-                    CHẠM TỌA ĐỘ — chạm một điểm trên mirror (cột điện thoại). Esc hoặc Huỷ để thoát.
+                    CHẠM TỌA ĐỘ — chạm một điểm trên mirror (cột điện thoại).
+                    Esc hoặc Huỷ để thoát.
                   </p>
                   <button
                     type='button'
@@ -1412,7 +1858,8 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                 <div className='flex shrink-0 items-center gap-2 border-b border-sky-400/35 bg-sky-50/90 px-4 py-2 dark:bg-sky-950/25'>
                   <Move className='size-3.5 shrink-0 text-sky-700 dark:text-sky-400' />
                   <p className='flex-1 text-[11px] text-sky-900 dark:text-sky-200'>
-                    Vuốt trên mirror để lấy đoạn (điểm đầu → cuối). Esc hoặc Huỷ để thoát.
+                    Vuốt trên mirror để lấy đoạn (điểm đầu → cuối). Esc hoặc Huỷ
+                    để thoát.
                   </p>
                   <button
                     type='button'
@@ -1446,7 +1893,8 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                 <div className='flex shrink-0 items-center gap-2 border-b border-amber-400/30 bg-amber-50/80 px-4 py-2 dark:bg-amber-950/20'>
                   <Crosshair className='size-3.5 shrink-0 text-amber-600' />
                   <p className='flex-1 text-[11px] text-amber-800 dark:text-amber-300'>
-                    FLOW — chạm phần tử trên mirror để gán selector cho node đang chọn (cần XML cây bên trái). Esc để hủy.
+                    FLOW — chạm phần tử trên mirror để gán selector cho node
+                    đang chọn (cần XML cây bên trái). Esc để hủy.
                   </p>
                   <button
                     type='button'
@@ -1461,7 +1909,12 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
               {/* Section header */}
               <div className='flex shrink-0 items-center border-b border-border/40 bg-muted/20 px-4 py-2'>
                 <div className='flex min-w-0 max-w-full flex-nowrap items-center gap-1.5 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'>
-                  {record.pollingXml && <RefreshCw size={12} className='animate-spin text-red-500/80' />}
+                  {record.pollingXml && (
+                    <RefreshCw
+                      size={12}
+                      className='animate-spin text-red-500/80'
+                    />
+                  )}
                   <Button
                     size='sm'
                     variant={record.recording ? 'destructive' : 'default'}
@@ -1469,8 +1922,14 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                     onClick={() => void record.toggleRecording()}
                     disabled={!selectedDevice}
                   >
-                    {record.recording ? <Square className='size-3.5' /> : <Circle className='size-3.5 fill-current' />}
-                    {record.recording ? t('stopRecording') : t('startRecording')}
+                    {record.recording ? (
+                      <Square className='size-3.5' />
+                    ) : (
+                      <Circle className='size-3.5 fill-current' />
+                    )}
+                    {record.recording
+                      ? t('stopRecording')
+                      : t('startRecording')}
                   </Button>
                   <Button
                     size='sm'
@@ -1479,11 +1938,17 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                     onClick={() => setPlayerMode(true)}
                     disabled={
                       !selectedDevice ||
-                      (selectedDevice.state || '').replace('DeviceState.', '') === 'BUSY'
+                      (selectedDevice.state || '').replace(
+                        'DeviceState.',
+                        ''
+                      ) === 'BUSY'
                     }
                     title={
                       selectedDevice &&
-                      (selectedDevice.state || '').replace('DeviceState.', '') === 'BUSY'
+                      (selectedDevice.state || '').replace(
+                        'DeviceState.',
+                        ''
+                      ) === 'BUSY'
                         ? 'Thiết bị đang chạy campaign — không cho chạy thử'
                         : undefined
                     }
@@ -1493,11 +1958,19 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                   </Button>
                   <Tooltip delayDuration={300}>
                     <TooltipTrigger asChild>
-                      <Button size='sm' variant='ghost' className='h-7 w-7 shrink-0 p-0' onClick={() => setJsonDialogOpen(true)} disabled={steps.items.length === 0}>
+                      <Button
+                        size='sm'
+                        variant='ghost'
+                        className='h-7 w-7 shrink-0 p-0'
+                        onClick={() => setJsonDialogOpen(true)}
+                        disabled={steps.items.length === 0}
+                      >
                         <Code2 className='size-3.5' />
                       </Button>
                     </TooltipTrigger>
-                    <TooltipContent side='bottom' className='text-xs'>Xem JSON</TooltipContent>
+                    <TooltipContent side='bottom' className='text-xs'>
+                      Xem JSON
+                    </TooltipContent>
                   </Tooltip>
                   <Button
                     size='sm'
@@ -1510,12 +1983,20 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                       }
                       steps.openSave();
                     }}
-                    disabled={steps.items.length === 0 || safeReadOnly || save.savingTemplate}
-                    title={safeReadOnly ? 'Safe mode: không cho lưu' : undefined}
+                    disabled={
+                      steps.items.length === 0 ||
+                      safeReadOnly ||
+                      save.savingTemplate
+                    }
+                    title={
+                      safeReadOnly ? 'Safe mode: không cho lưu' : undefined
+                    }
                   >
                     <Save className='size-3.5' />
                     {save.templateContext
-                      ? (save.savingTemplate ? t('templateSaving') : t('templateSave'))
+                      ? save.savingTemplate
+                        ? t('templateSaving')
+                        : t('templateSave')
                       : 'Lưu'}
                   </Button>
                   <Tooltip delayDuration={400}>
@@ -1526,7 +2007,8 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                         onClick={() => setVarDialogOpen(true)}
                         className={cn(
                           'h-7 shrink-0 gap-1.5 px-2.5 text-xs',
-                          Object.keys(scenarioVariables).length > 0 && 'border-primary/40 bg-primary/10 text-primary hover:bg-primary/20',
+                          Object.keys(scenarioVariables).length > 0 &&
+                            'border-primary/40 bg-primary/10 text-primary hover:bg-primary/20'
                         )}
                       >
                         <SlidersHorizontal className='size-3.5' />
@@ -1539,7 +2021,8 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                       </Button>
                     </TooltipTrigger>
                     <TooltipContent side='bottom' className='text-xs'>
-                      Chỉnh biến — giá trị thay thế cho {'${VAR}'} khi chạy thử bước
+                      Chỉnh biến — giá trị thay thế cho {'${VAR}'} khi chạy thử
+                      bước
                     </TooltipContent>
                   </Tooltip>
                   <Tooltip delayDuration={400}>
@@ -1551,9 +2034,11 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                         disabled={!activeCampaignId || !selectedDeviceId}
                         className={cn(
                           'h-7 shrink-0 gap-1.5 px-2.5 text-xs',
-                          hasEnabledDeviceVars && activeCampaignId && selectedDeviceId
+                          hasEnabledDeviceVars &&
+                            activeCampaignId &&
+                            selectedDeviceId
                             ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-300'
-                            : '',
+                            : ''
                         )}
                       >
                         <SlidersHorizontal className='size-3.5' />
@@ -1570,158 +2055,34 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                   </Tooltip>
                   <Tooltip delayDuration={400}>
                     <TooltipTrigger asChild>
-                      <Button size='sm' variant='ghost' className='h-7 w-7 shrink-0 p-0'>
+                      <Button
+                        size='sm'
+                        variant='ghost'
+                        className='h-7 w-7 shrink-0 p-0'
+                      >
                         <HelpCircle className='size-3.5' />
                       </Button>
                     </TooltipTrigger>
-                    <TooltipContent side='bottom' className='max-w-xs text-xs'>{t('tooltipScenarioSection')}</TooltipContent>
+                    <TooltipContent side='bottom' className='max-w-xs text-xs'>
+                      {t('tooltipScenarioSection')}
+                    </TooltipContent>
                   </Tooltip>
                 </div>
               </div>
 
               {/* Flow editor */}
-              <div className='min-h-0 flex-1 overflow-hidden px-3 pb-2'>
+              <div className='flex min-h-0 flex-1 flex-col overflow-hidden'>
+                <div className='min-h-0 flex-1 overflow-y-auto px-3 pb-2'>
                 {steps.items.length === 0 ? (
-                  (() => {
-                    type Picker = { type: string; label: string; onClick: () => void };
-                    const interactions: Picker[] = [
-                      { type: 'tap_selector',      label: t('emptyNodePicker.tapSelector'),    onClick: () => steps.addFlow('tap_selector') },
-                      { type: 'long_tap_selector', label: t('emptyNodePicker.longTap'),         onClick: () => steps.addFlow('long_tap_selector') },
-                      { type: 'input_selector',    label: t('emptyNodePicker.inputText'),       onClick: () => steps.addFlow('input_selector') },
-                      { type: 'assert_element',    label: t('emptyNodePicker.assertElement'),   onClick: () => steps.addFlow('assert_element') },
-                      { type: 'tap_ratio',         label: t('emptyNodePicker.tapRatio'),        onClick: () => steps.addFlow('tap_ratio') },
-                      { type: 'swipe_ratio',       label: t('emptyNodePicker.swipe'),           onClick: () => steps.addFlow('swipe_ratio') },
-                      { type: 'key',               label: t('emptyNodePicker.keyPress'),        onClick: () => steps.addFlow('key') },
-                      { type: 'set_variable',      label: t('emptyNodePicker.setVariable'),     onClick: () => steps.addFlow('set_variable') },
-                    ];
-                    const flow: Picker[] = [
-                      { type: 'wait',          label: t('emptyNodePicker.waitSeconds'), onClick: steps.addWait },
-                      { type: 'wait_element',  label: t('emptyNodePicker.waitElement'), onClick: () => steps.addFlow('wait_element') },
-                      { type: 'if_element',    label: t('emptyNodePicker.ifElement'),   onClick: () => steps.addFlow('if_element') },
-                      { type: 'if_variable',   label: t('emptyNodePicker.ifVariable'),  onClick: () => steps.addFlow('if_variable') },
-                      { type: 'repeat',        label: t('emptyNodePicker.repeatN'),     onClick: () => steps.addFlow('repeat') },
-                      { type: 'repeat_until',  label: t('emptyNodePicker.repeatUntil'), onClick: () => steps.addFlow('repeat_until') },
-                    ];
-                    const sections = [
-                      {
-                        key: 'interaction',
-                        title: t('emptyNodePicker.sectionInteraction'),
-                        items: interactions,
-                        accent: 'indigo',
-                        bar: 'bg-indigo-500',
-                        chip: 'bg-indigo-50 text-indigo-700 ring-indigo-200/60',
-                        iconWrap: 'bg-indigo-50 text-indigo-600 ring-indigo-100',
-                        cardHover: 'hover:border-indigo-300 hover:bg-indigo-50/40 hover:shadow-sm',
-                      },
-                      {
-                        key: 'flow',
-                        title: t('emptyNodePicker.sectionFlow'),
-                        items: flow,
-                        accent: 'amber',
-                        bar: 'bg-amber-500',
-                        chip: 'bg-amber-50 text-amber-700 ring-amber-200/60',
-                        iconWrap: 'bg-amber-50 text-amber-600 ring-amber-100',
-                        cardHover: 'hover:border-amber-300 hover:bg-amber-50/40 hover:shadow-sm',
-                      },
-                    ];
-                    return (
-                      <div className='flex h-full items-start justify-center overflow-y-auto rounded-xl bg-gradient-to-b from-muted/[0.04] to-transparent px-5 py-8'>
-                        <div className='w-full max-w-2xl space-y-6'>
-                          <div className='text-center'>
-                            <h3 className='text-base font-semibold tracking-tight text-foreground'>
-                              {t('emptyNodePicker.title')}
-                            </h3>
-                            <p className='mx-auto mt-1 max-w-md text-xs leading-relaxed text-muted-foreground'>
-                              {t('emptyNodePicker.subtitle')}
-                            </p>
-                          </div>
-                          {sections.map((s) => (
-                            <div key={s.key} className='space-y-2.5'>
-                              <div className='flex items-center gap-2'>
-                                <span className={`h-3.5 w-1 rounded-full ${s.bar}`} aria-hidden />
-                                <span className='text-xs font-semibold uppercase tracking-wide text-foreground/80'>
-                                  {s.title}
-                                </span>
-                                <span className={`ml-auto rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1 ring-inset ${s.chip}`}>
-                                  {s.items.length}
-                                </span>
-                              </div>
-                              <div className='grid grid-cols-2 gap-2 sm:grid-cols-3'>
-                                {s.items.map((it) => (
-                                  <button
-                                    key={it.type}
-                                    type='button'
-                                    onClick={it.onClick}
-                                    className={`group flex h-12 items-center gap-2.5 rounded-lg border border-border/60 bg-background px-2.5 text-left text-xs font-medium text-foreground/90 transition ${s.cardHover}`}
-                                  >
-                                    <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md ring-1 ring-inset transition group-hover:scale-105 ${s.iconWrap}`}>
-                                      <StepIcon type={it.type as any} size={14} />
-                                    </span>
-                                    <span className='truncate'>{it.label}</span>
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-                          ))}
-
-                          {/* Templates section — includes both user-created and builtin/system templates. */}
-                          <div className='space-y-2.5'>
-                            <div className='flex items-center gap-2'>
-                              <span className='h-3.5 w-1 rounded-full bg-emerald-500' aria-hidden />
-                              <span className='text-xs font-semibold uppercase tracking-wide text-foreground/80'>
-                                {t('emptyNodePicker.sectionTemplate')}
-                              </span>
-                              <span className='ml-auto rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1 ring-inset bg-emerald-50 text-emerald-700 ring-emerald-200/60'>
-                                {templatesQuery.data?.length ?? 0}
-                              </span>
-                            </div>
-                            {templatesQuery.isLoading ? (
-                              <div className='rounded-lg border border-dashed border-border/60 bg-background px-3 py-4 text-center text-xs text-muted-foreground'>
-                                {t('emptyNodePicker.templateLoading')}
-                              </div>
-                            ) : (templatesQuery.data?.length ?? 0) === 0 ? (
-                              <div className='rounded-lg border border-dashed border-border/60 bg-background px-3 py-4 text-center text-xs text-muted-foreground'>
-                                {t('emptyNodePicker.templateEmpty')}
-                              </div>
-                            ) : (
-                              <div className='grid grid-cols-1 gap-2 sm:grid-cols-2'>
-                                {templatesQuery.data!.map((tpl) => (
-                                  <button
-                                    key={tpl.id}
-                                    type='button'
-                                    onClick={() => setPreviewTemplate(tpl)}
-                                    className='group flex items-start gap-2.5 rounded-lg border border-border/60 bg-background px-2.5 py-2 text-left transition hover:border-emerald-300 hover:bg-emerald-50/40 hover:shadow-sm'
-                                  >
-                                    <span className='mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md ring-1 ring-inset bg-emerald-50 text-emerald-600 ring-emerald-100 transition group-hover:scale-105'>
-                                      <List size={14} />
-                                    </span>
-                                    <span className='min-w-0 flex-1 space-y-0.5'>
-                                      <span className='flex items-center gap-1.5'>
-                                        <span className='truncate text-xs font-medium text-foreground/90'>
-                                          {tpl.name}
-                                        </span>
-                                        {tpl.is_builtin && (
-                                          <Badge variant='secondary' className='h-4 px-1 text-[9px] font-semibold uppercase tracking-wide'>
-                                            {t('emptyNodePicker.templateBuiltinBadge')}
-                                          </Badge>
-                                        )}
-                                      </span>
-                                      <span className='block truncate text-[10px] text-muted-foreground'>
-                                        {t('emptyNodePicker.templateStepCount', { count: Array.isArray(tpl.steps) ? tpl.steps.length : 0 })}
-                                        {tpl.description ? ` · ${tpl.description}` : ''}
-                                      </span>
-                                    </span>
-                                  </button>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })()
+                  <EmptyNodePicker
+                    templates={templatesQuery.data}
+                    templatesLoading={templatesQuery.isLoading}
+                    onPreviewTemplate={setPreviewTemplate}
+                    onAddFlow={steps.addFlow}
+                    onAddWait={steps.addWait}
+                  />
                 ) : showFlowUi ? (
-                  <div className='flex h-full max-h-[calc(100vh-280px)] min-h-[280px] flex-col overflow-hidden rounded-lg border border-border/50 bg-background lg:flex-row'>
+                  <div className='flex h-full min-h-[240px] flex-col overflow-hidden rounded-lg border border-border/50 bg-background lg:flex-row'>
                     <div className='relative min-h-[220px] flex-1 overflow-hidden lg:min-h-0'>
                       <FlowgramCanvas
                         key={`flow-${flowCanvasKey}`}
@@ -1743,33 +2104,47 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                           onChange={handleFlowDetailChange}
                           onClose={() => setFlowSelectedFgId(null)}
                           onRequestPickSelector={
-                            flowSelectedFgId && flowDetailStep && isSelectorPickableStep(flowDetailStep)
+                            flowSelectedFgId &&
+                            flowDetailStep &&
+                            isSelectorPickableStep(flowDetailStep)
                               ? () => {
                                   setFlowSelectorPickFgId(flowSelectedFgId);
                                   setSelectorPickTarget(null);
                                   setFlowCoordPick(null);
                                   setCoordinatePickTarget(null);
-                                  toast.info('Chạm phần tử trên mirror để gán selector');
+                                  toast.info(
+                                    'Chạm phần tử trên mirror để gán selector'
+                                  );
                                 }
                               : undefined
                           }
                           onRequestPickTapCoords={
                             flowSelectedFgId
                               ? () => {
-                                  setFlowCoordPick({ fgId: flowSelectedFgId, kind: 'tap' });
+                                  setFlowCoordPick({
+                                    fgId: flowSelectedFgId,
+                                    kind: 'tap'
+                                  });
                                   setCoordinatePickTarget(null);
                                   setFlowSelectorPickFgId(null);
-                                  toast.info('Chạm mirror để gán tọa độ cho node này');
+                                  toast.info(
+                                    'Chạm mirror để gán tọa độ cho node này'
+                                  );
                                 }
                               : undefined
                           }
                           onRequestPickSwipeCoords={
                             flowSelectedFgId
                               ? () => {
-                                  setFlowCoordPick({ fgId: flowSelectedFgId, kind: 'swipe' });
+                                  setFlowCoordPick({
+                                    fgId: flowSelectedFgId,
+                                    kind: 'swipe'
+                                  });
                                   setCoordinatePickTarget(null);
                                   setFlowSelectorPickFgId(null);
-                                  toast.info('Vuốt trên mirror để gán swipe_ratio');
+                                  toast.info(
+                                    'Vuốt trên mirror để gán swipe_ratio'
+                                  );
                                 }
                               : undefined
                           }
@@ -1777,13 +2152,18 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                       ) : (
                         <div className='space-y-2 p-3 text-[11px] leading-relaxed text-muted-foreground'>
                           <p>
-                            Bấm <strong>con trỏ</strong> trên node → chỉnh chi tiết; <strong>play</strong> chạy một bước.
-                            Cây XML + thêm bước từ selector vẫn dùng cột trái như chế độ danh sách.
+                            Bấm <strong>con trỏ</strong> trên node → chỉnh chi
+                            tiết; <strong>play</strong> chạy một bước. Cây XML +
+                            thêm bước từ selector vẫn dùng cột trái như chế độ
+                            danh sách.
                           </p>
                           <p className='rounded-md border border-border/80 bg-muted/30 px-2 py-1.5 text-[10px]'>
-                            <strong>Không có “kéo dây” tự do</strong> — Flowgram (fixed-layout) tự vẽ nối theo thứ tự dọc
-                            và nhánh if/loop/random. Đổi thứ tự bằng <strong>kéo thả node</strong>. Muốn nối dây tùy ý cần
-                            editor dạng graph tự do (vd. React Flow), không nằm trong thư viện hiện tại.
+                            <strong>Không có “kéo dây” tự do</strong> — Flowgram
+                            (fixed-layout) tự vẽ nối theo thứ tự dọc và nhánh
+                            if/loop/random. Đổi thứ tự bằng{' '}
+                            <strong>kéo thả node</strong>. Muốn nối dây tùy ý
+                            cần editor dạng graph tự do (vd. React Flow), không
+                            nằm trong thư viện hiện tại.
                           </p>
                         </div>
                       )}
@@ -1791,20 +2171,23 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                   </div>
                 ) : (
                   <div className='flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border/50 bg-background'>
-                    {selectedDevice && Object.values(stepRunStates).some((st) => st === 'running') && (
-                      <div className='flex shrink-0 justify-end border-b border-border/60 bg-muted/40 px-2 py-1.5'>
-                        <Button
-                          type='button'
-                          size='sm'
-                          variant='outline'
-                          className='h-7 gap-1 text-xs text-destructive hover:bg-destructive/10'
-                          onClick={handleStopInlineRun}
-                        >
-                          <Square className='size-3' fill='currentColor' />
-                          Dừng chạy thử
-                        </Button>
-                      </div>
-                    )}
+                    {selectedDevice &&
+                      Object.values(stepRunStates).some(
+                        (st) => st === 'running'
+                      ) && (
+                        <div className='flex shrink-0 justify-end border-b border-border/60 bg-muted/40 px-2 py-1.5'>
+                          <Button
+                            type='button'
+                            size='sm'
+                            variant='outline'
+                            className='h-7 gap-1 text-xs text-destructive hover:bg-destructive/10'
+                            onClick={handleStopInlineRun}
+                          >
+                            <Square className='size-3' fill='currentColor' />
+                            Dừng chạy thử
+                          </Button>
+                        </div>
+                      )}
                     <div className='min-h-0 flex-1 overflow-hidden'>
                       <FlowEditor
                         steps={steps.items as FlowStep[]}
@@ -1812,7 +2195,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                           steps.setItems(
                             newSteps.map((s: FlowStep, i: number) => ({
                               ...s,
-                              _id: (s as any)._id || `step-${Date.now()}-${i}`,
+                              _id: (s as any)._id || `step-${Date.now()}-${i}`
                             })) as any
                           )
                         }
@@ -1820,17 +2203,21 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                         selectorPickTarget={selectorPickTarget}
                         onSelectorPickTargetChange={setSelectorPickTarget}
                         coordinatePickTarget={coordinatePickTarget}
-                        onCoordinatePickTargetChange={setCoordinatePickTargetSafe}
+                        onCoordinatePickTargetChange={
+                          setCoordinatePickTargetSafe
+                        }
                         onRunStep={selectedDevice ? handleRunStep : undefined}
-                        onStopInlineRun={selectedDevice ? handleStopInlineRun : undefined}
+                        onStopInlineRun={
+                          selectedDevice ? handleStopInlineRun : undefined
+                        }
                         stepRunStates={stepRunStates}
                       />
                     </div>
                   </div>
                 )}
+                </div>
               </div>
-
-            </>
+            </div>
           )}
         </div>
       </div>
@@ -1844,15 +2231,16 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
               Cài APK từ URL
             </DialogTitle>
           </DialogHeader>
-          <p className='text-[12px] text-muted-foreground -mt-1'>
-            Nhập URL APK công khai. atx-agent trên thiết bị sẽ tải và cài đặt tự động.
+          <p className='-mt-1 text-[12px] text-muted-foreground'>
+            Nhập URL APK công khai. atx-agent trên thiết bị sẽ tải và cài đặt tự
+            động.
           </p>
           <div className='flex gap-2'>
             <Input
               placeholder='https://example.com/app.apk'
               value={installUrl}
               onChange={(e) => setInstallUrl(e.target.value)}
-              className='h-8 text-xs font-mono'
+              className='h-8 font-mono text-xs'
             />
             <Button
               size='sm'
@@ -1860,7 +2248,11 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
               disabled={!installUrl.trim() || !selectedDevice}
               onClick={() => {
                 if (!selectedDevice || !installUrl.trim()) return;
-                record.wsSend({ type: 'install', serial: selectedDevice.serial, url: installUrl.trim() });
+                record.wsSend({
+                  type: 'install',
+                  serial: selectedDevice.serial,
+                  url: installUrl.trim()
+                });
                 toast.info(`Đang cài APK lên ${selectedDevice.serial}…`);
                 setInstallDialogOpen(false);
                 setInstallUrl('');
@@ -1874,25 +2266,27 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
 
       {/* ── Variables dialog ────────────────────────────────────────────────── */}
       <Dialog open={varDialogOpen} onOpenChange={setVarDialogOpen}>
-        <DialogContent className='max-h-[min(85dvh,720px)] max-w-xl gap-4 overflow-hidden !grid grid-rows-[auto_auto_minmax(0,1fr)]'>
-          <DialogHeader className='shrink-0'>
-            <DialogTitle className='flex items-center gap-2 text-base'>
-              <SlidersHorizontal className='size-4' />
-              Biến kịch bản
+        <DialogContent className='!grid max-h-[min(85dvh,720px)] max-w-2xl grid-rows-[auto_minmax(0,1fr)] gap-3 overflow-hidden'>
+          <DialogHeader className='shrink-0 space-y-1.5'>
+            <DialogTitle className='flex flex-wrap items-center gap-2 text-base'>
+              <SlidersHorizontal className='size-4 shrink-0' />
+              {tVar('title')}
+              {Object.keys(scenarioVariables).length > 0 ? (
+                <Badge variant='secondary' className='h-6 text-[11px] font-normal'>
+                  {tVar('variableCount', {
+                    count: Object.keys(scenarioVariables).length
+                  })}
+                </Badge>
+              ) : null}
             </DialogTitle>
+            <DialogDescription className='text-xs'>
+              {tVar('headerSubtitleLead')}{' '}
+              <code className='rounded bg-muted/80 px-1 py-0.5 font-mono text-[11px] text-foreground'>
+                {'${VAR}'}
+              </code>{' '}
+              {tVar('headerSubtitleTrail')}
+            </DialogDescription>
           </DialogHeader>
-          <div className='shrink-0 rounded-md border bg-muted/30 p-3 text-xs'>
-            <p className='font-medium text-foreground'>Cách gắn biến (nhanh)</p>
-            <p className='mt-1 text-muted-foreground'>
-              1) Tạo <span className='font-medium text-foreground'>tên biến</span> (vd: <code className='rounded bg-muted px-1 font-mono'>PLATFORM</code>) và nhập giá trị.
-            </p>
-            <p className='text-muted-foreground'>
-              2) Trong bước, dùng biến <code className='rounded bg-muted px-1 font-mono'>{'${PLATFORM}'}</code>.
-            </p>
-            <p className='text-muted-foreground'>
-              3) Khi chạy, hệ thống tự thay biến bằng giá trị bạn đã nhập.
-            </p>
-          </div>
           <div className='min-h-0 overflow-y-auto overscroll-y-contain pr-1 [-webkit-overflow-scrolling:touch]'>
             <VariableEditor
               variables={scenarioVariables}
@@ -1903,14 +2297,14 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
       </Dialog>
 
       <Dialog open={deviceVarDialogOpen} onOpenChange={setDeviceVarDialogOpen}>
-        <DialogContent className='!w-[min(94vw,980px)] max-h-[min(88dvh,760px)] !max-w-[980px] gap-4 overflow-hidden !grid grid-rows-[auto_auto_minmax(0,1fr)_auto]'>
+        <DialogContent className='!grid max-h-[min(88dvh,760px)] !w-[min(94vw,980px)] !max-w-[980px] grid-rows-[auto_auto_minmax(0,1fr)_auto] gap-4 overflow-hidden'>
           <DialogHeader className='shrink-0'>
             <DialogTitle className='flex items-center gap-2 text-base'>
               <SlidersHorizontal className='size-4' />
               {tDv('title')}
             </DialogTitle>
           </DialogHeader>
-          <p className='shrink-0 text-[12px] text-muted-foreground -mt-1'>
+          <p className='-mt-1 shrink-0 text-[12px] text-muted-foreground'>
             {tDvDlg('scopeHint')}
           </p>
           <div className='shrink-0 rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground'>
@@ -1918,9 +2312,13 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           </div>
           <div className='min-h-0 overflow-y-auto overscroll-y-contain pr-1 [-webkit-overflow-scrolling:touch]'>
             {scenarioDeviceVarsQuery.isLoading && activeScenarioId ? (
-              <p className='text-xs text-muted-foreground'>{tDvDlg('loadingVars')}</p>
+              <p className='text-xs text-muted-foreground'>
+                {tDvDlg('loadingVars')}
+              </p>
             ) : (campaignDevicesQuery.data ?? []).length === 0 ? (
-              <p className='text-xs text-muted-foreground'>{tDvDlg('noDevicesInCampaign')}</p>
+              <p className='text-xs text-muted-foreground'>
+                {tDvDlg('noDevicesInCampaign')}
+              </p>
             ) : (
               <div className='grid min-h-[430px] grid-cols-[260px_1fr] divide-x rounded-md border'>
                 <div className='min-h-0 overflow-y-auto p-2'>
@@ -1933,16 +2331,25 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                         type='button'
                         className={cn(
                           'mb-1 flex w-full items-center gap-2 rounded border border-transparent px-2 py-2 text-left text-xs hover:bg-muted/60',
-                          active && 'border-primary/30 bg-primary/[0.06]',
+                          active && 'border-primary/30 bg-primary/[0.06]'
                         )}
                         onClick={() => setSelectedScenarioDeviceId(d.id)}
                       >
                         <span className='min-w-0 flex-1'>
-                          <span className='block truncate font-medium'>{d.name || d.serial}</span>
-                          <span className='block truncate font-mono text-[10px] text-muted-foreground'>{d.serial}</span>
+                          <span className='block truncate font-medium'>
+                            {d.name || d.serial}
+                          </span>
+                          <span className='block truncate font-mono text-[10px] text-muted-foreground'>
+                            {d.serial}
+                          </span>
                         </span>
-                        <Badge variant={enabled ? 'default' : 'secondary'} className='shrink-0 text-[10px]'>
-                          {enabled ? tDvDlg('badgePerDevice') : tDvDlg('badgeGlobal')}
+                        <Badge
+                          variant={enabled ? 'default' : 'secondary'}
+                          className='shrink-0 text-[10px]'
+                        >
+                          {enabled
+                            ? tDvDlg('badgePerDevice')
+                            : tDvDlg('badgeGlobal')}
                         </Badge>
                       </button>
                     );
@@ -1987,7 +2394,10 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                     continue;
                   }
                   try {
-                    parsedDrafts[d.id] = parseDeviceVarsJson(deviceVarJsonDrafts[d.id] ?? '{}', deviceVarsParseMsgs);
+                    parsedDrafts[d.id] = parseDeviceVarsJson(
+                      deviceVarJsonDrafts[d.id] ?? '{}',
+                      deviceVarsParseMsgs
+                    );
                   } catch {
                     toast.error(tDv('invalidAtDevice', { serial: d.serial }));
                     return;
@@ -1998,9 +2408,9 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                 toast.info(tDvDlg('saveDraftToast'));
               }}
               disabled={
-                saveScenarioDeviceVarsMutation.isPending
-                || (campaignDevicesQuery.data ?? []).length === 0
-                || !!currentDeviceVarJsonError
+                saveScenarioDeviceVarsMutation.isPending ||
+                (campaignDevicesQuery.data ?? []).length === 0 ||
+                !!currentDeviceVarJsonError
               }
             >
               {saveScenarioDeviceVarsMutation.isPending
@@ -2015,7 +2425,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
 
       {/* ── JSON viewer dialog ──────────────────────────────────────────────── */}
       <Dialog open={jsonDialogOpen} onOpenChange={setJsonDialogOpen}>
-        <DialogContent className='max-h-[min(90dvh,920px)] max-w-2xl gap-4 overflow-hidden grid-rows-[auto_minmax(0,1fr)]'>
+        <DialogContent className='max-h-[min(90dvh,920px)] max-w-2xl grid-rows-[auto_minmax(0,1fr)] gap-4 overflow-hidden'>
           <DialogHeader className='shrink-0'>
             <DialogTitle className='flex flex-wrap items-center gap-2 pr-8 text-base'>
               <Code2 className='size-4 shrink-0' />
@@ -2036,7 +2446,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
             >
               <Copy className='size-3' /> Sao chép
             </Button>
-            <pre className='max-w-full min-h-0 flex-1 overflow-x-auto overflow-y-auto overscroll-y-contain rounded-md border border-border bg-muted/40 p-3 pb-10 pr-14 pt-9 text-[11px] font-mono leading-relaxed'>
+            <pre className='min-h-0 max-w-full flex-1 overflow-x-auto overflow-y-auto overscroll-y-contain rounded-md border border-border bg-muted/40 p-3 pb-10 pr-14 pt-9 font-mono text-[11px] leading-relaxed'>
               {JSON.stringify(
                 steps.items.map((s: any) => {
                   const { _id, ...rest } = s;
@@ -2044,7 +2454,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                   return rest;
                 }),
                 null,
-                2,
+                2
               )}
             </pre>
           </div>
@@ -2059,136 +2469,171 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
           if (!o) save.setSelectedCampaignId(null);
         }}
       >
-        <DialogContent className='max-h-[min(85dvh,720px)] max-w-lg gap-4 overflow-hidden !grid grid-rows-[auto_minmax(0,1fr)]'>
+        <DialogContent className='!grid max-h-[min(85dvh,720px)] max-w-lg grid-rows-[auto_minmax(0,1fr)] gap-4 overflow-hidden'>
           <DialogHeader className='shrink-0'>
             <DialogTitle>
               {save.selectedCampaignId
-                ? t('chooseScenarioTitle', { name: save.campaigns.find((c) => c.id === save.selectedCampaignId)?.name ?? '' })
+                ? t('chooseScenarioTitle', {
+                    name:
+                      save.campaigns.find(
+                        (c) => c.id === save.selectedCampaignId
+                      )?.name ?? ''
+                  })
                 : t('saveScenarioTitle')}
             </DialogTitle>
           </DialogHeader>
 
           <div className='min-h-0 overflow-y-auto overscroll-y-contain pr-1 [-webkit-overflow-scrolling:touch]'>
-          {!save.selectedCampaignId && !save.editingContext ? (
-            <div className='space-y-2'>
-              <p className='text-xs text-muted-foreground'>{t('stepsRecorded', { count: steps.items.length })}</p>
-              {save.campaigns.length === 0 ? (
-                <p className='text-sm text-muted-foreground'>{t('noCampaign')}</p>
-              ) : (
-                save.campaigns.map((c) => (
-                  <Button
-                    key={c.id}
-                    variant='outline'
-                    className='w-full justify-start'
-                    onClick={() => save.pickCampaign(c.id)}
-                    disabled={save.saving !== null}
-                  >
-                    {c.name}
-                  </Button>
-                ))
-              )}
-            </div>
-          ) : (
-            <div className='space-y-2'>
-              {!save.editingContext && (
-                <Button
-                  variant='ghost'
-                  size='sm'
-                  className='text-xs text-muted-foreground'
-                  onClick={() => save.setSelectedCampaignId(null)}
-                >
-                  {t('chooseCampaignAgain')}
-                </Button>
-              )}
-
-              {/* Account-group picker — bound to the scenario on save. Empty
-                  means "do not use a pool; fall back to the device's primary
-                  account" (legacy behavior). */}
-              <div className='space-y-1 rounded-md border border-border/60 bg-muted/30 p-2'>
-                <p className='text-[11px] font-medium text-foreground/80'>
-                  {t('accountGroupLabel')}
+            {!save.selectedCampaignId && !save.editingContext ? (
+              <div className='space-y-2'>
+                <p className='text-xs text-muted-foreground'>
+                  {t('stepsRecorded', { count: steps.items.length })}
                 </p>
-                <Select
-                  value={saveAccountGroupId || '_none'}
-                  onValueChange={(v) => setSaveAccountGroupId(v === '_none' ? '' : v)}
-                >
-                  <SelectTrigger className='h-8 text-xs'>
-                    <SelectValue />
-                  </SelectTrigger>
-                  {/* Dialog renders at z=10000; bump SelectContent above it so
-                      the dropdown is not clipped/hidden behind the modal. */}
-                  <SelectContent className='z-[10010]'>
-                    <SelectItem value='_none' className='text-xs'>
-                      {t('accountGroupNone')}
-                    </SelectItem>
-                    {accountGroups.map((g) => (
-                      <SelectItem key={g.id} value={g.id} className='text-xs'>
-                        {g.name} · {g.platform} · {g.member_count}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {saveAccountGroupId && (() => {
-                  const picked = accountGroups.find((g) => g.id === saveAccountGroupId);
-                  if (!picked) return null;
-                  return (
-                    <p className='text-[10px] text-muted-foreground'>
-                      {t('accountGroupCaption', {
-                        count: picked.member_count,
-                        strategy: picked.rotation_strategy,
-                      })}
-                    </p>
-                  );
-                })()}
-                <p className='text-[10px] text-muted-foreground'>
-                  {t('accountGroupHint')}
-                </p>
-              </div>
-
-              <Button
-                variant='default'
-                className='w-full justify-start gap-2'
-                onClick={() => save.saveAsNew(save.selectedCampaignId!, scenarioVariables, saveAccountGroupId || null)}
-                disabled={save.saving !== null}
-              >
-                <Plus size={13} />
-                {save.saving === 'new' ? t('creating') : t('createNewScenario')}
-              </Button>
-              {save.campaignScenarios.length > 0 && (
-                <>
-                  <p className='pt-1 text-xs text-muted-foreground'>{t('overwriteExisting')}</p>
-                  {save.campaignScenarios.map((s) => (
+                {save.campaigns.length === 0 ? (
+                  <p className='text-sm text-muted-foreground'>
+                    {t('noCampaign')}
+                  </p>
+                ) : (
+                  save.campaigns.map((c) => (
                     <Button
-                      key={s.id}
+                      key={c.id}
                       variant='outline'
-                      className='h-auto w-full flex-col items-start justify-start py-2 text-left'
-                      onClick={() => save.saveTo(save.selectedCampaignId!, s.id, scenarioVariables, saveAccountGroupId || null)}
+                      className='w-full justify-start'
+                      onClick={() => save.pickCampaign(c.id)}
                       disabled={save.saving !== null}
                     >
-                      <span className='font-medium'>
-                        {save.saving === s.id ? t('saving') : s.name}
-                      </span>
-                      <span className='text-[11px] font-normal text-muted-foreground'>
-                        {t('currentSteps', { count: s.steps.length })}
-                      </span>
+                      {c.name}
                     </Button>
-                  ))}
-                </>
-              )}
-            </div>
-          )}
+                  ))
+                )}
+              </div>
+            ) : (
+              <div className='space-y-2'>
+                {!save.editingContext && (
+                  <Button
+                    variant='ghost'
+                    size='sm'
+                    className='text-xs text-muted-foreground'
+                    onClick={() => save.setSelectedCampaignId(null)}
+                  >
+                    {t('chooseCampaignAgain')}
+                  </Button>
+                )}
+
+                {/* Account-group picker — bound to the scenario on save. Empty
+                  means "do not use a pool; fall back to the device's primary
+                  account" (legacy behavior). */}
+                <div className='space-y-1 rounded-md border border-border/60 bg-muted/30 p-2'>
+                  <p className='text-[11px] font-medium text-foreground/80'>
+                    {t('accountGroupLabel')}
+                  </p>
+                  <Select
+                    value={saveAccountGroupId || '_none'}
+                    onValueChange={(v) =>
+                      setSaveAccountGroupId(v === '_none' ? '' : v)
+                    }
+                  >
+                    <SelectTrigger className='h-8 text-xs'>
+                      <SelectValue />
+                    </SelectTrigger>
+                    {/* Dialog renders at z=10000; bump SelectContent above it so
+                      the dropdown is not clipped/hidden behind the modal. */}
+                    <SelectContent className='z-[10010]'>
+                      <SelectItem value='_none' className='text-xs'>
+                        {t('accountGroupNone')}
+                      </SelectItem>
+                      {accountGroups.map((g) => (
+                        <SelectItem key={g.id} value={g.id} className='text-xs'>
+                          {g.name} · {g.platform} · {g.member_count}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {saveAccountGroupId &&
+                    (() => {
+                      const picked = accountGroups.find(
+                        (g) => g.id === saveAccountGroupId
+                      );
+                      if (!picked) return null;
+                      return (
+                        <p className='text-[10px] text-muted-foreground'>
+                          {t('accountGroupCaption', {
+                            count: picked.member_count,
+                            strategy: picked.rotation_strategy
+                          })}
+                        </p>
+                      );
+                    })()}
+                  <p className='text-[10px] text-muted-foreground'>
+                    {t('accountGroupHint')}
+                  </p>
+                </div>
+
+                <Button
+                  variant='default'
+                  className='w-full justify-start gap-2'
+                  onClick={() =>
+                    save.saveAsNew(
+                      save.selectedCampaignId!,
+                      scenarioVariables,
+                      saveAccountGroupId || null
+                    )
+                  }
+                  disabled={save.saving !== null}
+                >
+                  <Plus size={13} />
+                  {save.saving === 'new'
+                    ? t('creating')
+                    : t('createNewScenario')}
+                </Button>
+                {save.campaignScenarios.length > 0 && (
+                  <>
+                    <p className='pt-1 text-xs text-muted-foreground'>
+                      {t('overwriteExisting')}
+                    </p>
+                    {save.campaignScenarios.map((s) => (
+                      <Button
+                        key={s.id}
+                        variant='outline'
+                        className='h-auto w-full flex-col items-start justify-start py-2 text-left'
+                        onClick={() =>
+                          save.saveTo(
+                            save.selectedCampaignId!,
+                            s.id,
+                            scenarioVariables,
+                            saveAccountGroupId || null
+                          )
+                        }
+                        disabled={save.saving !== null}
+                      >
+                        <span className='font-medium'>
+                          {save.saving === s.id ? t('saving') : s.name}
+                        </span>
+                        <span className='text-[11px] font-normal text-muted-foreground'>
+                          {t('currentSteps', { count: s.steps.length })}
+                        </span>
+                      </Button>
+                    ))}
+                  </>
+                )}
+              </div>
+            )}
           </div>
         </DialogContent>
       </Dialog>
 
       <AlertDialog
         open={exitConfirm !== null}
-        onOpenChange={(o) => { if (!o) setExitConfirm(null); }}
+        onOpenChange={(o) => {
+          if (!o) setExitConfirm(null);
+        }}
       >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{t('exitConfirmTitle')}</AlertDialogTitle>
-            <AlertDialogDescription>{t('exitConfirmDesc')}</AlertDialogDescription>
+            <AlertDialogDescription>
+              {t('exitConfirmDesc')}
+            </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>{t('exitConfirmCancel')}</AlertDialogCancel>
@@ -2197,6 +2642,7 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                 const action = exitConfirm;
                 setExitConfirm(null);
                 stopPlayerRef.current?.();
+                handleStopInlineRun();
                 if (action) action();
               }}
             >
@@ -2209,7 +2655,9 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
       {/* Template preview dialog — opened from the empty-state picker. */}
       <Dialog
         open={previewTemplate !== null}
-        onOpenChange={(o) => { if (!o) setPreviewTemplate(null); }}
+        onOpenChange={(o) => {
+          if (!o) setPreviewTemplate(null);
+        }}
       >
         <DialogContent className='max-w-xl'>
           <DialogHeader>
@@ -2217,7 +2665,10 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
               <List className='size-4 text-emerald-600' />
               <span className='truncate'>{previewTemplate?.name ?? ''}</span>
               {previewTemplate?.is_builtin && (
-                <Badge variant='secondary' className='h-5 px-1.5 text-[10px] font-semibold uppercase tracking-wide'>
+                <Badge
+                  variant='secondary'
+                  className='h-5 px-1.5 text-[10px] font-semibold uppercase tracking-wide'
+                >
                   {t('emptyNodePicker.templateBuiltinBadge')}
                 </Badge>
               )}
@@ -2232,25 +2683,42 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
               )}
               <div className='flex items-center gap-2 text-xs text-muted-foreground'>
                 <span className='font-semibold text-foreground/80'>
-                  {t('emptyNodePicker.templateStepCount', { count: Array.isArray(previewTemplate.steps) ? previewTemplate.steps.length : 0 })}
+                  {t('emptyNodePicker.templateStepCount', {
+                    count: Array.isArray(previewTemplate.steps)
+                      ? previewTemplate.steps.length
+                      : 0
+                  })}
                 </span>
-                {previewTemplate.category && <span>· {previewTemplate.category}</span>}
+                {previewTemplate.category && (
+                  <span>· {previewTemplate.category}</span>
+                )}
               </div>
               <div className='max-h-[50vh] overflow-y-auto rounded-md border border-border/60 bg-muted/30 p-2'>
-                {Array.isArray(previewTemplate.steps) && previewTemplate.steps.length > 0 ? (
+                {Array.isArray(previewTemplate.steps) &&
+                previewTemplate.steps.length > 0 ? (
                   <ol className='space-y-1'>
                     {previewTemplate.steps.map((step: any, i: number) => {
-                      const type = typeof step?.type === 'string' ? step.type : 'unknown';
+                      const type =
+                        typeof step?.type === 'string' ? step.type : 'unknown';
                       return (
-                        <li key={i} className='flex items-start gap-2 rounded border border-border/40 bg-background px-2 py-1.5 text-xs'>
-                          <span className='flex h-5 w-5 shrink-0 items-center justify-center rounded ring-1 ring-inset bg-indigo-50 text-indigo-600 ring-indigo-100'>
+                        <li
+                          key={i}
+                          className='flex items-start gap-2 rounded border border-border/40 bg-background px-2 py-1.5 text-xs'
+                        >
+                          <span className='flex h-5 w-5 shrink-0 items-center justify-center rounded bg-indigo-50 text-indigo-600 ring-1 ring-inset ring-indigo-100'>
                             <StepIcon type={type as any} size={12} />
                           </span>
                           <span className='min-w-0 flex-1'>
-                            <span className='mr-1 text-[10px] font-semibold uppercase text-muted-foreground'>#{i + 1}</span>
-                            <span className='font-medium text-foreground/90'>{type}</span>
+                            <span className='mr-1 text-[10px] font-semibold uppercase text-muted-foreground'>
+                              #{i + 1}
+                            </span>
+                            <span className='font-medium text-foreground/90'>
+                              {type}
+                            </span>
                             {(step?.name || step?.label) && (
-                              <span className='ml-1 text-muted-foreground'>· {String(step.name || step.label)}</span>
+                              <span className='ml-1 text-muted-foreground'>
+                                · {String(step.name || step.label)}
+                              </span>
                             )}
                           </span>
                         </li>
@@ -2258,13 +2726,17 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                     })}
                   </ol>
                 ) : (
-                  <p className='text-center text-xs text-muted-foreground py-4'>
+                  <p className='py-4 text-center text-xs text-muted-foreground'>
                     {t('emptyNodePicker.templateNoSteps')}
                   </p>
                 )}
               </div>
               <div className='flex items-center justify-end gap-2 pt-1'>
-                <Button variant='outline' size='sm' onClick={() => setPreviewTemplate(null)}>
+                <Button
+                  variant='outline'
+                  size='sm'
+                  onClick={() => setPreviewTemplate(null)}
+                >
                   {t('emptyNodePicker.templateCancel')}
                 </Button>
                 <Button
@@ -2272,15 +2744,25 @@ export function ControlRecordView({ initialSerial, initialCampaignId, initialSce
                   onClick={() => {
                     const tpl = previewTemplate;
                     if (!tpl) return;
-                    const n = steps.appendSteps(Array.isArray(tpl.steps) ? tpl.steps : []);
+                    const n = steps.appendSteps(
+                      Array.isArray(tpl.steps) ? tpl.steps : []
+                    );
                     setPreviewTemplate(null);
                     if (n > 0) {
-                      toast.success(t('emptyNodePicker.templateLoaded', { name: tpl.name, count: n }));
+                      toast.success(
+                        t('emptyNodePicker.templateLoaded', {
+                          name: tpl.name,
+                          count: n
+                        })
+                      );
                     } else {
                       toast.error(t('emptyNodePicker.templateEmptySteps'));
                     }
                   }}
-                  disabled={!Array.isArray(previewTemplate.steps) || previewTemplate.steps.length === 0}
+                  disabled={
+                    !Array.isArray(previewTemplate.steps) ||
+                    previewTemplate.steps.length === 0
+                  }
                 >
                   {t('emptyNodePicker.templateAppend')}
                 </Button>

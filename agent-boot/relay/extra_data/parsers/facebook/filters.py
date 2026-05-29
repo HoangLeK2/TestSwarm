@@ -304,6 +304,19 @@ def _is_cmt_noise(text: str) -> bool:
         return True
     if not tl or tl in _CMT_NOISE_TEXTS:
         return True
+    # Moderation/admin menu items sometimes leak into the comment sheet parse.
+    # Examples seen in the wild (vi):
+    # - "Giảm bậc cho bình luận của <name>"
+    # - "Tác giả" / "Tác giả Tác giả"
+    # - "Hủy"
+    if tl == "hủy" or tl == "cancel":
+        return True
+    if tl == "bài gốc" or tl == "original post":
+        return True
+    if tl == "tác giả" or tl == "author":
+        return True
+    if tl.startswith("giảm bậc cho bình luận của") or tl.startswith("reduce ranking for comment"):
+        return True
     if _is_cmt_chrome_search_or_post_menu_text(t):
         return True
     if _RE_SHARES_COUNT_LABEL.match(t.strip()):
@@ -403,10 +416,21 @@ def _is_comment_row_parse_noise(c: Dict[str, Any]) -> bool:
 
     if author == "đóng":
         return True
+    if author in {"hủy", "cancel", "bài gốc", "original post", "tác giả", "author"}:
+        return True
+    if text in {"hủy", "cancel", "bài gốc", "original post", "tác giả", "author"}:
+        return True
+    if text.startswith("giảm bậc cho bình luận của") or text.startswith("reduce ranking for comment"):
+        return True
+    if author.startswith("giảm bậc cho bình luận của") or author.startswith("reduce ranking for comment"):
+        return True
     if author in ("xem thêm", "see more"):
         return True
     if _is_feed_comment_preview_chrome(author_raw) or _is_feed_comment_preview_chrome(text_raw):
         return True
+    if author in {"bình luận", "comment", "thích", "like", "chia sẻ", "share"}:
+        if text.startswith("nút ") or "nhấn đúp" in text:
+            return True
     if "lựa chọn khác cho bài viết" in author or "lựa chọn khác cho bài viết" in text:
         return True
     if "tìm kiếm trong" in author or "tìm kiếm trong" in text:

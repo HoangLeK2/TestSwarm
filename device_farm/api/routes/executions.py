@@ -23,6 +23,7 @@ Endpoints:
 from __future__ import annotations
 
 import logging
+import os
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request, status
@@ -158,6 +159,14 @@ class DLQEntryOut(_BaseModel):
     model_config = {"from_attributes": True}
 
 
+class DLQSummaryOut(_BaseModel):
+    pending_count: int
+    alert_threshold: int
+    alert: bool
+    dismissed_offline_count: int = 0
+    offline_dismiss_minutes: int
+
+
 class ExecutionArtifactOut(_BaseModel):
     artifact_type: str
     execution_id: str
@@ -171,8 +180,82 @@ class ExecutionArtifactOut(_BaseModel):
     created_at: _Optional[_datetime] = None
 
 
+def _dlq_offline_dismiss_minutes() -> int:
+    raw = os.environ.get("DEVICE_FARM_DLQ_OFFLINE_DISMISS_MINUTES", "5")
+    try:
+        return max(1, min(10_080, int(raw)))
+    except ValueError:
+        return 5
+
+
+def _dlq_alert_threshold() -> int:
+    raw = os.environ.get("DEVICE_FARM_DLQ_ALERT_THRESHOLD", "10")
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 10
+
+
+async def _dismiss_stale_offline_dlq(
+    db,
+    user_id: str,
+    campaign_id: str | None,
+    *,
+    manager=None,
+) -> int:
+    from services.dlq_maintenance import dismiss_stale_offline_dlq_entries_for_user
+
+    return await dismiss_stale_offline_dlq_entries_for_user(
+        db,
+        user_id=user_id,
+        campaign_id=campaign_id,
+        offline_after_minutes=_dlq_offline_dismiss_minutes(),
+        manager=manager,
+    )
+
+
+async def _maybe_notify_dlq_threshold(
+    request: Request,
+    *,
+    user_id: str,
+    campaign_id: str | None,
+    pending_count: int,
+    threshold: int,
+) -> None:
+    cache = getattr(request.app.state, "dlq_alert_cache", None)
+    if cache is None:
+        cache = {}
+        request.app.state.dlq_alert_cache = cache
+    key = (user_id, campaign_id or "")
+    if pending_count <= threshold:
+        cache.pop(key, None)
+        return
+    if cache.get(key) == pending_count:
+        return
+    cache[key] = pending_count
+
+    svc = getattr(request.app.state, "notification_service", None)
+    if svc is None:
+        return
+    try:
+        await svc.notify(
+            "dlq.threshold",
+            "DLQ threshold exceeded",
+            f"DLQ has {pending_count} pending items, above threshold {threshold}.",
+            {
+                "campaign_id": campaign_id,
+                "pending_count": pending_count,
+                "threshold": threshold,
+            },
+            user_id=user_id,
+        )
+    except Exception as exc:
+        log.warning("DLQ threshold notification failed: %s", exc)
+
+
 @router.get("/dlq", response_model=list[DLQEntryOut])
 async def list_dlq(
+    request: Request,
     db: DB,
     user: CurrentUser,
     status: _Optional[str] = None,
@@ -198,6 +281,16 @@ async def list_dlq(
     if norm_campaign == "":
         norm_campaign = None
 
+    if norm_status in (None, "pending"):
+        dismissed = await _dismiss_stale_offline_dlq(
+            db,
+            user.id,
+            norm_campaign,
+            manager=getattr(request.app.state, "manager", None),
+        )
+        if dismissed:
+            await db.commit()
+
     entries = await list_dlq_entries_for_user(
         db,
         user_id=user.id,
@@ -207,6 +300,52 @@ async def list_dlq(
         limit=min(max(limit, 1), 200),
     )
     return [DLQEntryOut.model_validate(e) for e in entries]
+
+
+@router.get("/dlq/summary", response_model=DLQSummaryOut)
+async def dlq_summary(
+    request: Request,
+    db: DB,
+    user: CurrentUser,
+    campaign_id: _Optional[str] = None,
+):
+    """Return DLQ counters for operator alerting."""
+    from db.crud.execution_dlq import count_dlq_entries_for_user
+
+    norm_campaign = campaign_id.strip() if campaign_id else None
+    if norm_campaign == "":
+        norm_campaign = None
+
+    dismissed = await _dismiss_stale_offline_dlq(
+        db,
+        user.id,
+        norm_campaign,
+        manager=getattr(request.app.state, "manager", None),
+    )
+    if dismissed:
+        await db.commit()
+
+    pending_count = await count_dlq_entries_for_user(
+        db,
+        user_id=user.id,
+        status="pending",
+        campaign_id=norm_campaign,
+    )
+    threshold = _dlq_alert_threshold()
+    await _maybe_notify_dlq_threshold(
+        request,
+        user_id=user.id,
+        campaign_id=norm_campaign,
+        pending_count=pending_count,
+        threshold=threshold,
+    )
+    return DLQSummaryOut(
+        pending_count=pending_count,
+        alert_threshold=threshold,
+        alert=pending_count > threshold,
+        dismissed_offline_count=dismissed,
+        offline_dismiss_minutes=_dlq_offline_dismiss_minutes(),
+    )
 
 
 @router.post("/dlq/{dlq_id}/retry", response_model=DLQEntryOut)
@@ -244,6 +383,30 @@ async def retry_dlq(dlq_id: str, request: Request, db: DB, user: CurrentUser):
         await set_dlq_status(db, dlq_id, "pending", error="Temporal client unavailable for retry")
         await db.commit()
         raise HTTPException(status_code=503, detail="Temporal is unavailable")
+
+    from db.crud.device import get_device_by_serial
+    from services.device_liveness import is_device_dispatchable
+
+    device = await get_device_by_serial(db, entry.device_serial)
+    if device is None or device.user_id != user.id:
+        await set_dlq_status(db, dlq_id, "dismissed", error="Device is not available for retry")
+        await db.commit()
+        return DLQEntryOut.model_validate(entry)
+    device_live = await is_device_dispatchable(
+        db,
+        device,
+        offline_after_minutes=_dlq_offline_dismiss_minutes(),
+        manager=getattr(request.app.state, "manager", None),
+    )
+    if not device_live:
+        await set_dlq_status(
+            db,
+            dlq_id,
+            "dismissed",
+            error="Device is offline; DLQ retry skipped",
+        )
+        await db.commit()
+        return DLQEntryOut.model_validate(entry)
 
     try:
         payload, status_code = await enqueue_campaign_run_temporal(

@@ -7,7 +7,11 @@ import { useCreateSchedule, useUpdateSchedule } from '../hooks/use-schedules';
 import { useCampaigns } from '@/features/campaigns/hooks/use-campaigns';
 import { useScenarioTemplates } from '@/features/scenario-templates/hooks/use-scenario-templates';
 import { useDeviceGroups } from '@/features/device-groups/hooks/use-device-groups';
-import type { ScheduleOut, SchedulePatch, ScheduleCreate } from '../services/api';
+import type {
+  ScheduleOut,
+  SchedulePatch,
+  ScheduleCreate
+} from '../services/api';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import { CronBuilder } from './cron-builder';
 import { VariableEditor } from '@/components/variable-editor';
@@ -48,7 +52,8 @@ export function ScheduleFormDialog({
 }) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [targetType, setTargetType] = useState<ScheduleCreate['target_type']>('campaign');
+  const [targetType, setTargetType] =
+    useState<ScheduleCreate['target_type']>('campaign');
   const [targetId, setTargetId] = useState<string | null>(null);
 
   const [cronExpression, setCronExpression] = useState('*/30 * * * *');
@@ -68,7 +73,9 @@ export function ScheduleFormDialog({
   const [isEnabled, setIsEnabled] = useState(true);
 
   const [inlineSteps, setInlineSteps] = useState<FlowStep[]>([]);
-  const [inlineVariables, setInlineVariables] = useState<Record<string, any>>({});
+  const [inlineVariables, setInlineVariables] = useState<Record<string, any>>(
+    {}
+  );
 
   const { data: campaigns } = useCampaigns();
   const { data: templates } = useScenarioTemplates();
@@ -80,7 +87,9 @@ export function ScheduleFormDialog({
   const t = useTranslations('schedulesFeature.form');
 
   const title =
-    mode === 'create' ? t('titleCreate') : t('titleEdit', { name: schedule?.name ?? '' });
+    mode === 'create'
+      ? t('titleCreate')
+      : t('titleEdit', { name: schedule?.name ?? '' });
 
   useEffect(() => {
     if (!open) return;
@@ -122,7 +131,9 @@ export function ScheduleFormDialog({
     setStaggerDevices(Boolean((s as any).stagger_devices));
     setStaggerIntervalSeconds((s as any).stagger_interval_seconds ?? 60);
     setIsEnabled(Boolean((s as any).is_enabled));
-    setInlineSteps(Array.isArray(s.inline_steps) ? (s.inline_steps as any as FlowStep[]) : []);
+    setInlineSteps(
+      Array.isArray(s.inline_steps) ? (s.inline_steps as any as FlowStep[]) : []
+    );
     setInlineVariables(s.inline_variables ?? {});
   }, [open, mode, schedule]);
 
@@ -184,10 +195,11 @@ export function ScheduleFormDialog({
 
       createMutation.mutate(data, {
         onSuccess: () => {
-            toast.success(t('createSuccess'));
+          toast.success(t('createSuccess'));
           onOpenChange(false);
         },
-          onError: (err: unknown) => toast.error(formatFarmApiError(err, t('createFailed')))
+        onError: (err: unknown) =>
+          toast.error(formatFarmApiError(err, t('createFailed')))
       });
       return;
     }
@@ -228,26 +240,32 @@ export function ScheduleFormDialog({
           toast.success(t('updateSuccess'));
           onOpenChange(false);
         },
-        onError: (err: unknown) => toast.error(formatFarmApiError(err, t('updateFailed')))
+        onError: (err: unknown) =>
+          toast.error(formatFarmApiError(err, t('updateFailed')))
       }
     );
   };
 
-  const isPending = mode === 'create' ? createMutation.isPending : updateMutation.isPending;
+  const isPending =
+    mode === 'create' ? createMutation.isPending : updateMutation.isPending;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className='z-[1000] max-w-2xl flex flex-col max-h-[90vh]'>
+      <DialogContent className='z-[1000] flex max-h-[90vh] max-w-2xl flex-col'>
         <DialogHeader className='shrink-0'>
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
 
-        <div className='overflow-y-auto flex-1 space-y-5 pr-1 pt-2'>
+        <div className='flex-1 space-y-5 overflow-y-auto pr-1 pt-2'>
           {/* ── Thông tin cơ bản ── */}
           <div className='space-y-3'>
             <div className='space-y-1'>
               <Label>{t('nameLabel')}</Label>
-              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t('namePlaceholder')} />
+              <Input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder={t('namePlaceholder')}
+              />
             </div>
             <div className='space-y-1'>
               <Label>{t('descriptionLabel')}</Label>
@@ -259,8 +277,15 @@ export function ScheduleFormDialog({
               />
             </div>
             <div className='flex items-center gap-3'>
-              <Switch checked={isEnabled} onCheckedChange={setIsEnabled} id='schedule-enabled' />
-              <label htmlFor='schedule-enabled' className='text-sm cursor-pointer select-none'>
+              <Switch
+                checked={isEnabled}
+                onCheckedChange={setIsEnabled}
+                id='schedule-enabled'
+              />
+              <label
+                htmlFor='schedule-enabled'
+                className='cursor-pointer select-none text-sm'
+              >
                 {isEnabled ? t('enabledOn') : t('enabledOff')}
               </label>
             </div>
@@ -268,35 +293,51 @@ export function ScheduleFormDialog({
 
           {/* ── Mục tiêu ── */}
           <div className='space-y-3 rounded-lg border p-3'>
-            <p className='text-xs font-semibold uppercase tracking-wide text-muted-foreground'>{t('targetTypeLabel')}</p>
-            <Select
-              value={targetType}
-              onValueChange={(v) => {
-                const next = v as ScheduleCreate['target_type'];
-                setTargetType(next);
-                if (next === 'fleet') setTargetId(null);
-              }}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className='z-[10001]'>
-                <SelectItem value='campaign'>{t('targetCampaign')}</SelectItem>
-                <SelectItem value='template'>{t('targetTemplate')}</SelectItem>
-                <SelectItem value='fleet'>{t('targetFleet')}</SelectItem>
-              </SelectContent>
-            </Select>
+            <p className='text-xs font-semibold uppercase tracking-wide text-muted-foreground'>
+              {t('targetTypeLabel')}
+            </p>
+            {targetType === 'fleet' && mode === 'edit' ? (
+              <p className='text-sm text-muted-foreground'>
+                {t('targetFleet')}
+              </p>
+            ) : (
+              <Select
+                value={targetType === 'fleet' ? 'campaign' : targetType}
+                onValueChange={(v) => {
+                  const next = v as 'campaign' | 'template';
+                  setTargetType(next);
+                  setTargetId(null);
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className='z-[10001]'>
+                  <SelectItem value='campaign'>
+                    {t('targetCampaign')}
+                  </SelectItem>
+                  <SelectItem value='template'>
+                    {t('targetTemplate')}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            )}
 
             {(targetType === 'campaign' || targetType === 'template') && (
               <div className='space-y-1'>
                 <Label>{t('targetLabel')}</Label>
                 {targetType === 'campaign' ? (
-                  <Select value={targetId ?? '_none'} onValueChange={(v) => setTargetId(v === '_none' ? null : v)}>
+                  <Select
+                    value={targetId ?? '_none'}
+                    onValueChange={(v) => setTargetId(v === '_none' ? null : v)}
+                  >
                     <SelectTrigger>
                       <SelectValue placeholder={t('pickCampaign')} />
                     </SelectTrigger>
                     <SelectContent className='z-[10001]'>
-                      <SelectItem value='_none'>{t('selectCampaign')}</SelectItem>
+                      <SelectItem value='_none'>
+                        {t('selectCampaign')}
+                      </SelectItem>
                       {(campaigns ?? []).map((c) => (
                         <SelectItem key={c.id} value={c.id}>
                           {c.name}
@@ -305,12 +346,17 @@ export function ScheduleFormDialog({
                     </SelectContent>
                   </Select>
                 ) : (
-                  <Select value={targetId ?? '_none'} onValueChange={(v) => setTargetId(v === '_none' ? null : v)}>
+                  <Select
+                    value={targetId ?? '_none'}
+                    onValueChange={(v) => setTargetId(v === '_none' ? null : v)}
+                  >
                     <SelectTrigger>
                       <SelectValue placeholder={t('pickTemplate')} />
                     </SelectTrigger>
                     <SelectContent className='z-[10001]'>
-                      <SelectItem value='_none'>{t('selectTemplate')}</SelectItem>
+                      <SelectItem value='_none'>
+                        {t('selectTemplate')}
+                      </SelectItem>
                       {(templates ?? []).map((tpl) => (
                         <SelectItem key={tpl.id} value={tpl.id}>
                           {tpl.name}
@@ -324,24 +370,38 @@ export function ScheduleFormDialog({
 
             {targetType === 'fleet' && (
               <div className='space-y-2'>
-                <Label>{t('inlineStepsLabel', { count: inlineSteps.length })}</Label>
-                <FlowEditor steps={inlineSteps} onChange={setInlineSteps} compact maxHeight='min(320px,40vh)' />
+                <Label>
+                  {t('inlineStepsLabel', { count: inlineSteps.length })}
+                </Label>
+                <FlowEditor
+                  steps={inlineSteps}
+                  onChange={setInlineSteps}
+                  compact
+                  maxHeight='min(320px,40vh)'
+                />
               </div>
             )}
 
             {targetType === 'fleet' && (
               <details className='group'>
-                <summary className='cursor-pointer text-sm font-medium flex items-center gap-2'>
+                <summary className='flex cursor-pointer items-center gap-2 text-sm font-medium'>
                   {t('inlineVariablesSummary')}
                   {Object.keys(inlineVariables ?? {}).length > 0 && (
-                    <span className='text-xs text-muted-foreground'>({Object.keys(inlineVariables).length})</span>
+                    <span className='text-xs text-muted-foreground'>
+                      ({Object.keys(inlineVariables).length})
+                    </span>
                   )}
                 </summary>
                 <div className='pt-2'>
-                  <VariableEditor variables={inlineVariables} onChange={setInlineVariables} />
+                  <VariableEditor
+                    variables={inlineVariables}
+                    onChange={setInlineVariables}
+                  />
                   <p className='mt-1 text-[10px] text-muted-foreground'>
                     {t('inlineVariablesHintPrefix')}{' '}
-                    <code className='rounded bg-muted px-1 py-0.5'>{'${__DEVICE_SERIAL__}'}</code>
+                    <code className='rounded bg-muted px-1 py-0.5'>
+                      {'${__DEVICE_SERIAL__}'}
+                    </code>
                     {t('inlineVariablesHintSuffix')}
                   </p>
                 </div>
@@ -351,14 +411,22 @@ export function ScheduleFormDialog({
 
           {/* ── Lịch cron ── */}
           <div className='space-y-2'>
-            <CronBuilder value={cronExpression} onChange={(next) => setCronExpression(next)} />
+            <CronBuilder
+              value={cronExpression}
+              onChange={(next) => setCronExpression(next)}
+            />
           </div>
 
           {/* ── Nhóm thiết bị ── */}
           <div className='grid grid-cols-2 gap-4'>
             <div className='space-y-1'>
               <Label>{t('deviceGroupLabel')}</Label>
-              <Select value={deviceGroupId ?? '_none'} onValueChange={(v) => setDeviceGroupId(v === '_none' ? null : v)}>
+              <Select
+                value={deviceGroupId ?? '_none'}
+                onValueChange={(v) =>
+                  setDeviceGroupId(v === '_none' ? null : v)
+                }
+              >
                 <SelectTrigger>
                   <SelectValue placeholder={t('allReadyDevices')} />
                 </SelectTrigger>
@@ -374,7 +442,11 @@ export function ScheduleFormDialog({
             </div>
             <div className='space-y-1'>
               <Label>{t('timezoneLabel')}</Label>
-              <Input value={timezone} onChange={(e) => setTimezone(e.target.value)} placeholder={t('timezonePlaceholder')} />
+              <Input
+                value={timezone}
+                onChange={(e) => setTimezone(e.target.value)}
+                placeholder={t('timezonePlaceholder')}
+              />
             </div>
           </div>
 
@@ -382,11 +454,19 @@ export function ScheduleFormDialog({
           <div className='grid grid-cols-3 gap-4'>
             <div className='space-y-1'>
               <Label>{t('filterStateLabel')}</Label>
-              <Input value={filterState} onChange={(e) => setFilterState(e.target.value)} placeholder={t('filterStatePlaceholder')} />
+              <Input
+                value={filterState}
+                onChange={(e) => setFilterState(e.target.value)}
+                placeholder={t('filterStatePlaceholder')}
+              />
             </div>
             <div className='space-y-1'>
               <Label>{t('filterModelLabel')}</Label>
-              <Input value={filterModel} onChange={(e) => setFilterModel(e.target.value)} placeholder={t('filterModelPlaceholder')} />
+              <Input
+                value={filterModel}
+                onChange={(e) => setFilterModel(e.target.value)}
+                placeholder={t('filterModelPlaceholder')}
+              />
             </div>
             <div className='space-y-1'>
               <Label>{t('maxDevicesLabel')}</Label>
@@ -403,26 +483,51 @@ export function ScheduleFormDialog({
           </div>
 
           {/* ── Tuỳ chọn thời gian ── */}
-          <div className='rounded-lg border p-3 space-y-3'>
-            <p className='text-xs font-semibold uppercase tracking-wide text-muted-foreground'>{t('staggerDevicesLabel')}</p>
+          <div className='space-y-3 rounded-lg border p-3'>
+            <p className='text-xs font-semibold uppercase tracking-wide text-muted-foreground'>
+              {t('staggerDevicesLabel')}
+            </p>
             <div className='grid grid-cols-2 gap-4'>
               <div className='space-y-1'>
                 <Label>{t('randomDelayMinLabel')}</Label>
-                <Input type='number' min={0} value={randomDelayMin} onChange={(e) => setRandomDelayMin(Math.max(0, Number(e.target.value) || 0))} />
+                <Input
+                  type='number'
+                  min={0}
+                  value={randomDelayMin}
+                  onChange={(e) =>
+                    setRandomDelayMin(Math.max(0, Number(e.target.value) || 0))
+                  }
+                />
               </div>
               <div className='space-y-1'>
                 <Label>{t('randomDelayMaxLabel')}</Label>
-                <Input type='number' min={0} value={randomDelayMax} onChange={(e) => setRandomDelayMax(Math.max(0, Number(e.target.value) || 0))} />
+                <Input
+                  type='number'
+                  min={0}
+                  value={randomDelayMax}
+                  onChange={(e) =>
+                    setRandomDelayMax(Math.max(0, Number(e.target.value) || 0))
+                  }
+                />
               </div>
             </div>
 
             <div className='flex items-center gap-3'>
-              <Switch checked={staggerDevices} onCheckedChange={setStaggerDevices} id='stagger-toggle' />
+              <Switch
+                checked={staggerDevices}
+                onCheckedChange={setStaggerDevices}
+                id='stagger-toggle'
+              />
               <div>
-                <label htmlFor='stagger-toggle' className='text-sm font-medium cursor-pointer select-none block'>
+                <label
+                  htmlFor='stagger-toggle'
+                  className='block cursor-pointer select-none text-sm font-medium'
+                >
                   {t('staggerDevicesLabel')}
                 </label>
-                <p className='text-[11px] text-muted-foreground'>{t('staggerHint')}</p>
+                <p className='text-[11px] text-muted-foreground'>
+                  {t('staggerHint')}
+                </p>
               </div>
             </div>
 
@@ -434,7 +539,11 @@ export function ScheduleFormDialog({
                   min={1}
                   max={3600}
                   value={staggerIntervalSeconds}
-                  onChange={(e) => setStaggerIntervalSeconds(Math.max(1, Math.min(3600, Number(e.target.value) || 60)))}
+                  onChange={(e) =>
+                    setStaggerIntervalSeconds(
+                      Math.max(1, Math.min(3600, Number(e.target.value) || 60))
+                    )
+                  }
                 />
               </div>
             )}
@@ -451,16 +560,28 @@ export function ScheduleFormDialog({
         </div>
 
         {/* ── Footer ── */}
-        <div className='shrink-0 flex items-center justify-end gap-2 border-t pt-3'>
-          <Button size='sm' variant='outline' onClick={() => onOpenChange(false)} disabled={isPending}>
+        <div className='flex shrink-0 items-center justify-end gap-2 border-t pt-3'>
+          <Button
+            size='sm'
+            variant='outline'
+            onClick={() => onOpenChange(false)}
+            disabled={isPending}
+          >
             {t('cancel')}
           </Button>
-          <Button size='sm' onClick={() => void onSubmit()} disabled={isPending}>
-            {isPending ? t('saving') : mode === 'create' ? t('createCta') : t('saveCta')}
+          <Button
+            size='sm'
+            onClick={() => void onSubmit()}
+            disabled={isPending}
+          >
+            {isPending
+              ? t('saving')
+              : mode === 'create'
+                ? t('createCta')
+                : t('saveCta')}
           </Button>
         </div>
       </DialogContent>
     </Dialog>
   );
 }
-

@@ -26,6 +26,7 @@ import { formatFarmApiError } from '@/lib/format-farm-api-error';
 
 type FormData = {
   name: string;
+  display_name?: string;
   description?: string;
   category?: string;
   tags?: string;
@@ -40,7 +41,8 @@ export function EditTemplateDialog({
 }) {
   const t = useTranslations('scenarioTemplatesFeature.editDialog');
   const schema = z.object({
-    name: z.string().min(1, t('nameRequired')),
+    name: z.string().min(1, t('technicalNameRequired')),
+    display_name: z.string().optional(),
     description: z.string().optional(),
     category: z.string().optional(),
     tags: z.string().optional()
@@ -58,6 +60,7 @@ export function EditTemplateDialog({
     resolver: zodResolver(schema),
     defaultValues: {
       name: template.name,
+      display_name: template.display_name ?? '',
       description: template.description,
       category: template.category,
       tags: template.tags
@@ -68,6 +71,7 @@ export function EditTemplateDialog({
     if (open) {
       reset({
         name: template.name,
+        display_name: template.display_name ?? '',
         description: template.description,
         category: template.category,
         tags: template.tags
@@ -83,6 +87,7 @@ export function EditTemplateDialog({
         templateId: template.id,
         data: {
           name: data.name,
+          display_name: data.display_name,
           description: data.description,
           category: data.category || 'general',
           tags: data.tags,
@@ -110,10 +115,20 @@ export function EditTemplateDialog({
         <form onSubmit={handleSubmit(onSubmit)} className='space-y-4 pt-2'>
           <div className='grid grid-cols-2 gap-4'>
             <div className='space-y-1'>
-              <Label>{t('nameLabel')}</Label>
-              <Input {...register('name')} />
-              {errors.name && <p className='text-xs text-destructive'>{errors.name.message}</p>}
+              <Label>{t('technicalNameLabel')}</Label>
+              <Input className='font-mono text-sm' {...register('name')} />
+              {errors.name && (
+                <p className='text-xs text-destructive'>
+                  {errors.name.message}
+                </p>
+              )}
             </div>
+            <div className='space-y-1'>
+              <Label>{t('displayNameLabel')}</Label>
+              <Input {...register('display_name')} />
+            </div>
+          </div>
+          <div className='grid grid-cols-2 gap-4'>
             <div className='space-y-1'>
               <Label>{t('categoryLabel')}</Label>
               <Input {...register('category')} />
@@ -130,14 +145,23 @@ export function EditTemplateDialog({
 
           {/* Steps — FlowEditor */}
           <div className='space-y-1'>
-            <Label>{t('stepsLabel')} ({steps.length})</Label>
-            <FlowEditor nestedInDialog steps={steps} onChange={setSteps} maxHeight='350px' />
+            <Label>
+              {t('stepsLabel')} ({steps.length})
+            </Label>
+            <FlowEditor
+              nestedInDialog
+              steps={steps}
+              onChange={setSteps}
+              maxHeight='350px'
+            />
           </div>
 
           {/* Variables */}
           <details className='group'>
-            <summary className='cursor-pointer text-sm font-medium flex items-center gap-1'>
-              <span>{t('variablesLabel', { fallback: 'Biến (Variables)' })}</span>
+            <summary className='flex cursor-pointer items-center gap-1 text-sm font-medium'>
+              <span>
+                {t('variablesLabel', { fallback: 'Biến (Variables)' })}
+              </span>
               {Object.keys(variables).length > 0 && (
                 <span className='text-xs text-muted-foreground'>
                   ({Object.keys(variables).length})

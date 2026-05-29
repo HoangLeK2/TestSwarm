@@ -39,7 +39,7 @@ export async function fetchSafeMode(force = false): Promise<SafeMode> {
       const { data } = await farmApi.get<SafeMode>('/server/safe-mode');
       _cache = {
         read_only: Boolean(data?.read_only),
-        stream_hierarchy: data?.stream_hierarchy !== false,
+        stream_hierarchy: data?.stream_hierarchy !== false
       };
     } catch {
       _cache = { ...DEFAULT };

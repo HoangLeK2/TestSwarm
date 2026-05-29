@@ -9,11 +9,22 @@ import { useTranslations } from 'next-intl';
 import { toast } from 'sonner';
 import { useCreateAccountGroup } from '../hooks/use-account-groups';
 import type { AccountGroupRotationStrategy } from '../services/api';
+import {
+  ACCOUNT_PLATFORM_OPTIONS,
+  ACCOUNT_PLATFORM_SELECT_OPTIONS
+} from '@/constants/account-platforms';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select';
 import {
   Dialog,
   DialogContent,
@@ -41,7 +52,9 @@ export function CreateGroupDialog() {
   const t = useTranslations('accountGroupsFeature');
   const schema = z.object({
     name: z.string().min(1, t('nameRequired')),
-    platform: z.string().min(1, t('platformRequired')),
+    platform: z.enum(ACCOUNT_PLATFORM_OPTIONS, {
+      message: t('platformRequired')
+    }),
     rotation_strategy: z.enum(['round_robin', 'least_recent']),
     description: z.string().optional()
   });
@@ -57,7 +70,7 @@ export function CreateGroupDialog() {
     resolver: zodResolver(schema),
     defaultValues: {
       name: '',
-      platform: '',
+      platform: 'facebook',
       rotation_strategy: 'round_robin',
       description: ''
     }
@@ -102,19 +115,30 @@ export function CreateGroupDialog() {
         <form onSubmit={handleSubmit(onSubmit)} className='space-y-4 pt-2'>
           <div className='space-y-1'>
             <Label>{t('nameLabel')}</Label>
-            <Input
-              placeholder={t('namePlaceholder')}
-              {...register('name')}
-            />
+            <Input placeholder={t('namePlaceholder')} {...register('name')} />
             {errors.name && (
               <p className='text-xs text-destructive'>{errors.name.message}</p>
             )}
           </div>
           <div className='space-y-1'>
             <Label>{t('platformLabel')}</Label>
-            <Input
-              placeholder={t('platformPlaceholder')}
-              {...register('platform')}
+            <Controller
+              control={control}
+              name='platform'
+              render={({ field }) => (
+                <Select value={field.value} onValueChange={field.onChange}>
+                  <SelectTrigger className='h-9 w-full'>
+                    <SelectValue placeholder={t('platformPlaceholder')} />
+                  </SelectTrigger>
+                  <SelectContent className='z-[10001]'>
+                    {ACCOUNT_PLATFORM_SELECT_OPTIONS.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        {t(opt.labelKey)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
             />
             {errors.platform && (
               <p className='text-xs text-destructive'>
@@ -147,10 +171,7 @@ export function CreateGroupDialog() {
                       </Label>
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <Info
-                            size={13}
-                            className='text-muted-foreground'
-                          />
+                          <Info size={13} className='text-muted-foreground' />
                         </TooltipTrigger>
                         <TooltipContent>
                           {t('rotationRoundRobinHint')}
@@ -170,10 +191,7 @@ export function CreateGroupDialog() {
                       </Label>
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <Info
-                            size={13}
-                            className='text-muted-foreground'
-                          />
+                          <Info size={13} className='text-muted-foreground' />
                         </TooltipTrigger>
                         <TooltipContent>
                           {t('rotationLeastRecentHint')}

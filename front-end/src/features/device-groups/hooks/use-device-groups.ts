@@ -34,8 +34,13 @@ export function useCreateDeviceGroup() {
 export function useUpdateDeviceGroup() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ groupId, data }: { groupId: string; data: DeviceGroupUpdate }) =>
-      deviceGroupsApi.update(groupId, data),
+    mutationFn: ({
+      groupId,
+      data
+    }: {
+      groupId: string;
+      data: DeviceGroupUpdate;
+    }) => deviceGroupsApi.update(groupId, data),
     onSuccess: (_, { groupId }) => {
       qc.invalidateQueries({ queryKey: KEYS.list });
       qc.invalidateQueries({ queryKey: KEYS.detail(groupId) });
@@ -54,8 +59,13 @@ export function useDeleteDeviceGroup() {
 export function useAddDevicesToGroup() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ groupId, deviceIds }: { groupId: string; deviceIds: string[] }) =>
-      deviceGroupsApi.addDevices(groupId, deviceIds),
+    mutationFn: ({
+      groupId,
+      deviceIds
+    }: {
+      groupId: string;
+      deviceIds: string[];
+    }) => deviceGroupsApi.addDevices(groupId, deviceIds),
     onSuccess: (_, { groupId }) => {
       qc.invalidateQueries({ queryKey: KEYS.list });
       qc.invalidateQueries({ queryKey: KEYS.detail(groupId) });
@@ -66,8 +76,13 @@ export function useAddDevicesToGroup() {
 export function useRemoveDeviceFromGroup() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ groupId, deviceId }: { groupId: string; deviceId: string }) =>
-      deviceGroupsApi.removeDevice(groupId, deviceId),
+    mutationFn: ({
+      groupId,
+      deviceId
+    }: {
+      groupId: string;
+      deviceId: string;
+    }) => deviceGroupsApi.removeDevice(groupId, deviceId),
     onSuccess: (_, { groupId }) => {
       qc.invalidateQueries({ queryKey: KEYS.list });
       qc.invalidateQueries({ queryKey: KEYS.detail(groupId) });

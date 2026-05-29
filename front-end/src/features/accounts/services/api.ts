@@ -40,22 +40,38 @@ export type {
 };
 
 export const accountsApi = {
-  list: (query?: { platform?: string; status?: string; tags?: string; limit?: number; offset?: number }) =>
-    farmApi.get<AccountOut[]>('/accounts', { params: query }).then((r) => r.data),
+  list: (query?: {
+    platform?: string;
+    status?: string;
+    tags?: string;
+    limit?: number;
+    offset?: number;
+  }) =>
+    farmApi
+      .get<AccountOut[]>('/accounts', { params: query })
+      .then((r) => r.data),
   get: (accountId: string) =>
-    farmApi.get<AccountWithLinksOut>(`/accounts/${accountId}`).then((r) => r.data),
+    farmApi
+      .get<AccountWithLinksOut>(`/accounts/${accountId}`)
+      .then((r) => r.data),
   create: (data: AccountCreate) =>
     farmApi.post<AccountOut>('/accounts', data).then((r) => r.data),
   update: (accountId: string, data: AccountUpdate) =>
-    farmApi.patch<AccountOut>(`/accounts/${accountId}`, data).then((r) => r.data),
+    farmApi
+      .patch<AccountOut>(`/accounts/${accountId}`, data)
+      .then((r) => r.data),
   delete: (accountId: string) =>
     farmApi.delete(`/accounts/${accountId}`).then((r) => r.data),
   updateStatus: (accountId: string, status: string) =>
     farmApi
-      .patch<AccountOut>(`/accounts/${accountId}/status`, { status } as AccountStatusUpdate)
+      .patch<AccountOut>(`/accounts/${accountId}/status`, {
+        status
+      } as AccountStatusUpdate)
       .then((r) => r.data),
   bulkImport: (data: BulkImportBody) =>
-    farmApi.post<BulkImportResult>('/accounts/import', data).then((r) => r.data),
+    farmApi
+      .post<BulkImportResult>('/accounts/import', data)
+      .then((r) => r.data),
   bulkImportCsv: (file: File) => {
     const form = new FormData();
     form.append('file', file);
@@ -66,9 +82,13 @@ export const accountsApi = {
       .then((r) => r.data);
   },
   roundRobin: (data: RoundRobinBody) =>
-    farmApi.post<Record<string, any>>('/accounts/round-robin', data).then((r) => r.data),
+    farmApi
+      .post<Record<string, any>>('/accounts/round-robin', data)
+      .then((r) => r.data),
   listDevices: (accountId: string) =>
-    farmApi.get<DeviceAccountOut[]>(`/accounts/${accountId}/devices`).then((r) => r.data),
+    farmApi
+      .get<DeviceAccountOut[]>(`/accounts/${accountId}/devices`)
+      .then((r) => r.data),
   assignDevice: (accountId: string, deviceId: string, isPrimary = false) =>
     farmApi
       .post<DeviceAccountOut>(`/accounts/${accountId}/devices`, {
@@ -77,12 +97,16 @@ export const accountsApi = {
       })
       .then((r) => r.data),
   unassignDevice: (accountId: string, deviceId: string) =>
-    farmApi.delete(`/accounts/${accountId}/devices/${deviceId}`).then((r) => r.data),
+    farmApi
+      .delete(`/accounts/${accountId}/devices/${deviceId}`)
+      .then((r) => r.data),
   listEvents: (
     accountId: string,
     query?: { limit?: number; cursor?: string; event_type?: string }
   ) =>
     farmApi
-      .get<AccountEventListOut>(`/accounts/${accountId}/events`, { params: query })
+      .get<AccountEventListOut>(`/accounts/${accountId}/events`, {
+        params: query
+      })
       .then((r) => r.data)
 };

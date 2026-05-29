@@ -10,20 +10,20 @@ console.log('[H264Worker] LOADED v26');
  *   4. Drop delta frames only when queue/latency crosses thresholds.
  */
 
-let decoder       = null;
-let waitIdr       = true;
-let lastAvcc      = null;   // Uint8Array — last AVCDecoderConfigurationRecord
-let hwFailed      = false;  // once hardware decode fails, stay on software
-let droppedDelta  = 0;
+let decoder = null;
+let waitIdr = true;
+let lastAvcc = null; // Uint8Array — last AVCDecoderConfigurationRecord
+let hwFailed = false; // once hardware decode fails, stay on software
+let droppedDelta = 0;
 let decodedFrames = 0;
-let t0Us          = 0;      // local monotonic origin for chunk timestamps
-let lastTsUs      = 0;      // strictly increasing chunk timestamp guard
-let lastDecodeTsUs = 0;     // timestamp of last chunk accepted by decoder
-let pendingFrame = null;    // latest frame waiting to be sent (VideoFrame path)
-let frameInFlight = false;  // one frame has been sent but not consumed by main
+let t0Us = 0; // local monotonic origin for chunk timestamps
+let lastTsUs = 0; // strictly increasing chunk timestamp guard
+let lastDecodeTsUs = 0; // timestamp of last chunk accepted by decoder
+let pendingFrame = null; // latest frame waiting to be sent (VideoFrame path)
+let frameInFlight = false; // one frame has been sent but not consumed by main
 let lastOutputMs = 0;
 let decodeFps = 15;
-let targetFps = 15;  // updated via 'set-target-fps'
+let targetFps = 15; // updated via 'set-target-fps'
 let flushInFlight = false;
 let needKeyframe = false;
 const MAX_DRIFT_US = 500000;
@@ -52,12 +52,14 @@ function logDecoderError(accel, msg) {
     sameDecoderErrorCount = 0;
   }
   // throttle noisy decode failures (device stream hiccups can spam thousands of lines)
-  if ((now - lastDecoderErrorLogAt) < 1500 && sameDecoderErrorCount > 0) return;
+  if (now - lastDecoderErrorLogAt < 1500 && sameDecoderErrorCount > 0) return;
   lastDecoderErrorLogAt = now;
   console.warn(
-    '[H264Worker] decoder error (accel=' + accel + ')'
-      + (sameDecoderErrorCount > 0 ? ' x' + (sameDecoderErrorCount + 1) : '')
-      + ':',
+    '[H264Worker] decoder error (accel=' +
+      accel +
+      ')' +
+      (sameDecoderErrorCount > 0 ? ' x' + (sameDecoderErrorCount + 1) : '') +
+      ':',
     text
   );
 }
@@ -66,7 +68,7 @@ function postDecoderError(accel, msg) {
   self.postMessage({
     type: 'decoder-error',
     accel: String(accel || ''),
-    message: String(msg || 'unknown'),
+    message: String(msg || 'unknown')
   });
 }
 
@@ -77,8 +79,8 @@ function postBackpressure(reason) {
   self.postMessage({
     type: 'decoder-backpressure',
     reason: String(reason || 'decode_queue'),
-    decodeQueueSize: decoder ? (decoder.decodeQueueSize || 0) : 0,
-    droppedDelta,
+    decodeQueueSize: decoder ? decoder.decodeQueueSize || 0 : 0,
+    droppedDelta
   });
 }
 
@@ -96,21 +98,29 @@ function nextMonotonicTsUs() {
 
 function getCodecString(avcc) {
   if (avcc.length < 4) return 'avc1.42E01E';
-  return 'avc1.'
-    + avcc[1].toString(16).padStart(2, '0')
-    + avcc[2].toString(16).padStart(2, '0')
-    + avcc[3].toString(16).padStart(2, '0');
+  return (
+    'avc1.' +
+    avcc[1].toString(16).padStart(2, '0') +
+    avcc[2].toString(16).padStart(2, '0') +
+    avcc[3].toString(16).padStart(2, '0')
+  );
 }
 
 function closeDecoder() {
-  if (decoder) { try { decoder.close(); } catch (_) {} }
+  if (decoder) {
+    try {
+      decoder.close();
+    } catch (_) {}
+  }
   decoder = null;
   waitIdr = true;
   lastDecodeTsUs = 0;
   lastTsUs = 0;
   t0Us = 0;
   if (pendingFrame) {
-    try { pendingFrame.close(); } catch (_) {}
+    try {
+      pendingFrame.close();
+    } catch (_) {}
     pendingFrame = null;
   }
   frameInFlight = false;
@@ -130,7 +140,7 @@ function tryPostPendingFrame() {
       type: 'frame',
       frame: frame,
       width: frame.displayWidth,
-      height: frame.displayHeight,
+      height: frame.displayHeight
     },
     [frame]
   );
@@ -145,7 +155,7 @@ function normalizeChunkTimestampUs(ptsUs) {
     ptsUs <= MAX_SAFE_TS_US
   ) {
     tsUs = Math.floor(ptsUs);
-    if (lastTsUs > 0 && (tsUs - lastTsUs) > MAX_DRIFT_US) {
+    if (lastTsUs > 0 && tsUs - lastTsUs > MAX_DRIFT_US) {
       tsUs = lastTsUs + 1000;
     }
     // Guard against non-monotonic source PTS.
@@ -162,21 +172,31 @@ function normalizeChunkTimestampUs(ptsUs) {
 function stripParamNals(avccBuf) {
   var src = new Uint8Array(avccBuf);
   var hasParams = false;
-  for (var i = 0; i + 4 <= src.length;) {
-    var len = ((src[i] << 24) | (src[i+1] << 16) | (src[i+2] << 8) | src[i+3]) >>> 0;
+  for (var i = 0; i + 4 <= src.length; ) {
+    var len =
+      ((src[i] << 24) | (src[i + 1] << 16) | (src[i + 2] << 8) | src[i + 3]) >>>
+      0;
     if (i + 4 + len > src.length) break;
     var t = src[i + 4] & 0x1f;
-    if (t === 7 || t === 8) { hasParams = true; break; }
+    if (t === 7 || t === 8) {
+      hasParams = true;
+      break;
+    }
     i += 4 + len;
   }
   if (!hasParams) return avccBuf;
   var out = new Uint8Array(src.length);
   var outPos = 0;
-  for (var i = 0; i + 4 <= src.length;) {
-    var len = ((src[i] << 24) | (src[i+1] << 16) | (src[i+2] << 8) | src[i+3]) >>> 0;
+  for (var i = 0; i + 4 <= src.length; ) {
+    var len =
+      ((src[i] << 24) | (src[i + 1] << 16) | (src[i + 2] << 8) | src[i + 3]) >>>
+      0;
     if (i + 4 + len > src.length) break;
     var t = src[i + 4] & 0x1f;
-    if (t !== 7 && t !== 8) { out.set(src.subarray(i, i + 4 + len), outPos); outPos += 4 + len; }
+    if (t !== 7 && t !== 8) {
+      out.set(src.subarray(i, i + 4 + len), outPos);
+      outPos += 4 + len;
+    }
     i += 4 + len;
   }
   return out.buffer.slice(0, outPos);
@@ -186,7 +206,8 @@ function initDecoder(avccRecord) {
   closeDecoder();
 
   var codec = getCodecString(avccRecord);
-  var desc  = avccRecord instanceof Uint8Array ? avccRecord : new Uint8Array(avccRecord);
+  var desc =
+    avccRecord instanceof Uint8Array ? avccRecord : new Uint8Array(avccRecord);
   var token = ++decoderInitToken;
   decoderConfiguring = true;
   pendingKeyChunk = null;
@@ -196,43 +217,56 @@ function initDecoder(avccRecord) {
 
 function createDecoder(accel) {
   return new VideoDecoder({
-    output: function(frame) {
+    output: function (frame) {
       var now = performance.now();
       if (lastOutputMs > 0) {
         var dt = now - lastOutputMs;
         if (dt > 0) {
           var instFps = 1000 / dt;
           // Smooth decode throughput estimate to avoid noisy oscillations.
-          decodeFps = (decodeFps * 0.85) + (instFps * 0.15);
+          decodeFps = decodeFps * 0.85 + instFps * 0.15;
         }
       }
       lastOutputMs = now;
       decodedFrames++;
       var targetFrameTimeMs = 1000 / Math.max(1, targetFps);
-      var queueDelayMs = (decoder ? decoder.decodeQueueSize : 0) * targetFrameTimeMs;
+      var queueDelayMs =
+        (decoder ? decoder.decodeQueueSize : 0) * targetFrameTimeMs;
       // Wider thresholds reduce "stutter by over-dropping" during touch gestures.
-      var dynamicThresholdMs = Math.max(targetFrameTimeMs * 3, 360 - decodeFps * 4);
+      var dynamicThresholdMs = Math.max(
+        targetFrameTimeMs * 3,
+        360 - decodeFps * 4
+      );
       // Use actual target FPS (not hardcoded 30) — at 15fps config, 30*0.55=16.5
       // would ALWAYS trigger overload since decode rate ≈ 15fps.
-      var overload = decodeFps < (targetFps * 0.5);
+      var overload = decodeFps < targetFps * 0.5;
 
       // Output-stage dropping policy (after decode):
       // keep decode pipeline intact, shed only presented frames when overloaded.
       if (queueDelayMs > dynamicThresholdMs || overload) {
         droppedDelta++;
-        try { frame.close(); } catch (_) {}
+        try {
+          frame.close();
+        } catch (_) {}
         return;
       }
 
       // Keep latest decoded frame only.
       if (pendingFrame) {
-        var prevTs = (typeof pendingFrame.timestamp === 'number') ? pendingFrame.timestamp : -1;
-        var nextTs = (typeof frame.timestamp === 'number') ? frame.timestamp : -1;
+        var prevTs =
+          typeof pendingFrame.timestamp === 'number'
+            ? pendingFrame.timestamp
+            : -1;
+        var nextTs = typeof frame.timestamp === 'number' ? frame.timestamp : -1;
         if (nextTs >= 0 && prevTs >= 0 && nextTs <= prevTs) {
-          try { frame.close(); } catch (_) {}
+          try {
+            frame.close();
+          } catch (_) {}
           return;
         }
-        try { pendingFrame.close(); } catch (_) {}
+        try {
+          pendingFrame.close();
+        } catch (_) {}
       }
       pendingFrame = frame;
       // Push: send immediately if slot free; pull-frame in RAF is fallback.
@@ -246,19 +280,19 @@ function createDecoder(accel) {
           decodeQueueSize: decoder.decodeQueueSize || 0,
           droppedDelta,
           decodedFrames,
-          accel: accel === 'no-preference' ? 'software' : 'hardware',
+          accel: accel === 'no-preference' ? 'software' : 'hardware'
         });
       }
     },
-    error: function(e) {
-      var msg = (e && e.message) ? e.message : String(e);
+    error: function (e) {
+      var msg = e && e.message ? e.message : String(e);
       logDecoderError(accel, msg);
       postDecoderError(accel, msg);
       if (accel !== 'no-preference') {
         hwFailed = true;
       }
       closeDecoder();
-    },
+    }
   });
 }
 
@@ -268,19 +302,19 @@ async function configureSupportedDecoder(token, codec, desc) {
       codec: codec,
       description: desc,
       hardwareAcceleration: hwFailed ? 'no-preference' : 'prefer-hardware',
-      optimizeForLatency: true,
+      optimizeForLatency: true
     },
     {
       codec: codec,
       description: desc,
       hardwareAcceleration: 'no-preference',
-      optimizeForLatency: true,
+      optimizeForLatency: true
     },
     {
       codec: codec,
       description: desc,
-      optimizeForLatency: true,
-    },
+      optimizeForLatency: true
+    }
   ];
 
   for (var i = 0; i < candidates.length; i++) {
@@ -305,10 +339,19 @@ async function configureSupportedDecoder(token, codec, desc) {
       }
       return;
     } catch (e) {
-      if (decoder) { try { decoder.close(); } catch (_) {} }
+      if (decoder) {
+        try {
+          decoder.close();
+        } catch (_) {}
+      }
       decoder = null;
       if (cfg.hardwareAcceleration === 'prefer-hardware') hwFailed = true;
-      console.warn('[H264Worker] config candidate rejected:', codec, cfg.hardwareAcceleration || 'default', e && e.message);
+      console.warn(
+        '[H264Worker] config candidate rejected:',
+        codec,
+        cfg.hardwareAcceleration || 'default',
+        e && e.message
+      );
     }
   }
   decoderConfiguring = false;
@@ -320,7 +363,8 @@ async function configureSupportedDecoder(token, codec, desc) {
 
 function decodeChunk(isKey, ptsUs, frameData) {
   if (decoderConfiguring) {
-    if (isKey) pendingKeyChunk = { isKey: true, ptsUs: ptsUs, frameData: frameData };
+    if (isKey)
+      pendingKeyChunk = { isKey: true, ptsUs: ptsUs, frameData: frameData };
     return;
   }
   if (!decoder) {
@@ -329,7 +373,10 @@ function decodeChunk(isKey, ptsUs, frameData) {
     initDecoder(lastAvcc);
     return;
   }
-  if (decoder.state === 'closed') { closeDecoder(); return; }
+  if (decoder.state === 'closed') {
+    closeDecoder();
+    return;
+  }
 
   var decodeQueueSize = decoder.decodeQueueSize || 0;
   if (!isKey && decodeQueueSize >= DELTA_DROP_QUEUE_SIZE) {
@@ -364,11 +411,13 @@ function decodeChunk(isKey, ptsUs, frameData) {
   if (data.byteLength === 0) return;
 
   try {
-    decoder.decode(new EncodedVideoChunk({
-      type: isKey ? 'key' : 'delta',
-      timestamp: tsUs,
-      data: data,
-    }));
+    decoder.decode(
+      new EncodedVideoChunk({
+        type: isKey ? 'key' : 'delta',
+        timestamp: tsUs,
+        data: data
+      })
+    );
     lastDecodeTsUs = tsUs;
   } catch (e) {
     var accel = hwFailed ? 'no-preference' : 'prefer-hardware';
@@ -381,23 +430,28 @@ function decodeChunk(isKey, ptsUs, frameData) {
 
 // ── message handler ────────────────────────────────────────────────────────
 
-self.onmessage = function(event) {
+self.onmessage = function (event) {
   var data = event.data;
 
   switch (data.type) {
-
     case 'init':
       console.log('[H264Worker] init');
       break;
-
 
     case 'config': {
       var avcc = new Uint8Array(data.avcc);
       if (avcc.length < 4) break;
       lastAvcc = avcc;
-      console.log('[H264Worker] config len=' + avcc.length + ' codec=' + getCodecString(avcc));
+      console.log(
+        '[H264Worker] config len=' +
+          avcc.length +
+          ' codec=' +
+          getCodecString(avcc)
+      );
       initDecoder(avcc);
-      console.log('[H264Worker] decoder state=' + (decoder ? decoder.state : 'null'));
+      console.log(
+        '[H264Worker] decoder state=' + (decoder ? decoder.state : 'null')
+      );
       break;
     }
 

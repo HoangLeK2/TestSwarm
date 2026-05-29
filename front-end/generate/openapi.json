@@ -201,9 +201,7 @@
     },
     "/api/auth/register": {
       "post": {
-        "tags": [
-          "auth"
-        ],
+        "tags": ["auth"],
         "summary": "Register",
         "operationId": "register_api_auth_register_post",
         "requestBody": {
@@ -242,9 +240,7 @@
     },
     "/api/auth/login": {
       "post": {
-        "tags": [
-          "auth"
-        ],
+        "tags": ["auth"],
         "summary": "Login",
         "operationId": "login_api_auth_login_post",
         "requestBody": {
@@ -283,9 +279,7 @@
     },
     "/api/auth/refresh": {
       "post": {
-        "tags": [
-          "auth"
-        ],
+        "tags": ["auth"],
         "summary": "Refresh",
         "operationId": "refresh_api_auth_refresh_post",
         "requestBody": {
@@ -324,9 +318,7 @@
     },
     "/api/auth/me": {
       "get": {
-        "tags": [
-          "auth"
-        ],
+        "tags": ["auth"],
         "summary": "Me",
         "operationId": "me_api_auth_me_get",
         "responses": {
@@ -350,9 +342,7 @@
     },
     "/api/devices/stf-apk": {
       "get": {
-        "tags": [
-          "devices"
-        ],
+        "tags": ["devices"],
         "summary": "Download STFService APK",
         "description": "Serve the STFService.apk used by Android devices.\n\nThe file is resolved from a small set of well-known locations:\n- device_farm/bundle/apks/STFService.apk                (download_bundle.py output)\n- ../STFService.apk/app/build/outputs/apk/release/...   (local Gradle build)",
         "operationId": "download_stf_apk_api_devices_stf_apk_get",
@@ -370,9 +360,7 @@
     },
     "/api/devices/connect-adb": {
       "post": {
-        "tags": [
-          "devices"
-        ],
+        "tags": ["devices"],
         "summary": "Connect Device By Ip",
         "description": "Backend chủ động kết nối tới thiết bị qua ADB over TCP.\nThiết bị cần bật ADB over TCP (Wireless debugging hoặc adb tcpip 5555).\nKhông cần QR: chỉ cần nhập IP và bấm Kết nối.",
         "operationId": "connect_device_by_ip_api_devices_connect_adb_post",
@@ -415,9 +403,7 @@
     },
     "/api/devices/register": {
       "post": {
-        "tags": [
-          "devices"
-        ],
+        "tags": ["devices"],
         "summary": "Register Device",
         "description": "Đăng ký thiết bị: chỉ tạo bản ghi (serial = pending-xxx), chưa kết nối điện thoại.\nĐể kết nối điện thoại thật, user vào thẻ thiết bị → nhấn Kết nối → quét mã QR (key=device_key).",
         "operationId": "register_device_api_devices_register_post",
@@ -462,9 +448,7 @@
     },
     "/api/devices/pair": {
       "post": {
-        "tags": [
-          "devices"
-        ],
+        "tags": ["devices"],
         "summary": "Create Pairing",
         "operationId": "create_pairing_api_devices_pair_post",
         "responses": {
@@ -486,9 +470,7 @@
     },
     "/api/devices/pair/bulk": {
       "post": {
-        "tags": [
-          "devices"
-        ],
+        "tags": ["devices"],
         "summary": "Create Pairing Bulk",
         "description": "Tạo nhiều pairing cùng lúc để kết nối nhiều thiết bị. Mỗi thiết bị dùng một URL (copy hoặc quét QR).",
         "operationId": "create_pairing_bulk_api_devices_pair_bulk_post",
@@ -531,9 +513,7 @@
     },
     "/api/devices/pair/{pairing_id}": {
       "get": {
-        "tags": [
-          "devices"
-        ],
+        "tags": ["devices"],
         "summary": "Poll Pairing",
         "description": "Poll until device connects and pairing is complete.",
         "operationId": "poll_pairing_api_devices_pair__pairing_id__get",
@@ -577,9 +557,7 @@
     },
     "/api/devices": {
       "get": {
-        "tags": [
-          "devices"
-        ],
+        "tags": ["devices"],
         "summary": "List Devices",
         "operationId": "list_devices_api_devices_get",
         "responses": {
@@ -605,9 +583,7 @@
         ]
       },
       "post": {
-        "tags": [
-          "devices"
-        ],
+        "tags": ["devices"],
         "summary": "Create Device",
         "description": "Đăng ký thiết bị thủ công bằng serial (dùng cho script/admin).\nĐăng ký từ UI phải qua POST /pair + quét mã QR, không dùng endpoint này.\n\nSemantics:\n- If no device with this serial exists: create and assign to current user.\n- If it exists without an owner (user_id is NULL): claim it for current user.\n- If it already belongs to current user: idempotent (optionally updates name).\n- If it belongs to another user: 409.",
         "operationId": "create_device_api_devices_post",
@@ -652,9 +628,7 @@
     },
     "/api/devices/{device_id}": {
       "get": {
-        "tags": [
-          "devices"
-        ],
+        "tags": ["devices"],
         "summary": "Get Device",
         "operationId": "get_device_api_devices__device_id__get",
         "security": [
@@ -697,9 +671,7 @@
         }
       },
       "delete": {
-        "tags": [
-          "devices"
-        ],
+        "tags": ["devices"],
         "summary": "Delete Device",
         "description": "Xoá thiết bị của user hiện tại và mọi liên kết campaign-device.",
         "operationId": "delete_device_api_devices__device_id__delete",
@@ -738,9 +710,7 @@
     },
     "/api/devices/{device_id}/tags": {
       "patch": {
-        "tags": [
-          "devices"
-        ],
+        "tags": ["devices"],
         "summary": "Update Tags",
         "operationId": "update_tags_api_devices__device_id__tags_patch",
         "security": [
@@ -795,9 +765,7 @@
     },
     "/api/devices/{device_id}/sessions": {
       "get": {
-        "tags": [
-          "devices"
-        ],
+        "tags": ["devices"],
         "summary": "Device Sessions",
         "operationId": "device_sessions_api_devices__device_id__sessions_get",
         "security": [
@@ -846,9 +814,7 @@
     },
     "/api/users": {
       "get": {
-        "tags": [
-          "users"
-        ],
+        "tags": ["users"],
         "summary": "List Users",
         "operationId": "list_users_api_users_get",
         "responses": {
@@ -874,9 +840,7 @@
         ]
       },
       "post": {
-        "tags": [
-          "users"
-        ],
+        "tags": ["users"],
         "summary": "Create User",
         "operationId": "create_user_api_users_post",
         "requestBody": {
@@ -920,9 +884,7 @@
     },
     "/api/users/{user_id}": {
       "get": {
-        "tags": [
-          "users"
-        ],
+        "tags": ["users"],
         "summary": "Get User",
         "operationId": "get_user_api_users__user_id__get",
         "security": [
@@ -967,9 +929,7 @@
     },
     "/api/campaigns": {
       "get": {
-        "tags": [
-          "campaigns"
-        ],
+        "tags": ["campaigns"],
         "summary": "List Campaigns",
         "operationId": "list_campaigns_api_campaigns_get",
         "responses": {
@@ -995,9 +955,7 @@
         ]
       },
       "post": {
-        "tags": [
-          "campaigns"
-        ],
+        "tags": ["campaigns"],
         "summary": "Create Campaign",
         "operationId": "create_campaign_api_campaigns_post",
         "requestBody": {
@@ -1041,9 +999,7 @@
     },
     "/api/campaigns/{campaign_id}": {
       "get": {
-        "tags": [
-          "campaigns"
-        ],
+        "tags": ["campaigns"],
         "summary": "Get Campaign",
         "operationId": "get_campaign_api_campaigns__campaign_id__get",
         "security": [
@@ -1086,9 +1042,7 @@
         }
       },
       "delete": {
-        "tags": [
-          "campaigns"
-        ],
+        "tags": ["campaigns"],
         "summary": "Delete Campaign",
         "operationId": "delete_campaign_api_campaigns__campaign_id__delete",
         "security": [
@@ -1126,9 +1080,7 @@
     },
     "/api/campaigns/{campaign_id}/status": {
       "patch": {
-        "tags": [
-          "campaigns"
-        ],
+        "tags": ["campaigns"],
         "summary": "Update Status",
         "operationId": "update_status_api_campaigns__campaign_id__status_patch",
         "security": [
@@ -1181,9 +1133,7 @@
     },
     "/api/campaigns/{campaign_id}/devices": {
       "get": {
-        "tags": [
-          "campaigns"
-        ],
+        "tags": ["campaigns"],
         "summary": "Campaign Devices",
         "operationId": "campaign_devices_api_campaigns__campaign_id__devices_get",
         "security": [
@@ -1230,9 +1180,7 @@
         }
       },
       "post": {
-        "tags": [
-          "campaigns"
-        ],
+        "tags": ["campaigns"],
         "summary": "Add Device",
         "operationId": "add_device_api_campaigns__campaign_id__devices_post",
         "security": [
@@ -1285,9 +1233,7 @@
     },
     "/api/campaigns/{campaign_id}/devices/{device_id}": {
       "delete": {
-        "tags": [
-          "campaigns"
-        ],
+        "tags": ["campaigns"],
         "summary": "Remove Device",
         "operationId": "remove_device_api_campaigns__campaign_id__devices__device_id__delete",
         "security": [
@@ -1339,9 +1285,7 @@
     },
     "/api/campaigns/{campaign_id}/scenario": {
       "patch": {
-        "tags": [
-          "campaigns"
-        ],
+        "tags": ["campaigns"],
         "summary": "Update Scenario",
         "operationId": "update_scenario_api_campaigns__campaign_id__scenario_patch",
         "security": [
@@ -1396,9 +1340,7 @@
     },
     "/api/campaigns/{campaign_id}/compile-scenario": {
       "post": {
-        "tags": [
-          "campaigns"
-        ],
+        "tags": ["campaigns"],
         "summary": "Compile Scenario",
         "operationId": "compile_scenario_api_campaigns__campaign_id__compile_scenario_post",
         "security": [
@@ -1453,9 +1395,7 @@
     },
     "/api/campaigns/{campaign_id}/scenarios": {
       "get": {
-        "tags": [
-          "campaigns"
-        ],
+        "tags": ["campaigns"],
         "summary": "List Scenarios",
         "operationId": "list_scenarios_api_campaigns__campaign_id__scenarios_get",
         "security": [
@@ -1502,9 +1442,7 @@
         }
       },
       "post": {
-        "tags": [
-          "campaigns"
-        ],
+        "tags": ["campaigns"],
         "summary": "Create Scenario",
         "operationId": "create_scenario_api_campaigns__campaign_id__scenarios_post",
         "security": [
@@ -1559,9 +1497,7 @@
     },
     "/api/campaigns/{campaign_id}/scenarios/{scenario_id}": {
       "get": {
-        "tags": [
-          "campaigns"
-        ],
+        "tags": ["campaigns"],
         "summary": "Get Scenario",
         "operationId": "get_scenario_api_campaigns__campaign_id__scenarios__scenario_id__get",
         "security": [
@@ -1613,9 +1549,7 @@
         }
       },
       "patch": {
-        "tags": [
-          "campaigns"
-        ],
+        "tags": ["campaigns"],
         "summary": "Update Scenario Route",
         "operationId": "update_scenario_route_api_campaigns__campaign_id__scenarios__scenario_id__patch",
         "security": [
@@ -1677,9 +1611,7 @@
         }
       },
       "delete": {
-        "tags": [
-          "campaigns"
-        ],
+        "tags": ["campaigns"],
         "summary": "Delete Scenario Route",
         "operationId": "delete_scenario_route_api_campaigns__campaign_id__scenarios__scenario_id__delete",
         "security": [
@@ -1726,9 +1658,7 @@
     },
     "/api/campaigns/{campaign_id}/scenarios/{scenario_id}/compile": {
       "post": {
-        "tags": [
-          "campaigns"
-        ],
+        "tags": ["campaigns"],
         "summary": "Compile Scenario Row",
         "operationId": "compile_scenario_row_api_campaigns__campaign_id__scenarios__scenario_id__compile_post",
         "security": [
@@ -1792,9 +1722,7 @@
     },
     "/api/organizations": {
       "get": {
-        "tags": [
-          "organizations"
-        ],
+        "tags": ["organizations"],
         "summary": "List My Organizations",
         "operationId": "list_my_organizations_api_organizations_get",
         "responses": {
@@ -1820,9 +1748,7 @@
         ]
       },
       "post": {
-        "tags": [
-          "organizations"
-        ],
+        "tags": ["organizations"],
         "summary": "Create Organization",
         "operationId": "create_organization_api_organizations_post",
         "requestBody": {
@@ -1866,9 +1792,7 @@
     },
     "/api/scenario-templates": {
       "get": {
-        "tags": [
-          "scenario-templates"
-        ],
+        "tags": ["scenario-templates"],
         "summary": "List Scenario Templates",
         "operationId": "list_scenario_templates_api_scenario_templates_get",
         "security": [
@@ -1938,9 +1862,7 @@
         }
       },
       "post": {
-        "tags": [
-          "scenario-templates"
-        ],
+        "tags": ["scenario-templates"],
         "summary": "Create Scenario Template",
         "operationId": "create_scenario_template_api_scenario_templates_post",
         "security": [
@@ -1984,9 +1906,7 @@
     },
     "/api/scenario-templates/{template_id}": {
       "get": {
-        "tags": [
-          "scenario-templates"
-        ],
+        "tags": ["scenario-templates"],
         "summary": "Get Scenario Template",
         "operationId": "get_scenario_template_api_scenario_templates__template_id__get",
         "security": [
@@ -2029,9 +1949,7 @@
         }
       },
       "patch": {
-        "tags": [
-          "scenario-templates"
-        ],
+        "tags": ["scenario-templates"],
         "summary": "Update Scenario Template",
         "operationId": "update_scenario_template_api_scenario_templates__template_id__patch",
         "security": [
@@ -2084,9 +2002,7 @@
         }
       },
       "delete": {
-        "tags": [
-          "scenario-templates"
-        ],
+        "tags": ["scenario-templates"],
         "summary": "Delete Scenario Template",
         "operationId": "delete_scenario_template_api_scenario_templates__template_id__delete",
         "security": [
@@ -2124,9 +2040,7 @@
     },
     "/api/scenario-templates/{template_id}/duplicate": {
       "post": {
-        "tags": [
-          "scenario-templates"
-        ],
+        "tags": ["scenario-templates"],
         "summary": "Duplicate Scenario Template",
         "operationId": "duplicate_scenario_template_api_scenario_templates__template_id__duplicate_post",
         "security": [
@@ -2171,9 +2085,7 @@
     },
     "/api/device-groups": {
       "get": {
-        "tags": [
-          "device-groups"
-        ],
+        "tags": ["device-groups"],
         "summary": "List Device Groups",
         "description": "List all device groups for the authenticated user (includes device count).",
         "operationId": "list_device_groups_api_device_groups_get",
@@ -2200,9 +2112,7 @@
         ]
       },
       "post": {
-        "tags": [
-          "device-groups"
-        ],
+        "tags": ["device-groups"],
         "summary": "Create Device Group",
         "operationId": "create_device_group_api_device_groups_post",
         "requestBody": {
@@ -2246,9 +2156,7 @@
     },
     "/api/device-groups/{group_id}": {
       "get": {
-        "tags": [
-          "device-groups"
-        ],
+        "tags": ["device-groups"],
         "summary": "Get Device Group",
         "description": "Get group with full device list.",
         "operationId": "get_device_group_api_device_groups__group_id__get",
@@ -2292,9 +2200,7 @@
         }
       },
       "patch": {
-        "tags": [
-          "device-groups"
-        ],
+        "tags": ["device-groups"],
         "summary": "Update Device Group",
         "operationId": "update_device_group_api_device_groups__group_id__patch",
         "security": [
@@ -2347,9 +2253,7 @@
         }
       },
       "delete": {
-        "tags": [
-          "device-groups"
-        ],
+        "tags": ["device-groups"],
         "summary": "Delete Device Group",
         "description": "Delete group and all its memberships. Devices themselves are NOT deleted.",
         "operationId": "delete_device_group_api_device_groups__group_id__delete",
@@ -2388,9 +2292,7 @@
     },
     "/api/device-groups/{group_id}/devices": {
       "post": {
-        "tags": [
-          "device-groups"
-        ],
+        "tags": ["device-groups"],
         "summary": "Add Devices",
         "description": "Add one or more devices to the group. Already-present devices are ignored.",
         "operationId": "add_devices_api_device_groups__group_id__devices_post",
@@ -2444,9 +2346,7 @@
     },
     "/api/device-groups/{group_id}/devices/{device_id}": {
       "delete": {
-        "tags": [
-          "device-groups"
-        ],
+        "tags": ["device-groups"],
         "summary": "Remove Device",
         "description": "Remove a device from the group. The device itself is NOT deleted.",
         "operationId": "remove_device_api_device_groups__group_id__devices__device_id__delete",
@@ -2499,9 +2399,7 @@
     },
     "/api/accounts": {
       "get": {
-        "tags": [
-          "accounts"
-        ],
+        "tags": ["accounts"],
         "summary": "List Accounts Endpoint",
         "description": "List accounts owned by the current user with optional filters.",
         "operationId": "list_accounts_endpoint_api_accounts_get",
@@ -2611,9 +2509,7 @@
         }
       },
       "post": {
-        "tags": [
-          "accounts"
-        ],
+        "tags": ["accounts"],
         "summary": "Create Account Endpoint",
         "description": "Create a new account. Password is encrypted before storage.",
         "operationId": "create_account_endpoint_api_accounts_post",
@@ -2658,9 +2554,7 @@
     },
     "/api/accounts/import": {
       "post": {
-        "tags": [
-          "accounts"
-        ],
+        "tags": ["accounts"],
         "summary": "Bulk Import Json",
         "description": "Bulk import accounts from a JSON array. Duplicate (platform, username) pairs are skipped.",
         "operationId": "bulk_import_json_api_accounts_import_post",
@@ -2705,9 +2599,7 @@
     },
     "/api/accounts/import-csv": {
       "post": {
-        "tags": [
-          "accounts"
-        ],
+        "tags": ["accounts"],
         "summary": "Bulk Import Csv",
         "description": "Stream-import accounts from a CSV file upload.\n\nReads the upload in 64 KB chunks, parses CSV incrementally, and flushes\nbatches of up to 500 rows to the DB via INSERT ON CONFLICT DO NOTHING —\nso memory usage stays flat regardless of file size.\n\nExpected CSV columns: platform, username, password, display_name, tags, notes",
         "operationId": "bulk_import_csv_api_accounts_import_csv_post",
@@ -2752,9 +2644,7 @@
     },
     "/api/accounts/round-robin": {
       "post": {
-        "tags": [
-          "accounts"
-        ],
+        "tags": ["accounts"],
         "summary": "Round Robin Assign Endpoint",
         "description": "Auto-assign accounts to devices in round-robin order.",
         "operationId": "round_robin_assign_endpoint_api_accounts_round_robin_post",
@@ -2801,9 +2691,7 @@
     },
     "/api/accounts/{account_id}": {
       "get": {
-        "tags": [
-          "accounts"
-        ],
+        "tags": ["accounts"],
         "summary": "Get Account Endpoint",
         "description": "Get account details including device links.",
         "operationId": "get_account_endpoint_api_accounts__account_id__get",
@@ -2847,9 +2735,7 @@
         }
       },
       "patch": {
-        "tags": [
-          "accounts"
-        ],
+        "tags": ["accounts"],
         "summary": "Update Account Endpoint",
         "description": "Update account fields. Password (if provided) is re-encrypted before storage.",
         "operationId": "update_account_endpoint_api_accounts__account_id__patch",
@@ -2903,9 +2789,7 @@
         }
       },
       "delete": {
-        "tags": [
-          "accounts"
-        ],
+        "tags": ["accounts"],
         "summary": "Delete Account Endpoint",
         "description": "Delete account and all its device links (cascade).",
         "operationId": "delete_account_endpoint_api_accounts__account_id__delete",
@@ -2944,9 +2828,7 @@
     },
     "/api/accounts/{account_id}/status": {
       "patch": {
-        "tags": [
-          "accounts"
-        ],
+        "tags": ["accounts"],
         "summary": "Update Account Status",
         "description": "Manually set account status (active / banned / cooldown / disabled).",
         "operationId": "update_account_status_api_accounts__account_id__status_patch",
@@ -3002,9 +2884,7 @@
     },
     "/api/accounts/{account_id}/devices": {
       "get": {
-        "tags": [
-          "accounts"
-        ],
+        "tags": ["accounts"],
         "summary": "List Account Devices Endpoint",
         "description": "List all device-account links for an account.",
         "operationId": "list_account_devices_endpoint_api_accounts__account_id__devices_get",
@@ -3052,9 +2932,7 @@
         }
       },
       "post": {
-        "tags": [
-          "accounts"
-        ],
+        "tags": ["accounts"],
         "summary": "Assign Device To Account",
         "description": "Assign a device to an account.",
         "operationId": "assign_device_to_account_api_accounts__account_id__devices_post",
@@ -3110,9 +2988,7 @@
     },
     "/api/accounts/{account_id}/devices/{device_id}": {
       "delete": {
-        "tags": [
-          "accounts"
-        ],
+        "tags": ["accounts"],
         "summary": "Unassign Device From Account",
         "description": "Remove a device-account link.",
         "operationId": "unassign_device_from_account_api_accounts__account_id__devices__device_id__delete",
@@ -3165,9 +3041,7 @@
     },
     "/api/devices/{device_id}/accounts": {
       "get": {
-        "tags": [
-          "accounts"
-        ],
+        "tags": ["accounts"],
         "summary": "List Device Accounts Endpoint",
         "description": "List all accounts assigned to a device.",
         "operationId": "list_device_accounts_endpoint_api_devices__device_id__accounts_get",
@@ -3215,9 +3089,7 @@
         }
       },
       "post": {
-        "tags": [
-          "accounts"
-        ],
+        "tags": ["accounts"],
         "summary": "Assign Account To Device Endpoint",
         "description": "Assign an account to a device.",
         "operationId": "assign_account_to_device_endpoint_api_devices__device_id__accounts_post",
@@ -3273,9 +3145,7 @@
     },
     "/api/devices/{device_id}/accounts/primary": {
       "post": {
-        "tags": [
-          "accounts"
-        ],
+        "tags": ["accounts"],
         "summary": "Set Primary Account Endpoint",
         "description": "Set the primary account for a device (demotes existing primary).",
         "operationId": "set_primary_account_endpoint_api_devices__device_id__accounts_primary_post",
@@ -3331,9 +3201,7 @@
     },
     "/api/content": {
       "get": {
-        "tags": [
-          "content"
-        ],
+        "tags": ["content"],
         "summary": "List Content",
         "operationId": "list_content_api_content_get",
         "security": [
@@ -3486,9 +3354,7 @@
     },
     "/api/content/stats": {
       "get": {
-        "tags": [
-          "content"
-        ],
+        "tags": ["content"],
         "summary": "Get Stats",
         "operationId": "get_stats_api_content_stats_get",
         "security": [
@@ -3512,9 +3378,7 @@
     },
     "/api/content/save": {
       "post": {
-        "tags": [
-          "content"
-        ],
+        "tags": ["content"],
         "summary": "Save Content",
         "description": "Save extracted content with deduplication (used by scenarios and MCP).",
         "operationId": "save_content_api_content_save_post",
@@ -3557,9 +3421,7 @@
     },
     "/api/content/{item_id}": {
       "get": {
-        "tags": [
-          "content"
-        ],
+        "tags": ["content"],
         "summary": "Get Content Item",
         "operationId": "get_content_item_api_content__item_id__get",
         "security": [
@@ -3600,9 +3462,7 @@
         }
       },
       "delete": {
-        "tags": [
-          "content"
-        ],
+        "tags": ["content"],
         "summary": "Delete Content Item",
         "operationId": "delete_content_item_api_content__item_id__delete",
         "security": [
@@ -3645,9 +3505,7 @@
     },
     "/api/content/collections/list": {
       "get": {
-        "tags": [
-          "content"
-        ],
+        "tags": ["content"],
         "summary": "List Collections",
         "operationId": "list_collections_api_content_collections_list_get",
         "security": [
@@ -3675,9 +3533,7 @@
     },
     "/api/content/collections": {
       "post": {
-        "tags": [
-          "content"
-        ],
+        "tags": ["content"],
         "summary": "Create Collection",
         "operationId": "create_collection_api_content_collections_post",
         "security": [
@@ -3719,9 +3575,7 @@
     },
     "/api/content/collections/{name}": {
       "delete": {
-        "tags": [
-          "content"
-        ],
+        "tags": ["content"],
         "summary": "Delete Collection",
         "operationId": "delete_collection_api_content_collections__name__delete",
         "security": [
@@ -3764,9 +3618,7 @@
     },
     "/api/content/export": {
       "post": {
-        "tags": [
-          "content"
-        ],
+        "tags": ["content"],
         "summary": "Create Export",
         "operationId": "create_export_api_content_export_post",
         "security": [
@@ -3810,9 +3662,7 @@
     },
     "/api/content/exports/list": {
       "get": {
-        "tags": [
-          "content"
-        ],
+        "tags": ["content"],
         "summary": "List Exports",
         "operationId": "list_exports_api_content_exports_list_get",
         "security": [
@@ -3840,9 +3690,7 @@
     },
     "/api/content/exports/{export_id}": {
       "get": {
-        "tags": [
-          "content"
-        ],
+        "tags": ["content"],
         "summary": "Get Export",
         "operationId": "get_export_api_content_exports__export_id__get",
         "security": [
@@ -3885,9 +3733,7 @@
     },
     "/api/content/exports/{export_id}/download": {
       "get": {
-        "tags": [
-          "content"
-        ],
+        "tags": ["content"],
         "summary": "Download Export",
         "operationId": "download_export_api_content_exports__export_id__download_get",
         "security": [
@@ -3930,9 +3776,7 @@
     },
     "/api/schedules": {
       "get": {
-        "tags": [
-          "schedules"
-        ],
+        "tags": ["schedules"],
         "summary": "List Schedules Endpoint",
         "operationId": "list_schedules_endpoint_api_schedules_get",
         "security": [
@@ -3990,9 +3834,7 @@
         }
       },
       "post": {
-        "tags": [
-          "schedules"
-        ],
+        "tags": ["schedules"],
         "summary": "Create Schedule Endpoint",
         "operationId": "create_schedule_endpoint_api_schedules_post",
         "security": [
@@ -4036,9 +3878,7 @@
     },
     "/api/schedules/{schedule_id}": {
       "get": {
-        "tags": [
-          "schedules"
-        ],
+        "tags": ["schedules"],
         "summary": "Get Schedule Endpoint",
         "operationId": "get_schedule_endpoint_api_schedules__schedule_id__get",
         "security": [
@@ -4081,9 +3921,7 @@
         }
       },
       "patch": {
-        "tags": [
-          "schedules"
-        ],
+        "tags": ["schedules"],
         "summary": "Update Schedule Endpoint",
         "operationId": "update_schedule_endpoint_api_schedules__schedule_id__patch",
         "security": [
@@ -4136,9 +3974,7 @@
         }
       },
       "delete": {
-        "tags": [
-          "schedules"
-        ],
+        "tags": ["schedules"],
         "summary": "Delete Schedule Endpoint",
         "operationId": "delete_schedule_endpoint_api_schedules__schedule_id__delete",
         "security": [
@@ -4176,9 +4012,7 @@
     },
     "/api/schedules/{schedule_id}/toggle": {
       "post": {
-        "tags": [
-          "schedules"
-        ],
+        "tags": ["schedules"],
         "summary": "Toggle Schedule Endpoint",
         "operationId": "toggle_schedule_endpoint_api_schedules__schedule_id__toggle_post",
         "security": [
@@ -4223,9 +4057,7 @@
     },
     "/api/schedules/{schedule_id}/run-now": {
       "post": {
-        "tags": [
-          "schedules"
-        ],
+        "tags": ["schedules"],
         "summary": "Run Now Endpoint",
         "operationId": "run_now_endpoint_api_schedules__schedule_id__run_now_post",
         "security": [
@@ -4270,9 +4102,7 @@
     },
     "/api/schedules/{schedule_id}/runs": {
       "get": {
-        "tags": [
-          "schedules"
-        ],
+        "tags": ["schedules"],
         "summary": "List Runs Endpoint",
         "operationId": "list_runs_endpoint_api_schedules__schedule_id__runs_get",
         "security": [
@@ -4341,9 +4171,7 @@
     },
     "/api/schedules/{schedule_id}/runs/{run_id}": {
       "get": {
-        "tags": [
-          "schedules"
-        ],
+        "tags": ["schedules"],
         "summary": "Get Run Endpoint",
         "operationId": "get_run_endpoint_api_schedules__schedule_id__runs__run_id__get",
         "security": [
@@ -4415,9 +4243,7 @@
     },
     "/api/connect/info": {
       "get": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Connect Info",
         "operationId": "api_connect_info_api_connect_info_get",
         "responses": {
@@ -4439,9 +4265,7 @@
     },
     "/api/scenario/schema": {
       "get": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Scenario Schema",
         "operationId": "api_scenario_schema_api_scenario_schema_get",
         "responses": {
@@ -4463,9 +4287,7 @@
     },
     "/api/connect/register": {
       "post": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Connect Register",
         "operationId": "api_connect_register_api_connect_register_post",
         "requestBody": {
@@ -4507,9 +4329,7 @@
     },
     "/api/devices/{serial}/scrcpy/attach": {
       "post": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Scrcpy Attach",
         "operationId": "api_scrcpy_attach_api_devices__serial__scrcpy_attach_post",
         "security": [
@@ -4562,9 +4382,7 @@
     },
     "/api/devices/{serial}/scrcpy/detach": {
       "post": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Scrcpy Detach",
         "operationId": "api_scrcpy_detach_api_devices__serial__scrcpy_detach_post",
         "security": [
@@ -4607,9 +4425,7 @@
     },
     "/api/sessions/start": {
       "post": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Sessions Start",
         "operationId": "api_sessions_start_api_sessions_start_post",
         "requestBody": {
@@ -4651,9 +4467,7 @@
     },
     "/api/sessions/end": {
       "post": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Sessions End",
         "operationId": "api_sessions_end_api_sessions_end_post",
         "requestBody": {
@@ -4695,9 +4509,7 @@
     },
     "/api/sessions/{session_id}": {
       "get": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Sessions Get",
         "operationId": "api_sessions_get_api_sessions__session_id__get",
         "security": [
@@ -4740,9 +4552,7 @@
     },
     "/api/devices/{serial}/reserve": {
       "post": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Devices Reserve",
         "operationId": "api_devices_reserve_api_devices__serial__reserve_post",
         "security": [
@@ -4785,9 +4595,7 @@
     },
     "/api/devices/{serial}/release": {
       "post": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Devices Release",
         "operationId": "api_devices_release_api_devices__serial__release_post",
         "security": [
@@ -4830,9 +4638,7 @@
     },
     "/api/tap/{serial}": {
       "post": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Tap",
         "operationId": "api_tap_api_tap__serial__post",
         "security": [
@@ -4885,9 +4691,7 @@
     },
     "/api/swipe/{serial}": {
       "post": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Swipe",
         "operationId": "api_swipe_api_swipe__serial__post",
         "security": [
@@ -4940,9 +4744,7 @@
     },
     "/api/key/{serial}": {
       "post": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Key",
         "operationId": "api_key_api_key__serial__post",
         "security": [
@@ -4998,10 +4800,37 @@
         "tags": ["device-control"],
         "summary": "Api Double Tap",
         "operationId": "api_double_tap_api_devices__serial__double_tap_post",
-        "security": [{"HTTPBearer": []}],
-        "parameters": [{"name": "serial", "in": "path", "required": true, "schema": {"type": "string", "title": "Serial"}}],
-        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DoubleTapRequest"}}}},
-        "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {}}}}, "422": {"description": "Validation Error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}}}}
+        "security": [{ "HTTPBearer": [] }],
+        "parameters": [
+          {
+            "name": "serial",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "title": "Serial" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/DoubleTapRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": { "application/json": { "schema": {} } }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
+              }
+            }
+          }
+        }
       }
     },
     "/api/devices/{serial}/pinch": {
@@ -5009,10 +4838,37 @@
         "tags": ["device-control"],
         "summary": "Api Pinch",
         "operationId": "api_pinch_api_devices__serial__pinch_post",
-        "security": [{"HTTPBearer": []}],
-        "parameters": [{"name": "serial", "in": "path", "required": true, "schema": {"type": "string", "title": "Serial"}}],
-        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PinchRequest"}}}},
-        "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {}}}}, "422": {"description": "Validation Error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}}}}
+        "security": [{ "HTTPBearer": [] }],
+        "parameters": [
+          {
+            "name": "serial",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "title": "Serial" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/PinchRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": { "application/json": { "schema": {} } }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
+              }
+            }
+          }
+        }
       }
     },
     "/api/devices/{serial}/drag": {
@@ -5020,10 +4876,37 @@
         "tags": ["device-control"],
         "summary": "Api Drag",
         "operationId": "api_drag_api_devices__serial__drag_post",
-        "security": [{"HTTPBearer": []}],
-        "parameters": [{"name": "serial", "in": "path", "required": true, "schema": {"type": "string", "title": "Serial"}}],
-        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DragRequest"}}}},
-        "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {}}}}, "422": {"description": "Validation Error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}}}}
+        "security": [{ "HTTPBearer": [] }],
+        "parameters": [
+          {
+            "name": "serial",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "title": "Serial" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/DragRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": { "application/json": { "schema": {} } }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
+              }
+            }
+          }
+        }
       }
     },
     "/api/devices/{serial}/clipboard": {
@@ -5031,25 +4914,70 @@
         "tags": ["device-control"],
         "summary": "Api Get Clipboard",
         "operationId": "api_get_clipboard_api_devices__serial__clipboard_get",
-        "security": [{"HTTPBearer": []}],
-        "parameters": [{"name": "serial", "in": "path", "required": true, "schema": {"type": "string", "title": "Serial"}}],
-        "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {}}}}, "422": {"description": "Validation Error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}}}}
+        "security": [{ "HTTPBearer": [] }],
+        "parameters": [
+          {
+            "name": "serial",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "title": "Serial" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": { "application/json": { "schema": {} } }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
+              }
+            }
+          }
+        }
       },
       "post": {
         "tags": ["device-control"],
         "summary": "Api Set Clipboard",
         "operationId": "api_set_clipboard_api_devices__serial__clipboard_post",
-        "security": [{"HTTPBearer": []}],
-        "parameters": [{"name": "serial", "in": "path", "required": true, "schema": {"type": "string", "title": "Serial"}}],
-        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ClipboardSetRequest"}}}},
-        "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {}}}}, "422": {"description": "Validation Error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}}}}
+        "security": [{ "HTTPBearer": [] }],
+        "parameters": [
+          {
+            "name": "serial",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "title": "Serial" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ClipboardSetRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": { "application/json": { "schema": {} } }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
+              }
+            }
+          }
+        }
       }
     },
     "/api/launch_app/{serial}": {
       "post": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Launch App",
         "operationId": "api_launch_app_api_launch_app__serial__post",
         "security": [
@@ -5102,9 +5030,7 @@
     },
     "/api/open_url/{serial}": {
       "post": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Open Url",
         "operationId": "api_open_url_api_open_url__serial__post",
         "security": [
@@ -5157,9 +5083,7 @@
     },
     "/api/devices/{serial}/input_text": {
       "post": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Input Text",
         "operationId": "api_input_text_api_devices__serial__input_text_post",
         "security": [
@@ -5212,9 +5136,7 @@
     },
     "/api/devices/{serial}/long_tap": {
       "post": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Long Tap",
         "operationId": "api_long_tap_api_devices__serial__long_tap_post",
         "security": [
@@ -5267,9 +5189,7 @@
     },
     "/api/devices/{serial}/scroll": {
       "post": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Scroll",
         "operationId": "api_scroll_api_devices__serial__scroll_post",
         "security": [
@@ -5322,9 +5242,7 @@
     },
     "/api/devices/{serial}/hierarchy": {
       "get": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Hierarchy",
         "operationId": "api_hierarchy_api_devices__serial__hierarchy_get",
         "security": [
@@ -5377,9 +5295,7 @@
     },
     "/api/devices/{serial}/ui_elements": {
       "get": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Ui Elements",
         "operationId": "api_ui_elements_api_devices__serial__ui_elements_get",
         "security": [
@@ -5432,9 +5348,7 @@
     },
     "/api/tap_selector/{serial}": {
       "post": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Tap Selector",
         "operationId": "api_tap_selector_api_tap_selector__serial__post",
         "security": [
@@ -5487,9 +5401,7 @@
     },
     "/api/devices/{serial}/hit_test": {
       "post": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Hit Test",
         "operationId": "api_hit_test_api_devices__serial__hit_test_post",
         "security": [
@@ -5542,9 +5454,7 @@
     },
     "/api/tasks/{task_id}": {
       "get": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Get Task",
         "operationId": "api_get_task_api_tasks__task_id__get",
         "security": [
@@ -5587,9 +5497,7 @@
     },
     "/api/agent/{serial}/shell": {
       "post": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Shell",
         "operationId": "api_shell_api_agent__serial__shell_post",
         "security": [
@@ -5644,9 +5552,7 @@
     },
     "/api/task": {
       "post": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Enqueue Task",
         "operationId": "api_enqueue_task_api_task_post",
         "requestBody": {
@@ -5688,9 +5594,7 @@
     },
     "/api/devices/{serial}/scenario/preview": {
       "post": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Scenario Preview",
         "operationId": "api_scenario_preview_api_devices__serial__scenario_preview_post",
         "security": [
@@ -5743,9 +5647,7 @@
     },
     "/api/devices/{serial}/scenario/preview-stream": {
       "post": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Scenario Preview Stream",
         "description": "SSE endpoint: streams step results as they complete.\nEach event is a JSON object with the step result.\nFinal event has type \"done\" with full summary.",
         "operationId": "api_scenario_preview_stream_api_devices__serial__scenario_preview_stream_post",
@@ -5799,9 +5701,7 @@
     },
     "/api/devices/{serial}/scenario/run": {
       "post": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Scenario Run",
         "operationId": "api_scenario_run_api_devices__serial__scenario_run_post",
         "security": [
@@ -5854,9 +5754,7 @@
     },
     "/api/sessions/{session_id}/scenario/run": {
       "post": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Sessions Scenario Run",
         "operationId": "api_sessions_scenario_run_api_sessions__session_id__scenario_run_post",
         "security": [
@@ -5909,9 +5807,7 @@
     },
     "/api/campaigns/{campaign_id}/run": {
       "post": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Run Campaign",
         "operationId": "api_run_campaign_api_campaigns__campaign_id__run_post",
         "security": [
@@ -5954,9 +5850,7 @@
     },
     "/api/execution/runtime": {
       "get": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Execution Runtime",
         "description": "How campaign runs are executed — for UI/docs.",
         "operationId": "api_execution_runtime_api_execution_runtime_get",
@@ -5979,9 +5873,7 @@
     },
     "/api/campaigns/{campaign_id}/workflows": {
       "get": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api List Campaign Workflows",
         "description": "List top-level Temporal workflow runs for a campaign.\n\nOnly returns ScenarioWorkflow entries (one per device×scenario).\nChild workflows (ScenarioStepsWorkflow) are excluded — they are an\nimplementation detail and would flood the list.",
         "operationId": "api_list_campaign_workflows_api_campaigns__campaign_id__workflows_get",
@@ -6025,9 +5917,7 @@
     },
     "/api/devices/{serial}/running-workflows": {
       "get": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Device Running Workflows",
         "description": "List RUNNING/PAUSED top-level scenario workflows for a specific device serial.",
         "operationId": "api_device_running_workflows_api_devices__serial__running_workflows_get",
@@ -6071,9 +5961,7 @@
     },
     "/api/workflows/{workflow_id}/progress": {
       "get": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Workflow Progress",
         "description": "Query real-time progress of a Temporal scenario workflow.",
         "operationId": "api_workflow_progress_api_workflows__workflow_id__progress_get",
@@ -6117,9 +6005,7 @@
     },
     "/api/workflows/{workflow_id}/steps": {
       "get": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Workflow Steps",
         "description": "Query step-by-step execution log for a scenario workflow.\n\n- While RUNNING: queries the child steps workflow (live, real-time).\n- After COMPLETED/FAILED: reads the final result from the parent workflow.\n\nReturns a flat list of step entries with index, type, ok, message, depth.",
         "operationId": "api_workflow_steps_api_workflows__workflow_id__steps_get",
@@ -6163,9 +6049,7 @@
     },
     "/api/workflows/{workflow_id}/pause": {
       "post": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Workflow Pause",
         "description": "Pause a running scenario workflow at the next step boundary.\n\nSECURITY NOTE: workflow_id is caller-supplied and not validated for\nownership. Any authenticated caller can pause any workflow whose ID they\nknow. Add campaign-ownership middleware before exposing this to untrusted\nusers.",
         "operationId": "api_workflow_pause_api_workflows__workflow_id__pause_post",
@@ -6209,9 +6093,7 @@
     },
     "/api/workflows/{workflow_id}/resume": {
       "post": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Workflow Resume",
         "description": "Resume a paused scenario workflow.",
         "operationId": "api_workflow_resume_api_workflows__workflow_id__resume_post",
@@ -6255,9 +6137,7 @@
     },
     "/api/workflows/{workflow_id}/cancel": {
       "post": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Workflow Cancel",
         "description": "Cancel a scenario workflow gracefully.",
         "operationId": "api_workflow_cancel_api_workflows__workflow_id__cancel_post",
@@ -6301,9 +6181,7 @@
     },
     "/api/fleet/run": {
       "post": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Fleet Run",
         "operationId": "api_fleet_run_api_fleet_run_post",
         "requestBody": {
@@ -6345,9 +6223,7 @@
     },
     "/api/fleet/status": {
       "get": {
-        "tags": [
-          "device-control"
-        ],
+        "tags": ["device-control"],
         "summary": "Api Fleet Status",
         "operationId": "api_fleet_status_api_fleet_status_get",
         "security": [
@@ -6397,10 +6273,7 @@
     },
     "/api/stf/status/{serial}": {
       "get": {
-        "tags": [
-          "device-control",
-          "stf-control"
-        ],
+        "tags": ["device-control", "stf-control"],
         "summary": "Stf Status",
         "description": "Get STFService connection status and all event state.",
         "operationId": "stf_status_api_stf_status__serial__get",
@@ -6444,10 +6317,7 @@
     },
     "/api/stf/clipboard/{serial}": {
       "get": {
-        "tags": [
-          "device-control",
-          "stf-control"
-        ],
+        "tags": ["device-control", "stf-control"],
         "summary": "Stf Get Clipboard",
         "operationId": "stf_get_clipboard_api_stf_clipboard__serial__get",
         "security": [
@@ -6488,10 +6358,7 @@
         }
       },
       "post": {
-        "tags": [
-          "device-control",
-          "stf-control"
-        ],
+        "tags": ["device-control", "stf-control"],
         "summary": "Stf Set Clipboard",
         "operationId": "stf_set_clipboard_api_stf_clipboard__serial__post",
         "security": [
@@ -6544,10 +6411,7 @@
     },
     "/api/stf/wifi/{serial}": {
       "post": {
-        "tags": [
-          "device-control",
-          "stf-control"
-        ],
+        "tags": ["device-control", "stf-control"],
         "summary": "Stf Set Wifi",
         "operationId": "stf_set_wifi_api_stf_wifi__serial__post",
         "security": [
@@ -6600,10 +6464,7 @@
     },
     "/api/stf/bluetooth/{serial}": {
       "post": {
-        "tags": [
-          "device-control",
-          "stf-control"
-        ],
+        "tags": ["device-control", "stf-control"],
         "summary": "Stf Set Bluetooth",
         "operationId": "stf_set_bluetooth_api_stf_bluetooth__serial__post",
         "security": [
@@ -6656,10 +6517,7 @@
     },
     "/api/stf/keyguard/{serial}": {
       "post": {
-        "tags": [
-          "device-control",
-          "stf-control"
-        ],
+        "tags": ["device-control", "stf-control"],
         "summary": "Stf Set Keyguard",
         "operationId": "stf_set_keyguard_api_stf_keyguard__serial__post",
         "security": [
@@ -6712,10 +6570,7 @@
     },
     "/api/stf/wakelock/{serial}": {
       "post": {
-        "tags": [
-          "device-control",
-          "stf-control"
-        ],
+        "tags": ["device-control", "stf-control"],
         "summary": "Stf Set Wake Lock",
         "operationId": "stf_set_wake_lock_api_stf_wakelock__serial__post",
         "security": [
@@ -6768,10 +6623,7 @@
     },
     "/api/stf/ringer/{serial}": {
       "post": {
-        "tags": [
-          "device-control",
-          "stf-control"
-        ],
+        "tags": ["device-control", "stf-control"],
         "summary": "Stf Set Ringer",
         "operationId": "stf_set_ringer_api_stf_ringer__serial__post",
         "security": [
@@ -6824,10 +6676,7 @@
     },
     "/api/stf/mute/{serial}": {
       "post": {
-        "tags": [
-          "device-control",
-          "stf-control"
-        ],
+        "tags": ["device-control", "stf-control"],
         "summary": "Stf Set Mute",
         "operationId": "stf_set_mute_api_stf_mute__serial__post",
         "security": [
@@ -6880,10 +6729,7 @@
     },
     "/api/stf/identify/{serial}": {
       "post": {
-        "tags": [
-          "device-control",
-          "stf-control"
-        ],
+        "tags": ["device-control", "stf-control"],
         "summary": "Stf Identify",
         "operationId": "stf_identify_api_stf_identify__serial__post",
         "security": [
@@ -6926,10 +6772,7 @@
     },
     "/api/stf/display/{serial}": {
       "get": {
-        "tags": [
-          "device-control",
-          "stf-control"
-        ],
+        "tags": ["device-control", "stf-control"],
         "summary": "Stf Get Display",
         "operationId": "stf_get_display_api_stf_display__serial__get",
         "security": [
@@ -6972,10 +6815,7 @@
     },
     "/api/stf/properties/{serial}": {
       "get": {
-        "tags": [
-          "device-control",
-          "stf-control"
-        ],
+        "tags": ["device-control", "stf-control"],
         "summary": "Stf Get Properties",
         "operationId": "stf_get_properties_api_stf_properties__serial__get",
         "security": [
@@ -7165,9 +7005,7 @@
     },
     "/devices/{serial}/extract/hierarchy": {
       "post": {
-        "tags": [
-          "extraction"
-        ],
+        "tags": ["extraction"],
         "summary": "Api Extract Hierarchy",
         "operationId": "api_extract_hierarchy_devices__serial__extract_hierarchy_post",
         "security": [
@@ -7220,9 +7058,7 @@
     },
     "/devices/{serial}/extract/ocr": {
       "post": {
-        "tags": [
-          "extraction"
-        ],
+        "tags": ["extraction"],
         "summary": "Api Extract Ocr",
         "operationId": "api_extract_ocr_devices__serial__extract_ocr_post",
         "security": [
@@ -7275,9 +7111,7 @@
     },
     "/devices/{serial}/extract/ai": {
       "post": {
-        "tags": [
-          "extraction"
-        ],
+        "tags": ["extraction"],
         "summary": "Api Extract Ai",
         "operationId": "api_extract_ai_devices__serial__extract_ai_post",
         "security": [
@@ -7374,9 +7208,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "prompt"
-        ],
+        "required": ["prompt"],
         "title": "AIExtractBody"
       },
       "AccountCreate": {
@@ -7434,10 +7266,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "platform",
-          "username"
-        ],
+        "required": ["platform", "username"],
         "title": "AccountCreate"
       },
       "AccountOut": {
@@ -7576,9 +7405,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "status"
-        ],
+        "required": ["status"],
         "title": "AccountStatusUpdate"
       },
       "AccountUpdate": {
@@ -7815,9 +7642,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "ip"
-        ],
+        "required": ["ip"],
         "title": "AdbRegisterRequest",
         "description": "Body for app-after-scan: phone sends its IP so backend can connect via ADB."
       },
@@ -7829,9 +7654,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "device_id"
-        ],
+        "required": ["device_id"],
         "title": "AddDeviceBody"
       },
       "AddDevicesToGroupBody": {
@@ -7845,9 +7668,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "device_ids"
-        ],
+        "required": ["device_ids"],
         "title": "AddDevicesToGroupBody"
       },
       "AssignAccountBody": {
@@ -7863,9 +7684,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "account_id"
-        ],
+        "required": ["account_id"],
         "title": "AssignAccountBody",
         "description": "Used by POST /devices/{device_id}/accounts — assigns an account to a device."
       },
@@ -7882,9 +7701,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "device_id"
-        ],
+        "required": ["device_id"],
         "title": "AssignDeviceBody",
         "description": "Used by POST /accounts/{account_id}/devices — assigns a device to an account."
       },
@@ -7898,9 +7715,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "file"
-        ],
+        "required": ["file"],
         "title": "Body_bulk_import_csv_api_accounts_import_csv_post"
       },
       "BulkImportBody": {
@@ -7914,9 +7729,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "accounts"
-        ],
+        "required": ["accounts"],
         "title": "BulkImportBody",
         "description": "JSON bulk import body."
       },
@@ -7936,11 +7749,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "created",
-          "skipped",
-          "total"
-        ],
+        "required": ["created", "skipped", "total"],
         "title": "BulkImportResult"
       },
       "BulkImportRow": {
@@ -7981,10 +7790,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "platform",
-          "username"
-        ],
+        "required": ["platform", "username"],
         "title": "BulkImportRow"
       },
       "CampaignCreate": {
@@ -8031,9 +7837,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "name"
-        ],
+        "required": ["name"],
         "title": "CampaignCreate"
       },
       "CampaignDeviceOut": {
@@ -8052,11 +7856,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "id",
-          "serial",
-          "name"
-        ],
+        "required": ["id", "serial", "name"],
         "title": "CampaignDeviceOut"
       },
       "CampaignOut": {
@@ -8166,9 +7966,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "name"
-        ],
+        "required": ["name"],
         "title": "CollectionCreate"
       },
       "CollectionOut": {
@@ -8207,13 +8005,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "id",
-          "name",
-          "description",
-          "item_count",
-          "created_at"
-        ],
+        "required": ["id", "name", "description", "item_count", "created_at"],
         "title": "CollectionOut"
       },
       "CompileScenarioBody": {
@@ -8291,9 +8083,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "ip"
-        ],
+        "required": ["ip"],
         "title": "ConnectByIpBody",
         "description": "Kết nối thiết bị qua ADB TCP: backend chủ động connect tới IP, không cần QR."
       },
@@ -8330,11 +8120,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "total_items",
-          "by_platform",
-          "by_collection"
-        ],
+        "required": ["total_items", "by_platform", "by_collection"],
         "title": "ContentStatsOut"
       },
       "DeviceAccountOut": {
@@ -8395,9 +8181,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "serial"
-        ],
+        "required": ["serial"],
         "title": "DeviceCreate"
       },
       "DeviceGroupCreate": {
@@ -8418,9 +8202,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "name"
-        ],
+        "required": ["name"],
         "title": "DeviceGroupCreate"
       },
       "DeviceGroupDetailOut": {
@@ -8703,9 +8485,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "session_id"
-        ],
+        "required": ["session_id"],
         "title": "EndSessionRequest"
       },
       "ExportOut": {
@@ -8767,13 +8547,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "id",
-          "format",
-          "status",
-          "item_count",
-          "created_at"
-        ],
+        "required": ["id", "format", "status", "item_count", "created_at"],
         "title": "ExportOut"
       },
       "ExportRequest": {
@@ -8880,9 +8654,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "steps"
-        ],
+        "required": ["steps"],
         "title": "FleetRunRequest"
       },
       "HTTPValidationError": {
@@ -8962,9 +8734,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "text"
-        ],
+        "required": ["text"],
         "title": "InputTextRequest"
       },
       "KeyRequest": {
@@ -8975,9 +8745,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "key"
-        ],
+        "required": ["key"],
         "title": "KeyRequest"
       },
       "LoginRequest": {
@@ -8992,10 +8760,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "email",
-          "password"
-        ],
+        "required": ["email", "password"],
         "title": "LoginRequest"
       },
       "LongTapRequest": {
@@ -9015,10 +8780,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "x",
-          "y"
-        ],
+        "required": ["x", "y"],
         "title": "LongTapRequest"
       },
       "OCRExtractBody": {
@@ -9057,15 +8819,15 @@
         "title": "OCRExtractBody"
       },
       "ClipboardSetRequest": {
-        "properties": {"text": {"type": "string", "title": "Text"}},
+        "properties": { "text": { "type": "string", "title": "Text" } },
         "type": "object",
         "required": ["text"],
         "title": "ClipboardSetRequest"
       },
       "DoubleTapRequest": {
         "properties": {
-          "x": {"type": "integer", "title": "X"},
-          "y": {"type": "integer", "title": "Y"}
+          "x": { "type": "integer", "title": "X" },
+          "y": { "type": "integer", "title": "Y" }
         },
         "type": "object",
         "required": ["x", "y"],
@@ -9073,11 +8835,15 @@
       },
       "DragRequest": {
         "properties": {
-          "x1": {"type": "integer", "title": "X1"},
-          "y1": {"type": "integer", "title": "Y1"},
-          "x2": {"type": "integer", "title": "X2"},
-          "y2": {"type": "integer", "title": "Y2"},
-          "duration_ms": {"type": "integer", "title": "Duration Ms", "default": 1000}
+          "x1": { "type": "integer", "title": "X1" },
+          "y1": { "type": "integer", "title": "Y1" },
+          "x2": { "type": "integer", "title": "X2" },
+          "y2": { "type": "integer", "title": "Y2" },
+          "duration_ms": {
+            "type": "integer",
+            "title": "Duration Ms",
+            "default": 1000
+          }
         },
         "type": "object",
         "required": ["x1", "y1", "x2", "y2"],
@@ -9085,10 +8851,14 @@
       },
       "PinchRequest": {
         "properties": {
-          "cx": {"type": "integer", "title": "Cx"},
-          "cy": {"type": "integer", "title": "Cy"},
-          "scale": {"type": "number", "title": "Scale", "default": 0.5},
-          "duration_ms": {"type": "integer", "title": "Duration Ms", "default": 400}
+          "cx": { "type": "integer", "title": "Cx" },
+          "cy": { "type": "integer", "title": "Cy" },
+          "scale": { "type": "number", "title": "Scale", "default": 0.5 },
+          "duration_ms": {
+            "type": "integer",
+            "title": "Duration Ms",
+            "default": 400
+          }
         },
         "type": "object",
         "required": ["cx", "cy"],
@@ -9102,9 +8872,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "package"
-        ],
+        "required": ["package"],
         "title": "LaunchAppRequest"
       },
       "OpenUrlRequest": {
@@ -9126,9 +8894,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "url"
-        ],
+        "required": ["url"],
         "title": "OpenUrlRequest"
       },
       "OrganizationCreate": {
@@ -9161,9 +8927,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "businessName"
-        ],
+        "required": ["businessName"],
         "title": "OrganizationCreate"
       },
       "OrganizationOut": {
@@ -9233,9 +8997,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "refresh_token"
-        ],
+        "required": ["refresh_token"],
         "title": "RefreshRequest"
       },
       "RegisterDeviceBody": {
@@ -9275,11 +9037,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "email",
-          "name",
-          "password"
-        ],
+        "required": ["email", "name", "password"],
         "title": "RegisterRequest"
       },
       "RoundRobinBody": {
@@ -9300,10 +9058,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "account_ids",
-          "device_ids"
-        ],
+        "required": ["account_ids", "device_ids"],
         "title": "RoundRobinBody"
       },
       "SaveContentBody": {
@@ -9374,9 +9129,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "data"
-        ],
+        "required": ["data"],
         "title": "SaveContentBody"
       },
       "ScenarioCreate": {
@@ -9481,9 +9234,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "steps"
-        ],
+        "required": ["steps"],
         "title": "ScenarioPreviewRequest"
       },
       "ScenarioTemplateCreate": {
@@ -9521,9 +9272,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "name"
-        ],
+        "required": ["name"],
         "title": "ScenarioTemplateCreate"
       },
       "ScenarioTemplateOut": {
@@ -9746,9 +9495,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "scenario"
-        ],
+        "required": ["scenario"],
         "title": "ScenarioUpdateBody"
       },
       "ScheduleCreate": {
@@ -9881,11 +9628,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "name",
-          "target_type",
-          "cron_expression"
-        ],
+        "required": ["name", "target_type", "cron_expression"],
         "title": "ScheduleCreate"
       },
       "ScheduleOut": {
@@ -10444,12 +10187,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "id",
-          "client_ip",
-          "connected_at",
-          "disconnected_at"
-        ],
+        "required": ["id", "client_ip", "connected_at", "disconnected_at"],
         "title": "SessionOut"
       },
       "SetClipboardRequest": {
@@ -10460,9 +10198,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "text"
-        ],
+        "required": ["text"],
         "title": "SetClipboardRequest"
       },
       "SetEnabledRequest": {
@@ -10473,9 +10209,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "enabled"
-        ],
+        "required": ["enabled"],
         "title": "SetEnabledRequest"
       },
       "SetPrimaryBody": {
@@ -10486,9 +10220,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "account_id"
-        ],
+        "required": ["account_id"],
         "title": "SetPrimaryBody"
       },
       "SetRingerModeRequest": {
@@ -10499,9 +10231,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "mode"
-        ],
+        "required": ["mode"],
         "title": "SetRingerModeRequest"
       },
       "StartSessionRequest": {
@@ -10523,9 +10253,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "device_id"
-        ],
+        "required": ["device_id"],
         "title": "StartSessionRequest"
       },
       "StatusUpdate": {
@@ -10536,9 +10264,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "status"
-        ],
+        "required": ["status"],
         "title": "StatusUpdate"
       },
       "SwipeRequest": {
@@ -10566,12 +10292,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "x1",
-          "y1",
-          "x2",
-          "y2"
-        ],
+        "required": ["x1", "y1", "x2", "y2"],
         "title": "SwipeRequest"
       },
       "TapRequest": {
@@ -10586,10 +10307,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "x",
-          "y"
-        ],
+        "required": ["x", "y"],
         "title": "TapRequest"
       },
       "TapSelectorRequest": {
@@ -10604,10 +10322,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "by",
-          "value"
-        ],
+        "required": ["by", "value"],
         "title": "TapSelectorRequest"
       },
       "TaskRequest": {
@@ -10664,10 +10379,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "access_token",
-          "refresh_token"
-        ],
+        "required": ["access_token", "refresh_token"],
         "title": "TokenResponse"
       },
       "TriggerResponse": {
@@ -10683,9 +10395,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "run_id"
-        ],
+        "required": ["run_id"],
         "title": "TriggerResponse"
       },
       "UpdateTagsBody": {
@@ -10696,9 +10406,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "tags"
-        ],
+        "required": ["tags"],
         "title": "UpdateTagsBody"
       },
       "UserCreate": {
@@ -10722,11 +10430,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "email",
-          "name",
-          "password"
-        ],
+        "required": ["email", "name", "password"],
         "title": "UserCreate"
       },
       "ValidationError": {
@@ -10762,11 +10466,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "loc",
-          "msg",
-          "type"
-        ],
+        "required": ["loc", "msg", "type"],
         "title": "ValidationError"
       },
       "api__schemas__auth__UserOut": {
@@ -10793,13 +10493,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "id",
-          "email",
-          "name",
-          "role",
-          "api_key"
-        ],
+        "required": ["id", "email", "name", "role", "api_key"],
         "title": "UserOut"
       },
       "api__schemas__user__UserOut": {

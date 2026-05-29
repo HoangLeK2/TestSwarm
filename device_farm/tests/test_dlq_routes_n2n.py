@@ -7,8 +7,10 @@ Verifies the route → CRUD wiring for the recently-added campaign scoping fix
 """
 
 from datetime import datetime, timezone
+from datetime import timedelta
 from types import SimpleNamespace
 from typing import AsyncIterator
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
@@ -20,6 +22,7 @@ from api.deps import _get_current_user, _get_db
 from api.routes.executions import router as executions_router
 from db.crud.execution_dlq import create_dlq_entry
 from db.database import Base
+from db.models.device import Device
 from db.models.execution import Execution
 
 
@@ -71,6 +74,19 @@ async def _seed(session_factory, exec_id: str, campaign_id: str, user_id: str = 
 async def _seed_dlq(session_factory, exec_id: str, serial: str):
     async with session_factory() as s:
         await create_dlq_entry(s, execution_id=exec_id, device_serial=serial)
+        await s.commit()
+
+
+async def _seed_device(session_factory, serial: str, user_id: str = "u1", *, last_seen=None):
+    async with session_factory() as s:
+        s.add(
+            Device(
+                id=f"dev-{serial}",
+                serial=serial,
+                user_id=user_id,
+                last_seen=last_seen,
+            )
+        )
         await s.commit()
 
 
@@ -156,6 +172,26 @@ async def test_dlq_route_campaign_filter_combined_with_status(session_factory):
         assert r2.json() == []
 
 
+@pytest.mark.asyncio
+async def test_dlq_summary_alerts_when_pending_count_exceeds_threshold(session_factory):
+    for idx in range(11):
+        exec_id = f"exec-alert-{idx}"
+        await _seed(session_factory, exec_id, "camp-alert")
+        await _seed_dlq(session_factory, exec_id, f"dev-alert-{idx}")
+
+    app = _build_app(session_factory)
+    notification_service = SimpleNamespace(notify=AsyncMock())
+    app.state.notification_service = notification_service
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
+        r = await ac.get("/api/executions/dlq/summary", params={"campaign_id": "camp-alert"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["pending_count"] == 11
+        assert body["alert_threshold"] == 10
+        assert body["alert"] is True
+        notification_service.notify.assert_awaited_once()
+
+
 # ── Retry path coverage ───────────────────────────────────────────────────────
 
 
@@ -188,6 +224,32 @@ async def test_retry_no_temporal_returns_503_and_reverts_to_pending(session_fact
         assert len(body) == 1
         assert body[0]["status"] == "pending"
         assert body[0]["error"] and "Temporal" in body[0]["error"]
+
+
+@pytest.mark.asyncio
+async def test_retry_stale_offline_device_is_dismissed_without_enqueue(session_factory):
+    await _seed(session_factory, "exec-offline", "camp-offline")
+    await _seed_device(
+        session_factory,
+        "serial-offline",
+        last_seen=datetime.now(timezone.utc) - timedelta(hours=1),
+    )
+    await _seed_dlq(session_factory, "exec-offline", "serial-offline")
+
+    fake_temporal = SimpleNamespace(start_workflow=AsyncMock())
+    app = _build_app_with_temporal(session_factory, temporal_client=fake_temporal)
+    async with session_factory() as s:
+        from db.models.execution_dlq import ExecutionDLQ
+        from sqlalchemy import select as _select
+
+        dlq_id = (await s.execute(_select(ExecutionDLQ.id))).scalar_one()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
+        retry = await ac.post(f"/api/executions/dlq/{dlq_id}/retry")
+        assert retry.status_code == 200
+        assert retry.json()["status"] == "dismissed"
+
+        fake_temporal.start_workflow.assert_not_awaited()
 
 
 @pytest.mark.asyncio

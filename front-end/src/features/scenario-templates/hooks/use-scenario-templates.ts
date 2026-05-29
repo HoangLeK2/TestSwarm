@@ -11,7 +11,10 @@ const KEYS = {
   detail: (id: string) => ['scenario-templates', id] as const
 };
 
-export function useScenarioTemplates(query?: { category?: string; tags?: string }) {
+export function useScenarioTemplates(query?: {
+  category?: string;
+  tags?: string;
+}) {
   return useQuery({
     queryKey: [...KEYS.list, query] as const,
     queryFn: () => scenarioTemplatesApi.list(query)
@@ -29,7 +32,8 @@ export function useScenarioTemplate(templateId: string) {
 export function useCreateScenarioTemplate() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (data: ScenarioTemplateCreate) => scenarioTemplatesApi.create(data),
+    mutationFn: (data: ScenarioTemplateCreate) =>
+      scenarioTemplatesApi.create(data),
     onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.list })
   });
 }
@@ -62,7 +66,8 @@ export function useDeleteScenarioTemplate() {
 export function useDuplicateScenarioTemplate() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (templateId: string) => scenarioTemplatesApi.duplicate(templateId),
+    mutationFn: (templateId: string) =>
+      scenarioTemplatesApi.duplicate(templateId),
     onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.list })
   });
 }

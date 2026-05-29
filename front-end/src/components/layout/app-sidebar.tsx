@@ -46,8 +46,9 @@ import { FadeInSide } from '@/components/motion/fade-in-side';
 import { TitleTooltip } from '../title-tooltip';
 import { cn } from '@/lib/utils';
 
-export const quickActions = (_t: any): { label: string; link: string; icon: React.ReactNode }[] =>
-  [];
+export const quickActions = (
+  _t: any
+): { label: string; link: string; icon: React.ReactNode }[] => [];
 
 function SidebarMainMenu({ isSettingsPage }: { isSettingsPage: boolean }) {
   const t = useTranslations('navigation');

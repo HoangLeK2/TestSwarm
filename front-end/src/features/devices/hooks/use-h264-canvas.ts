@@ -13,7 +13,15 @@
  */
 
 import { useEffect, useRef } from 'react';
-import { subscribeBinaryFrames, getLastConfigFrame, getLastKeyFrame, subscribeDeviceFarm, requestIdr, isCachedKeyFrameStale, notifyDecoderBackpressure } from '../services/ws';
+import {
+  subscribeBinaryFrames,
+  getLastConfigFrame,
+  getLastKeyFrame,
+  subscribeDeviceFarm,
+  requestIdr,
+  isCachedKeyFrameStale,
+  notifyDecoderBackpressure
+} from '../services/ws';
 
 export function useH264Video(
   serial: string,
@@ -31,8 +39,8 @@ export function useH264Video(
   }
 ) {
   const restartKey = opts?.restartKey ?? 0;
-  const workerRef  = useRef<Worker | null>(null);
-  const rafRef     = useRef<number | null>(null);
+  const workerRef = useRef<Worker | null>(null);
+  const rafRef = useRef<number | null>(null);
   const mountedAtRef = useRef(0);
   const lastVideoPacketAtRef = useRef(0);
   const lastRenderedFrameAtRef = useRef(0);
@@ -47,7 +55,7 @@ export function useH264Video(
   const onFrameRef = useRef(opts?.onFrame);
   const onStallRef = useRef(opts?.onStall);
   const onStatsRef = useRef(opts?.onStats);
-  const serialRef  = useRef(serial);
+  const serialRef = useRef(serial);
   const wsConnectedRef = useRef(false);
   // Reset+replay on ws_status=true is only needed for true reconnects (close→open).
   // On initial mount, the worker is fresh and bootstrap cache replay already
@@ -58,7 +66,7 @@ export function useH264Video(
   onFrameRef.current = opts?.onFrame;
   onStallRef.current = opts?.onStall;
   onStatsRef.current = opts?.onStats;
-  serialRef.current  = serial;
+  serialRef.current = serial;
 
   // ── Main lifecycle: spawn worker + subscribe to frames ───────────────────
   useEffect(() => {
@@ -86,7 +94,14 @@ export function useH264Video(
     // can silently produce a black canvas on some Chrome/macOS combinations.
     const renderFrame = (frame: VideoFrame, w: number, h: number) => {
       const canvas = canvasRef.current;
-      if (!canvas) { try { frame.close(); } catch { /* ok */ } return; }
+      if (!canvas) {
+        try {
+          frame.close();
+        } catch {
+          /* ok */
+        }
+        return;
+      }
       try {
         const width = Math.max(1, Math.floor(w || frame.displayWidth || 1));
         const height = Math.max(1, Math.floor(h || frame.displayHeight || 1));
@@ -102,7 +117,13 @@ export function useH264Video(
         onFrameRef.current?.({ mostlyBlack });
       } catch (err) {
         console.debug('[H264] render skipped:', err);
-      } finally { try { frame.close(); } catch { /* ok */ } }
+      } finally {
+        try {
+          frame.close();
+        } catch {
+          /* ok */
+        }
+      }
     };
 
     // RAF sends pull-frame as fallback for missed pushes (decoder reset, tab restore).
@@ -113,7 +134,8 @@ export function useH264Video(
     rafRef.current = requestAnimationFrame(keepalive);
 
     worker.onmessage = ({ data }) => {
-      if (data.type === 'error') console.error('[H264] worker error:', data.message);
+      if (data.type === 'error')
+        console.error('[H264] worker error:', data.message);
       if (data.type === 'decoder-error') {
         const now = Date.now();
         const s = serialRef.current;
@@ -135,7 +157,11 @@ export function useH264Video(
         return;
       }
       if (data.type === 'frame' && data.frame) {
-        renderFrame(data.frame as VideoFrame, data.width as number, data.height as number);
+        renderFrame(
+          data.frame as VideoFrame,
+          data.width as number,
+          data.height as number
+        );
         worker.postMessage({ type: 'frame-consumed' });
       }
       if (data.type === 'stats') {
@@ -143,13 +169,16 @@ export function useH264Video(
           decodeQueueSize: Number(data.decodeQueueSize ?? 0),
           droppedDelta: Number(data.droppedDelta ?? 0),
           decodedFrames: Number(data.decodedFrames ?? 0),
-          accel: String(data.accel ?? ''),
+          accel: String(data.accel ?? '')
         });
-        console.debug('[H264] stats',
-          `q=${data.decodeQueueSize} dropped=${data.droppedDelta} decoded=${data.decodedFrames} accel=${data.accel}`);
+        console.debug(
+          '[H264] stats',
+          `q=${data.decodeQueueSize} dropped=${data.droppedDelta} decoded=${data.decodedFrames} accel=${data.accel}`
+        );
       }
     };
-    worker.onerror = (e) => console.error('[H264] worker load error:', e.message);
+    worker.onerror = (e) =>
+      console.error('[H264] worker load error:', e.message);
 
     // Subscribe to binary frames synchronously.
     // ws.ts replays cached config + keyframe via queueMicrotask so they land
@@ -250,12 +279,12 @@ export function useH264Video(
         const ptsLo = view.getUint32(doff + 5, false);
         // Safe-number bound for (hi << 32) | lo within JS Number precision:
         // hi must be <= 2^21 - 1.
-        const ptsUs = ptsHi <= 0x1fffff ? (ptsHi * 4_294_967_296 + ptsLo) : 0;
+        const ptsUs = ptsHi <= 0x1fffff ? ptsHi * 4_294_967_296 + ptsLo : 0;
         const frameData = new Uint8Array(keyBuf, doff + 9).slice();
         if (frameData.length > 0 && isKey) {
           w.postMessage(
             { type: 'frame', isKey: true, ptsUs, frameData: frameData.buffer },
-            [frameData.buffer],
+            [frameData.buffer]
           );
         }
       }
@@ -344,14 +373,22 @@ export function useH264Video(
       const s = serialRef.current;
       const w = workerRef.current;
       if (!s || !w) return;
-      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      if (
+        typeof document !== 'undefined' &&
+        document.visibilityState !== 'visible'
+      )
+        return;
 
       const now = Date.now();
       const mountedAt = mountedAtRef.current;
       const lastPacketAt = lastVideoPacketAtRef.current;
       const lastRenderedAt = lastRenderedFrameAtRef.current;
       if (!lastPacketAt) {
-        if (mountedAt && now - mountedAt > 3000 && now - lastRecoveryAtRef.current > 3000) {
+        if (
+          mountedAt &&
+          now - mountedAt > 3000 &&
+          now - lastRecoveryAtRef.current > 3000
+        ) {
           lastRecoveryAtRef.current = now;
           onStallRef.current?.('no_packets');
           requestIdr(s, 0);
@@ -377,7 +414,11 @@ export function useH264Video(
 
       // Packets are arriving but no frame has rendered recently: reset the
       // browser decoder and request a keyframe to rebuild the reference chain.
-      if (packetAgeMs < 2000 && renderedAgeMs > 1800 && now - lastRecoveryAtRef.current > 1500) {
+      if (
+        packetAgeMs < 2000 &&
+        renderedAgeMs > 1800 &&
+        now - lastRecoveryAtRef.current > 1500
+      ) {
         lastRecoveryAtRef.current = now;
         onStallRef.current?.('decoder_stalled');
         w.postMessage({ type: 'reset' });
@@ -392,7 +433,11 @@ export function useH264Video(
   }, []);
 }
 
-function isCanvasMostlyBlack(ctx: CanvasRenderingContext2D, width: number, height: number): boolean {
+function isCanvasMostlyBlack(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number
+): boolean {
   const sampleW = Math.min(32, width);
   const sampleH = Math.min(32, height);
   const x = Math.max(0, Math.floor((width - sampleW) / 2));
@@ -407,7 +452,7 @@ function isCanvasMostlyBlack(ctx: CanvasRenderingContext2D, width: number, heigh
   let lit = 0;
   const total = sampleW * sampleH;
   for (let i = 0; i < data.length; i += 4) {
-    const luma = (data[i] * 0.2126) + (data[i + 1] * 0.7152) + (data[i + 2] * 0.0722);
+    const luma = data[i] * 0.2126 + data[i + 1] * 0.7152 + data[i + 2] * 0.0722;
     if (luma < 8) dark += 1;
     if (luma > 24) lit += 1;
   }

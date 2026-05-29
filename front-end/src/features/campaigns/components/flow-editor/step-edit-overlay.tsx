@@ -9,7 +9,7 @@ import { createPortal } from 'react-dom';
  */
 export function StepEditOverlay({
   onClose,
-  children,
+  children
 }: {
   onClose: () => void;
   children: React.ReactNode;
@@ -46,6 +46,6 @@ export function StepEditOverlay({
         {children}
       </div>
     </div>,
-    document.body,
+    document.body
   );
 }

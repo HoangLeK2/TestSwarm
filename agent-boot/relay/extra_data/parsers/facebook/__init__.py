@@ -15,6 +15,8 @@ from .comment_pipeline import (
     _resolve_comment_region_anchors,
     parse_fb_comments_from_xml,
     parse_fb_comments_from_xml_with_diagnostic,
+    resolve_center_comment_target_from_xml,
+    resolve_comment_targets_from_xml,
     resolve_topmost_comment_target_from_xml,
 )
 from .constants import _AUTHOR_PREFIXES, _RE_LINK_TYPE, _RE_POST_RESHARE_HEADER, _author_prefix_match

@@ -48,11 +48,15 @@ def _bind_pending_kw_only(meta: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _is_private_ip(host: str) -> bool:
-    try:
-        ip = ipaddress.ip_address((host or "").strip())
-        return bool(ip.is_private or ip.is_loopback or ip.is_link_local)
-    except Exception:
-        return False
+    from core.net_utils import is_private_ip
+
+    return is_private_ip(host)
+
+
+def _is_trusted_device_lan_ip(host: str) -> bool:
+    from core.net_utils import is_trusted_device_lan_ip
+
+    return is_trusted_device_lan_ip(host)
 
 
 def _parse_agent_binary_frame(buf: bytes) -> Dict[str, Any] | None:
@@ -550,6 +554,12 @@ class WebSocketManager:
             if conn_id is not None:
                 allowed_serials = self._allowed_serials.get(conn_id)
                 if allowed_serials is not None and serial not in allowed_serials:
+                    if msg_type == "watch_serial":
+                        log.warning(
+                            "watch_serial denied for %s (not in user allowlist, size=%d)",
+                            serial,
+                            len(allowed_serials),
+                        )
                     continue
 
             # On-demand video senders (per connection + per serial).
@@ -559,6 +569,7 @@ class WebSocketManager:
                 if msg_type == "watch_serial":
                     device = self.manager.get_device(serial)
                     if not device:
+                        log.debug("watch_serial ignored: unknown device %s", serial)
                         continue
                     async with self._lock:
                         ws_send_lock = self._conn_send_locks.get(conn_id)
@@ -577,6 +588,7 @@ class WebSocketManager:
                         setattr(task, "_device_serial", serial)
                         group.append(task)
                         self._conn_sender_groups[conn_id] = group
+                        log.info("watch_serial: started video sender for %s", serial)
                 else:
                     async with self._lock:
                         group = self._conn_sender_groups.get(conn_id, [])
@@ -834,7 +846,7 @@ class DeviceAgentSession:
             # used only when it is a private/LAN address; public proxy addresses
             # cannot identify the Android device behind agent-boot.
             client_ip = ws.client.host if ws.client else ""
-            trusted_client_ip = client_ip if _is_private_ip(client_ip) else ""
+            trusted_client_ip = client_ip if _is_trusted_device_lan_ip(client_ip) else ""
             adb_serial_hint = str(hello.get("adb_serial") or "").strip()
 
             agent_boot_serial = ""

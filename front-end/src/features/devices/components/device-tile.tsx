@@ -5,9 +5,13 @@ import type { Device } from '../types';
 import { serialToId } from '../helpers';
 import { DeviceScreen } from './device-screen';
 import { DeviceControls } from './device-controls';
-import { DeviceStepMonitor } from './device-step-monitor';
+import {
+  DeviceStepMonitorButton,
+  DeviceStepsSheet
+} from './device-step-monitor';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { DeviceAndroidFrame } from './device-android-frame';
+import { cn } from '@/lib/utils';
 import { useTranslations } from 'next-intl';
 
 interface DeviceTileProps {
@@ -18,8 +22,20 @@ interface DeviceTileProps {
   onToggleMode: (serial: string) => void;
   onRestart: (serial: string) => void;
   onTap?: (rx: number, ry: number) => void;
-  onSwipe?: (rx1: number, ry1: number, rx2: number, ry2: number, durationMs: number) => void;
-  onDragGesture?: (rx1: number, ry1: number, rx2: number, ry2: number, durationMs: number) => void;
+  onSwipe?: (
+    rx1: number,
+    ry1: number,
+    rx2: number,
+    ry2: number,
+    durationMs: number
+  ) => void;
+  onDragGesture?: (
+    rx1: number,
+    ry1: number,
+    rx2: number,
+    ry2: number,
+    durationMs: number
+  ) => void;
   highlightBounds?: [number, number, number, number] | null;
   /** Thu nhỏ khung màn + nút — dùng trong dialog kịch bản */
   compact?: boolean;
@@ -33,6 +49,10 @@ interface DeviceTileProps {
   hideDeviceFunctions?: boolean;
   /** Chỉ xem, không gửi thao tác điều khiển vào thiết bị. */
   readOnlyPreview?: boolean;
+  /** Mockup screen width (px); default 288 / 232 when compact. */
+  mockupScreenWidth?: number;
+  /** Rail: ẩn pinch zoom + khởi động lại phiên ADB/scrcpy (trang ghi kịch bản). */
+  minimalRailControls?: boolean;
 }
 
 export function DeviceTile({
@@ -52,53 +72,103 @@ export function DeviceTile({
   hideControls = false,
   hideDeviceFunctions = false,
   readOnlyPreview = false,
+  mockupScreenWidth: mockupScreenWidthProp,
+  minimalRailControls = false
 }: DeviceTileProps) {
   const t = useTranslations('devicesFarm');
   const id = serialToId(device.serial);
-  const title = device.display_name?.trim()
-    || device.name?.trim()
-    || `${device.brand} ${device.model}`.trim()
-    || device.serial;
-  const subtitle = device.serial !== title ? device.serial : `${device.brand} ${device.model}`.trim();
+  const title =
+    device.display_name?.trim() ||
+    device.name?.trim() ||
+    `${device.brand} ${device.model}`.trim() ||
+    device.serial;
+  const subtitle =
+    device.serial !== title
+      ? device.serial
+      : `${device.brand} ${device.model}`.trim();
   const isActive =
-    device.state && !['DISCONNECTED', 'DEAD'].includes(device.state.toUpperCase());
+    device.state &&
+    !['DISCONNECTED', 'DEAD'].includes(device.state.toUpperCase());
 
-  const [gestureMode, setGestureMode] = useState<'tap' | 'swipe' | 'double_tap' | 'drag'>('tap');
+  const [gestureMode, setGestureMode] = useState<
+    'tap' | 'swipe' | 'double_tap' | 'drag'
+  >('tap');
+  const [stepsOpen, setStepsOpen] = useState(false);
 
   /** Screen width inside the mockup (lib adds bezel + side button padding when `frameOnly={false}`). */
-  const mockupScreenWidth = useMemo(() => (compact ? 232 : 288), [compact]);
+  const mockupScreenWidth = useMemo(
+    () => mockupScreenWidthProp ?? (compact ? 232 : 288),
+    [compact, mockupScreenWidthProp]
+  );
+  const studioMirror =
+    mockupScreenWidthProp != null && mockupScreenWidthProp <= 260;
 
-  const handlePinch = useCallback((scale: number) => {
-    const dw = device.screen_width || 1080;
-    const dh = device.screen_height || 1920;
-    wsSend({ type: 'pinch', serial: device.serial, cx: Math.round(dw / 2), cy: Math.round(dh / 2), scale, ms: 400 });
-  }, [wsSend, device.serial, device.screen_width, device.screen_height]);
+  const handlePinch = useCallback(
+    (scale: number) => {
+      const dw = device.screen_width || 1080;
+      const dh = device.screen_height || 1920;
+      wsSend({
+        type: 'pinch',
+        serial: device.serial,
+        cx: Math.round(dw / 2),
+        cy: Math.round(dh / 2),
+        scale,
+        ms: 400
+      });
+    },
+    [wsSend, device.serial, device.screen_width, device.screen_height]
+  );
 
-  const handleSwipeExt = useCallback((direction: 'up' | 'down' | 'left' | 'right') => {
-    wsSend({ type: 'swipe_ext', serial: device.serial, direction, scale: 0.4, ms: 500 });
-  }, [wsSend, device.serial]);
+  const handleSwipeExt = useCallback(
+    (direction: 'up' | 'down' | 'left' | 'right') => {
+      wsSend({
+        type: 'swipe_ext',
+        serial: device.serial,
+        direction,
+        scale: 0.4,
+        ms: 500
+      });
+    },
+    [wsSend, device.serial]
+  );
 
-  const handleScreenOn  = useCallback(() => wsSend({ type: 'screen_on',  serial: device.serial }), [wsSend, device.serial]);
-  const handleScreenOff = useCallback(() => wsSend({ type: 'screen_off', serial: device.serial }), [wsSend, device.serial]);
-  const handleUnlock    = useCallback(() => wsSend({ type: 'unlock',     serial: device.serial }), [wsSend, device.serial]);
+  const handleScreenOn = useCallback(
+    () => wsSend({ type: 'screen_on', serial: device.serial }),
+    [wsSend, device.serial]
+  );
+  const handleScreenOff = useCallback(
+    () => wsSend({ type: 'screen_off', serial: device.serial }),
+    [wsSend, device.serial]
+  );
+  const handleUnlock = useCallback(
+    () => wsSend({ type: 'unlock', serial: device.serial }),
+    [wsSend, device.serial]
+  );
 
   return (
     <Card
       id={`tile-${id}`}
       data-serial={device.serial}
-      className='flex h-full flex-col border-0 bg-transparent shadow-none overflow-visible'
+      className='flex h-full flex-col overflow-visible border-0 bg-transparent shadow-none'
     >
       {!hideHeader && (
-        <CardHeader className={compact ? 'border-b border-border/60 px-2 py-2' : 'border-b border-border/60 px-4 py-3'}>
+        <CardHeader
+          className={
+            compact
+              ? 'border-b border-border/60 px-2 py-2'
+              : 'border-b border-border/60 px-4 py-3'
+          }
+        >
           <div className='flex flex-col gap-1'>
             <CardTitle className='flex items-center justify-between gap-2 text-xs'>
               <span className='truncate font-medium text-foreground'>
                 {title}
               </span>
               {!hideStepMonitor && (
-                <DeviceStepMonitor
+                <DeviceStepMonitorButton
                   serial={device.serial}
                   isBusy={device.state?.toUpperCase() === 'BUSY'}
+                  onOpen={() => setStepsOpen(true)}
                 />
               )}
             </CardTitle>
@@ -110,35 +180,77 @@ export function DeviceTile({
           </div>
         </CardHeader>
       )}
-      <CardContent className={compact ? 'flex flex-1 flex-col gap-1.5 px-2 pb-2 pt-2' : `flex flex-1 flex-col gap-2 px-3 pb-3 ${hideHeader ? 'pt-2' : 'pt-3'}`}>
+      <CardContent
+        className={
+          compact
+            ? 'flex flex-1 flex-col gap-1.5 px-2 pb-2 pt-2'
+            : cn(
+                'flex flex-1 flex-col',
+                studioMirror
+                  ? 'gap-1 px-2 pb-2 pt-1.5'
+                  : `gap-2 px-3 pb-3 ${hideHeader ? 'pt-2' : 'pt-3'}`
+              )
+        }
+      >
         <div className='flex flex-col items-center gap-2'>
-          <div className='mx-auto flex flex-col items-center gap-1'>
-            <DeviceAndroidFrame
-              screenWidth={mockupScreenWidth}
-              deviceWidth={device.screen_width}
-              deviceHeight={device.screen_height}
+          <div className='mx-auto flex w-fit max-w-full flex-col items-center gap-1'>
+            <div
+              className={cn(
+                compact
+                  ? 'flex flex-col items-center gap-2'
+                  : 'inline-grid h-full grid-cols-[auto_auto] items-stretch gap-2.5'
+              )}
             >
-              <div className='flex h-full min-h-0 w-full flex-col'>
-                {isActive ? (
-                  <DeviceScreen
-                    device={device}
-                    wsSend={wsSend}
-                    mode={mode}
-                    onTap={onTap}
-                    onSwipe={onSwipe}
-                    onDragGesture={onDragGesture}
-                    highlightBounds={highlightBounds}
-                    gestureMode={gestureMode}
-                    captionBelowFrame
-                    interactive={!readOnlyPreview}
-                  />
-                ) : (
-                  <div className='flex h-full w-full items-center justify-center bg-zinc-900 text-[11px] text-muted-foreground'>
-                    {t('deviceInactive')}
-                  </div>
-                )}
-              </div>
-            </DeviceAndroidFrame>
+              <DeviceAndroidFrame
+                screenWidth={mockupScreenWidth}
+                deviceWidth={device.screen_width}
+                deviceHeight={device.screen_height}
+                className='shrink-0'
+              >
+                <div className='flex h-full min-h-0 w-full flex-col'>
+                  {isActive ? (
+                    <DeviceScreen
+                      device={device}
+                      wsSend={wsSend}
+                      mode={mode}
+                      onTap={onTap}
+                      onSwipe={onSwipe}
+                      onDragGesture={onDragGesture}
+                      highlightBounds={highlightBounds}
+                      gestureMode={gestureMode}
+                      captionBelowFrame
+                      interactive={!readOnlyPreview}
+                    />
+                  ) : (
+                    <div className='flex h-full w-full items-center justify-center bg-zinc-900 text-[11px] text-muted-foreground'>
+                      {t('deviceInactive')}
+                    </div>
+                  )}
+                </div>
+              </DeviceAndroidFrame>
+              {!hideControls && !compact ? (
+                <DeviceControls
+                  serial={device.serial}
+                  mode={mode}
+                  layout='rail'
+                  className='h-full min-h-full self-stretch'
+                  onToggleMode={() => onToggleMode(device.serial)}
+                  onKey={(key) =>
+                    wsSend({ type: 'key', serial: device.serial, key })
+                  }
+                  onRestart={() => onRestart(device.serial)}
+                  gestureMode={gestureMode}
+                  onGestureMode={setGestureMode}
+                  onPinch={minimalRailControls ? undefined : handlePinch}
+                  onSwipeExt={handleSwipeExt}
+                  onScreenOn={handleScreenOn}
+                  onScreenOff={handleScreenOff}
+                  onUnlock={handleUnlock}
+                  hidePinch={minimalRailControls}
+                  hideRestart={minimalRailControls}
+                />
+              ) : null}
+            </div>
             {isActive && (
               <p
                 className='mx-auto max-w-[min(320px,90vw)] truncate px-1 text-center font-mono text-[10px] text-muted-foreground'
@@ -150,10 +262,11 @@ export function DeviceTile({
             )}
           </div>
         </div>
-        {!hideControls && (
+        {!hideControls && compact ? (
           <DeviceControls
             serial={device.serial}
             mode={mode}
+            layout='below'
             onToggleMode={() => onToggleMode(device.serial)}
             onKey={(key) => wsSend({ type: 'key', serial: device.serial, key })}
             onRestart={() => onRestart(device.serial)}
@@ -166,9 +279,16 @@ export function DeviceTile({
             onScreenOff={handleScreenOff}
             onUnlock={handleUnlock}
           />
-        )}
+        ) : null}
         {/* {isActive && !hideDeviceFunctions && <DeviceSTFPanel serial={device.serial} />} */}
       </CardContent>
+      {!hideStepMonitor ? (
+        <DeviceStepsSheet
+          serial={device.serial}
+          open={stepsOpen}
+          onOpenChange={setStepsOpen}
+        />
+      ) : null}
     </Card>
   );
 }

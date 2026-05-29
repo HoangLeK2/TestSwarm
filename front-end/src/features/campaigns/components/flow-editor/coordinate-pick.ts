@@ -9,7 +9,7 @@ export type CoordinatePickTarget = {
 
 export function coordinatePickTargetEquals(
   a: CoordinatePickTarget | null | undefined,
-  b: CoordinatePickTarget | null | undefined,
+  b: CoordinatePickTarget | null | undefined
 ): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
@@ -17,7 +17,10 @@ export function coordinatePickTargetEquals(
   const ap = a.path ?? [];
   const bp = b.path ?? [];
   if (ap.length !== bp.length) return false;
-  return ap.every((seg, i) => seg.listKey === bp[i]!.listKey && seg.childIndex === bp[i]!.childIndex);
+  return ap.every(
+    (seg, i) =>
+      seg.listKey === bp[i]!.listKey && seg.childIndex === bp[i]!.childIndex
+  );
 }
 
 function mergeTapPointLeaf(step: FlowStep, rx: number, ry: number): FlowStep {
@@ -27,7 +30,11 @@ function mergeTapPointLeaf(step: FlowStep, rx: number, ry: number): FlowStep {
   if (step.type === 'tap') {
     return {
       ...step,
-      fallback: { ...((step.fallback as Record<string, number> | undefined) ?? {}), rx: x, ry: y },
+      fallback: {
+        ...((step.fallback as Record<string, number> | undefined) ?? {}),
+        rx: x,
+        ry: y
+      }
     };
   }
   return step;
@@ -39,7 +46,7 @@ function mergeSwipeLeaf(
   ry1: number,
   rx2: number,
   ry2: number,
-  durationMs: number,
+  durationMs: number
 ): FlowStep {
   if (step.type !== 'swipe_ratio') return step;
   return {
@@ -48,7 +55,7 @@ function mergeSwipeLeaf(
     y1: parseFloat(ry1.toFixed(3)),
     x2: parseFloat(rx2.toFixed(3)),
     y2: parseFloat(ry2.toFixed(3)),
-    duration_ms: Math.round(Math.max(100, Math.min(durationMs, 2000))),
+    duration_ms: Math.round(Math.max(100, Math.min(durationMs, 2000)))
   };
 }
 
@@ -57,7 +64,7 @@ export function applyTapPointToSteps(
   steps: FlowStep[],
   target: CoordinatePickTarget,
   rx: number,
-  ry: number,
+  ry: number
 ): FlowStep[] {
   if (target.mode !== 'tap_point') return steps;
   const root = steps[target.rootIndex];
@@ -86,7 +93,9 @@ export function applyTapPointToSteps(
       return { ...node, branches };
     }
 
-    const arr = [...(((node as Record<string, unknown>)[listKey] as FlowStep[]) ?? [])];
+    const arr = [
+      ...(((node as Record<string, unknown>)[listKey] as FlowStep[]) ?? [])
+    ];
     const child = arr[childIndex];
     if (!child) return node;
     const updatedChild = applyAtPath(child, pathIdx + 1);
@@ -110,7 +119,7 @@ export function applySwipeSegmentToSteps(
   ry1: number,
   rx2: number,
   ry2: number,
-  durationMs: number,
+  durationMs: number
 ): FlowStep[] {
   if (target.mode !== 'swipe_segment') return steps;
   const root = steps[target.rootIndex];
@@ -139,7 +148,9 @@ export function applySwipeSegmentToSteps(
       return { ...node, branches };
     }
 
-    const arr = [...(((node as Record<string, unknown>)[listKey] as FlowStep[]) ?? [])];
+    const arr = [
+      ...(((node as Record<string, unknown>)[listKey] as FlowStep[]) ?? [])
+    ];
     const child = arr[childIndex];
     if (!child) return node;
     const updatedChild = applyAtPath(child, pathIdx + 1);

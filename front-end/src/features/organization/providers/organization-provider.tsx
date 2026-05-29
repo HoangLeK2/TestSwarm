@@ -10,13 +10,20 @@ type OrganizationContextValue = {
   setCurrentOrg: (org: ProtoOrganization | null) => void;
 };
 
-const OrganizationContext = React.createContext<OrganizationContextValue | null>(
-  null
-);
+const OrganizationContext =
+  React.createContext<OrganizationContextValue | null>(null);
 
-export function OrganizationProvider({ children }: { children: React.ReactNode }) {
-  const [organizations, setOrganizations] = React.useState<ProtoOrganization[]>([]);
-  const [currentOrg, setCurrentOrg] = React.useState<ProtoOrganization | null>(null);
+export function OrganizationProvider({
+  children
+}: {
+  children: React.ReactNode;
+}) {
+  const [organizations, setOrganizations] = React.useState<ProtoOrganization[]>(
+    []
+  );
+  const [currentOrg, setCurrentOrg] = React.useState<ProtoOrganization | null>(
+    null
+  );
 
   React.useEffect(() => {
     let cancelled = false;
@@ -65,4 +72,3 @@ export function useOrganizationContext() {
   }
   return ctx;
 }
-

@@ -510,10 +510,17 @@ def build_campaign_fleet_router(
             except Exception as exc:
                 log.warning("interrupt: temporal unavailable for %s: %s", serial, exc)
 
+        from api.routes.device_control.scenarios import cancel_all_previews_for_serial
         from tasks.scenario_task import force_clear_scenario_busy
 
+        preview_cancelled = cancel_all_previews_for_serial(serial)
         force_clear_scenario_busy(device)
 
-        return {"ok": True, "serial": serial, "cancelled_workflows": cancelled}
+        return {
+            "ok": True,
+            "serial": serial,
+            "cancelled_workflows": cancelled,
+            "cancelled_previews": preview_cancelled,
+        }
 
     return router

@@ -288,6 +288,24 @@ class OpenUrlStep(StepBase):
             raise ValueError("url must start with http:// or https://")
         return v
 
+class InstallApkStep(StepBase):
+    type: Literal["install_apk"]
+    url: str = Field(min_length=1)
+    timeout: float = Field(90.0, ge=10.0, le=600.0)
+
+    @field_validator("url")
+    @classmethod
+    def url_must_be_install_source(cls, v: str) -> str:
+        u = v.strip()
+        low = u.lower()
+        if low.startswith(("http://", "https://")):
+            return v
+        if u.startswith("/") or u.startswith("${"):
+            return v
+        raise ValueError(
+            "url must be an http(s) APK URL, absolute local path, or ${VARIABLE}"
+        )
+
 class WaitStep(StepBase):
     type: Literal["wait"]
     seconds: NumOrVar = 1.0
@@ -639,6 +657,7 @@ StepModel = Annotated[
         Annotated[PushFileStep, Tag("push_file")],
         Annotated[PullFileStep, Tag("pull_file")],
         Annotated[OpenUrlStep, Tag("open_url")],
+        Annotated[InstallApkStep, Tag("install_apk")],
         Annotated[WaitStep, Tag("wait")],
         Annotated[TapStep, Tag("tap")],
         Annotated[TapRatioStep, Tag("tap_ratio")],

@@ -13,7 +13,7 @@ import {
   CheckCircle2,
   Circle,
   Loader2,
-  XCircle,
+  XCircle
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Progress } from '@/components/ui/progress';
@@ -28,7 +28,10 @@ import type { FlowStep } from './scenario-steps/types';
 export function parseWorkflowId(id: string) {
   const m = id.match(/^campaign:([^:]+):device:.+:scenario:([^:]+)$/);
   const scenarioId = m?.[2] ?? '';
-  return { campaignId: m?.[1] ?? '', scenarioId: scenarioId === '__sequence__' ? '' : scenarioId };
+  return {
+    campaignId: m?.[1] ?? '',
+    scenarioId: scenarioId === '__sequence__' ? '' : scenarioId
+  };
 }
 
 // ── Single step row ───────────────────────────────────────────────────────────
@@ -41,7 +44,7 @@ export function StepRow({
   currentStepType,
   currentMessage,
   loopIter,
-  isPending,
+  isPending
 }: {
   index: number;
   stepDef?: FlowStep;
@@ -53,11 +56,20 @@ export function StepRow({
   isPending: boolean;
 }) {
   const t = useTranslations('campaignsFeature.list');
-  const { getStepTypeName, getStepDisplay: getStepDisplayI18n } = useCampaignFlowI18n();
-  const type = stepDef?.type ?? logEntry?.step_type ?? logEntry?.type ?? (isCurrentlyRunning ? currentStepType : '');
-  const userTitle = (stepDef as Record<string, unknown> | undefined)?.['title'] as string | undefined;
+  const { getStepTypeName, getStepDisplay: getStepDisplayI18n } =
+    useCampaignFlowI18n();
+  const type =
+    stepDef?.type ??
+    logEntry?.step_type ??
+    logEntry?.type ??
+    (isCurrentlyRunning ? currentStepType : '');
+  const userTitle = (stepDef as Record<string, unknown> | undefined)?.[
+    'title'
+  ] as string | undefined;
   const { target } = stepDef ? getStepDisplayI18n(stepDef) : { target: '' };
-  const label = userTitle?.trim() || (type ? getStepTypeName(type) : t('monitorStepFallback', { n: index + 1 }));
+  const label =
+    userTitle?.trim() ||
+    (type ? getStepTypeName(type) : t('monitorStepFallback', { n: index + 1 }));
   const sublabel = !userTitle?.trim() && target ? target : undefined;
   const depth = logEntry?.depth ?? 0;
 
@@ -69,10 +81,10 @@ export function StepRow({
   return (
     <div
       className={cn(
-        'flex items-start gap-2 border-b last:border-b-0 py-2 pr-3 text-[11px] transition-colors',
+        'flex items-start gap-2 border-b py-2 pr-3 text-[11px] transition-colors last:border-b-0',
         isCurrentlyRunning && 'bg-primary/5',
         isFailed && 'bg-destructive/5',
-        isPending && 'opacity-40',
+        isPending && 'opacity-40'
       )}
       style={{ paddingLeft: `${12 + depth * 14}px` }}
     >
@@ -90,32 +102,48 @@ export function StepRow({
       </div>
 
       {/* Number */}
-      <span className={cn(
-        'mt-0.5 w-5 shrink-0 tabular-nums text-[10px]',
-        isCurrentlyRunning ? 'font-bold text-primary' : 'text-muted-foreground',
-      )}>
+      <span
+        className={cn(
+          'mt-0.5 w-5 shrink-0 text-[10px] tabular-nums',
+          isCurrentlyRunning
+            ? 'font-bold text-primary'
+            : 'text-muted-foreground'
+        )}
+      >
         {index + 1}
       </span>
 
       {/* Name + sublabel + message */}
       <div className='min-w-0 flex-1'>
-        <div className={cn(
-          'truncate leading-tight',
-          isCurrentlyRunning
-            ? 'font-semibold text-primary'
-            : isFailed
-              ? 'text-destructive'
-              : isOk
-                ? 'text-foreground'
-                : 'text-muted-foreground/60',
-        )}>
+        <div
+          className={cn(
+            'truncate leading-tight',
+            isCurrentlyRunning
+              ? 'font-semibold text-primary'
+              : isFailed
+                ? 'text-destructive'
+                : isOk
+                  ? 'text-foreground'
+                  : 'text-muted-foreground/60'
+          )}
+        >
           {label}
         </div>
         {sublabel && !isCurrentlyRunning && (
-          <div className='truncate text-[10px] text-muted-foreground' title={sublabel}>{sublabel}</div>
+          <div
+            className='truncate text-[10px] text-muted-foreground'
+            title={sublabel}
+          >
+            {sublabel}
+          </div>
         )}
         {isCurrentlyRunning && msg && (
-          <div className='truncate text-[10px] italic text-primary/70' title={msg}>{msg}</div>
+          <div
+            className='truncate text-[10px] italic text-primary/70'
+            title={msg}
+          >
+            {msg}
+          </div>
         )}
         {isCurrentlyRunning && loopIter !== null && (
           <div className='text-[10px] text-primary/60'>
@@ -123,22 +151,26 @@ export function StepRow({
           </div>
         )}
         {isFailed && msg && (
-          <div className='truncate text-[10px] text-destructive/80' title={msg}>{msg}</div>
+          <div className='truncate text-[10px] text-destructive/80' title={msg}>
+            {msg}
+          </div>
         )}
       </div>
 
       {/* Type badge */}
       {type && (
-        <span className={cn(
-          'mt-0.5 shrink-0 rounded px-1 py-px text-[9px] font-bold uppercase tracking-wide',
-          isCurrentlyRunning
-            ? 'bg-primary/15 text-primary'
-            : isOk
-              ? 'bg-green-500/10 text-green-600 dark:text-green-400'
-              : isFailed
-                ? 'bg-destructive/10 text-destructive'
-                : 'bg-muted text-muted-foreground/50',
-        )}>
+        <span
+          className={cn(
+            'mt-0.5 shrink-0 rounded px-1 py-px text-[9px] font-bold uppercase tracking-wide',
+            isCurrentlyRunning
+              ? 'bg-primary/15 text-primary'
+              : isOk
+                ? 'bg-green-500/10 text-green-600 dark:text-green-400'
+                : isFailed
+                  ? 'bg-destructive/10 text-destructive'
+                  : 'bg-muted text-muted-foreground/50'
+          )}
+        >
           {getStepTypeName(type)}
         </span>
       )}
@@ -154,25 +186,32 @@ interface WorkflowStepListProps {
   maxHeight?: string;
 }
 
-export function WorkflowStepList({ wf, maxHeight = '360px' }: WorkflowStepListProps) {
+export function WorkflowStepList({
+  wf,
+  maxHeight = '360px'
+}: WorkflowStepListProps) {
   const t = useTranslations('campaignsFeature.list');
   const isActive = wf.status === 'RUNNING' || wf.status === 'PAUSED';
   const { campaignId, scenarioId } = parseWorkflowId(wf.workflow_id);
 
   const { data: prog } = useWorkflowProgress(wf.workflow_id, isActive);
-  const { data: stepLog, isLoading: logLoading } = useWorkflowSteps(wf.workflow_id, true);
+  const { data: stepLog, isLoading: logLoading } = useWorkflowSteps(
+    wf.workflow_id,
+    true
+  );
 
   const { data: scenario, isLoading: scenarioLoading } = useQuery({
     queryKey: ['scenario-steps', campaignId, scenarioId],
     queryFn: () => scenariosApi.get(campaignId, scenarioId),
     enabled: !!campaignId && !!scenarioId,
-    staleTime: 30_000,
+    staleTime: 30_000
   });
 
   if (logLoading || scenarioLoading) {
     return (
       <div className='flex items-center gap-2 py-4 text-xs text-muted-foreground'>
-        <Loader2 size={12} className='animate-spin' /> {t('monitorStepListLoading')}
+        <Loader2 size={12} className='animate-spin' />{' '}
+        {t('monitorStepListLoading')}
       </div>
     );
   }
@@ -181,19 +220,28 @@ export function WorkflowStepList({ wf, maxHeight = '360px' }: WorkflowStepListPr
   const executedSteps: StepLogEntry[] = stepLog?.steps ?? [];
 
   const current = prog?.current_step ?? 0;
-  const total = prog?.total_steps ?? scenarioDefs.length ?? executedSteps.length;
+  const total =
+    prog?.total_steps ?? scenarioDefs.length ?? executedSteps.length;
   const stepType = prog?.current_step_type ?? '';
   const message = prog?.message ?? '';
-  const loopIter = prog?.loop_iteration != null && prog.loop_iteration >= 0 ? prog.loop_iteration : null;
-  const pct = total > 0
-    ? Math.round(((isActive ? current : executedSteps.length) / total) * 100)
-    : wf.status === 'COMPLETED' ? 100 : 0;
+  const loopIter =
+    prog?.loop_iteration != null && prog.loop_iteration >= 0
+      ? prog.loop_iteration
+      : null;
+  const pct =
+    total > 0
+      ? Math.round(((isActive ? current : executedSteps.length) / total) * 100)
+      : wf.status === 'COMPLETED'
+        ? 100
+        : 0;
 
   const logByIndex = new Map(executedSteps.map((e) => [e.index, e]));
   const rowCount = Math.max(
     total,
     scenarioDefs.length,
-    executedSteps.length > 0 ? (executedSteps[executedSteps.length - 1]?.index ?? 0) + 1 : 0,
+    executedSteps.length > 0
+      ? (executedSteps[executedSteps.length - 1]?.index ?? 0) + 1
+      : 0
   );
 
   return (
@@ -206,11 +254,13 @@ export function WorkflowStepList({ wf, maxHeight = '360px' }: WorkflowStepListPr
             'h-1.5 flex-1',
             wf.status === 'FAILED' && '[&>div]:bg-destructive',
             wf.status === 'PAUSED' && '[&>div]:bg-amber-500',
-            wf.status === 'COMPLETED' && '[&>div]:bg-green-500',
+            wf.status === 'COMPLETED' && '[&>div]:bg-green-500'
           )}
         />
-        <span className='shrink-0 tabular-nums text-[10px] text-muted-foreground'>
-          {isActive ? `${current}/${total}` : `${executedSteps.length}/${total}`}
+        <span className='shrink-0 text-[10px] tabular-nums text-muted-foreground'>
+          {isActive
+            ? `${current}/${total}`
+            : `${executedSteps.length}/${total}`}
         </span>
       </div>
 
@@ -240,13 +290,18 @@ export function WorkflowStepList({ wf, maxHeight = '360px' }: WorkflowStepListPr
           </div>
         </div>
       ) : (
-        <p className='py-4 text-center text-[11px] text-muted-foreground'>{t('monitorStepListEmpty')}</p>
+        <p className='py-4 text-center text-[11px] text-muted-foreground'>
+          {t('monitorStepListEmpty')}
+        </p>
       )}
 
       {/* Summary */}
       {wf.status === 'COMPLETED' && (
         <div className='flex items-center gap-1.5 text-[11px] text-green-600 dark:text-green-400'>
-          <CheckCircle2 size={12} /> {t('monitorStepListCompletedSummary', { count: executedSteps.length })}
+          <CheckCircle2 size={12} />{' '}
+          {t('monitorStepListCompletedSummary', {
+            count: executedSteps.length
+          })}
         </div>
       )}
       {wf.status === 'FAILED' && (

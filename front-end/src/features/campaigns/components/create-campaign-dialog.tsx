@@ -3,7 +3,7 @@
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { useCreateCampaign } from '../hooks/use-campaigns';
+import { useCampaigns, useCreateCampaign } from '../hooks/use-campaigns';
 import { useDeviceGroups } from '@/features/device-groups/hooks/use-device-groups';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -11,10 +11,18 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { VariableEditor } from '@/components/variable-editor';
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger
 } from '@/components/ui/dialog';
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
 } from '@/components/ui/select';
 import { useState } from 'react';
 import { Plus, Layers, FileText, MonitorSpeaker, Variable } from 'lucide-react';
@@ -33,14 +41,14 @@ const PLATFORM_OPTIONS: Array<{ value: SocialPlatform; labelKey: string }> = [
   { value: 'facebook', labelKey: 'platformFacebook' },
   { value: 'instagram', labelKey: 'platformInstagram' },
   { value: 'tiktok', labelKey: 'platformTiktok' },
-  { value: 'linkedin', labelKey: 'platformLinkedin' },
+  { value: 'linkedin', labelKey: 'platformLinkedin' }
 ];
 
 function Section({
   icon: Icon,
   title,
   hint,
-  children,
+  children
 }: {
   icon: React.ElementType;
   title: string;
@@ -52,7 +60,9 @@ function Section({
       <div className='flex items-center gap-2'>
         <Icon size={13} className='shrink-0 text-muted-foreground' />
         <span className='text-xs font-semibold text-foreground'>{title}</span>
-        {hint && <span className='text-[10px] text-muted-foreground'>{hint}</span>}
+        {hint && (
+          <span className='text-[10px] text-muted-foreground'>{hint}</span>
+        )}
       </div>
       <div className='pl-5'>{children}</div>
     </div>
@@ -61,33 +71,48 @@ function Section({
 
 export function CreateCampaignDialog() {
   const t = useTranslations('campaignsFeature.createDialog');
+  const { data: campaigns } = useCampaigns();
+  const existingNames = new Set(
+    (campaigns ?? [])
+      .map((c) => (c.name ?? '').trim().toLowerCase())
+      .filter(Boolean)
+  );
   const schema = z.object({
-    name: z.string().min(1, t('nameRequired')),
-    description: z.string().optional(),
+    name: z
+      .string()
+      .min(1, t('nameRequired'))
+      .refine(
+        (v) => !existingNames.has(v.trim().toLowerCase()),
+        t('nameUnique')
+      ),
+    description: z.string().optional()
   });
   const [open, setOpen] = useState(false);
   const [variables, setVariables] = useState<Record<string, any>>({});
   const [platform, setPlatform] = useState<SocialPlatform>('facebook');
-  const [targetGroupId, setTargetGroupId] = useState<string | undefined>(undefined);
+  const [targetGroupId, setTargetGroupId] = useState<string | undefined>(
+    undefined
+  );
   const { mutate, isPending, error } = useCreateCampaign();
   const { data: groups } = useDeviceGroups();
   const {
     register,
     handleSubmit,
     reset,
-    formState: { errors },
+    formState: { errors }
   } = useForm<FormData>({ resolver: zodResolver(schema) });
 
   const onSubmit = (data: FormData) => {
     const nextVariables: Record<string, any> = {
       ...variables,
-      __PLATFORM__: platform,
+      __PLATFORM__: platform
     };
     mutate(
       {
         ...data,
-        variables: Object.keys(nextVariables).length > 0 ? nextVariables : undefined,
-        target_group_id: targetGroupId || undefined,
+        variables:
+          Object.keys(nextVariables).length > 0 ? nextVariables : undefined,
+        target_group_id: targetGroupId || undefined
       },
       {
         onSuccess: () => {
@@ -96,8 +121,8 @@ export function CreateCampaignDialog() {
           setPlatform('facebook');
           setTargetGroupId(undefined);
           setOpen(false);
-        },
-      },
+        }
+      }
     );
   };
 
@@ -110,11 +135,13 @@ export function CreateCampaignDialog() {
         </Button>
       </DialogTrigger>
 
-      <DialogContent className='max-w-lg p-0 gap-0  max-h-[90vh]  overflow-y-auto'>
+      <DialogContent className='max-h-[90vh] max-w-lg gap-0 overflow-y-auto p-0'>
         <DialogHeader className='border-b px-5 py-4'>
           <div className='flex items-center gap-2'>
             <Layers size={15} className='text-primary' />
-            <DialogTitle className='text-sm font-semibold'>{t('title')}</DialogTitle>
+            <DialogTitle className='text-sm font-semibold'>
+              {t('title')}
+            </DialogTitle>
           </div>
           <p className='mt-0.5 text-[11px] text-muted-foreground'>
             Campaign gộp nhiều thiết bị và kịch bản vào một lần chạy.
@@ -123,7 +150,6 @@ export function CreateCampaignDialog() {
 
         <form onSubmit={handleSubmit(onSubmit)}>
           <div className='space-y-5 px-5 py-5'>
-
             {/* Basic info */}
             <Section icon={FileText} title='Thông tin cơ bản'>
               <div className='space-y-3'>
@@ -135,7 +161,9 @@ export function CreateCampaignDialog() {
                     {...register('name')}
                   />
                   {errors.name && (
-                    <p className='text-[11px] text-destructive'>{errors.name.message}</p>
+                    <p className='text-[11px] text-destructive'>
+                      {errors.name.message}
+                    </p>
                   )}
                 </div>
                 <div className='space-y-1.5'>
@@ -151,11 +179,7 @@ export function CreateCampaignDialog() {
 
             <hr className='border-border' />
 
-            <Section
-              icon={Layers}
-              title={t('platformLabel')}
-              hint='(required)'
-            >
+            <Section icon={Layers} title={t('platformLabel')} hint='(required)'>
               <Select
                 value={platform}
                 onValueChange={(v) => setPlatform(v as SocialPlatform)}
@@ -186,7 +210,9 @@ export function CreateCampaignDialog() {
             >
               <Select
                 value={targetGroupId ?? '_none'}
-                onValueChange={(v) => setTargetGroupId(v === '_none' ? undefined : v)}
+                onValueChange={(v) =>
+                  setTargetGroupId(v === '_none' ? undefined : v)
+                }
               >
                 <SelectTrigger className='h-9 w-full'>
                   <SelectValue placeholder={t('targetGroupPlaceholder')} />
@@ -194,7 +220,9 @@ export function CreateCampaignDialog() {
                 {/* z-[10001] to appear above DialogContent (which is at z-10000) */}
                 <SelectContent className='z-[10001]'>
                   <SelectItem value='_none'>
-                    <span className='text-muted-foreground'>{t('noGroup')}</span>
+                    <span className='text-muted-foreground'>
+                      {t('noGroup')}
+                    </span>
                   </SelectItem>
                   {(groups ?? []).map((g) => (
                     <SelectItem key={g.id} value={g.id}>
@@ -204,7 +232,9 @@ export function CreateCampaignDialog() {
                           style={{ backgroundColor: g.color }}
                         />
                         <span>{g.name}</span>
-                        <span className='text-muted-foreground'>({g.device_count})</span>
+                        <span className='text-muted-foreground'>
+                          ({g.device_count})
+                        </span>
                       </span>
                     </SelectItem>
                   ))}
@@ -216,7 +246,8 @@ export function CreateCampaignDialog() {
                 </SelectContent>
               </Select>
               <p className='mt-1.5 text-[11px] text-muted-foreground'>
-                Campaign sẽ chạy trên tất cả thiết bị trong nhóm này. Bỏ trống để chọn thiết bị sau.
+                Campaign sẽ chạy trên tất cả thiết bị trong nhóm này. Bỏ trống
+                để chọn thiết bị sau.
               </p>
             </Section>
 
@@ -230,16 +261,24 @@ export function CreateCampaignDialog() {
             >
               <p className='mb-2 text-[11px] text-muted-foreground'>
                 Biến được dùng trong kịch bản qua cú pháp{' '}
-                <code className='rounded bg-muted px-1 font-mono'>{'${tên_biến}'}</code>.
-                Ví dụ: <code className='rounded bg-muted px-1 font-mono'>username</code>,{' '}
-                <code className='rounded bg-muted px-1 font-mono'>password</code>.
+                <code className='rounded bg-muted px-1 font-mono'>
+                  {'${tên_biến}'}
+                </code>
+                . Ví dụ:{' '}
+                <code className='rounded bg-muted px-1 font-mono'>
+                  username
+                </code>
+                ,{' '}
+                <code className='rounded bg-muted px-1 font-mono'>
+                  password
+                </code>
+                .
               </p>
               <p className='mb-2 text-[11px] text-muted-foreground'>
                 {t('accountModeHint')}
               </p>
               <VariableEditor variables={variables} onChange={setVariables} />
             </Section>
-
           </div>
 
           {/* Footer */}

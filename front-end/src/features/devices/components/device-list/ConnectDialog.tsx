@@ -9,7 +9,12 @@ import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog';
 import { Separator } from '@/components/ui/separator';
 import { getDeviceAgentWsUrl } from '@/lib/farm-api';
 import { ROUTES } from '@/config/routes';
@@ -19,13 +24,13 @@ import {
   PENDING_SERIAL_PREFIX,
   relayAgentsApi,
   type DeviceOut,
-  type RelayAgentOut,
+  type RelayAgentOut
 } from '../../services/manage-api';
 
 /** Serial for ADB on relay: real serial, or adb_serial when DB row is still pending-*. */
 function resolveRelayPushTarget(
   device: DeviceOut,
-  relayMap?: Record<string, RelayAgentOut>,
+  relayMap?: Record<string, RelayAgentOut>
 ): { relayId: string; serial: string } | null {
   const serial = isPendingDevice(device)
     ? (device.adb_serial ?? '').trim()
@@ -46,7 +51,7 @@ function resolveRelayPushTarget(
 /** ADB targets on online relays; skip placeholders and serials already bound to a real device row. */
 function relayPushCandidates(
   relayAgents: RelayAgentOut[] | undefined,
-  registeredSerials: Set<string> | undefined,
+  registeredSerials: Set<string> | undefined
 ): { relayId: string; serial: string }[] {
   if (!relayAgents?.length) return [];
   const taken = registeredSerials ?? new Set<string>();
@@ -70,7 +75,7 @@ export function ConnectDialog({
   onClose,
   relayMap,
   relayAgents,
-  registeredSerials,
+  registeredSerials
 }: {
   device: DeviceOut;
   open: boolean;
@@ -84,7 +89,9 @@ export function ConnectDialog({
   const qc = useQueryClient();
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [pushingUrl, setPushingUrl] = useState(false);
-  const [connectedDevice, setConnectedDevice] = useState<DeviceOut | null>(null);
+  const [connectedDevice, setConnectedDevice] = useState<DeviceOut | null>(
+    null
+  );
   const [relayPickIdx, setRelayPickIdx] = useState(0);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const openedAtRef = useRef<number>(0);
@@ -135,7 +142,10 @@ export function ConnectDialog({
           const hasFreshActiveSession = sessions.some((session) => {
             if (session.disconnected_at) return false;
             const connectedAtTs = Date.parse(session.connected_at);
-            return Number.isFinite(connectedAtTs) && connectedAtTs >= openedAtRef.current;
+            return (
+              Number.isFinite(connectedAtTs) &&
+              connectedAtTs >= openedAtRef.current
+            );
           });
           if (!hasFreshActiveSession) return;
           stopPolling();
@@ -152,12 +162,12 @@ export function ConnectDialog({
 
   const candidates = useMemo(
     () => relayPushCandidates(relayAgents, registeredSerials),
-    [relayAgents, registeredSerials],
+    [relayAgents, registeredSerials]
   );
 
   const directPush = useMemo(
     () => (device ? resolveRelayPushTarget(device, relayMap) : null),
-    [device, relayMap],
+    [device, relayMap]
   );
 
   const relayPush = useMemo(() => {
@@ -171,16 +181,20 @@ export function ConnectDialog({
   }, [device, directPush, candidates, relayPickIdx]);
 
   const showRelayPicker = Boolean(
-    device && isPendingDevice(device) && !directPush && candidates.length > 1,
+    device && isPendingDevice(device) && !directPush && candidates.length > 1
   );
 
   async function pushConnectUrl() {
     if (!relayPush || !device) return;
     setPushingUrl(true);
     try {
-      const res = await relayAgentsApi.pushConnectUrl(relayPush.relayId, relayPush.serial, {
-        deviceId: isPendingDevice(device) ? device.id : undefined,
-      });
+      const res = await relayAgentsApi.pushConnectUrl(
+        relayPush.relayId,
+        relayPush.serial,
+        {
+          deviceId: isPendingDevice(device) ? device.id : undefined
+        }
+      );
       if (!res.ok) {
         toast.error(res.error || t('errorPushToPhone'));
         return;
@@ -193,7 +207,9 @@ export function ConnectDialog({
     }
   }
 
-  const wsUrl = device?.device_key ? getDeviceAgentWsUrl(`key=${device.device_key}`) : '';
+  const wsUrl = device?.device_key
+    ? getDeviceAgentWsUrl(`key=${device.device_key}`)
+    : '';
 
   return (
     <Dialog
@@ -220,31 +236,51 @@ export function ConnectDialog({
               </div>
               <div className='text-center'>
                 <p className='font-semibold text-foreground'>
-                  {connectedDevice.brand || ''} {connectedDevice.model || connectedDevice.name || connectedDevice.serial}
+                  {connectedDevice.brand || ''}{' '}
+                  {connectedDevice.model ||
+                    connectedDevice.name ||
+                    connectedDevice.serial}
                 </p>
-                <p className='text-xs text-muted-foreground'>{t('successMessage')}</p>
+                <p className='text-xs text-muted-foreground'>
+                  {t('successMessage')}
+                </p>
               </div>
             </div>
 
             <div className='rounded-lg border bg-muted/30'>
               <div className='flex items-center gap-3 px-3 py-2.5'>
-                <Smartphone size={14} className='shrink-0 text-muted-foreground' />
-                <span className='min-w-0 flex-1 text-xs text-muted-foreground'>{t('infoSerial')}</span>
-                <span className='font-mono text-xs font-medium text-foreground'>{connectedDevice.serial}</span>
+                <Smartphone
+                  size={14}
+                  className='shrink-0 text-muted-foreground'
+                />
+                <span className='min-w-0 flex-1 text-xs text-muted-foreground'>
+                  {t('infoSerial')}
+                </span>
+                <span className='font-mono text-xs font-medium text-foreground'>
+                  {connectedDevice.serial}
+                </span>
               </div>
               {connectedDevice.android_version && (
                 <>
                   <Separator />
                   <div className='flex items-center gap-3 px-3 py-2.5'>
-                    <span className='min-w-0 flex-1 text-xs text-muted-foreground'>{t('infoAndroid')}</span>
-                    <span className='text-xs font-medium text-foreground'>{connectedDevice.android_version}</span>
+                    <span className='min-w-0 flex-1 text-xs text-muted-foreground'>
+                      {t('infoAndroid')}
+                    </span>
+                    <span className='text-xs font-medium text-foreground'>
+                      {connectedDevice.android_version}
+                    </span>
                   </div>
                 </>
               )}
             </div>
 
             <Button asChild className='w-full'>
-              <Link href={ROUTES.DEVICES.CONTROL_RECORD_WITH_SERIAL(connectedDevice.serial)}>
+              <Link
+                href={ROUTES.DEVICES.CONTROL_RECORD_WITH_SERIAL(
+                  connectedDevice.serial
+                )}
+              >
                 {t('controlNow')}
               </Link>
             </Button>
@@ -255,7 +291,9 @@ export function ConnectDialog({
         ) : (
           <div className='flex flex-col gap-3 pt-2'>
             <p className='text-sm text-muted-foreground'>
-              {t.rich('description', { strong: (chunks) => <strong>{chunks}</strong> })}
+              {t.rich('description', {
+                strong: (chunks) => <strong>{chunks}</strong>
+              })}
             </p>
             <div className='flex gap-2'>
               <input
@@ -276,7 +314,10 @@ export function ConnectDialog({
             </div>
             {showRelayPicker ? (
               <div className='flex flex-col gap-1.5'>
-                <label className='text-xs font-medium text-foreground' htmlFor='relay-serial-pick'>
+                <label
+                  className='text-xs font-medium text-foreground'
+                  htmlFor='relay-serial-pick'
+                >
                   {t('pickAdbSerial')}
                 </label>
                 <select
@@ -291,7 +332,9 @@ export function ConnectDialog({
                     </option>
                   ))}
                 </select>
-                <p className='text-[11px] text-muted-foreground'>{t('pickAdbSerialHint')}</p>
+                <p className='text-[11px] text-muted-foreground'>
+                  {t('pickAdbSerialHint')}
+                </p>
               </div>
             ) : null}
             {relayPush ? (
@@ -302,7 +345,11 @@ export function ConnectDialog({
                 disabled={pushingUrl}
                 onClick={pushConnectUrl}
               >
-                {pushingUrl ? <Loader2 size={14} className='animate-spin' /> : <Send size={14} />}
+                {pushingUrl ? (
+                  <Loader2 size={14} className='animate-spin' />
+                ) : (
+                  <Send size={14} />
+                )}
                 {pushingUrl ? t('sendingToPhone') : t('sendToPhone')}
               </Button>
             ) : null}

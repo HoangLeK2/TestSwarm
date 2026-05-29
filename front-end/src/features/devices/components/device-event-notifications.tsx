@@ -42,16 +42,16 @@ export function DeviceEventNotifications() {
       lastToastTime.current.set(dedupKey, now);
 
       const nameParts = [evt.device_brand, evt.device_model].filter(Boolean);
-      const short = evt.serial.length > 12 ? `...${evt.serial.slice(-8)}` : evt.serial;
-      const label = nameParts.length > 0
-        ? `${nameParts.join(' ')} (${short})`
-        : evt.serial;
+      const short =
+        evt.serial.length > 12 ? `...${evt.serial.slice(-8)}` : evt.serial;
+      const label =
+        nameParts.length > 0 ? `${nameParts.join(' ')} (${short})` : evt.serial;
 
       switch (evt.event) {
         case 'disconnected':
           toast.error(t('toastDisconnected', { label }), {
             description: evt.reason || t('connectionLost'),
-            duration: 8000,
+            duration: 8000
           });
           break;
         case 'reconnected':
@@ -61,13 +61,13 @@ export function DeviceEventNotifications() {
         case 'error':
           toast.warning(t('toastError', { label }), {
             description: evt.reason,
-            duration: 6000,
+            duration: 6000
           });
           break;
         case 'dead':
           toast.error(t('toastDead', { label }), {
             description: evt.reason || t('deviceMarkedDead'),
-            duration: 10000,
+            duration: 10000
           });
           break;
       }

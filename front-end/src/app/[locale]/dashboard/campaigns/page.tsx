@@ -1,20 +1,20 @@
 'use client';
 import { CampaignList } from '@/features/campaigns/components/campaign-list';
+import { useTranslations } from 'next-intl';
 
 export default function CampaignsPage() {
+  const t = useTranslations('campaignsFeature.page');
   return (
-    <div >
-      <div className=''>
-        <div className='mb-4 flex items-center justify-between'>
-          <div>
-            <h1 className='text-xl font-bold tracking-tight text-foreground'>Campaigns</h1>
-            <p className='text-sm text-muted-foreground'>
-              Tạo và chạy kịch bản tự động trên nhiều thiết bị
-            </p>
-          </div>
+    <div className='space-y-4'>
+      <div className='flex items-start justify-between gap-4'>
+        <div className='space-y-1'>
+          <h1 className='text-xl font-bold tracking-tight text-foreground'>
+            {t('title')}
+          </h1>
+          <p className='text-sm text-muted-foreground'>{t('subtitle')}</p>
         </div>
-        <CampaignList />
       </div>
+      <CampaignList />
     </div>
   );
 }

@@ -42,6 +42,28 @@ def _unregister_preview(serial: str, trace_id: str) -> None:
 def _get_preview_entry(serial: str, trace_id: str) -> Optional[dict]:
     with _ACTIVE_PREVIEWS_LOCK:
         return _ACTIVE_PREVIEWS.get((serial, trace_id))
+
+
+def cancel_all_previews_for_serial(
+    serial: str,
+    user_id: Optional[str] = None,
+) -> int:
+    """Signal cancel on every in-flight preview stream for a device.
+
+    Used by interrupt/stop when the client has not yet captured trace_id from
+    the SSE ``start`` event, or when cancel-by-trace_id returns 404.
+    """
+    cancelled = 0
+    with _ACTIVE_PREVIEWS_LOCK:
+        for (s, _tid), entry in list(_ACTIVE_PREVIEWS.items()):
+            if s != serial:
+                continue
+            owner_id = entry.get("user_id")
+            if owner_id and user_id and owner_id != user_id:
+                continue
+            entry["event"].set()
+            cancelled += 1
+    return cancelled
 from api.auth import policy
 from api.auth.context import AuthContext
 from api.deps import caller_auth_from_request

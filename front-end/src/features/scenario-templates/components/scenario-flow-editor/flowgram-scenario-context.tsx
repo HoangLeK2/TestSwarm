@@ -18,16 +18,22 @@ export type FlowgramScenarioWorkbench = {
   onRunLeafStep: (fgId: string, step: FlowStep) => void;
 };
 
-const FlowgramScenarioContext = createContext<FlowgramScenarioWorkbench | null>(null);
+const FlowgramScenarioContext = createContext<FlowgramScenarioWorkbench | null>(
+  null
+);
 
 export function FlowgramScenarioProvider({
   value,
-  children,
+  children
 }: {
   value: FlowgramScenarioWorkbench;
   children: ReactNode;
 }) {
-  return <FlowgramScenarioContext.Provider value={value}>{children}</FlowgramScenarioContext.Provider>;
+  return (
+    <FlowgramScenarioContext.Provider value={value}>
+      {children}
+    </FlowgramScenarioContext.Provider>
+  );
 }
 
 export function useFlowgramScenarioWorkbench(): FlowgramScenarioWorkbench | null {

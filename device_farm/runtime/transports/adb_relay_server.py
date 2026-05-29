@@ -34,7 +34,8 @@ CMD_ADB_CONNECT  = 2
 CMD_RESTART_ATX  = 3
 CMD_BOOTSTRAP    = 4  # push binaries + install APKs + start atx-agent + u2
 CMD_SCREENCAP    = 5  # screencap → base64 PNG in result["output"]
-CMD_PROBE_CAPS   = 6  # probe_capabilities() → JSON dict in result["output"]
+CMD_PROBE_CAPS       = 6  # probe_capabilities() → JSON dict in result["output"]
+CMD_RESTART_SCRCPY   = 7  # stop + resume scrcpy session (must match agent-boot)
 
 
 def _match_tags(caps: dict, filters: list) -> bool:
@@ -803,17 +804,39 @@ class AdbRelayManager:
         Returns True when atx-agent is confirmed listening on port 7912.
         Should be called once after a device first appears online via relay.
         """
-        conn = self.relay_for_serial(serial)
-        if conn is None:
-            logger.warning("bootstrap: no relay for serial=%s", serial)
-            return False
-        actual = self.resolve_serial(serial)
-        result = await conn.send_command(actual, "", int(timeout), cmd_type=CMD_BOOTSTRAP)
+        result = await self.run_command(serial, "", timeout, cmd_type=CMD_BOOTSTRAP)
         ok = result.get("ok", False)
         if not ok:
-            logger.warning("bootstrap failed for %s: %s",
-                           serial, result.get("error") or result.get("output"))
+            logger.warning(
+                "bootstrap failed for %s: %s",
+                serial,
+                result.get("error") or result.get("output"),
+            )
         return ok
+
+    async def restart_scrcpy(self, serial: str, timeout: float = 30.0) -> dict:
+        """Stop + resume scrcpy for serial via the video/WS relay command queue."""
+        return await self.run_command(serial, "", timeout, cmd_type=CMD_RESTART_SCRCPY)
+
+    async def run_command(
+        self,
+        serial: str,
+        cmd: str,
+        timeout: float,
+        *,
+        cmd_type: int = CMD_SHELL,
+    ) -> dict:
+        """Enqueue a relay command and return the agent-boot result dict."""
+        conn = self.relay_for_serial(serial)
+        if conn is None:
+            return {
+                "ok": False,
+                "exit_code": -1,
+                "output": "",
+                "error": f"no relay for serial={serial!r}",
+            }
+        actual = self.resolve_serial(serial)
+        return await conn.send_command(actual, cmd, timeout, cmd_type=cmd_type)
 
     async def screencap(self, serial: str, timeout: float = 30.0) -> bytes:
         """Capture a screenshot via relay → base64 PNG → decoded bytes.

@@ -10,12 +10,15 @@ import { useDataTable } from '@/hooks/use-data-table';
 import { CreateCampaignDialog } from '../create-campaign-dialog';
 import { getCampaignColumns } from './columns';
 
-const STATUS_VARIANT: Record<CampaignStatus, 'secondary' | 'default' | 'outline' | 'destructive'> = {
+const STATUS_VARIANT: Record<
+  CampaignStatus,
+  'secondary' | 'default' | 'outline' | 'destructive'
+> = {
   idle: 'outline',
   draft: 'outline',
   running: 'default',
   paused: 'outline',
-  completed: 'outline',
+  completed: 'outline'
 };
 
 export function CampaignList() {
@@ -30,7 +33,7 @@ export function CampaignList() {
       draft: t('statusDraft'),
       running: t('statusRunning'),
       paused: t('statusPaused'),
-      completed: t('statusCompleted'),
+      completed: t('statusCompleted')
     };
 
     return getCampaignColumns(t, statusLabel, STATUS_VARIANT);
@@ -46,14 +49,20 @@ export function CampaignList() {
     <div className='space-y-3'>
       {isLoading || error ? (
         <div>
-          {isLoading && <p className='text-sm text-muted-foreground'>{t('loading')}</p>}
-          {error && <p className='text-sm text-destructive'>{t('loadError')}</p>}
+          {isLoading && (
+            <p className='text-sm text-muted-foreground'>{t('loading')}</p>
+          )}
+          {error && (
+            <p className='text-sm text-destructive'>{t('loadError')}</p>
+          )}
         </div>
       ) : (
         <>
           <div className='flex flex-wrap items-center justify-between gap-2'>
             <p className='text-sm text-muted-foreground'>
-              <span className='font-medium text-foreground'>{campaigns?.length ?? 0}</span>{' '}
+              <span className='font-medium text-foreground'>
+                {campaigns?.length ?? 0}
+              </span>{' '}
               {t('campaignCountLabel')}
             </p>
             <CreateCampaignDialog />
@@ -62,18 +71,23 @@ export function CampaignList() {
           {!campaigns?.length && (
             <div className='rounded-xl border border-dashed border-border bg-muted/20 p-12 text-center'>
               <FileText className='mx-auto mb-3 size-10 text-muted-foreground/60' />
-              <p className='text-sm font-medium text-foreground'>{t('emptyTitle')}</p>
-              <p className='mt-1 text-xs text-muted-foreground'>{t('emptyDescription')}</p>
+              <p className='text-sm font-medium text-foreground'>
+                {t('emptyTitle')}
+              </p>
+              <p className='mt-1 text-xs text-muted-foreground'>
+                {t('emptyDescription')}
+              </p>
               <div className='mt-4'>
                 <CreateCampaignDialog />
               </div>
             </div>
           )}
 
-          {campaigns?.length ? <DataTable table={table} total={campaigns.length} /> : null}
+          {campaigns?.length ? (
+            <DataTable table={table} total={campaigns.length} />
+          ) : null}
         </>
       )}
     </div>
   );
 }
-

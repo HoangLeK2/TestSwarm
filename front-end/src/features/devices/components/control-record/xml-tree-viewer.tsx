@@ -6,18 +6,20 @@ import {
   parseHierarchyTree,
   searchTree,
   bestSelector,
-  type HierarchyTreeNode,
+  type HierarchyTreeNode
 } from '../../utils/hierarchy-tree';
 import {
   Tooltip,
   TooltipContent,
-  TooltipTrigger,
+  TooltipTrigger
 } from '@/components/ui/tooltip';
 import { useTranslations } from 'next-intl';
 
 interface XmlTreeViewerProps {
   xml: string;
   loading: boolean;
+  deviceActive?: boolean;
+  wsConnected?: boolean;
   onNodeSelect: (node: {
     bounds: [number, number, number, number] | null;
     by: string;
@@ -33,11 +35,13 @@ interface XmlTreeViewerProps {
 export function XmlTreeViewer({
   xml,
   loading,
+  deviceActive = true,
+  wsConnected = true,
   onNodeSelect,
   selectedNodeId,
   onRefresh,
   autoRefresh,
-  onAutoRefreshChange,
+  onAutoRefreshChange
 }: XmlTreeViewerProps) {
   const t = useTranslations('devicesControlRecord.view');
   const [search, setSearch] = useState('');
@@ -59,7 +63,7 @@ export function XmlTreeViewer({
 
   const matchingIds = useMemo(
     () => (root && search ? searchTree(root, search) : null),
-    [root, search],
+    [root, search]
   );
 
   const toggle = useCallback((id: number) => {
@@ -76,7 +80,7 @@ export function XmlTreeViewer({
       const sel = bestSelector(node);
       onNodeSelect({ bounds: node.bounds, ...sel, nodeId: node.id });
     },
-    [onNodeSelect],
+    [onNodeSelect]
   );
 
   return (
@@ -84,7 +88,9 @@ export function XmlTreeViewer({
       {/* Header */}
       <div className='flex items-center gap-2 border-b border-border/60 bg-background/80 px-3 py-2'>
         <div className='flex items-center gap-1'>
-          <span className='text-xs font-semibold text-foreground'>{t('hierarchyTitle')}</span>
+          <span className='text-xs font-semibold text-foreground'>
+            {t('hierarchyTitle')}
+          </span>
           <Tooltip delayDuration={400}>
             <TooltipTrigger asChild>
               <button
@@ -95,7 +101,10 @@ export function XmlTreeViewer({
                 <HelpCircle className='size-3.5' />
               </button>
             </TooltipTrigger>
-            <TooltipContent side='bottom' className='max-w-[min(100vw-2rem,22rem)] text-xs leading-relaxed'>
+            <TooltipContent
+              side='bottom'
+              className='max-w-[min(100vw-2rem,22rem)] text-xs leading-relaxed'
+            >
               {t('tooltipHierarchyPanel')}
             </TooltipContent>
           </Tooltip>
@@ -131,10 +140,16 @@ export function XmlTreeViewer({
       </div>
 
       {/* Tree */}
-      <div className='flex-1 overflow-auto p-1 text-[11px] font-mono'>
+      <div className='flex-1 overflow-auto p-1 font-mono text-[11px]'>
         {!root ? (
-          <div className='flex h-full items-center justify-center text-muted-foreground text-xs'>
-            {loading ? 'Loading...' : 'No hierarchy data'}
+          <div className='flex h-full items-center justify-center text-xs text-muted-foreground'>
+            {loading
+              ? t('hierarchyLoading')
+              : !deviceActive
+                ? t('hierarchyOffline')
+                : !wsConnected
+                  ? t('hierarchyDisconnected')
+                  : t('hierarchyEmpty')}
           </div>
         ) : (
           <TreeNode
@@ -151,7 +166,6 @@ export function XmlTreeViewer({
   );
 }
 
-
 // ── Recursive tree node renderer ─────────────────────────────────────────
 
 interface TreeNodeProps {
@@ -163,7 +177,14 @@ interface TreeNodeProps {
   onClick: (node: HierarchyTreeNode) => void;
 }
 
-function TreeNode({ node, expanded, matchingIds, selectedNodeId, onToggle, onClick }: TreeNodeProps) {
+function TreeNode({
+  node,
+  expanded,
+  matchingIds,
+  selectedNodeId,
+  onToggle,
+  onClick
+}: TreeNodeProps) {
   // If searching and this node is not in matching set, hide it
   if (matchingIds && !matchingIds.has(node.id)) return null;
 
@@ -181,7 +202,7 @@ function TreeNode({ node, expanded, matchingIds, selectedNodeId, onToggle, onCli
   return (
     <>
       <div
-        className={`flex min-w-full w-max cursor-pointer items-center gap-1 whitespace-nowrap rounded px-1 py-0.5 hover:bg-accent/50 ${
+        className={`flex w-max min-w-full cursor-pointer items-center gap-1 whitespace-nowrap rounded px-1 py-0.5 hover:bg-accent/50 ${
           isSelected ? 'bg-primary/15 ring-1 ring-primary/30' : ''
         }`}
         style={{ paddingLeft: indent + 4 }}
@@ -190,7 +211,10 @@ function TreeNode({ node, expanded, matchingIds, selectedNodeId, onToggle, onCli
         {/* Expand/collapse toggle */}
         {hasChildren ? (
           <button
-            onClick={(e) => { e.stopPropagation(); onToggle(node.id); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggle(node.id);
+            }}
             className='flex h-4 w-4 flex-shrink-0 items-center justify-center text-muted-foreground hover:text-foreground'
           >
             {isExpanded ? '\u25BE' : '\u25B8'}
@@ -200,45 +224,60 @@ function TreeNode({ node, expanded, matchingIds, selectedNodeId, onToggle, onCli
         )}
 
         {/* Class name badge */}
-        <span className={`flex-shrink-0 rounded px-1 text-[10px] ${
-          node.clickable ? 'bg-blue-500/20 text-blue-600 dark:text-blue-400' : 'bg-muted text-muted-foreground'
-        }`}>
+        <span
+          className={`flex-shrink-0 rounded px-1 text-[10px] ${
+            node.clickable
+              ? 'bg-blue-500/20 text-blue-600 dark:text-blue-400'
+              : 'bg-muted text-muted-foreground'
+          }`}
+        >
           {label}
         </span>
 
         {/* Resource ID */}
         {resId && (
-          <span className='shrink-0 text-[10px] text-emerald-600 dark:text-emerald-400' title={node.resourceId || resId}>
+          <span
+            className='shrink-0 text-[10px] text-emerald-600 dark:text-emerald-400'
+            title={node.resourceId || resId}
+          >
             {resId}
           </span>
         )}
 
         {/* Always show full text/content-desc (no truncation) */}
         {rawText && (
-          <span className='shrink-0 text-[10px] text-orange-600 dark:text-orange-400' title={rawText}>
+          <span
+            className='shrink-0 text-[10px] text-orange-600 dark:text-orange-400'
+            title={rawText}
+          >
             &quot;{rawText}&quot;
           </span>
         )}
 
         {node.pkg && (
-          <span className='shrink-0 text-[9px] text-violet-600/90 dark:text-violet-400/90' title={node.pkg}>
+          <span
+            className='shrink-0 text-[9px] text-violet-600/90 dark:text-violet-400/90'
+            title={node.pkg}
+          >
             {node.pkg}
           </span>
         )}
       </div>
 
       {/* Children */}
-      {isExpanded && hasChildren && node.children.map((child) => (
-        <TreeNode
-          key={child.id}
-          node={child}
-          expanded={expanded}
-          matchingIds={matchingIds}
-          selectedNodeId={selectedNodeId}
-          onToggle={onToggle}
-          onClick={onClick}
-        />
-      ))}
+      {isExpanded &&
+        hasChildren &&
+        node.children.map((child) => (
+          <TreeNode
+            key={child.id}
+            node={child}
+            expanded={expanded}
+            matchingIds={matchingIds}
+            selectedNodeId={selectedNodeId}
+            onToggle={onToggle}
+            onClick={onClick}
+          />
+        ))}
     </>
   );
 }

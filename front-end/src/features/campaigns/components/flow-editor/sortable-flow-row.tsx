@@ -7,16 +7,26 @@ import { FLOW_ROW_DRAG_GUTTER_CLASS } from './flow-row-gutter';
 
 export function SortableFlowRow({
   id,
-  children,
+  children
 }: {
   id: string;
-  children: (dragHandle: React.ReactNode, isDragging: boolean) => React.ReactNode;
+  children: (
+    dragHandle: React.ReactNode,
+    isDragging: boolean
+  ) => React.ReactNode;
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging
+  } = useSortable({ id });
 
   const style = {
     transform: CSS.Transform.toString(transform),
-    transition: transition ?? undefined,
+    transition: transition ?? undefined
   };
 
   const dragHandle = (
@@ -30,7 +40,7 @@ export function SortableFlowRow({
         'flex shrink-0 cursor-grab items-center justify-center self-stretch text-muted-foreground/30',
         FLOW_ROW_DRAG_GUTTER_CLASS,
         'hover:text-muted-foreground/70 active:cursor-grabbing',
-        isDragging ? 'cursor-grabbing text-muted-foreground/70' : '',
+        isDragging ? 'cursor-grabbing text-muted-foreground/70' : ''
       ].join(' ')}
     >
       <GripVertical size={11} />
@@ -38,7 +48,11 @@ export function SortableFlowRow({
   );
 
   return (
-    <div ref={setNodeRef} style={style} className={isDragging ? 'relative z-50 rounded shadow-lg' : ''}>
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={isDragging ? 'relative z-50 rounded shadow-lg' : ''}
+    >
       {children(dragHandle, isDragging)}
     </div>
   );

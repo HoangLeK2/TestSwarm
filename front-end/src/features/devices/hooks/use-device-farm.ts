@@ -10,7 +10,9 @@ import { useConfirm } from '@/providers/modal-provider';
 
 export function useDeviceFarm() {
   const [devices, setDevices] = useState<Device[]>([]);
-  const [registeredSerials, setRegisteredSerials] = useState<Set<string>>(new Set());
+  const [registeredSerials, setRegisteredSerials] = useState<Set<string>>(
+    new Set()
+  );
   const [tasks, setTasks] = useState<Task[]>([]);
   const [wsConnected, setWsConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -32,7 +34,8 @@ export function useDeviceFarm() {
 
   // Fetch user's registered devices to filter the live list
   useEffect(() => {
-    devicesApi.list()
+    devicesApi
+      .list()
       .then((list) => setRegisteredSerials(new Set(list.map((d) => d.serial))))
       .catch(() => {});
   }, []);
@@ -42,7 +45,8 @@ export function useDeviceFarm() {
     fetchLiveDevices()
       .then((live) => setDevices(live))
       .catch(() => {});
-    devicesApi.list()
+    devicesApi
+      .list()
       .then((list) => setRegisteredSerials(new Set(list.map((d) => d.serial))))
       .catch(() => {});
   }, []);
@@ -92,35 +96,39 @@ export function useDeviceFarm() {
             return [
               ...prev,
               {
-                serial:           msg.serial,
-                brand:            msg.brand ?? '',
-                model:            msg.model ?? '',
-                state:            msg.state ?? 'CONNECTING',
-                battery:          msg.battery ?? -1,
-                current_app:      msg.current_app ?? '',
-                screen_width:     msg.device_width ?? msg.screen_width ?? 1080,
-                screen_height:    msg.device_height ?? msg.screen_height ?? 1920,
-                touch_method:     msg.touch_method,
-                minitouch_ready:  msg.minitouch_ready,
-                u2_ready:         msg.u2_ready,
-                scenario_active:  msg.scenario_active ?? 0,
-              },
+                serial: msg.serial,
+                brand: msg.brand ?? '',
+                model: msg.model ?? '',
+                state: msg.state ?? 'CONNECTING',
+                battery: msg.battery ?? -1,
+                current_app: msg.current_app ?? '',
+                screen_width: msg.device_width ?? msg.screen_width ?? 1080,
+                screen_height: msg.device_height ?? msg.screen_height ?? 1920,
+                touch_method: msg.touch_method,
+                minitouch_ready: msg.minitouch_ready,
+                u2_ready: msg.u2_ready,
+                scenario_active: msg.scenario_active ?? 0
+              }
             ];
           }
           return prev.map((d) =>
             d.serial === msg.serial
               ? {
                   ...d,
-                  state:            msg.state ?? d.state,
-                  battery:          msg.battery ?? d.battery,
-                  current_app:     msg.current_app ?? d.current_app,
-                  screen_width:    msg.device_width ?? msg.screen_width ?? d.screen_width,
-                  screen_height:   msg.device_height ?? msg.screen_height ?? d.screen_height,
-                  touch_method:    msg.touch_method ?? d.touch_method,
+                  state: msg.state ?? d.state,
+                  battery: msg.battery ?? d.battery,
+                  current_app: msg.current_app ?? d.current_app,
+                  screen_width:
+                    msg.device_width ?? msg.screen_width ?? d.screen_width,
+                  screen_height:
+                    msg.device_height ?? msg.screen_height ?? d.screen_height,
+                  touch_method: msg.touch_method ?? d.touch_method,
                   minitouch_ready: msg.minitouch_ready ?? d.minitouch_ready,
-                  u2_ready:        msg.u2_ready ?? d.u2_ready,
+                  u2_ready: msg.u2_ready ?? d.u2_ready,
                   scenario_active:
-                    'scenario_active' in msg ? (msg.scenario_active ?? 0) : d.scenario_active,
+                    'scenario_active' in msg
+                      ? (msg.scenario_active ?? 0)
+                      : d.scenario_active
                 }
               : d
           );
@@ -129,9 +137,12 @@ export function useDeviceFarm() {
         setRegisteredSerials((prev) => {
           if (prev.has(msg.serial)) return prev;
           // Re-fetch to pick up newly paired devices
-          devicesApi.list().then((list) =>
-            setRegisteredSerials(new Set(list.map((d) => d.serial)))
-          ).catch(() => {});
+          devicesApi
+            .list()
+            .then((list) =>
+              setRegisteredSerials(new Set(list.map((d) => d.serial)))
+            )
+            .catch(() => {});
           return prev;
         });
         return;
@@ -143,7 +154,6 @@ export function useDeviceFarm() {
           return { ...prev, [msg.serial]: arr };
         });
       }
-
     });
 
     return () => wsRef.current?.close();
@@ -152,7 +162,7 @@ export function useDeviceFarm() {
   const handleToggleMode = useCallback((serial: string) => {
     setModes((prev) => ({
       ...prev,
-      [serial]: prev[serial] === 'tap' ? 'swipe' : 'tap',
+      [serial]: prev[serial] === 'tap' ? 'swipe' : 'tap'
     }));
   }, []);
 
@@ -173,7 +183,9 @@ export function useDeviceFarm() {
     [confirm, t, tCommon, wsSend]
   );
 
-  const myDevices = devices.filter((device) => registeredSerials.has(device.serial));
+  const myDevices = devices.filter((device) =>
+    registeredSerials.has(device.serial)
+  );
 
   return {
     devices: myDevices,
@@ -185,6 +197,6 @@ export function useDeviceFarm() {
     wifiDenseposeUrl,
     wsSend,
     handleToggleMode,
-    handleRestart,
+    handleRestart
   };
 }

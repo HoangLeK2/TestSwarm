@@ -202,6 +202,17 @@ def create_app(
                 _account_maintenance_loop,
             )
 
+            async def _dlq_maintenance_loop() -> None:
+                from services.dlq_periodic import dlq_stale_offline_maintenance_loop
+
+                await dlq_stale_offline_maintenance_loop(manager=manager)
+
+            lifecycle.register_task(
+                LifecyclePhase.BACKGROUND,
+                "dlq-maintenance",
+                _dlq_maintenance_loop,
+            )
+
         # ── Prometheus metrics collector (tạm tắt) ──
         # async def _metrics_collector() -> None:
         #     from web.metrics import (

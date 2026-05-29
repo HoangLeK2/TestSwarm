@@ -24,6 +24,7 @@ def _to_out(t) -> ScenarioTemplateOut:
     return ScenarioTemplateOut(
         id=t.id,
         name=t.name,
+        display_name=getattr(t, "display_name", None) or "",
         description=t.description or "",
         category=t.category or "general",
         steps=t.steps or [],
@@ -56,6 +57,7 @@ async def create_scenario_template(
     tmpl = await create_template(
         db,
         name=body.name,
+        display_name=body.display_name,
         description=body.description,
         category=body.category,
         steps=body.steps,

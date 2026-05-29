@@ -4,7 +4,10 @@ import type { FlowStep } from '../scenario-steps/types';
 const stepObjectDnDIds = new WeakMap<object, string>();
 
 function newDnDStepId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+  if (
+    typeof crypto !== 'undefined' &&
+    typeof crypto.randomUUID === 'function'
+  ) {
     return `dnd-${crypto.randomUUID()}`;
   }
   return `dnd-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
@@ -49,8 +52,11 @@ export function decodeFlowListRef(id: string): FlowListRef | null {
       return {
         kind: 'nested',
         rootIndex: r.rootIndex,
-        pathToBracket: r.pathToBracket as Array<{ listKey: string; childIndex: number }>,
-        listKey: r.listKey,
+        pathToBracket: r.pathToBracket as Array<{
+          listKey: string;
+          childIndex: number;
+        }>,
+        listKey: r.listKey
       };
     }
   } catch {

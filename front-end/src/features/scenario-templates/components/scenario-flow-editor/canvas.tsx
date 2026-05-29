@@ -14,7 +14,7 @@ import {
   type FixedLayoutPluginContext,
   type FixedLayoutProps,
   usePlaygroundTools,
-  useClientContext,
+  useClientContext
 } from '@flowgram.ai/fixed-layout-editor';
 import { ZoomIn, ZoomOut, Maximize, Undo2, Redo2 } from 'lucide-react';
 
@@ -22,7 +22,10 @@ import type { FlowStep } from '@/features/campaigns/components/scenario-steps/ty
 import { stepsToFlowDoc, flowDocToSteps } from './converters';
 import { scenarioNodeRegistries } from './node-registries';
 import { BaseNode } from './base-node';
-import { FlowgramScenarioProvider, type FlowgramScenarioWorkbench } from './flowgram-scenario-context';
+import {
+  FlowgramScenarioProvider,
+  type FlowgramScenarioWorkbench
+} from './flowgram-scenario-context';
 
 // ─── Adder: "+" button between nodes ─────────────────────────────────────────
 // Must be inside FixedLayoutEditorProvider to use useClientContext().
@@ -38,10 +41,10 @@ function FlowAdder({ from, hoverActivated }: any) {
       ctx.operation.addFromNode(from, {
         id: `step-${Date.now()}`,
         type: 'action',
-        data: { step: { type: 'tap_selector', by: 'id', value: '' } },
+        data: { step: { type: 'tap_selector', by: 'id', value: '' } }
       });
     },
-    [ctx, from],
+    [ctx, from]
   );
 
   return (
@@ -63,7 +66,7 @@ function FlowAdder({ from, hoverActivated }: any) {
         fontSize: 16,
         lineHeight: 1,
         boxShadow: '0 1px 4px rgba(0,0,0,0.18)',
-        transition: 'background 0.15s',
+        transition: 'background 0.15s'
       }}
     >
       +
@@ -80,7 +83,14 @@ function CanvasToolbar() {
       <button onClick={() => tools.zoomout()} style={iconBtn} title='Thu nhỏ'>
         <ZoomOut size={13} />
       </button>
-      <span style={{ fontSize: 11, color: '#9ca3af', minWidth: 36, textAlign: 'center' }}>
+      <span
+        style={{
+          fontSize: 11,
+          color: '#9ca3af',
+          minWidth: 36,
+          textAlign: 'center'
+        }}
+      >
         {Math.round(tools.zoom * 100)}%
       </span>
       <button onClick={() => tools.zoomin()} style={iconBtn} title='Phóng to'>
@@ -90,10 +100,20 @@ function CanvasToolbar() {
         <Maximize size={13} />
       </button>
       <div style={{ flex: 1 }} />
-      <button onClick={() => tools.undo()} disabled={!tools.canUndo} style={iconBtn} title='Hoàn tác'>
+      <button
+        onClick={() => tools.undo()}
+        disabled={!tools.canUndo}
+        style={iconBtn}
+        title='Hoàn tác'
+      >
         <Undo2 size={13} />
       </button>
-      <button onClick={() => tools.redo()} disabled={!tools.canRedo} style={iconBtn} title='Làm lại'>
+      <button
+        onClick={() => tools.redo()}
+        disabled={!tools.canRedo}
+        style={iconBtn}
+        title='Làm lại'
+      >
         <Redo2 size={13} />
       </button>
     </div>
@@ -108,7 +128,7 @@ const toolbarStyle: React.CSSProperties = {
   borderBottom: '1px solid #e5e7eb',
   background: '#f9fafb',
   height: 36,
-  flexShrink: 0,
+  flexShrink: 0
 };
 
 const iconBtn: React.CSSProperties = {
@@ -121,7 +141,7 @@ const iconBtn: React.CSSProperties = {
   padding: '3px 6px',
   cursor: 'pointer',
   color: '#4b5563',
-  fontSize: 12,
+  fontSize: 12
 };
 
 // ─── FlowgramCanvas ───────────────────────────────────────────────────────────
@@ -137,10 +157,15 @@ export interface FlowgramCanvasProps {
   onFlowCtx?: (ctx: FixedLayoutPluginContext | null) => void;
 }
 
-export function FlowgramCanvas({ steps, onStepsChange, workbench = null, onFlowCtx }: FlowgramCanvasProps) {
+export function FlowgramCanvas({
+  steps,
+  onStepsChange,
+  workbench = null,
+  onFlowCtx
+}: FlowgramCanvasProps) {
   const ctxRef = useRef<FixedLayoutPluginContext | null>(null);
 
-  const initialData = useMemo(() => stepsToFlowDoc(steps), []);  // intentionally no dep — only on mount
+  const initialData = useMemo(() => stepsToFlowDoc(steps), []); // intentionally no dep — only on mount
   // eslint-disable-next-line react-hooks/exhaustive-deps
 
   const handleChange = useCallback(
@@ -149,7 +174,7 @@ export function FlowgramCanvas({ steps, onStepsChange, workbench = null, onFlowC
       const doc = ctx.document.toJSON();
       onStepsChange(flowDocToSteps(doc));
     },
-    [onStepsChange],
+    [onStepsChange]
   );
 
   const editorProps = useMemo<FixedLayoutProps>(
@@ -168,18 +193,25 @@ export function FlowgramCanvas({ steps, onStepsChange, workbench = null, onFlowC
         components: {
           // Drag ghost
           'drag-node': () => (
-            <div style={{
-              background: '#2563eb', color: '#fff', borderRadius: 8,
-              padding: '8px 16px', fontSize: 12, opacity: 0.85, cursor: 'grabbing',
-            }}>
+            <div
+              style={{
+                background: '#2563eb',
+                color: '#fff',
+                borderRadius: 8,
+                padding: '8px 16px',
+                fontSize: 12,
+                opacity: 0.85,
+                cursor: 'grabbing'
+              }}
+            >
               Đang di chuyển…
             </div>
           ),
           // "+" button on edges — use FlowAdder which needs useClientContext
-          'adder': FlowAdder,
+          adder: FlowAdder,
           // Rest unused — register no-ops to satisfy the registry
           'branch-adder': () => null,
-          'collapse': () => null,
+          collapse: () => null,
           'try-catch-collapse': () => null,
           'draggable-adder': () => null,
           'drag-highlight-adder': () => null,
@@ -192,8 +224,8 @@ export function FlowgramCanvas({ steps, onStepsChange, workbench = null, onFlowC
           'slot-collapse': () => null,
           'arrow-renderer': () => null,
           'marker-arrow': () => null,
-          'marker-active-arrow': () => null,
-        },
+          'marker-active-arrow': () => null
+        }
       },
       nodeEngine: { enable: false },
       // Drag-to-reorder: when a node is dropped onto another, move it after the target
@@ -204,7 +236,11 @@ export function FlowgramCanvas({ steps, onStepsChange, workbench = null, onFlowC
             for (const dragNode of dragNodes) {
               if (dragNode.id === dropNode.id) continue;
               // skip start/end nodes
-              if (dragNode.flowNodeType === 'start' || dragNode.flowNodeType === 'end') continue;
+              if (
+                dragNode.flowNodeType === 'start' ||
+                dragNode.flowNodeType === 'end'
+              )
+                continue;
               const { id: _id, ...jsonWithoutId } = dragNode.toJSON() as any;
               ctx.operation.deleteNode(dragNode);
               ctx.operation.addFromNode(dropNode, jsonWithoutId);
@@ -212,14 +248,14 @@ export function FlowgramCanvas({ steps, onStepsChange, workbench = null, onFlowC
           } finally {
             ctx.operation.endTransaction();
           }
-        },
+        }
       },
       history: {
         enable: true,
         enableChangeNode: true,
         onApply(ctx) {
           handleChange(ctx);
-        },
+        }
       },
       onInit(ctx) {
         ctxRef.current = ctx;
@@ -233,14 +269,21 @@ export function FlowgramCanvas({ steps, onStepsChange, workbench = null, onFlowC
         setTimeout(() => {
           ctx.playground.config.fitView(ctx.document.root.bounds.pad(40));
         }, 100);
-      },
+      }
     }),
-    [initialData, handleChange, onFlowCtx],
+    [initialData, handleChange, onFlowCtx]
   );
 
   const shell = (
     <FixedLayoutEditorProvider {...editorProps}>
-      <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%' }}>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          width: '100%',
+          height: '100%'
+        }}
+      >
         <CanvasToolbar />
         <div style={{ flex: 1, overflow: 'hidden' }}>
           <EditorRenderer style={{ width: '100%', height: '100%' }} />
@@ -250,7 +293,11 @@ export function FlowgramCanvas({ steps, onStepsChange, workbench = null, onFlowC
   );
 
   if (workbench) {
-    return <FlowgramScenarioProvider value={workbench}>{shell}</FlowgramScenarioProvider>;
+    return (
+      <FlowgramScenarioProvider value={workbench}>
+        {shell}
+      </FlowgramScenarioProvider>
+    );
   }
   return shell;
 }

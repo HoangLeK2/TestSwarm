@@ -2,11 +2,26 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { ChevronDown, ChevronRight, Server, Loader2, Plus, RefreshCw } from 'lucide-react';
+import {
+  ChevronDown,
+  ChevronRight,
+  Server,
+  Loader2,
+  Plus,
+  RefreshCw
+} from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
-import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '@/components/ui/collapsible';
-import { relayAgentsApi, type DeviceOut, type RelayAgentOut } from '../services/manage-api';
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent
+} from '@/components/ui/collapsible';
+import {
+  relayAgentsApi,
+  type DeviceOut,
+  type RelayAgentOut
+} from '../services/manage-api';
 
 interface RelayAgentCardProps {
   agent: RelayAgentOut;
@@ -14,7 +29,11 @@ interface RelayAgentCardProps {
   onDeviceRegistered?: (device: DeviceOut) => void;
 }
 
-function RelayAgentCard({ agent, registeredSerials, onDeviceRegistered }: RelayAgentCardProps) {
+function RelayAgentCard({
+  agent,
+  registeredSerials,
+  onDeviceRegistered
+}: RelayAgentCardProps) {
   const qc = useQueryClient();
   const t = useTranslations('relayAgentsFeature');
 
@@ -23,15 +42,19 @@ function RelayAgentCard({ agent, registeredSerials, onDeviceRegistered }: RelayA
     onSuccess: (result) => {
       qc.invalidateQueries({ queryKey: ['relay-agents'] });
       qc.invalidateQueries({ queryKey: ['devices'] });
-      const msg = `Bootstrap: ${result.ok}/${result.total} OK` +
+      const msg =
+        t('bootstrapAllResult', { ok: result.ok, total: result.total }) +
         (result.failed > 0
-          ? ` — failed: ${result.results.filter(r => !r.ok).map(r => r.serial).join(', ')}`
+          ? ` — ${result.results
+              .filter((r) => !r.ok)
+              .map((r) => r.serial)
+              .join(', ')}`
           : '');
       console.info('[relay-agents]', msg);
     },
     onError: (err) => {
       console.error('[relay-agents] bootstrap-all failed', err);
-    },
+    }
   });
 
   const { mutate: registerDevice, isPending: isRegistering } = useMutation({
@@ -44,46 +67,63 @@ function RelayAgentCard({ agent, registeredSerials, onDeviceRegistered }: RelayA
     },
     onError: (err) => {
       console.error('[relay-agents] register device failed', err);
-    },
+    }
   });
 
   const online = agent.status === 'online';
-  const realSerials = agent.serials.filter(s => !s.startsWith('pending-'));
+  const realSerials = agent.serials.filter((s) => !s.startsWith('pending-'));
 
   return (
-    <div className='rounded-lg border border-border bg-card p-3 flex flex-col gap-2'>
+    <div className='flex flex-col gap-2 rounded-lg border border-border bg-card p-3'>
       <div className='flex items-center justify-between gap-2'>
-        <div className='flex items-center gap-2 min-w-0'>
-          <span className={`size-2 shrink-0 rounded-full ${online ? 'bg-green-500' : 'bg-gray-400'}`} />
-          <span className='font-medium text-sm truncate'>{agent.hostname || agent.relay_id}</span>
-          <span className='text-[11px] text-muted-foreground shrink-0'>{agent.ip}</span>
+        <div className='flex min-w-0 items-center gap-2'>
+          <span
+            className={`size-2 shrink-0 rounded-full ${online ? 'bg-green-500' : 'bg-gray-400'}`}
+          />
+          <span className='truncate text-sm font-medium'>
+            {agent.hostname || agent.relay_id}
+          </span>
+          <span className='shrink-0 text-[11px] text-muted-foreground'>
+            {agent.ip}
+          </span>
         </div>
         <Button
           size='sm'
           variant='outline'
-          className='h-7 px-2 text-xs shrink-0'
+          className='h-7 shrink-0 px-2 text-xs'
           disabled={isPending || !online || realSerials.length === 0}
           onClick={() => bootstrapAll()}
         >
-          {isPending
-            ? <Loader2 className='size-3 animate-spin mr-1' />
-            : <RefreshCw className='size-3 mr-1' />}
+          {isPending ? (
+            <Loader2 className='mr-1 size-3 animate-spin' />
+          ) : (
+            <RefreshCw className='mr-1 size-3' />
+          )}
           {t('bootstrapAll')}
         </Button>
       </div>
 
       <div className='flex flex-wrap gap-1'>
         {realSerials.length === 0 ? (
-          <span className='text-[11px] text-muted-foreground'>{t('noDevices')}</span>
+          <span className='text-[11px] text-muted-foreground'>
+            {t('noDevices')}
+          </span>
         ) : (
-          realSerials.slice(0, 6).map(s => {
+          realSerials.slice(0, 6).map((s) => {
             const registered = registeredSerials?.has(s) ?? false;
             const label = agent.device_names?.[s] || s;
             return (
-              <span key={s} className='inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5'>
-                <span className='max-w-[180px] truncate text-[10px]' title={s}>{label}</span>
+              <span
+                key={s}
+                className='inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5'
+              >
+                <span className='max-w-[180px] truncate text-[10px]' title={s}>
+                  {label}
+                </span>
                 {registered ? (
-                  <span className='text-[10px] text-muted-foreground'>{t('registered')}</span>
+                  <span className='text-[10px] text-muted-foreground'>
+                    {t('registered')}
+                  </span>
                 ) : (
                   <Button
                     type='button'
@@ -94,7 +134,11 @@ function RelayAgentCard({ agent, registeredSerials, onDeviceRegistered }: RelayA
                     title={t('registerDevice')}
                     onClick={() => registerDevice(s)}
                   >
-                    {isRegistering ? <Loader2 className='size-3 animate-spin' /> : <Plus className='size-3' />}
+                    {isRegistering ? (
+                      <Loader2 className='size-3 animate-spin' />
+                    ) : (
+                      <Plus className='size-3' />
+                    )}
                   </Button>
                 )}
               </span>
@@ -102,7 +146,9 @@ function RelayAgentCard({ agent, registeredSerials, onDeviceRegistered }: RelayA
           })
         )}
         {realSerials.length > 6 && (
-          <span className='text-[11px] text-muted-foreground'>{t('moreDevices', { count: realSerials.length - 6 })}</span>
+          <span className='text-[11px] text-muted-foreground'>
+            {t('moreDevices', { count: realSerials.length - 6 })}
+          </span>
         )}
       </div>
     </div>
@@ -115,11 +161,15 @@ interface RelayAgentsPanelProps {
   onDeviceRegistered?: (device: DeviceOut) => void;
 }
 
-export function RelayAgentsPanel({ agents, registeredSerials, onDeviceRegistered }: RelayAgentsPanelProps) {
+export function RelayAgentsPanel({
+  agents,
+  registeredSerials,
+  onDeviceRegistered
+}: RelayAgentsPanelProps) {
   const t = useTranslations('relayAgentsFeature');
   const [open, setOpen] = useState(false);
   const didAutoOpen = useRef(false);
-  const hasOnline = agents.some(a => a.status === 'online');
+  const hasOnline = agents.some((a) => a.status === 'online');
 
   useEffect(() => {
     if (hasOnline && !didAutoOpen.current) {
@@ -128,15 +178,19 @@ export function RelayAgentsPanel({ agents, registeredSerials, onDeviceRegistered
     }
   }, [hasOnline]);
 
-  const onlineCount = agents.filter(a => a.status === 'online').length;
+  const onlineCount = agents.filter((a) => a.status === 'online').length;
 
   if (agents.length === 0) return null;
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
       <CollapsibleTrigger asChild>
-        <button className='flex w-full items-center gap-2 rounded-md px-1 py-1 text-sm font-medium text-foreground hover:bg-muted/50 transition-colors'>
-          {open ? <ChevronDown className='size-4 text-muted-foreground' /> : <ChevronRight className='size-4 text-muted-foreground' />}
+        <button className='flex w-full items-center gap-2 rounded-md px-1 py-1 text-sm font-medium text-foreground transition-colors hover:bg-muted/50'>
+          {open ? (
+            <ChevronDown className='size-4 text-muted-foreground' />
+          ) : (
+            <ChevronRight className='size-4 text-muted-foreground' />
+          )}
           <Server className='size-4 text-muted-foreground' />
           <span>{t('title')}</span>
           <span className='rounded-full bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground'>
@@ -146,7 +200,7 @@ export function RelayAgentsPanel({ agents, registeredSerials, onDeviceRegistered
       </CollapsibleTrigger>
       <CollapsibleContent>
         <div className='mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3'>
-          {agents.map(agent => (
+          {agents.map((agent) => (
             <RelayAgentCard
               key={agent.relay_id}
               agent={agent}

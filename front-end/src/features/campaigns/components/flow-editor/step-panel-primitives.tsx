@@ -1,0 +1,426 @@
+'use client';
+
+import { useMemo, type ReactNode } from 'react';
+import { useTranslations } from 'next-intl';
+import { Label } from '@/components/ui/label';
+import { Input } from '@/components/ui/input';
+import { Switch } from '@/components/ui/switch';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { Badge } from '@/components/ui/badge';
+import { cn } from '@/lib/utils';
+import type { FlowStep } from '../scenario-steps/types';
+import { formatStepLabelForCard, getStepSummary } from './constants';
+import { useCampaignFlowI18n } from './flow-i18n';
+import { StepIcon } from './step-icon';
+
+export function StepPanelField({
+  label,
+  children
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className='space-y-1.5'>
+      <Label className='text-xs font-medium leading-none text-foreground'>
+        {label}
+      </Label>
+      {children}
+    </div>
+  );
+}
+
+/** @deprecated Use StepPanelField — kept for minimal churn in step-detail-panel. */
+export const F = StepPanelField;
+
+export function StepPanelSection({
+  title,
+  badge,
+  children,
+  className
+}: {
+  title?: string;
+  badge?: ReactNode;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <section
+      className={cn(
+        'space-y-3 rounded-lg border border-border/60 bg-muted/15 p-3',
+        className
+      )}
+    >
+      {title ? (
+        <div className='flex items-center justify-between gap-2'>
+          <h4 className='text-xs font-semibold text-foreground'>{title}</h4>
+          {badge}
+        </div>
+      ) : null}
+      {children}
+    </section>
+  );
+}
+
+export function StepPanelHint({ children }: { children: ReactNode }) {
+  return (
+    <p className='rounded-md bg-muted/40 px-2.5 py-2 text-[11px] leading-relaxed text-muted-foreground'>
+      {children}
+    </p>
+  );
+}
+
+export function StepPanelToggle({
+  label,
+  description,
+  checked,
+  onCheckedChange,
+  className
+}: {
+  label: ReactNode;
+  description?: ReactNode;
+  checked: boolean;
+  onCheckedChange: (checked: boolean) => void;
+  className?: string;
+}) {
+  return (
+    <div
+      role='button'
+      tabIndex={0}
+      className={cn(
+        'flex cursor-pointer items-start gap-3 rounded-lg border border-border/60 bg-background/90 px-3 py-2.5 transition-colors',
+        checked && 'border-primary/25 bg-primary/[0.04]',
+        className
+      )}
+      onClick={() => onCheckedChange(!checked)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onCheckedChange(!checked);
+        }
+      }}
+    >
+      <Switch
+        checked={checked}
+        onCheckedChange={onCheckedChange}
+        className='mt-0.5 shrink-0'
+        onClick={(e) => e.stopPropagation()}
+      />
+      <div className='min-w-0 flex-1 space-y-0.5'>
+        <div className='text-xs font-medium leading-snug text-foreground'>
+          {label}
+        </div>
+        {description ? (
+          <div className='text-[11px] leading-relaxed text-muted-foreground'>
+            {description}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+export function StepPanelHeader({ step }: { step: FlowStep }) {
+  const { getStepTypeName } = useCampaignFlowI18n();
+  const typeName = formatStepLabelForCard(getStepTypeName(step.type));
+  const userTitle = String((step as { title?: string }).title ?? '').trim();
+  const summary = getStepSummary(step).trim();
+
+  const subtitle = userTitle
+    ? summary
+      ? `${userTitle} · ${summary}`
+      : userTitle
+    : summary || undefined;
+
+  return (
+    <div className='flex items-start gap-3 border-b border-border/60 bg-muted/20 px-3 py-3 sm:px-4'>
+      <span className='flex size-10 shrink-0 items-center justify-center rounded-lg bg-background ring-1 ring-border/60'>
+        <StepIcon type={step.type} size={18} />
+      </span>
+      <div className='min-w-0 flex-1 pt-0.5'>
+        <h3 className='text-sm font-semibold leading-tight text-foreground'>
+          {typeName}
+        </h3>
+        {subtitle ? (
+          <p className='mt-0.5 line-clamp-2 text-[11px] leading-snug text-muted-foreground'>
+            {subtitle}
+          </p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+export function StepPanelMetaFields({
+  step,
+  update,
+  t
+}: {
+  step: FlowStep;
+  update: (fields: Partial<FlowStep>) => void;
+  t: ReturnType<typeof useTranslations<'campaignsFeature.stepEditor'>>;
+}) {
+  const tSec = useTranslations('campaignsFeature.stepEditor.sections');
+
+  return (
+    <StepPanelSection title={tSec('general')}>
+      <StepPanelField label={t('common.titleOptional')}>
+        <Input
+          className='h-9 text-sm'
+          placeholder={t('common.titlePlaceholder')}
+          value={(step as { title?: string }).title ?? ''}
+          onChange={(e) =>
+            update({ title: e.target.value || undefined } as Partial<FlowStep>)
+          }
+        />
+      </StepPanelField>
+      <StepPanelField label={t('common.descriptionOptional')}>
+        <Input
+          className='h-9 text-sm'
+          placeholder={t('common.descriptionPlaceholder')}
+          value={(step as { description?: string }).description ?? ''}
+          onChange={(e) =>
+            update({
+              description: e.target.value || undefined
+            } as Partial<FlowStep>)
+          }
+        />
+      </StepPanelField>
+    </StepPanelSection>
+  );
+}
+
+type ErrorPolicyValue = '' | 'continue' | 'stop' | 'pause';
+
+function resolveErrorPolicyValue(step: FlowStep): ErrorPolicyValue {
+  const p = step.on_error ?? '';
+  if (p === 'continue' || p === 'stop' || p === 'pause') return p;
+  return '';
+}
+
+export function StepErrorPolicySection({
+  step,
+  update
+}: {
+  step: FlowStep;
+  update: (patch: Partial<FlowStep>) => void;
+}) {
+  const t = useTranslations('campaignsFeature.stepEditor.errorPolicy');
+  const policy = resolveErrorPolicyValue(step);
+
+  const effective = useMemo(() => {
+    if (policy === 'continue') return t('effectiveContinue');
+    if (policy === 'stop') return t('effectiveStop');
+    if (policy === 'pause') return t('effectivePause');
+    if (step.ignore_error === true) return t('effectiveIgnoreFlag');
+    return t('effectiveScenarioDefault');
+  }, [policy, step.ignore_error, t]);
+
+  return (
+    <StepPanelSection
+      title={t('title')}
+      badge={
+        <Badge variant='outline' className='text-[10px] font-normal'>
+          {t('optionalBadge')}
+        </Badge>
+      }
+      className='bg-muted/10'
+    >
+      <p className='text-[11px] leading-relaxed text-muted-foreground'>
+        {t('intro')}
+      </p>
+
+      <StepPanelToggle
+        label={t('ignoreLabel')}
+        description={t('ignoreDescription')}
+        checked={step.ignore_error === true}
+        onCheckedChange={(checked) =>
+          update({ ignore_error: checked || undefined })
+        }
+      />
+
+      <StepPanelField label={t('policyLabel')}>
+        <RadioGroup
+          value={policy}
+          onValueChange={(v) =>
+            update({ on_error: (v as ErrorPolicyValue) || undefined })
+          }
+          className='gap-2'
+        >
+          {(
+            [
+              { value: '', label: t('policyInherit') },
+              { value: 'continue', label: t('policyContinue') },
+              { value: 'stop', label: t('policyStop') },
+              { value: 'pause', label: t('policyPause') }
+            ] as const
+          ).map((opt) => (
+            <label
+              key={opt.value || 'inherit'}
+              className='flex cursor-pointer items-start gap-2.5 rounded-md border border-transparent px-1 py-1 hover:bg-muted/40 has-[[data-state=checked]]:border-border/60 has-[[data-state=checked]]:bg-background/80'
+            >
+              <RadioGroupItem
+                value={opt.value}
+                id={`err-policy-${opt.value || 'inherit'}`}
+                className='mt-0.5'
+              />
+              <span className='text-[11px] leading-snug text-foreground'>
+                {opt.label}
+              </span>
+            </label>
+          ))}
+        </RadioGroup>
+      </StepPanelField>
+
+      <div className='rounded-md border border-border/50 bg-background/80 px-2.5 py-2 text-[11px] leading-relaxed text-muted-foreground'>
+        {t('effectivePrefix')}{' '}
+        <span className='font-medium text-foreground'>{effective}</span>
+      </div>
+    </StepPanelSection>
+  );
+}
+
+export function AppLifecycleStepFields({
+  step,
+  update,
+  tApp
+}: {
+  step: FlowStep;
+  update: (fields: Partial<FlowStep>) => void;
+  tApp: ReturnType<
+    typeof useTranslations<'campaignsFeature.stepEditor.appLifecycle'>
+  >;
+}) {
+  const tSec = useTranslations('campaignsFeature.stepEditor.sections');
+
+  if (step.type === 'stop_app') {
+    return (
+      <StepPanelSection title={tSec('appTarget')}>
+        <StepPanelField label={tApp('packageLabel')}>
+          <Input
+            className='h-9 font-mono text-sm'
+            value={step.package ?? ''}
+            onChange={(e) => update({ package: e.target.value })}
+            placeholder={tApp('placeholderPackage')}
+          />
+        </StepPanelField>
+      </StepPanelSection>
+    );
+  }
+
+  if (step.type === 'clear_app') {
+    return (
+      <StepPanelSection title={tSec('appTarget')}>
+        <StepPanelField label={tApp('packageLabel')}>
+          <Input
+            className='h-9 font-mono text-sm'
+            value={step.package ?? ''}
+            onChange={(e) => update({ package: e.target.value })}
+            placeholder={tApp('placeholderPackage')}
+          />
+        </StepPanelField>
+        <StepPanelHint>
+          <span className='text-amber-700 dark:text-amber-300'>
+            {tApp('clearWarning')}
+          </span>
+        </StepPanelHint>
+      </StepPanelSection>
+    );
+  }
+
+  if (step.type === 'wait_app') {
+    return (
+      <>
+        <StepPanelSection title={tSec('appTarget')}>
+          <StepPanelField label={tApp('packageLabel')}>
+            <Input
+              className='h-9 font-mono text-sm'
+              value={step.package ?? ''}
+              onChange={(e) => update({ package: e.target.value })}
+              placeholder={tApp('placeholderPackage')}
+            />
+          </StepPanelField>
+        </StepPanelSection>
+        <StepPanelSection title={tSec('timing')}>
+          <StepPanelField label={tApp('timeoutSeconds')}>
+            <Input
+              type='number'
+              min={0.5}
+              step={0.5}
+              className='h-9 w-32 text-sm'
+              value={step.timeout ?? 20}
+              onChange={(e) =>
+                update({ timeout: Number(e.target.value) || 20 })
+              }
+            />
+          </StepPanelField>
+          <StepPanelToggle
+            label={tApp('waitForeground')}
+            checked={step.front !== false}
+            onCheckedChange={(checked) => update({ front: checked })}
+          />
+        </StepPanelSection>
+      </>
+    );
+  }
+
+  if (step.type === 'launch_app') {
+    return (
+      <>
+        <StepPanelSection title={tSec('appTarget')}>
+          <StepPanelField label={tApp('packageLabel')}>
+            <Input
+              className='h-9 font-mono text-sm'
+              value={step.package ?? ''}
+              onChange={(e) => update({ package: e.target.value })}
+              placeholder={tApp('placeholderChrome')}
+            />
+          </StepPanelField>
+          <StepPanelField label={tApp('activityLabel')}>
+            <Input
+              className='h-9 font-mono text-sm'
+              value={step.activity ?? step.component ?? ''}
+              onChange={(e) =>
+                update({
+                  activity: e.target.value || undefined,
+                  component: e.target.value || undefined
+                })
+              }
+              placeholder={tApp('activityPlaceholder')}
+            />
+          </StepPanelField>
+        </StepPanelSection>
+        <StepPanelSection title={tSec('appOptions')}>
+          <StepPanelToggle
+            label={tApp('stopBefore')}
+            description={tApp('stopBeforeHint')}
+            checked={!!step.stop_before}
+            onCheckedChange={(checked) => update({ stop_before: checked })}
+          />
+          <StepPanelToggle
+            label={tApp('useMonkey')}
+            description={tApp('useMonkeyHint')}
+            checked={!!step.use_monkey}
+            onCheckedChange={(checked) => update({ use_monkey: checked })}
+          />
+        </StepPanelSection>
+        <StepPanelSection title={tSec('timing')}>
+          <StepPanelField label={tApp('waitAfterLaunch')}>
+            <Input
+              type='number'
+              min={0}
+              step={0.1}
+              className='h-9 w-32 text-sm'
+              value={step.wait_after ?? 2}
+              onChange={(e) =>
+                update({ wait_after: Number(e.target.value) || 0 })
+              }
+            />
+          </StepPanelField>
+        </StepPanelSection>
+      </>
+    );
+  }
+
+  return null;
+}

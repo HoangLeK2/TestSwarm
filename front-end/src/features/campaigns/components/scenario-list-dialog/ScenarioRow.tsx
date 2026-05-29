@@ -27,7 +27,14 @@ export function ScenarioRow({
   const tCommon = useTranslations('common');
   const confirm = useConfirm();
   const { mutate: deleteScenario, isPending } = useDeleteScenario();
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging
+  } = useSortable({
     id: scenario.id,
     disabled: dragDisabled
   });
@@ -88,15 +95,35 @@ export function ScenarioRow({
       </button>
       <FileText size={14} className='shrink-0 text-muted-foreground' />
       <div className='min-w-0 flex-1'>
-        <div className='line-clamp-2 break-words font-medium' title={scenario.name}>
+        <div
+          className='line-clamp-2 break-words font-medium'
+          title={scenario.name}
+        >
           {scenario.name}
         </div>
-        {scenario.instructions && <div className='truncate text-[11px] text-muted-foreground'>{scenario.instructions}</div>}
-        <div className='text-[11px] text-muted-foreground'>{t('stepsCount', { count: scenario.steps.length })}</div>
+        {scenario.instructions && (
+          <div className='truncate text-[11px] text-muted-foreground'>
+            {scenario.instructions}
+          </div>
+        )}
+        <div className='text-[11px] text-muted-foreground'>
+          {t('stepsCount', { count: scenario.steps.length })}
+        </div>
       </div>
 
-      <Button size='icon' variant='ghost' className='size-7 shrink-0' title={t('editTitle')} asChild>
-        <Link href={ROUTES.DEVICES.CONTROL_RECORD_EDIT_SCENARIO(campaign.id, scenario.id)}>
+      <Button
+        size='icon'
+        variant='ghost'
+        className='size-7 shrink-0'
+        title={t('editTitle')}
+        asChild
+      >
+        <Link
+          href={ROUTES.DEVICES.CONTROL_RECORD_EDIT_SCENARIO(
+            campaign.id,
+            scenario.id
+          )}
+        >
           <ChevronRight size={14} />
         </Link>
       </Button>

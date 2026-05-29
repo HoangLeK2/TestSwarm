@@ -28,6 +28,21 @@ async def create_campaign(
     return campaign
 
 
+async def get_campaign_by_name(
+    db: AsyncSession,
+    *,
+    user_id: str,
+    name: str,
+) -> Optional[Campaign]:
+    result = await db.execute(
+        select(Campaign)
+        .where(Campaign.user_id == user_id, Campaign.name == name)
+        .order_by(Campaign.created_at.desc())
+        .limit(1)
+    )
+    return result.scalars().first()
+
+
 async def get_campaign(db: AsyncSession, campaign_id: str) -> Optional[Campaign]:
     result = await db.execute(select(Campaign).where(Campaign.id == campaign_id))
     return result.scalar_one_or_none()

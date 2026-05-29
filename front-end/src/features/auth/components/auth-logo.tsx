@@ -26,11 +26,12 @@ export function AuthLogo({
         priority
       />
       {variant === 'full' ? (
-        <span className={cn('text-sm font-medium text-foreground', textClassName)}>
+        <span
+          className={cn('text-sm font-medium text-foreground', textClassName)}
+        >
           Device farm
         </span>
       ) : null}
     </div>
   );
 }
-

@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import ExitStack
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
@@ -836,6 +837,15 @@ class TestDlqRetryReenqueue:
             )
             stack.enter_context(
                 patch.object(executions_route, "get_execution", AsyncMock(return_value=execution))
+            )
+            stack.enter_context(
+                patch(
+                    "db.crud.device.get_device_by_serial",
+                    AsyncMock(return_value=SimpleNamespace(id="dev-1", serial="SN001", user_id="user-1")),
+                )
+            )
+            stack.enter_context(
+                patch("services.device_liveness.is_device_dispatchable", AsyncMock(return_value=True))
             )
             stack.enter_context(
                 patch(

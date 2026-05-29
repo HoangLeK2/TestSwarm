@@ -8,6 +8,7 @@ from pydantic import BaseModel, field_validator
 
 class ScenarioTemplateCreate(BaseModel):
     name: str
+    display_name: str = ""
     description: str = ""
     category: str = "general"
     steps: list = []
@@ -28,6 +29,7 @@ class ScenarioTemplateCreate(BaseModel):
 
 class ScenarioTemplateUpdate(BaseModel):
     name: str | None = None
+    display_name: str | None = None
     description: str | None = None
     category: str | None = None
     steps: list | None = None
@@ -49,6 +51,7 @@ class ScenarioTemplateUpdate(BaseModel):
 class ScenarioTemplateOut(BaseModel):
     id: str
     name: str
+    display_name: str = ""
     description: str
     category: str
     steps: list

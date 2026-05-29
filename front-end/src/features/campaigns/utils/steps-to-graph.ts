@@ -14,16 +14,30 @@ import type { FlowNode, FlowEdge } from '../components/scenario-steps/types';
 
 // Keys stripped from config (handled as child-node scopes or top-level node fields).
 // NOTE: `description` is NOT in this list — it stays in config.
-const STRIP_FROM_CONFIG = new Set(['type', 'title', 'steps', 'then', 'else', 'branches', 'else_steps']);
+const STRIP_FROM_CONFIG = new Set([
+  'type',
+  'title',
+  'steps',
+  'then',
+  'else',
+  'branches',
+  'else_steps'
+]);
 
 const CONTAINER_STEP_TYPES = new Set(['loop', 'repeat', 'repeat_until']);
-const CONTAINER_IF_TYPES   = new Set(['if_element', 'if_variable']);
+const CONTAINER_IF_TYPES = new Set(['if_element', 'if_variable']);
 
-export function stepsToGraph(steps: Record<string, unknown>[]): { nodes: FlowNode[]; edges: FlowEdge[] } {
+export function stepsToGraph(steps: Record<string, unknown>[]): {
+  nodes: FlowNode[];
+  edges: FlowEdge[];
+} {
   const nodes: FlowNode[] = [];
   const edges: FlowEdge[] = [];
 
-  function walk(stepList: Record<string, unknown>[], parentScope: FlowNode['scope']): void {
+  function walk(
+    stepList: Record<string, unknown>[],
+    parentScope: FlowNode['scope']
+  ): void {
     if (!stepList.length) return;
     const orders = generateNKeysBetween(null, null, stepList.length);
 
@@ -41,8 +55,10 @@ export function stepsToGraph(steps: Record<string, unknown>[]): { nodes: FlowNod
 
       // Store branch weights as ordered list for stable round-trip
       if (type === 'random_pick') {
-        const branches = (step.branches ?? []) as Array<Record<string, unknown>>;
-        config['branch_weights'] = branches.map(b => b['weight'] ?? 1);
+        const branches = (step.branches ?? []) as Array<
+          Record<string, unknown>
+        >;
+        config['branch_weights'] = branches.map((b) => b['weight'] ?? 1);
         // Remove legacy per-index weight keys if present
         delete config['branch_count'];
       }
@@ -53,30 +69,49 @@ export function stepsToGraph(steps: Record<string, unknown>[]): { nodes: FlowNod
         config,
         order: orders[i]!,
         scope: parentScope ?? null,
-        ...(step.title ? { title: String(step.title) } : {}),
+        ...(step.title ? { title: String(step.title) } : {})
       };
       nodes.push(node);
 
       if (prevId) {
-        edges.push({ id: nanoid(10), source: prevId, target: id, type: 'default' });
+        edges.push({
+          id: nanoid(10),
+          source: prevId,
+          target: id,
+          type: 'default'
+        });
       }
       prevId = id;
 
       // Recurse into child branches
       if (CONTAINER_STEP_TYPES.has(type)) {
-        walk((step.steps ?? []) as Record<string, unknown>[], { parentId: id, branch: 'steps' });
+        walk((step.steps ?? []) as Record<string, unknown>[], {
+          parentId: id,
+          branch: 'steps'
+        });
       } else if (CONTAINER_IF_TYPES.has(type)) {
-        walk((step.then ?? []) as Record<string, unknown>[], { parentId: id, branch: 'then' });
-        const elseSteps = (step.else ?? step.else_steps ?? []) as Record<string, unknown>[];
+        walk((step.then ?? []) as Record<string, unknown>[], {
+          parentId: id,
+          branch: 'then'
+        });
+        const elseSteps = (step.else ?? step.else_steps ?? []) as Record<
+          string,
+          unknown
+        >[];
         if (elseSteps.length) {
           walk(elseSteps, { parentId: id, branch: 'else' });
         }
       } else if (type === 'random_pick') {
-        const branches = (step.branches ?? []) as Array<Record<string, unknown>>;
+        const branches = (step.branches ?? []) as Array<
+          Record<string, unknown>
+        >;
         branches.forEach((branch, bi) => {
           // Always create scope for every branch — even empty ones — so branch
           // count is preserved across round-trips (empty branch ≠ deleted branch).
-          walk((branch.steps ?? []) as Record<string, unknown>[], { parentId: id, branch: `branch_${bi}` });
+          walk((branch.steps ?? []) as Record<string, unknown>[], {
+            parentId: id,
+            branch: `branch_${bi}`
+          });
         });
       }
     });

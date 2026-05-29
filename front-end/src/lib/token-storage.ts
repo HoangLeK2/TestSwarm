@@ -112,7 +112,8 @@ class TokenStorage {
    * Set secure cookie with proper security flags
    */
   private setSecureCookie(name: string, value: string): void {
-    if (typeof document === 'undefined' || typeof window === 'undefined') return;
+    if (typeof document === 'undefined' || typeof window === 'undefined')
+      return;
     const maxAge = 30 * 24 * 60 * 60; // 30 days
     const secure = window.location.protocol === 'https:' ? '; secure' : '';
 

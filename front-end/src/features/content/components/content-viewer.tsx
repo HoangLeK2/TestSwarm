@@ -2,11 +2,29 @@
 
 import { useState } from 'react';
 import {
-  Search, RefreshCw, ChevronLeft, ChevronRight,
-  Trash2, ExternalLink, Eye, Database, TrendingUp,
-  Smartphone, FileText, MessageCircle, Newspaper,
-  Heart, Share2, ThumbsUp, Clock, CornerDownRight,
-  Download, ChevronDown, X, Filter, Hash,
+  Search,
+  RefreshCw,
+  ChevronLeft,
+  ChevronRight,
+  Trash2,
+  ExternalLink,
+  Eye,
+  Database,
+  TrendingUp,
+  Smartphone,
+  FileText,
+  MessageCircle,
+  Newspaper,
+  Heart,
+  Share2,
+  ThumbsUp,
+  Clock,
+  CornerDownRight,
+  Download,
+  ChevronDown,
+  X,
+  Filter,
+  Hash
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -15,12 +33,24 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuTrigger,
+  DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 import { useContent, useContentStats } from '../hooks/use-content';
-import { contentApi, type ContentItem, type ExportFormat } from '../services/api';
+import {
+  contentApi,
+  type ContentItem,
+  type ExportFormat
+} from '../services/api';
 import { ContentDetailDialog } from './content-detail-dialog';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select';
+import { useCampaigns } from '@/features/campaigns/hooks/use-campaigns';
 
 // ── Stats bar ────────────────────────────────────────────────────────────────
 
@@ -55,7 +85,7 @@ function StatsBar() {
           stats.latest_extraction
             ? new Date(stats.latest_extraction).toLocaleString('vi-VN', {
                 dateStyle: 'short',
-                timeStyle: 'short',
+                timeStyle: 'short'
               })
             : '–'
         }
@@ -80,31 +110,66 @@ function StatsBarSkeleton() {
 
 type StatTint = 'primary' | 'emerald' | 'blue' | 'violet';
 
-const STAT_TINTS: Record<StatTint, { bubble: string; icon: string; ring: string }> = {
-  primary: { bubble: 'bg-primary/10', icon: 'text-primary', ring: 'ring-primary/10' },
-  emerald: { bubble: 'bg-emerald-500/10', icon: 'text-emerald-600 dark:text-emerald-400', ring: 'ring-emerald-500/10' },
-  blue: { bubble: 'bg-blue-500/10', icon: 'text-blue-600 dark:text-blue-400', ring: 'ring-blue-500/10' },
-  violet: { bubble: 'bg-violet-500/10', icon: 'text-violet-600 dark:text-violet-400', ring: 'ring-violet-500/10' },
+const STAT_TINTS: Record<
+  StatTint,
+  { bubble: string; icon: string; ring: string }
+> = {
+  primary: {
+    bubble: 'bg-primary/10',
+    icon: 'text-primary',
+    ring: 'ring-primary/10'
+  },
+  emerald: {
+    bubble: 'bg-emerald-500/10',
+    icon: 'text-emerald-600 dark:text-emerald-400',
+    ring: 'ring-emerald-500/10'
+  },
+  blue: {
+    bubble: 'bg-blue-500/10',
+    icon: 'text-blue-600 dark:text-blue-400',
+    ring: 'ring-blue-500/10'
+  },
+  violet: {
+    bubble: 'bg-violet-500/10',
+    icon: 'text-violet-600 dark:text-violet-400',
+    ring: 'ring-violet-500/10'
+  }
 };
 
-function StatCard({ icon, label, value, tint }: { icon: React.ReactNode; label: string; value: string; tint: StatTint }) {
+function StatCard({
+  icon,
+  label,
+  value,
+  tint
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  tint: StatTint;
+}) {
   const s = STAT_TINTS[tint];
   return (
     <div
       className={cn(
         'group relative overflow-hidden rounded-xl border border-border/60 bg-card p-4 shadow-sm ring-1 ring-transparent transition-all hover:-translate-y-0.5 hover:shadow-md',
-        s.ring,
+        s.ring
       )}
     >
       <div className='flex items-start gap-3'>
-        <div className={cn('flex size-10 shrink-0 items-center justify-center rounded-lg', s.bubble, s.icon)}>
+        <div
+          className={cn(
+            'flex size-10 shrink-0 items-center justify-center rounded-lg',
+            s.bubble,
+            s.icon
+          )}
+        >
           {icon}
         </div>
         <div className='min-w-0 flex-1'>
           <p className='truncate text-xs font-medium uppercase tracking-wide text-muted-foreground'>
             {label}
           </p>
-          <p className='mt-1 truncate text-2xl font-bold leading-tight tabular-nums text-foreground'>
+          <p className='mt-1 truncate text-2xl font-bold tabular-nums leading-tight text-foreground'>
             {value}
           </p>
         </div>
@@ -117,8 +182,16 @@ function StatCard({ icon, label, value, tint }: { icon: React.ReactNode; label: 
 
 const CONTENT_TYPE_TABS = [
   { value: '', label: 'Tất cả', icon: <Database className='size-3.5' /> },
-  { value: 'group_post', label: 'Bài đăng', icon: <Newspaper className='size-3.5' /> },
-  { value: 'comment', label: 'Bình luận', icon: <MessageCircle className='size-3.5' /> },
+  {
+    value: 'group_post',
+    label: 'Bài đăng',
+    icon: <Newspaper className='size-3.5' />
+  },
+  {
+    value: 'comment',
+    label: 'Bình luận',
+    icon: <MessageCircle className='size-3.5' />
+  }
 ] as const;
 
 interface FiltersProps {
@@ -126,6 +199,8 @@ interface FiltersProps {
   onSearchChange: (v: string) => void;
   campaignId: string;
   onCampaignIdChange: (v: string) => void;
+  collection: string;
+  onCollectionChange: (v: string) => void;
   platform: string;
   onPlatformChange: (v: string) => void;
   contentType: string;
@@ -141,6 +216,8 @@ function Filters({
   onSearchChange,
   campaignId,
   onCampaignIdChange,
+  collection,
+  onCollectionChange,
   platform,
   onPlatformChange,
   contentType,
@@ -148,12 +225,33 @@ function Filters({
   onRefresh,
   onApply,
   onClear,
-  loading,
+  loading
 }: FiltersProps) {
+  const { data: campaigns = [], isLoading: loadingCampaigns } = useCampaigns();
+  const { stats } = useContentStats();
+
   const onKeyEnter = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') onApply();
   };
-  const hasFilters = !!(search || campaignId || platform || contentType);
+  const hasFilters = !!(
+    search ||
+    campaignId ||
+    collection ||
+    platform ||
+    contentType
+  );
+
+  const platformOptions = Object.keys(stats?.by_platform ?? {}).sort((a, b) =>
+    a.localeCompare(b, 'vi')
+  );
+  const collectionOptions = Object.keys(stats?.by_collection ?? {}).sort(
+    (a, b) => a.localeCompare(b, 'vi')
+  );
+
+  const selectedCampaign =
+    campaignId && campaigns.length
+      ? campaigns.find((c) => c.id === campaignId)
+      : undefined;
 
   return (
     <div className='space-y-3'>
@@ -171,7 +269,7 @@ function Filters({
                   'inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-all',
                   active
                     ? 'bg-background text-foreground shadow-sm ring-1 ring-border/60'
-                    : 'text-muted-foreground hover:bg-background/60 hover:text-foreground',
+                    : 'text-muted-foreground hover:bg-background/60 hover:text-foreground'
                 )}
                 aria-pressed={active}
               >
@@ -209,8 +307,8 @@ function Filters({
       </div>
 
       {/* Inputs row */}
-      <div className='grid grid-cols-1 gap-2 sm:grid-cols-12'>
-        <div className='relative sm:col-span-6'>
+      <div className='flex flex-wrap items-center gap-2'>
+        <div className='relative min-w-[260px] flex-1'>
           <Search className='pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground' />
           <Input
             className='h-10 pl-9 text-sm'
@@ -221,31 +319,96 @@ function Filters({
             aria-label='Tìm kiếm'
           />
         </div>
-        <div className='relative sm:col-span-3'>
+        <div className='relative min-w-[240px] max-w-full flex-[0_0_280px]'>
           <Hash className='pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground' />
-          <Input
-            className='h-10 pl-9 text-sm'
-            placeholder='Campaign ID'
-            value={campaignId}
-            onChange={(e) => onCampaignIdChange(e.target.value)}
-            onKeyDown={onKeyEnter}
-            aria-label='Campaign ID'
-          />
+          <Select
+            value={campaignId || '_all'}
+            onValueChange={(v) => onCampaignIdChange(v === '_all' ? '' : v)}
+            disabled={loadingCampaigns}
+          >
+            <SelectTrigger
+              className='h-10 w-full min-w-0 overflow-hidden pl-9 text-sm'
+              aria-label='Lọc theo chiến dịch'
+            >
+              <SelectValue placeholder='Chiến dịch'>
+                <span className='block w-full truncate'>
+                  {campaignId
+                    ? (selectedCampaign?.name ?? campaignId)
+                    : 'Chiến dịch'}
+                </span>
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent className='z-[10002]'>
+              <SelectItem value='_all'>
+                <span className='text-muted-foreground'>Tất cả chiến dịch</span>
+              </SelectItem>
+              {campaigns.map((c) => (
+                <SelectItem key={c.id} value={c.id}>
+                  <span className='block max-w-[460px] truncate'>{c.name}</span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
-        <div className='relative sm:col-span-2'>
+        <div className='relative min-w-[200px] max-w-full flex-[0_0_220px]'>
+          <FileText className='pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground' />
+          <Select
+            value={collection || '_all'}
+            onValueChange={(v) => onCollectionChange(v === '_all' ? '' : v)}
+          >
+            <SelectTrigger
+              className='h-10 w-full min-w-0 overflow-hidden pl-9 text-sm'
+              aria-label='Lọc theo bộ sưu tập'
+            >
+              <SelectValue placeholder='Bộ sưu tập'>
+                <span className='block w-full truncate'>
+                  {collection ? collection : 'Bộ sưu tập'}
+                </span>
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent className='z-[10002]'>
+              <SelectItem value='_all'>
+                <span className='text-muted-foreground'>Tất cả bộ sưu tập</span>
+              </SelectItem>
+              {collectionOptions.map((c) => (
+                <SelectItem key={c} value={c}>
+                  <span className='block max-w-[460px] truncate'>{c}</span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className='relative min-w-[170px] max-w-full flex-[0_0_180px]'>
           <Smartphone className='pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground' />
-          <Input
-            className='h-10 pl-9 text-sm'
-            placeholder='Nền tảng'
-            value={platform}
-            onChange={(e) => onPlatformChange(e.target.value)}
-            onKeyDown={onKeyEnter}
-            aria-label='Nền tảng'
-          />
+          <Select
+            value={platform || '_all'}
+            onValueChange={(v) => onPlatformChange(v === '_all' ? '' : v)}
+          >
+            <SelectTrigger
+              className='h-10 w-full min-w-0 overflow-hidden pl-9 text-sm'
+              aria-label='Lọc theo nền tảng'
+            >
+              <SelectValue placeholder='Nền tảng'>
+                <span className='block w-full truncate'>
+                  {platform ? platform : 'Nền tảng'}
+                </span>
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent className='z-[10002]'>
+              <SelectItem value='_all'>
+                <span className='text-muted-foreground'>Tất cả nền tảng</span>
+              </SelectItem>
+              {platformOptions.map((p) => (
+                <SelectItem key={p} value={p}>
+                  <span className='capitalize'>{p}</span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
         <Button
           size='sm'
-          className='h-10 gap-1.5 text-sm font-medium sm:col-span-1'
+          className='h-10 gap-1.5 text-sm font-medium'
           onClick={onApply}
         >
           <Filter className='size-4' />
@@ -261,20 +424,22 @@ function Filters({
 const PLATFORM_STYLES: Record<string, string> = {
   facebook: 'bg-blue-500/10 text-blue-700 ring-blue-500/20 dark:text-blue-300',
   instagram: 'bg-pink-500/10 text-pink-700 ring-pink-500/20 dark:text-pink-300',
-  tiktok: 'bg-neutral-900/10 text-neutral-900 ring-neutral-900/20 dark:bg-neutral-50/10 dark:text-neutral-100',
+  tiktok:
+    'bg-neutral-900/10 text-neutral-900 ring-neutral-900/20 dark:bg-neutral-50/10 dark:text-neutral-100',
   twitter: 'bg-sky-500/10 text-sky-700 ring-sky-500/20 dark:text-sky-300',
   x: 'bg-sky-500/10 text-sky-700 ring-sky-500/20 dark:text-sky-300',
-  youtube: 'bg-red-500/10 text-red-700 ring-red-500/20 dark:text-red-300',
+  youtube: 'bg-red-500/10 text-red-700 ring-red-500/20 dark:text-red-300'
 };
 
 function PlatformBadge({ name }: { name: string }) {
   const key = (name || '').toLowerCase();
-  const cls = PLATFORM_STYLES[key] ?? 'bg-muted text-muted-foreground ring-border';
+  const cls =
+    PLATFORM_STYLES[key] ?? 'bg-muted text-muted-foreground ring-border';
   return (
     <span
       className={cn(
         'inline-flex h-5 items-center rounded-md px-1.5 text-[11px] font-semibold capitalize ring-1 ring-inset',
-        cls,
+        cls
       )}
     >
       {name}
@@ -282,11 +447,20 @@ function PlatformBadge({ name }: { name: string }) {
   );
 }
 
-function EmptyState({ hasFilters, onClear }: { hasFilters?: boolean; onClear?: () => void }) {
+function EmptyState({
+  hasFilters,
+  onClear
+}: {
+  hasFilters?: boolean;
+  onClear?: () => void;
+}) {
   return (
     <div className='flex flex-col items-center justify-center rounded-xl border border-dashed border-border/60 py-20 text-center'>
       <div className='mb-3 flex size-14 items-center justify-center rounded-full bg-muted/60'>
-        <Database className='size-7 text-muted-foreground/60' strokeWidth={1.5} />
+        <Database
+          className='size-7 text-muted-foreground/60'
+          strokeWidth={1.5}
+        />
       </div>
       <p className='text-sm font-semibold text-foreground'>
         {hasFilters ? 'Không có kết quả phù hợp' : 'Chưa có dữ liệu'}
@@ -297,7 +471,12 @@ function EmptyState({ hasFilters, onClear }: { hasFilters?: boolean; onClear?: (
           : 'Chạy kịch bản có bước extract để thu thập dữ liệu từ các nền tảng.'}
       </p>
       {hasFilters && onClear && (
-        <Button size='sm' variant='outline' className='mt-4 gap-1.5' onClick={onClear}>
+        <Button
+          size='sm'
+          variant='outline'
+          className='mt-4 gap-1.5'
+          onClick={onClear}
+        >
           <X className='size-3.5' />
           Xoá bộ lọc
         </Button>
@@ -333,7 +512,7 @@ function ContentTable({
   onDeleteItem,
   onViewParent,
   hasFilters,
-  onClear,
+  onClear
 }: {
   items: ContentItem[];
   onViewItem: (item: ContentItem) => void;
@@ -342,7 +521,8 @@ function ContentTable({
   hasFilters: boolean;
   onClear: () => void;
 }) {
-  if (items.length === 0) return <EmptyState hasFilters={hasFilters} onClear={onClear} />;
+  if (items.length === 0)
+    return <EmptyState hasFilters={hasFilters} onClear={onClear} />;
   return (
     <div className='overflow-hidden rounded-xl border border-border/60 bg-card shadow-sm'>
       <div className='overflow-x-auto'>
@@ -365,7 +545,7 @@ function ContentTable({
                 className={cn(
                   'group cursor-pointer border-b border-border/40 transition-colors last:border-b-0',
                   idx % 2 === 1 && 'bg-muted/10',
-                  'hover:bg-primary/[0.05]',
+                  'hover:bg-primary/[0.05]'
                 )}
                 onClick={() => onViewItem(item)}
               >
@@ -373,7 +553,7 @@ function ContentTable({
                   {item.extracted_at
                     ? new Date(item.extracted_at).toLocaleString('vi-VN', {
                         dateStyle: 'short',
-                        timeStyle: 'short',
+                        timeStyle: 'short'
                       })
                     : '–'}
                 </td>
@@ -400,7 +580,9 @@ function ContentTable({
                 <td className='max-w-[380px] px-4 py-3.5 align-top'>
                   <p className='line-clamp-2 leading-snug text-foreground/90'>
                     {item.title || item.body || (
-                      <span className='italic text-muted-foreground'>(trống)</span>
+                      <span className='italic text-muted-foreground'>
+                        (trống)
+                      </span>
                     )}
                   </p>
                   {item.url && (
@@ -417,7 +599,9 @@ function ContentTable({
                   )}
                 </td>
                 <td className='px-4 py-3.5 align-top text-foreground/90'>
-                  {item.author || <span className='text-muted-foreground'>–</span>}
+                  {item.author || (
+                    <span className='text-muted-foreground'>–</span>
+                  )}
                 </td>
                 <td className='whitespace-nowrap px-4 py-3.5 text-right align-top font-mono text-xs text-muted-foreground'>
                   {[item.likes_count, item.comments_count, item.shares_count]
@@ -430,7 +614,7 @@ function ContentTable({
                   </span>
                 </td>
                 <td className='px-4 py-3.5 align-top'>
-                  <div className='flex items-center justify-end gap-1 opacity-60 transition-opacity group-hover:opacity-100 focus-within:opacity-100'>
+                  <div className='flex items-center justify-end gap-1 opacity-60 transition-opacity focus-within:opacity-100 group-hover:opacity-100'>
                     <Button
                       size='sm'
                       variant='ghost'
@@ -476,7 +660,7 @@ function ContentFeed({
   onDeleteItem,
   onViewParent,
   hasFilters,
-  onClear,
+  onClear
 }: {
   items: ContentItem[];
   onViewItem: (item: ContentItem) => void;
@@ -485,7 +669,8 @@ function ContentFeed({
   hasFilters: boolean;
   onClear: () => void;
 }) {
-  if (items.length === 0) return <EmptyState hasFilters={hasFilters} onClear={onClear} />;
+  if (items.length === 0)
+    return <EmptyState hasFilters={hasFilters} onClear={onClear} />;
 
   return (
     <div className='space-y-3'>
@@ -495,7 +680,9 @@ function ContentFeed({
           item={item}
           onView={() => onViewItem(item)}
           onDelete={() => onDeleteItem(item.id)}
-          onViewParent={item.parent_id ? () => onViewParent(item.parent_id!) : undefined}
+          onViewParent={
+            item.parent_id ? () => onViewParent(item.parent_id!) : undefined
+          }
         />
       ))}
     </div>
@@ -506,7 +693,7 @@ function ContentCard({
   item,
   onView,
   onDelete,
-  onViewParent,
+  onViewParent
 }: {
   item: ContentItem;
   onView: () => void;
@@ -522,7 +709,7 @@ function ContentCard({
   const time = item.extracted_at
     ? new Date(item.extracted_at).toLocaleString('vi-VN', {
         dateStyle: 'short',
-        timeStyle: 'short',
+        timeStyle: 'short'
       })
     : '';
 
@@ -540,8 +727,8 @@ function ContentCard({
       className={cn(
         'group relative rounded-xl border bg-card transition-all hover:border-primary/30 hover:shadow-md',
         isComment
-          ? 'ml-6 border-l-2 border-l-blue-400/60 border-border/40 bg-blue-500/[0.02]'
-          : 'border-border/50',
+          ? 'ml-6 border-l-2 border-border/40 border-l-blue-400/60 bg-blue-500/[0.02]'
+          : 'border-border/50'
       )}
     >
       {isComment && (
@@ -556,7 +743,9 @@ function ContentCard({
             <div
               className={cn(
                 'flex size-9 shrink-0 items-center justify-center rounded-full text-xs font-bold',
-                isComment ? 'bg-blue-500/15 text-blue-600 dark:text-blue-400' : 'bg-primary/15 text-primary',
+                isComment
+                  ? 'bg-blue-500/15 text-blue-600 dark:text-blue-400'
+                  : 'bg-primary/15 text-primary'
               )}
             >
               {initials}
@@ -567,7 +756,10 @@ function ContentCard({
                   {item.author || 'Ẩn danh'}
                 </span>
                 {item.platform && (
-                  <Badge variant='secondary' className='h-5 px-1.5 text-[10px] capitalize'>
+                  <Badge
+                    variant='secondary'
+                    className='h-5 px-1.5 text-[10px] capitalize'
+                  >
                     {item.platform}
                   </Badge>
                 )}
@@ -583,14 +775,16 @@ function ContentCard({
                 {item.collection && (
                   <>
                     <span>·</span>
-                    <span className='rounded bg-muted px-1.5 py-0.5'>{item.collection}</span>
+                    <span className='rounded bg-muted px-1.5 py-0.5'>
+                      {item.collection}
+                    </span>
                   </>
                 )}
               </div>
             </div>
           </div>
 
-          <div className='flex shrink-0 items-center gap-0.5 opacity-60 transition-opacity group-hover:opacity-100 focus-within:opacity-100'>
+          <div className='flex shrink-0 items-center gap-0.5 opacity-60 transition-opacity focus-within:opacity-100 group-hover:opacity-100'>
             {onViewParent && (
               <Button
                 size='sm'
@@ -651,7 +845,10 @@ function ContentCard({
           </a>
         )}
 
-        {(item.likes_count != null || item.comments_count != null || item.shares_count != null || item.views_count != null) && (
+        {(item.likes_count != null ||
+          item.comments_count != null ||
+          item.shares_count != null ||
+          item.views_count != null) && (
           <div className='flex items-center gap-4 border-t border-border/30 pt-3 text-xs text-muted-foreground'>
             {item.likes_count != null && (
               <span className='flex items-center gap-1.5'>
@@ -671,12 +868,14 @@ function ContentCard({
                 {item.shares_count.toLocaleString()}
               </span>
             )}
-            {item.likes_count == null && item.shares_count == null && item.views_count != null && (
-              <span className='flex items-center gap-1.5'>
-                <Heart size={12} className='text-rose-500' />
-                {item.views_count.toLocaleString()}
-              </span>
-            )}
+            {item.likes_count == null &&
+              item.shares_count == null &&
+              item.views_count != null && (
+                <span className='flex items-center gap-1.5'>
+                  <Heart size={12} className='text-rose-500' />
+                  {item.views_count.toLocaleString()}
+                </span>
+              )}
           </div>
         )}
       </div>
@@ -692,23 +891,46 @@ function Pagination({
   total,
   pageSize,
   onPageChange,
+  onPageSizeChange
 }: {
   page: number;
   totalPages: number;
   total: number;
   pageSize: number;
   onPageChange: (p: number) => void;
+  onPageSizeChange: (n: number) => void;
 }) {
-  if (totalPages <= 1) return null;
   const from = page * pageSize + 1;
   const to = Math.min((page + 1) * pageSize, total);
   return (
     <div className='flex flex-wrap items-center justify-between gap-3'>
       <p className='text-xs text-muted-foreground'>
-        Hiển thị <span className='font-semibold text-foreground'>{from.toLocaleString()}–{to.toLocaleString()}</span>{' '}
-        trong tổng <span className='font-semibold text-foreground'>{total.toLocaleString()}</span> bản ghi
+        Hiển thị{' '}
+        <span className='font-semibold text-foreground'>
+          {from.toLocaleString()}–{to.toLocaleString()}
+        </span>{' '}
+        trong tổng{' '}
+        <span className='font-semibold text-foreground'>
+          {total.toLocaleString()}
+        </span>{' '}
+        bản ghi
       </p>
       <div className='flex items-center gap-1.5'>
+        <Select
+          value={String(pageSize)}
+          onValueChange={(v) => onPageSizeChange(Number(v))}
+        >
+          <SelectTrigger className='h-8 w-[88px] text-xs'>
+            <SelectValue placeholder='50' />
+          </SelectTrigger>
+          <SelectContent align='end'>
+            {[10, 25, 50, 100].map((n) => (
+              <SelectItem key={n} value={String(n)}>
+                {n}/trang
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <Button
           size='sm'
           variant='outline'
@@ -747,10 +969,12 @@ interface Props {
 export function ContentViewer({ defaultCampaignId }: Props) {
   const [search, setSearch] = useState('');
   const [campaignId, setCampaignId] = useState(defaultCampaignId ?? '');
+  const [collection, setCollection] = useState('');
   const [platform, setPlatform] = useState('');
   const [contentType, setContentType] = useState('');
   const [viewingItem, setViewingItem] = useState<ContentItem | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [pageSize, setPageSize] = useState(50);
 
   const {
     items,
@@ -763,10 +987,13 @@ export function ContentViewer({ defaultCampaignId }: Props) {
     applyFilters,
     setPage,
     deleteItem,
-    reload,
-  } = useContent({
-    campaign_id: defaultCampaignId || undefined,
-  });
+    reload
+  } = useContent(
+    {
+      campaign_id: defaultCampaignId || undefined
+    },
+    { pageSize }
+  );
 
   const handleExport = (format: ExportFormat) => {
     setExporting(true);
@@ -778,19 +1005,60 @@ export function ContentViewer({ defaultCampaignId }: Props) {
   };
 
   const handleApply = (overrides?: { contentType?: string }) => {
-    const ct = overrides?.contentType !== undefined ? overrides.contentType : contentType;
+    const ct =
+      overrides?.contentType !== undefined
+        ? overrides.contentType
+        : contentType;
     applyFilters({
       search: search || undefined,
       campaign_id: campaignId || undefined,
+      collection: collection || undefined,
       platform: platform || undefined,
-      content_type: ct || undefined,
+      content_type: ct || undefined
     });
+  };
+
+  const applyWithNext = (next: {
+    search?: string;
+    campaignId?: string;
+    collection?: string;
+    platform?: string;
+    contentType?: string;
+  }) => {
+    const nextSearch = next.search ?? search;
+    const nextCampaignId = next.campaignId ?? campaignId;
+    const nextCollection = next.collection ?? collection;
+    const nextPlatform = next.platform ?? platform;
+    const nextContentType = next.contentType ?? contentType;
+    applyFilters({
+      search: nextSearch || undefined,
+      campaign_id: nextCampaignId || undefined,
+      collection: nextCollection || undefined,
+      platform: nextPlatform || undefined,
+      content_type: nextContentType || undefined
+    });
+  };
+
+  const handleCampaignIdChange = (v: string) => {
+    setCampaignId(v);
+    applyWithNext({ campaignId: v });
+  };
+
+  const handleCollectionChange = (v: string) => {
+    setCollection(v);
+    applyWithNext({ collection: v });
+  };
+
+  const handlePlatformChange = (v: string) => {
+    setPlatform(v);
+    applyWithNext({ platform: v });
   };
 
   const handleViewParent = (parentId: string) => {
     applyFilters({ content_hash: parentId });
     setSearch('');
     setCampaignId('');
+    setCollection('');
     setPlatform('');
     setContentType('');
   };
@@ -803,12 +1071,19 @@ export function ContentViewer({ defaultCampaignId }: Props) {
   const handleClear = () => {
     setSearch('');
     setCampaignId('');
+    setCollection('');
     setPlatform('');
     setContentType('');
     applyFilters({});
   };
 
-  const hasFilters = !!(search || campaignId || platform || contentType);
+  const hasFilters = !!(
+    search ||
+    campaignId ||
+    collection ||
+    platform ||
+    contentType
+  );
 
   return (
     <div className='space-y-5'>
@@ -851,11 +1126,17 @@ export function ContentViewer({ defaultCampaignId }: Props) {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align='end'>
-                <DropdownMenuItem onClick={() => handleExport('csv')} className='cursor-pointer'>
+                <DropdownMenuItem
+                  onClick={() => handleExport('csv')}
+                  className='cursor-pointer'
+                >
                   <FileText className='mr-2 size-3.5' />
                   CSV (streaming)
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleExport('xlsx')} className='cursor-pointer'>
+                <DropdownMenuItem
+                  onClick={() => handleExport('xlsx')}
+                  className='cursor-pointer'
+                >
                   <Database className='mr-2 size-3.5' />
                   Excel (.xlsx)
                 </DropdownMenuItem>
@@ -870,9 +1151,11 @@ export function ContentViewer({ defaultCampaignId }: Props) {
             search={search}
             onSearchChange={setSearch}
             campaignId={campaignId}
-            onCampaignIdChange={setCampaignId}
+            onCampaignIdChange={handleCampaignIdChange}
+            collection={collection}
+            onCollectionChange={handleCollectionChange}
             platform={platform}
-            onPlatformChange={setPlatform}
+            onPlatformChange={handlePlatformChange}
             contentType={contentType}
             onContentTypeChange={handleContentTypeChange}
             onRefresh={() => {
@@ -925,8 +1208,12 @@ export function ContentViewer({ defaultCampaignId }: Props) {
               page={page}
               totalPages={totalPages}
               total={total}
-              pageSize={50}
+              pageSize={pageSize}
               onPageChange={setPage}
+              onPageSizeChange={(n) => {
+                setPage(0);
+                setPageSize(n);
+              }}
             />
           </div>
         )}

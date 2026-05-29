@@ -66,7 +66,8 @@ export function EditAccountDialog({ account }: { account: AccountOut }) {
   const onSubmit = (data: FormData) => {
     const payload: Record<string, any> = {};
     if (data.password) payload.password = data.password;
-    if (data.display_name !== undefined) payload.display_name = data.display_name;
+    if (data.display_name !== undefined)
+      payload.display_name = data.display_name;
     if (data.tags !== undefined) payload.tags = data.tags;
     if (data.notes !== undefined) payload.notes = data.notes;
     mutate(
@@ -92,7 +93,11 @@ export function EditAccountDialog({ account }: { account: AccountOut }) {
           <div className='grid grid-cols-2 gap-4'>
             <div className='space-y-1'>
               <Label>{t('passwordLabel')}</Label>
-              <Input type='password' placeholder={t('passwordPlaceholder')} {...register('password')} />
+              <Input
+                type='password'
+                placeholder={t('passwordPlaceholder')}
+                {...register('password')}
+              />
             </div>
             <div className='space-y-1'>
               <Label>{t('displayNameLabel')}</Label>

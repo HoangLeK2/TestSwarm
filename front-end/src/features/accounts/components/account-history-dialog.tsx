@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from 'react';
 import { formatDistanceToNow } from 'date-fns';
-import { vi } from 'date-fns/locale';
+import { enUS, vi } from 'date-fns/locale';
 import { History } from 'lucide-react';
-import { useTranslations } from 'next-intl';
+import { useLocale, useTranslations } from 'next-intl';
 import { useAccountEvents } from '../hooks/use-accounts';
 import type { AccountOut } from '../services/api';
 import { Button } from '@/components/ui/button';
@@ -17,7 +17,10 @@ import {
   DialogTrigger
 } from '@/components/ui/dialog';
 
-const EVENT_VARIANT: Record<string, 'default' | 'secondary' | 'destructive' | 'outline'> = {
+const EVENT_VARIANT: Record<
+  string,
+  'default' | 'secondary' | 'destructive' | 'outline'
+> = {
   'account.usage_started': 'default',
   'account.usage_ended': 'secondary',
   'account.picked': 'outline',
@@ -28,8 +31,16 @@ const EVENT_VARIANT: Record<string, 'default' | 'secondary' | 'destructive' | 'o
   'account.cooldown_cleared': 'default'
 };
 
+function eventTypeKey(eventType: string): string {
+  return eventType.startsWith('account.')
+    ? eventType.slice('account.'.length)
+    : eventType;
+}
+
 export function AccountHistoryDialog({ account }: { account: AccountOut }) {
   const t = useTranslations('accountsFeature.history');
+  const locale = useLocale();
+  const dateLocale = locale === 'vi' ? vi : enUS;
   const [open, setOpen] = useState(false);
   const [cursor, setCursor] = useState<string | undefined>();
   const [allItems, setAllItems] = useState<
@@ -47,9 +58,7 @@ export function AccountHistoryDialog({ account }: { account: AccountOut }) {
       return;
     }
     if (!data?.items) return;
-    setAllItems((prev) =>
-      cursor ? [...prev, ...data.items] : data.items
-    );
+    setAllItems((prev) => (cursor ? [...prev, ...data.items] : data.items));
   }, [data, cursor, open]);
 
   const items = allItems;
@@ -62,11 +71,13 @@ export function AccountHistoryDialog({ account }: { account: AccountOut }) {
           {t('trigger')}
         </Button>
       </DialogTrigger>
-      <DialogContent className='max-h-[85vh] max-w-lg overflow-hidden flex flex-col'>
+      <DialogContent className='flex max-h-[85vh] max-w-lg flex-col overflow-hidden'>
         <DialogHeader>
-          <DialogTitle>{t('title', { username: account.username })}</DialogTitle>
+          <DialogTitle>
+            {t('title', { username: account.username })}
+          </DialogTitle>
         </DialogHeader>
-        <div className='flex-1 overflow-y-auto space-y-3 pr-1'>
+        <div className='flex-1 space-y-3 overflow-y-auto pr-1'>
           {isLoading && (
             <p className='text-sm text-muted-foreground'>{t('loading')}</p>
           )}
@@ -83,12 +94,14 @@ export function AccountHistoryDialog({ account }: { account: AccountOut }) {
                   variant={EVENT_VARIANT[ev.event_type] ?? 'outline'}
                   className='text-[10px] font-normal'
                 >
-                  {ev.event_type.replace('account.', '')}
+                  {t.has(`events.${eventTypeKey(ev.event_type)}`)
+                    ? t(`events.${eventTypeKey(ev.event_type)}`)
+                    : eventTypeKey(ev.event_type)}
                 </Badge>
                 <span className='text-xs text-muted-foreground'>
                   {formatDistanceToNow(new Date(ev.created_at), {
                     addSuffix: true,
-                    locale: vi
+                    locale: dateLocale
                   })}
                 </span>
               </div>

@@ -5,7 +5,7 @@ import {
   getInsertMenuForUi,
   getStepDisplay,
   getStepTypeName,
-  type FlowStepTranslator,
+  type FlowStepTranslator
 } from './constants';
 
 /** Campaign flow editor + step list i18n helpers. */
@@ -16,7 +16,10 @@ export function useCampaignFlowI18n() {
   const tValidation = useTranslations('campaignsFeature.scenarioValidation');
 
   const stepT: FlowStepTranslator = (key, values) =>
-    tStep(key as Parameters<typeof tStep>[0], values as Record<string, string | number>);
+    tStep(
+      key as Parameters<typeof tStep>[0],
+      values as Record<string, string | number>
+    );
 
   return {
     tInsert,
@@ -24,6 +27,7 @@ export function useCampaignFlowI18n() {
     tValidation,
     getInsertMenu: () => getInsertMenuForUi(tInsert),
     getStepTypeName: (type: string) => getStepTypeName(type, stepT),
-    getStepDisplay: (step: Parameters<typeof getStepDisplay>[0]) => getStepDisplay(step, stepT),
+    getStepDisplay: (step: Parameters<typeof getStepDisplay>[0]) =>
+      getStepDisplay(step, stepT)
   };
 }

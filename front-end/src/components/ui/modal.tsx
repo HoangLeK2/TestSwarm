@@ -74,7 +74,7 @@ export const Modal: React.FC<ModalProps> = ({
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       <DialogContent
         className={cn(
-          'max-w-3xl overflow-hidden p-0 z-50',
+          'z-50 max-w-3xl overflow-hidden p-0',
           !!wrapperClassName && wrapperClassName
         )}
         onClose={onClose}

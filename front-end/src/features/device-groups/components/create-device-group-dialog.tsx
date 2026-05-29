@@ -20,7 +20,10 @@ import {
   DialogTrigger
 } from '@/components/ui/dialog';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
-import { HexColorPopover, sanitizeHex } from '@/components/ui/hex-color-popover';
+import {
+  HexColorPopover,
+  sanitizeHex
+} from '@/components/ui/hex-color-popover';
 import { DeviceGroupFormPreview } from './device-group-form-preview';
 
 type FormData = {
@@ -52,7 +55,11 @@ export function CreateDeviceGroupDialog() {
   });
 
   const name = useWatch({ control, name: 'name', defaultValue: '' });
-  const description = useWatch({ control, name: 'description', defaultValue: '' });
+  const description = useWatch({
+    control,
+    name: 'description',
+    defaultValue: ''
+  });
   const color = useWatch({ control, name: 'color', defaultValue: '#6366f1' });
 
   const onSubmit = (data: FormData) => {
@@ -62,7 +69,12 @@ export function CreateDeviceGroupDialog() {
         description: data.description,
         color: sanitizeHex(data.color || '#6366f1')
       },
-      { onSuccess: () => { reset(); setOpen(false); } }
+      {
+        onSuccess: () => {
+          reset();
+          setOpen(false);
+        }
+      }
     );
   };
 
@@ -95,14 +107,20 @@ export function CreateDeviceGroupDialog() {
                 className='transition-colors duration-200'
                 {...register('name')}
               />
-              <p className='text-[11px] leading-snug text-muted-foreground'>{tForm('nameHint')}</p>
+              <p className='text-[11px] leading-snug text-muted-foreground'>
+                {tForm('nameHint')}
+              </p>
               {errors.name && (
-                <p className='text-xs text-destructive'>{errors.name.message}</p>
+                <p className='text-xs text-destructive'>
+                  {errors.name.message}
+                </p>
               )}
             </div>
 
             <div className='space-y-1.5'>
-              <Label htmlFor='device-group-create-description'>{t('descriptionLabel')}</Label>
+              <Label htmlFor='device-group-create-description'>
+                {t('descriptionLabel')}
+              </Label>
               <Textarea
                 id='device-group-create-description'
                 placeholder={t('descriptionPlaceholder')}
@@ -110,11 +128,15 @@ export function CreateDeviceGroupDialog() {
                 className='min-h-[80px] resize-y transition-colors duration-200'
                 {...register('description')}
               />
-              <p className='text-[11px] leading-snug text-muted-foreground'>{tForm('descriptionHint')}</p>
+              <p className='text-[11px] leading-snug text-muted-foreground'>
+                {tForm('descriptionHint')}
+              </p>
             </div>
 
             <div className='space-y-1.5'>
-              <Label htmlFor='device-group-create-color-trigger'>{t('colorLabel')}</Label>
+              <Label htmlFor='device-group-create-color-trigger'>
+                {t('colorLabel')}
+              </Label>
               <Controller
                 name='color'
                 control={control}
@@ -127,7 +149,9 @@ export function CreateDeviceGroupDialog() {
                   />
                 )}
               />
-              <p className='text-[11px] leading-snug text-muted-foreground'>{tForm('colorHint')}</p>
+              <p className='text-[11px] leading-snug text-muted-foreground'>
+                {tForm('colorHint')}
+              </p>
             </div>
 
             {error && (
@@ -136,7 +160,11 @@ export function CreateDeviceGroupDialog() {
               </p>
             )}
 
-            <Button type='submit' className='w-full cursor-pointer' disabled={isPending}>
+            <Button
+              type='submit'
+              className='w-full cursor-pointer'
+              disabled={isPending}
+            >
               {isPending ? t('creating') : t('submit')}
             </Button>
           </form>

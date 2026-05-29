@@ -23,4 +23,3 @@ export const taskSchema = z.object({
 
 export type DeviceSchema = z.infer<typeof deviceSchema>;
 export type TaskSchema = z.infer<typeof taskSchema>;
-

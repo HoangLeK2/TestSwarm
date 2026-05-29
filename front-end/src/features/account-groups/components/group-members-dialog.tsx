@@ -25,6 +25,18 @@ import {
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import { cn } from '@/lib/utils';
 
+function accountStatusLabel(
+  status: string,
+  tStatus: (key: string) => string
+): string {
+  const key = status.toLowerCase();
+  if (key === 'active') return tStatus('statusActive');
+  if (key === 'cooldown') return tStatus('statusCooldown');
+  if (key === 'banned') return tStatus('statusBanned');
+  if (key === 'disabled') return tStatus('statusDisabled');
+  return status;
+}
+
 export function GroupMembersDialog({
   group,
   open,
@@ -35,6 +47,7 @@ export function GroupMembersDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const t = useTranslations('accountGroupsFeature');
+  const tStatus = useTranslations('accountsFeature.list');
   const { data: members, isLoading: membersLoading } = useAccountGroupMembers(
     open ? group.id : ''
   );
@@ -85,9 +98,7 @@ export function GroupMembersDialog({
           setStaged(new Set());
         },
         onError: (err) => {
-          toast.error(
-            formatFarmApiError(err, t('addedSuccess', { count: 0 }))
-          );
+          toast.error(formatFarmApiError(err, t('addedSuccess', { count: 0 })));
         }
       }
     );
@@ -107,7 +118,8 @@ export function GroupMembersDialog({
   const statusVariant = (status: string) => {
     const s = (status || '').toLowerCase();
     if (s === 'active' || s === 'ready') return 'default';
-    if (s === 'banned' || s === 'error' || s === 'disabled') return 'destructive';
+    if (s === 'banned' || s === 'error' || s === 'disabled')
+      return 'destructive';
     return 'secondary';
   };
 
@@ -166,7 +178,7 @@ export function GroupMembersDialog({
                           variant={statusVariant(m.status)}
                           className='text-[10px]'
                         >
-                          {m.status}
+                          {accountStatusLabel(m.status, tStatus)}
                         </Badge>
                       </div>
                       {m.display_name && (
@@ -249,7 +261,7 @@ export function GroupMembersDialog({
                             variant={statusVariant(acc.status)}
                             className='text-[10px]'
                           >
-                            {acc.status}
+                            {accountStatusLabel(acc.status, tStatus)}
                           </Badge>
                         </div>
                         {acc.display_name && (

@@ -4,7 +4,7 @@ import { isControlFlow, type FlowStep } from '../scenario-steps/types';
 import {
   decodeFlowListRef,
   type FlowListRef,
-  stableStepDnDId,
+  stableStepDnDId
 } from './flow-dnd-ids';
 
 function readListKeyFromNode(node: FlowStep, listKey: string): FlowStep[] {
@@ -12,18 +12,27 @@ function readListKeyFromNode(node: FlowStep, listKey: string): FlowStep[] {
     const m = listKey.match(/^branches\.(\d+)\.steps$/);
     if (!m) return [];
     const bi = parseInt(m[1]!, 10);
-    return ((node as { branches?: Array<{ steps?: FlowStep[] }> }).branches?.[bi]?.steps ??
-      []) as FlowStep[];
+    return ((node as { branches?: Array<{ steps?: FlowStep[] }> }).branches?.[
+      bi
+    ]?.steps ?? []) as FlowStep[];
   }
-  return ((node as Record<string, unknown>)[listKey] as FlowStep[] | undefined) ?? [];
+  return (
+    ((node as Record<string, unknown>)[listKey] as FlowStep[] | undefined) ?? []
+  );
 }
 
-function setListKeyOnNode(node: FlowStep, listKey: string, newList: FlowStep[]): FlowStep {
+function setListKeyOnNode(
+  node: FlowStep,
+  listKey: string,
+  newList: FlowStep[]
+): FlowStep {
   if (listKey.startsWith('branches.')) {
     const m = listKey.match(/^branches\.(\d+)\.steps$/);
     if (!m) return node;
     const bi = parseInt(m[1]!, 10);
-    const branches = [...(((node as { branches?: unknown[] }).branches ?? []) as object[])];
+    const branches = [
+      ...(((node as { branches?: unknown[] }).branches ?? []) as object[])
+    ];
     const cur = (branches[bi] ?? {}) as { steps?: FlowStep[]; weight?: number };
     branches[bi] = { ...cur, steps: newList };
     return { ...node, branches } as FlowStep;
@@ -35,14 +44,23 @@ function replaceInStep(
   step: FlowStep,
   path: Array<{ listKey: string; childIndex: number }>,
   listKey: string,
-  newList: FlowStep[],
+  newList: FlowStep[]
 ): FlowStep {
   if (path.length === 0) {
     return setListKeyOnNode(step, listKey, newList);
   }
   const [head, ...rest] = path;
-  const arr = [...(((step as Record<string, unknown>)[head.listKey] as FlowStep[] | undefined) ?? [])];
-  arr[head.childIndex] = replaceInStep(arr[head.childIndex]!, rest, listKey, newList);
+  const arr = [
+    ...(((step as Record<string, unknown>)[head.listKey] as
+      | FlowStep[]
+      | undefined) ?? [])
+  ];
+  arr[head.childIndex] = replaceInStep(
+    arr[head.childIndex]!,
+    rest,
+    listKey,
+    newList
+  );
   return { ...step, [head.listKey]: arr } as FlowStep;
 }
 
@@ -52,7 +70,9 @@ export function readFlowList(steps: FlowStep[], ref: FlowListRef): FlowStep[] {
   if (!root) return [];
   let node: FlowStep = root;
   for (const seg of ref.pathToBracket) {
-    const arr = (node as Record<string, unknown>)[seg.listKey] as FlowStep[] | undefined;
+    const arr = (node as Record<string, unknown>)[seg.listKey] as
+      | FlowStep[]
+      | undefined;
     node = arr?.[seg.childIndex]!;
     if (!node) return [];
   }
@@ -62,17 +82,28 @@ export function readFlowList(steps: FlowStep[], ref: FlowListRef): FlowStep[] {
 export function writeFlowList(
   steps: FlowStep[],
   ref: Extract<FlowListRef, { kind: 'nested' }>,
-  newList: FlowStep[],
+  newList: FlowStep[]
 ): FlowStep[] {
   const next = [...steps];
   const root = next[ref.rootIndex];
   if (!root) return steps;
-  next[ref.rootIndex] = replaceInStep(root, ref.pathToBracket, ref.listKey, newList);
+  next[ref.rootIndex] = replaceInStep(
+    root,
+    ref.pathToBracket,
+    ref.listKey,
+    newList
+  );
   return next;
 }
 
-function tryRemoveFromStep(step: FlowStep, dragId: string): { step: FlowStep; removed: FlowStep } | null {
-  const tryList = (listKey: string, arr: FlowStep[]): { step: FlowStep; removed: FlowStep } | null => {
+function tryRemoveFromStep(
+  step: FlowStep,
+  dragId: string
+): { step: FlowStep; removed: FlowStep } | null {
+  const tryList = (
+    listKey: string,
+    arr: FlowStep[]
+  ): { step: FlowStep; removed: FlowStep } | null => {
     const idx = arr.findIndex((s, i) => stableStepDnDId(s, i) === dragId);
     if (idx < 0) return null;
     const removed = arr[idx]!;
@@ -93,7 +124,8 @@ function tryRemoveFromStep(step: FlowStep, dragId: string): { step: FlowStep; re
     const r = tryList('else', sx.else as FlowStep[]);
     if (r) return r;
   }
-  const branches = (step as { branches?: Array<{ steps?: FlowStep[] }> }).branches;
+  const branches = (step as { branches?: Array<{ steps?: FlowStep[] }> })
+    .branches;
   if (Array.isArray(branches)) {
     for (let bi = 0; bi < branches.length; bi++) {
       const bSteps = branches[bi]?.steps;
@@ -108,7 +140,10 @@ function tryRemoveFromStep(step: FlowStep, dragId: string): { step: FlowStep; re
     }
   }
 
-  const recurseInto = (listKey: string, arr: FlowStep[]): { step: FlowStep; removed: FlowStep } | null => {
+  const recurseInto = (
+    listKey: string,
+    arr: FlowStep[]
+  ): { step: FlowStep; removed: FlowStep } | null => {
     const nextArr = [...arr];
     for (let i = 0; i < nextArr.length; i++) {
       const ch = nextArr[i]!;
@@ -116,7 +151,10 @@ function tryRemoveFromStep(step: FlowStep, dragId: string): { step: FlowStep; re
       const inner = tryRemoveFromStep(ch, dragId);
       if (inner) {
         nextArr[i] = inner.step;
-        return { step: setListKeyOnNode(step, listKey, nextArr), removed: inner.removed };
+        return {
+          step: setListKeyOnNode(step, listKey, nextArr),
+          removed: inner.removed
+        };
       }
     }
     return null;
@@ -147,7 +185,10 @@ function tryRemoveFromStep(step: FlowStep, dragId: string): { step: FlowStep; re
           nextArr[i] = inner.step;
           const nb = [...branches];
           nb[bi] = { ...nb[bi]!, steps: nextArr };
-          return { step: { ...step, branches: nb } as FlowStep, removed: inner.removed };
+          return {
+            step: { ...step, branches: nb } as FlowStep,
+            removed: inner.removed
+          };
         }
       }
     }
@@ -159,7 +200,7 @@ function tryRemoveFromStep(step: FlowStep, dragId: string): { step: FlowStep; re
 /** Remove first step whose stable id matches (DFS). Returns unchanged steps if not found. */
 export function removeStepByDragId(
   steps: FlowStep[],
-  dragId: string,
+  dragId: string
 ): { steps: FlowStep[]; removed: FlowStep | null } {
   const ri = steps.findIndex((s, i) => stableStepDnDId(s, i) === dragId);
   if (ri >= 0) {
@@ -183,7 +224,7 @@ export function insertStepInList(
   steps: FlowStep[],
   ref: FlowListRef,
   index: number,
-  step: FlowStep,
+  step: FlowStep
 ): FlowStep[] {
   if (ref.kind === 'root') {
     const arr = [...steps];
@@ -199,13 +240,17 @@ export function insertStepInList(
 export function applyFlowDragEnd(
   event: DragEndEvent,
   steps: FlowStep[],
-  onChange: (next: FlowStep[]) => void,
+  onChange: (next: FlowStep[]) => void
 ): void {
   const { active, over } = event;
   if (!over) return;
 
-  const activeContainer = active.data.current?.sortable?.containerId as string | undefined;
-  const overContainer = over.data.current?.sortable?.containerId as string | undefined;
+  const activeContainer = active.data.current?.sortable?.containerId as
+    | string
+    | undefined;
+  const overContainer = over.data.current?.sortable?.containerId as
+    | string
+    | undefined;
   if (!activeContainer || !overContainer) return;
 
   const activeRef = decodeFlowListRef(activeContainer);

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from typing import FrozenSet
 
+# Many devices (e.g. Vivo) omit scrollable="true" on RecyclerView in hierarchy dumps.
 XPATH_RECYCLER = (
-    '//node[contains(@class, "RecyclerView") and @scrollable="true"]'
-    '|//node[contains(@class, "StaggeredGridLayoutManager") and @scrollable="true"]'
+    '//node[contains(@class, "RecyclerView")]'
+    '|//node[contains(@class, "StaggeredGridLayoutManager")]'
 )
 
 XPATH_LIST = '//node[contains(@class, "ListView") and @scrollable="true"]'

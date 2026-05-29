@@ -63,7 +63,9 @@ export function HexColorPopover({
             className='size-6 shrink-0 rounded-md border bg-background shadow-sm'
             style={{ backgroundColor: safe }}
           />
-          <span className='font-mono text-xs text-muted-foreground'>{safe}</span>
+          <span className='font-mono text-xs text-muted-foreground'>
+            {safe}
+          </span>
         </Button>
       </PopoverTrigger>
       <PopoverContent

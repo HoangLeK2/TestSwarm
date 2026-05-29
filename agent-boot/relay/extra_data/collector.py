@@ -20,6 +20,22 @@ def _collect_lock(serial: str) -> asyncio.Lock:
     return lock
 
 
+def release_collect_lock(serial: str) -> None:
+    """Drop the per-serial collect lock if it is idle.
+
+    Called from the device-offline cascade in the relay agent so phones that
+    are cycled (cradle / USB replug) do not slowly grow this map. Safe to
+    call when a lock is held — in that case we leave it in place and the
+    holder will finish normally; the next OFFLINE event will free it.
+    """
+    lock = _collect_locks.get(serial)
+    if lock is None:
+        return
+    if lock.locked():
+        return
+    _collect_locks.pop(serial, None)
+
+
 _COMMENT_STRATEGIES = frozenset({
     "fb_comments",
     "ig_comments",
@@ -486,43 +502,71 @@ async def _collect_comment_snapshots(
     context: dict[str, Any],
     initial_xml: str,
 ) -> list[str]:
-    """Mirror APK collectCommentXmlSnapshots using u2 swipe + dump."""
-    passes = _int_context(context, "comment_scroll_passes", 0, 0, 20)
-    if passes <= 0:
+    """Swipe through the comment list, dumping hierarchy every N swipes (not every swipe)."""
+    swipe_budget = _int_context(context, "comment_scroll_passes", 36, 0, 80)
+    if swipe_budget <= 0:
         return [initial_xml]
 
-    min_passes = _int_context(context, "min_comment_scan_passes", 1, 0, passes)
-    no_growth_break = _int_context(context, "comment_no_growth_break", 3, 0, 20)
-    max_snapshots = _int_context(context, "comment_max_snapshots", 16, 1, 31)
+    swipes_per_dump = _int_context(context, "comment_swipes_per_dump", 3, 1, 6)
+    dump_cycles = max(1, (swipe_budget + swipes_per_dump - 1) // swipes_per_dump)
+    min_dumps = _int_context(context, "min_comment_scan_passes", 2, 0, dump_cycles)
+    no_growth_break = _int_context(context, "comment_no_growth_break", 8, 0, 24)
+    max_snapshots = _int_context(
+        context, "comment_max_snapshots", max(20, dump_cycles + 1), 1, 50
+    )
     max_xml_bytes = _int_context(context, "comment_xml_max_bytes", 6 * 1024 * 1024, 512 * 1024, 7 * 1024 * 1024)
-    distance = _float_context(context, "comment_scroll_distance", 0.22, 0.08, 0.75)
-    duration_ms = _int_context(context, "comment_scroll_duration_ms", 340, 120, 1600)
-    pause_s = _float_context(context, "comment_scroll_pause_s", 0.30, 0.05, 4.0)
+    distance = _float_context(context, "comment_scroll_distance", 0.70, 0.08, 0.85)
+    duration_ms = _int_context(context, "comment_scroll_duration_ms", 60, 40, 800)
+    swipe_pause_s = _float_context(context, "comment_scroll_pause_s", 0.02, 0.0, 4.0)
+    recover_chrome = _bool_context(context, "comment_recover_chrome", True)
 
-    from relay.extra_data.parsers.facebook.comment_pipeline import resolve_comment_scroll_swipe_from_xml
+    from relay.extra_data.parsers.facebook.comment_pipeline import (
+        detect_comment_sheet_interrupt_from_xml,
+        resolve_comment_scroll_swipe_from_xml,
+    )
 
+    async def _recover_comment_chrome(xml: str) -> str:
+        if not recover_chrome:
+            return xml
+        reason = detect_comment_sheet_interrupt_from_xml(xml)
+        if not reason:
+            return xml
+        logger.info("[%s] extra_data comment recovery: %s — press BACK", serial, reason)
+        await _press_back(executor, serial)
+        await asyncio.sleep(0.22)
+        fresh = await _dump_hierarchy(executor, serial, context)
+        return fresh if fresh else xml
+
+    initial_xml = await _recover_comment_chrome(initial_xml)
     snapshots: list[str] = [initial_xml]
-    seen: set[str] = {_sha256_hex(initial_xml)}
+    seen_xml: set[str] = {_sha256_hex(initial_xml)}
     total_xml_bytes = len(initial_xml.encode("utf-8"))
-    unchanged_passes = 0
+    # Stop after N consecutive dumps with identical hierarchy (end of list / scroll stuck).
+    unchanged_dumps = 0
     scroll_xml = initial_xml
+    # Slightly longer than minimum so Android treats the gesture as scroll, not tap.
     duration_s = max(0.12, duration_ms / 1000.0)
+    settle_after_batch_s = max(swipe_pause_s, 0.14)
+    use_screen_swipe = False
+    swipes_done = 0
+
+    async def _screen_swipe_coords() -> tuple[int, int, int, int]:
+        width, height = await _window_size(executor, serial)
+        x = int(width * 0.68)
+        ratio = max(0.12, min(0.75, float(distance)))
+        fy = int(height * 0.58)
+        ty = int(height * max(0.22, 0.58 - ratio))
+        return x, fy, x, ty
 
     async def _swipe_coords() -> tuple[int, int, int, int]:
+        if use_screen_swipe:
+            return await _screen_swipe_coords()
         node_swipe = resolve_comment_scroll_swipe_from_xml(scroll_xml, distance_ratio=distance)
         if node_swipe:
             return node_swipe
-        width, height = await _window_size(executor, serial)
-        x = int(width * 0.55)
-        fy = int(height * 0.74)
-        ty = int(height * max(0.18, 0.74 - distance))
-        return x, fy, x, ty
+        return await _screen_swipe_coords()
 
-    for i in range(passes):
-        if len(snapshots) >= max_snapshots:
-            logger.info("[%s] extra_data comment snapshot cap reached: %d", serial, len(snapshots))
-            break
-
+    async def _do_swipe() -> bool:
         fx, fy, tx, ty = await _swipe_coords()
         swipe_result = await executor.run_batch(
             serial,
@@ -536,16 +580,34 @@ async def _collect_comment_snapshots(
             }],
             early_exit=True,
         )
-        if not swipe_result.get("ok"):
-            logger.warning("[%s] extra_data comment swipe failed at pass %d", serial, i + 1)
+        return bool(swipe_result.get("ok"))
+
+    cycle = 0
+    while cycle < dump_cycles:
+        if len(snapshots) >= max_snapshots or swipes_done >= swipe_budget:
             break
 
-        if pause_s > 0:
-            await asyncio.sleep(pause_s)
+        batch_swipes = min(swipes_per_dump, swipe_budget - swipes_done)
+        swipes_before_batch = swipes_done
+        for _ in range(batch_swipes):
+            if not await _do_swipe():
+                logger.warning(
+                    "[%s] extra_data comment swipe failed at swipe %d",
+                    serial,
+                    swipes_done + 1,
+                )
+                return snapshots
+            swipes_done += 1
+            if swipe_pause_s > 0:
+                await asyncio.sleep(swipe_pause_s)
+
+        if settle_after_batch_s > 0:
+            await asyncio.sleep(settle_after_batch_s)
 
         next_xml = await _dump_hierarchy(executor, serial, context)
         if not next_xml:
             break
+        next_xml = await _recover_comment_chrome(next_xml)
 
         next_bytes = len(next_xml.encode("utf-8"))
         if total_xml_bytes + next_bytes > max_xml_bytes:
@@ -553,20 +615,91 @@ async def _collect_comment_snapshots(
             break
 
         digest = _sha256_hex(next_xml)
-        if digest in seen:
-            unchanged_passes += 1
-            if no_growth_break > 0 and (i + 1) >= min_passes and unchanged_passes >= no_growth_break:
-                logger.info("[%s] extra_data comment no-growth break after %d passes", serial, i + 1)
-                break
+        duplicate_xml = digest in seen_xml
+
+        if not duplicate_xml:
+            seen_xml.add(digest)
+            snapshots.append(next_xml)
+            total_xml_bytes += next_bytes
+            unchanged_dumps = 0
+            use_screen_swipe = False
+            scroll_xml = next_xml
+            cycle += 1
             continue
 
-        seen.add(digest)
-        snapshots.append(next_xml)
-        total_xml_bytes += next_bytes
-        unchanged_passes = 0
-        scroll_xml = next_xml
+        unchanged_dumps += 1
+        if not use_screen_swipe and unchanged_dumps <= 2:
+            logger.info(
+                "[%s] extra_data comment scroll unchanged XML — retry with screen swipe "
+                "(dump cycle %d)",
+                serial,
+                cycle + 1,
+            )
+            use_screen_swipe = True
+            swipes_done = swipes_before_batch
+            continue
+        if (
+            no_growth_break > 0
+            and (cycle + 1) >= min_dumps
+            and unchanged_dumps >= no_growth_break
+        ):
+            logger.info(
+                "[%s] extra_data comment no-growth break after %d dump cycles "
+                "(%d swipes, %d unchanged XML dumps, snapshots=%d)",
+                serial,
+                cycle + 1,
+                swipes_done,
+                unchanged_dumps,
+                len(snapshots),
+            )
+            break
+        cycle += 1
 
+    logger.info(
+        "[%s] extra_data comment scroll done swipes=%d dumps=%d snapshots=%d",
+        serial,
+        swipes_done,
+        len(snapshots),
+        len(snapshots),
+    )
     return snapshots
+
+
+async def _press_back(executor: Any, serial: str) -> bool:
+    """Best-effort BACK key press to bail out of an unintended sheet/dialog."""
+    try:
+        result = await executor.run_batch(
+            serial,
+            [{"op": "press_key", "key": "back"}],
+            early_exit=True,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("[%s] press_back failed: %s", serial, exc)
+        return False
+    if not result.get("ok"):
+        return False
+    results = result.get("results") or []
+    return bool(results and results[0].get("ok"))
+
+
+def _diag_sheet_opened(xml: str | None) -> bool:
+    """Return True iff the post-tap hierarchy looks like an FB comment sheet."""
+    if not xml:
+        return False
+    try:
+        from relay.extra_data.parsers.facebook import (
+            _hierarchy_is_fb_comment_sheet,
+            _parse_xml,
+        )
+    except Exception:  # pragma: no cover - import safety
+        return False
+    root = _parse_xml(xml)
+    if root is None:
+        return False
+    try:
+        return bool(_hierarchy_is_fb_comment_sheet(root))
+    except Exception:  # pragma: no cover - parser safety
+        return False
 
 
 async def collect_fb_comment_target_with_tap(
@@ -575,7 +708,13 @@ async def collect_fb_comment_target_with_tap(
     context: dict[str, Any],
 ) -> tuple[list[str], str | None, bool, dict[str, Any]]:
     """
-    One u2 session: HTTP dump → resolve target → tap → settle (no reconnect between steps).
+    One u2 session: HTTP dump → resolve target → tap → settle → verify (no reconnect between steps).
+
+    When the post-tap hierarchy does not look like a comment sheet we press
+    BACK and retry the next-best alternate so the locked anchor stays in sync
+    with the post that actually opened. Retry count is capped tightly to keep
+    the worst-case extra latency small (`comment_target_verify_max_retries`,
+    default 1, hard-capped at 3).
     """
     from relay.extra_data.ingest import _parse_items
 
@@ -592,34 +731,120 @@ async def collect_fb_comment_target_with_tap(
                 return [], "u2_hierarchy_unavailable", False, {"reason_code": "u2_hierarchy_unavailable"}
 
             _, diagnostic = _parse_items("fb_comment_target", xml, context)
+
+            if diagnostic.get("reason_code") == "already_on_comment_sheet":
+                diagnostic["verified"] = True
+                logger.info(
+                    "[%s] extra_data fb_comment_target_tap: already on comment sheet — skip tap",
+                    serial,
+                )
+                return [xml], None, False, diagnostic
+
+            primary = diagnostic.get("target") if isinstance(diagnostic.get("target"), dict) else None
+            alternates_raw = diagnostic.get("alternates") if isinstance(diagnostic.get("alternates"), list) else []
+            alternates = [t for t in alternates_raw if isinstance(t, dict)]
+            candidates = ([primary] if primary else []) + alternates
+
+            verify_enabled = _bool_context(context, "comment_target_verify", True)
+            verify_max_retries = _int_context(
+                context, "comment_target_verify_max_retries", 1, 0, 3
+            )
+            settle_s = _float_context(context, "post_tap_wait_s", 0.6, 0.0, 3.0)
+            verify_back_settle_s = _float_context(
+                context, "comment_target_verify_back_settle_s", 0.6, 0.0, 3.0
+            )
+
+            max_attempts = min(len(candidates), 1 + verify_max_retries) if verify_enabled else min(len(candidates), 1)
+            attempts: list[dict[str, Any]] = []
             tapped = False
-            target = diagnostic.get("target") if isinstance(diagnostic.get("target"), dict) else None
-            bounds = target.get("bounds") if target else None
-            if isinstance(bounds, list) and len(bounds) == 4:
+            chosen: dict[str, Any] | None = None
+            chosen_index: int | None = None
+
+            for attempt_idx in range(max_attempts):
+                cand = candidates[attempt_idx]
+                bounds = cand.get("bounds") if isinstance(cand, dict) else None
+                if not (isinstance(bounds, list) and len(bounds) == 4):
+                    attempts.append(
+                        {"index": attempt_idx, "skipped": True, "reason": "invalid_bounds"}
+                    )
+                    continue
                 x1, y1, x2, y2 = [int(v) for v in bounds]
                 cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-                if await _u2_click(executor, serial, cx, cy):
-                    tapped = True
-                    logger.info(
-                        "[%s] extra_data fb_comment_target_tap: tapped at (%d,%d)",
-                        serial,
-                        cx,
-                        cy,
+                click_ok = await _u2_click(executor, serial, cx, cy)
+                if not click_ok:
+                    attempts.append(
+                        {"index": attempt_idx, "tapped": False, "reason": "tap_failed"}
                     )
-                    settle_s = _float_context(context, "post_tap_wait_s", 0.6, 0.0, 3.0)
-                    if settle_s > 0:
-                        await asyncio.sleep(settle_s)
-            else:
+                    continue
+                tapped = True
+                logger.info(
+                    "[%s] extra_data fb_comment_target_tap attempt=%d tap at (%d,%d) post_key=%s",
+                    serial,
+                    attempt_idx,
+                    cx,
+                    cy,
+                    cand.get("post_key"),
+                )
+                if settle_s > 0:
+                    await asyncio.sleep(settle_s)
+
+                if not verify_enabled:
+                    attempts.append(
+                        {"index": attempt_idx, "tapped": True, "verified": "skipped"}
+                    )
+                    chosen = cand
+                    chosen_index = attempt_idx
+                    break
+
+                post_tap_xml = await _dump_hierarchy(executor, serial, context)
+                opened = _diag_sheet_opened(post_tap_xml)
+                attempts.append(
+                    {
+                        "index": attempt_idx,
+                        "tapped": True,
+                        "verified": opened,
+                        "post_xml_available": post_tap_xml is not None,
+                    }
+                )
+                if opened:
+                    chosen = cand
+                    chosen_index = attempt_idx
+                    break
+
+                # Sheet did not open: press BACK to leave whatever popped up
+                # before retrying the next-best candidate.
+                is_last = attempt_idx >= max_attempts - 1
+                if not is_last:
+                    backed = await _press_back(executor, serial)
+                    if verify_back_settle_s > 0:
+                        await asyncio.sleep(verify_back_settle_s)
+                    attempts[-1]["back_pressed"] = backed
+                    logger.info(
+                        "[%s] extra_data fb_comment_target_tap attempt=%d verify_failed back=%s — trying next alternate",
+                        serial,
+                        attempt_idx,
+                        backed,
+                    )
+
+            if primary is None:
                 logger.info(
                     "[%s] extra_data fb_comment_target_tap: skip tap reason=%s",
                     serial,
                     diagnostic.get("reason_code"),
                 )
+
+            diagnostic["target"] = chosen if chosen is not None else primary
+            diagnostic["verify_attempts"] = attempts
+            diagnostic["verified"] = bool(chosen is not None)
+            diagnostic["chosen_index"] = chosen_index
             logger.info(
-                "[%s] extra_data collect+tap done snapshots=1 total=%.2fs tapped=%s",
+                "[%s] extra_data collect+tap done snapshots=1 total=%.2fs tapped=%s verified=%s attempts=%d chosen_index=%s",
                 serial,
                 time.monotonic() - collect_started,
                 tapped,
+                diagnostic["verified"],
+                len(attempts),
+                chosen_index,
             )
             return [xml], None, tapped, diagnostic
 
@@ -776,7 +1001,16 @@ async def collect_xml_snapshots(
 
             expand_default = strategy in _POST_STRATEGIES or str(strategy).endswith("_posts")
             cached_xml: str | None = None
-            if _bool_context(context, "expand_see_more", expand_default):
+            expand_requested = _bool_context(context, "expand_see_more", expand_default)
+            if strategy in _COMMENT_STRATEGIES:
+                if expand_requested:
+                    logger.info(
+                        "[%s] extra_data expand_see_more skipped for %s (comment sheet has no see-more)",
+                        serial,
+                        strategy,
+                    )
+                expand_requested = False
+            if expand_requested:
                 expand_ctx = dict(context)
                 if strategy in _POST_STRATEGIES or str(strategy).endswith("_posts"):
                     # Facebook: dump+coordinate tap first; avoids 30–60s u2 selector/reconnect loops.

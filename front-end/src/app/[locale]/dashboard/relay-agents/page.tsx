@@ -11,7 +11,7 @@ import {
   RefreshCw,
   Server,
   Trash2,
-  Wifi,
+  Wifi
 } from 'lucide-react';
 import { useFormatter, useTranslations } from 'next-intl';
 import { toast } from 'sonner';
@@ -24,7 +24,7 @@ import {
   DialogDescription,
   DialogFooter,
   DialogHeader,
-  DialogTitle,
+  DialogTitle
 } from '@/components/ui/dialog';
 import {
   AlertDialog,
@@ -34,7 +34,7 @@ import {
   AlertDialogDescription,
   AlertDialogFooter,
   AlertDialogHeader,
-  AlertDialogTitle,
+  AlertDialogTitle
 } from '@/components/ui/alert-dialog';
 import {
   Table,
@@ -42,7 +42,7 @@ import {
   TableCell,
   TableHead,
   TableHeader,
-  TableRow,
+  TableRow
 } from '@/components/ui/table';
 import {
   devicesApi,
@@ -51,7 +51,7 @@ import {
   type RelayAgentOut,
   type RelayBatchJobOut,
   type RelayAgentTokenCreated,
-  type RelayAgentTokenOut,
+  type RelayAgentTokenOut
 } from '@/features/devices/services/manage-api';
 
 function RelayTokenSection({ tokens }: { tokens: RelayAgentTokenOut[] }) {
@@ -62,7 +62,8 @@ function RelayTokenSection({ tokens }: { tokens: RelayAgentTokenOut[] }) {
   const [createdOpen, setCreatedOpen] = useState(false);
   const [revokeId, setRevokeId] = useState<string | null>(null);
   const [name, setName] = useState('');
-  const [createdToken, setCreatedToken] = useState<RelayAgentTokenCreated | null>(null);
+  const [createdToken, setCreatedToken] =
+    useState<RelayAgentTokenCreated | null>(null);
 
   const activeTokens = tokens.filter((token) => token.status === 'active');
 
@@ -74,7 +75,7 @@ function RelayTokenSection({ tokens }: { tokens: RelayAgentTokenOut[] }) {
       setCreateOpen(false);
       setCreatedOpen(true);
       qc.invalidateQueries({ queryKey: ['relay-agent-tokens'] });
-    },
+    }
   });
 
   const { mutate: revokeToken, isPending: isRevoking } = useMutation({
@@ -82,7 +83,7 @@ function RelayTokenSection({ tokens }: { tokens: RelayAgentTokenOut[] }) {
     onSuccess: () => {
       setRevokeId(null);
       qc.invalidateQueries({ queryKey: ['relay-agent-tokens'] });
-    },
+    }
   });
 
   const copyToken = async (value: string) => {
@@ -98,30 +99,40 @@ function RelayTokenSection({ tokens }: { tokens: RelayAgentTokenOut[] }) {
     <>
       <div className='rounded-lg border border-border bg-card'>
         <div className='flex flex-col gap-4 border-b border-border p-4 sm:flex-row sm:items-start sm:justify-between'>
-          <div className='flex gap-3 min-w-0'>
+          <div className='flex min-w-0 gap-3'>
             <div className='flex size-9 shrink-0 items-center justify-center rounded-md bg-muted'>
               <KeyRound className='size-4 text-muted-foreground' />
             </div>
             <div className='min-w-0 space-y-1'>
               <h2 className='text-sm font-semibold'>{t('tokens')}</h2>
-              <p className='text-xs text-muted-foreground'>{t('tokensDescription')}</p>
+              <p className='text-xs text-muted-foreground'>
+                {t('tokensDescription')}
+              </p>
             </div>
           </div>
-          <Button size='sm' className='shrink-0' onClick={() => setCreateOpen(true)}>
+          <Button
+            size='sm'
+            className='shrink-0'
+            onClick={() => setCreateOpen(true)}
+          >
             <Plus className='mr-1.5 size-3.5' />
             {t('createToken')}
           </Button>
         </div>
 
         {activeTokens.length === 0 ? (
-          <p className='p-4 text-sm text-muted-foreground'>{t('noActiveTokens')}</p>
+          <p className='p-4 text-sm text-muted-foreground'>
+            {t('noActiveTokens')}
+          </p>
         ) : (
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>{t('colTokenName')}</TableHead>
                 <TableHead>{t('colTokenPrefix')}</TableHead>
-                <TableHead className='hidden sm:table-cell'>{t('colTokenCreated')}</TableHead>
+                <TableHead className='hidden sm:table-cell'>
+                  {t('colTokenCreated')}
+                </TableHead>
                 <TableHead className='w-[72px] text-right' />
               </TableRow>
             </TableHeader>
@@ -132,13 +143,15 @@ function RelayTokenSection({ tokens }: { tokens: RelayAgentTokenOut[] }) {
                     {token.name?.trim() || '—'}
                   </TableCell>
                   <TableCell>
-                    <code className='rounded bg-muted px-1.5 py-0.5 text-xs'>{token.prefix}</code>
+                    <code className='rounded bg-muted px-1.5 py-0.5 text-xs'>
+                      {token.prefix}
+                    </code>
                   </TableCell>
                   <TableCell className='hidden text-muted-foreground sm:table-cell'>
                     {token.created_at
                       ? format.dateTime(new Date(token.created_at), {
                           dateStyle: 'short',
-                          timeStyle: 'short',
+                          timeStyle: 'short'
                         })
                       : '—'}
                   </TableCell>
@@ -166,7 +179,9 @@ function RelayTokenSection({ tokens }: { tokens: RelayAgentTokenOut[] }) {
         <DialogContent className='sm:max-w-md'>
           <DialogHeader>
             <DialogTitle>{t('createTokenDialogTitle')}</DialogTitle>
-            <DialogDescription>{t('createTokenDialogDescription')}</DialogDescription>
+            <DialogDescription>
+              {t('createTokenDialogDescription')}
+            </DialogDescription>
           </DialogHeader>
           <form
             className='space-y-4'
@@ -187,11 +202,17 @@ function RelayTokenSection({ tokens }: { tokens: RelayAgentTokenOut[] }) {
               />
             </div>
             <DialogFooter>
-              <Button type='button' variant='outline' onClick={() => setCreateOpen(false)}>
+              <Button
+                type='button'
+                variant='outline'
+                onClick={() => setCreateOpen(false)}
+              >
                 {t('cancel')}
               </Button>
               <Button type='submit' disabled={isCreating}>
-                {isCreating && <Loader2 className='mr-1.5 size-3.5 animate-spin' />}
+                {isCreating && (
+                  <Loader2 className='mr-1.5 size-3.5 animate-spin' />
+                )}
                 {t('createToken')}
               </Button>
             </DialogFooter>
@@ -203,11 +224,15 @@ function RelayTokenSection({ tokens }: { tokens: RelayAgentTokenOut[] }) {
         <DialogContent className='sm:max-w-lg'>
           <DialogHeader>
             <DialogTitle>{t('tokenCreatedDialogTitle')}</DialogTitle>
-            <DialogDescription>{t('tokenCreatedDialogDescription')}</DialogDescription>
+            <DialogDescription>
+              {t('tokenCreatedDialogDescription')}
+            </DialogDescription>
           </DialogHeader>
           {createdToken && (
             <div className='flex items-center gap-2 rounded-md border border-border bg-muted/50 p-3'>
-              <code className='min-w-0 flex-1 break-all text-xs'>{createdToken.token}</code>
+              <code className='min-w-0 flex-1 break-all text-xs'>
+                {createdToken.token}
+              </code>
               <Button
                 type='button'
                 size='icon'
@@ -234,11 +259,16 @@ function RelayTokenSection({ tokens }: { tokens: RelayAgentTokenOut[] }) {
         </DialogContent>
       </Dialog>
 
-      <AlertDialog open={!!revokeId} onOpenChange={(open) => !open && setRevokeId(null)}>
+      <AlertDialog
+        open={!!revokeId}
+        onOpenChange={(open) => !open && setRevokeId(null)}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{t('revokeTokenTitle')}</AlertDialogTitle>
-            <AlertDialogDescription>{t('revokeTokenDescription')}</AlertDialogDescription>
+            <AlertDialogDescription>
+              {t('revokeTokenDescription')}
+            </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>{t('cancel')}</AlertDialogCancel>
@@ -258,7 +288,7 @@ function RelayTokenSection({ tokens }: { tokens: RelayAgentTokenOut[] }) {
 
 function RelayAgentCard({
   agent,
-  registeredSerials,
+  registeredSerials
 }: {
   agent: RelayAgentOut;
   registeredSerials: Set<string>;
@@ -276,16 +306,23 @@ function RelayAgentCard({
     refetchInterval: (query) => {
       const job = query.state.data as RelayBatchJobOut | undefined;
       if (!activeJobId) return false;
-      if (job && ['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(job.status)) {
+      if (
+        job &&
+        ['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(
+          job.status
+        )
+      ) {
         return false;
       }
       return 2_000;
-    },
+    }
   });
 
   const { mutate: provisionJob, isPending: isProvisioning } = useMutation({
-    mutationFn: (body: { serials?: string[]; mode?: 'selected' | 'all_visible' }) =>
-      relayAgentsApi.createProvisionJob(agent.relay_id, body),
+    mutationFn: (body: {
+      serials?: string[];
+      mode?: 'selected' | 'all_visible';
+    }) => relayAgentsApi.createProvisionJob(agent.relay_id, body),
     onSuccess: (job) => {
       setActiveJobId(job.id);
       qc.invalidateQueries({ queryKey: ['relay-agents'] });
@@ -293,12 +330,15 @@ function RelayAgentCard({
     },
     onError: (err) => {
       console.error('[relay-agents] provision job failed', err);
-    },
+    }
   });
 
   const { mutate: claimConnectJob, isPending: isClaiming } = useMutation({
-    mutationFn: (body: { serials?: string[]; mode?: 'selected' | 'all_visible'; connect?: boolean }) =>
-      relayAgentsApi.createClaimConnectJob(agent.relay_id, body),
+    mutationFn: (body: {
+      serials?: string[];
+      mode?: 'selected' | 'all_visible';
+      connect?: boolean;
+    }) => relayAgentsApi.createClaimConnectJob(agent.relay_id, body),
     onSuccess: (job) => {
       setActiveJobId(job.id);
       qc.invalidateQueries({ queryKey: ['devices'] });
@@ -306,7 +346,7 @@ function RelayAgentCard({
     },
     onError: (err) => {
       console.error('[relay-agents] claim-connect job failed', err);
-    },
+    }
   });
 
   const online = agent.status === 'online';
@@ -314,7 +354,10 @@ function RelayAgentCard({
   const selectedSerials = realSerials.filter((serial) => selected.has(serial));
   const busy = isProvisioning || isClaiming;
   const terminal =
-    activeJob && ['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(activeJob.status);
+    activeJob &&
+    ['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(
+      activeJob.status
+    );
 
   const toggleSerial = (serial: string) => {
     setSelected((prev) => {
@@ -332,7 +375,9 @@ function RelayAgentCard({
       <div className='flex items-start justify-between gap-2'>
         <div className='min-w-0 space-y-1'>
           <div className='flex flex-wrap items-center gap-2'>
-            <p className='truncate text-sm font-semibold'>{agent.hostname || agent.relay_id}</p>
+            <p className='truncate text-sm font-semibold'>
+              {agent.hostname || agent.relay_id}
+            </p>
             <Badge variant={online ? 'default' : 'secondary'}>
               {online ? t('statusOnline') : t('statusOffline')}
             </Badge>
@@ -366,9 +411,15 @@ function RelayAgentCard({
           variant='outline'
           className='h-7 px-2 text-xs'
           disabled={busy || !online || selectedSerials.length === 0}
-          onClick={() => provisionJob({ mode: 'selected', serials: selectedSerials })}
+          onClick={() =>
+            provisionJob({ mode: 'selected', serials: selectedSerials })
+          }
         >
-          {isProvisioning ? <Loader2 className='mr-1 size-3 animate-spin' /> : <RefreshCw className='mr-1 size-3' />}
+          {isProvisioning ? (
+            <Loader2 className='mr-1 size-3 animate-spin' />
+          ) : (
+            <RefreshCw className='mr-1 size-3' />
+          )}
           {t('provisionSelected')}
         </Button>
         <Button
@@ -386,9 +437,19 @@ function RelayAgentCard({
           size='sm'
           className='h-7 px-2 text-xs'
           disabled={busy || !online || selectedSerials.length === 0}
-          onClick={() => claimConnectJob({ mode: 'selected', serials: selectedSerials, connect: true })}
+          onClick={() =>
+            claimConnectJob({
+              mode: 'selected',
+              serials: selectedSerials,
+              connect: true
+            })
+          }
         >
-          {isClaiming ? <Loader2 className='mr-1 size-3 animate-spin' /> : <Plus className='mr-1 size-3' />}
+          {isClaiming ? (
+            <Loader2 className='mr-1 size-3 animate-spin' />
+          ) : (
+            <Plus className='mr-1 size-3' />
+          )}
           {t('registerConnectSelected')}
         </Button>
         <Button
@@ -397,7 +458,9 @@ function RelayAgentCard({
           variant='secondary'
           className='h-7 px-2 text-xs'
           disabled={busy || !online || realSerials.length === 0}
-          onClick={() => claimConnectJob({ mode: 'all_visible', connect: true })}
+          onClick={() =>
+            claimConnectJob({ mode: 'all_visible', connect: true })
+          }
         >
           {t('registerConnectAll')}
         </Button>
@@ -405,12 +468,17 @@ function RelayAgentCard({
 
       <div className='divide-y rounded-md border border-border'>
         {realSerials.length === 0 ? (
-          <div className='p-3 text-xs text-muted-foreground'>{t('noDevices')}</div>
+          <div className='p-3 text-xs text-muted-foreground'>
+            {t('noDevices')}
+          </div>
         ) : (
           realSerials.map((s) => {
             const registered = registeredSerials.has(s);
             return (
-              <label key={s} className='flex min-h-10 cursor-pointer items-center gap-2 px-2 py-1.5'>
+              <label
+                key={s}
+                className='flex min-h-10 cursor-pointer items-center gap-2 px-2 py-1.5'
+              >
                 <input
                   type='checkbox'
                   className='size-3.5 shrink-0'
@@ -418,10 +486,17 @@ function RelayAgentCard({
                   onChange={() => toggleSerial(s)}
                 />
                 <span className='min-w-0 flex-1'>
-                  <span className='block truncate text-xs'>{agent.device_names?.[s] || s}</span>
-                  <span className='block truncate font-mono text-[10px] text-muted-foreground'>{s}</span>
+                  <span className='block truncate text-xs'>
+                    {agent.device_names?.[s] || s}
+                  </span>
+                  <span className='block truncate font-mono text-[10px] text-muted-foreground'>
+                    {s}
+                  </span>
                 </span>
-                <Badge variant={registered ? 'secondary' : 'outline'} className='shrink-0 text-[10px]'>
+                <Badge
+                  variant={registered ? 'secondary' : 'outline'}
+                  className='shrink-0 text-[10px]'
+                >
                   {registered ? t('registered') : t('ready')}
                 </Badge>
               </label>
@@ -434,7 +509,9 @@ function RelayAgentCard({
         <div className='rounded-md bg-muted px-3 py-2 text-xs'>
           <div className='flex items-center justify-between gap-2'>
             <span className='font-medium'>
-              {activeJob.kind === 'provision' ? t('provisionJob') : t('claimConnectJob')}
+              {activeJob.kind === 'provision'
+                ? t('provisionJob')
+                : t('claimConnectJob')}
             </span>
             <span className='text-muted-foreground'>{activeJob.status}</span>
           </div>
@@ -443,15 +520,20 @@ function RelayAgentCard({
               ok: activeJob.ok,
               failed: activeJob.failed,
               pending: activeJob.pending,
-              total: activeJob.total,
+              total: activeJob.total
             })}
           </div>
-          {!terminal && <Loader2 className='mt-2 size-3 animate-spin text-muted-foreground' />}
+          {!terminal && (
+            <Loader2 className='mt-2 size-3 animate-spin text-muted-foreground' />
+          )}
           {activeJob.items
             .filter((item) => item.status === 'failed')
             .slice(0, 3)
             .map((item) => (
-              <div key={item.id} className='mt-1 truncate text-[11px] text-destructive'>
+              <div
+                key={item.id}
+                className='mt-1 truncate text-[11px] text-destructive'
+              >
                 {item.serial}: {item.error || item.step}
               </div>
             ))}
@@ -463,8 +545,8 @@ function RelayAgentCard({
           {t('lastHeartbeat', {
             time: format.dateTime(new Date(agent.last_heartbeat_at), {
               dateStyle: 'short',
-              timeStyle: 'medium',
-            }),
+              timeStyle: 'medium'
+            })
           })}
         </p>
       )}
@@ -478,17 +560,17 @@ export default function RelayAgentsPage() {
     queryKey: ['relay-agents'],
     queryFn: relayAgentsApi.list,
     staleTime: 15_000,
-    refetchInterval: 30_000,
+    refetchInterval: 30_000
   });
   const { data: devices = [] } = useQuery<DeviceOut[]>({
     queryKey: ['devices'],
     queryFn: devicesApi.list,
-    staleTime: 15_000,
+    staleTime: 15_000
   });
   const { data: tokens = [] } = useQuery<RelayAgentTokenOut[]>({
     queryKey: ['relay-agent-tokens'],
     queryFn: relayAgentsApi.listTokens,
-    staleTime: 30_000,
+    staleTime: 30_000
   });
 
   const onlineCount = agents.filter((a) => a.status === 'online').length;
@@ -511,20 +593,27 @@ export default function RelayAgentsPage() {
           <p className='text-sm text-muted-foreground'>{t('subtitle')}</p>
           {!isLoading && agents.length > 0 && (
             <p className='mt-1 text-sm text-muted-foreground'>
-              {t('onlineSummary', { online: onlineCount, total: agents.length })}
+              {t('onlineSummary', {
+                online: onlineCount,
+                total: agents.length
+              })}
             </p>
           )}
         </div>
       </div>
 
-      {isLoading && <p className='text-sm text-muted-foreground'>{t('loading')}</p>}
+      {isLoading && (
+        <p className='text-sm text-muted-foreground'>{t('loading')}</p>
+      )}
 
       <RelayTokenSection tokens={tokens} />
 
       {!isLoading && agents.length === 0 && (
         <div className='rounded-lg border border-dashed border-border p-12 text-center'>
           <Server className='mx-auto mb-3 size-10 text-muted-foreground' />
-          <p className='text-sm font-medium text-muted-foreground'>{t('empty')}</p>
+          <p className='text-sm font-medium text-muted-foreground'>
+            {t('empty')}
+          </p>
           <p className='mt-2 text-xs text-muted-foreground'>{t('emptyHint')}</p>
         </div>
       )}

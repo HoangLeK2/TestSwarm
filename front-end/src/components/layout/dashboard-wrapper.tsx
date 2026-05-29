@@ -20,22 +20,22 @@ export function DashboardWrapper({
 }: DashboardWrapperProps) {
   return (
     // <AuthGuard>
-      // <OrganizationProvider>
-        // <OrganizationStatusGuard>
-          <SidebarProvider defaultOpen={defaultOpen}>
-            <AppSidebar />
-            <SidebarInset className='flex flex-col overflow-hidden'>
-              <Header />
-              <PageContainer
-                className='h-[calc(100dvh-64px)] overflow-scroll'
-                scrollable={false}
-              >
-                {children}
-              </PageContainer>
-            </SidebarInset>
-          </SidebarProvider>
-        // </OrganizationStatusGuard>
-      // </OrganizationProvider>
+    // <OrganizationProvider>
+    // <OrganizationStatusGuard>
+    <SidebarProvider defaultOpen={defaultOpen}>
+      <AppSidebar />
+      <SidebarInset className='flex flex-col overflow-hidden'>
+        <Header />
+        <PageContainer
+          className='h-[calc(100dvh-64px)] overflow-scroll'
+          scrollable={false}
+        >
+          {children}
+        </PageContainer>
+      </SidebarInset>
+    </SidebarProvider>
+    // </OrganizationStatusGuard>
+    // </OrganizationProvider>
     // </AuthGuard>
   );
 }

@@ -1,14 +1,19 @@
 'use client';
 
-import { Smartphone, Users, ChevronRight } from 'lucide-react';
+import { useState } from 'react';
+import { Smartphone, Users, ChevronRight, Plus } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { useCampaignDevices } from '../../hooks/use-campaigns';
 import { useDeviceGroup } from '@/features/device-groups/hooks/use-device-groups';
 import {
-  Popover, PopoverContent, PopoverTrigger,
+  Popover,
+  PopoverContent,
+  PopoverTrigger
 } from '@/components/ui/popover';
 import { Badge } from '@/components/ui/badge';
 import { Loader2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { AddDevicesToCampaignDialog } from '../add-devices-dialog';
 
 // ── Group-based summary ───────────────────────────────────────────────────────
 
@@ -31,24 +36,27 @@ function GroupDevicesSummary({ groupId }: { groupId: string }) {
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <button
+        <Button
           type='button'
-          className='flex items-center gap-1.5 rounded text-left hover:opacity-80'
+          variant='outline'
+          size='sm'
+          className='h-7 max-w-[190px] justify-start gap-1.5 px-2 text-[11px]'
+          title={`${group.name} (${group.device_count})`}
         >
           <span
             className='inline-block size-2.5 shrink-0 rounded-full'
             style={{ backgroundColor: group.color }}
           />
-          <span className='max-w-[120px] truncate text-[11px] font-medium text-foreground'>
+          <span className='min-w-0 flex-1 truncate font-medium text-foreground'>
             {group.name}
           </span>
           <span className='shrink-0 text-[10px] text-muted-foreground'>
             ({group.device_count})
           </span>
-          <ChevronRight size={10} className='shrink-0 text-muted-foreground' />
-        </button>
+          <ChevronRight size={12} className='shrink-0 text-muted-foreground' />
+        </Button>
       </PopoverTrigger>
-      <PopoverContent className='w-64 p-0 z-[10001]' align='start'>
+      <PopoverContent className='z-[10001] w-64 p-0' align='start'>
         {/* Header */}
         <div
           className='flex items-center gap-2 border-b px-3 py-2'
@@ -58,7 +66,9 @@ function GroupDevicesSummary({ groupId }: { groupId: string }) {
           <div className='min-w-0'>
             <p className='truncate text-xs font-semibold'>{group.name}</p>
             {group.description && (
-              <p className='truncate text-[10px] text-muted-foreground'>{group.description}</p>
+              <p className='truncate text-[10px] text-muted-foreground'>
+                {group.description}
+              </p>
             )}
           </div>
           <Badge variant='secondary' className='ml-auto shrink-0 text-[10px]'>
@@ -78,7 +88,10 @@ function GroupDevicesSummary({ groupId }: { groupId: string }) {
                 key={d.id}
                 className='flex items-center gap-2 border-b px-3 py-1.5 last:border-b-0'
               >
-                <Smartphone size={11} className='shrink-0 text-muted-foreground' />
+                <Smartphone
+                  size={11}
+                  className='shrink-0 text-muted-foreground'
+                />
                 <div className='min-w-0'>
                   <p className='truncate text-[11px] font-medium'>
                     {d.name?.trim() || d.serial}
@@ -103,31 +116,73 @@ function GroupDevicesSummary({ groupId }: { groupId: string }) {
 
 // ── Explicit device list (no group) ──────────────────────────────────────────
 
-function ExplicitDevicesSummary({ campaignId }: { campaignId: string }) {
+function ExplicitDevicesSummary({
+  campaignId,
+  campaignName
+}: {
+  campaignId: string;
+  campaignName: string;
+}) {
   const t = useTranslations('campaignsFeature.list');
   const { data: devices = [] } = useCampaignDevices(campaignId);
+  const [open, setOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
 
   if (devices.length === 0) {
-    return <span className='text-[11px] text-muted-foreground'>{t('noDevices')}</span>;
+    return (
+      <AddDevicesToCampaignDialog
+        campaignId={campaignId}
+        campaignName={campaignName}
+        deviceCount={0}
+      >
+        <Button
+          type='button'
+          variant='outline'
+          size='sm'
+          className='h-7 gap-1.5 px-2 text-[11px]'
+        >
+          <Smartphone size={12} className='shrink-0 text-muted-foreground' />
+          {t('titleNeedDevice') ?? t('noDevices')}
+        </Button>
+      </AddDevicesToCampaignDialog>
+    );
   }
 
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button
+        <Button
           type='button'
-          className='flex items-center gap-1.5 rounded text-left hover:opacity-80'
+          variant='outline'
+          size='sm'
+          className='h-7 justify-start gap-1.5 px-2 text-[11px]'
+          title='Xem thiết bị được gán'
         >
           <Smartphone size={12} className='shrink-0 text-muted-foreground' />
-          <span className='text-[11px] font-medium text-foreground'>
+          <span className='font-medium text-foreground'>
             {devices.length} thiết bị
           </span>
-          <ChevronRight size={10} className='shrink-0 text-muted-foreground' />
-        </button>
+          <ChevronRight size={12} className='shrink-0 text-muted-foreground' />
+        </Button>
       </PopoverTrigger>
-      <PopoverContent className='w-60 p-0 z-[10001]' align='start'>
-        <div className='border-b px-3 py-2'>
+      <PopoverContent className='z-[10001] w-72 p-0' align='start'>
+        <div className='flex items-center gap-2 border-b px-3 py-2'>
           <p className='text-xs font-semibold'>Thiết bị được gán</p>
+          <div className='ml-auto'>
+            <Button
+              type='button'
+              size='sm'
+              variant='outline'
+              className='h-7 gap-1.5 px-2 text-[11px]'
+              onClick={() => {
+                setAddOpen(true);
+                setOpen(false);
+              }}
+            >
+              <Plus size={12} />
+              {t('titleNeedDevice')}
+            </Button>
+          </div>
         </div>
         <div className='max-h-48 overflow-y-auto'>
           {devices.map((d) => (
@@ -135,17 +190,32 @@ function ExplicitDevicesSummary({ campaignId }: { campaignId: string }) {
               key={d.id}
               className='flex items-center gap-2 border-b px-3 py-1.5 last:border-b-0'
             >
-              <Smartphone size={11} className='shrink-0 text-muted-foreground' />
+              <Smartphone
+                size={11}
+                className='shrink-0 text-muted-foreground'
+              />
               <div className='min-w-0'>
                 <p className='truncate text-[11px] font-medium'>
                   {d.name?.trim() || d.serial}
                 </p>
-                <p className='truncate font-mono text-[10px] text-muted-foreground'>{d.serial}</p>
+                <p className='truncate font-mono text-[10px] text-muted-foreground'>
+                  {d.serial}
+                </p>
               </div>
             </div>
           ))}
         </div>
       </PopoverContent>
+
+      <AddDevicesToCampaignDialog
+        campaignId={campaignId}
+        campaignName={campaignName}
+        deviceCount={devices.length}
+        open={addOpen}
+        onOpenChange={setAddOpen}
+      >
+        {null}
+      </AddDevicesToCampaignDialog>
     </Popover>
   );
 }
@@ -154,13 +224,20 @@ function ExplicitDevicesSummary({ campaignId }: { campaignId: string }) {
 
 export function CampaignDevicesSummary({
   campaignId,
-  targetGroupId,
+  campaignName,
+  targetGroupId
 }: {
   campaignId: string;
+  campaignName: string;
   targetGroupId?: string | null;
 }) {
   if (targetGroupId) {
     return <GroupDevicesSummary groupId={targetGroupId} />;
   }
-  return <ExplicitDevicesSummary campaignId={campaignId} />;
+  return (
+    <ExplicitDevicesSummary
+      campaignId={campaignId}
+      campaignName={campaignName}
+    />
+  );
 }

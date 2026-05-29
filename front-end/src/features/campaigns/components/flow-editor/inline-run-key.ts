@@ -4,7 +4,7 @@ export type ScenarioStepPathSegment = { listKey: string; childIndex: number };
 /** Stable key for inline preview run state (root index + path to the step/block). */
 export function encodeScenarioInlineRunKey(
   rootIndex: number,
-  path: ScenarioStepPathSegment[],
+  path: ScenarioStepPathSegment[]
 ): string {
   if (!path.length) return String(rootIndex);
   return `${rootIndex}/${path.map((p) => `${p.listKey}:${p.childIndex}`).join('/')}`;

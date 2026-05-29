@@ -165,6 +165,25 @@ services:
       retries: 5
       start_period: 60s
 
+  # agent-boot:
+  #   image: device-farm/agent-boot:local
+  #   build:
+  #     context: ./agent-boot
+  #     dockerfile: Dockerfile
+  #   restart: unless-stopped
+  #   env_file:
+  #     - ./agent-boot/.env
+  #   extra_hosts:
+  #     - "host.docker.internal:host-gateway"
+  #   # NOTE:
+  #   # - On Linux, if you want the container to access USB devices, you may need:
+  #   #     privileged: true
+  #   #     volumes:
+  #   #       - /dev/bus/usb:/dev/bus/usb
+  #   # - On macOS/Windows, ADB USB passthrough is not available this way; use
+  #   #   network ADB (adb connect) or run agent-boot on the host.
+  #   command: ["--relay-only"]
+
   frontend:
     build:
       context: ./front-end

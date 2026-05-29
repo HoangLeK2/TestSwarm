@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import select, text, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -122,6 +122,25 @@ async def list_dlq_entries_for_user(
         q = q.where(Execution.campaign_id == campaign_id)
     result = await db.execute(q.offset(offset).limit(limit))
     return list(result.scalars().all())
+
+
+async def count_dlq_entries_for_user(
+    db: AsyncSession,
+    *,
+    user_id: str,
+    status: Optional[str] = None,
+    campaign_id: Optional[str] = None,
+) -> int:
+    q = (
+        select(func.count(ExecutionDLQ.id))
+        .join(Execution, Execution.id == ExecutionDLQ.execution_id)
+        .where(Execution.user_id == user_id)
+    )
+    if status is not None:
+        q = q.where(ExecutionDLQ.status == status)
+    if campaign_id is not None:
+        q = q.where(Execution.campaign_id == campaign_id)
+    return int((await db.execute(q)).scalar() or 0)
 
 
 async def mark_dlq_retrying(db: AsyncSession, dlq_id: str) -> Optional[ExecutionDLQ]:
@@ -270,6 +289,7 @@ async def dismiss_dlq_entry_for_user(db: AsyncSession, dlq_id: str, user_id: str
 
 __all__ = [
     "create_dlq_entry",
+    "count_dlq_entries_for_user",
     "get_dlq_entry",
     "list_dlq_entries",
     "list_dlq_entries_for_user",

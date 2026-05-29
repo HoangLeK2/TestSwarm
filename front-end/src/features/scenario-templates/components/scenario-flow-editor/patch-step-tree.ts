@@ -6,7 +6,11 @@ import { SELECTOR_STEP_TYPES } from '@/features/campaigns/components/flow-editor
 
 const FG = '_fgId' as const;
 
-export function patchStepByFlowgramId(steps: FlowStep[], fgId: string, replacement: FlowStep): FlowStep[] {
+export function patchStepByFlowgramId(
+  steps: FlowStep[],
+  fgId: string,
+  replacement: FlowStep
+): FlowStep[] {
   return steps.map((s) => patchOne(s, fgId, replacement));
 }
 
@@ -20,30 +24,36 @@ function patchOne(s: FlowStep, fgId: string, replacement: FlowStep): FlowStep {
     return {
       ...s,
       then: patchArray(cur.then ?? [], fgId, replacement),
-      else: patchArray(cur.else ?? [], fgId, replacement),
+      else: patchArray(cur.else ?? [], fgId, replacement)
     } as FlowStep;
   }
   if (t === 'random_pick') {
-    const cur = s as FlowStep & { branches?: Array<{ weight?: number; steps?: FlowStep[] }> };
+    const cur = s as FlowStep & {
+      branches?: Array<{ weight?: number; steps?: FlowStep[] }>;
+    };
     return {
       ...s,
       branches: (cur.branches ?? []).map((br) => ({
         ...br,
-        steps: patchArray(br.steps ?? [], fgId, replacement),
-      })),
+        steps: patchArray(br.steps ?? [], fgId, replacement)
+      }))
     } as FlowStep;
   }
   if (t === 'repeat' || t === 'repeat_until' || t === 'loop') {
     const cur = s as FlowStep & { steps?: FlowStep[] };
     return {
       ...s,
-      steps: patchArray(cur.steps ?? [], fgId, replacement),
+      steps: patchArray(cur.steps ?? [], fgId, replacement)
     } as FlowStep;
   }
   return s;
 }
 
-function patchArray(arr: FlowStep[], fgId: string, replacement: FlowStep): FlowStep[] {
+function patchArray(
+  arr: FlowStep[],
+  fgId: string,
+  replacement: FlowStep
+): FlowStep[] {
   return arr.map((x) => patchOne(x, fgId, replacement));
 }
 
@@ -51,12 +61,16 @@ function patchArray(arr: FlowStep[], fgId: string, replacement: FlowStep): FlowS
 export function mergeStepByFlowgramId(
   steps: FlowStep[],
   fgId: string,
-  patch: Partial<FlowStep> | ((prev: FlowStep) => FlowStep),
+  patch: Partial<FlowStep> | ((prev: FlowStep) => FlowStep)
 ): FlowStep[] {
   return steps.map((s) => mergeOne(s, fgId, patch));
 }
 
-function mergeOne(s: FlowStep, fgId: string, patch: Partial<FlowStep> | ((prev: FlowStep) => FlowStep)): FlowStep {
+function mergeOne(
+  s: FlowStep,
+  fgId: string,
+  patch: Partial<FlowStep> | ((prev: FlowStep) => FlowStep)
+): FlowStep {
   if ((s as Record<string, unknown>)[FG] === fgId) {
     const next = typeof patch === 'function' ? patch(s) : { ...s, ...patch };
     return { ...next, [FG]: fgId } as FlowStep;
@@ -67,40 +81,56 @@ function mergeOne(s: FlowStep, fgId: string, patch: Partial<FlowStep> | ((prev: 
     return {
       ...s,
       then: mergeArray(cur.then ?? [], fgId, patch),
-      else: mergeArray(cur.else ?? [], fgId, patch),
+      else: mergeArray(cur.else ?? [], fgId, patch)
     } as FlowStep;
   }
   if (t === 'random_pick') {
-    const cur = s as FlowStep & { branches?: Array<{ weight?: number; steps?: FlowStep[] }> };
+    const cur = s as FlowStep & {
+      branches?: Array<{ weight?: number; steps?: FlowStep[] }>;
+    };
     return {
       ...s,
       branches: (cur.branches ?? []).map((br) => ({
         ...br,
-        steps: mergeArray(br.steps ?? [], fgId, patch),
-      })),
+        steps: mergeArray(br.steps ?? [], fgId, patch)
+      }))
     } as FlowStep;
   }
   if (t === 'repeat' || t === 'repeat_until' || t === 'loop') {
     const cur = s as FlowStep & { steps?: FlowStep[] };
     return {
       ...s,
-      steps: mergeArray(cur.steps ?? [], fgId, patch),
+      steps: mergeArray(cur.steps ?? [], fgId, patch)
     } as FlowStep;
   }
   return s;
 }
 
-function mergeArray(arr: FlowStep[], fgId: string, patch: Partial<FlowStep> | ((prev: FlowStep) => FlowStep)): FlowStep[] {
+function mergeArray(
+  arr: FlowStep[],
+  fgId: string,
+  patch: Partial<FlowStep> | ((prev: FlowStep) => FlowStep)
+): FlowStep[] {
   return arr.map((x) => mergeOne(x, fgId, patch));
 }
 
-function mergeSelectorOntoStep(step: FlowStep, pick: { by: string; value: string; conditions?: Record<string, unknown>; instance?: number }): FlowStep {
+function mergeSelectorOntoStep(
+  step: FlowStep,
+  pick: {
+    by: string;
+    value: string;
+    conditions?: Record<string, unknown>;
+    instance?: number;
+  }
+): FlowStep {
   const { by, value } = pick;
   const selector = {
     by,
     value,
-    ...(pick.conditions && Object.keys(pick.conditions).length > 0 ? { conditions: pick.conditions } : {}),
-    ...(pick.instance != null ? { instance: pick.instance } : {}),
+    ...(pick.conditions && Object.keys(pick.conditions).length > 0
+      ? { conditions: pick.conditions }
+      : {}),
+    ...(pick.instance != null ? { instance: pick.instance } : {})
   };
   if (step.type === 'tap') {
     return { ...step, selector, by, value } as FlowStep;
@@ -112,7 +142,12 @@ function mergeSelectorOntoStep(step: FlowStep, pick: { by: string; value: string
 export function mergeSelectorByFlowgramId(
   steps: FlowStep[],
   fgId: string,
-  pick: { by: string; value: string; conditions?: Record<string, unknown>; instance?: number },
+  pick: {
+    by: string;
+    value: string;
+    conditions?: Record<string, unknown>;
+    instance?: number;
+  }
 ): FlowStep[] {
   return mergeStepByFlowgramId(steps, fgId, (prev) => {
     if (!SELECTOR_STEP_TYPES.has(prev.type)) return prev;
@@ -120,7 +155,10 @@ export function mergeSelectorByFlowgramId(
   });
 }
 
-export function findStepByFlowgramId(steps: FlowStep[], fgId: string): FlowStep | null {
+export function findStepByFlowgramId(
+  steps: FlowStep[],
+  fgId: string
+): FlowStep | null {
   for (const s of steps) {
     const hit = findOneDeep(s, fgId);
     if (hit) return hit;

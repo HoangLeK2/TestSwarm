@@ -8,14 +8,19 @@ import { ScheduleRowActions } from './schedule-row-actions';
 
 type TFn = (key: string, values?: Record<string, any>) => string;
 
-export function getScheduleColumns(tList: TFn, tCron: TFn): ColumnDef<ScheduleOut>[] {
+export function getScheduleColumns(
+  tList: TFn,
+  tCron: TFn
+): ColumnDef<ScheduleOut>[] {
   return [
     {
       id: 'name',
       accessorKey: 'name',
       header: tList('colName'),
       cell: ({ row }) => (
-        <span className='truncate text-sm font-semibold'>{row.original.name}</span>
+        <span className='truncate text-sm font-semibold'>
+          {row.original.name}
+        </span>
       )
     },
     {
@@ -49,7 +54,9 @@ export function getScheduleColumns(tList: TFn, tCron: TFn): ColumnDef<ScheduleOu
           <div className='space-y-0.5'>
             <div className='truncate text-sm'>{human}</div>
             {!parsed && (
-              <div className='truncate text-[11px] text-muted-foreground font-mono'>{s.cron_expression}</div>
+              <div className='truncate font-mono text-[11px] text-muted-foreground'>
+                {s.cron_expression}
+              </div>
             )}
           </div>
         );
@@ -62,7 +69,10 @@ export function getScheduleColumns(tList: TFn, tCron: TFn): ColumnDef<ScheduleOu
       cell: ({ row }) => {
         const isEnabled = row.original.is_enabled;
         return (
-          <Badge variant={isEnabled ? 'default' : 'secondary'} className='text-[11px]'>
+          <Badge
+            variant={isEnabled ? 'default' : 'secondary'}
+            className='text-[11px]'
+          >
             {isEnabled ? tList('enabledOn') : tList('enabledOff')}
           </Badge>
         );
@@ -74,7 +84,8 @@ export function getScheduleColumns(tList: TFn, tCron: TFn): ColumnDef<ScheduleOu
       header: tList('colNextRun'),
       cell: ({ row }) => {
         const v = row.original.next_run_at;
-        if (!v) return <span className='text-[11px] text-muted-foreground'>-</span>;
+        if (!v)
+          return <span className='text-[11px] text-muted-foreground'>-</span>;
         return (
           <span className='whitespace-nowrap text-[11px] text-muted-foreground'>
             {formatDistanceToNow(new Date(v), { addSuffix: true, locale: vi })}
@@ -99,4 +110,3 @@ export function getScheduleColumns(tList: TFn, tCron: TFn): ColumnDef<ScheduleOu
     }
   ];
 }
-

@@ -8,7 +8,11 @@ import type { FlowStep } from './types';
 import { getStepIcon } from './types';
 import { useTranslations } from 'next-intl';
 
-export type RunScenarioCampaignOption = { id: string; name: string; steps?: any[] };
+export type RunScenarioCampaignOption = {
+  id: string;
+  name: string;
+  steps?: any[];
+};
 
 /** Single merge — required so parent does not drop fields when two updates use the same stale `step` (e.g. template pick). */
 export type RunScenarioFieldPatch = Partial<{
@@ -29,14 +33,35 @@ type Props = {
 const inputCls = 'border rounded px-1.5 py-0.5 bg-background text-[11px]';
 const labelCls = 'shrink-0 text-[11px] text-muted-foreground';
 
-export function RunScenarioFields({ step, onPatch, campaignScenarios = [], layout = 'compact' }: Props) {
+export function RunScenarioFields({
+  step,
+  onPatch,
+  campaignScenarios = [],
+  layout = 'compact'
+}: Props) {
   const t = useTranslations('campaignsFeature.scenarioStepsInline.runScenario');
   const { data: templates } = useScenarioTemplates();
   const [showPreview, setShowPreview] = useState(false);
 
-  const allOptions: { id: string; name: string; source: string; steps?: any[]; variables?: Record<string, any> }[] = [
-    ...campaignScenarios.map((s) => ({ ...s, source: 'campaign', variables: {} as Record<string, any> })),
-    ...(templates ?? []).map((t) => ({ id: t.id, name: t.name, source: t.category, steps: t.steps, variables: t.variables }))
+  const allOptions: {
+    id: string;
+    name: string;
+    source: string;
+    steps?: any[];
+    variables?: Record<string, any>;
+  }[] = [
+    ...campaignScenarios.map((s) => ({
+      ...s,
+      source: 'campaign',
+      variables: {} as Record<string, any>
+    })),
+    ...(templates ?? []).map((t) => ({
+      id: t.id,
+      name: t.name,
+      source: t.category,
+      steps: t.steps,
+      variables: t.variables
+    }))
   ];
 
   const selected = allOptions.find(
@@ -57,13 +82,25 @@ export function RunScenarioFields({ step, onPatch, campaignScenarios = [], layou
   const selectCls = panel
     ? 'h-9 w-full min-w-0 flex-1 rounded-md border border-input bg-background px-2 py-1.5 text-sm shadow-sm sm:min-w-[200px]'
     : `${inputCls} flex-1 min-w-[160px]`;
-  const manualCls = panel ? 'h-9 w-full min-w-0 rounded-md border border-input bg-background px-2 text-sm sm:max-w-[220px]' : `${inputCls} w-36`;
+  const manualCls = panel
+    ? 'h-9 w-full min-w-0 rounded-md border border-input bg-background px-2 text-sm sm:max-w-[220px]'
+    : `${inputCls} w-36`;
 
   return (
     <div className={panel ? 'space-y-4' : 'space-y-2'}>
       {/* Scenario picker */}
-      <div className={panel ? 'flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center' : 'flex flex-wrap items-center gap-2'}>
-        <span className={panel ? 'text-xs font-medium text-foreground' : labelCls}>{t('scenarioLabel')}</span>
+      <div
+        className={
+          panel
+            ? 'flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center'
+            : 'flex flex-wrap items-center gap-2'
+        }
+      >
+        <span
+          className={panel ? 'text-xs font-medium text-foreground' : labelCls}
+        >
+          {t('scenarioLabel')}
+        </span>
         <select
           className={selectCls}
           value={selected ? `${selected.source}:${selected.name}` : ''}
@@ -89,7 +126,9 @@ export function RunScenarioFields({ step, onPatch, campaignScenarios = [], layou
             </optgroup>
           )}
         </select>
-        <span className={panel ? 'text-xs text-muted-foreground' : labelCls}>{t('orNameLabel')}</span>
+        <span className={panel ? 'text-xs text-muted-foreground' : labelCls}>
+          {t('orNameLabel')}
+        </span>
         <input
           className={manualCls}
           placeholder={t('scenarioNamePlaceholder')}
@@ -102,7 +141,13 @@ export function RunScenarioFields({ step, onPatch, campaignScenarios = [], layou
 
       {/* Variable overrides */}
       <div className='space-y-1.5'>
-        <span className={panel ? 'text-xs font-medium text-muted-foreground' : `${labelCls} text-[10px]`}>
+        <span
+          className={
+            panel
+              ? 'text-xs font-medium text-muted-foreground'
+              : `${labelCls} text-[10px]`
+          }
+        >
           {t('variableOverrides')}
         </span>
         <VariableEditor
@@ -120,7 +165,11 @@ export function RunScenarioFields({ step, onPatch, campaignScenarios = [], layou
             className='flex items-center gap-1 text-[10px] text-primary hover:underline'
             onClick={() => setShowPreview((v) => !v)}
           >
-            {showPreview ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+            {showPreview ? (
+              <ChevronDown size={10} />
+            ) : (
+              <ChevronRight size={10} />
+            )}
             {t('preview', { count: selected.steps.length })}
           </button>
           {showPreview && (
@@ -128,18 +177,29 @@ export function RunScenarioFields({ step, onPatch, campaignScenarios = [], layou
               {selected.steps.map((s: any, i: number) => {
                 const StepIcon = getStepIcon(s.type);
                 return (
-                <div key={i} className='flex items-center gap-1 text-[10px] text-muted-foreground py-0.5'>
-                  <span><StepIcon size={12} className='inline-block align-middle' /></span>
-                  <span className='font-mono'>#{i + 1}</span>
-                  <span className='font-medium'>{s.type}</span>
-                  {s.package && <span className='truncate'>— {s.package}</span>}
-                  {s.url && <span className='truncate'>— {s.url}</span>}
-                  {s.value && <span className='truncate'>— {s.value}</span>}
-                  {s.text && <span className='truncate'>— "{s.text}"</span>}
-                  {s.seconds != null && <span>— {s.seconds}s</span>}
-                  {s.count != null && <span>— ×{s.count}</span>}
-                </div>
-              )})}
+                  <div
+                    key={i}
+                    className='flex items-center gap-1 py-0.5 text-[10px] text-muted-foreground'
+                  >
+                    <span>
+                      <StepIcon
+                        size={12}
+                        className='inline-block align-middle'
+                      />
+                    </span>
+                    <span className='font-mono'>#{i + 1}</span>
+                    <span className='font-medium'>{s.type}</span>
+                    {s.package && (
+                      <span className='truncate'>— {s.package}</span>
+                    )}
+                    {s.url && <span className='truncate'>— {s.url}</span>}
+                    {s.value && <span className='truncate'>— {s.value}</span>}
+                    {s.text && <span className='truncate'>— "{s.text}"</span>}
+                    {s.seconds != null && <span>— {s.seconds}s</span>}
+                    {s.count != null && <span>— ×{s.count}</span>}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>

@@ -61,7 +61,9 @@ export const accountGroupsApi = {
       .get<AccountGroupOut[]>('/account-groups', { params: query })
       .then((r) => r.data),
   get: (groupId: string) =>
-    farmApi.get<AccountGroupOut>(`/account-groups/${groupId}`).then((r) => r.data),
+    farmApi
+      .get<AccountGroupOut>(`/account-groups/${groupId}`)
+      .then((r) => r.data),
   create: (data: AccountGroupCreate) =>
     farmApi.post<AccountGroupOut>('/account-groups', data).then((r) => r.data),
   update: (groupId: string, data: AccountGroupUpdate) =>
@@ -90,5 +92,5 @@ export const accountGroupsApi = {
   resolve: (groupId: string) =>
     farmApi
       .post<AccountGroupResolveResult>(`/account-groups/${groupId}/resolve`)
-      .then((r) => r.data),
+      .then((r) => r.data)
 };

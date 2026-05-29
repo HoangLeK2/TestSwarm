@@ -37,64 +37,88 @@ export function isPendingDevice(device: { serial: string }): boolean {
 }
 
 export type PairingOut = { pairing_id: string; qr_url: string };
-export type PairPollOut = { status: 'pending' | 'paired'; device?: Record<string, unknown> };
+export type PairPollOut = {
+  status: 'pending' | 'paired';
+  device?: Record<string, unknown>;
+};
 
 export const devicesApi = {
   list: () => farmApi.get<DeviceOut[]>('/devices').then((r) => r.data),
-  create: (data: DeviceCreate) => farmApi.post<DeviceOut>('/devices', data).then((r) => r.data),
+  create: (data: DeviceCreate) =>
+    farmApi.post<DeviceOut>('/devices', data).then((r) => r.data),
   register: (body?: { name?: string; description?: string }) =>
-    farmApi.post<DeviceOut>('/devices/register', body ?? {}).then((r) => r.data),
+    farmApi
+      .post<DeviceOut>('/devices/register', body ?? {})
+      .then((r) => r.data),
   sessions: (deviceId: string) =>
-    farmApi.get<SessionOut[]>(`/devices/${deviceId}/sessions`).then((r) => r.data),
-  delete: (deviceId: string) => farmApi.delete(`/devices/${deviceId}`).then((r) => r.data),
-  pair: () => farmApi.post<{ pairing_id: string; qr_url: string }>('/devices/pair').then((r) => r.data),
+    farmApi
+      .get<SessionOut[]>(`/devices/${deviceId}/sessions`)
+      .then((r) => r.data),
+  delete: (deviceId: string) =>
+    farmApi.delete(`/devices/${deviceId}`).then((r) => r.data),
+  pair: () =>
+    farmApi
+      .post<{ pairing_id: string; qr_url: string }>('/devices/pair')
+      .then((r) => r.data),
   pairBulk: (count: number) =>
-    farmApi.post<{ pairings: PairingOut[] }>('/devices/pair/bulk', { count }).then((r) => r.data),
+    farmApi
+      .post<{ pairings: PairingOut[] }>('/devices/pair/bulk', { count })
+      .then((r) => r.data),
   pollPair: (pairingId: string) =>
     farmApi.get<PairPollOut>(`/devices/pair/${pairingId}`).then((r) => r.data),
   /** Backend chủ động kết nối tới thiết bị qua ADB TCP. Không cần QR. */
   connectByIp: (ip: string, port = 5555) =>
-    farmApi.post<{ ok: boolean; serial: string }>('/devices/connect-adb', { ip, port }).then((r) => r.data),
+    farmApi
+      .post<{
+        ok: boolean;
+        serial: string;
+      }>('/devices/connect-adb', { ip, port })
+      .then((r) => r.data)
 };
 
 // ── Relay agent types ─────────────────────────────────────────────────────────
 
 export type RelayAgentOut = {
-  relay_id:          string;
-  hostname:          string;
-  ip:                string;
-  version:           string;
-  serials:           string[];
-  device_names?:     Record<string, string>;
-  status:            'online' | 'offline';
-  connected_at:      string;
+  relay_id: string;
+  hostname: string;
+  ip: string;
+  version: string;
+  serials: string[];
+  device_names?: Record<string, string>;
+  status: 'online' | 'offline';
+  connected_at: string;
   last_heartbeat_at: string | null;
-  disconnected_at:   string | null;
+  disconnected_at: string | null;
 };
 
 export type RelayCommandOut = {
-  ok:        boolean;
-  output:    string;
+  ok: boolean;
+  output: string;
   exit_code: number;
-  error:     string;
+  error: string;
 };
 
 export type BootstrapAllResult = {
   relay_id: string;
-  total:    number;
-  ok:       number;
-  failed:   number;
-  results:  Array<{ serial: string; ok: boolean; output: string; error: string }>;
+  total: number;
+  ok: number;
+  failed: number;
+  results: Array<{
+    serial: string;
+    ok: boolean;
+    output: string;
+    error: string;
+  }>;
 };
 
 export type RelayAgentTokenOut = {
-  id:           string;
-  name:         string;
-  prefix:       string;
-  status:       'active' | 'revoked';
-  created_at:   string;
+  id: string;
+  name: string;
+  prefix: string;
+  status: 'active' | 'revoked';
+  created_at: string;
   last_used_at: string | null;
-  revoked_at:   string | null;
+  revoked_at: string | null;
 };
 
 export type RelayAgentTokenCreated = RelayAgentTokenOut & {
@@ -116,7 +140,14 @@ export type RelayBatchJobOut = {
   id: string;
   relay_id: string;
   kind: 'provision' | 'claim_connect' | string;
-  status: 'pending' | 'running' | 'completed' | 'completed_with_errors' | 'failed' | 'cancelled' | string;
+  status:
+    | 'pending'
+    | 'running'
+    | 'completed'
+    | 'completed_with_errors'
+    | 'failed'
+    | 'cancelled'
+    | string;
   total: number;
   ok: number;
   failed: number;
@@ -137,63 +168,93 @@ export type RelayBatchJobCreate = {
 // ── Relay agents API ──────────────────────────────────────────────────────────
 
 export const relayAgentsApi = {
-  list: () =>
-    farmApi.get<RelayAgentOut[]>('/relay-agents').then((r) => r.data),
+  list: () => farmApi.get<RelayAgentOut[]>('/relay-agents').then((r) => r.data),
   get: (relayId: string) =>
     farmApi.get<RelayAgentOut>(`/relay-agents/${relayId}`).then((r) => r.data),
   registerDevice: (relayId: string, serial: string, body?: { name?: string }) =>
     farmApi
       .post<DeviceOut>(
         `/relay-agents/${encodeURIComponent(relayId)}/devices/${encodeURIComponent(serial)}/register`,
-        body ?? {},
+        body ?? {}
       )
       .then((r) => r.data),
-  pushConnectUrl: (relayId: string, serial: string, opts?: { deviceId?: string }) =>
+  pushConnectUrl: (
+    relayId: string,
+    serial: string,
+    opts?: { deviceId?: string }
+  ) =>
     farmApi
       .post<RelayCommandOut>(
         `/relay-agents/${encodeURIComponent(relayId)}/devices/${encodeURIComponent(serial)}/push-connect-url`,
         undefined,
-        opts?.deviceId ? { params: { device_id: opts.deviceId } } : undefined,
+        opts?.deviceId ? { params: { device_id: opts.deviceId } } : undefined
       )
       .then((r) => r.data),
   bootstrapAll: (relayId: string) =>
-    farmApi.post<BootstrapAllResult>(`/relay-agents/${relayId}/bootstrap-all`).then((r) => r.data),
+    farmApi
+      .post<BootstrapAllResult>(`/relay-agents/${relayId}/bootstrap-all`)
+      .then((r) => r.data),
   createProvisionJob: (relayId: string, body: RelayBatchJobCreate) =>
     farmApi
-      .post<RelayBatchJobOut>(`/relay-agents/${encodeURIComponent(relayId)}/jobs/provision`, body)
+      .post<RelayBatchJobOut>(
+        `/relay-agents/${encodeURIComponent(relayId)}/jobs/provision`,
+        body
+      )
       .then((r) => r.data),
   createClaimConnectJob: (relayId: string, body: RelayBatchJobCreate) =>
     farmApi
-      .post<RelayBatchJobOut>(`/relay-agents/${encodeURIComponent(relayId)}/jobs/claim-connect`, body)
+      .post<RelayBatchJobOut>(
+        `/relay-agents/${encodeURIComponent(relayId)}/jobs/claim-connect`,
+        body
+      )
       .then((r) => r.data),
   getJob: (relayId: string, jobId: string) =>
     farmApi
-      .get<RelayBatchJobOut>(`/relay-agents/${encodeURIComponent(relayId)}/jobs/${encodeURIComponent(jobId)}`)
-      .then((r) => r.data),
-  listJobItems: (relayId: string, jobId: string, params?: { status?: string; limit?: number; offset?: number }) =>
-    farmApi
-      .get<RelayBatchJobItemOut[]>(
-        `/relay-agents/${encodeURIComponent(relayId)}/jobs/${encodeURIComponent(jobId)}/items`,
-        { params },
+      .get<RelayBatchJobOut>(
+        `/relay-agents/${encodeURIComponent(relayId)}/jobs/${encodeURIComponent(jobId)}`
       )
       .then((r) => r.data),
+  listJobItems: (
+    relayId: string,
+    jobId: string,
+    params?: { status?: string; limit?: number; offset?: number }
+  ) =>
+    farmApi
+      .get<
+        RelayBatchJobItemOut[]
+      >(`/relay-agents/${encodeURIComponent(relayId)}/jobs/${encodeURIComponent(jobId)}/items`, { params })
+      .then((r) => r.data),
   listTokens: () =>
-    farmApi.get<RelayAgentTokenOut[]>('/relay-agents/tokens').then((r) => r.data),
+    farmApi
+      .get<RelayAgentTokenOut[]>('/relay-agents/tokens')
+      .then((r) => r.data),
   createToken: (body: { name?: string }) =>
-    farmApi.post<RelayAgentTokenCreated>('/relay-agents/tokens', body).then((r) => r.data),
+    farmApi
+      .post<RelayAgentTokenCreated>('/relay-agents/tokens', body)
+      .then((r) => r.data),
   revokeToken: (tokenId: string) =>
-    farmApi.delete(`/relay-agents/tokens/${encodeURIComponent(tokenId)}`).then((r) => r.data),
+    farmApi
+      .delete(`/relay-agents/tokens/${encodeURIComponent(tokenId)}`)
+      .then((r) => r.data)
 };
 
 // ── Device relay control API ──────────────────────────────────────────────────
 
 export const deviceControlApi = {
-  bootstrap:     (deviceId: string) =>
-    farmApi.post<RelayCommandOut>(`/devices/${deviceId}/bootstrap`).then((r) => r.data),
-  restartU2:     (deviceId: string) =>
-    farmApi.post<RelayCommandOut>(`/devices/${deviceId}/restart-u2`).then((r) => r.data),
-  restartAtx:    (deviceId: string) =>
-    farmApi.post<RelayCommandOut>(`/devices/${deviceId}/restart-atx`).then((r) => r.data),
+  bootstrap: (deviceId: string) =>
+    farmApi
+      .post<RelayCommandOut>(`/devices/${deviceId}/bootstrap`)
+      .then((r) => r.data),
+  restartU2: (deviceId: string) =>
+    farmApi
+      .post<RelayCommandOut>(`/devices/${deviceId}/restart-u2`)
+      .then((r) => r.data),
+  restartAtx: (deviceId: string) =>
+    farmApi
+      .post<RelayCommandOut>(`/devices/${deviceId}/restart-atx`)
+      .then((r) => r.data),
   restartScrcpy: (deviceId: string) =>
-    farmApi.post<RelayCommandOut>(`/devices/${deviceId}/restart-scrcpy`).then((r) => r.data),
+    farmApi
+      .post<RelayCommandOut>(`/devices/${deviceId}/restart-scrcpy`)
+      .then((r) => r.data)
 };

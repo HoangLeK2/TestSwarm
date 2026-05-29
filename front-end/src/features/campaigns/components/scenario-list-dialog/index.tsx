@@ -22,18 +22,43 @@ import {
 import { restrictToVerticalAxis } from '@dnd-kit/modifiers';
 import { useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { useCreateScenario, useReorderScenarios, useScenarios } from '../../hooks/use-campaigns';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger
+} from '@/components/ui/dialog';
+import {
+  useCreateScenario,
+  useReorderScenarios,
+  useScenarios
+} from '../../hooks/use-campaigns';
 import type { CampaignOut, ScenarioOut } from '../../types';
 import { ScenarioRow } from './ScenarioRow';
 
-export function ScenarioListDialog({ campaign, children }: { campaign: CampaignOut; children?: React.ReactNode }) {
+export function ScenarioListDialog({
+  campaign,
+  children,
+  open: controlledOpen,
+  onOpenChange: controlledOnOpenChange
+}: {
+  campaign: CampaignOut;
+  children?: React.ReactNode;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}) {
   const t = useTranslations('campaignsFeature.scenarioList');
   const [open, setOpen] = useState(false);
+  const isControlled =
+    typeof controlledOpen === 'boolean' && !!controlledOnOpenChange;
+  const finalOpen = isControlled ? controlledOpen : open;
+  const onOpenChange = isControlled ? controlledOnOpenChange : setOpen;
   const qc = useQueryClient();
   const { data: scenarios = [], refetch } = useScenarios(campaign.id);
   const { mutate: createScenario, isPending: isCreating } = useCreateScenario();
-  const { mutateAsync: reorderScenarios, isPending: isReordering } = useReorderScenarios();
+  const { mutateAsync: reorderScenarios, isPending: isReordering } =
+    useReorderScenarios();
 
   const totalSteps = scenarios.reduce((sum, s) => sum + s.steps.length, 0);
 
@@ -48,7 +73,10 @@ export function ScenarioListDialog({ campaign, children }: { campaign: CampaignO
     createScenario(
       {
         campaignId: campaign.id,
-        data: { name: `Scenario ${scenarios.length + 1}`, order: scenarios.length }
+        data: {
+          name: `Scenario ${scenarios.length + 1}`,
+          order: scenarios.length
+        }
       },
       {
         onSuccess: () => toast.success(t('createSuccess')),
@@ -66,12 +94,17 @@ export function ScenarioListDialog({ campaign, children }: { campaign: CampaignO
     const newIndex = scenarios.findIndex((s) => s.id === over.id);
     if (oldIndex < 0 || newIndex < 0) return;
 
-    const reordered = arrayMove(scenarios, oldIndex, newIndex).map((s, idx) => ({ ...s, order: idx }));
+    const reordered = arrayMove(scenarios, oldIndex, newIndex).map(
+      (s, idx) => ({ ...s, order: idx })
+    );
     await qc.cancelQueries({ queryKey: scenariosKey });
     qc.setQueryData<ScenarioOut[]>(scenariosKey, reordered);
 
     try {
-      await reorderScenarios({ campaignId: campaign.id, orderedIds: reordered.map((s) => s.id) });
+      await reorderScenarios({
+        campaignId: campaign.id,
+        orderedIds: reordered.map((s) => s.id)
+      });
     } catch {
       toast.error(t('reorderFailed'));
       refetch();
@@ -79,15 +112,21 @@ export function ScenarioListDialog({ campaign, children }: { campaign: CampaignO
   };
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        {children ?? (
-          <Button variant='outline' size='sm' className='w-full justify-start gap-1.5 text-xs'>
-            <FileText size={12} />
-            {t('trigger', { scenarios: scenarios.length, steps: totalSteps })}
-          </Button>
-        )}
-      </DialogTrigger>
+    <Dialog open={finalOpen} onOpenChange={onOpenChange}>
+      {children !== null && (
+        <DialogTrigger asChild>
+          {children ?? (
+            <Button
+              variant='outline'
+              size='sm'
+              className='w-full justify-start gap-1.5 text-xs'
+            >
+              <FileText size={12} />
+              {t('trigger', { scenarios: scenarios.length, steps: totalSteps })}
+            </Button>
+          )}
+        </DialogTrigger>
+      )}
 
       <DialogContent className='max-h-[80vh] overflow-y-auto sm:max-w-lg'>
         <DialogHeader className='pr-10 text-left sm:pr-12'>
@@ -98,7 +137,9 @@ export function ScenarioListDialog({ campaign, children }: { campaign: CampaignO
 
         <div className='flex flex-col gap-2'>
           {scenarios.length === 0 ? (
-            <p className='py-4 text-center text-sm text-muted-foreground'>{t('empty')}</p>
+            <p className='py-4 text-center text-sm text-muted-foreground'>
+              {t('empty')}
+            </p>
           ) : (
             <DndContext
               sensors={sensors}
@@ -106,7 +147,10 @@ export function ScenarioListDialog({ campaign, children }: { campaign: CampaignO
               modifiers={[restrictToVerticalAxis]}
               onDragEnd={handleDragEnd}
             >
-              <SortableContext items={scenarios.map((s) => s.id)} strategy={verticalListSortingStrategy}>
+              <SortableContext
+                items={scenarios.map((s) => s.id)}
+                strategy={verticalListSortingStrategy}
+              >
                 <div className='flex flex-col gap-2'>
                   {scenarios.map((s) => (
                     <ScenarioRow

@@ -21,7 +21,10 @@ import {
   DialogTrigger
 } from '@/components/ui/dialog';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
-import { HexColorPopover, sanitizeHex } from '@/components/ui/hex-color-popover';
+import {
+  HexColorPopover,
+  sanitizeHex
+} from '@/components/ui/hex-color-popover';
 import { DeviceGroupFormPreview } from './device-group-form-preview';
 
 type FormData = { name: string; description?: string; color?: string };
@@ -54,12 +57,25 @@ export function EditDeviceGroupDialog({ group }: { group: DeviceGroupOut }) {
   });
 
   useEffect(() => {
-    if (open) reset({ name: group.name, description: group.description, color: group.color });
+    if (open)
+      reset({
+        name: group.name,
+        description: group.description,
+        color: group.color
+      });
   }, [open, group, reset]);
 
   const name = useWatch({ control, name: 'name', defaultValue: group.name });
-  const description = useWatch({ control, name: 'description', defaultValue: group.description ?? '' });
-  const color = useWatch({ control, name: 'color', defaultValue: group.color ?? '#6366f1' });
+  const description = useWatch({
+    control,
+    name: 'description',
+    defaultValue: group.description ?? ''
+  });
+  const color = useWatch({
+    control,
+    name: 'color',
+    defaultValue: group.color ?? '#6366f1'
+  });
 
   const onSubmit = (data: FormData) => {
     mutate(
@@ -78,7 +94,12 @@ export function EditDeviceGroupDialog({ group }: { group: DeviceGroupOut }) {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button size='icon' variant='ghost' className='size-8 cursor-pointer' aria-label={t('title')}>
+        <Button
+          size='icon'
+          variant='ghost'
+          className='size-8 cursor-pointer'
+          aria-label={t('title')}
+        >
           <Pencil size={14} />
         </Button>
       </DialogTrigger>
@@ -89,9 +110,14 @@ export function EditDeviceGroupDialog({ group }: { group: DeviceGroupOut }) {
         </DialogHeader>
 
         <div className='grid max-h-[min(85vh,720px)] auto-rows-min gap-6 overflow-y-auto px-6 pb-6 sm:grid-cols-[minmax(0,1fr)_min(240px,40%)] sm:items-start'>
-          <form onSubmit={handleSubmit(onSubmit)} className='flex min-w-0 flex-col gap-4'>
+          <form
+            onSubmit={handleSubmit(onSubmit)}
+            className='flex min-w-0 flex-col gap-4'
+          >
             <div className='space-y-1.5'>
-              <Label htmlFor={`device-group-edit-name-${group.id}`}>{t('nameLabel')}</Label>
+              <Label htmlFor={`device-group-edit-name-${group.id}`}>
+                {t('nameLabel')}
+              </Label>
               <Input
                 id={`device-group-edit-name-${group.id}`}
                 autoComplete='off'
@@ -99,12 +125,20 @@ export function EditDeviceGroupDialog({ group }: { group: DeviceGroupOut }) {
                 className='transition-colors duration-200'
                 {...register('name')}
               />
-              <p className='text-[11px] leading-snug text-muted-foreground'>{tForm('nameHint')}</p>
-              {errors.name && <p className='text-xs text-destructive'>{errors.name.message}</p>}
+              <p className='text-[11px] leading-snug text-muted-foreground'>
+                {tForm('nameHint')}
+              </p>
+              {errors.name && (
+                <p className='text-xs text-destructive'>
+                  {errors.name.message}
+                </p>
+              )}
             </div>
 
             <div className='space-y-1.5'>
-              <Label htmlFor={`device-group-edit-description-${group.id}`}>{t('descriptionLabel')}</Label>
+              <Label htmlFor={`device-group-edit-description-${group.id}`}>
+                {t('descriptionLabel')}
+              </Label>
               <Textarea
                 id={`device-group-edit-description-${group.id}`}
                 placeholder={tCreate('descriptionPlaceholder')}
@@ -112,7 +146,9 @@ export function EditDeviceGroupDialog({ group }: { group: DeviceGroupOut }) {
                 className='min-h-[80px] resize-y transition-colors duration-200'
                 {...register('description')}
               />
-              <p className='text-[11px] leading-snug text-muted-foreground'>{tForm('descriptionHint')}</p>
+              <p className='text-[11px] leading-snug text-muted-foreground'>
+                {tForm('descriptionHint')}
+              </p>
             </div>
 
             <div className='space-y-1.5'>
@@ -129,7 +165,9 @@ export function EditDeviceGroupDialog({ group }: { group: DeviceGroupOut }) {
                   />
                 )}
               />
-              <p className='text-[11px] leading-snug text-muted-foreground'>{tForm('colorHint')}</p>
+              <p className='text-[11px] leading-snug text-muted-foreground'>
+                {tForm('colorHint')}
+              </p>
             </div>
 
             {error && (
@@ -138,7 +176,11 @@ export function EditDeviceGroupDialog({ group }: { group: DeviceGroupOut }) {
               </p>
             )}
 
-            <Button type='submit' className='w-full cursor-pointer' disabled={isPending}>
+            <Button
+              type='submit'
+              className='w-full cursor-pointer'
+              disabled={isPending}
+            >
               {isPending ? t('updating') : t('submit')}
             </Button>
           </form>

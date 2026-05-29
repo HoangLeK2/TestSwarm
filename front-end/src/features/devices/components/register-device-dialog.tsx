@@ -23,13 +23,29 @@ import {
 import Link from 'next/link';
 import { ROUTES } from '@/config/routes';
 import { Separator } from '@/components/ui/separator';
-import { Plus, Copy, Check, CheckCircle2, Loader2, QrCode, Send, Smartphone } from 'lucide-react';
+import {
+  Plus,
+  Copy,
+  Check,
+  CheckCircle2,
+  Loader2,
+  QrCode,
+  Send,
+  Smartphone
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
-import { devicesApi, relayAgentsApi, isPendingDevice } from '@/features/devices/services/manage-api';
+import {
+  devicesApi,
+  relayAgentsApi,
+  isPendingDevice
+} from '@/features/devices/services/manage-api';
 import { getDeviceAgentWsUrl } from '@/lib/farm-api';
 import { useTranslations } from 'next-intl';
-import type { DeviceOut, RelayAgentOut } from '@/features/devices/services/manage-api';
+import type {
+  DeviceOut,
+  RelayAgentOut
+} from '@/features/devices/services/manage-api';
 
 type Step = 'form' | 'confirm' | 'qr' | 'connected';
 
@@ -45,7 +61,7 @@ type RelayDeviceChoice = {
 
 export function RegisterDeviceDialog({
   relayAgents = [],
-  registeredSerials = new Set<string>(),
+  registeredSerials = new Set<string>()
 }: {
   relayAgents?: RelayAgentOut[];
   registeredSerials?: Set<string>;
@@ -57,8 +73,12 @@ export function RegisterDeviceDialog({
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [selectedRelayDeviceId, setSelectedRelayDeviceId] = useState('');
-  const [registeredDevice, setRegisteredDevice] = useState<DeviceOut | null>(null);
-  const [connectedDevice, setConnectedDevice] = useState<DeviceOut | null>(null);
+  const [registeredDevice, setRegisteredDevice] = useState<DeviceOut | null>(
+    null
+  );
+  const [connectedDevice, setConnectedDevice] = useState<DeviceOut | null>(
+    null
+  );
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [pushingUrl, setPushingUrl] = useState(false);
@@ -71,13 +91,18 @@ export function RegisterDeviceDialog({
     for (const agent of relayAgents) {
       if (agent.status !== 'online') continue;
       for (const serial of agent.serials) {
-        if (!serial || serial.startsWith('pending-') || registeredSerials.has(serial)) continue;
+        if (
+          !serial ||
+          serial.startsWith('pending-') ||
+          registeredSerials.has(serial)
+        )
+          continue;
         choices.push({
           id: `${agent.relay_id}::${serial}`,
           relayId: agent.relay_id,
           relayLabel: agent.hostname || agent.relay_id,
           serial,
-          deviceName: agent.device_names?.[serial],
+          deviceName: agent.device_names?.[serial]
         });
       }
     }
@@ -111,7 +136,10 @@ export function RegisterDeviceDialog({
   useEffect(() => {
     if (
       relayDeviceChoices.length > 0 &&
-      (!selectedRelayDeviceId || !relayDeviceChoices.some((choice) => choice.id === selectedRelayDeviceId))
+      (!selectedRelayDeviceId ||
+        !relayDeviceChoices.some(
+          (choice) => choice.id === selectedRelayDeviceId
+        ))
     ) {
       setSelectedRelayDeviceId(relayDeviceChoices[0].id);
     }
@@ -140,7 +168,10 @@ export function RegisterDeviceDialog({
         const hasFreshActiveSession = sessions.some((session) => {
           if (session.disconnected_at) return false;
           const connectedAtTs = Date.parse(session.connected_at);
-          return Number.isFinite(connectedAtTs) && connectedAtTs >= qrOpenedAtRef.current;
+          return (
+            Number.isFinite(connectedAtTs) &&
+            connectedAtTs >= qrOpenedAtRef.current
+          );
         });
         if (!hasFreshActiveSession) return;
         stopPolling();
@@ -156,13 +187,20 @@ export function RegisterDeviceDialog({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const choice = relayDeviceChoices.find((item) => item.id === selectedRelayDeviceId);
+    const choice = relayDeviceChoices.find(
+      (item) => item.id === selectedRelayDeviceId
+    );
     setLoading(true);
     try {
-      const displayName = [name.trim(), description.trim()].filter(Boolean).join(' — ');
+      const displayName = [name.trim(), description.trim()]
+        .filter(Boolean)
+        .join(' — ');
       const device = choice
         ? await relayAgentsApi.registerDevice(choice.relayId, choice.serial)
-        : await devicesApi.register({ name: displayName || name.trim() || undefined, description: '' });
+        : await devicesApi.register({
+            name: displayName || name.trim() || undefined,
+            description: ''
+          });
       setRegisteredDevice(device);
       qrOpenedAtRef.current = Date.now();
       setStep('qr');
@@ -191,7 +229,10 @@ export function RegisterDeviceDialog({
     if (!registeredDevice?.relay_id) return;
     setPushingUrl(true);
     try {
-      const res = await relayAgentsApi.pushConnectUrl(registeredDevice.relay_id, registeredDevice.serial);
+      const res = await relayAgentsApi.pushConnectUrl(
+        registeredDevice.relay_id,
+        registeredDevice.serial
+      );
       if (!res.ok) {
         toast.error(res.error || t('errorPushToPhone'));
         return;
@@ -212,7 +253,11 @@ export function RegisterDeviceDialog({
           {t('title')}
         </Button>
       </DialogTrigger>
-      <DialogContent className='max-w-sm' zIndex={20000} onInteractOutside={() => {}}>
+      <DialogContent
+        className='max-w-sm'
+        zIndex={20000}
+        onInteractOutside={() => {}}
+      >
         <DialogHeader>
           <DialogTitle>
             {step === 'form' && t('title')}
@@ -253,13 +298,18 @@ export function RegisterDeviceDialog({
                   {relayDeviceChoices.map((choice) => (
                     <SelectItem key={choice.id} value={choice.id}>
                       <span>{choice.deviceName || choice.serial}</span>
-                      <span className='text-xs text-muted-foreground'> · {choice.relayLabel}</span>
+                      <span className='text-xs text-muted-foreground'>
+                        {' '}
+                        · {choice.relayLabel}
+                      </span>
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
               {relayDeviceChoices.length === 0 && (
-                <p className='text-xs text-muted-foreground'>{t('noAvailableDevices')}</p>
+                <p className='text-xs text-muted-foreground'>
+                  {t('noAvailableDevices')}
+                </p>
               )}
             </div>
             {!hasRelayChoices && (
@@ -287,14 +337,18 @@ export function RegisterDeviceDialog({
             <p className='text-sm text-muted-foreground'>
               {t.rich('confirmMessage', {
                 strong: (c) => <strong className='text-foreground'>{c}</strong>,
-                name: registeredDevice.name || registeredDevice.serial,
+                name: registeredDevice.name || registeredDevice.serial
               })}
             </p>
             <Button className='w-full gap-2' onClick={() => setStep('qr')}>
               <QrCode size={15} />
               {t('connectNow')}
             </Button>
-            <Button variant='outline' className='w-full' onClick={() => setOpen(false)}>
+            <Button
+              variant='outline'
+              className='w-full'
+              onClick={() => setOpen(false)}
+            >
               {t('connectLater')}
             </Button>
           </div>
@@ -324,7 +378,9 @@ export function RegisterDeviceDialog({
             <div className='flex w-full gap-2'>
               <input
                 readOnly
-                value={getDeviceAgentWsUrl(`key=${registeredDevice.device_key}`)}
+                value={getDeviceAgentWsUrl(
+                  `key=${registeredDevice.device_key}`
+                )}
                 className='flex-1 rounded-md border bg-muted px-2 py-1.5 font-mono text-xs'
               />
               <Button size='sm' variant='outline' onClick={copyLink}>
@@ -340,7 +396,11 @@ export function RegisterDeviceDialog({
                 disabled={pushingUrl}
                 onClick={pushConnectUrl}
               >
-                {pushingUrl ? <Loader2 size={14} className='animate-spin' /> : <Send size={14} />}
+                {pushingUrl ? (
+                  <Loader2 size={14} className='animate-spin' />
+                ) : (
+                  <Send size={14} />
+                )}
                 {pushingUrl ? t('sendingToPhone') : t('sendToPhone')}
               </Button>
             )}
@@ -350,7 +410,12 @@ export function RegisterDeviceDialog({
               {t('waiting')}
             </div>
 
-            <Button variant='ghost' size='sm' className='w-full text-xs' onClick={() => setOpen(false)}>
+            <Button
+              variant='ghost'
+              size='sm'
+              className='w-full text-xs'
+              onClick={() => setOpen(false)}
+            >
               {t('close')}
             </Button>
           </div>
@@ -371,45 +436,70 @@ export function RegisterDeviceDialog({
                 <p className='font-semibold text-foreground'>
                   {connectedDevice.brand} {connectedDevice.model}
                 </p>
-                <p className='text-xs text-muted-foreground'>{t('successMessage')}</p>
+                <p className='text-xs text-muted-foreground'>
+                  {t('successMessage')}
+                </p>
               </div>
             </div>
 
             {/* Device info */}
             <div className='rounded-lg border bg-muted/30'>
               <div className='flex items-center gap-3 px-3 py-2.5'>
-                <Smartphone size={14} className='shrink-0 text-muted-foreground' />
-                <span className='min-w-0 flex-1 text-xs text-muted-foreground'>{t('infoSerial')}</span>
-                <span className='font-mono text-xs font-medium text-foreground'>{connectedDevice.serial}</span>
+                <Smartphone
+                  size={14}
+                  className='shrink-0 text-muted-foreground'
+                />
+                <span className='min-w-0 flex-1 text-xs text-muted-foreground'>
+                  {t('infoSerial')}
+                </span>
+                <span className='font-mono text-xs font-medium text-foreground'>
+                  {connectedDevice.serial}
+                </span>
               </div>
               {connectedDevice.android_version && (
                 <>
                   <Separator />
                   <div className='flex items-center gap-3 px-3 py-2.5'>
-                    <span className='min-w-0 flex-1 text-xs text-muted-foreground'>{t('infoAndroid')}</span>
-                    <span className='text-xs font-medium text-foreground'>{connectedDevice.android_version}</span>
-                  </div>
-                </>
-              )}
-              {connectedDevice.screen_width > 0 && connectedDevice.screen_height > 0 && (
-                <>
-                  <Separator />
-                  <div className='flex items-center gap-3 px-3 py-2.5'>
-                    <span className='min-w-0 flex-1 text-xs text-muted-foreground'>{t('infoResolution')}</span>
+                    <span className='min-w-0 flex-1 text-xs text-muted-foreground'>
+                      {t('infoAndroid')}
+                    </span>
                     <span className='text-xs font-medium text-foreground'>
-                      {connectedDevice.screen_width} × {connectedDevice.screen_height}
+                      {connectedDevice.android_version}
                     </span>
                   </div>
                 </>
               )}
+              {connectedDevice.screen_width > 0 &&
+                connectedDevice.screen_height > 0 && (
+                  <>
+                    <Separator />
+                    <div className='flex items-center gap-3 px-3 py-2.5'>
+                      <span className='min-w-0 flex-1 text-xs text-muted-foreground'>
+                        {t('infoResolution')}
+                      </span>
+                      <span className='text-xs font-medium text-foreground'>
+                        {connectedDevice.screen_width} ×{' '}
+                        {connectedDevice.screen_height}
+                      </span>
+                    </div>
+                  </>
+                )}
             </div>
 
             <Button asChild className='w-full'>
-              <Link href={ROUTES.DEVICES.CONTROL_RECORD_WITH_SERIAL(connectedDevice.serial)}>
+              <Link
+                href={ROUTES.DEVICES.CONTROL_RECORD_WITH_SERIAL(
+                  connectedDevice.serial
+                )}
+              >
                 {t('controlNow')}
               </Link>
             </Button>
-            <Button variant='outline' className='w-full' onClick={() => setOpen(false)}>
+            <Button
+              variant='outline'
+              className='w-full'
+              onClick={() => setOpen(false)}
+            >
               {t('close')}
             </Button>
           </div>

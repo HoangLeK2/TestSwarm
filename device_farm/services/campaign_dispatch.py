@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict, Tuple
@@ -9,7 +10,10 @@ from typing import Any, Dict, Tuple
 from db.database import AsyncSessionLocal
 from db import crud as repo
 from db.crud.default_scenario import DEVICE_CONTEXT_KEY
-from db.crud.scenario_device_variable import get_scenario_device_variables_bulk
+from db.crud.scenario_device_variable import (
+    get_scenario_device_variables as _get_scenario_device_variables_crud,
+    get_scenario_device_variables_bulk,
+)
 from common.variable_resolver import normalize_device_vars
 
 log = logging.getLogger(__name__)
@@ -18,6 +22,14 @@ log = logging.getLogger(__name__)
 # Colons (:) are reserved as segment separators; quotes/backslashes risk
 # injection into Temporal query string filter expressions.
 _CAMPAIGN_ID_RE = re.compile(r'^[\w\-]{1,128}$')
+
+
+def _offline_dismiss_minutes() -> int:
+    raw = os.environ.get("DEVICE_FARM_DLQ_OFFLINE_DISMISS_MINUTES", "5")
+    try:
+        return max(1, min(10_080, int(raw)))
+    except ValueError:
+        return 5
 
 
 def _account_to_vars(account) -> Dict[str, Any]:
@@ -122,6 +134,18 @@ async def _build_per_scenario_device_runtime_vars(
     scenario_ids = [s.id for s in scenarios]
     device_ids = [d.id for d in devices]
     bulk = await get_scenario_device_variables_bulk(db, scenario_ids, device_ids)
+
+    # Backward-compatible path: older tests and call sites patch
+    # `services.campaign_dispatch.get_scenario_device_variables`. Also, when
+    # there are no DB rows at all, bulk will be empty; in that case it is safe
+    # to do a minimal per-(scenario,device) lookup to preserve override semantics.
+    if not bulk and scenario_ids and device_ids:
+        for scen in scenarios:
+            for device in devices:
+                bulk[(scen.id, device.id)] = await get_scenario_device_variables(
+                    db, scen.id, device.id
+                )
+
     out: Dict[str, Dict[str, Dict[str, Any]]] = {}
     for scen in scenarios:
         per_device: Dict[str, Dict[str, Any]] = {}
@@ -130,6 +154,11 @@ async def _build_per_scenario_device_runtime_vars(
             per_device[device.id] = normalize_device_vars(raw)
         out[scen.id] = per_device
     return out
+
+
+async def get_scenario_device_variables(db, scenario_id: str, device_id: str) -> Dict[str, Any]:
+    # Exposed for patching in tests and to keep a stable import surface.
+    return await _get_scenario_device_variables_crud(db, scenario_id, device_id)
 
 
 def _build_scenario_registry(
@@ -182,6 +211,7 @@ def _build_device_sequence_steps(
     slot_idx: int,
     per_scenario_device_vars: Dict[str, Dict[str, Dict[str, Any]]],
     per_scenario_device_runtime_vars: Dict[str, Dict[str, Dict[str, Any]]],
+    scenario_registry: Dict[str, Any] | None = None,
 ) -> list[Dict[str, Any]]:
     """Build ordered run_scenario steps for one device.
 
@@ -190,8 +220,14 @@ def _build_device_sequence_steps(
     order, carrying the per-scenario device/account variables as overrides.
     """
     steps: list[Dict[str, Any]] = []
+    by_template_name = (scenario_registry or {}).get("by_template_name") or {}
     for scenario_idx, scen in enumerate(scenarios):
-        if not scen.steps:
+        # Some campaigns use ScenarioTemplates (stored separately) and keep
+        # Scenario.steps empty. In that case, still include the scenario in the
+        # device sequence if a template with the same name exists.
+        has_steps = bool(getattr(scen, "steps", None))
+        has_template = bool(getattr(scen, "name", "") and (scen.name in by_template_name))
+        if not has_steps and not has_template:
             continue
         acct_vars = per_scenario_device_vars.get(scen.id, {}).get(device.id, {})
         device_runtime_vars = (
@@ -260,6 +296,20 @@ async def enqueue_campaign_run_temporal(
 
         if not devices:
             return {"error": "Campaign has no devices"}, 400
+
+        from services.device_liveness import filter_live_devices_for_dispatch
+
+        devices, skipped_devices = await filter_live_devices_for_dispatch(
+            db,
+            devices,
+            offline_after_minutes=_offline_dismiss_minutes(),
+        )
+        if not devices:
+            return {
+                "error": "No online devices available for campaign dispatch",
+                "campaign_id": campaign_id,
+                "skipped_offline_device_serials": [d.serial for d in skipped_devices],
+            }, 400
 
         scenarios = await repo.list_scenarios(db, campaign_id)
         if not scenarios:
@@ -426,6 +476,7 @@ async def enqueue_campaign_run_temporal(
             slot_idx=slot_idx,
             per_scenario_device_vars=per_scenario_device_vars,
             per_scenario_device_runtime_vars=per_scenario_device_runtime_vars,
+            scenario_registry=registry,
         )
         if not sequence_steps:
             continue
@@ -482,6 +533,7 @@ async def enqueue_campaign_run_temporal(
                 "scenario_ids": [s.id for s in scenarios if s.steps],
                 "execution_mode": "device_sequence",
                 "account_usage": account_usage_meta,
+                "skipped_offline_device_serials": [d.serial for d in skipped_devices],
             },
         )
         await db.commit()
@@ -491,6 +543,7 @@ async def enqueue_campaign_run_temporal(
         "execution_id": execution_id,
         "status": "running",
         "device_serials": [d.serial for d in devices],
+        "skipped_offline_device_serials": [d.serial for d in skipped_devices],
         "workflow_ids": workflow_ids,
         "scenarios_count": len(scenarios),
         "execution_engine": "temporal",

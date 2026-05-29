@@ -35,19 +35,21 @@ export function DeviceFarmTaskPanel({ tasks }: TaskPanelProps) {
         <CardContent className='px-3 py-2'>
           <div className='max-h-52 space-y-1.5 overflow-y-auto text-[11px]'>
             {items.length === 0 ? (
-              <div className='text-xs text-muted-foreground'>{t('noTasks')}</div>
+              <div className='text-xs text-muted-foreground'>
+                {t('noTasks')}
+              </div>
             ) : (
               items.map((task) => {
                 const borderClass =
                   task.status === 'PENDING'
                     ? 'border-border'
                     : task.status === 'RUNNING'
-                    ? 'border-amber-500/80 bg-amber-500/5'
-                    : task.status === 'DONE'
-                    ? 'border-emerald-500/80 bg-emerald-500/5'
-                    : task.status === 'FAILED'
-                    ? 'border-destructive/80 bg-destructive/5'
-                    : 'border-sky-500/80 bg-sky-500/5';
+                      ? 'border-amber-500/80 bg-amber-500/5'
+                      : task.status === 'DONE'
+                        ? 'border-emerald-500/80 bg-emerald-500/5'
+                        : task.status === 'FAILED'
+                          ? 'border-destructive/80 bg-destructive/5'
+                          : 'border-sky-500/80 bg-sky-500/5';
                 return (
                   <div
                     key={task.id}
@@ -62,8 +64,8 @@ export function DeviceFarmTaskPanel({ tasks }: TaskPanelProps) {
                       </span>
                     </div>
                     <div className='mt-0.5 text-[10px] text-muted-foreground'>
-                      {task.target ? '@' + task.target : t('any')} · {t('retry')}{' '}
-                      {task.retry_count}/{task.max_retries}
+                      {task.target ? '@' + task.target : t('any')} ·{' '}
+                      {t('retry')} {task.retry_count}/{task.max_retries}
                       {task.error && (
                         <span className='ml-1 text-destructive'>
                           · {task.error.slice(0, 40)}
@@ -80,4 +82,3 @@ export function DeviceFarmTaskPanel({ tasks }: TaskPanelProps) {
     </div>
   );
 }
-

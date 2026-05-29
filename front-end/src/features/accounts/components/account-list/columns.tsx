@@ -1,5 +1,5 @@
 import { formatDistanceToNow } from 'date-fns';
-import { vi } from 'date-fns/locale';
+import type { Locale } from 'date-fns';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -9,6 +9,12 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu';
 import { MoreHorizontal, Trash2 } from 'lucide-react';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger
+} from '@/components/ui/tooltip';
+import { detectAccountEnvironment } from '../../lib/account-environment';
 import type { ColumnDef } from '@tanstack/react-table';
 import type { AccountOut } from '../../services/api';
 import { EditAccountDialog } from '../edit-account-dialog';
@@ -16,15 +22,23 @@ import { AccountHistoryDialog } from '../account-history-dialog';
 
 type TFn = (key: string, values?: Record<string, any>) => string;
 
-const STATUS_VARIANT: Record<string, 'default' | 'secondary' | 'outline' | 'destructive'> = {
+const STATUS_VARIANT: Record<
+  string,
+  'default' | 'secondary' | 'outline' | 'destructive'
+> = {
   active: 'default',
   cooldown: 'secondary',
   banned: 'destructive',
   disabled: 'outline'
 };
 
+const ACCOUNT_STATUSES = ['active', 'cooldown', 'banned', 'disabled'] as const;
+export type AccountStatusKey = (typeof ACCOUNT_STATUSES)[number];
+
 export function getAccountColumns(
   t: TFn,
+  statusLabel: Record<AccountStatusKey, string>,
+  dateLocale: Locale,
   onDelete: (account: AccountOut) => void,
   onStatusChange: (account: AccountOut, status: string) => void
 ): ColumnDef<AccountOut>[] {
@@ -43,11 +57,43 @@ export function getAccountColumns(
       id: 'username',
       accessorKey: 'username',
       header: t('colUsername'),
-      cell: ({ row }) => (
-        <span className='truncate text-sm font-semibold'>
-          {row.original.username}
-        </span>
-      )
+      cell: ({ row }) => {
+        const account = row.original;
+        const envFlag = detectAccountEnvironment(account);
+        return (
+          <div className='flex min-w-0 flex-wrap items-center gap-1.5'>
+            <span className='truncate text-sm font-semibold'>
+              {account.username}
+            </span>
+            {envFlag === 'test' ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge
+                    variant='outline'
+                    className='border-amber-500/50 text-[10px] text-amber-700 dark:text-amber-300'
+                  >
+                    {t('badgeTest')}
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent>{t('testAccountHint')}</TooltipContent>
+              </Tooltip>
+            ) : null}
+            {envFlag === 'dev' ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge
+                    variant='outline'
+                    className='border-orange-500/50 text-[10px] text-orange-700 dark:text-orange-300'
+                  >
+                    {t('badgeDev')}
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent>{t('testAccountHint')}</TooltipContent>
+              </Tooltip>
+            ) : null}
+          </div>
+        );
+      }
     },
     {
       id: 'displayName',
@@ -63,8 +109,12 @@ export function getAccountColumns(
       id: 'status',
       header: t('colStatus'),
       cell: ({ row }) => (
-        <Badge variant={STATUS_VARIANT[row.original.status] ?? 'outline'} className='text-[11px]'>
-          {row.original.status}
+        <Badge
+          variant={STATUS_VARIANT[row.original.status] ?? 'outline'}
+          className='text-[11px]'
+        >
+          {statusLabel[row.original.status as AccountStatusKey] ??
+            row.original.status}
         </Badge>
       )
     },
@@ -77,11 +127,14 @@ export function getAccountColumns(
         if (!tags) return <span className='text-muted-foreground'>-</span>;
         return (
           <div className='flex flex-wrap gap-1'>
-            {tags.split(',').filter(Boolean).map((tag) => (
-              <Badge key={tag} variant='secondary' className='text-[10px]'>
-                {tag.trim()}
-              </Badge>
-            ))}
+            {tags
+              .split(',')
+              .filter(Boolean)
+              .map((tag) => (
+                <Badge key={tag} variant='secondary' className='text-[10px]'>
+                  {tag.trim()}
+                </Badge>
+              ))}
           </div>
         );
       }
@@ -93,7 +146,7 @@ export function getAccountColumns(
         <span className='whitespace-nowrap text-[11px] text-muted-foreground'>
           {formatDistanceToNow(new Date(row.original.created_at), {
             addSuffix: true,
-            locale: vi
+            locale: dateLocale
           })}
         </span>
       )
@@ -114,16 +167,16 @@ export function getAccountColumns(
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align='end'>
-                {['active', 'cooldown', 'banned', 'disabled']
-                  .filter((s) => s !== account.status)
-                  .map((s) => (
+                {ACCOUNT_STATUSES.filter((s) => s !== account.status).map(
+                  (s) => (
                     <DropdownMenuItem
                       key={s}
                       onClick={() => onStatusChange(account, s)}
                     >
-                      {t('setStatus', { status: s })}
+                      {t('setStatus', { status: statusLabel[s] })}
                     </DropdownMenuItem>
-                  ))}
+                  )
+                )}
                 <DropdownMenuItem
                   className='text-destructive'
                   onClick={() => onDelete(account)}

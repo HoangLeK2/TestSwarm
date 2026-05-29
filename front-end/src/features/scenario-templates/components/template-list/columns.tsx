@@ -13,6 +13,7 @@ import { useRouter } from 'next/navigation';
 import { ROUTES } from '@/config/routes';
 import type { ColumnDef } from '@tanstack/react-table';
 import type { ScenarioTemplateOut } from '../../services/api';
+import { templateDisplayLabel } from '../../lib/template-label';
 import { EditTemplateDialog } from '../edit-template-dialog';
 import { UseTemplateDialog } from '../use-template-dialog';
 
@@ -29,15 +30,20 @@ export function getTemplateColumns(
       accessorKey: 'name',
       header: t('colName'),
       cell: ({ row }) => (
-        <div>
-          <span className='truncate text-sm font-semibold'>
+        <div className='min-w-0'>
+          <div className='flex flex-wrap items-center gap-2'>
+            <span className='truncate text-sm font-semibold'>
+              {templateDisplayLabel(row.original)}
+            </span>
+            {row.original.is_builtin && (
+              <Badge variant='outline' className='ml-2 text-[10px]'>
+                built-in
+              </Badge>
+            )}
+          </div>
+          <div className='mt-0.5 truncate font-mono text-[11px] text-muted-foreground'>
             {row.original.name}
-          </span>
-          {row.original.is_builtin && (
-            <Badge variant='outline' className='ml-2 text-[10px]'>
-              built-in
-            </Badge>
-          )}
+          </div>
         </div>
       )
     },
@@ -117,7 +123,9 @@ export function getTemplateColumns(
               variant='ghost'
               className='size-8'
               title='Mở trong Flow Editor'
-              onClick={() => router.push(ROUTES.SCENARIO_TEMPLATES.FLOW(tpl.id))}
+              onClick={() =>
+                router.push(ROUTES.SCENARIO_TEMPLATES.FLOW(tpl.id))
+              }
             >
               <GitBranch size={14} />
             </Button>

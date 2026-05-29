@@ -8,7 +8,13 @@ import { Button } from '@/components/ui/button';
 import { farmApi } from '@/lib/farm-api';
 import { useQueryClient } from '@tanstack/react-query';
 
-export function TagsCell({ deviceId, tags }: { deviceId: string; tags?: string }) {
+export function TagsCell({
+  deviceId,
+  tags
+}: {
+  deviceId: string;
+  tags?: string;
+}) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(tags ?? '');
   const [saving, setSaving] = useState(false);
@@ -68,7 +74,10 @@ export function TagsCell({ deviceId, tags }: { deviceId: string; tags?: string }
         size='icon'
         variant='ghost'
         className='size-5 shrink-0 opacity-0 group-hover/row:opacity-100'
-        onClick={() => { setValue(tags ?? ''); setEditing(true); }}
+        onClick={() => {
+          setValue(tags ?? '');
+          setEditing(true);
+        }}
       >
         <Pencil size={10} />
       </Button>

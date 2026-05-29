@@ -11,6 +11,15 @@ interface Props {
   isRunning: boolean;
 }
 
+function MonitorSidePanels({ campaignId }: { campaignId: string }) {
+  return (
+    <>
+      <ArtifactPanel campaignId={campaignId} />
+      <DlqPanel campaignId={campaignId} />
+    </>
+  );
+}
+
 export function MonitorContent({ campaignId, isRunning }: Props) {
   const t = useTranslations('campaignsFeature.list');
   const { data, isLoading } = useCampaignWorkflows(campaignId, isRunning);
@@ -18,32 +27,23 @@ export function MonitorContent({ campaignId, isRunning }: Props) {
 
   if (isLoading) {
     return (
-      <div className='flex items-center justify-center py-12 text-xs text-muted-foreground'>
+      <div className='flex items-center justify-center py-12 text-sm text-muted-foreground'>
         {t('loading')}
       </div>
     );
   }
 
   if (!isRunning) {
-    return (
-      <div>
-        <div className='flex items-center justify-center py-12 text-xs text-muted-foreground'>
-          {t('monitorNotRunningMessage')}
-        </div>
-        <ArtifactPanel campaignId={campaignId} />
-        <DlqPanel campaignId={campaignId} />
-      </div>
-    );
+    return <MonitorSidePanels campaignId={campaignId} />;
   }
 
   if (!data?.temporal_available) {
     return (
       <div>
-        <div className='flex items-center justify-center py-12 text-xs text-muted-foreground'>
+        <p className='border-b px-6 py-3 text-sm text-muted-foreground'>
           {t('monitorTemporalUnavailableMessage')}
-        </div>
-        <ArtifactPanel campaignId={campaignId} />
-        <DlqPanel campaignId={campaignId} />
+        </p>
+        <MonitorSidePanels campaignId={campaignId} />
       </div>
     );
   }
@@ -51,11 +51,10 @@ export function MonitorContent({ campaignId, isRunning }: Props) {
   if (workflows.length === 0) {
     return (
       <div>
-        <div className='flex items-center justify-center py-12 text-xs text-muted-foreground'>
+        <p className='border-b px-6 py-3 text-sm text-muted-foreground'>
           {t('monitorNoRunningWorkflowsMessage')}
-        </div>
-        <ArtifactPanel campaignId={campaignId} />
-        <DlqPanel campaignId={campaignId} />
+        </p>
+        <MonitorSidePanels campaignId={campaignId} />
       </div>
     );
   }
@@ -64,11 +63,14 @@ export function MonitorContent({ campaignId, isRunning }: Props) {
     <div>
       <div className='divide-y'>
         {workflows.map((wf) => (
-          <WorkflowProgressCard key={wf.workflow_id} wf={wf} campaignId={campaignId} />
+          <WorkflowProgressCard
+            key={wf.workflow_id}
+            wf={wf}
+            campaignId={campaignId}
+          />
         ))}
       </div>
-      <ArtifactPanel campaignId={campaignId} />
-      <DlqPanel campaignId={campaignId} />
+      <MonitorSidePanels campaignId={campaignId} />
     </div>
   );
 }

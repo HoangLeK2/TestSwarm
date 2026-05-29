@@ -6,7 +6,11 @@ import { useTranslations } from 'next-intl';
 import { toast } from 'sonner';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import { Button } from '@/components/ui/button';
-import { useToggleSchedule, useRunNowSchedule, useDeleteSchedule } from '../hooks/use-schedules';
+import {
+  useToggleSchedule,
+  useRunNowSchedule,
+  useDeleteSchedule
+} from '../hooks/use-schedules';
 import type { ScheduleOut } from '../services/api';
 import { ScheduleFormDialog } from './schedule-form-dialog';
 import { ScheduleRunHistoryDialog } from './schedule-run-history-dialog';
@@ -22,20 +26,25 @@ export function ScheduleRowActions({ schedule }: { schedule: ScheduleOut }) {
 
   const [editOpen, setEditOpen] = useState(false);
 
-  const isPending = toggleMutation.isPending || runNowMutation.isPending || deleteMutation.isPending;
+  const isPending =
+    toggleMutation.isPending ||
+    runNowMutation.isPending ||
+    deleteMutation.isPending;
 
   const handleToggle = () => {
     toggleMutation.mutate(
       { scheduleId: schedule.id, enabled: !schedule.is_enabled },
       {
-        onError: (err: unknown) => toast.error(formatFarmApiError(err, t('toggleFailed')))
+        onError: (err: unknown) =>
+          toast.error(formatFarmApiError(err, t('toggleFailed')))
       }
     );
   };
 
   const handleRunNow = () => {
     runNowMutation.mutate(schedule.id, {
-      onError: (err: unknown) => toast.error(formatFarmApiError(err, t('runNowFailed')))
+      onError: (err: unknown) =>
+        toast.error(formatFarmApiError(err, t('runNowFailed')))
     });
   };
 
@@ -52,14 +61,18 @@ export function ScheduleRowActions({ schedule }: { schedule: ScheduleOut }) {
       if (!ok) return;
       deleteMutation.mutate(schedule.id, {
         onSuccess: () => toast.success(t('deleteSuccess')),
-        onError: (err: unknown) => toast.error(formatFarmApiError(err, t('deleteFailed')))
+        onError: (err: unknown) =>
+          toast.error(formatFarmApiError(err, t('deleteFailed')))
       });
     })();
   };
 
   return (
     <div className='flex items-center justify-center gap-1'>
-      <ScheduleRunHistoryDialog scheduleId={schedule.id} scheduleName={schedule.name} />
+      <ScheduleRunHistoryDialog
+        scheduleId={schedule.id}
+        scheduleName={schedule.name}
+      />
 
       <Button
         size='icon'
@@ -116,4 +129,3 @@ export function ScheduleRowActions({ schedule }: { schedule: ScheduleOut }) {
     </div>
   );
 }
-

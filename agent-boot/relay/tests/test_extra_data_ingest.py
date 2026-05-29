@@ -53,12 +53,25 @@ def test_fb_comment_target_returns_bounds_and_parent_hash(monkeypatch) -> None:
     module = Module()
 
     def fake_resolve(_xml):
-        return (
-            {"_pid": "pid-1", "post_key": "post-1", "text": "hello", "author": "Alice"},
-            (10, 20, 110, 60),
-        )
+        top = {
+            "post": {"_pid": "pid-1", "post_key": "post-1", "text": "hello", "author": "Alice"},
+            "comment_bounds": (10, 20, 110, 60),
+            "parent_post_bounds": (0, 100, 1080, 800),
+            "score": 0.12,
+            "breakdown": {"distance": 0.1, "cut_penalty": 0.0},
+            "feed_item_index": 0,
+        }
+        alt = {
+            "post": {"_pid": "pid-2", "post_key": "post-2", "text": "world", "author": "Bob"},
+            "comment_bounds": (10, 1400, 110, 1440),
+            "parent_post_bounds": None,
+            "score": 0.34,
+            "breakdown": {"distance": 0.3, "cut_penalty": 0.04},
+            "feed_item_index": 1,
+        }
+        return top, [top, alt]
 
-    module.resolve_topmost_comment_target_from_xml = fake_resolve
+    module.resolve_comment_targets_from_xml = fake_resolve
     monkeypatch.setitem(sys.modules, "relay.extra_data.parsers.facebook", module)
 
     items, diagnostic = _parse_items(
@@ -73,6 +86,30 @@ def test_fb_comment_target_returns_bounds_and_parent_hash(monkeypatch) -> None:
     assert diagnostic["target"]["pid"] == "pid-1"
     assert diagnostic["target"]["parent_base_hash"]
     assert diagnostic["target"]["parent_id"] != diagnostic["target"]["parent_base_hash"]
+    assert diagnostic["target"]["score"] == 0.12
+    assert diagnostic["target"]["score_breakdown"]["distance"] == 0.1
+    assert diagnostic["target"]["parent_post_bounds"] == [0, 100, 1080, 800]
+    assert diagnostic["candidate_count"] == 2
+    assert len(diagnostic["alternates"]) == 1
+    assert diagnostic["alternates"][0]["bounds"] == [10, 1400, 110, 1440]
+    assert diagnostic["alternates"][0]["pid"] == "pid-2"
+
+
+def test_fb_comment_target_reports_empty_when_no_candidate(monkeypatch) -> None:
+    class Module:
+        pass
+
+    module = Module()
+    module.resolve_comment_targets_from_xml = lambda _xml: (None, [])
+    monkeypatch.setitem(sys.modules, "relay.extra_data.parsers.facebook", module)
+
+    items, diagnostic = _parse_items("fb_comment_target", "<hierarchy />", {})
+
+    assert items == []
+    assert diagnostic["reason_code"] == "comment_button_not_found"
+    assert diagnostic["target"] is None
+    assert diagnostic["alternates"] == []
+    assert diagnostic["candidate_count"] == 0
 
 
 def test_text_nodes_parser_lives_in_agent_boot() -> None:
@@ -213,3 +250,43 @@ async def test_process_payload_merges_fb_comment_snapshots(monkeypatch) -> None:
     assert result["parsed_count"] == 2
     assert result["diagnostic"]["comments_returned"] == 2
     assert [item["comment_key"] for item in result["items"]] == ["c1", "c2"]
+
+
+@pytest.mark.asyncio
+async def test_process_payload_merges_fb_comments_respects_high_max_items_default(
+    monkeypatch,
+) -> None:
+    class Module:
+        pass
+
+    module = Module()
+    captured_max: list[int] = []
+
+    def fake_parse(xml, parent_post_id=None, max_items=50):
+        captured_max.append(max_items)
+        idx = len(captured_max)
+        return [{"comment_key": f"c{idx}", "text": f"frame-{idx}"}], {"reason_code": "ok"}
+
+    module.parse_fb_comments_from_xml_with_diagnostic = fake_parse
+    monkeypatch.setitem(sys.modules, "relay.extra_data.parsers.facebook", module)
+
+    class FakeWriter:
+        async def insert_rows(self, rows):
+            raise AssertionError("persist disabled")
+
+    server = ExtraDataIngestServer()
+    server._writer = FakeWriter()
+    xml1 = '<hierarchy><node text="frame-1" /></hierarchy>'
+    xml2 = '<hierarchy><node text="frame-2" /></hierarchy>'
+
+    result = await server.process_payload({
+        "serial": "serial-1",
+        "strategy": "fb_comments",
+        "xml": xml1,
+        "xml_snapshots": [xml1, xml2],
+        "context": {"persist": False, "return_items": True},
+    })
+
+    assert result["ok"] is True
+    assert result["parsed_count"] == 2
+    assert captured_max == [400, 400]

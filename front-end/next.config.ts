@@ -15,7 +15,7 @@ const baseConfig: NextConfig = {
   allowedDevOrigins: [
     'http://localhost:3000',
     'http://127.0.0.1:3000',
-    'http://172.16.0.86:3000',
+    'http://172.16.0.86:3000'
   ],
   async rewrites() {
     return [
@@ -23,7 +23,10 @@ const baseConfig: NextConfig = {
       { source: '/api/:path*', destination: `${BACKEND}/api/:path*` },
       // Proxy MJPEG stream and screenshot endpoints
       { source: '/stream/:path*', destination: `${BACKEND}/stream/:path*` },
-      { source: '/screenshot/:path*', destination: `${BACKEND}/screenshot/:path*` },
+      {
+        source: '/screenshot/:path*',
+        destination: `${BACKEND}/screenshot/:path*`
+      }
     ];
   },
   images: {
@@ -49,11 +52,11 @@ const baseConfig: NextConfig = {
       // jmuxer uses Node.js stream module — polyfill for browser
       config.resolve.fallback = {
         ...(config.resolve.fallback ?? {}),
-        stream: require.resolve('stream-browserify'),
+        stream: require.resolve('stream-browserify')
       };
     }
     return config;
-  },
+  }
 };
 
 const configWithPlugins = baseConfig;

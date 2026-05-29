@@ -17,6 +17,27 @@ from db.database import AsyncSessionLocal
 from runtime.core import DeviceManager, TaskQueue
 
 
+_OFFLINE_LIVE_STATES = {"DISCONNECTED", "DEAD"}
+
+
+def _apply_realtime_connectivity(device: dict, relay_lookup=None) -> None:
+    """Downshift stale runtime entries that no longer have any live transport."""
+    state = str(device.get("state") or "").upper()
+    if state in _OFFLINE_LIVE_STATES:
+        return
+
+    serial = str(device.get("serial") or "").strip()
+    agent_connected = bool(device.get("agent_connected"))
+    u2_ready = bool(device.get("u2_ready"))
+    relay_online = bool(relay_lookup(serial)) if relay_lookup and serial else False
+    if agent_connected or u2_ready or relay_online:
+        return
+
+    device["state"] = "DISCONNECTED"
+    device["touch_method"] = "none"
+    device["stf_connected"] = False
+
+
 def _verify_token_only(request: Request) -> None:
     """Verify JWT is present and valid. Always enforced regardless of db_enabled.
     Does NOT query the DB — use for endpoints where identity is needed but no
@@ -112,6 +133,18 @@ def build_public_router(
                 info = allowed_devices.get(str(d.get("serial") or ""), {})
                 d["name"] = info.get("name", "")
                 d["display_name"] = info.get("display_name", d.get("serial", ""))
+        try:
+            from runtime.transports.adb_relay_server import get_relay_manager
+
+            relay = get_relay_manager()
+        except Exception:
+            relay = None
+
+        def _relay_lookup(serial: str) -> bool:
+            return bool(relay is not None and relay.relay_for_serial(serial))
+
+        for d in devices:
+            _apply_realtime_connectivity(d, relay_lookup=_relay_lookup)
         store = getattr(request.app.state, "session_store", None)
         for d in devices:
             serial = d.get("serial", "")

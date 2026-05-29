@@ -66,20 +66,24 @@ export const contentApi = {
    * Trigger a streaming download of the current filtered content.
    * Opens the URL directly so the browser handles the file download.
    */
-  exportStream: async (filters: ContentFilters, format: ExportFormat): Promise<void> => {
+  exportStream: async (
+    filters: ContentFilters,
+    format: ExportFormat
+  ): Promise<void> => {
     const params = new URLSearchParams({ format });
     if (filters.collection) params.set('collection', filters.collection);
     if (filters.platform) params.set('platform', filters.platform);
     if (filters.content_type) params.set('content_type', filters.content_type);
     if (filters.search) params.set('search', filters.search);
-    if (filters.device_serial) params.set('device_serial', filters.device_serial);
+    if (filters.device_serial)
+      params.set('device_serial', filters.device_serial);
     if (filters.campaign_id) params.set('campaign_id', filters.campaign_id);
     if (filters.run_id) params.set('execution_id', filters.run_id);
     const url = `${deviceFarmBackendBase}/api/content/export/stream?${params.toString()}`;
     const token = tokenStorage.getAuthToken();
     const response = await fetch(url, {
       method: 'GET',
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined
     });
 
     if (!response.ok) {
@@ -98,19 +102,24 @@ export const contentApi = {
   list: async (filters?: ContentFilters): Promise<ContentListResponse> => {
     const params: Record<string, unknown> = {
       limit: filters?.limit ?? 50,
-      offset: filters?.offset ?? 0,
+      offset: filters?.offset ?? 0
     };
     if (filters?.collection != null) params.collection = filters.collection;
     if (filters?.platform != null) params.platform = filters.platform;
-    if (filters?.content_type != null) params.content_type = filters.content_type;
+    if (filters?.content_type != null)
+      params.content_type = filters.content_type;
     if (filters?.search != null) params.search = filters.search;
-    if (filters?.device_serial != null) params.device_serial = filters.device_serial;
+    if (filters?.device_serial != null)
+      params.device_serial = filters.device_serial;
     if (filters?.campaign_id != null) params.campaign_id = filters.campaign_id;
     if (filters?.run_id != null) params.run_id = filters.run_id;
-    if (filters?.content_hash != null) params.content_hash = filters.content_hash;
+    if (filters?.content_hash != null)
+      params.content_hash = filters.content_hash;
     if (filters?.parent_id != null) params.parent_id = filters.parent_id;
 
-    return farmApi.get<ContentListResponse>('/content', { params }).then((r) => r.data);
+    return farmApi
+      .get<ContentListResponse>('/content', { params })
+      .then((r) => r.data);
   },
 
   stats: async (): Promise<ContentStats> =>
@@ -121,5 +130,5 @@ export const contentApi = {
 
   deleteItem: async (id: string): Promise<void> => {
     await farmApi.delete(`/content/${id}`);
-  },
+  }
 };

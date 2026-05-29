@@ -1,7 +1,7 @@
 'use client';
 
-import { DashboardActivity } from '@/features/analytics/components/dashboard-activity';
+import { ActivityFeed } from '@/features/analytics/components/activity-feed';
 
 export default function ActivityHistoryPage() {
-  return <DashboardActivity />;
+  return <ActivityFeed />;
 }

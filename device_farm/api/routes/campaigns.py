@@ -131,6 +131,13 @@ async def list_campaigns(db: DB, user: CurrentUser):
 
 @router.post("", response_model=CampaignOut, status_code=status.HTTP_201_CREATED)
 async def create_campaign(body: CampaignCreate, db: DB, user: CurrentUser):
+    existing = await repo.get_campaign_by_name(db, user_id=user.id, name=body.name)
+    if existing is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Campaign name already exists",
+        )
+
     valid_device_ids: list[str] = []
     for device_id in body.device_ids:
         device = await repo.get_device(db, device_id)

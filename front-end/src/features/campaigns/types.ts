@@ -1,5 +1,10 @@
 import type { FlowNode, FlowEdge } from './components/scenario-steps/types';
-export type CampaignStatus = 'idle' | 'running' | 'draft' | 'paused' | 'completed';
+export type CampaignStatus =
+  | 'idle'
+  | 'running'
+  | 'draft'
+  | 'paused'
+  | 'completed';
 
 /** Ready to start a new run (not executing, not user-paused mid-run) */
 export function isIdleStatus(s: string): boolean {
@@ -85,7 +90,14 @@ export type TaskOut = {
 
 // ── Temporal Workflow types ──────────────────────────────────────────────────
 
-export type WorkflowStatus = 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED' | 'PAUSED' | 'paused_on_error' | 'TERMINATED';
+export type WorkflowStatus =
+  | 'RUNNING'
+  | 'COMPLETED'
+  | 'FAILED'
+  | 'CANCELLED'
+  | 'PAUSED'
+  | 'paused_on_error'
+  | 'TERMINATED';
 
 export type WorkflowInfo = {
   workflow_id: string;
@@ -150,7 +162,13 @@ export type CampaignRunResponse = {
   task_ids?: string[];
 };
 
-export type DlqStatus = 'pending' | 'retrying' | 'resolved' | 'failed' | 'dismissed' | 'unknown';
+export type DlqStatus =
+  | 'pending'
+  | 'retrying'
+  | 'resolved'
+  | 'failed'
+  | 'dismissed'
+  | 'unknown';
 
 export type DlqEntry = {
   id: string;
@@ -161,6 +179,14 @@ export type DlqEntry = {
   status: DlqStatus;
   last_attempt_at: string | null;
   created_at: string;
+};
+
+export type DlqSummary = {
+  pending_count: number;
+  alert_threshold: number;
+  alert: boolean;
+  dismissed_offline_count: number;
+  offline_dismiss_minutes: number;
 };
 
 export type ExecutionOut = {

@@ -41,7 +41,7 @@ export function hashXml(xml: string): number {
   let h = 0x811c9dc5;
   for (let i = 0; i < norm.length; i++) {
     h ^= norm.charCodeAt(i);
-    h = (Math.imul(h, 0x01000193)) >>> 0;
+    h = Math.imul(h, 0x01000193) >>> 0;
   }
   return h;
 }
@@ -65,7 +65,7 @@ export function hashXml(xml: string): number {
 export function findSelectorInXml(
   xmlStr: string,
   rx: number,
-  ry: number,
+  ry: number
 ): XmlSelectorPick | null {
   let doc: Document;
   try {
@@ -75,10 +75,15 @@ export function findSelectorInXml(
   }
 
   const allNodes = Array.from(doc.getElementsByTagName('node'));
-  let dw = 1080, dh = 1920;
+  let dw = 1080,
+    dh = 1920;
   for (const n of allNodes) {
     const m = /\[0,0\]\[(\d+),(\d+)\]/.exec(n.getAttribute('bounds') ?? '');
-    if (m) { dw = parseInt(m[1]); dh = parseInt(m[2]); break; }
+    if (m) {
+      dw = parseInt(m[1]);
+      dh = parseInt(m[2]);
+      break;
+    }
   }
   const px = rx * dw;
   const py = ry * dh;
@@ -91,7 +96,8 @@ export function findSelectorInXml(
     const txt = (node.getAttribute('text') ?? '').trim();
     const d = (node.getAttribute('content-desc') ?? '').trim();
     if (rid) ridCount.set(rid, (ridCount.get(rid) ?? 0) + 1);
-    if (txt && txt.length < 80) textCount.set(txt, (textCount.get(txt) ?? 0) + 1);
+    if (txt && txt.length < 80)
+      textCount.set(txt, (textCount.get(txt) ?? 0) + 1);
     if (d && d.length < 80) descCount.set(d, (descCount.get(d) ?? 0) + 1);
   }
 
@@ -99,7 +105,10 @@ export function findSelectorInXml(
 
   type Cand = {
     node: Element;
-    x1: number; y1: number; x2: number; y2: number;
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
     area: number;
     clickable: boolean;
     clickableAncestor: Element | null;
@@ -146,13 +155,20 @@ export function findSelectorInXml(
     const desc = (n.getAttribute('content-desc') ?? '').trim();
     const text = (n.getAttribute('text') ?? '').trim();
     const pkg = (n.getAttribute('package') ?? '').trim();
-    const ambiguousLauncher = rid ? isAmbiguousLauncherResourceId(rid, pkg) : false;
-    const ridUnique = !!rid && !ambiguousLauncher && (ridCount.get(rid) ?? 0) === 1;
-    const textUnique = !!text && text.length < 80 && (textCount.get(text) ?? 0) === 1;
-    const descUnique = !!desc && desc.length < 80 && (descCount.get(desc) ?? 0) === 1;
+    const ambiguousLauncher = rid
+      ? isAmbiguousLauncherResourceId(rid, pkg)
+      : false;
+    const ridUnique =
+      !!rid && !ambiguousLauncher && (ridCount.get(rid) ?? 0) === 1;
+    const textUnique =
+      !!text && text.length < 80 && (textCount.get(text) ?? 0) === 1;
+    const descUnique =
+      !!desc && desc.length < 80 && (descCount.get(desc) ?? 0) === 1;
 
-    if (ambiguousLauncher && text && text.length < 120) return { by: 'text', value: text };
-    if (ambiguousLauncher && desc && desc.length < 80) return { by: 'description', value: desc };
+    if (ambiguousLauncher && text && text.length < 120)
+      return { by: 'text', value: text };
+    if (ambiguousLauncher && desc && desc.length < 80)
+      return { by: 'description', value: desc };
     if (ridUnique) return { by: 'resource-id', value: rid };
     if (descUnique) return { by: 'description', value: desc };
     if (textUnique) return { by: 'text', value: text };
@@ -163,7 +179,9 @@ export function findSelectorInXml(
   };
 
   /** Resolve primary selector on node, ancestors, then descendants (never @bounds xpath). */
-  const pickPrimaryForNode = (start: Element): { sel: Sel; anchor: Element } | null => {
+  const pickPrimaryForNode = (
+    start: Element
+  ): { sel: Sel; anchor: Element } | null => {
     let cur: Element | null = start;
     while (cur) {
       const s = tryPrimaryOnNode(cur);
@@ -202,17 +220,21 @@ export function findSelectorInXml(
     if (x2 <= x1 || y2 <= y1) continue;
 
     candidates.push({
-      node, x1, y1, x2, y2,
+      node,
+      x1,
+      y1,
+      x2,
+      y2,
       area: (x2 - x1) * (y2 - y1),
       clickable: node.getAttribute('clickable') === 'true',
-      clickableAncestor: findClickableSelfOrAncestor(node),
+      clickableAncestor: findClickableSelfOrAncestor(node)
     });
   }
   if (candidates.length === 0) return null;
 
   // Step 3: prefer clickable self; else promote non-clickable hit to its
   // clickable ancestor (the real button the user aimed at); else raw smallest.
-  const clickableSelf = candidates.filter(c => c.clickable);
+  const clickableSelf = candidates.filter((c) => c.clickable);
   let pool: Cand[];
   if (clickableSelf.length > 0) {
     pool = clickableSelf;
@@ -226,10 +248,14 @@ export function findSelectorInXml(
         if (bm) {
           const [x1, y1, x2, y2] = [+bm[1], +bm[2], +bm[3], +bm[4]];
           promoted.push({
-            node: a, x1, y1, x2, y2,
+            node: a,
+            x1,
+            y1,
+            x2,
+            y2,
             area: (x2 - x1) * (y2 - y1),
             clickable: true,
-            clickableAncestor: a,
+            clickableAncestor: a
           });
           seen.add(a);
         }
@@ -252,16 +278,22 @@ export function findSelectorInXml(
     value: sel.value,
     selector,
     bounds: {
-      left: x1, top: y1, right: x2, bottom: y2,
-      rx1: x1 / dw, ry1: y1 / dh, rx2: x2 / dw, ry2: y2 / dh,
-    },
+      left: x1,
+      top: y1,
+      right: x2,
+      bottom: y2,
+      rx1: x1 / dw,
+      ry1: y1 / dh,
+      rx2: x2 / dw,
+      ry2: y2 / dh
+    }
   };
 }
 
 /** Pick at center of a hierarchy tree node's bounds (tree row click). */
 export function findSelectorForTreeNode(
   xmlStr: string,
-  bounds: [number, number, number, number] | null,
+  bounds: [number, number, number, number] | null
 ): XmlSelectorPick | null {
   if (!bounds || !xmlStr?.trim()) return null;
   const [x1, y1, x2, y2] = bounds;
@@ -288,7 +320,10 @@ export function findSelectorForTreeNode(
   return findSelectorInXml(xmlStr, rx, ry);
 }
 
-export function getScreenSignature(xml: string): { package: string; texts: string[] } {
+export function getScreenSignature(xml: string): {
+  package: string;
+  texts: string[];
+} {
   try {
     const doc = new DOMParser().parseFromString(xml, 'text/xml');
     const BOUNDS = /\[(\d+),(\d+)\]\[(\d+),(\d+)\]/;
@@ -296,7 +331,8 @@ export function getScreenSignature(xml: string): { package: string; texts: strin
     let bestArea = 0;
     for (const node of Array.from(doc.getElementsByTagName('node'))) {
       const p = (node.getAttribute('package') ?? '').trim();
-      if (!p || p === 'android' || p.startsWith('com.android.systemui')) continue;
+      if (!p || p === 'android' || p.startsWith('com.android.systemui'))
+        continue;
       const m = BOUNDS.exec(node.getAttribute('bounds') ?? '');
       if (!m) continue;
       const area = (+m[3] - +m[1]) * (+m[4] - +m[2]);

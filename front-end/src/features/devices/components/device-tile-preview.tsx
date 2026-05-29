@@ -1,6 +1,14 @@
 'use client';
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react';
 import Link from 'next/link';
 import type { Device, DeviceFarmStreamingConfig } from '../types';
 import { serialToId } from '../helpers';
@@ -13,24 +21,33 @@ import { Switch } from '@/components/ui/switch';
 import { DeviceAndroidFrame } from './device-android-frame';
 import { useTranslations } from 'next-intl';
 import { toast } from 'sonner';
-import { DeviceStepMonitor } from './device-step-monitor';
+import { DeviceStepMonitorButton } from './device-step-monitor';
 import { SHOW_RELAY_SCRCPY_UI_TOGGLE } from '../streaming-ui-flags';
 import { useH264Video } from '../hooks/use-h264-canvas';
+import { Badge } from '@/components/ui/badge';
 
 /** When true (default), grid tiles load MJPEG/H264 immediately for active devices (no scroll-to-load). Set NEXT_PUBLIC_DEVICE_FARM_GRID_PREVIEW_EAGER=0 to restore lazy viewport loading. */
 const GRID_PREVIEW_EAGER =
-  (process.env.NEXT_PUBLIC_DEVICE_FARM_GRID_PREVIEW_EAGER ?? '1').trim() !== '0';
+  (process.env.NEXT_PUBLIC_DEVICE_FARM_GRID_PREVIEW_EAGER ?? '1').trim() !==
+  '0';
 
 const gridH264Slots = new Set<string>();
 const gridH264SlotListeners = new Set<() => void>();
 
+let gridH264NotifyRaf = 0;
+
 function notifyGridH264SlotListeners() {
-  gridH264SlotListeners.forEach((fn) => {
-    try {
-      fn();
-    } catch {
-      // isolate listener errors
-    }
+  if (typeof window === 'undefined') return;
+  if (gridH264NotifyRaf) return;
+  gridH264NotifyRaf = window.requestAnimationFrame(() => {
+    gridH264NotifyRaf = 0;
+    gridH264SlotListeners.forEach((fn) => {
+      try {
+        fn();
+      } catch {
+        // isolate listener errors
+      }
+    });
   });
 }
 
@@ -55,17 +72,20 @@ interface DeviceTilePreviewProps {
   serverAllowPreviewMjpeg?: boolean;
   /** From GET /api/config — relay scrcpy toggle only in continuous mode. */
   streamingConfig?: DeviceFarmStreamingConfig | null;
+  onOpenSteps?: (serial: string) => void;
 }
 
-export function DeviceTilePreview({
+function DeviceTilePreviewInner({
   device,
   serverAllowPreviewMjpeg = true,
   streamingConfig = null,
+  onOpenSteps
 }: DeviceTilePreviewProps) {
   const t = useTranslations('devicesFarm');
   const id = serialToId(device.serial);
   const isActive =
-    device.state && !['DISCONNECTED', 'DEAD'].includes(device.state.toUpperCase());
+    device.state &&
+    !['DISCONNECTED', 'DEAD'].includes(device.state.toUpperCase());
 
   const previewZoneRef = useRef<HTMLDivElement>(null);
   const [inView, setInView] = useState(false);
@@ -95,7 +115,10 @@ export function DeviceTilePreview({
   const [h264Active, setH264Active] = useState(false);
   const [hasH264Slot, setHasH264Slot] = useState(false);
   const h264TimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const h264WarmupRef = useRef<{ startedAt: number; frames: number }>({ startedAt: 0, frames: 0 });
+  const h264WarmupRef = useRef<{ startedAt: number; frames: number }>({
+    startedAt: 0,
+    frames: 0
+  });
 
   useEffect(() => {
     if (GRID_PREVIEW_EAGER) return;
@@ -123,9 +146,9 @@ export function DeviceTilePreview({
   }, [device.serial, isActive, previewFps]);
 
   const showMjpeg =
-    Boolean(mjpegUrl) &&
-    (serverAllowPreviewMjpeg || !h264Active) &&
-    loadStream;
+    Boolean(mjpegUrl) && (serverAllowPreviewMjpeg || !h264Active) && loadStream;
+
+  const isUnresponsive = isActive && loadStream && !h264Active && !showMjpeg;
 
   /** Grid preview — target ~282px outer after lib bezel + side padding. */
   const previewMockupScreenWidth = 262;
@@ -136,7 +159,9 @@ export function DeviceTilePreview({
   const [relayStreamBusy, setRelayStreamBusy] = useState(false);
 
   const gridH264Limit = useMemo(() => {
-    const raw = Number(process.env.NEXT_PUBLIC_DEVICE_FARM_GRID_H264_LIMIT ?? 4);
+    const raw = Number(
+      process.env.NEXT_PUBLIC_DEVICE_FARM_GRID_H264_LIMIT ?? 4
+    );
     if (!Number.isFinite(raw)) return 4;
     return Math.max(0, Math.min(4, Math.round(raw)));
   }, []);
@@ -144,7 +169,9 @@ export function DeviceTilePreview({
   const wantsH264 =
     isActive &&
     loadStream &&
-    (streamingConfig === null || streamingConfig.mode !== 'continuous' || relayStreamOn);
+    (streamingConfig === null ||
+      streamingConfig.mode !== 'continuous' ||
+      relayStreamOn);
 
   useEffect(() => {
     if (!wantsH264) {
@@ -154,7 +181,8 @@ export function DeviceTilePreview({
     }
 
     const syncSlot = () => {
-      setHasH264Slot(claimGridH264Slot(device.serial, gridH264Limit));
+      const claimed = claimGridH264Slot(device.serial, gridH264Limit);
+      setHasH264Slot((prev) => (prev === claimed ? prev : claimed));
     };
     gridH264SlotListeners.add(syncSlot);
     syncSlot();
@@ -169,16 +197,65 @@ export function DeviceTilePreview({
 
   useLayoutEffect(() => {
     if (!streamingConfig || streamingConfig.mode !== 'continuous') return;
-    const serverWants =
-      device.relay_scrcpy_enabled !== undefined && device.relay_scrcpy_enabled !== null
-        ? Boolean(device.relay_scrcpy_enabled)
-        : Boolean(streamingConfig.autoAttachScrcpy);
-    setRelayStreamOn(serverWants);
+    // Grid tiles without a relay toggle always try H264 when they have a slot.
+    if (!SHOW_RELAY_SCRCPY_UI_TOGGLE) {
+      setRelayStreamOn((prev) => (prev ? prev : true));
+      return;
+    }
+    // When server auto-attach is disabled (viewer-gated), default to ON for tiles
+    // that are actually decoding H264 (claimed slot). DB override still wins.
+    if (
+      device.relay_scrcpy_enabled !== undefined &&
+      device.relay_scrcpy_enabled !== null
+    ) {
+      setRelayStreamOn(Boolean(device.relay_scrcpy_enabled));
+      return;
+    }
+    if (streamingConfig.autoAttachScrcpy === false) {
+      const next = Boolean(allowH264);
+      setRelayStreamOn((prev) => (prev === next ? prev : next));
+      return;
+    }
+    const next = Boolean(streamingConfig.autoAttachScrcpy);
+    setRelayStreamOn((prev) => (prev === next ? prev : next));
   }, [
     streamingConfig?.mode,
     streamingConfig?.autoAttachScrcpy,
     device.serial,
     device.relay_scrcpy_enabled,
+    allowH264
+  ]);
+
+  // Viewer-gated streaming: attach on mount (when we have an H264 slot), detach on cleanup.
+  useEffect(() => {
+    if (!isContinuous || !isActive) return;
+    if (!allowH264) return;
+    if (!streamingConfig || streamingConfig.mode !== 'continuous') return;
+    if (streamingConfig.autoAttachScrcpy !== false) return;
+    if (!relayStreamOn) return;
+
+    let detachScheduled = false;
+    const serial = device.serial;
+
+    farmApi
+      .post(`/devices/${encodeURIComponent(serial)}/scrcpy/attach`, {})
+      .catch(() => {});
+
+    return () => {
+      if (detachScheduled) return;
+      detachScheduled = true;
+      farmApi
+        .post(`/devices/${encodeURIComponent(serial)}/scrcpy/detach`, {})
+        .catch(() => {});
+    };
+  }, [
+    allowH264,
+    device.serial,
+    isActive,
+    isContinuous,
+    relayStreamOn,
+    streamingConfig?.autoAttachScrcpy,
+    streamingConfig?.mode
   ]);
 
   const onRelayStreamChange = useCallback(
@@ -187,16 +264,23 @@ export function DeviceTilePreview({
       setRelayStreamBusy(true);
       try {
         if (checked) {
-          await farmApi.post(`/devices/${encodeURIComponent(device.serial)}/scrcpy/attach`, {});
+          await farmApi.post(
+            `/devices/${encodeURIComponent(device.serial)}/scrcpy/attach`,
+            {}
+          );
         } else {
-          await farmApi.post(`/devices/${encodeURIComponent(device.serial)}/scrcpy/detach`, {});
+          await farmApi.post(
+            `/devices/${encodeURIComponent(device.serial)}/scrcpy/detach`,
+            {}
+          );
         }
         setRelayStreamOn(checked);
       } catch (err) {
         const msg =
           err && typeof err === 'object' && 'response' in err
             ? String(
-                (err as { response?: { data?: { error?: string } } }).response?.data?.error ?? ''
+                (err as { response?: { data?: { error?: string } } }).response
+                  ?.data?.error ?? ''
               )
             : '';
         toast.error(
@@ -210,11 +294,9 @@ export function DeviceTilePreview({
     [device.serial, isActive, isContinuous, t]
   );
 
-  useH264Video(
-    allowH264 ? device.serial : '',
-    canvasRef,
-    {
-      onFrame: useCallback((frame?: { mostlyBlack: boolean }) => {
+  useH264Video(allowH264 ? device.serial : '', canvasRef, {
+    onFrame: useCallback(
+      (frame?: { mostlyBlack: boolean }) => {
         if (frame?.mostlyBlack) {
           setH264Active(false);
           h264WarmupRef.current = { startedAt: 0, frames: 0 };
@@ -222,7 +304,7 @@ export function DeviceTilePreview({
         }
         const now = Date.now();
         const warm = h264WarmupRef.current;
-        if (warm.startedAt === 0 || (now - warm.startedAt) > 1500) {
+        if (warm.startedAt === 0 || now - warm.startedAt > 1500) {
           warm.startedAt = now;
           warm.frames = 1;
         } else {
@@ -233,9 +315,10 @@ export function DeviceTilePreview({
         }
         if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
         h264TimeoutRef.current = setTimeout(() => setH264Active(false), 8000);
-      }, [h264Active]),
-    }
-  );
+      },
+      [h264Active]
+    )
+  });
 
   useEffect(() => {
     setH264Active(false);
@@ -250,9 +333,9 @@ export function DeviceTilePreview({
     <Card
       id={`tile-${id}`}
       data-serial={device.serial}
-      className='flex h-full flex-col border-border bg-card shadow-sm'
+      className='flex h-full flex-col overflow-hidden border-border bg-card shadow-sm'
     >
-      <CardHeader className='border-b border-border/60 px-4 py-3'>
+      <CardHeader className='relative z-10 border-b border-border/60 px-4 py-3'>
         <div className='flex items-center justify-between gap-2'>
           <div className='flex min-w-0 flex-col gap-0.5'>
             <CardTitle className='truncate text-xs font-medium text-foreground'>
@@ -262,14 +345,36 @@ export function DeviceTilePreview({
               {device.serial}
             </span>
           </div>
-          <div className='flex shrink-0 items-center gap-1.5'>
-            <DeviceStepMonitor
-              serial={device.serial}
-              isBusy={device.state?.toUpperCase() === 'BUSY'}
-            />
+          <div className='relative z-10 flex shrink-0 items-center gap-1.5'>
+            {!isActive ? (
+              <Badge
+                variant='outline'
+                className='border-red-500/30 bg-red-500/10 text-[10px] text-red-700 dark:text-red-300'
+              >
+                {t('badgeOffline')}
+              </Badge>
+            ) : isUnresponsive ? (
+              <Badge
+                variant='outline'
+                className='border-amber-500/30 bg-amber-500/10 text-[10px] text-amber-800 dark:text-amber-200'
+              >
+                {t('badgeUnresponsive')}
+              </Badge>
+            ) : null}
+            {onOpenSteps ? (
+              <DeviceStepMonitorButton
+                serial={device.serial}
+                isBusy={device.state?.toUpperCase() === 'BUSY'}
+                onOpen={onOpenSteps}
+              />
+            ) : null}
             {isActive ? (
               <Button asChild size='sm' className='shrink-0'>
-                <Link href={ROUTES.DEVICES.CONTROL_RECORD_WITH_SERIAL(device.serial)}>
+                <Link
+                  href={ROUTES.DEVICES.CONTROL_RECORD_WITH_SERIAL(
+                    device.serial
+                  )}
+                >
                   {t('controlDevice')}
                 </Link>
               </Button>
@@ -297,7 +402,7 @@ export function DeviceTilePreview({
                   <img
                     src={mjpegUrl!}
                     alt={`${device.brand} ${device.model} preview`}
-                    className={`absolute inset-0 h-full w-full object-cover object-bottom transition-opacity duration-300 ${h264Active ? 'opacity-0' : 'opacity-100'}`}
+                    className={`pointer-events-none absolute inset-0 h-full w-full object-cover object-bottom transition-opacity duration-300 ${h264Active ? 'opacity-0' : 'opacity-100'}`}
                   />
                 ) : isActive && !serverAllowPreviewMjpeg ? (
                   <div className='flex h-full w-full items-center justify-center bg-zinc-900 px-2 text-center text-[10px] text-muted-foreground'>
@@ -326,31 +431,69 @@ export function DeviceTilePreview({
           isContinuous &&
           isActive &&
           streamingConfig !== null && (
-          <div className='mt-2 flex flex-col gap-1 border-t border-border/60 pt-2'>
-            <div className='flex items-start justify-between gap-2'>
-              <div className='min-w-0 flex-1'>
-                <div className='text-xs font-medium leading-tight text-foreground'>
-                  {t('gridRelayStream')}
+            <div className='mt-2 flex flex-col gap-1 border-t border-border/60 pt-2'>
+              <div className='flex items-start justify-between gap-2'>
+                <div className='min-w-0 flex-1'>
+                  <div className='text-xs font-medium leading-tight text-foreground'>
+                    {t('gridRelayStream')}
+                  </div>
+                  <p className='mt-0.5 text-[10px] leading-snug text-muted-foreground'>
+                    {t('gridRelayStreamHint')}
+                  </p>
                 </div>
-                <p className='mt-0.5 text-[10px] leading-snug text-muted-foreground'>
-                  {t('gridRelayStreamHint')}
-                </p>
+                <Switch
+                  className='mt-0.5 shrink-0'
+                  checked={relayStreamOn}
+                  disabled={relayStreamBusy}
+                  onCheckedChange={(v) => void onRelayStreamChange(v)}
+                />
               </div>
-              <Switch
-                className='mt-0.5 shrink-0'
-                checked={relayStreamOn}
-                disabled={relayStreamBusy}
-                onCheckedChange={(v) => void onRelayStreamChange(v)}
-              />
+              {!streamingConfig.autoAttachScrcpyOnRelayOnline ? (
+                <p className='text-[10px] leading-snug text-muted-foreground'>
+                  {t('gridRelayManualOnlyHint')}
+                </p>
+              ) : null}
             </div>
-            {!streamingConfig.autoAttachScrcpyOnRelayOnline ? (
-              <p className='text-[10px] leading-snug text-muted-foreground'>
-                {t('gridRelayManualOnlyHint')}
-              </p>
-            ) : null}
-          </div>
-        )}
+          )}
       </CardContent>
     </Card>
   );
 }
+
+function tilePreviewPropsEqual(
+  prev: DeviceTilePreviewProps,
+  next: DeviceTilePreviewProps
+) {
+  if (prev.device.serial !== next.device.serial) return false;
+  if (prev.onOpenSteps !== next.onOpenSteps) return false;
+  if (prev.serverAllowPreviewMjpeg !== next.serverAllowPreviewMjpeg)
+    return false;
+  if (prev.streamingConfig?.mode !== next.streamingConfig?.mode) return false;
+  if (
+    prev.streamingConfig?.autoAttachScrcpy !==
+    next.streamingConfig?.autoAttachScrcpy
+  )
+    return false;
+  if (
+    prev.streamingConfig?.autoAttachScrcpyOnRelayOnline !==
+    next.streamingConfig?.autoAttachScrcpyOnRelayOnline
+  ) {
+    return false;
+  }
+  const pd = prev.device;
+  const nd = next.device;
+  return (
+    pd.state === nd.state &&
+    pd.brand === nd.brand &&
+    pd.model === nd.model &&
+    pd.battery === nd.battery &&
+    pd.relay_scrcpy_enabled === nd.relay_scrcpy_enabled &&
+    pd.screen_width === nd.screen_width &&
+    pd.screen_height === nd.screen_height
+  );
+}
+
+export const DeviceTilePreview = memo(
+  DeviceTilePreviewInner,
+  tilePreviewPropsEqual
+);

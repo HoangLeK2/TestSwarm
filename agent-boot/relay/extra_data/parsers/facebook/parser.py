@@ -173,16 +173,29 @@ def _hierarchy_is_fb_comment_sheet(root) -> bool:
     has_close = False
     composer_top: Optional[int] = None
     filter_top: Optional[int] = None
+    has_feed_composer = False
+    has_comment_composer = False
     for node in root.iter():
-        if (node.get("package") or "") != "com.facebook.katana":
+        pkg = node.get("package") or ""
+        if pkg and pkg != "com.facebook.katana":
             continue
         text = _normalize_fb_ui_spacing(node.get("text") or "")
-        desc = (node.get("content-desc") or "").strip()
+        desc = _normalize_fb_ui_spacing(node.get("content-desc") or "")
         cls = node.get("class") or ""
         lowered = f"{text} {desc}".lower()
         bounds = _parse_bounds(node)
-        if "Button" in cls and (text in {"Đóng", "Close"} or desc in {"Đóng", "Close"}):
-            has_close = True
+        if "bạn viết gì" in lowered or "what's on your mind" in lowered:
+            has_feed_composer = True
+        if "viết bình luận" in lowered or "write a public comment" in lowered or "write a comment" in lowered:
+            has_comment_composer = True
+        if "Button" in cls or node.get("clickable") == "true":
+            if text in {"Đóng", "Close"} or desc in {"Đóng", "Close"}:
+                has_close = True
+            elif any(
+                tok in lowered
+                for tok in ("quay lại", "go back", "navigate up", "trở lại", "back")
+            ):
+                has_close = True
         if (
             "autocomplete" in cls.lower()
             and ("viết bình luận" in lowered or "write a public comment" in lowered or "write a comment" in lowered)
@@ -190,10 +203,19 @@ def _hierarchy_is_fb_comment_sheet(root) -> bool:
             if bounds:
                 composer_top = bounds[1] if composer_top is None else min(composer_top, bounds[1])
         if "phù hợp nhất" in lowered or "most relevant" in lowered or "all comments" in lowered or "tất cả bình luận" in lowered:
-            if bounds:
+            # Feed post sort also shows "Phù hợp nhất" — only treat as comment filter when
+            # copy mentions comments (sheet) or we already know we are not on group feed.
+            if "bình luận" in lowered or "comments" in lowered or "bộ lọc" in lowered:
+                if bounds:
+                    filter_top = bounds[1] if filter_top is None else min(filter_top, bounds[1])
+            elif not has_feed_composer and bounds:
                 filter_top = bounds[1] if filter_top is None else min(filter_top, bounds[1])
-    if not has_close:
+    # Group feed composer — never the full-screen comment sheet.
+    if has_feed_composer:
         return False
+    # Group comment sheet often has sort row + back icon without a literal "Đóng" label.
+    if not has_close and filter_top is not None:
+        has_close = True
     containers = root.xpath(XPATH_RECYCLER) or root.xpath(XPATH_LIST)
     if not containers:
         return False
@@ -210,6 +232,8 @@ def _hierarchy_is_fb_comment_sheet(root) -> bool:
     if composer_top is not None and composer_top >= y2 - 40:
         return True
     if filter_top is not None and y2 <= int(screen_h * 0.86):
+        return True
+    if filter_top is not None and (has_comment_composer or has_close):
         return True
     return False
 

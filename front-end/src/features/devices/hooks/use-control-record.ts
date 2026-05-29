@@ -8,7 +8,11 @@ import { scenarioTemplatesApi } from '@/features/scenario-templates/services/api
 import type { ScenarioOut } from '@/features/campaigns/types';
 import type { ScenarioStep } from '../types/scenario';
 import { scenarioToJson } from '../types/scenario';
-import { fetchHierarchy, fetchScreenshotB64, cropBase64 } from '../services/api';
+import {
+  fetchHierarchy,
+  fetchScreenshotB64,
+  cropBase64
+} from '../services/api';
 import { useDeviceFarm } from './use-device-farm';
 import {
   findSelectorInXml,
@@ -21,13 +25,15 @@ import { createDefaultStep } from '@/features/campaigns/components/scenario-step
 import { validateScenarioStepsForApi } from '@/features/campaigns/utils/validate-scenario-steps-for-api';
 import {
   buildRecordedTapStep,
-  normalizeSelectorStepFields,
+  normalizeSelectorStepFields
 } from '../lib/scenario-selector-step';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import { useTranslations } from 'next-intl';
 
 let _stepIdCounter = 0;
-function nextStepId() { return `step-${++_stepIdCounter}`; }
+function nextStepId() {
+  return `step-${++_stepIdCounter}`;
+}
 
 export type StepWithId = ScenarioStep & { _id: string };
 
@@ -47,7 +53,7 @@ const ALLOWED_SELECTOR_BY: readonly SelectorBy[] = [
   'class name',
   'description',
   'descriptionContains',
-  'descriptionStartsWith',
+  'descriptionStartsWith'
 ];
 
 const HIERARCHY_INTERACTION_PULSE_THROTTLE_MS = 3500;
@@ -55,14 +61,25 @@ const HIERARCHY_INTERACTION_FETCH_COOLDOWN_MS = 3500;
 const RECORD_XML_POLL_INTERVAL_MS = 1200;
 const RECORD_XML_POLL_TIMEOUT_MS = 4800;
 
-function normalizeSelectorBy(by: unknown, fallback: SelectorBy = 'text'): SelectorBy {
+function normalizeSelectorBy(
+  by: unknown,
+  fallback: SelectorBy = 'text'
+): SelectorBy {
   const raw = String(by ?? '').trim();
   if (!raw) return fallback;
   if (ALLOWED_SELECTOR_BY.includes(raw as SelectorBy)) return raw as SelectorBy;
   const lower = raw.toLowerCase().replace(/\s+/g, '');
-  if (lower === 'content-desc' || lower === 'contentdesc' || lower === 'description' || lower === 'accessibilityid') return 'description';
-  if (lower === 'content-desccontains' || lower === 'descriptioncontains') return 'descriptionContains';
-  if (lower === 'content-descstartswith' || lower === 'descriptionstartswith') return 'descriptionStartsWith';
+  if (
+    lower === 'content-desc' ||
+    lower === 'contentdesc' ||
+    lower === 'description' ||
+    lower === 'accessibilityid'
+  )
+    return 'description';
+  if (lower === 'content-desccontains' || lower === 'descriptioncontains')
+    return 'descriptionContains';
+  if (lower === 'content-descstartswith' || lower === 'descriptionstartswith')
+    return 'descriptionStartsWith';
   if (lower === 'classname' || lower === 'class-name') return 'class name';
   return fallback;
 }
@@ -79,31 +96,55 @@ function sanitizeScenarioStep(step: any): any {
   }
   // Auto-fix random_pick: drop branches with no steps
   if (next.type === 'random_pick' && Array.isArray(next.branches)) {
-    next.branches = next.branches.filter((br: any) => Array.isArray(br?.steps) && br.steps.length > 0);
+    next.branches = next.branches.filter(
+      (br: any) => Array.isArray(br?.steps) && br.steps.length > 0
+    );
   }
   if (next.selector && typeof next.selector === 'object') {
     next.selector = {
       ...next.selector,
-      ...(next.selector.by != null ? { by: normalizeSelectorBy(next.selector.by) } : {}),
+      ...(next.selector.by != null
+        ? { by: normalizeSelectorBy(next.selector.by) }
+        : {})
     };
   }
   if (next.condition && typeof next.condition === 'object') {
     const cond = { ...(next.condition as Record<string, any>) };
-    if (cond.element_exists && typeof cond.element_exists === 'object' && cond.element_exists.by != null) {
-      cond.element_exists = { ...cond.element_exists, by: normalizeSelectorBy(cond.element_exists.by) };
+    if (
+      cond.element_exists &&
+      typeof cond.element_exists === 'object' &&
+      cond.element_exists.by != null
+    ) {
+      cond.element_exists = {
+        ...cond.element_exists,
+        by: normalizeSelectorBy(cond.element_exists.by)
+      };
     }
-    if (cond.element_not_exists && typeof cond.element_not_exists === 'object' && cond.element_not_exists.by != null) {
-      cond.element_not_exists = { ...cond.element_not_exists, by: normalizeSelectorBy(cond.element_not_exists.by) };
+    if (
+      cond.element_not_exists &&
+      typeof cond.element_not_exists === 'object' &&
+      cond.element_not_exists.by != null
+    ) {
+      cond.element_not_exists = {
+        ...cond.element_not_exists,
+        by: normalizeSelectorBy(cond.element_not_exists.by)
+      };
     }
     next.condition = cond;
   }
   if (Array.isArray(next.then)) next.then = next.then.map(sanitizeScenarioStep);
   if (Array.isArray(next.else)) next.else = next.else.map(sanitizeScenarioStep);
-  if (Array.isArray(next.steps)) next.steps = next.steps.map(sanitizeScenarioStep);
+  if (Array.isArray(next.steps))
+    next.steps = next.steps.map(sanitizeScenarioStep);
   if (Array.isArray(next.branches)) {
     next.branches = next.branches.map((br: any) =>
       br && typeof br === 'object'
-        ? { ...br, ...(Array.isArray(br.steps) ? { steps: br.steps.map(sanitizeScenarioStep) } : {}) }
+        ? {
+            ...br,
+            ...(Array.isArray(br.steps)
+              ? { steps: br.steps.map(sanitizeScenarioStep) }
+              : {})
+          }
         : br
     );
   }
@@ -119,7 +160,7 @@ export function useControlRecord(
   initialSerial?: string | null,
   initialCampaignId?: string | null,
   initialScenarioId?: string | null,
-  initialTemplateId?: string | null,
+  initialTemplateId?: string | null
 ) {
   const t = useTranslations('devicesControlRecord');
   const errorPrefix = t('errorPrefix');
@@ -139,12 +180,18 @@ export function useControlRecord(
   const initialSerialAppliedRef = useRef(false);
 
   const connectedDevices = useMemo(
-    () => devices.filter((d) => ['READY', 'BUSY'].includes((d.state ?? '').toUpperCase())),
+    () =>
+      devices.filter((d) =>
+        ['READY', 'BUSY'].includes((d.state ?? '').toUpperCase())
+      ),
     [devices]
   );
 
   const selectedDevice = useMemo(
-    () => connectedDevices.find((d) => d.serial === selectedSerial) ?? connectedDevices[0] ?? null,
+    () =>
+      connectedDevices.find((d) => d.serial === selectedSerial) ??
+      connectedDevices[0] ??
+      null,
     [connectedDevices, selectedSerial]
   );
 
@@ -178,8 +225,12 @@ export function useControlRecord(
   const [hierarchyRefreshPulse, setHierarchyRefreshPulse] = useState(0);
   const lastHierarchyPulseAtRef = useRef(0);
 
-  useEffect(() => { recordingRef.current = recording; }, [recording]);
-  useEffect(() => { recordXmlRef.current = recordXml; }, [recordXml]);
+  useEffect(() => {
+    recordingRef.current = recording;
+  }, [recording]);
+  useEffect(() => {
+    recordXmlRef.current = recordXml;
+  }, [recordXml]);
 
   const refreshRecordXml = useCallback(async (serial: string) => {
     try {
@@ -189,7 +240,9 @@ export function useControlRecord(
         recordXmlRef.current = xml;
         return xml;
       }
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     return null;
   }, []);
 
@@ -200,7 +253,11 @@ export function useControlRecord(
   const pulseHierarchyRefresh = useCallback(() => {
     const now = Date.now();
     // Collapse burst actions (tap/swipe spam) into one refresh pulse.
-    if (now - lastHierarchyPulseAtRef.current < HIERARCHY_INTERACTION_PULSE_THROTTLE_MS) return;
+    if (
+      now - lastHierarchyPulseAtRef.current <
+      HIERARCHY_INTERACTION_PULSE_THROTTLE_MS
+    )
+      return;
     lastHierarchyPulseAtRef.current = now;
     setHierarchyRefreshPulse((v) => v + 1);
   }, []);
@@ -236,7 +293,7 @@ export function useControlRecord(
     return stepId;
   }, []);
 
-  const trackScreenshotTask = useCallback(<T,>(task: Promise<T>) => {
+  const trackScreenshotTask = useCallback(<T>(task: Promise<T>) => {
     pendingScreenshotTasksRef.current.add(task);
     setPendingScreenshotCount(pendingScreenshotTasksRef.current.size);
     task.finally(() => {
@@ -256,7 +313,7 @@ export function useControlRecord(
       const pending = Array.from(pendingScreenshotTasksRef.current);
       await Promise.race([
         Promise.allSettled(pending),
-        new Promise((resolve) => setTimeout(resolve, Math.min(remaining, 250))),
+        new Promise((resolve) => setTimeout(resolve, Math.min(remaining, 250)))
       ]);
     }
     return true;
@@ -291,7 +348,7 @@ export function useControlRecord(
           'tap_selector',
           'input_text',
           'open_url',
-          'launch_app',
+          'launch_app'
         ].includes(String(m0.type ?? ''))
       ) {
         pulseHierarchyRefresh();
@@ -304,15 +361,26 @@ export function useControlRecord(
       }
       if (!recordingRef.current || !selectedDevice) return;
       const m = msg as {
-        type?: string; serial?: string;
-        x?: number; y?: number; key?: string;
-        x1?: number; y1?: number; x2?: number; y2?: number; ms?: number;
+        type?: string;
+        serial?: string;
+        x?: number;
+        y?: number;
+        key?: string;
+        x1?: number;
+        y1?: number;
+        x2?: number;
+        y2?: number;
+        ms?: number;
       };
       if (m.serial !== selectedDevice.serial) return;
       const w = selectedDevice.screen_width || 1080;
       const h = selectedDevice.screen_height || 1920;
 
-      if (m.type === 'tap' && typeof m.x === 'number' && typeof m.y === 'number') {
+      if (
+        m.type === 'tap' &&
+        typeof m.x === 'number' &&
+        typeof m.y === 'number'
+      ) {
         const rx = parseFloat((m.x / w).toFixed(4));
         const ry = parseFloat((m.y / h).toFixed(4));
         const xml = pollingXmlRef.current ? null : recordXmlRef.current;
@@ -336,19 +404,37 @@ export function useControlRecord(
                 selector: sel.selector,
                 rx,
                 ry,
-                screen,
-              }) as ScenarioStep,
+                screen
+              }) as ScenarioStep
             );
-            toast.success(t('toast.tapRecorded', { by: sel.by, value: sel.value.slice(0, 40) }), { duration: 2000 });
+            toast.success(
+              t('toast.tapRecorded', {
+                by: sel.by,
+                value: sel.value.slice(0, 40)
+              }),
+              { duration: 2000 }
+            );
           } else {
-            recordedStepId = recordStep({ type: 'tap', fallback: { rx, ry }, screen } as ScenarioStep);
+            recordedStepId = recordStep({
+              type: 'tap',
+              fallback: { rx, ry },
+              screen
+            } as ScenarioStep);
             toast.warning(t('toast.elementNotFound'), { duration: 3000 });
           }
 
           const stepSerial = selectedDevice.serial;
-          const ratioCrop = elemBounds?.rx2 != null && elemBounds.rx2 > elemBounds.rx1 && elemBounds.ry2 > elemBounds.ry1
-            ? { rx1: elemBounds.rx1, ry1: elemBounds.ry1, rx2: elemBounds.rx2, ry2: elemBounds.ry2 }
-            : undefined;
+          const ratioCrop =
+            elemBounds?.rx2 != null &&
+            elemBounds.rx2 > elemBounds.rx1 &&
+            elemBounds.ry2 > elemBounds.ry1
+              ? {
+                  rx1: elemBounds.rx1,
+                  ry1: elemBounds.ry1,
+                  rx2: elemBounds.rx2,
+                  ry2: elemBounds.ry2
+                }
+              : undefined;
 
           // screen.screenshot is used ONLY for SSIM visual-anchoring during
           // playback (scenario_task.py: `if not has_real_selector`).
@@ -364,29 +450,40 @@ export function useControlRecord(
           if (!needFullScreenshot && !ratioCrop) return;
 
           trackScreenshotTask(
-            (preTapScreenshotPromise ?? fetchScreenshotB64(stepSerial)).then(async (imgData) => {
-              if (!recordingRef.current) return;
-              // Crop element_image client-side — avoids a second round-trip and
-              // guarantees the crop matches the exact frame in screen.screenshot.
-              const elementImage = ratioCrop
-                ? await cropBase64(imgData.screenshot, ratioCrop)
-                : undefined;
-              setSteps((prev) => {
-                const idxById = prev.findIndex((step) => step._id === recordedStepId);
-                if (idxById < 0 || prev[idxById].type !== 'tap') return prev;
-                const updated = [...prev];
-                const s = { ...updated[idxById] };
-                const sc = { ...(s as Record<string, unknown>).screen as Record<string, unknown> };
-                // Only store full screenshot when needed for SSIM visual-anchoring
-                if (needFullScreenshot) sc.screenshot = imgData.screenshot;
-                if (elementImage) sc.element_image = elementImage;
-                (s as Record<string, unknown>).screen = sc;
-                updated[idxById] = s as StepWithId;
-                return updated;
-              });
-            }).catch(() => {
-              toast.warning(t('toast.screenshotCaptureFailed'), { duration: 2500 });
-            })
+            (preTapScreenshotPromise ?? fetchScreenshotB64(stepSerial))
+              .then(async (imgData) => {
+                if (!recordingRef.current) return;
+                // Crop element_image client-side — avoids a second round-trip and
+                // guarantees the crop matches the exact frame in screen.screenshot.
+                const elementImage = ratioCrop
+                  ? await cropBase64(imgData.screenshot, ratioCrop)
+                  : undefined;
+                setSteps((prev) => {
+                  const idxById = prev.findIndex(
+                    (step) => step._id === recordedStepId
+                  );
+                  if (idxById < 0 || prev[idxById].type !== 'tap') return prev;
+                  const updated = [...prev];
+                  const s = { ...updated[idxById] };
+                  const sc = {
+                    ...((s as Record<string, unknown>).screen as Record<
+                      string,
+                      unknown
+                    >)
+                  };
+                  // Only store full screenshot when needed for SSIM visual-anchoring
+                  if (needFullScreenshot) sc.screenshot = imgData.screenshot;
+                  if (elementImage) sc.element_image = elementImage;
+                  (s as Record<string, unknown>).screen = sc;
+                  updated[idxById] = s as StepWithId;
+                  return updated;
+                });
+              })
+              .catch(() => {
+                toast.warning(t('toast.screenshotCaptureFailed'), {
+                  duration: 2500
+                });
+              })
           );
 
           if (recordingRef.current) {
@@ -400,7 +497,10 @@ export function useControlRecord(
               RECORD_XML_POLL_TIMEOUT_MS
             ).then((newXml) => {
               if (!recordingRef.current) return;
-              if (newXml) { setRecordXml(newXml); recordXmlRef.current = newXml; }
+              if (newXml) {
+                setRecordXml(newXml);
+                recordXmlRef.current = newXml;
+              }
               pollingXmlRef.current = false;
               setPollingXml(false);
             });
@@ -410,11 +510,15 @@ export function useControlRecord(
 
         recordStep({ type: 'tap_ratio', x: rx, y: ry });
         toast.info(t('toast.xmlMissing'), { duration: 3000 });
-
       } else if (m.type === 'key' && m.key) {
         recordStep({ type: 'key', key: m.key });
-
-      } else if (m.type === 'swipe' && typeof m.x1 === 'number' && typeof m.y1 === 'number' && typeof m.x2 === 'number' && typeof m.y2 === 'number') {
+      } else if (
+        m.type === 'swipe' &&
+        typeof m.x1 === 'number' &&
+        typeof m.y1 === 'number' &&
+        typeof m.x2 === 'number' &&
+        typeof m.y2 === 'number'
+      ) {
         recordStep({
           type: 'swipe_ratio',
           x1: parseFloat((m.x1 / w).toFixed(4)),
@@ -423,13 +527,21 @@ export function useControlRecord(
           y2: parseFloat((m.y2 / h).toFixed(4)),
           duration_ms: m.ms ?? 300
         });
-
-      } else if (m.type === 'double_tap' && typeof m.x === 'number' && typeof m.y === 'number') {
+      } else if (
+        m.type === 'double_tap' &&
+        typeof m.x === 'number' &&
+        typeof m.y === 'number'
+      ) {
         const rx = parseFloat((m.x / w).toFixed(4));
         const ry = parseFloat((m.y / h).toFixed(4));
         recordStep({ type: 'double_tap', rx, ry });
-
-      } else if (m.type === 'drag' && typeof m.x1 === 'number' && typeof m.y1 === 'number' && typeof m.x2 === 'number' && typeof m.y2 === 'number') {
+      } else if (
+        m.type === 'drag' &&
+        typeof m.x1 === 'number' &&
+        typeof m.y1 === 'number' &&
+        typeof m.x2 === 'number' &&
+        typeof m.y2 === 'number'
+      ) {
         recordStep({
           type: 'drag',
           rx1: parseFloat((m.x1 / w).toFixed(4)),
@@ -440,7 +552,14 @@ export function useControlRecord(
         });
       }
     },
-    [wsSend, selectedDevice, recordStep, t, trackScreenshotTask, pulseHierarchyRefresh]
+    [
+      wsSend,
+      selectedDevice,
+      recordStep,
+      t,
+      trackScreenshotTask,
+      pulseHierarchyRefresh
+    ]
   );
 
   const addWaitStep = useCallback(() => {
@@ -448,7 +567,10 @@ export function useControlRecord(
   }, []);
 
   const addFlowStep = useCallback((type: string) => {
-    setSteps((s) => [...s, { ...createDefaultStep(type), _id: nextStepId() } as StepWithId]);
+    setSteps((s) => [
+      ...s,
+      { ...createDefaultStep(type), _id: nextStepId() } as StepWithId
+    ]);
   }, []);
 
   // Append an array of steps loaded from a template. Each step gets a fresh
@@ -459,13 +581,18 @@ export function useControlRecord(
     if (!Array.isArray(incoming) || incoming.length === 0) return 0;
     const mapped = incoming
       .filter((s) => s && typeof s === 'object')
-      .map((s) => ({ ...(s as ScenarioStep), _id: nextStepId() }) as StepWithId);
+      .map(
+        (s) => ({ ...(s as ScenarioStep), _id: nextStepId() }) as StepWithId
+      );
     if (mapped.length === 0) return 0;
     setSteps((prev) => [...prev, ...mapped]);
     return mapped.length;
   }, []);
 
-  const cleanSteps = useCallback(() => steps.map(({ _id, ...rest }) => rest), [steps]);
+  const cleanSteps = useCallback(
+    () => steps.map(({ _id, ...rest }) => rest),
+    [steps]
+  );
 
   const copyJson = useCallback(() => {
     const text = scenarioToJson(cleanSteps());
@@ -519,30 +646,40 @@ export function useControlRecord(
     if (!initialCampaignId || !initialScenarioId) return;
     Promise.all([
       scenariosApi.get(initialCampaignId, initialScenarioId),
-      campaignsApi.get(initialCampaignId).catch(() => null),
-    ]).then(([sc, campaign]) => {
-      const loaded = Array.isArray(sc.steps)
-        ? sc.steps.map((s: any) => ({ ...s, _id: nextStepId() }) as StepWithId)
-        : [];
-      setSteps(loaded);
-      // Preview stream only receives `variables` from FE payload, so merge both
-      // scopes here to match campaign run behavior:
-      // campaign vars < scenario vars (scenario takes precedence).
-      const mergedVars = {
-        ...((campaign as { variables?: Record<string, any> } | null)?.variables ?? {}),
-        ...(sc.variables ?? {}),
-      };
-      setEditingContext({
-        campaignId: initialCampaignId,
-        scenarioId: initialScenarioId,
-        name: sc.name,
-        variables: mergedVars,
-        accountGroupId: (sc as { account_group_id?: string | null }).account_group_id ?? null,
-      });
-      if (loaded.length > 0) toast.info(t('toast.loadedScenario', { name: sc.name, count: loaded.length }));
-    }).catch(() => toast.error(t('toast.loadScenarioFailed')));
-  // intentionally runs once on mount
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+      campaignsApi.get(initialCampaignId).catch(() => null)
+    ])
+      .then(([sc, campaign]) => {
+        const loaded = Array.isArray(sc.steps)
+          ? sc.steps.map(
+              (s: any) => ({ ...s, _id: nextStepId() }) as StepWithId
+            )
+          : [];
+        setSteps(loaded);
+        // Preview stream only receives `variables` from FE payload, so merge both
+        // scopes here to match campaign run behavior:
+        // campaign vars < scenario vars (scenario takes precedence).
+        const mergedVars = {
+          ...((campaign as { variables?: Record<string, any> } | null)
+            ?.variables ?? {}),
+          ...(sc.variables ?? {})
+        };
+        setEditingContext({
+          campaignId: initialCampaignId,
+          scenarioId: initialScenarioId,
+          name: sc.name,
+          variables: mergedVars,
+          accountGroupId:
+            (sc as { account_group_id?: string | null }).account_group_id ??
+            null
+        });
+        if (loaded.length > 0)
+          toast.info(
+            t('toast.loadedScenario', { name: sc.name, count: loaded.length })
+          );
+      })
+      .catch(() => toast.error(t('toast.loadScenarioFailed')));
+    // intentionally runs once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Load scenario template when ?templateId=... is present in the URL.
@@ -551,29 +688,41 @@ export function useControlRecord(
   useEffect(() => {
     if (!initialTemplateId) return;
     if (initialCampaignId || initialScenarioId) return;
-    scenarioTemplatesApi.get(initialTemplateId).then((tpl) => {
-      const loaded = Array.isArray(tpl.steps)
-        ? tpl.steps.map((s: any) => ({ ...s, _id: nextStepId() }) as StepWithId)
-        : [];
-      setSteps(loaded);
-      setTemplateContext({
-        templateId: tpl.id,
-        name: tpl.name,
-        description: tpl.description ?? '',
-        category: tpl.category ?? '',
-        tags: tpl.tags ?? '',
-        variables: tpl.variables ?? {},
-      });
-      if (loaded.length > 0) toast.info(t('toast.loadedTemplate', { name: tpl.name, count: loaded.length }));
-    }).catch(() => toast.error(t('toast.loadTemplateFailed')));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    scenarioTemplatesApi
+      .get(initialTemplateId)
+      .then((tpl) => {
+        const loaded = Array.isArray(tpl.steps)
+          ? tpl.steps.map(
+              (s: any) => ({ ...s, _id: nextStepId() }) as StepWithId
+            )
+          : [];
+        setSteps(loaded);
+        setTemplateContext({
+          templateId: tpl.id,
+          name: tpl.name,
+          description: tpl.description ?? '',
+          category: tpl.category ?? '',
+          tags: tpl.tags ?? '',
+          variables: tpl.variables ?? {}
+        });
+        if (loaded.length > 0)
+          toast.info(
+            t('toast.loadedTemplate', { name: tpl.name, count: loaded.length })
+          );
+      })
+      .catch(() => toast.error(t('toast.loadTemplateFailed')));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const saveToTemplate = useCallback(
     async (variables?: Record<string, any>) => {
       if (!templateContext) return;
       if (pendingScreenshotCount > 0) {
-        toast.info(t('toast.waitingScreenshotBeforeSave', { count: pendingScreenshotCount }));
+        toast.info(
+          t('toast.waitingScreenshotBeforeSave', {
+            count: pendingScreenshotCount
+          })
+        );
       }
       const ready = await waitForPendingScreenshots();
       if (!ready) {
@@ -590,7 +739,7 @@ export function useControlRecord(
       try {
         await scenarioTemplatesApi.update(templateContext.templateId, {
           steps: payloadSteps,
-          variables: variables ?? templateContext.variables ?? {},
+          variables: variables ?? templateContext.variables ?? {}
         });
         toast.success(t('toast.saveTemplateSuccess'));
       } catch (err) {
@@ -601,14 +750,24 @@ export function useControlRecord(
     },
     // cleanSteps closes over `steps` — eslint is happy once it's listed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [templateContext, pendingScreenshotCount, t, waitForPendingScreenshots, cleanSteps],
+    [
+      templateContext,
+      pendingScreenshotCount,
+      t,
+      waitForPendingScreenshots,
+      cleanSteps
+    ]
   );
 
   // ── Save dialog ──────────────────────────────────────────────────────────
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
-  const [campaigns, setCampaigns] = useState<{ id: string; name: string }[]>([]);
+  const [campaigns, setCampaigns] = useState<{ id: string; name: string }[]>(
+    []
+  );
   const [savingCampaignId, setSavingCampaignId] = useState<string | null>(null);
-  const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(null);
+  const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(
+    null
+  );
   const [campaignScenarios, setCampaignScenarios] = useState<ScenarioOut[]>([]);
 
   const openSaveDialog = useCallback(() => {
@@ -617,13 +776,19 @@ export function useControlRecord(
       // Pre-select the campaign and load its scenarios so the user can directly overwrite
       setSelectedCampaignId(editingContext.campaignId);
       setCampaignScenarios([]);
-      scenariosApi.list(editingContext.campaignId).then(setCampaignScenarios).catch(() => setCampaignScenarios([]));
+      scenariosApi
+        .list(editingContext.campaignId)
+        .then(setCampaignScenarios)
+        .catch(() => setCampaignScenarios([]));
       setCampaigns([]);
     } else {
       setSelectedCampaignId(null);
       setCampaignScenarios([]);
-      campaignsApi.list()
-        .then((list) => setCampaigns(list.map((c) => ({ id: c.id, name: c.name }))))
+      campaignsApi
+        .list()
+        .then((list) =>
+          setCampaigns(list.map((c) => ({ id: c.id, name: c.name })))
+        )
         .catch(() => setCampaigns([]));
     }
   }, [editingContext]);
@@ -631,7 +796,10 @@ export function useControlRecord(
   const handlePickCampaign = useCallback((campaignId: string) => {
     setSelectedCampaignId(campaignId);
     setCampaignScenarios([]);
-    scenariosApi.list(campaignId).then(setCampaignScenarios).catch(() => setCampaignScenarios([]));
+    scenariosApi
+      .list(campaignId)
+      .then(setCampaignScenarios)
+      .catch(() => setCampaignScenarios([]));
   }, []);
 
   const saveToScenario = useCallback(
@@ -639,10 +807,14 @@ export function useControlRecord(
       campaignId: string,
       scenarioId: string,
       variables?: Record<string, any>,
-      accountGroupIdOverride?: string | null,
+      accountGroupIdOverride?: string | null
     ) => {
       if (pendingScreenshotCount > 0) {
-        toast.info(t('toast.waitingScreenshotBeforeSave', { count: pendingScreenshotCount }));
+        toast.info(
+          t('toast.waitingScreenshotBeforeSave', {
+            count: pendingScreenshotCount
+          })
+        );
       }
       const ready = await waitForPendingScreenshots();
       if (!ready) {
@@ -669,37 +841,54 @@ export function useControlRecord(
       const payload: Parameters<typeof scenariosApi.update>[2] = {
         steps: payloadSteps,
         variables,
-        ...(accountGroupForEdit !== undefined ? { account_group_id: accountGroupForEdit } : {}),
+        ...(accountGroupForEdit !== undefined
+          ? { account_group_id: accountGroupForEdit }
+          : {})
       };
-      scenariosApi.update(campaignId, scenarioId, payload)
+      scenariosApi
+        .update(campaignId, scenarioId, payload)
         .then((updated) => {
           setEditingContext({
             campaignId,
             scenarioId: updated.id,
             name: updated.name,
             variables: {
-              ...(variables ?? {}),
+              ...(variables ?? {})
             },
-            accountGroupId: (updated as { account_group_id?: string | null }).account_group_id ?? null,
+            accountGroupId:
+              (updated as { account_group_id?: string | null })
+                .account_group_id ?? null
           });
           toast.success(t('toast.saveStepsSuccess'));
           setSaveDialogOpen(false);
           setSelectedCampaignId(null);
         })
-        .catch((err) => toast.error(formatFarmApiError(err, t('toast.saveFailed'))))
+        .catch((err) =>
+          toast.error(formatFarmApiError(err, t('toast.saveFailed')))
+        )
         .finally(() => setSavingCampaignId(null));
     },
-    [cleanSteps, pendingScreenshotCount, t, waitForPendingScreenshots, editingContext]
+    [
+      cleanSteps,
+      pendingScreenshotCount,
+      t,
+      waitForPendingScreenshots,
+      editingContext
+    ]
   );
 
   const saveAsNewScenario = useCallback(
     async (
       campaignId: string,
       variables?: Record<string, any>,
-      accountGroupIdOverride?: string | null,
+      accountGroupIdOverride?: string | null
     ) => {
       if (pendingScreenshotCount > 0) {
-        toast.info(t('toast.waitingScreenshotBeforeSave', { count: pendingScreenshotCount }));
+        toast.info(
+          t('toast.waitingScreenshotBeforeSave', {
+            count: pendingScreenshotCount
+          })
+        );
       }
       const ready = await waitForPendingScreenshots();
       if (!ready) {
@@ -714,27 +903,36 @@ export function useControlRecord(
       }
       setSavingCampaignId('new');
       const createBody: Parameters<typeof scenariosApi.create>[1] = {
-        name: t('newScenarioName', { time: new Date().toLocaleTimeString('vi-VN') }),
+        name: t('newScenarioName', {
+          time: new Date().toLocaleTimeString('vi-VN')
+        }),
         steps: payloadSteps,
         variables,
-        ...(accountGroupIdOverride ? { account_group_id: accountGroupIdOverride } : {}),
+        ...(accountGroupIdOverride
+          ? { account_group_id: accountGroupIdOverride }
+          : {})
       };
-      scenariosApi.create(campaignId, createBody)
+      scenariosApi
+        .create(campaignId, createBody)
         .then((created) => {
           setEditingContext({
             campaignId,
             scenarioId: created.id,
             name: created.name,
             variables: {
-              ...(variables ?? {}),
+              ...(variables ?? {})
             },
-            accountGroupId: (created as { account_group_id?: string | null }).account_group_id ?? null,
+            accountGroupId:
+              (created as { account_group_id?: string | null })
+                .account_group_id ?? null
           });
           toast.success(t('toast.createScenarioSuccess'));
           setSaveDialogOpen(false);
           setSelectedCampaignId(null);
         })
-        .catch((err) => toast.error(formatFarmApiError(err, t('toast.createScenarioFailed'))))
+        .catch((err) =>
+          toast.error(formatFarmApiError(err, t('toast.createScenarioFailed')))
+        )
         .finally(() => setSavingCampaignId(null));
     },
     [cleanSteps, pendingScreenshotCount, t, waitForPendingScreenshots]
@@ -758,9 +956,12 @@ export function useControlRecord(
     enabled: false,
     refetchOnWindowFocus: false,
     staleTime: 1500,
-    gcTime: 1000 * 60,
+    gcTime: 1000 * 60
   });
-  const hierarchyXml = useMemo(() => hierarchyQuery.data ?? '', [hierarchyQuery.data]);
+  const hierarchyXml = useMemo(
+    () => hierarchyQuery.data ?? '',
+    [hierarchyQuery.data]
+  );
   const hierarchyLoading = hierarchyQuery.isFetching;
 
   const fetchAndSetHierarchy = useCallback(
@@ -775,12 +976,22 @@ export function useControlRecord(
   const refreshHierarchy = useCallback(() => {
     if (!selectedHierarchySerial) return;
     fetchAndSetHierarchy(selectedHierarchySerial, true).catch((e) => {
-      queryClient.setQueryData(hierarchyQueryKey, `${errorPrefix} ${String(e)}`);
+      queryClient.setQueryData(
+        hierarchyQueryKey,
+        `${errorPrefix} ${String(e)}`
+      );
     });
-  }, [selectedHierarchySerial, fetchAndSetHierarchy, queryClient, hierarchyQueryKey, errorPrefix]);
+  }, [
+    selectedHierarchySerial,
+    fetchAndSetHierarchy,
+    queryClient,
+    hierarchyQueryKey,
+    errorPrefix
+  ]);
 
   useEffect(() => {
-    if (!autoRefreshHierarchy || !selectedHierarchySerial || hierarchyPaused) return;
+    if (!autoRefreshHierarchy || !selectedHierarchySerial || hierarchyPaused)
+      return;
     lastHierarchyAppRef.current = selectedHierarchyApp;
     fetchAndSetHierarchy(selectedHierarchySerial, true).catch(() => {});
   }, [
@@ -788,12 +999,13 @@ export function useControlRecord(
     selectedHierarchySerial,
     selectedHierarchyApp,
     hierarchyPaused,
-    fetchAndSetHierarchy,
+    fetchAndSetHierarchy
   ]);
 
   // Refresh hierarchy when the foreground app changes.
   useEffect(() => {
-    if (!autoRefreshHierarchy || !selectedHierarchySerial || hierarchyPaused) return;
+    if (!autoRefreshHierarchy || !selectedHierarchySerial || hierarchyPaused)
+      return;
     const app = selectedHierarchyApp;
     if (lastHierarchyAppRef.current === app) return;
     lastHierarchyAppRef.current = app;
@@ -814,17 +1026,23 @@ export function useControlRecord(
     errorPrefix,
     hierarchyQuery,
     queryClient,
-    hierarchyQueryKey,
+    hierarchyQueryKey
   ]);
 
   // Refresh hierarchy on interaction pulses (tap/swipe/drag/key...).
   useEffect(() => {
-    if (!autoRefreshHierarchy || !selectedHierarchySerial || hierarchyPaused) return;
+    if (!autoRefreshHierarchy || !selectedHierarchySerial || hierarchyPaused)
+      return;
     if (hierarchyRefreshPulse <= 0) return;
     const now = Date.now();
-    if (now - lastHierarchyFetchAtRef.current < HIERARCHY_INTERACTION_FETCH_COOLDOWN_MS) return;
+    if (
+      now - lastHierarchyFetchAtRef.current <
+      HIERARCHY_INTERACTION_FETCH_COOLDOWN_MS
+    )
+      return;
     const tid = setTimeout(() => {
-      hierarchyQuery.refetch()
+      hierarchyQuery
+        .refetch()
         .then(() => {
           lastHierarchyFetchAtRef.current = Date.now();
         })
@@ -844,14 +1062,23 @@ export function useControlRecord(
     errorPrefix,
     hierarchyQuery,
     queryClient,
-    hierarchyQueryKey,
+    hierarchyQueryKey
   ]);
 
-  const parsedHierarchyNodes = useMemo(() => parseHierarchySelectorNodes(hierarchyXml), [hierarchyXml]);
+  const parsedHierarchyNodes = useMemo(
+    () => parseHierarchySelectorNodes(hierarchyXml),
+    [hierarchyXml]
+  );
 
   // ── Selector (manual tap) ────────────────────────────────────────────────
   const [selectorBy, setSelectorBy] = useState<
-    'resource-id' | 'text' | 'xpath' | 'class name' | 'description' | 'descriptionContains' | 'descriptionStartsWith'
+    | 'resource-id'
+    | 'text'
+    | 'xpath'
+    | 'class name'
+    | 'description'
+    | 'descriptionContains'
+    | 'descriptionStartsWith'
   >('text');
   const [selectorValue, setSelectorValue] = useState('');
 
@@ -862,11 +1089,27 @@ export function useControlRecord(
     wsSend({ type: 'tap_selector', serial: selectedDevice.serial, by, value });
     if (recording) {
       recordStep(
-        buildRecordedTapStep({ by, value, rx: 0.5, ry: 0.5, selector: { by: by as any, value } }) as ScenarioStep,
+        buildRecordedTapStep({
+          by,
+          value,
+          rx: 0.5,
+          ry: 0.5,
+          selector: { by: by as any, value }
+        }) as ScenarioStep
       );
     }
-    toast.success(t('toast.tapSelectorSuccess', { by, value: value.slice(0, 30) }));
-  }, [selectedDevice, selectorBy, selectorValue, wsSend, recording, recordStep, t]);
+    toast.success(
+      t('toast.tapSelectorSuccess', { by, value: value.slice(0, 30) })
+    );
+  }, [
+    selectedDevice,
+    selectorBy,
+    selectorValue,
+    wsSend,
+    recording,
+    recordStep,
+    t
+  ]);
 
   // ── Return (grouped) ─────────────────────────────────────────────────────
   const mode = selectedDevice ? (modes[selectedDevice.serial] ?? 'tap') : 'tap';
@@ -881,7 +1124,7 @@ export function useControlRecord(
       selectedSerial,
       setSelectedSerial,
       mode,
-      logs,
+      logs
     },
 
     record: {
@@ -892,7 +1135,7 @@ export function useControlRecord(
       wsSend,
       setSkipTapRecordingWhilePick,
       handleToggleMode,
-      handleRestart,
+      handleRestart
     },
 
     steps: {
@@ -902,7 +1145,7 @@ export function useControlRecord(
       addFlow: addFlowStep,
       appendSteps,
       copyJson,
-      openSave: openSaveDialog,
+      openSave: openSaveDialog
     },
 
     save: {
@@ -919,7 +1162,7 @@ export function useControlRecord(
       editingContext,
       templateContext,
       savingTemplate,
-      saveToTemplate,
+      saveToTemplate
     },
 
     hierarchy: {
@@ -929,7 +1172,7 @@ export function useControlRecord(
       setAutoRefresh: setAutoRefreshHierarchy,
       refresh: refreshHierarchy,
       nodes: parsedHierarchyNodes,
-      setPaused: setHierarchyPaused,
+      setPaused: setHierarchyPaused
     },
 
     selector: {
@@ -937,7 +1180,7 @@ export function useControlRecord(
       setBy: setSelectorBy,
       value: selectorValue,
       setValue: setSelectorValue,
-      tap: handleTapSelector,
-    },
+      tap: handleTapSelector
+    }
   };
 }

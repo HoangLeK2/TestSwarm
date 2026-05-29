@@ -63,7 +63,12 @@ export type WsMessage =
     }
   | { type: 'log'; serial: string; line: string }
   | { type: 'ws_status'; connected: boolean }
-  | { type: 'device_busy'; serial: string; reason: string; scenario_active: boolean }
+  | {
+      type: 'device_busy';
+      serial: string;
+      reason: string;
+      scenario_active: boolean;
+    }
   | {
       type: 'notification';
       data: import('@/features/notifications/services/api').NotificationItem;

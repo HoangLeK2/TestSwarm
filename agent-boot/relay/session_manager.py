@@ -15,6 +15,7 @@ import time
 from typing import Callable, Dict, Optional
 
 from relay.scrcpy_relay import ScrcpyRelaySession
+from relay.runtime import scrcpy_executor
 
 logger = logging.getLogger("relay.session_mgr")
 
@@ -130,8 +131,9 @@ class ScrcpySessionManager:
 
         try:
             self._starting_serials.add(serial)
-            # start() is blocking (JAR push ~1-2s) — run in executor
-            await asyncio.get_running_loop().run_in_executor(None, session.start)
+            # start() is blocking (JAR push ~1-2s) — run in scrcpy-specific
+            # pool so a slow start cannot starve adb/u2 work.
+            await asyncio.get_running_loop().run_in_executor(scrcpy_executor(), session.start)
             self._sessions[serial] = session
             self._started_at[serial] = time.monotonic()
             logger.info("session started: %s (total=%d)", serial, len(self._sessions))
@@ -151,7 +153,7 @@ class ScrcpySessionManager:
         session = self._sessions.pop(serial, None)
         self._started_at.pop(serial, None)
         if session:
-            await asyncio.get_running_loop().run_in_executor(None, session.stop)
+            await asyncio.get_running_loop().run_in_executor(scrcpy_executor(), session.stop)
             logger.info(
                 "session stopped: %s (reason=%s, remaining=%d)",
                 serial,

@@ -72,7 +72,24 @@ def build_scrcpy_router(manager: DeviceManager, *, db_enabled: bool) -> APIRoute
 
 
 async def _resolve_device_ip(serial: str) -> str | None:
-    """Look up device IP from database (saved when agent connected via WS or ADB register)."""
+    """Resolve scrcpy attach target: relay ADB serial first, then trusted LAN IP from DB/caps."""
+    from core.net_utils import is_trusted_device_lan_ip
+
+    try:
+        from runtime.transports.adb_relay_server import get_relay_manager
+
+        relay = get_relay_manager()
+        if relay is not None:
+            resolved = relay.resolve_serial(serial)
+            if relay.relay_for_serial(resolved):
+                return resolved
+            caps = relay.get_capabilities(resolved) or relay.get_capabilities(serial) or {}
+            wlan = str(caps.get("wlan_ip") or "").strip()
+            if wlan and is_trusted_device_lan_ip(wlan):
+                return wlan
+    except Exception as exc:
+        log.debug("relay scrcpy target lookup skipped for %s: %s", serial, exc)
+
     try:
         from db.database import AsyncSessionLocal
         from db.models.device import Device
@@ -85,7 +102,14 @@ async def _resolve_device_ip(serial: str) -> str | None:
             )
             row = result.first()
             if row and row.adb_ip:
-                return row.adb_ip
+                adb_ip = str(row.adb_ip).strip()
+                if is_trusted_device_lan_ip(adb_ip):
+                    return adb_ip
+                log.info(
+                    "Ignoring stale adb_ip=%s for %s (Docker/untrusted); use relay serial",
+                    adb_ip,
+                    serial,
+                )
     except Exception as exc:
         log.warning("Failed to resolve device IP from DB: %s", exc)
     return None

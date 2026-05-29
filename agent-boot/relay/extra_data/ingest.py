@@ -88,27 +88,64 @@ def _parse_items(strategy: str, xml: str, context: dict[str, Any]) -> tuple[list
 
         return [], resolve_comment_filter_next_tap(xml, context)
     if strategy in {"fb_comment_target", "fb_comment_target_tap"}:
-        from relay.extra_data.parsers.facebook import resolve_topmost_comment_target_from_xml
+        from relay.extra_data.parsers.facebook import resolve_comment_targets_from_xml
+        from relay.extra_data.parsers.facebook.parser import _hierarchy_is_fb_comment_sheet, _parse_xml
 
-        post, bounds = resolve_topmost_comment_target_from_xml(xml)
-        if not post or not bounds:
-            return [], {"reason_code": "comment_button_not_found", "target": None}
+        root = _parse_xml(xml)
+        if root is not None and _hierarchy_is_fb_comment_sheet(root):
+            return [], {
+                "reason_code": "already_on_comment_sheet",
+                "target": None,
+                "alternates": [],
+                "candidate_count": 0,
+            }
+
+        # Rank Comment buttons by proximity to mid-screen so a feed with several
+        # visible "Bình luận" rows never silently latches onto the wrong post.
+        top, ranked = resolve_comment_targets_from_xml(xml)
+        if not top:
+            return [], {
+                "reason_code": "comment_button_not_found",
+                "target": None,
+                "alternates": [],
+                "candidate_count": 0,
+            }
         dedupe_field = str(context.get("dedupe_field") or "post_key")
-        base_hash = compute_content_hash(post, dedupe_field=dedupe_field)
         scope = context.get("hash_scope") or context.get("execution_id")
-        target = {
-            "bounds": list(bounds),
-            "pid": post.get("_pid"),
-            "parent_base_hash": base_hash,
-            "parent_id": scope_content_hash(base_hash, scope),
-            "post_key": post.get("post_key"),
-            "stable_post_id": post.get("stable_post_id"),
-            "fb_post_id": post.get("fb_post_id"),
-            "author": post.get("author"),
-            "timestamp": post.get("timestamp"),
-            "text_prefix": str(post.get("text") or "")[:220],
+
+        def _target_from(cand: dict[str, Any]) -> dict[str, Any]:
+            post = cand["post"]
+            bnds = cand["comment_bounds"]
+            base_hash = compute_content_hash(post, dedupe_field=dedupe_field)
+            return {
+                "bounds": list(bnds),
+                "parent_post_bounds": (
+                    list(cand["parent_post_bounds"])
+                    if cand.get("parent_post_bounds")
+                    else None
+                ),
+                "pid": post.get("_pid"),
+                "parent_base_hash": base_hash,
+                "parent_id": scope_content_hash(base_hash, scope),
+                "post_key": post.get("post_key"),
+                "stable_post_id": post.get("stable_post_id"),
+                "fb_post_id": post.get("fb_post_id"),
+                "author": post.get("author"),
+                "timestamp": post.get("timestamp"),
+                "text_prefix": str(post.get("text") or "")[:220],
+                "score": cand.get("score"),
+                "score_breakdown": cand.get("breakdown"),
+                "feed_item_index": cand.get("feed_item_index"),
+            }
+
+        target = _target_from(top)
+        alternates = [_target_from(c) for c in ranked[1:]]
+        return [], {
+            "reason_code": "ok",
+            "target": target,
+            "alternates": alternates,
+            "candidate_count": len(ranked),
         }
-        return [], {"reason_code": "ok", "target": target}
     if strategy == "fb_posts":
         from relay.extra_data.parsers.facebook import parse_fb_posts_from_xml_with_diagnostic
 
@@ -122,7 +159,7 @@ def _parse_items(strategy: str, xml: str, context: dict[str, Any]) -> tuple[list
         return parse_fb_comments_from_xml_with_diagnostic(
             xml,
             parent_post_id=context.get("parent_post_id") or context.get("parent_id"),
-            max_items=int(context.get("max_items") or 50),
+            max_items=int(context.get("max_items") or 400),
         )
     if strategy == "text_nodes":
         return _text_node_items(xml)
@@ -166,7 +203,8 @@ def _parse_fb_comment_snapshots(
     snapshots: list[str],
     context: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    max_items = int(context.get("max_items") or 50)
+    # Match single-snapshot parse default (400) so multi-scroll runs are not capped at 50.
+    max_items = int(context.get("max_items") or 400)
     merged_comments: list[dict[str, Any]] = []
     seen: set[str] = set()
     latest_stats: dict[str, Any] | None = None
@@ -360,8 +398,16 @@ class ExtraDataIngestServer:
             async with self._parse_sem:
                 loop = asyncio.get_running_loop()
                 parse_started = time.perf_counter()
+                # Route XML parsing to the dedicated CPU pool when available.
+                # Falls back to the default pool when the relay runtime is
+                # not initialised (tests / standalone use).
+                try:
+                    from relay.runtime import cpu_executor as _cpu_exec
+                    _parse_ex = _cpu_exec()
+                except Exception:
+                    _parse_ex = None
                 items, diagnostic, snapshots = await loop.run_in_executor(
-                    None,
+                    _parse_ex,
                     _parse_payload_items,
                     strategy,
                     xml,

@@ -3,14 +3,14 @@ import type { FlowStep } from '../scenario-steps/types';
 
 /** Identifies a step that uses resource/text selectors (for pick-from-device). */
 export const SELECTOR_STEP_TYPES = new Set([
-  'tap',           // recorded tap — selector nested in step.selector
+  'tap', // recorded tap — selector nested in step.selector
   'tap_selector',
   'long_tap_selector',
   'input_selector',
   'wait_element',
   'assert_element',
   'scroll_to',
-  'if_element',
+  'if_element'
 ]);
 
 /**
@@ -27,7 +27,7 @@ export type SelectorPickTarget = {
 
 export function selectorPickTargetEquals(
   a: SelectorPickTarget | null | undefined,
-  b: SelectorPickTarget | null | undefined,
+  b: SelectorPickTarget | null | undefined
 ): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
@@ -35,27 +35,36 @@ export function selectorPickTargetEquals(
   const ap = a.path ?? [];
   const bp = b.path ?? [];
   if (ap.length !== bp.length) return false;
-  return ap.every((seg, i) => seg.listKey === bp[i]!.listKey && seg.childIndex === bp[i]!.childIndex);
+  return ap.every(
+    (seg, i) =>
+      seg.listKey === bp[i]!.listKey && seg.childIndex === bp[i]!.childIndex
+  );
 }
 
 function mergeSelector(
   step: FlowStep,
   pick: ScenarioSelectorShape,
-  fallback?: { rx: number; ry: number } | null,
+  fallback?: { rx: number; ry: number } | null
 ): FlowStep {
   const { by, value } = pick;
   const nestedSelector = {
     by,
     value,
-    ...(pick.conditions && Object.keys(pick.conditions).length > 0 ? { conditions: pick.conditions } : {}),
+    ...(pick.conditions && Object.keys(pick.conditions).length > 0
+      ? { conditions: pick.conditions }
+      : {}),
     ...(pick.instance != null ? { instance: pick.instance } : {}),
-    ...(pick.chain ? { chain: pick.chain } : {}),
+    ...(pick.chain ? { chain: pick.chain } : {})
   };
 
   if (step.type === 'tap') {
     const next: any = { ...step, selector: nestedSelector, by, value };
     if (fallback) {
-      next.fallback = { ...(step.fallback ?? {}), rx: fallback.rx, ry: fallback.ry };
+      next.fallback = {
+        ...(step.fallback ?? {}),
+        rx: fallback.rx,
+        ry: fallback.ry
+      };
     }
     return next as FlowStep;
   }
@@ -85,7 +94,7 @@ export function applySelectorToSteps(
   steps: FlowStep[],
   target: SelectorPickTarget,
   pick: ScenarioSelectorShape,
-  fallback?: { rx: number; ry: number } | null,
+  fallback?: { rx: number; ry: number } | null
 ): FlowStep[] {
   const by = pick.by;
   const value = pick.value;
@@ -118,7 +127,9 @@ export function applySelectorToSteps(
       return { ...node, branches };
     }
 
-    const arr = [...(((node as Record<string, unknown>)[listKey] as FlowStep[]) ?? [])];
+    const arr = [
+      ...(((node as Record<string, unknown>)[listKey] as FlowStep[]) ?? [])
+    ];
     const child = arr[childIndex];
     if (!child) return node;
     const updatedChild = applyAtPath(child, pathIdx + 1);

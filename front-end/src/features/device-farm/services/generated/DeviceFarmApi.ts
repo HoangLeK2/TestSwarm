@@ -998,6 +998,11 @@ export interface ScenarioTemplateCreate {
   /** Name */
   name: string;
   /**
+   * Display Name
+   * @default ""
+   */
+  display_name?: string;
+  /**
    * Description
    * @default ""
    */
@@ -1030,6 +1035,8 @@ export interface ScenarioTemplateOut {
   id: string;
   /** Name */
   name: string;
+  /** Display Name */
+  display_name?: string;
   /** Description */
   description: string;
   /** Category */
@@ -1060,6 +1067,8 @@ export interface ScenarioTemplateOut {
 export interface ScenarioTemplateUpdate {
   /** Name */
   name?: string | null;
+  /** Display Name */
+  display_name?: string | null;
   /** Description */
   description?: string | null;
   /** Category */

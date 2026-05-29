@@ -26,6 +26,7 @@ import { formatFarmApiError } from '@/lib/format-farm-api-error';
 
 type FormData = {
   name: string;
+  display_name?: string;
   description?: string;
   category?: string;
   tags?: string;
@@ -34,7 +35,8 @@ type FormData = {
 export function CreateTemplateDialog() {
   const t = useTranslations('scenarioTemplatesFeature.createDialog');
   const schema = z.object({
-    name: z.string().min(1, t('nameRequired')),
+    name: z.string().min(1, t('technicalNameRequired')),
+    display_name: z.string().optional(),
     description: z.string().optional(),
     category: z.string().optional(),
     tags: z.string().optional()
@@ -57,6 +59,7 @@ export function CreateTemplateDialog() {
     mutate(
       {
         name: data.name,
+        display_name: data.display_name,
         description: data.description,
         category: data.category || 'general',
         tags: data.tags,
@@ -83,17 +86,20 @@ export function CreateTemplateDialog() {
     try {
       const created = await mutateAsync({
         name: data.name,
+        display_name: data.display_name,
         description: data.description,
         category: data.category || 'general',
         tags: data.tags,
         steps,
-        variables,
+        variables
       });
       reset();
       setSteps([]);
       setVariables({});
       setOpen(false);
-      router.push(`/${locale}/dashboard/device-farm/control?templateId=${encodeURIComponent(created.id)}`);
+      router.push(
+        `/${locale}/dashboard/device-farm/control?templateId=${encodeURIComponent(created.id)}`
+      );
     } catch {
       // error surfaced via the `error` render below
     } finally {
@@ -116,12 +122,27 @@ export function CreateTemplateDialog() {
         <form onSubmit={handleSubmit(onSubmit)} className='space-y-4 pt-2'>
           <div className='grid grid-cols-2 gap-4'>
             <div className='space-y-1'>
-              <Label>{t('nameLabel')}</Label>
-              <Input placeholder={t('namePlaceholder')} {...register('name')} />
+              <Label>{t('technicalNameLabel')}</Label>
+              <Input
+                className='font-mono text-sm'
+                placeholder={t('technicalNamePlaceholder')}
+                {...register('name')}
+              />
               {errors.name && (
-                <p className='text-xs text-destructive'>{errors.name.message}</p>
+                <p className='text-xs text-destructive'>
+                  {errors.name.message}
+                </p>
               )}
             </div>
+            <div className='space-y-1'>
+              <Label>{t('displayNameLabel')}</Label>
+              <Input
+                placeholder={t('displayNamePlaceholder')}
+                {...register('display_name')}
+              />
+            </div>
+          </div>
+          <div className='grid grid-cols-2 gap-4'>
             <div className='space-y-1'>
               <Label>{t('categoryLabel')}</Label>
               <Input placeholder='general' {...register('category')} />
@@ -142,14 +163,23 @@ export function CreateTemplateDialog() {
 
           {/* Steps — FlowEditor */}
           <div className='space-y-1'>
-            <Label>{t('stepsLabel', { fallback: 'Các bước' })} ({steps.length})</Label>
-            <FlowEditor nestedInDialog steps={steps} onChange={setSteps} maxHeight='300px' />
+            <Label>
+              {t('stepsLabel', { fallback: 'Các bước' })} ({steps.length})
+            </Label>
+            <FlowEditor
+              nestedInDialog
+              steps={steps}
+              onChange={setSteps}
+              maxHeight='300px'
+            />
           </div>
 
           {/* Variables */}
           <details className='group'>
-            <summary className='cursor-pointer text-sm font-medium flex items-center gap-1'>
-              <span>{t('variablesLabel', { fallback: 'Biến (Variables)' })}</span>
+            <summary className='flex cursor-pointer items-center gap-1 text-sm font-medium'>
+              <span>
+                {t('variablesLabel', { fallback: 'Biến (Variables)' })}
+              </span>
               {Object.keys(variables).length > 0 && (
                 <span className='text-xs text-muted-foreground'>
                   ({Object.keys(variables).length})
@@ -159,8 +189,8 @@ export function CreateTemplateDialog() {
             <div className='pt-2'>
               <VariableEditor variables={variables} onChange={setVariables} />
               <p className='mt-1 text-[10px] text-muted-foreground'>
-                {'${VAR_NAME}'} trong steps sẽ được thay thế khi chạy.
-                Built-in: {'${__NOW__}'} {'${__DATE__}'} {'${__DEVICE_SERIAL__}'}
+                {'${VAR_NAME}'} trong steps sẽ được thay thế khi chạy. Built-in:{' '}
+                {'${__NOW__}'} {'${__DATE__}'} {'${__DEVICE_SERIAL__}'}
               </p>
             </div>
           </details>
@@ -176,12 +206,18 @@ export function CreateTemplateDialog() {
               variant='outline'
               className='w-full sm:flex-1'
               disabled={isPending || openingControl}
-              onClick={() => { void onSubmitAndOpenControl(); }}
+              onClick={() => {
+                void onSubmitAndOpenControl();
+              }}
             >
               <ExternalLink size={14} className='mr-1' />
               {openingControl ? t('openingControl') : t('submitAndOpenControl')}
             </Button>
-            <Button type='submit' className='w-full sm:flex-1' disabled={isPending || openingControl}>
+            <Button
+              type='submit'
+              className='w-full sm:flex-1'
+              disabled={isPending || openingControl}
+            >
               {isPending ? t('creating') : t('submit')}
             </Button>
           </div>

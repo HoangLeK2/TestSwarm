@@ -55,7 +55,8 @@ export function ControlRecordStepLabel({ step }: { step: ScenarioStep }) {
       return (
         <span className='flex items-center gap-1.5'>
           <MousePointer className='size-3.5' />
-          tap ({(step.fallback?.rx ?? 0.5) * 100}%, {(step.fallback?.ry ?? 0.5) * 100}%)
+          tap ({(step.fallback?.rx ?? 0.5) * 100}%,{' '}
+          {(step.fallback?.ry ?? 0.5) * 100}%)
         </span>
       );
     }
@@ -71,6 +72,8 @@ export function ControlRecordStepLabel({ step }: { step: ScenarioStep }) {
       );
     }
     default:
-      return <span className='font-mono text-muted-foreground'>{step.type}</span>;
+      return (
+        <span className='font-mono text-muted-foreground'>{step.type}</span>
+      );
   }
 }

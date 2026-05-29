@@ -1,30 +1,40 @@
 'use client';
 
 import { useState } from 'react';
-import {
-  Activity, ChevronDown, ChevronRight,
-} from 'lucide-react';
+import { Activity, ChevronDown, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
-} from '@/components/ui/dialog';
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle
+} from '@/components/ui/sheet';
 import { Loader2 } from 'lucide-react';
+import { useTranslations } from 'next-intl';
+import { useDeviceRunningWorkflows } from '@/features/campaigns/hooks/use-campaigns';
 import {
-  useDeviceRunningWorkflows,
-} from '@/features/campaigns/hooks/use-campaigns';
-import { parseWorkflowId, WorkflowStepList } from '@/features/campaigns/components/workflow-step-list';
+  parseWorkflowId,
+  WorkflowStepList
+} from '@/features/campaigns/components/workflow-step-list';
 import type { WorkflowInfo } from '@/features/campaigns/types';
 
-// ── Accordion per workflow ────────────────────────────────────────────────────
-
-function WorkflowSection({ wf, defaultOpen }: { wf: WorkflowInfo; defaultOpen?: boolean }) {
+function WorkflowSection({
+  wf,
+  defaultOpen
+}: {
+  wf: WorkflowInfo;
+  defaultOpen?: boolean;
+}) {
+  const t = useTranslations('devicesFarm.stepMonitor');
   const [open, setOpen] = useState(defaultOpen ?? true);
   const { campaignId } = parseWorkflowId(wf.workflow_id);
 
   const statusColor: Record<string, string> = {
-    RUNNING: 'text-blue-500', COMPLETED: 'text-green-500',
-    FAILED: 'text-destructive', PAUSED: 'text-amber-500',
+    RUNNING: 'text-blue-500',
+    COMPLETED: 'text-green-500',
+    FAILED: 'text-destructive',
+    PAUSED: 'text-amber-500'
   };
 
   return (
@@ -36,9 +46,17 @@ function WorkflowSection({ wf, defaultOpen }: { wf: WorkflowInfo; defaultOpen?: 
       >
         {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         <span className='flex-1 truncate text-[11px] text-muted-foreground'>
-          Campaign <span className='font-mono font-semibold text-foreground'>#{campaignId.slice(0, 8)}</span>
+          {t('campaignLabel')}{' '}
+          <span className='font-mono font-semibold text-foreground'>
+            #{campaignId ? campaignId.slice(0, 8) : wf.workflow_id.slice(0, 12)}
+          </span>
         </span>
-        <span className={cn('text-[10px] font-bold', statusColor[wf.status] ?? 'text-muted-foreground')}>
+        <span
+          className={cn(
+            'text-[10px] font-bold',
+            statusColor[wf.status] ?? 'text-muted-foreground'
+          )}
+        >
           {wf.status}
         </span>
       </button>
@@ -52,6 +70,7 @@ function WorkflowSection({ wf, defaultOpen }: { wf: WorkflowInfo; defaultOpen?: 
 }
 
 export function DeviceStepsPanel({ serial }: { serial: string }) {
+  const t = useTranslations('devicesFarm.stepMonitor');
   const { data, isLoading } = useDeviceRunningWorkflows(serial, true);
   const workflows = data?.workflows ?? [];
 
@@ -59,12 +78,12 @@ export function DeviceStepsPanel({ serial }: { serial: string }) {
     <div className='flex flex-col gap-2'>
       {isLoading && (
         <div className='flex items-center justify-center py-8 text-xs text-muted-foreground'>
-          <Loader2 size={14} className='mr-2 animate-spin' /> Đang tải...
+          <Loader2 size={14} className='mr-2 animate-spin' /> {t('loading')}
         </div>
       )}
       {!isLoading && workflows.length === 0 && (
         <p className='py-8 text-center text-xs text-muted-foreground'>
-          Không có workflow đang chạy.
+          {t('noWorkflows')}
         </p>
       )}
       {workflows.map((wf, i) => (
@@ -74,59 +93,97 @@ export function DeviceStepsPanel({ serial }: { serial: string }) {
   );
 }
 
-// ── Main dialog ───────────────────────────────────────────────────────────────
-
-interface Props {
+interface DeviceStepMonitorButtonProps {
   serial: string;
   isBusy: boolean;
+  onOpen: (serial: string) => void;
 }
 
-export function DeviceStepMonitor({ serial, isBusy }: Props) {
-  const [open, setOpen] = useState(false);
-  const { data, isLoading } = useDeviceRunningWorkflows(serial, open);
+/** Lightweight trigger — one shared sheet lives on the device farm page. */
+export function DeviceStepMonitorButton({
+  serial,
+  isBusy,
+  onOpen
+}: DeviceStepMonitorButtonProps) {
+  const t = useTranslations('devicesFarm.stepMonitor');
+
+  return (
+    <Button
+      type='button'
+      size='sm'
+      variant={isBusy ? 'outline' : 'ghost'}
+      className={cn(
+        'relative z-10 shrink-0',
+        isBusy
+          ? 'h-7 gap-1.5 border-blue-400/50 px-2.5 text-[11px] text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/30'
+          : 'h-7 gap-1 px-2 text-[11px] text-muted-foreground'
+      )}
+      onClick={() => onOpen(serial)}
+    >
+      <Activity size={12} className={isBusy ? 'animate-pulse' : ''} />
+      {isBusy ? t('running') : t('steps')}
+    </Button>
+  );
+}
+
+interface DeviceStepsSheetProps {
+  serial: string | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}
+
+/** Single sheet instance for the whole grid (avoids N Radix portals + polling hooks). */
+export function DeviceStepsSheet({
+  serial,
+  open,
+  onOpenChange
+}: DeviceStepsSheetProps) {
+  const t = useTranslations('devicesFarm.stepMonitor');
+  const activeSerial = open && serial ? serial : '';
+  const { data, isLoading } = useDeviceRunningWorkflows(
+    activeSerial,
+    open && !!serial
+  );
   const workflows = data?.workflows ?? [];
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button
-          size='sm'
-          variant={isBusy ? 'outline' : 'ghost'}
-          className={isBusy
-            ? 'h-7 gap-1.5 px-2.5 text-[11px] text-blue-600 border-blue-400/50 hover:bg-blue-50 dark:hover:bg-blue-950/30'
-            : 'h-7 gap-1 px-2 text-[11px] text-muted-foreground'
-          }
-        >
-          <Activity size={12} className={isBusy ? 'animate-pulse' : ''} />
-          {isBusy ? 'Đang chạy' : 'Steps'}
-        </Button>
-      </DialogTrigger>
-
-      <DialogContent className='max-w-md p-0 gap-0'>
-        <DialogHeader className='border-b px-4 py-3'>
-          <div className='flex items-center gap-2'>
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent
+        side='right'
+        className='flex w-full flex-col gap-0 p-0 sm:max-w-md'
+      >
+        <SheetHeader className='border-b px-4 py-3 text-left'>
+          <SheetTitle className='flex items-center gap-2 text-sm font-semibold'>
             <Activity size={14} className='text-primary' />
-            <DialogTitle className='text-sm font-semibold'>Theo dõi bước</DialogTitle>
-          </div>
-          <p className='mt-0.5 font-mono text-[10px] text-muted-foreground'>{serial}</p>
-        </DialogHeader>
-
-        <div className='max-h-[75vh] space-y-3 overflow-y-auto p-4'>
-          {isLoading && (
-            <div className='flex items-center justify-center py-8 text-xs text-muted-foreground'>
-              <Loader2 size={14} className='mr-2 animate-spin' /> Đang tải...
-            </div>
-          )}
-          {!isLoading && workflows.length === 0 && (
-            <p className='py-8 text-center text-xs text-muted-foreground'>
-              Không có workflow đang chạy.
+            {t('title')}
+          </SheetTitle>
+          {serial ? (
+            <p className='font-mono text-[10px] text-muted-foreground'>
+              {serial}
             </p>
+          ) : null}
+        </SheetHeader>
+
+        <div className='min-h-0 flex-1 space-y-3 overflow-y-auto p-4'>
+          {!serial ? null : isLoading ? (
+            <div className='flex items-center justify-center py-8 text-xs text-muted-foreground'>
+              <Loader2 size={14} className='mr-2 animate-spin' /> {t('loading')}
+            </div>
+          ) : workflows.length === 0 ? (
+            <p className='py-8 text-center text-xs text-muted-foreground'>
+              {t('noWorkflows')}
+            </p>
+          ) : (
+            workflows.map((wf, i) => (
+              <WorkflowSection
+                key={wf.workflow_id}
+                wf={wf}
+                defaultOpen={i === 0}
+              />
+            ))
           )}
-          {workflows.map((wf, i) => (
-            <WorkflowSection key={wf.workflow_id} wf={wf} defaultOpen={i === 0} />
-          ))}
         </div>
-      </DialogContent>
-    </Dialog>
+      </SheetContent>
+    </Sheet>
   );
 }

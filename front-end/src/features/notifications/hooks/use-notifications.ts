@@ -38,7 +38,8 @@ export function useNotificationChannels() {
 export function useMarkNotificationRead() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (notificationId: string) => notificationsApi.markRead(notificationId),
+    mutationFn: (notificationId: string) =>
+      notificationsApi.markRead(notificationId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: notificationKeys.list });
       qc.invalidateQueries({ queryKey: notificationKeys.unreadCount });
@@ -60,17 +61,25 @@ export function useMarkAllNotificationsRead() {
 export function useCreateNotificationChannel() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (data: NotificationChannelInput) => notificationsApi.createChannel(data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: notificationKeys.channels })
+    mutationFn: (data: NotificationChannelInput) =>
+      notificationsApi.createChannel(data),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: notificationKeys.channels })
   });
 }
 
 export function useUpdateNotificationChannel() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Partial<NotificationChannelInput> }) =>
-      notificationsApi.updateChannel(id, data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: notificationKeys.channels })
+    mutationFn: ({
+      id,
+      data
+    }: {
+      id: string;
+      data: Partial<NotificationChannelInput>;
+    }) => notificationsApi.updateChannel(id, data),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: notificationKeys.channels })
   });
 }
 
@@ -78,7 +87,8 @@ export function useDeleteNotificationChannel() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => notificationsApi.deleteChannel(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: notificationKeys.channels })
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: notificationKeys.channels })
   });
 }
 
@@ -88,9 +98,18 @@ export function useTestNotificationChannel() {
   });
 }
 
-export function mergeNotification(existing: NotificationItem[], incoming: NotificationItem) {
-  const next = [incoming, ...existing.filter((item) => item.id !== incoming.id)];
+export function mergeNotification(
+  existing: NotificationItem[],
+  incoming: NotificationItem
+) {
+  const next = [
+    incoming,
+    ...existing.filter((item) => item.id !== incoming.id)
+  ];
   return next
-    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    .sort(
+      (a, b) =>
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    )
     .slice(0, 20);
 }

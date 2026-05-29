@@ -1,7 +1,10 @@
 /**
  * Converts between our FlowStep[] format and the flowgram.ai FlowDocumentJSON format.
  */
-import type { FlowDocumentJSON, FlowNodeJSON } from '@flowgram.ai/fixed-layout-editor';
+import type {
+  FlowDocumentJSON,
+  FlowNodeJSON
+} from '@flowgram.ai/fixed-layout-editor';
 import type { FlowStep } from '@/features/campaigns/components/scenario-steps/types';
 
 let _counter = 0;
@@ -22,7 +25,11 @@ function stepToNode(step: FlowStep): FlowNodeJSON {
   const id = fgIdFromStep(step);
 
   // Condition (if_element / if_variable / tap_fb_comment_button — control with then/else)
-  if (step.type === 'if_element' || step.type === 'if_variable' || step.type === 'tap_fb_comment_button') {
+  if (
+    step.type === 'if_element' ||
+    step.type === 'if_variable' ||
+    step.type === 'tap_fb_comment_button'
+  ) {
     const thenNodes = stepsToNodes((step as any).then ?? []);
     const elseNodes = stepsToNodes((step as any).else ?? []);
     const isFbTap = step.type === 'tap_fb_comment_button';
@@ -34,16 +41,20 @@ function stepToNode(step: FlowStep): FlowNodeJSON {
         {
           id: `${id}_then`,
           type: 'block',
-          data: { title: isFbTap ? 'Khi bấm được nút Bình luận' : 'Nếu đúng (then)' },
-          blocks: thenNodes,
+          data: {
+            title: isFbTap ? 'Khi bấm được nút Bình luận' : 'Nếu đúng (then)'
+          },
+          blocks: thenNodes
         },
         {
           id: `${id}_else`,
           type: 'block',
-          data: { title: isFbTap ? 'Khi không thấy nút Bình luận' : 'Nếu sai (else)' },
-          blocks: elseNodes,
-        },
-      ],
+          data: {
+            title: isFbTap ? 'Khi không thấy nút Bình luận' : 'Nếu sai (else)'
+          },
+          blocks: elseNodes
+        }
+      ]
     };
   }
 
@@ -54,8 +65,8 @@ function stepToNode(step: FlowStep): FlowNodeJSON {
         id: `${id}_branch_${i}`,
         type: 'block',
         data: { title: `Nhánh ${i + 1} (${branch.weight ?? 1})` },
-        blocks: stepsToNodes(branch.steps ?? []),
-      }),
+        blocks: stepsToNodes(branch.steps ?? [])
+      })
     );
     return {
       id,
@@ -65,14 +76,28 @@ function stepToNode(step: FlowStep): FlowNodeJSON {
         branches.length >= 2
           ? branches
           : [
-              { id: `${id}_b0`, type: 'block', data: { title: 'Nhánh 1' }, blocks: [] },
-              { id: `${id}_b1`, type: 'block', data: { title: 'Nhánh 2' }, blocks: [] },
-            ],
+              {
+                id: `${id}_b0`,
+                type: 'block',
+                data: { title: 'Nhánh 1' },
+                blocks: []
+              },
+              {
+                id: `${id}_b1`,
+                type: 'block',
+                data: { title: 'Nhánh 2' },
+                blocks: []
+              }
+            ]
     };
   }
 
   // Loop (repeat / repeat_until / loop)
-  if (step.type === 'repeat' || step.type === 'repeat_until' || step.type === 'loop') {
+  if (
+    step.type === 'repeat' ||
+    step.type === 'repeat_until' ||
+    step.type === 'loop'
+  ) {
     const bodyNodes = stepsToNodes((step as any).steps ?? []);
     return {
       id,
@@ -83,9 +108,9 @@ function stepToNode(step: FlowStep): FlowNodeJSON {
           id: `${id}_body`,
           type: 'block',
           data: { title: 'Thân vòng lặp' },
-          blocks: bodyNodes,
-        },
-      ],
+          blocks: bodyNodes
+        }
+      ]
     };
   }
 
@@ -93,7 +118,7 @@ function stepToNode(step: FlowStep): FlowNodeJSON {
   return {
     id,
     type: step.type === 'run_scenario' ? 'sub_scenario' : 'action',
-    data: { step },
+    data: { step }
   };
 }
 
@@ -107,8 +132,8 @@ export function stepsToFlowDoc(steps: FlowStep[]): FlowDocumentJSON {
     nodes: [
       { id: 'start_0', type: 'start', data: { title: 'Bắt đầu' }, blocks: [] },
       ...stepsToNodes(steps),
-      { id: 'end_0', type: 'end', data: { title: 'Kết thúc' } },
-    ],
+      { id: 'end_0', type: 'end', data: { title: 'Kết thúc' } }
+    ]
   };
 }
 
@@ -119,35 +144,44 @@ function withFgId<S extends FlowStep>(nodeId: string, step: S): S {
 }
 
 function nodeToStep(node: FlowNodeJSON): FlowStep | null {
-  if (node.type === 'start' || node.type === 'end' || node.type === 'block') return null;
+  if (node.type === 'start' || node.type === 'end' || node.type === 'block')
+    return null;
 
   const step = node.data?.step as FlowStep | undefined;
   if (!step) return null;
 
   // Reconstruct nested steps from blocks
-  if (step.type === 'if_element' || step.type === 'if_variable' || step.type === 'tap_fb_comment_button') {
+  if (
+    step.type === 'if_element' ||
+    step.type === 'if_variable' ||
+    step.type === 'tap_fb_comment_button'
+  ) {
     const thenBlock = node.blocks?.[0];
     const elseBlock = node.blocks?.[1];
     return withFgId(node.id, {
       ...step,
       then: nodesToSteps(thenBlock?.blocks ?? []),
-      else: nodesToSteps(elseBlock?.blocks ?? []),
+      else: nodesToSteps(elseBlock?.blocks ?? [])
     } as FlowStep);
   }
 
   if (step.type === 'random_pick') {
     const branches = (node.blocks ?? []).map((block, i) => ({
       weight: (block.data as { weight?: number })?.weight ?? 1,
-      steps: nodesToSteps(block.blocks ?? []),
+      steps: nodesToSteps(block.blocks ?? [])
     }));
     return withFgId(node.id, { ...step, branches } as FlowStep);
   }
 
-  if (step.type === 'repeat' || step.type === 'repeat_until' || step.type === 'loop') {
+  if (
+    step.type === 'repeat' ||
+    step.type === 'repeat_until' ||
+    step.type === 'loop'
+  ) {
     const bodyBlock = node.blocks?.[0];
     return withFgId(node.id, {
       ...step,
-      steps: nodesToSteps(bodyBlock?.blocks ?? []),
+      steps: nodesToSteps(bodyBlock?.blocks ?? [])
     } as FlowStep);
   }
 
@@ -163,6 +197,8 @@ function nodesToSteps(nodes: FlowNodeJSON[]): FlowStep[] {
 
 export function flowDocToSteps(doc: FlowDocumentJSON): FlowStep[] {
   // Top-level nodes, excluding start/end
-  const contentNodes = doc.nodes.filter((n) => n.type !== 'start' && n.type !== 'end');
+  const contentNodes = doc.nodes.filter(
+    (n) => n.type !== 'start' && n.type !== 'end'
+  );
   return nodesToSteps(contentNodes);
 }

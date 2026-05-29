@@ -2461,10 +2461,24 @@ class DeviceClient:
 
             relay = get_relay_manager()
 
-            # Resolve actual serial first: farm constructs "ip:5555" but mDNS devices
-            # use a random port (e.g. "ip:46311") chosen by the OS — not 5555.
-            # resolve_serial() finds the device by IP even if port differs.
-            actual_serial = relay.resolve_serial(serial) if relay else serial
+            # Prefer stable relay ADB serial over stale DB/docker WS client IPs
+            # (e.g. 172.19.0.1 gateway when server runs in Docker).
+            lookup_hints: list[str] = []
+            for hint in (self._adb_serial, self.serial, device_ip, serial):
+                h = str(hint or "").strip()
+                if h and h not in lookup_hints:
+                    lookup_hints.append(h)
+
+            actual_serial = serial
+            if relay:
+                for hint in lookup_hints:
+                    candidate = relay.resolve_serial(hint)
+                    if relay.relay_for_serial(candidate):
+                        actual_serial = candidate
+                        break
+                else:
+                    actual_serial = relay.resolve_serial(serial)
+
             # If device still not known to any relay agent, wait up to 4 s for
             # agent-boot's next heartbeat.  Do NOT broadcast `adb connect ip:5555` —
             # mDNS devices are already connected at an OS-assigned port; connecting to
@@ -2472,7 +2486,11 @@ class DeviceClient:
             if relay and not relay.relay_for_serial(actual_serial):
                 for _ in range(16):         # poll 16 × 0.25 s = up to 4 s
                     _time.sleep(0.25)
-                    actual_serial = relay.resolve_serial(serial)
+                    for hint in lookup_hints:
+                        candidate = relay.resolve_serial(hint)
+                        if relay.relay_for_serial(candidate):
+                            actual_serial = candidate
+                            break
                     if relay.relay_for_serial(actual_serial):
                         break
 
@@ -2598,11 +2616,21 @@ class DeviceClient:
                         self.attach_scrcpy_stream, actual_serial, 5555, _enable_control
                     )
 
-                _relay.register_pending_scrcpy(device_ip, _on_relay_serial)
+                pending_keys: list[str] = []
+                for hint in (self._adb_serial, self.serial, device_ip):
+                    h = str(hint or "").strip()
+                    if not h:
+                        continue
+                    pending_keys.append(h)
+                    if ":" in h:
+                        pending_keys.append(h.rsplit(":", 1)[0])
+                for key in dict.fromkeys(pending_keys):
+                    _relay.register_pending_scrcpy(key, _on_relay_serial)
                 self._scrcpy_pending_registered_ip = device_ip
                 self._log(
-                    f"[scrcpy] relay agent not yet connected for {device_ip!r} — "
-                    f"registered pending callback (will auto-start when agent-boot connects). "
+                    f"[scrcpy] relay agent not yet connected for {device_ip!r} "
+                    f"(pending keys={list(dict.fromkeys(pending_keys))}) — "
+                    f"will auto-start when agent-boot reports the device. "
                     f"Connected relay agents: {_relay.registered_relays()}",
                     level=logging.WARNING,
                 )

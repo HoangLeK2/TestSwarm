@@ -11,6 +11,7 @@ from db.models.scenario_template import ScenarioTemplate
 async def create_template(
     db: AsyncSession,
     name: str,
+    display_name: str = "",
     description: str = "",
     category: str = "general",
     steps: list | None = None,
@@ -23,6 +24,7 @@ async def create_template(
 ) -> ScenarioTemplate:
     tmpl = ScenarioTemplate(
         name=name,
+        display_name=display_name or "",
         description=description,
         category=category,
         steps=steps or [],
@@ -107,6 +109,7 @@ async def duplicate_template(
     return await create_template(
         db,
         name=new_name,
+        display_name=src.display_name or "",
         description=src.description,
         category=src.category,
         steps=list(src.steps) if src.steps else [],

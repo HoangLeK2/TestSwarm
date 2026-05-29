@@ -6,8 +6,9 @@ import axios, { type AxiosRequestConfig } from 'axios';
 import { tokenStorage } from './token-storage';
 
 /** Origin of the Device Farm HTTP API (no `/api` suffix). */
-export const deviceFarmBackendBase =
-  (process.env.NEXT_PUBLIC_PRODUCT_API_URL || 'http://localhost:8081').replace(/\/+$/, '');
+export const deviceFarmBackendBase = (
+  process.env.NEXT_PUBLIC_PRODUCT_API_URL || 'http://localhost:8081'
+).replace(/\/+$/, '');
 const backendBase = deviceFarmBackendBase;
 const API_BASE_URL = `${backendBase}/api`;
 
@@ -33,7 +34,10 @@ function getDeviceBackendBase(): string {
   const scheme = api.protocol;
   const port = api.port || (api.protocol === 'https:' ? '443' : '80');
   const portPart =
-    (scheme === 'http:' && port === '80') || (scheme === 'https:' && port === '443') ? '' : `:${port}`;
+    (scheme === 'http:' && port === '80') ||
+    (scheme === 'https:' && port === '443')
+      ? ''
+      : `:${port}`;
 
   // Reuse the already-configured farm WS URL so operators don't need a second
   // env var. The agent WS lives on the same host:port, just a different path.
@@ -41,7 +45,9 @@ function getDeviceBackendBase(): string {
   if (farmWsRaw) {
     try {
       const farmUrl = new URL(
-        farmWsRaw.replace(/^ws:\/\//i, 'http://').replace(/^wss:\/\//i, 'https://'),
+        farmWsRaw
+          .replace(/^ws:\/\//i, 'http://')
+          .replace(/^wss:\/\//i, 'https://')
       );
       const h = farmUrl.hostname;
       if (h && h !== 'localhost' && h !== '127.0.0.1') {
@@ -77,7 +83,7 @@ export function getDeviceAgentWsUrl(query = ''): string {
   const base = getDeviceBackendBase()
     .replace(/^http:\/\//i, 'ws://')
     .replace(/^https:\/\//i, 'wss://');
-  const suffix = query.startsWith('?') ? query : (query ? `?${query}` : '');
+  const suffix = query.startsWith('?') ? query : query ? `?${query}` : '';
   return `${base}/device-agent${suffix}`;
 }
 
@@ -107,7 +113,10 @@ farmApi.interceptors.request.use((config) => {
 
 // --- Refresh logic ---
 let _isRefreshing = false;
-let _waitQueue: Array<{ resolve: (v: string) => void; reject: (e: unknown) => void }> = [];
+let _waitQueue: Array<{
+  resolve: (v: string) => void;
+  reject: (e: unknown) => void;
+}> = [];
 
 function _processQueue(error: unknown, token: string | null) {
   _waitQueue.forEach((p) => (token ? p.resolve(token) : p.reject(error)));
@@ -120,8 +129,12 @@ farmApi.interceptors.response.use(
     const original = err.config as AxiosRequestConfig & { _retry?: boolean };
 
     if (err.response?.status === 401 && !original._retry) {
-      const pathname = typeof window !== 'undefined' ? window.location.pathname : '';
-      const isAuthPage = /\/auth\/(sign-in|sign-up|forgot-password|reset-password|verify-email)/i.test(pathname);
+      const pathname =
+        typeof window !== 'undefined' ? window.location.pathname : '';
+      const isAuthPage =
+        /\/auth\/(sign-in|sign-up|forgot-password|reset-password|verify-email)/i.test(
+          pathname
+        );
       if (isAuthPage) {
         return Promise.reject(err);
       }
@@ -130,7 +143,10 @@ farmApi.interceptors.response.use(
 
       if (!refreshToken) {
         tokenStorage.clearTokens();
-        const locale = pathname.split('/')[1] && /^[a-z]{2}$/i.test(pathname.split('/')[1]) ? pathname.split('/')[1] : 'vi';
+        const locale =
+          pathname.split('/')[1] && /^[a-z]{2}$/i.test(pathname.split('/')[1])
+            ? pathname.split('/')[1]
+            : 'vi';
         window.location.href = `/${locale}/auth/sign-in`;
         return Promise.reject(err);
       }
@@ -139,7 +155,10 @@ farmApi.interceptors.response.use(
         return new Promise((resolve, reject) => {
           _waitQueue.push({ resolve, reject });
         }).then((token) => {
-          original.headers = { ...original.headers, Authorization: `Bearer ${token}` };
+          original.headers = {
+            ...original.headers,
+            Authorization: `Bearer ${token}`
+          };
           return farmApi(original);
         });
       }
@@ -148,23 +167,30 @@ farmApi.interceptors.response.use(
       _isRefreshing = true;
 
       try {
-        const { data } = await axios.post<{ access_token: string; refresh_token: string }>(
-          `${API_BASE_URL}/auth/refresh`,
-          { refresh_token: refreshToken }
-        );
+        const { data } = await axios.post<{
+          access_token: string;
+          refresh_token: string;
+        }>(`${API_BASE_URL}/auth/refresh`, { refresh_token: refreshToken });
         tokenStorage.setTokens({
           idToken: data.access_token,
           refreshToken: data.refresh_token,
           expiresAt: Date.now() + 60 * 60 * 1000 // 1h
         });
         _processQueue(null, data.access_token);
-        original.headers = { ...original.headers, Authorization: `Bearer ${data.access_token}` };
+        original.headers = {
+          ...original.headers,
+          Authorization: `Bearer ${data.access_token}`
+        };
         return farmApi(original);
       } catch (refreshErr) {
         _processQueue(refreshErr, null);
         tokenStorage.clearTokens();
-        const pathname = typeof window !== 'undefined' ? window.location.pathname : '';
-        const locale = pathname.split('/')[1] && /^[a-z]{2}$/i.test(pathname.split('/')[1]) ? pathname.split('/')[1] : 'vi';
+        const pathname =
+          typeof window !== 'undefined' ? window.location.pathname : '';
+        const locale =
+          pathname.split('/')[1] && /^[a-z]{2}$/i.test(pathname.split('/')[1])
+            ? pathname.split('/')[1]
+            : 'vi';
         window.location.href = `/${locale}/auth/sign-in`;
         return Promise.reject(refreshErr);
       } finally {

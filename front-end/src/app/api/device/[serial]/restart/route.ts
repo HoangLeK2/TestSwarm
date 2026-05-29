@@ -8,6 +8,8 @@ export async function POST(
   ctx: { params: Promise<{ serial: string }> }
 ) {
   const { serial } = await ctx.params;
-  return proxyDeviceFarm(req, `/api/device/${encodeURIComponent(serial)}/restart`);
+  return proxyDeviceFarm(
+    req,
+    `/api/device/${encodeURIComponent(serial)}/restart`
+  );
 }
-

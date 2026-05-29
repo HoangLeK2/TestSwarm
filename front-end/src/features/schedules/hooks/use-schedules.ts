@@ -10,7 +10,8 @@ import {
 const KEYS = {
   list: ['schedules'] as const,
   runs: (scheduleId: string) => ['schedule-runs', scheduleId] as const,
-  run: (scheduleId: string, runId: string) => ['schedule-run', scheduleId, runId] as const
+  run: (scheduleId: string, runId: string) =>
+    ['schedule-run', scheduleId, runId] as const
 };
 
 export function useSchedules() {
@@ -21,7 +22,10 @@ export function useSchedules() {
   });
 }
 
-export function useScheduleRuns(scheduleId: string | null | undefined, enabled = true) {
+export function useScheduleRuns(
+  scheduleId: string | null | undefined,
+  enabled = true
+) {
   return useQuery({
     queryKey: scheduleId ? KEYS.runs(scheduleId) : KEYS.runs('__none__'),
     queryFn: () => schedulesApi.listRuns(scheduleId!),
@@ -36,9 +40,15 @@ export function useScheduleRuns(scheduleId: string | null | undefined, enabled =
   });
 }
 
-export function useScheduleRun(scheduleId: string | null | undefined, runId: string | null | undefined) {
+export function useScheduleRun(
+  scheduleId: string | null | undefined,
+  runId: string | null | undefined
+) {
   return useQuery({
-    queryKey: scheduleId && runId ? KEYS.run(scheduleId, runId) : KEYS.run('__none__', '__none__'),
+    queryKey:
+      scheduleId && runId
+        ? KEYS.run(scheduleId, runId)
+        : KEYS.run('__none__', '__none__'),
     queryFn: () => schedulesApi.getRun(scheduleId!, runId!),
     enabled: !!scheduleId && !!runId
   });
@@ -57,8 +67,13 @@ export function useCreateSchedule() {
 export function useUpdateSchedule() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ scheduleId, data }: { scheduleId: string; data: SchedulePatch }) =>
-      schedulesApi.update(scheduleId, data),
+    mutationFn: ({
+      scheduleId,
+      data
+    }: {
+      scheduleId: string;
+      data: SchedulePatch;
+    }) => schedulesApi.update(scheduleId, data),
     onSuccess: (_, { scheduleId }) => {
       qc.invalidateQueries({ queryKey: KEYS.list });
       qc.invalidateQueries({ queryKey: KEYS.runs(scheduleId) });
@@ -79,7 +94,13 @@ export function useDeleteSchedule() {
 export function useToggleSchedule() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ scheduleId, enabled }: { scheduleId: string; enabled: boolean }) => {
+    mutationFn: ({
+      scheduleId,
+      enabled
+    }: {
+      scheduleId: string;
+      enabled: boolean;
+    }) => {
       // Backend toggles based on current state, so we just call toggle and rely on returned is_enabled.
       return schedulesApi.toggle(scheduleId);
     },
@@ -102,4 +123,3 @@ export function useRunNowSchedule() {
 }
 
 export type { ScheduleOut, ScheduleRunOut };
-

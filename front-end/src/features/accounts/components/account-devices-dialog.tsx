@@ -79,7 +79,9 @@ export function AccountDevicesDialog({ account }: { account: AccountOut }) {
               </p>
               <ul className='max-h-32 space-y-1 overflow-y-auto'>
                 {links.map((link) => {
-                  const device = allDevices.find((d) => d.id === link.device_id);
+                  const device = allDevices.find(
+                    (d) => d.id === link.device_id
+                  );
                   return (
                     <li
                       key={link.id}
@@ -120,7 +122,9 @@ export function AccountDevicesDialog({ account }: { account: AccountOut }) {
             {loadingLinks || loadingAll ? (
               <p className='text-sm text-muted-foreground'>{t('loading')}</p>
             ) : available.length === 0 ? (
-              <p className='text-sm text-muted-foreground'>{t('noAvailable')}</p>
+              <p className='text-sm text-muted-foreground'>
+                {t('noAvailable')}
+              </p>
             ) : (
               <ul className='max-h-48 space-y-0.5 overflow-y-auto rounded-lg border border-border/60 p-2'>
                 {available.map((d) => (

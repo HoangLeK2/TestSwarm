@@ -252,9 +252,47 @@ def _cluster_into_comments(
         clusters.append(current)
     return clusters
 
+
+def _coalesce_comment_clusters(
+    clusters: List[List[Dict[str, Any]]],
+) -> List[List[Dict[str, Any]]]:
+    """Merge split name-only + body-only clusters (common on FB comment sheet dumps)."""
+    from .comment_pipeline import _extract_comment
+
+    if len(clusters) < 2:
+        return clusters
+
+    def _row(cluster: List[Dict[str, Any]]) -> Dict[str, Any] | None:
+        if not cluster:
+            return None
+        min_x = min((n["bounds"][0] for n in cluster if n.get("bounds")), default=150)
+        return _extract_comment(cluster, None, cluster_min_x=min_x)
+
+    merged: List[List[Dict[str, Any]]] = []
+    i = 0
+    while i < len(clusters):
+        cur = clusters[i]
+        if i + 1 < len(clusters):
+            row = _row(cur)
+            nxt_row = _row(clusters[i + 1])
+            if row and nxt_row:
+                author = (row.get("author") or "").strip()
+                text = (row.get("text") or "").strip()
+                n_author = (nxt_row.get("author") or "").strip()
+                n_text = (nxt_row.get("text") or "").strip()
+                if author and not text and n_text:
+                    merged.append(cur + clusters[i + 1])
+                    i += 2
+                    continue
+        merged.append(cur)
+        i += 1
+    return merged
+
+
 __all__ = [
     "_cluster_into_posts",
     "_cluster_into_comments",
+    "_coalesce_comment_clusters",
     "_should_merge_post_nodes_despite_vertical_gap",
     "_should_merge_split_comment_nodes",
 ]

@@ -6,16 +6,26 @@
  */
 
 import { useEffect, useState } from 'react';
-import { BarChart3, Database, FileText, MessageSquare, RefreshCw } from 'lucide-react';
+import {
+  BarChart3,
+  Database,
+  FileText,
+  MessageSquare,
+  RefreshCw
+} from 'lucide-react';
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
+  DialogTrigger
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger
+} from '@/components/ui/tooltip';
 import { ContentViewer } from '@/features/content/components/content-viewer';
 import { contentApi } from '@/features/content/services/api';
 import type { CampaignOut } from '../types';
@@ -37,15 +47,23 @@ function useQuickStats(campaignId: string, enabled: boolean) {
     setLoading(true);
 
     Promise.all([
-      contentApi.list({ campaign_id: campaignId, content_type: 'group_post', limit: 1 }),
-      contentApi.list({ campaign_id: campaignId, content_type: 'group_comment', limit: 1 }),
-      contentApi.list({ campaign_id: campaignId, limit: 1 }),
+      contentApi.list({
+        campaign_id: campaignId,
+        content_type: 'group_post',
+        limit: 1
+      }),
+      contentApi.list({
+        campaign_id: campaignId,
+        content_type: 'group_comment',
+        limit: 1
+      }),
+      contentApi.list({ campaign_id: campaignId, limit: 1 })
     ])
       .then(([posts, comments, all]) => {
         setStats({
           posts: posts.total,
           comments: comments.total,
-          total: all.total,
+          total: all.total
         });
       })
       .catch(() => setStats(null))
@@ -55,7 +73,12 @@ function useQuickStats(campaignId: string, enabled: boolean) {
   return { stats, loading };
 }
 
-function StatCard({ icon, label, value, loading }: {
+function StatCard({
+  icon,
+  label,
+  value,
+  loading
+}: {
   icon: React.ReactNode;
   label: string;
   value: number | null;
@@ -95,7 +118,11 @@ export function CampaignResultsDialog({ campaign, children }: Props) {
         <TooltipTrigger asChild>
           <DialogTrigger asChild>
             {children ?? (
-              <Button size='sm' variant='ghost' className='h-7 gap-1.5 px-2 text-xs'>
+              <Button
+                size='sm'
+                variant='ghost'
+                className='h-7 gap-1.5 px-2 text-xs'
+              >
                 <BarChart3 size={13} />
               </Button>
             )}
@@ -114,7 +141,9 @@ export function CampaignResultsDialog({ campaign, children }: Props) {
               Kết quả — {campaign.name}
             </DialogTitle>
           </div>
-          <p className='mt-0.5 font-mono text-[10px] text-muted-foreground'>{campaign.id}</p>
+          <p className='mt-0.5 font-mono text-[10px] text-muted-foreground'>
+            {campaign.id}
+          </p>
         </DialogHeader>
 
         <div className='max-h-[82vh] overflow-y-auto'>

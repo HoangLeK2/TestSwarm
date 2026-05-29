@@ -36,6 +36,29 @@ from relay.device_watcher import AdbDeviceWatcher
 from relay.session_manager import ScrcpySessionManager
 from relay.supervisor     import RelaySupervisor
 from relay.u2_session_pool import U2SessionPool
+from relay.runtime         import (
+    SEND_CONTROL_MAX,
+    SEND_PER_DEVICE_MAX,
+    FairSendQueue,
+    LoopWatchdog,
+    RuntimeStats,
+    TaskRegistry,
+    adb_executor,
+    bounded_put,
+    bounded_put_nowait,
+    cpu_executor,
+    dumps,
+    dumps_maybe_offload,
+    extra_data_sem,
+    generic_executor,
+    init_executors,
+    init_semaphores,
+    register_stats_source,
+    shutdown_executors,
+    u2_batch_sem,
+    u2_executor_pool,
+    u2_flow_sem,
+)
 
 logger = logging.getLogger("relay.agent")
 
@@ -147,9 +170,10 @@ class RelayAgent:
         self._scrcpy_mgr = ScrcpySessionManager(on_session_stopped=self._on_session_stopped)
         self._supervisor = RelaySupervisor(self)
         self._scrcpy_desired: dict[str, dict[str, Any]] = {}
-        self._active_send_queue: Optional[asyncio.Queue] = None
+        self._active_send_queue: Optional[FairSendQueue] = None
         self._active_loop: Optional[asyncio.AbstractEventLoop] = None
-        self._scrcpy_auto_resume_enabled = os.getenv("SCRCPY_AUTO_RESUME", "true").lower() in ("1", "true", "yes", "on")
+        # Viewer-gated default: do not auto-start scrcpy for every online device.
+        self._scrcpy_auto_resume_enabled = os.getenv("SCRCPY_AUTO_RESUME", "false").lower() in ("1", "true", "yes", "on")
 
         self._u2_batch_enabled = os.getenv("U2_BATCH_ENABLED", "true").lower() in ("1", "true")
         self._u2_pool: Optional[U2SessionPool] = None
@@ -165,6 +189,23 @@ class RelayAgent:
         self._scrcpy_logical_to_adb: dict[str, str] = {}
         # USB serial → LAN IP for atx-agent HTTP (u2 proxy); filled from TCP suppress map or adb probe.
         self._atx_lan_host_cache: dict[str, str] = {}
+
+        # Runtime: bounded executors + task registry + watchdog.
+        # `_stream_tasks` is replaced per transport connect; this initial
+        # registry exists so `_handle_*` paths can spawn tasks before the
+        # first stream is established (e.g. during the brief startup window).
+        self._stream_tasks: TaskRegistry = TaskRegistry()
+        self._loop_watchdog: Optional[LoopWatchdog] = None
+        self._runtime_stats: Optional[RuntimeStats] = None
+
+        # Heartbeat coalescing — rebuilding the caps_list dict on every
+        # device event burns CPU when 20-40 phones flap together (cradle
+        # power blip, USB controller reset). Cache the rendered JSON keyed
+        # on (serials_signature, caps_version). Bumping `caps_version` on
+        # capability change invalidates the cache.
+        self._hb_cache_key: Optional[tuple] = None
+        self._hb_cache_payload: Optional[str] = None
+        self._hb_caps_version: int = 0
 
     def _ensure_default_scrcpy_desired(self) -> None:
         """
@@ -226,6 +267,52 @@ class RelayAgent:
 
     async def run(self) -> None:
         zc = start_mdns_discovery()
+
+        # Bounded executor pools + global semaphores. Must be created before
+        # any coroutine offloads blocking work (scrcpy_mgr.start does).
+        init_executors()
+        init_semaphores()
+
+        # Loop watchdog + runtime stats — long-running observability so
+        # multi-day stability regressions are visible in the log instead of
+        # only appearing as "agent died after 2h" tickets.
+        self._loop_watchdog = LoopWatchdog()
+        self._loop_watchdog.start()
+        self._runtime_stats = RuntimeStats(
+            watchdog=self._loop_watchdog,
+            task_registry=self._stream_tasks,
+        )
+        self._runtime_stats.start()
+        register_stats_source(
+            "scrcpy",
+            lambda: {"sessions": self._scrcpy_mgr.count},
+        )
+        register_stats_source(
+            "devices",
+            lambda: {"online": len(self._registry.online_serials)},
+        )
+        register_stats_source(
+            "a11y",
+            lambda: {"serials": len(self._a11y_state)},
+        )
+   
+        def _send_queue_stats() -> dict[str, int]:
+            q = self._active_send_queue
+            if q is None:
+                return {}
+            try:
+                snap = q.snapshot()
+            except Exception:
+                return {"qsize": q.qsize()}
+            ctrl = snap.pop("_control", 0)
+            return {
+                "qsize": sum(snap.values()) + ctrl,
+                "lanes": len(snap),
+                "ctrl": ctrl,
+                "max_lane": max(snap.values(), default=0),
+            }
+        register_stats_source("send_q", _send_queue_stats)
+
         await self._scrcpy_mgr.start()
         await self._supervisor.start()
 
@@ -239,7 +326,35 @@ class RelayAgent:
                 loop=loop,
                 http_dump=self._dump_hierarchy_http_sync,
             )
+            register_stats_source(
+                "u2pool",
+                lambda: {"sessions": len(self._u2_pool._sessions)} if self._u2_pool else {},
+            )
             logger.info("u2 batch/flow enabled (U2_BATCH_ENABLED=true)")
+
+        # HTTP keep-alive pool stats — visible warm-pool size matters when
+        # debugging "u2 HTTP suddenly slow" reports.
+        try:
+            from relay.http_pool import default_pool as _http_default_pool
+            register_stats_source(
+                "http",
+                lambda: {"hosts": len(_http_default_pool()._hosts)},
+            )
+        except Exception:
+            pass
+
+        # Multi-day GC tuning: freeze long-lived objects (modules, the agent
+        # instance, the scrcpy/u2 managers) so future GC runs only scan the
+        # smaller request-scoped heap. Without this, every gen-2 sweep walks
+        # ~all reachable objects — cost grows with uptime.
+        try:
+            import gc
+            # One full collection to compact, then freeze the survivors.
+            gc.collect()
+            gc.freeze()
+            logger.info("runtime: gc.freeze() applied (frozen=%d)", gc.get_freeze_count())
+        except Exception:
+            pass
 
         attempt    = 0
         base_delay = 0.5
@@ -273,6 +388,12 @@ class RelayAgent:
             if self._u2_pool:
                 await self._u2_pool.stop()
             await self._scrcpy_mgr.stop()
+            await self._stream_tasks.cancel_all(timeout=3.0)
+            if self._loop_watchdog:
+                await self._loop_watchdog.stop()
+            if self._runtime_stats:
+                await self._runtime_stats.stop()
+            shutdown_executors(wait=False)
             if zc:
                 zc.close()
 
@@ -286,10 +407,15 @@ class RelayAgent:
             headers["x-relay-enrollment-token"] = self._enrollment_token
 
         # send_queue: str for JSON text frames, bytes for binary frames.
-        # Keep this shallow for interactive streaming. If transport stalls, old
-        # P-frames are worse than useless: they make the viewer decode history
-        # in bursts. scrcpy_relay.py drops deltas on overflow and requests IDR.
-        send_queue: asyncio.Queue = asyncio.Queue(maxsize=RELAY_SEND_QUEUE_MAX)
+        # FairSendQueue replaces a single shallow asyncio.Queue: one lane per
+        # device + a high-priority control lane. A phone whose scrcpy stream
+        # is stuck on IDR retries no longer blocks every other device's u2
+        # results, and heartbeats are never starved by a backlogged frame
+        # queue. scrcpy_relay.py drops deltas on overflow and requests IDR.
+        send_queue = FairSendQueue(
+            per_device_max=SEND_PER_DEVICE_MAX,
+            control_max=SEND_CONTROL_MAX,
+        )
         loop = asyncio.get_running_loop()
         self._active_send_queue = send_queue
         self._active_loop = loop
@@ -305,7 +431,7 @@ class RelayAgent:
 
             # ── Register ──────────────────────────────────────────────────────
             serials = self._registry.online_serials or _list_serials()
-            await ws.send(json.dumps({
+            await ws.send(dumps({
                 "type":     "register",
                 "relay_id": self._relay_id,
                 "serials":  serials,
@@ -371,7 +497,13 @@ class RelayAgent:
         from relay.grpc_client import GrpcRelayClient
         from relay.control_client import AgentControlClient
 
-        send_queue: asyncio.Queue = asyncio.Queue(maxsize=RELAY_SEND_QUEUE_MAX)
+        # FairSendQueue: same per-device fairness story as the WS path. The
+        # gRPC frame generator consumes via `await send_queue.get()`, which
+        # transparently interleaves frames + JSON results from the right lane.
+        send_queue = FairSendQueue(
+            per_device_max=SEND_PER_DEVICE_MAX,
+            control_max=SEND_CONTROL_MAX,
+        )
         loop = asyncio.get_running_loop()
         self._active_send_queue = send_queue
         self._active_loop = loop
@@ -411,7 +543,7 @@ class RelayAgent:
             # ── Register on Channel 1 (video stream) for backward compat ──────
             # Channel 2 also sends register; server uses whichever arrives first.
             serials = self._registry.online_serials or _list_serials()
-            register_msg = json.dumps({
+            register_msg = dumps({
                 "type":     "register",
                 "relay_id": self._relay_id,
                 "serials":  serials,
@@ -549,18 +681,22 @@ class RelayAgent:
             asyncio.create_task(
                 self._scrcpy_mgr.stop_all_for_serial(serial, reason="device_offline")
             )
+            self._cleanup_serial_state(serial)
 
         if ctx.state == DeviceState.ONLINE:
             loop = asyncio.get_running_loop()
             if not ctx.capabilities:
-                caps = await loop.run_in_executor(None, _probe_capabilities, serial)
+                caps = await loop.run_in_executor(adb_executor(), _probe_capabilities, serial)
                 self._registry.set_capabilities(serial, caps)
+                # Invalidate the cached heartbeat payload — next emit will
+                # re-render to include the freshly probed capabilities.
+                self._hb_caps_version += 1
                 wlan_ip = str((caps or {}).get("wlan_ip") or "").strip()
                 if wlan_ip and ":" not in serial:
                     self._atx_lan_host_cache[serial] = wlan_ip
                 logger.info("capabilities %s: %s", serial, caps)
             pairs = await loop.run_in_executor(
-                None,
+                adb_executor(),
                 reconcile_usb_preferred_for_duplicate_devices,
                 self._registry,
             )
@@ -601,7 +737,7 @@ class RelayAgent:
                     self._tcp_suppressed_for_usb.pop(serial, None)
             if not skip:
                 loop = asyncio.get_running_loop()
-                output, rc = await loop.run_in_executor(None, _adb_connect, serial)
+                output, rc = await loop.run_in_executor(adb_executor(), _adb_connect, serial)
                 if rc == 0:
                     logger.info("auto-reconnected %s — %s", serial, output)
                 else:
@@ -617,6 +753,11 @@ class RelayAgent:
 
     async def _send_heartbeat(self, send_queue: asyncio.Queue) -> None:
         serials = self._registry.online_serials
+        key = (tuple(serials), self._hb_caps_version)
+        if key == self._hb_cache_key and self._hb_cache_payload is not None:
+            bounded_put_nowait(send_queue, self._hb_cache_payload, label="heartbeat")
+            return
+
         caps_list = []
         for s in serials:
             ctx = self._registry.get(s)
@@ -642,14 +783,16 @@ class RelayAgent:
                     "tags":            list(c.get("tags", [])),
                 })
 
-        try:
-            send_queue.put_nowait(json.dumps({
-                "type":         "heartbeat",
-                "serials":      serials,
-                "capabilities": caps_list,
-            }))
-        except asyncio.QueueFull:
-            pass
+        payload = dumps({
+            "type":         "heartbeat",
+            "serials":      serials,
+            "capabilities": caps_list,
+        })
+        self._hb_cache_key = key
+        self._hb_cache_payload = payload
+        # Heartbeat is control-plane: untagged so it never sits behind a
+        # device's video backlog (FairSendQueue gives control absolute prio).
+        bounded_put_nowait(send_queue, payload, label="heartbeat")
 
     # ── Server message handling ───────────────────────────────────────────────
 
@@ -662,19 +805,17 @@ class RelayAgent:
             logger.info("registered: %s", msg.get("message"))
 
         elif mtype == "command":
+            cmd_serial = str(msg.get("serial", "") or "")
             result = await loop.run_in_executor(
-                None,
+                adb_executor(),
                 self._execute_command,
                 msg.get("msg_id", ""),
-                msg.get("serial", ""),
+                cmd_serial,
                 msg.get("cmd", ""),
                 int(msg.get("timeout", 30)),
                 int(msg.get("cmd_type", CMD_SHELL)),
             )
-            try:
-                send_queue.put_nowait(result)
-            except asyncio.QueueFull:
-                pass
+            bounded_put_nowait(send_queue, result, serial=cmd_serial, label="cmd_result")
 
         elif mtype == "scrcpy_start":
             req = str(msg.get("serial", "") or "")
@@ -726,16 +867,28 @@ class RelayAgent:
                 await self._scrcpy_mgr.stop_session(req, reason="manual_stop")
 
         elif mtype == "u2_request":
-            asyncio.create_task(self._handle_u2_request(msg, send_queue))
+            self._stream_tasks.add(
+                self._handle_u2_request(msg, send_queue),
+                name="u2-request",
+            )
 
         elif mtype == "u2_batch":
-            asyncio.create_task(self._handle_u2_batch(msg, send_queue))
+            self._stream_tasks.add(
+                self._guarded(u2_batch_sem(), self._handle_u2_batch(msg, send_queue)),
+                name="u2-batch",
+            )
 
         elif mtype == "u2_flow":
-            asyncio.create_task(self._handle_u2_flow(msg, send_queue))
+            self._stream_tasks.add(
+                self._guarded(u2_flow_sem(), self._handle_u2_flow(msg, send_queue)),
+                name="u2-flow",
+            )
 
         elif mtype == "extra_data":
-            asyncio.create_task(self._handle_extra_data(msg, send_queue))
+            self._stream_tasks.add(
+                self._guarded(extra_data_sem(), self._handle_extra_data(msg, send_queue)),
+                name="extra-data",
+            )
 
         elif mtype == "a11y_action":
             await self._handle_a11y_action(msg, send_queue, loop)
@@ -765,7 +918,7 @@ class RelayAgent:
         supported_actions = {"tap", "swipe", "drag", "long_tap", "double_tap", "key", "type", "dump_hierarchy"}
         if action not in supported_actions:
             if mode == "query":
-                await send_queue.put(json.dumps({
+                await bounded_put(send_queue, dumps({
                     "type": "a11y_result",
                     "id": req_id,
                     "serial": serial,
@@ -773,9 +926,9 @@ class RelayAgent:
                     "ok": False,
                     "error": f"unsupported_action:{action}",
                     "data": {},
-                }))
+                }), serial=serial, label="a11y_result")
             else:
-                await send_queue.put(json.dumps({
+                await bounded_put(send_queue, dumps({
                     "type": "a11y_ack",
                     "id": req_id,
                     "serial": serial,
@@ -783,7 +936,7 @@ class RelayAgent:
                     "accepted": False,
                     "queue_pos": -1,
                     "error": f"unsupported_action:{action}",
-                }))
+                }), serial=serial, label="a11y_ack")
             return
 
         def _new_state(active_session_id: str) -> dict[str, Any]:
@@ -799,7 +952,7 @@ class RelayAgent:
 
         async def _reject(error: str, queue_pos: int = -1) -> None:
             if mode == "query":
-                await send_queue.put(json.dumps({
+                await bounded_put(send_queue, dumps({
                     "type": "a11y_result",
                     "id": req_id,
                     "serial": serial,
@@ -807,9 +960,9 @@ class RelayAgent:
                     "ok": False,
                     "error": error,
                     "data": {},
-                }))
+                }), serial=serial, label="a11y_result")
                 return
-            await send_queue.put(json.dumps({
+            await bounded_put(send_queue, dumps({
                 "type": "a11y_ack",
                 "id": req_id,
                 "serial": serial,
@@ -817,7 +970,7 @@ class RelayAgent:
                 "accepted": False,
                 "queue_pos": queue_pos,
                 "error": error,
-            }))
+            }), serial=serial, label="a11y_ack")
 
         state = self._a11y_state.get(serial)
         if state is None:
@@ -878,14 +1031,14 @@ class RelayAgent:
 
         # Query mode returns only a11y_result to avoid ack/result race on same id.
         if mode != "query":
-            await send_queue.put(json.dumps({
+            await bounded_put(send_queue, dumps({
                 "type": "a11y_ack",
                 "id": req_id,
                 "serial": serial,
                 "seq": seq,
                 "accepted": True,
                 "queue_pos": q.qsize() - 1,
-            }))
+            }), serial=serial, label="a11y_ack")
 
     async def _a11y_worker(
         self,
@@ -911,7 +1064,7 @@ class RelayAgent:
                 state.get("queued_seqs", set()).discard(seq)
                 continue
 
-            res = await loop.run_in_executor(None, self._execute_a11y_action, item)
+            res = await loop.run_in_executor(adb_executor(), self._execute_a11y_action, item)
             if seq > 0:
                 state.get("queued_seqs", set()).discard(seq)
                 state["last_seq"] = max(int(state.get("last_seq", 0) or 0), seq)
@@ -920,7 +1073,9 @@ class RelayAgent:
             # Query lane: caller expects a11y_result.
             if item.get("mode") != "query":
                 res["id"] = f"{res.get('id', '')}:result"
-            await send_queue.put(json.dumps(res))
+            await bounded_put(
+                send_queue, dumps(res), serial=serial, label="a11y_result"
+            )
 
     def _execute_a11y_action(self, item: dict) -> dict:
         serial = str(item.get("serial", "") or "")
@@ -1108,13 +1263,16 @@ class RelayAgent:
 
         loop   = asyncio.get_running_loop()
         result = await loop.run_in_executor(
-            None, self._do_u2_http, serial, method, path, body, content_type, timeout
+            u2_executor_pool(), self._do_u2_http, serial, method, path, body, content_type, timeout
         )
         result["type"]   = "u2_result"
         result["msg_id"] = msg_id
-        # Use blocking put() — control results must never be dropped.
-        # Scrcpy video frames use put_nowait (lossy); control results must not.
-        await send_queue.put(json.dumps(result))
+        # Bounded put: control results are important, but we MUST NOT block
+        # forever waiting for a stuck transport — that's what froze the agent
+        # after a few hours. `bounded_put` drops with a counter on timeout.
+        await bounded_put(
+            send_queue, dumps(result), serial=serial, label="u2_result"
+        )
 
     def _atx_http_host(self, serial: str) -> str:
         """Host for http://HOST:7912 — must be an IPv4, not a USB ADB serial string."""
@@ -1148,41 +1306,37 @@ class RelayAgent:
         content_type: str,
         timeout: float,
     ) -> dict:
-        """Blocking: call atx-agent at device_ip:7912 and return a result dict."""
-        import urllib.request
-        import urllib.error
+        """Blocking: call atx-agent at device_ip:7912 and return a result dict.
+
+        Uses a per-process HTTP/1.1 keep-alive pool to avoid the per-call TCP
+        handshake. atx-agent supports keep-alive, so a warm pool turns each
+        call into a single request/response round trip — ~30-100ms saved
+        per call on WiFi-attached phones.
+        """
+        from relay.http_pool import default_pool
 
         host = self._atx_http_host(serial)
-        url  = f"http://{host}:7912{path}"
 
-        headers: dict = {}
+        headers: dict[str, str] = {}
         data: bytes | None = None
         if body:
             data = body.encode("utf-8") if isinstance(body, str) else body
             headers["Content-Type"] = content_type or "application/json"
 
-        req = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                resp_body = resp.read()
-                status    = resp.status
-                ct        = resp.headers.get("Content-Type", "")
+            status, resp_headers, resp_body = default_pool().request(
+                host, 7912, method, path,
+                body=data, headers=headers, timeout=timeout,
+            )
+            ok = 200 <= status < 400
             return {
-                "ok":           True,
+                "ok":           ok,
                 "status":       status,
                 "body":         resp_body.decode("utf-8", errors="replace"),
-                "content_type": ct,
-            }
-        except urllib.error.HTTPError as exc:
-            body_err = exc.read().decode("utf-8", errors="replace") if exc.fp else str(exc)
-            return {
-                "ok":           False,
-                "status":       exc.code,
-                "body":         body_err,
-                "content_type": "",
+                "content_type": resp_headers.get("Content-Type", ""),
             }
         except Exception as exc:
-            logger.debug("u2 HTTP error %s %s: %s", method, url, exc)
+            logger.debug("u2 HTTP error %s http://%s:7912%s: %s", method, host, path, exc)
             return {
                 "ok":           False,
                 "status":       0,
@@ -1192,36 +1346,48 @@ class RelayAgent:
 
     async def _handle_u2_batch(self, msg: dict, send_queue: asyncio.Queue) -> None:
         """Execute a batch of primitive u2 actions and return aggregated results."""
+        serial = str(msg.get("serial", "") or "")
         if self._u2_executor is None:
             result = {"ok": False, "stopped_at": 0, "results": [],
                       "error": "u2 batch not enabled"}
         else:
             result = await self._u2_executor.run_batch(
-                serial=msg.get("serial", ""),
+                serial=serial,
                 actions=msg.get("actions") or [],
                 early_exit=bool(msg.get("early_exit", True)),
             )
         result["type"] = "u2_batch_result"
         result["id"] = msg.get("id", "")
-        await send_queue.put(json.dumps(result))
+        # dump_hierarchy / screenshot ops can produce MB-sized values; offload
+        # large dumps to keep the event loop responsive. With orjson the
+        # offloaded calls actually run in parallel because the GIL is released.
+        payload = await dumps_maybe_offload(result)
+        await bounded_put(
+            send_queue, payload, serial=serial, label="u2_batch_result"
+        )
 
     async def _handle_u2_flow(self, msg: dict, send_queue: asyncio.Queue) -> None:
         """Execute a named high-level u2 flow and return result."""
+        serial = str(msg.get("serial", "") or "")
         if self._u2_executor is None:
             result: dict = {"ok": False, "value": None, "error": "u2 batch not enabled"}
         else:
             result = await self._u2_executor.execute_flow(
-                serial=msg.get("serial", ""),
+                serial=serial,
                 flow=msg.get("flow", ""),
                 params=msg.get("params") or {},
             )
         result["type"] = "u2_flow_result"
         result["id"] = msg.get("id", "")
         result["flow"] = msg.get("flow", "")
-        await send_queue.put(json.dumps(result))
+        payload = await dumps_maybe_offload(result)
+        await bounded_put(
+            send_queue, payload, serial=serial, label="u2_flow_result"
+        )
 
     async def _handle_extra_data(self, msg: dict, send_queue: asyncio.Queue) -> None:
         """PA B: u2 dump + in-process ingest; reply extra_data_result."""
+        loop = asyncio.get_running_loop()
         req_id = str(msg.get("id", "") or "")
         serial = str(msg.get("serial", "") or "")
         strategy = str(msg.get("strategy", "fb_posts") or "fb_posts")
@@ -1235,15 +1401,15 @@ class RelayAgent:
         }
         if not serial:
             reply["error"] = "serial_required"
-            await send_queue.put(json.dumps(reply))
+            await bounded_put(send_queue, await dumps_maybe_offload(reply), serial=serial, label="extra_data_result")
             return
         if self._u2_executor is None:
             reply["error"] = "u2_batch_not_enabled"
-            await send_queue.put(json.dumps(reply))
+            await bounded_put(send_queue, await dumps_maybe_offload(reply), serial=serial, label="extra_data_result")
             return
         if self._extra_ingest is None:
             reply["error"] = "extra_data_not_configured"
-            await send_queue.put(json.dumps(reply))
+            await bounded_put(send_queue, await dumps_maybe_offload(reply), serial=serial, label="extra_data_result")
             return
 
         from relay.extra_data.collector import (
@@ -1273,7 +1439,7 @@ class RelayAgent:
                 else:
                     reply["ok"] = True
                     reply["ingest"] = {"ok": True, "diagnostic": report}
-                await send_queue.put(json.dumps(reply))
+                await bounded_put(send_queue, await dumps_maybe_offload(reply), serial=serial, label="extra_data_result")
                 return
 
             if strategy == "fb_comment_target_tap":
@@ -1286,13 +1452,13 @@ class RelayAgent:
                 )
                 if collect_err:
                     reply["error"] = collect_err
-                    await send_queue.put(json.dumps(reply))
+                    await bounded_put(send_queue, await dumps_maybe_offload(reply), serial=serial, label="extra_data_result")
                     return
                 reply["ok"] = True
                 reply["ingest"] = {"ok": True, "diagnostic": diagnostic}
                 if agent_tapped:
                     reply["agent_tapped"] = True
-                await send_queue.put(json.dumps(reply))
+                await bounded_put(send_queue, await dumps_maybe_offload(reply), serial=serial, label="extra_data_result")
                 return
 
             if strategy in {"fb_comment_target", "fb_comment_filter_next"}:
@@ -1304,7 +1470,7 @@ class RelayAgent:
                 )
                 if collect_err:
                     reply["error"] = collect_err
-                    await send_queue.put(json.dumps(reply))
+                    await bounded_put(send_queue, await dumps_maybe_offload(reply), serial=serial, label="extra_data_result")
                     return
                 primary = snapshots[0] if snapshots else ""
                 parse_strategy = (
@@ -1312,10 +1478,14 @@ class RelayAgent:
                     if strategy == "fb_comment_target"
                     else strategy
                 )
-                _, diagnostic = _parse_items(parse_strategy, primary, context)
+                # lxml parsing for ~MB hierarchies is pure-CPU; keep it off
+                # the event loop so heartbeats / gRPC sends are not delayed.
+                _, diagnostic = await loop.run_in_executor(
+                    cpu_executor(), _parse_items, parse_strategy, primary, context,
+                )
                 reply["ok"] = True
                 reply["ingest"] = {"ok": True, "diagnostic": diagnostic}
-                await send_queue.put(json.dumps(reply))
+                await bounded_put(send_queue, await dumps_maybe_offload(reply), serial=serial, label="extra_data_result")
                 return
 
             snapshots, collect_err = await collect_xml_snapshots(
@@ -1326,7 +1496,7 @@ class RelayAgent:
             )
             if collect_err:
                 reply["error"] = collect_err
-                await send_queue.put(json.dumps(reply))
+                await bounded_put(send_queue, await dumps_maybe_offload(reply), serial=serial, label="extra_data_result")
                 return
 
             payload = build_ingest_payload(
@@ -1346,7 +1516,7 @@ class RelayAgent:
         except Exception as exc:
             logger.warning("extra_data failed serial=%s strategy=%s: %s", serial, strategy, exc)
             reply["error"] = str(exc)
-        await send_queue.put(json.dumps(reply))
+        await bounded_put(send_queue, await dumps_maybe_offload(reply), serial=serial, label="extra_data_result")
 
     def _execute_command(
         self,
@@ -1361,7 +1531,7 @@ class RelayAgent:
             ctx = self._registry.get(serial)
             if ctx is None or not ctx.is_available:
                 state_str = ctx.state.value if ctx else "unknown"
-                return json.dumps({
+                return dumps({
                     "type":      "result",
                     "msg_id":    msg_id,
                     "ok":        False,
@@ -1376,7 +1546,7 @@ class RelayAgent:
                 if anchor:
                     usb_ctx = self._registry.get(anchor)
                     if usb_ctx and usb_ctx.is_available:
-                        return json.dumps({
+                        return dumps({
                             "type":      "result",
                             "msg_id":    msg_id,
                             "ok":        True,
@@ -1398,9 +1568,8 @@ class RelayAgent:
             elif cmd_type == CMD_SCREENCAP:
                 output, rc = _screencap(serial, timeout=timeout)
             elif cmd_type == CMD_PROBE_CAPS:
-                import json as _json
                 caps = _probe_capabilities(serial)
-                output, rc = _json.dumps(caps), 0
+                output, rc = dumps(caps), 0
             elif cmd_type == CMD_RESTART_SCRCPY:
                 output, rc = self._restart_scrcpy_sync(serial, timeout)
             else:
@@ -1408,7 +1577,7 @@ class RelayAgent:
                 if lock_rotation_after_shell_enabled():
                     lock_portrait_rotation(serial)
 
-            return json.dumps({
+            return dumps({
                 "type":      "result",
                 "msg_id":    msg_id,
                 "ok":        rc == 0,
@@ -1417,7 +1586,7 @@ class RelayAgent:
                 "error":     "" if rc == 0 else output,
             })
         except Exception as exc:
-            return json.dumps({
+            return dumps({
                 "type":      "result",
                 "msg_id":    msg_id,
                 "ok":        False,
@@ -1657,3 +1826,85 @@ class RelayAgent:
             if task and not task.done():
                 task.cancel()
             state["restart_task"] = None
+
+    def _cleanup_serial_state(self, serial: str) -> None:
+        """
+        Scrub all per-serial state on device OFFLINE so a relay running for
+        days does not slowly leak workers / queues / locks / breakers.
+
+        Idempotent: safe to call multiple times for the same serial. Does NOT
+        evict the u2 pool or stop scrcpy (those are owned by the callers).
+        """
+        # a11y workers: cancel mut/qry tasks, drop queues + dedup sets.
+        state = self._a11y_state.pop(serial, None)
+        if state is not None:
+            for key in ("mut_worker", "qry_worker"):
+                worker = state.get(key)
+                if worker is not None and not worker.done():
+                    worker.cancel()
+
+        # Per-serial collect lock (extra_data) — keep map small across cycles.
+        try:
+            from relay.extra_data.collector import release_collect_lock
+            release_collect_lock(serial)
+        except Exception:
+            pass
+
+        # Supervisor circuit breaker — let a re-plugged device start fresh.
+        breakers = getattr(self._supervisor, "_breakers", None)
+        if isinstance(breakers, dict):
+            breakers.pop(serial, None)
+
+        # Cancel any pending scrcpy restart task for this serial.
+        sd_state = self._scrcpy_desired.get(serial)
+        if sd_state is not None:
+            task = sd_state.get("restart_task")
+            if task and not task.done():
+                task.cancel()
+            sd_state["restart_task"] = None
+
+        # ATX cache + logical serial map can grow with phone churn.
+        host = self._atx_lan_host_cache.pop(serial, None)
+        mapped_keys = [k for k, v in self._scrcpy_logical_to_adb.items() if v == serial]
+        for k in mapped_keys:
+            self._scrcpy_logical_to_adb.pop(k, None)
+
+        # Close pooled HTTP/1.1 keep-alive sockets for the offline device's
+        # atx-agent host; reused sockets to a powered-off phone would block
+        # the next caller for the full request timeout.
+        try:
+            from relay.http_pool import default_pool
+            if host:
+                default_pool().drop_host(host, 7912)
+            if ":" in serial:
+                default_pool().drop_host(serial.rsplit(":", 1)[0], 7912)
+        except Exception:
+            pass
+
+        # Drop the offline device's lane from the FairSendQueue so we don't
+        # carry stale frames / results across an unplug+replug cycle, and so
+        # the round-robin cursor stops visiting an empty lane every iteration.
+        send_q = self._active_send_queue
+        if send_q is not None:
+            try:
+                dropped = send_q.drop_serial(serial)
+                if dropped:
+                    logger.info(
+                        "send_queue: dropped %d queued items for offline serial %s",
+                        dropped, serial,
+                    )
+            except Exception:
+                pass
+
+    async def _guarded(self, sem: asyncio.Semaphore, coro) -> Any:
+        """
+        Run `coro` while holding a global semaphore so total concurrency for
+        this class of work (extra_data / u2_batch / u2_flow) is bounded
+        regardless of how many phones the farm fans out to.
+
+        Without this, a burst of 50 farm requests can spawn 50 parallel u2
+        dump tasks, each grabbing a thread from the u2 pool — the loop then
+        starves heartbeats and gRPC sends, which looks like a hang.
+        """
+        async with sem:
+            return await coro

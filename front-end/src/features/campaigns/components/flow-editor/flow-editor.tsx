@@ -5,7 +5,7 @@ import {
   Dialog,
   DialogContent,
   DialogHeader,
-  DialogTitle,
+  DialogTitle
 } from '@/components/ui/dialog';
 import {
   DndContext,
@@ -14,12 +14,12 @@ import {
   PointerSensor,
   useSensor,
   useSensors,
-  type DragEndEvent,
+  type DragEndEvent
 } from '@dnd-kit/core';
 import {
   SortableContext,
   sortableKeyboardCoordinates,
-  verticalListSortingStrategy,
+  verticalListSortingStrategy
 } from '@dnd-kit/sortable';
 import { restrictToVerticalAxis } from '@dnd-kit/modifiers';
 import { isContainerType, type FlowStep } from '../scenario-steps/types';
@@ -29,16 +29,20 @@ import { BracketBlock } from './bracket-block';
 import { InsertGap } from './insert-button';
 import { StepDetailPanel } from './step-detail-panel';
 import type { SelectorPickTarget } from './selector-pick';
-import { selectorPickTargetEquals, isSelectorPickableStep } from './selector-pick';
+import {
+  selectorPickTargetEquals,
+  isSelectorPickableStep
+} from './selector-pick';
 import type { CoordinatePickTarget } from './coordinate-pick';
 import {
   coordinatePickTargetEquals,
   isTapCoordinatePickableStep,
-  isSwipeCoordinatePickableStep,
+  isSwipeCoordinatePickableStep
 } from './coordinate-pick';
 import { encodeFlowListRef, stableStepDnDId } from './flow-dnd-ids';
 import { applyFlowDragEnd } from './flow-tree-dnd';
 import { SortableFlowRow } from './sortable-flow-row';
+import { FlowStepRail } from './flow-step-rail';
 import { encodeScenarioInlineRunKey } from './inline-run-key';
 
 // ── FlowEditor ───────────────────────────────────────────────────────────────
@@ -82,24 +86,34 @@ export function FlowEditor({
   stepRunStates = {},
   onStopInlineRun,
   nestedInDialog = false,
-  campaignScenarios = [],
+  campaignScenarios = []
 }: Props) {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const selectedStep = selectedIndex != null ? steps[selectedIndex] : null;
-  const availableVariables = useMemo(() => collectVariableNames(steps), [steps]);
+  const availableVariables = useMemo(
+    () => collectVariableNames(steps),
+    [steps]
+  );
 
-  const stepIds = useMemo(() => steps.map((s, i) => stableStepDnDId(s, i)), [steps]);
+  const stepIds = useMemo(
+    () => steps.map((s, i) => stableStepDnDId(s, i)),
+    [steps]
+  );
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
       const { active, over } = event;
-      const activeContainer = active.data.current?.sortable?.containerId as string | undefined;
-      const overContainer = over?.data.current?.sortable?.containerId as string | undefined;
+      const activeContainer = active.data.current?.sortable?.containerId as
+        | string
+        | undefined;
+      const overContainer = over?.data.current?.sortable?.containerId as
+        | string
+        | undefined;
       if (
         activeContainer === ROOT_SORTABLE_ID &&
         overContainer === ROOT_SORTABLE_ID &&
@@ -120,7 +134,7 @@ export function FlowEditor({
       }
       applyFlowDragEnd(event, steps, onChange);
     },
-    [stepIds, steps, onChange],
+    [stepIds, steps, onChange]
   );
 
   const togglePick = useCallback(
@@ -128,10 +142,14 @@ export function FlowEditor({
       if (!onSelectorPickTargetChange) return;
       onCoordinatePickTargetChange?.(null);
       onSelectorPickTargetChange(
-        selectorPickTargetEquals(selectorPickTarget, path) ? null : path,
+        selectorPickTargetEquals(selectorPickTarget, path) ? null : path
       );
     },
-    [onSelectorPickTargetChange, selectorPickTarget, onCoordinatePickTargetChange],
+    [
+      onSelectorPickTargetChange,
+      selectorPickTarget,
+      onCoordinatePickTargetChange
+    ]
   );
 
   const toggleCoordPick = useCallback(
@@ -139,10 +157,14 @@ export function FlowEditor({
       if (!onCoordinatePickTargetChange) return;
       onSelectorPickTargetChange?.(null);
       onCoordinatePickTargetChange(
-        coordinatePickTargetEquals(coordinatePickTarget, path) ? null : path,
+        coordinatePickTargetEquals(coordinatePickTarget, path) ? null : path
       );
     },
-    [onCoordinatePickTargetChange, coordinatePickTarget, onSelectorPickTargetChange],
+    [
+      onCoordinatePickTargetChange,
+      coordinatePickTarget,
+      onSelectorPickTargetChange
+    ]
   );
 
   const handleLeafStepCardClick = useCallback(
@@ -171,16 +193,24 @@ export function FlowEditor({
       selectorPickTarget,
       onCoordinatePickTargetChange,
       coordinatePickTarget,
-      selectedIndex,
-    ],
+      selectedIndex
+    ]
   );
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && selectorPickTarget && onSelectorPickTargetChange) {
+      if (
+        e.key === 'Escape' &&
+        selectorPickTarget &&
+        onSelectorPickTargetChange
+      ) {
         onSelectorPickTargetChange(null);
       }
-      if (e.key === 'Escape' && coordinatePickTarget && onCoordinatePickTargetChange) {
+      if (
+        e.key === 'Escape' &&
+        coordinatePickTarget &&
+        onCoordinatePickTargetChange
+      ) {
         onCoordinatePickTargetChange(null);
       }
     };
@@ -190,7 +220,7 @@ export function FlowEditor({
     selectorPickTarget,
     onSelectorPickTargetChange,
     coordinatePickTarget,
-    onCoordinatePickTargetChange,
+    onCoordinatePickTargetChange
   ]);
 
   const insertAt = useCallback(
@@ -199,7 +229,7 @@ export function FlowEditor({
       next.splice(index, 0, newStep);
       onChange(next);
     },
-    [steps, onChange],
+    [steps, onChange]
   );
 
   const removeAt = useCallback(
@@ -211,7 +241,10 @@ export function FlowEditor({
           onSelectorPickTargetChange(null);
         }
       }
-      if (onCoordinatePickTargetChange && coordinatePickTarget?.rootIndex === index) {
+      if (
+        onCoordinatePickTargetChange &&
+        coordinatePickTarget?.rootIndex === index
+      ) {
         onCoordinatePickTargetChange(null);
       }
     },
@@ -222,8 +255,8 @@ export function FlowEditor({
       selectorPickTarget,
       onSelectorPickTargetChange,
       coordinatePickTarget,
-      onCoordinatePickTargetChange,
-    ],
+      onCoordinatePickTargetChange
+    ]
   );
 
   const updateAt = useCallback(
@@ -232,7 +265,7 @@ export function FlowEditor({
       next[index] = newStep;
       onChange(next);
     },
-    [steps, onChange],
+    [steps, onChange]
   );
 
   const removeChild = useCallback(
@@ -245,15 +278,19 @@ export function FlowEditor({
         const branches = [...(next.branches ?? [])];
         branches[bi] = {
           ...branches[bi],
-          steps: branches[bi].steps.filter((_: unknown, i: number) => i !== childIndex),
+          steps: branches[bi].steps.filter(
+            (_: unknown, i: number) => i !== childIndex
+          )
         };
         next.branches = branches;
       } else {
-        next[key] = (next[key] ?? []).filter((_: unknown, i: number) => i !== childIndex);
+        next[key] = (next[key] ?? []).filter(
+          (_: unknown, i: number) => i !== childIndex
+        );
       }
       updateAt(parentIndex, next);
     },
-    [steps, updateAt],
+    [steps, updateAt]
   );
 
   const insertChild = useCallback(
@@ -275,13 +312,18 @@ export function FlowEditor({
       }
       updateAt(parentIndex, next);
     },
-    [steps, updateAt],
+    [steps, updateAt]
   );
 
   return (
     <>
-      <Dialog open={!compact && selectedIndex != null} onOpenChange={(open) => { if (!open) setSelectedIndex(null); }}>
-        <DialogContent className='max-w-sm p-0 gap-0'>
+      <Dialog
+        open={!compact && selectedIndex != null}
+        onOpenChange={(open) => {
+          if (!open) setSelectedIndex(null);
+        }}
+      >
+        <DialogContent className='max-w-sm gap-0 p-0'>
           <DialogHeader className='sr-only'>
             <DialogTitle>Chỉnh sửa bước</DialogTitle>
           </DialogHeader>
@@ -304,22 +346,32 @@ export function FlowEditor({
               }
               onRequestPickTapCoords={
                 onCoordinatePickTargetChange &&
-                (selectedStep.type === 'tap_ratio' || selectedStep.type === 'tap')
+                (selectedStep.type === 'tap_ratio' ||
+                  selectedStep.type === 'tap')
                   ? () => {
                       const idx = selectedIndex;
                       setSelectedIndex(null);
                       onSelectorPickTargetChange?.(null);
-                      onCoordinatePickTargetChange({ rootIndex: idx, path: [], mode: 'tap_point' });
+                      onCoordinatePickTargetChange({
+                        rootIndex: idx,
+                        path: [],
+                        mode: 'tap_point'
+                      });
                     }
                   : undefined
               }
               onRequestPickSwipeCoords={
-                onCoordinatePickTargetChange && selectedStep.type === 'swipe_ratio'
+                onCoordinatePickTargetChange &&
+                selectedStep.type === 'swipe_ratio'
                   ? () => {
                       const idx = selectedIndex;
                       setSelectedIndex(null);
                       onSelectorPickTargetChange?.(null);
-                      onCoordinatePickTargetChange({ rootIndex: idx, path: [], mode: 'swipe_segment' });
+                      onCoordinatePickTargetChange({
+                        rootIndex: idx,
+                        path: [],
+                        mode: 'swipe_segment'
+                      });
                     }
                   : undefined
               }
@@ -329,7 +381,10 @@ export function FlowEditor({
       </Dialog>
 
       <div className='min-w-0'>
-        <div className='min-w-0 overflow-x-hidden overflow-y-auto' style={{ maxHeight }}>
+        <div
+          className='min-w-0 overflow-y-auto overflow-x-hidden'
+          style={{ maxHeight }}
+        >
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
@@ -346,8 +401,14 @@ export function FlowEditor({
                   <InsertGap onInsert={(s) => insertAt(i, s)} />
                   <SortableFlowRow id={stepIds[i]!}>
                     {(dragHandle, isDragging) => (
-                      <div className={`flex items-stretch ${isDragging ? 'opacity-60' : ''}`}>
+                      <div
+                        className={`flex items-stretch ${isDragging ? 'opacity-60' : ''}`}
+                      >
                         {dragHandle}
+                        <FlowStepRail
+                          stepNumber={i + 1}
+                          showLine={i < steps.length - 1}
+                        />
                         <div className='min-w-0 flex-1'>
                           {isContainerType(step.type) ? (
                             <BracketBlock
@@ -357,27 +418,49 @@ export function FlowEditor({
                               pathFromRoot={[]}
                               selected={selectedIndex === i}
                               selectedChild={null}
-                              onSelectSelf={() => setSelectedIndex(selectedIndex === i ? null : i)}
+                              onSelectSelf={() =>
+                                setSelectedIndex(selectedIndex === i ? null : i)
+                              }
                               onSelectChild={() => {}}
                               onUpdate={(s) => updateAt(i, s)}
                               onRemove={() => removeAt(i)}
-                              onRemoveChild={(key, ci) => removeChild(i, key, ci)}
-                              onInsertChild={(key, at, s) => insertChild(i, key, at, s)}
+                              onRemoveChild={(key, ci) =>
+                                removeChild(i, key, ci)
+                              }
+                              onInsertChild={(key, at, s) =>
+                                insertChild(i, key, at, s)
+                              }
                               compact={compact}
                               nestedInDialog={nestedInDialog}
                               selectorPickTarget={selectorPickTarget}
-                              onTogglePickSelector={onSelectorPickTargetChange ? togglePick : undefined}
+                              onTogglePickSelector={
+                                onSelectorPickTargetChange
+                                  ? togglePick
+                                  : undefined
+                              }
                               coordinatePickTarget={coordinatePickTarget}
-                              onToggleCoordinatePick={onCoordinatePickTargetChange ? toggleCoordPick : undefined}
+                              onToggleCoordinatePick={
+                                onCoordinatePickTargetChange
+                                  ? toggleCoordPick
+                                  : undefined
+                              }
                               selfRunKey={encodeScenarioInlineRunKey(i, [])}
                               stepRunStates={stepRunStates}
                               onStopInlineRun={onStopInlineRun}
                               onRunSelf={
                                 onRunStep
-                                  ? () => onRunStep(step, encodeScenarioInlineRunKey(i, []))
+                                  ? () =>
+                                      onRunStep(
+                                        step,
+                                        encodeScenarioInlineRunKey(i, [])
+                                      )
                                   : undefined
                               }
-                              onRunChild={onRunStep ? (s, k) => onRunStep(s, k) : undefined}
+                              onRunChild={
+                                onRunStep
+                                  ? (s, k) => onRunStep(s, k)
+                                  : undefined
+                              }
                               campaignScenarios={campaignScenarios}
                             />
                           ) : (
@@ -390,7 +473,11 @@ export function FlowEditor({
                               onRemove={() => removeAt(i)}
                               onRun={
                                 onRunStep
-                                  ? () => onRunStep(step, encodeScenarioInlineRunKey(i, []))
+                                  ? () =>
+                                      onRunStep(
+                                        step,
+                                        encodeScenarioInlineRunKey(i, [])
+                                      )
                                   : undefined
                               }
                               runState={stepRunStates[String(i)] ?? 'idle'}
@@ -401,35 +488,54 @@ export function FlowEditor({
                                 (selectorPickTarget.path ?? []).length === 0
                               }
                               onTogglePickSelector={
-                                onSelectorPickTargetChange && isSelectorPickableStep(step)
+                                onSelectorPickTargetChange &&
+                                isSelectorPickableStep(step)
                                   ? () => togglePick({ rootIndex: i, path: [] })
                                   : undefined
                               }
                               coordPickActive={
                                 coordinatePickTarget &&
-                                coordinatePickTargetEquals(coordinatePickTarget, {
-                                  rootIndex: i,
-                                  path: [],
-                                  mode: 'tap_point',
-                                })
+                                coordinatePickTargetEquals(
+                                  coordinatePickTarget,
+                                  {
+                                    rootIndex: i,
+                                    path: [],
+                                    mode: 'tap_point'
+                                  }
+                                )
                                   ? 'tap_point'
                                   : coordinatePickTarget &&
-                                      coordinatePickTargetEquals(coordinatePickTarget, {
-                                        rootIndex: i,
-                                        path: [],
-                                        mode: 'swipe_segment',
-                                      })
+                                      coordinatePickTargetEquals(
+                                        coordinatePickTarget,
+                                        {
+                                          rootIndex: i,
+                                          path: [],
+                                          mode: 'swipe_segment'
+                                        }
+                                      )
                                     ? 'swipe_segment'
                                     : null
                               }
                               onTogglePickTapCoords={
-                                onCoordinatePickTargetChange && isTapCoordinatePickableStep(step)
-                                  ? () => toggleCoordPick({ rootIndex: i, path: [], mode: 'tap_point' })
+                                onCoordinatePickTargetChange &&
+                                isTapCoordinatePickableStep(step)
+                                  ? () =>
+                                      toggleCoordPick({
+                                        rootIndex: i,
+                                        path: [],
+                                        mode: 'tap_point'
+                                      })
                                   : undefined
                               }
                               onTogglePickSwipeCoords={
-                                onCoordinatePickTargetChange && isSwipeCoordinatePickableStep(step)
-                                  ? () => toggleCoordPick({ rootIndex: i, path: [], mode: 'swipe_segment' })
+                                onCoordinatePickTargetChange &&
+                                isSwipeCoordinatePickableStep(step)
+                                  ? () =>
+                                      toggleCoordPick({
+                                        rootIndex: i,
+                                        path: [],
+                                        mode: 'swipe_segment'
+                                      })
                                   : undefined
                               }
                             />
@@ -446,7 +552,8 @@ export function FlowEditor({
 
           {steps.length === 0 && (
             <p className='py-6 text-center text-xs text-muted-foreground'>
-              Nhấn <strong>+</strong> để thêm bước, hoặc ghi thao tác từ thiết bị.
+              Nhấn <strong>+</strong> để thêm bước, hoặc ghi thao tác từ thiết
+              bị.
             </p>
           )}
         </div>

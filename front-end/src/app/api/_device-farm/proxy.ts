@@ -16,10 +16,7 @@ export function getDeviceFarmBackendBaseUrl() {
   );
 }
 
-export async function proxyDeviceFarm(
-  req: NextRequest,
-  upstreamPath: string
-) {
+export async function proxyDeviceFarm(req: NextRequest, upstreamPath: string) {
   const base = getDeviceFarmBackendBaseUrl();
   const upstreamUrl = joinUrl(base, upstreamPath) + req.nextUrl.search;
 
@@ -30,7 +27,9 @@ export async function proxyDeviceFarm(
   headers.delete('content-length');
 
   const body =
-    req.method === 'GET' || req.method === 'HEAD' ? undefined : await req.text();
+    req.method === 'GET' || req.method === 'HEAD'
+      ? undefined
+      : await req.text();
 
   const upstream = await axios.request({
     url: upstreamUrl,
@@ -50,4 +49,3 @@ export async function proxyDeviceFarm(
     headers: resHeaders
   });
 }
-

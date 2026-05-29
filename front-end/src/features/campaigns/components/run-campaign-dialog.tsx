@@ -11,7 +11,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogFooter,
+  DialogFooter
 } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -19,13 +19,13 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
+  SelectValue
 } from '@/components/ui/select';
 import {
   DeviceVarsJsonPanel,
   formatInitialDeviceVars,
   mergeCampaignScenarioVariables,
-  parseDeviceVarsJson,
+  parseDeviceVarsJson
 } from '@/components/device-vars-json-panel';
 import { cn } from '@/lib/utils';
 import { campaignsApi } from '../services/api';
@@ -43,7 +43,8 @@ interface Props {
   onConfirm: (deviceSerials?: string[]) => void;
 }
 
-const makePairKey = (scenarioId: string, deviceId: string) => `${scenarioId}::${deviceId}`;
+const makePairKey = (scenarioId: string, deviceId: string) =>
+  `${scenarioId}::${deviceId}`;
 
 export function RunCampaignDialog({
   open,
@@ -53,7 +54,7 @@ export function RunCampaignDialog({
   devices,
   scenarios,
   isRunning,
-  onConfirm,
+  onConfirm
 }: Props) {
   const tList = useTranslations('campaignsFeature.list');
   const tVars = useTranslations('components.deviceVarsJson');
@@ -63,22 +64,30 @@ export function RunCampaignDialog({
   const [activeDeviceId, setActiveDeviceId] = useState<string>('');
   const [activeScenarioId, setActiveScenarioId] = useState<string>('');
   const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const [deviceVarEnabled, setDeviceVarEnabled] = useState<Record<string, boolean>>({});
+  const [deviceVarEnabled, setDeviceVarEnabled] = useState<
+    Record<string, boolean>
+  >({});
   const [dirtyKeys, setDirtyKeys] = useState<Record<string, true>>({});
   const [isSaving, setIsSaving] = useState(false);
 
   const allSerials = useMemo(() => devices.map((d) => d.serial), [devices]);
-  const deviceSignature = useMemo(() => devices.map((d) => d.id).join('|'), [devices]);
-  const scenarioSignature = useMemo(() => scenarios.map((s) => s.id).join('|'), [scenarios]);
+  const deviceSignature = useMemo(
+    () => devices.map((d) => d.id).join('|'),
+    [devices]
+  );
+  const scenarioSignature = useMemo(
+    () => scenarios.map((s) => s.id).join('|'),
+    [scenarios]
+  );
   const firstDeviceId = devices[0]?.id ?? '';
   const firstScenarioId = scenarios[0]?.id ?? '';
   const activeDevice = useMemo(
     () => devices.find((d) => d.id === activeDeviceId) ?? devices[0],
-    [activeDeviceId, devices],
+    [activeDeviceId, devices]
   );
   const activeScenario = useMemo(
     () => scenarios.find((s) => s.id === activeScenarioId) ?? scenarios[0],
-    [activeScenarioId, scenarios],
+    [activeScenarioId, scenarios]
   );
   const pairKey =
     activeScenarioId && activeDevice?.id
@@ -93,17 +102,29 @@ export function RunCampaignDialog({
     setDrafts({});
     setDeviceVarEnabled({});
     setDirtyKeys({});
-  }, [allSerials, deviceSignature, firstDeviceId, firstScenarioId, open, scenarioSignature]);
+  }, [
+    allSerials,
+    deviceSignature,
+    firstDeviceId,
+    firstScenarioId,
+    open,
+    scenarioSignature
+  ]);
 
   const variableQuery = useQuery({
-    queryKey: ['campaign-device-variables', campaignId, activeScenarioId, activeDevice?.id],
+    queryKey: [
+      'campaign-device-variables',
+      campaignId,
+      activeScenarioId,
+      activeDevice?.id
+    ],
     queryFn: () =>
       campaignsApi.getScenarioDeviceVariables(
         campaignId,
         activeScenarioId,
-        activeDevice!.id,
+        activeDevice!.id
       ),
-    enabled: open && !!campaignId && !!activeScenarioId && !!activeDevice?.id,
+    enabled: open && !!campaignId && !!activeScenarioId && !!activeDevice?.id
   });
 
   useEffect(() => {
@@ -113,30 +134,36 @@ export function RunCampaignDialog({
       if (prev[pairKey] !== undefined) return prev;
       return {
         ...prev,
-        [pairKey]: formatInitialDeviceVars(savedVars, activeScenario?.variables),
+        [pairKey]: formatInitialDeviceVars(savedVars, activeScenario?.variables)
       };
     });
     setDeviceVarEnabled((prev) => {
       if (prev[pairKey] !== undefined) return prev;
       return {
         ...prev,
-        [pairKey]: Object.keys(savedVars).length > 0,
+        [pairKey]: Object.keys(savedVars).length > 0
       };
     });
   }, [activeScenario?.variables, pairKey, variableQuery.data]);
 
-  const allSelected = allSerials.length > 0 && allSerials.every((s) => selected.has(s));
+  const allSelected =
+    allSerials.length > 0 && allSerials.every((s) => selected.has(s));
   const someSelected = allSerials.some((s) => selected.has(s));
   const currentDraft = pairKey
-    ? drafts[pairKey] ?? (variableQuery.isLoading ? '' : formatInitialDeviceVars({}, activeScenario?.variables))
+    ? (drafts[pairKey] ??
+      (variableQuery.isLoading
+        ? ''
+        : formatInitialDeviceVars({}, activeScenario?.variables)))
     : formatInitialDeviceVars({}, activeScenario?.variables);
-  const currentDeviceVarsEnabled = pairKey ? deviceVarEnabled[pairKey] === true : false;
+  const currentDeviceVarsEnabled = pairKey
+    ? deviceVarEnabled[pairKey] === true
+    : false;
   const parseMsgs = useMemo(
     () => ({
       invalidJson: tVars('parseInvalidJson'),
-      invalidRoot: tVars('parseInvalidRoot'),
+      invalidRoot: tVars('parseInvalidRoot')
     }),
-    [tVars],
+    [tVars]
   );
   const currentJsonError = useMemo(() => {
     if (variableQuery.isLoading || !currentDeviceVarsEnabled) return '';
@@ -146,11 +173,21 @@ export function RunCampaignDialog({
     } catch (err) {
       return err instanceof Error ? err.message : tVars('parseUnknown');
     }
-  }, [currentDeviceVarsEnabled, currentDraft, variableQuery.isLoading, parseMsgs, tVars]);
+  }, [
+    currentDeviceVarsEnabled,
+    currentDraft,
+    variableQuery.isLoading,
+    parseMsgs,
+    tVars
+  ]);
 
   const globalVariablesPreview = useMemo(
-    () => mergeCampaignScenarioVariables(campaignVariables, activeScenario?.variables),
-    [campaignVariables, activeScenario?.variables],
+    () =>
+      mergeCampaignScenarioVariables(
+        campaignVariables,
+        activeScenario?.variables
+      ),
+    [campaignVariables, activeScenario?.variables]
   );
 
   const toggle = (serial: string) => {
@@ -181,7 +218,8 @@ export function RunCampaignDialog({
     setDeviceVarEnabled((prev) => ({ ...prev, [pairKey]: enabled }));
     setDrafts((prev) => ({
       ...prev,
-      [pairKey]: prev[pairKey] ?? formatInitialDeviceVars({}, activeScenario?.variables),
+      [pairKey]:
+        prev[pairKey] ?? formatInitialDeviceVars({}, activeScenario?.variables)
     }));
     setDirtyKeys((prev) => ({ ...prev, [pairKey]: true }));
   };
@@ -208,18 +246,29 @@ export function RunCampaignDialog({
       await Promise.all(
         keys.map((key) => {
           const [scenarioId, deviceId] = key.split('::');
-          const vars = deviceVarEnabled[key] === true
-            ? parseDeviceVarsJson(drafts[key] ?? '{}', parseMsgs)
-            : {};
-          return campaignsApi.replaceScenarioDeviceVariables(campaignId, scenarioId, deviceId, {
-            vars,
-          });
-        }),
+          const vars =
+            deviceVarEnabled[key] === true
+              ? parseDeviceVarsJson(drafts[key] ?? '{}', parseMsgs)
+              : {};
+          return campaignsApi.replaceScenarioDeviceVariables(
+            campaignId,
+            scenarioId,
+            deviceId,
+            {
+              vars
+            }
+          );
+        })
       );
       keys.forEach((key) => {
         const [scenarioId, deviceId] = key.split('::');
         qc.invalidateQueries({
-          queryKey: ['campaign-device-variables', campaignId, scenarioId, deviceId],
+          queryKey: [
+            'campaign-device-variables',
+            campaignId,
+            scenarioId,
+            deviceId
+          ]
         });
       });
       setDirtyKeys({});
@@ -240,7 +289,12 @@ export function RunCampaignDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        if (!o) onClose();
+      }}
+    >
       <DialogContent className='flex max-h-[92vh] min-w-[800px] max-w-5xl flex-col gap-0 overflow-hidden p-0 sm:w-full'>
         <DialogHeader className='shrink-0 space-y-0 border-b px-5 py-4 pr-12 text-left'>
           <DialogTitle className='flex items-start gap-2 text-base font-semibold leading-snug'>
@@ -250,13 +304,18 @@ export function RunCampaignDialog({
           {activeScenario ? (
             scenarios.length > 1 ? (
               <div className='mt-3 min-w-0'>
-                <Select value={activeScenarioId} onValueChange={setActiveScenarioId}>
+                <Select
+                  value={activeScenarioId}
+                  onValueChange={setActiveScenarioId}
+                >
                   <SelectTrigger
                     size='sm'
                     className='h-auto min-h-9 w-full min-w-0 whitespace-normal py-2 text-left text-xs leading-snug [&_[data-slot=select-value]]:line-clamp-2 [&_[data-slot=select-value]]:whitespace-normal'
                     title={activeScenario.name}
                   >
-                    <SelectValue placeholder={tList('runDialogScenarioPlaceholder')} />
+                    <SelectValue
+                      placeholder={tList('runDialogScenarioPlaceholder')}
+                    />
                   </SelectTrigger>
                   <SelectContent>
                     {scenarios.map((scenario) => (
@@ -284,89 +343,118 @@ export function RunCampaignDialog({
           </p>
         ) : (
           <div className='flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden px-5'>
-            <div className='grid min-h-0 min-w-0 flex-1 grid-cols-1 divide-y divide-border pt-4 pb-2 md:grid-cols-[minmax(200px,280px)_minmax(0,1fr)] md:divide-x md:divide-y-0'>
+            <div className='grid min-h-0 min-w-0 flex-1 grid-cols-1 divide-y divide-border pb-2 pt-4 md:grid-cols-[minmax(200px,280px)_minmax(0,1fr)] md:divide-x md:divide-y-0'>
               <div className='min-h-0 max-md:max-h-[40vh] max-md:overflow-y-auto md:py-4 md:pr-4'>
-              <button
-                type='button'
-                onClick={toggleAll}
-                className='mb-2 flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted/60'
-              >
-                {allSelected
-                  ? <CheckSquare size={14} className='text-primary' />
-                  : <Square size={14} className='text-muted-foreground' />}
-                <span className='font-medium'>{tList('runDialogSelectAll')}</span>
-                <Badge variant='secondary' className='ml-auto text-[10px]'>
-                  {allSerials.length}
-                </Badge>
-              </button>
+                <button
+                  type='button'
+                  onClick={toggleAll}
+                  className='mb-2 flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted/60'
+                >
+                  {allSelected ? (
+                    <CheckSquare size={14} className='text-primary' />
+                  ) : (
+                    <Square size={14} className='text-muted-foreground' />
+                  )}
+                  <span className='font-medium'>
+                    {tList('runDialogSelectAll')}
+                  </span>
+                  <Badge variant='secondary' className='ml-auto text-[10px]'>
+                    {allSerials.length}
+                  </Badge>
+                </button>
 
-              <div className='max-h-[min(64vh,28rem)] space-y-1 overflow-y-auto pr-1 md:max-h-none md:overflow-visible'>
-                {devices.map((device) => {
-                  const isChecked = selected.has(device.serial);
-                  const isActive = activeDevice?.id === device.id;
-                  return (
-                    <div
-                      key={device.id}
-                      className={cn(
-                        'flex items-center gap-1 rounded border border-transparent px-1 py-1',
-                        isActive && 'border-primary/30 bg-primary/[0.06]',
-                      )}
-                    >
-                      <button
-                        type='button'
-                        onClick={() => toggle(device.serial)}
-                        className='flex h-7 w-7 shrink-0 items-center justify-center rounded hover:bg-muted'
-                        aria-label={isChecked ? tList('runDialogAriaDeselectDevice') : tList('runDialogAriaSelectDevice')}
+                <div className='max-h-[min(64vh,28rem)] space-y-1 overflow-y-auto pr-1 md:max-h-none md:overflow-visible'>
+                  {devices.map((device) => {
+                    const isChecked = selected.has(device.serial);
+                    const isActive = activeDevice?.id === device.id;
+                    return (
+                      <div
+                        key={device.id}
+                        className={cn(
+                          'flex items-center gap-1 rounded border border-transparent px-1 py-1',
+                          isActive && 'border-primary/30 bg-primary/[0.06]'
+                        )}
                       >
-                        {isChecked
-                          ? <CheckSquare size={13} className='text-primary' />
-                          : <Square size={13} className='text-muted-foreground' />}
-                      </button>
-                      <button
-                        type='button'
-                        onClick={() => setActiveDeviceId(device.id)}
-                        className='flex min-w-0 flex-1 items-center gap-2 rounded px-1.5 py-1 text-left text-xs hover:bg-muted/60'
-                      >
-                        <Smartphone size={12} className='shrink-0 text-muted-foreground' />
-                        <span className='min-w-0 truncate font-mono'>{device.serial}</span>
-                      </button>
-                    </div>
-                  );
-                })}
+                        <button
+                          type='button'
+                          onClick={() => toggle(device.serial)}
+                          className='flex h-7 w-7 shrink-0 items-center justify-center rounded hover:bg-muted'
+                          aria-label={
+                            isChecked
+                              ? tList('runDialogAriaDeselectDevice')
+                              : tList('runDialogAriaSelectDevice')
+                          }
+                        >
+                          {isChecked ? (
+                            <CheckSquare size={13} className='text-primary' />
+                          ) : (
+                            <Square
+                              size={13}
+                              className='text-muted-foreground'
+                            />
+                          )}
+                        </button>
+                        <button
+                          type='button'
+                          onClick={() => setActiveDeviceId(device.id)}
+                          className='flex min-w-0 flex-1 items-center gap-2 rounded px-1.5 py-1 text-left text-xs hover:bg-muted/60'
+                        >
+                          <Smartphone
+                            size={12}
+                            className='shrink-0 text-muted-foreground'
+                          />
+                          <span className='min-w-0 truncate font-mono'>
+                            {device.serial}
+                          </span>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
 
               <div className='flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden md:py-4 md:pl-4'>
-              <DeviceVarsJsonPanel
-                enabled={currentDeviceVarsEnabled}
-                onEnabledChange={handleDeviceVarsToggle}
-                draft={currentDraft}
-                onDraftChange={handleDraftChange}
-                loading={variableQuery.isLoading}
-                jsonError={currentJsonError}
-                deviceLabel={activeDevice?.serial}
-                baseVariables={activeScenario?.variables}
-                globalVariablesPreview={globalVariablesPreview}
-                className='flex min-h-0 min-w-0 flex-1 flex-col'
-                editorClassName='min-h-[200px] flex-1 md:min-h-[260px]'
-                emptyClassName='flex min-h-[200px] flex-1 flex-col md:min-h-[260px]'
-              />
+                <DeviceVarsJsonPanel
+                  enabled={currentDeviceVarsEnabled}
+                  onEnabledChange={handleDeviceVarsToggle}
+                  draft={currentDraft}
+                  onDraftChange={handleDraftChange}
+                  loading={variableQuery.isLoading}
+                  jsonError={currentJsonError}
+                  deviceLabel={activeDevice?.serial}
+                  baseVariables={activeScenario?.variables}
+                  globalVariablesPreview={globalVariablesPreview}
+                  className='flex min-h-0 min-w-0 flex-1 flex-col'
+                  editorClassName='min-h-[200px] flex-1 md:min-h-[260px]'
+                  emptyClassName='flex min-h-[200px] flex-1 flex-col md:min-h-[260px]'
+                />
               </div>
             </div>
           </div>
         )}
 
         <DialogFooter className='shrink-0 gap-2 border-t bg-background px-5 py-4'>
-          <Button size='sm' variant='outline' className='h-7 text-xs' onClick={onClose}>
+          <Button
+            size='sm'
+            variant='outline'
+            className='h-7 text-xs'
+            onClick={onClose}
+          >
             {tModal('cancel')}
           </Button>
           <Button
             size='sm'
             className='h-7 gap-1.5 text-xs'
-            disabled={isRunning || isSaving || !someSelected || !!currentJsonError}
+            disabled={
+              isRunning || isSaving || !someSelected || !!currentJsonError
+            }
             onClick={handleRun}
           >
-            {isSaving ? <Loader2 size={12} className='animate-spin' /> : <Play size={12} />}
+            {isSaving ? (
+              <Loader2 size={12} className='animate-spin' />
+            ) : (
+              <Play size={12} />
+            )}
             {selected.size > 0 && selected.size < allSerials.length
               ? tList('runDialogRunCount', { count: selected.size })
               : tList('runDialogRun')}

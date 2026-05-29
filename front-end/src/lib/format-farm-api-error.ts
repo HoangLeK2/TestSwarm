@@ -1,6 +1,9 @@
 /** FastAPI/Pydantic `detail` from axios response — always a display string for UI. */
 export function formatFarmApiError(err: unknown, fallback: string): string {
-  const e = err as { response?: { data?: { detail?: unknown } }; message?: string };
+  const e = err as {
+    response?: { data?: { detail?: unknown } };
+    message?: string;
+  };
   const d = e.response?.data?.detail;
   if (typeof d === 'string' && d.trim()) return d.trim();
   if (Array.isArray(d)) {

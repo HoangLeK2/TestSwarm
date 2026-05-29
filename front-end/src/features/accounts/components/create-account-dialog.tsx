@@ -18,6 +18,7 @@ import {
   DialogTitle,
   DialogTrigger
 } from '@/components/ui/dialog';
+import { ACCOUNT_PLATFORM_OPTIONS } from '@/constants/account-platforms';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
 
 type FormData = {
@@ -29,18 +30,12 @@ type FormData = {
   notes?: string;
 };
 
-const PLATFORM_OPTIONS = [
-  'facebook',
-  'instagram',
-  'tiktok',
-  'linkedin',
-  'zalo',
-] as const;
-
 export function CreateAccountDialog() {
   const t = useTranslations('accountsFeature.createDialog');
   const schema = z.object({
-    platform: z.enum(PLATFORM_OPTIONS, { message: t('platformRequired') }),
+    platform: z.enum(ACCOUNT_PLATFORM_OPTIONS, {
+      message: t('platformRequired')
+    }),
     username: z.string().min(1, t('usernameRequired')),
     password: z.string().optional(),
     display_name: z.string().optional(),
@@ -86,7 +81,7 @@ export function CreateAccountDialog() {
                 defaultValue='facebook'
                 {...register('platform')}
               >
-                {PLATFORM_OPTIONS.map((p) => (
+                {ACCOUNT_PLATFORM_OPTIONS.map((p) => (
                   <option key={p} value={p}>
                     {p}
                   </option>
@@ -100,7 +95,10 @@ export function CreateAccountDialog() {
             </div>
             <div className='space-y-1'>
               <Label>{t('usernameLabel')}</Label>
-              <Input placeholder={t('usernamePlaceholder')} {...register('username')} />
+              <Input
+                placeholder={t('usernamePlaceholder')}
+                {...register('username')}
+              />
               {errors.username && (
                 <p className='text-xs text-destructive'>
                   {errors.username.message}
@@ -131,7 +129,10 @@ export function CreateAccountDialog() {
           </div>
           <div className='space-y-1'>
             <Label>{t('notesLabel')}</Label>
-            <Textarea placeholder={t('notesPlaceholder')} {...register('notes')} />
+            <Textarea
+              placeholder={t('notesPlaceholder')}
+              {...register('notes')}
+            />
           </div>
           {error && (
             <p className='text-xs text-destructive'>

@@ -4,12 +4,12 @@ import { useTranslations } from 'next-intl';
 import { TrendingUp } from 'lucide-react';
 import {
   useCampaignProgress,
-  useCampaignWorkflows,
+  useCampaignWorkflows
 } from '../../hooks/use-campaigns';
 import {
   Popover,
   PopoverContent,
-  PopoverTrigger,
+  PopoverTrigger
 } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
 
@@ -17,7 +17,7 @@ import { cn } from '@/lib/utils';
 
 function StatPill({
   label,
-  tone = 'neutral',
+  tone = 'neutral'
 }: {
   label: string;
   tone?: 'neutral' | 'running' | 'paused' | 'failed';
@@ -34,7 +34,7 @@ function StatPill({
     <span
       className={cn(
         'inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium leading-4',
-        toneClass,
+        toneClass
       )}
     >
       {label}
@@ -64,7 +64,7 @@ function CampaignProgressBar({ value }: { value: number }) {
 
 export function CampaignRunProgress({
   campaignId,
-  isRunning,
+  isRunning
 }: {
   campaignId: string;
   isRunning: boolean;
@@ -79,7 +79,7 @@ export function CampaignRunProgress({
     isRunning && wfData !== undefined && workflows.length === 0;
   const { data: legacyProgress } = useCampaignProgress(
     campaignId,
-    shouldUseLegacyFallback,
+    shouldUseLegacyFallback
   );
 
   if (!isRunning) return null;
@@ -92,7 +92,10 @@ export function CampaignRunProgress({
     const total = workflows.length;
     const completed = workflows.filter((w) => w.status === 'COMPLETED').length;
     const failed = workflows.filter(
-      (w) => w.status === 'FAILED' || w.status === 'CANCELLED' || w.status === 'TERMINATED',
+      (w) =>
+        w.status === 'FAILED' ||
+        w.status === 'CANCELLED' ||
+        w.status === 'TERMINATED'
     ).length;
     const running = workflows.filter((w) => w.status === 'RUNNING').length;
     const paused = workflows.filter((w) => w.status === 'PAUSED').length;
@@ -105,7 +108,7 @@ export function CampaignRunProgress({
           <span className='text-xs font-semibold uppercase tracking-wide text-muted-foreground'>
             Tiến độ chạy
           </span>
-          <span className='tabular-nums text-base font-bold text-foreground'>
+          <span className='text-base font-bold tabular-nums text-foreground'>
             {pct}%
           </span>
         </div>
@@ -113,7 +116,10 @@ export function CampaignRunProgress({
         <div className='flex flex-wrap items-center gap-1.5'>
           <StatPill label={`${completed}/${total}`} />
           {running > 0 && (
-            <StatPill label={t('wfRunning', { count: running })} tone='running' />
+            <StatPill
+              label={t('wfRunning', { count: running })}
+              tone='running'
+            />
           )}
           {paused > 0 && (
             <StatPill label={t('wfPaused', { count: paused })} tone='paused' />
@@ -132,7 +138,7 @@ export function CampaignRunProgress({
           <span className='text-xs font-semibold uppercase tracking-wide text-muted-foreground'>
             Tiến độ chạy
           </span>
-          <span className='tabular-nums text-base font-bold text-foreground'>
+          <span className='text-base font-bold tabular-nums text-foreground'>
             {pct}%
           </span>
         </div>
@@ -141,7 +147,7 @@ export function CampaignRunProgress({
           <StatPill
             label={t('progressDone', {
               done: legacyProgress.done,
-              total: legacyProgress.total,
+              total: legacyProgress.total
             })}
           />
           {legacyProgress.failed > 0 && (
@@ -165,7 +171,7 @@ export function CampaignRunProgress({
           type='button'
           aria-label={`Tiến độ chạy ${pct}%`}
           className={cn(
-            'group inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-blue-500/30 bg-blue-500/10 px-2.5 text-xs font-semibold text-blue-700 shadow-sm ring-1 ring-transparent transition-all hover:bg-blue-500/15 hover:ring-blue-500/30 dark:text-blue-300',
+            'group inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-blue-500/30 bg-blue-500/10 px-2.5 text-xs font-semibold text-blue-700 shadow-sm ring-1 ring-transparent transition-all hover:bg-blue-500/15 hover:ring-blue-500/30 dark:text-blue-300'
           )}
         >
           <span className='relative inline-flex size-2 items-center justify-center'>

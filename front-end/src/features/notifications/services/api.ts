@@ -70,7 +70,9 @@ export const notificationsApi = {
       .then((r) => r.data),
 
   markAllRead: () =>
-    farmApi.post<{ count: number }>('/notifications/read-all', {}).then((r) => r.data),
+    farmApi
+      .post<{ count: number }>('/notifications/read-all', {})
+      .then((r) => r.data),
 
   listChannels: () =>
     farmApi
@@ -92,6 +94,9 @@ export const notificationsApi = {
 
   testChannel: (channelId: string) =>
     farmApi
-      .post<{ ok: boolean; message: string }>(`/notification-channels/${channelId}/test`, {})
+      .post<{
+        ok: boolean;
+        message: string;
+      }>(`/notification-channels/${channelId}/test`, {})
       .then((r) => r.data)
 };

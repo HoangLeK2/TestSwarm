@@ -187,10 +187,7 @@ async def poll_pairing(pairing_id: str, user: CurrentUser):
 async def list_devices(request: Request, db: DB, user: CurrentUser):
     devices = await repo.list_devices(db, user_id=user.id)
     manager: DeviceManager | None = getattr(request.app.state, "manager", None)
-    try:
-        ctrl = _get_ctrl_servicer()
-    except HTTPException:
-        ctrl = None
+    ctrl = _get_ctrl_servicer_optional()
 
     def _resolve_relay_id(device) -> str | None:
         # Source of truth: control channel registered by agent-boot.
@@ -355,19 +352,38 @@ async def device_sessions(device_id: str, db: DB, user: CurrentUser):
 from api.schemas.relay_agent import RelayCommandOut  # noqa: E402
 
 
-def _get_ctrl_servicer():
+def _get_ctrl_servicer_optional():
     from runtime.transports.agent_control_servicer import get_control_servicer
-    svc = get_control_servicer()
-    if svc is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="control servicer not available (gRPC relay not started)",
-        )
-    return svc
+
+    return get_control_servicer()
 
 
-async def _resolve_ctrl_serial(db, device_id: str, user_id: str, ctrl, manager: DeviceManager | None = None) -> str:
-    """Return the serial string the control servicer actually has a channel for."""
+def _get_relay_manager_optional():
+    try:
+        from runtime.transports.adb_relay_server import get_relay_manager
+
+        return get_relay_manager()
+    except Exception:
+        return None
+
+
+def _serial_reachable(ctrl, relay, serial: str) -> bool:
+    if ctrl is not None and ctrl.conn_for_serial(serial):
+        return True
+    if relay is not None and relay.relay_for_serial(serial):
+        return True
+    return False
+
+
+async def _resolve_relay_serial(
+    db,
+    device_id: str,
+    user_id: str,
+    ctrl,
+    relay,
+    manager: DeviceManager | None = None,
+) -> str:
+    """Return a serial reachable on gRPC control and/or the video/WS relay."""
     device = await repo.get_device(db, device_id)
     if not device or device.user_id != user_id:
         raise HTTPException(status_code=404, detail="Device not found")
@@ -387,7 +403,6 @@ async def _resolve_ctrl_serial(db, device_id: str, user_id: str, ctrl, manager: 
         _add_candidate(f"{device.adb_ip}:{getattr(device, 'adb_port', 5555)}")
         _add_candidate(device.adb_ip)
 
-    # Runtime mapping from WS logical device -> relay ADB serial.
     if manager is not None:
         runtime_device = manager.get_device(device.serial)
         if runtime_device is not None:
@@ -399,70 +414,117 @@ async def _resolve_ctrl_serial(db, device_id: str, user_id: str, ctrl, manager: 
                     pass
             _add_candidate(getattr(runtime_device, "_adb_serial", None))
 
-    # Try exact serial match first.
     for serial in candidates:
-        if ctrl.conn_for_serial(serial):
+        if _serial_reachable(ctrl, relay, serial):
             return serial
 
-    # Then resolve via relay index (ip:port churn, mDNS, USB-preferred remap).
-    try:
-        from runtime.transports.adb_relay_server import get_relay_manager
+    if relay is not None:
+        for hint in candidates:
+            resolved = relay.resolve_serial(hint)
+            if resolved and _serial_reachable(ctrl, relay, resolved):
+                return resolved
 
-        relay = get_relay_manager()
-        if relay is not None:
-            for hint in candidates:
-                resolved = relay.resolve_serial(hint)
-                if resolved and ctrl.conn_for_serial(resolved):
-                    return resolved
-    except Exception:
-        pass
+    if ctrl is not None:
+        for hint in candidates:
+            if "." in hint:
+                ip = hint.split(":")[0]
+                matched = ctrl.find_serial_by_ip(ip)
+                if matched and _serial_reachable(ctrl, relay, matched):
+                    return matched
 
-    # Last fallback by IP for dynamic wireless debug ports.
-    for hint in candidates:
-        if "." in hint:
-            ip = hint.split(":")[0]
-            matched = ctrl.find_serial_by_ip(ip)
-            if matched:
-                return matched
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="Device relay not connected (no control channel or video relay for this serial)",
+    )
 
-    # Neither found — return USB serial so error message is meaningful
-    return device.serial
+
+async def _dispatch_relay_command(
+    db,
+    device_id: str,
+    user_id: str,
+    manager: DeviceManager | None,
+    *,
+    kind: str,
+    timeout: float,
+) -> RelayCommandOut:
+    """Run bootstrap/restart via gRPC control plane, else video/WS relay queue."""
+    ctrl = _get_ctrl_servicer_optional()
+    relay = _get_relay_manager_optional()
+    if ctrl is None and relay is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="relay transport not available",
+        )
+
+    serial = await _resolve_relay_serial(db, device_id, user_id, ctrl, relay, manager)
+
+    if ctrl is not None and ctrl.conn_for_serial(serial):
+        method = getattr(ctrl, kind)
+        res = await method(serial, timeout=timeout)
+        if res.get("ok") or res.get("error") != "no control channel for serial":
+            return RelayCommandOut(**res)
+
+    if relay is not None and relay.relay_for_serial(serial):
+        relay_methods = {
+            "bootstrap": lambda: relay.bootstrap(serial, timeout=timeout),
+            "restart_u2": lambda: relay.restart_u2(serial, timeout=timeout),
+            "restart_atx": lambda: relay.restart_atx(serial, timeout=timeout),
+            "restart_scrcpy": lambda: relay.restart_scrcpy(serial, timeout=timeout),
+        }
+        fn = relay_methods.get(kind)
+        if fn is None:
+            raise HTTPException(status_code=500, detail=f"unknown relay command: {kind}")
+        if kind == "restart_scrcpy":
+            res = await fn()
+            return RelayCommandOut(**res)
+        ok = await fn()
+        return RelayCommandOut(
+            ok=ok,
+            output="",
+            exit_code=0 if ok else -1,
+            error="" if ok else f"{kind} failed for serial {serial!r}",
+        )
+
+    if ctrl is not None:
+        method = getattr(ctrl, kind)
+        return RelayCommandOut(**(await method(serial, timeout=timeout)))
+
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="Device relay not connected",
+    )
 
 
 @router.post("/{device_id}/bootstrap", response_model=RelayCommandOut)
 async def bootstrap_device(device_id: str, request: Request, db: DB, user: CurrentUser):
-    ctrl   = _get_ctrl_servicer()
     manager: DeviceManager | None = getattr(request.app.state, "manager", None)
-    serial = await _resolve_ctrl_serial(db, device_id, user.id, ctrl, manager)
-    res    = await ctrl.bootstrap(serial, timeout=180.0)
-    return RelayCommandOut(**res)
+    return await _dispatch_relay_command(
+        db, device_id, user.id, manager, kind="bootstrap", timeout=180.0
+    )
 
 
 @router.post("/{device_id}/restart-u2", response_model=RelayCommandOut)
 async def restart_u2(device_id: str, request: Request, db: DB, user: CurrentUser):
-    ctrl   = _get_ctrl_servicer()
     manager: DeviceManager | None = getattr(request.app.state, "manager", None)
-    serial = await _resolve_ctrl_serial(db, device_id, user.id, ctrl, manager)
-    res    = await ctrl.restart_u2(serial, timeout=60.0)
-    return RelayCommandOut(**res)
+    return await _dispatch_relay_command(
+        db, device_id, user.id, manager, kind="restart_u2", timeout=60.0
+    )
 
 
 @router.post("/{device_id}/restart-atx", response_model=RelayCommandOut)
 async def restart_atx(device_id: str, request: Request, db: DB, user: CurrentUser):
-    ctrl   = _get_ctrl_servicer()
     manager: DeviceManager | None = getattr(request.app.state, "manager", None)
-    serial = await _resolve_ctrl_serial(db, device_id, user.id, ctrl, manager)
-    res    = await ctrl.restart_atx(serial, timeout=30.0)
-    return RelayCommandOut(**res)
+    return await _dispatch_relay_command(
+        db, device_id, user.id, manager, kind="restart_atx", timeout=30.0
+    )
 
 
 @router.post("/{device_id}/restart-scrcpy", response_model=RelayCommandOut)
 async def restart_scrcpy(device_id: str, request: Request, db: DB, user: CurrentUser):
-    ctrl   = _get_ctrl_servicer()
     manager: DeviceManager | None = getattr(request.app.state, "manager", None)
-    serial = await _resolve_ctrl_serial(db, device_id, user.id, ctrl, manager)
-    res    = await ctrl.restart_scrcpy(serial, timeout=30.0)
-    return RelayCommandOut(**res)
+    return await _dispatch_relay_command(
+        db, device_id, user.id, manager, kind="restart_scrcpy", timeout=30.0
+    )
 
 
 def _to_out(

@@ -1,4 +1,4 @@
-"""Step handlers: launch_app, stop_app, clear_app, wait_app, push_file, pull_file, open_url, key, scroll."""
+"""Step handlers: launch_app, stop_app, clear_app, wait_app, push_file, pull_file, open_url, install_apk, key, scroll."""
 from __future__ import annotations
 
 import logging
@@ -142,6 +142,27 @@ def handle_open_url(sc: ScenarioContext, step: Dict[str, Any], idx: int, result:
         except Exception as exc:
             result["ok"] = False
             result["message"] = f"open_url failed: {exc}"
+
+
+@register_step("install_apk")
+def handle_install_apk(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
+    source = str(step.get("url") or step.get("apk_url") or "").strip()
+    if not source:
+        result["ok"] = False
+        result["message"] = "install_apk: empty url"
+        return
+    try:
+        timeout = float(step.get("timeout", 90.0) or 90.0)
+    except (TypeError, ValueError):
+        timeout = 90.0
+    timeout = min(600.0, max(10.0, timeout))
+    try:
+        sc.device.install(source, timeout=timeout)
+        log.info("[%s] install_apk ok: %s", sc.serial, source)
+        result["message"] = f"install_apk: ok ({source})"
+    except Exception as exc:
+        result["ok"] = False
+        result["message"] = f"install_apk failed: {exc}"
 
 
 @register_step("key")

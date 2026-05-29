@@ -19,6 +19,21 @@ import { useConfirm } from '@/providers/modal-provider';
 
 const CATEGORIES = ['all', 'general', 'facebook', 'tiktok', 'utility'] as const;
 
+function humanizeTechnicalName(name: string) {
+  const raw = String(name ?? '').trim();
+  if (!raw) return '';
+  const spaced = raw
+    .replace(/[_\-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return spaced
+    .split(' ')
+    .map((w) =>
+      w.toUpperCase() === w ? w : w.charAt(0).toUpperCase() + w.slice(1)
+    )
+    .join(' ');
+}
+
 export function TemplateList() {
   const t = useTranslations('scenarioTemplatesFeature.list');
   const tCommon = useTranslations('common');
@@ -39,6 +54,7 @@ export function TemplateList() {
       list = list.filter(
         (tpl) =>
           tpl.name.toLowerCase().includes(q) ||
+          humanizeTechnicalName(tpl.name).toLowerCase().includes(q) ||
           tpl.description?.toLowerCase().includes(q) ||
           tpl.tags?.toLowerCase().includes(q)
       );
@@ -92,7 +108,9 @@ export function TemplateList() {
           {isLoading && (
             <p className='text-sm text-muted-foreground'>{t('loading')}</p>
           )}
-          {error && <p className='text-sm text-destructive'>{t('loadError')}</p>}
+          {error && (
+            <p className='text-sm text-destructive'>{t('loadError')}</p>
+          )}
         </div>
       ) : (
         <>
@@ -125,7 +143,10 @@ export function TemplateList() {
               ))}
             </div>
             <div className='relative flex-1'>
-              <Search size={14} className='absolute left-2.5 top-2.5 text-muted-foreground' />
+              <Search
+                size={14}
+                className='absolute left-2.5 top-2.5 text-muted-foreground'
+              />
               <Input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}

@@ -18,6 +18,7 @@ DEFAULT_EVENTS = [
     "device.disconnect",
     "device.reconnect",
     "task.failed",
+    "dlq.threshold",
     "campaign.complete",
     "campaign.failed",
     "schedule.triggered",

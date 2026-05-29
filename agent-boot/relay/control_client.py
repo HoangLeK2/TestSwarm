@@ -176,8 +176,9 @@ class AgentControlClient:
 
         loop = asyncio.get_event_loop()
         try:
+            from relay.runtime import adb_executor
             raw_result = await loop.run_in_executor(
-                None,
+                adb_executor(),
                 self._agent._execute_command,
                 msg_id, serial, raw_cmd, timeout, cmd_type,
             )

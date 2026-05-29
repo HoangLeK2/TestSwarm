@@ -4,7 +4,7 @@ import { DeviceGroupList } from '@/features/device-groups/components/device-grou
 
 export default function DeviceGroupsPage() {
   return (
-    <div >
+    <div>
       <DeviceGroupList />
     </div>
   );

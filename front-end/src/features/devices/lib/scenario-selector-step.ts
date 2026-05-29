@@ -29,17 +29,20 @@ const SELECTOR_STEP_TYPES = new Set([
   'input_selector',
   'long_tap_selector',
   'scroll_to',
-  'if_element',
+  'if_element'
 ]);
 
-export function selectorFromPick(by: string, value: string): ScenarioSelectorShape {
+export function selectorFromPick(
+  by: string,
+  value: string
+): ScenarioSelectorShape {
   return { by: by as SelectorBy, value: String(value ?? '').trim() };
 }
 
 export function mergeSelectorShape(
   base: ScenarioSelectorShape | undefined,
   by: string,
-  value: string,
+  value: string
 ): ScenarioSelectorShape {
   const trimmed = String(value ?? '').trim();
   if (base && (base.conditions || base.instance != null || base.chain)) {
@@ -66,7 +69,7 @@ export function buildRecordedTapStep(args: {
     value: selector.value,
     fallback: { rx, ry },
     timeout: 4,
-    ...(screen ? { screen } : {}),
+    ...(screen ? { screen } : {})
   };
 }
 
@@ -86,7 +89,7 @@ export function buildTapSelectorStep(args: {
     selector,
     by: selector.by,
     value: selector.value,
-    timeout,
+    timeout
   };
   if (rx != null && ry != null) {
     step.fallback = { rx, ry };
@@ -101,7 +104,7 @@ export function buildSelectorStep(
   by: string,
   value: string,
   extra?: Record<string, unknown>,
-  selector?: ScenarioSelectorShape,
+  selector?: ScenarioSelectorShape
 ): Record<string, unknown> {
   const spec = selector ?? selectorFromPick(by, value);
   return {
@@ -109,12 +112,14 @@ export function buildSelectorStep(
     selector: spec,
     by: spec.by,
     value: spec.value,
-    ...extra,
+    ...extra
   };
 }
 
 /** Hoist flat by/value into nested selector; sync fallback_rx/ry → fallback. */
-export function normalizeSelectorStepFields(step: Record<string, unknown>): Record<string, unknown> {
+export function normalizeSelectorStepFields(
+  step: Record<string, unknown>
+): Record<string, unknown> {
   if (!step || typeof step !== 'object') return step;
   const next = { ...step };
   const t = String(next.type ?? '');
@@ -130,20 +135,24 @@ export function normalizeSelectorStepFields(step: Record<string, unknown>): Reco
 
   if (!SELECTOR_STEP_TYPES.has(t)) return next;
 
-  const by = String(next.by ?? (next.selector as Record<string, unknown>)?.by ?? '').trim();
-  const value = String(next.value ?? (next.selector as Record<string, unknown>)?.value ?? '').trim();
+  const by = String(
+    next.by ?? (next.selector as Record<string, unknown>)?.by ?? ''
+  ).trim();
+  const value = String(
+    next.value ?? (next.selector as Record<string, unknown>)?.value ?? ''
+  ).trim();
 
   if (by && value) {
-    const existing = (next.selector && typeof next.selector === 'object'
-      ? next.selector
-      : {}) as Record<string, unknown>;
+    const existing = (
+      next.selector && typeof next.selector === 'object' ? next.selector : {}
+    ) as Record<string, unknown>;
     next.selector = {
       ...existing,
       by,
       value,
       ...(existing.conditions ? { conditions: existing.conditions } : {}),
       ...(existing.instance != null ? { instance: existing.instance } : {}),
-      ...(existing.chain ? { chain: existing.chain } : {}),
+      ...(existing.chain ? { chain: existing.chain } : {})
     };
     next.by = by;
     next.value = value;
@@ -160,10 +169,13 @@ export function normalizeSelectorStepFields(step: Record<string, unknown>): Reco
   return next;
 }
 
-export function selectorDisplay(step: Record<string, unknown>): { by?: string; value?: string } {
+export function selectorDisplay(step: Record<string, unknown>): {
+  by?: string;
+  value?: string;
+} {
   const sel = step.selector as Record<string, unknown> | undefined;
   return {
     by: String(sel?.by ?? step.by ?? ''),
-    value: String(sel?.value ?? step.value ?? ''),
+    value: String(sel?.value ?? step.value ?? '')
   };
 }

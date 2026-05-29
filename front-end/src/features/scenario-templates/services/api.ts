@@ -5,7 +5,11 @@ import type {
   ScenarioTemplateUpdate
 } from '../../device-farm/services/generated/DeviceFarmApi';
 
-export type { ScenarioTemplateOut, ScenarioTemplateCreate, ScenarioTemplateUpdate };
+export type {
+  ScenarioTemplateOut,
+  ScenarioTemplateCreate,
+  ScenarioTemplateUpdate
+};
 
 export const scenarioTemplatesApi = {
   list: (query?: { category?: string; tags?: string }) =>
@@ -13,9 +17,13 @@ export const scenarioTemplatesApi = {
       .get<ScenarioTemplateOut[]>('/scenario-templates', { params: query })
       .then((r) => r.data),
   get: (templateId: string) =>
-    farmApi.get<ScenarioTemplateOut>(`/scenario-templates/${templateId}`).then((r) => r.data),
+    farmApi
+      .get<ScenarioTemplateOut>(`/scenario-templates/${templateId}`)
+      .then((r) => r.data),
   create: (data: ScenarioTemplateCreate) =>
-    farmApi.post<ScenarioTemplateOut>('/scenario-templates', data).then((r) => r.data),
+    farmApi
+      .post<ScenarioTemplateOut>('/scenario-templates', data)
+      .then((r) => r.data),
   update: (templateId: string, data: ScenarioTemplateUpdate) =>
     farmApi
       .patch<ScenarioTemplateOut>(`/scenario-templates/${templateId}`, data)

@@ -9,7 +9,7 @@ import {
   useScenarios,
   useUpdateCampaignScenario,
   useUpdateScenario,
-  useCompileScenario,
+  useCompileScenario
 } from '../hooks/use-campaigns';
 import type { CampaignOut, ScenarioOut } from '../types';
 import { Button } from '@/components/ui/button';
@@ -26,15 +26,34 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
+  SelectValue
 } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
 import { Textarea } from '@/components/ui/textarea';
-import { FileText, Trash2, Circle, Square, RefreshCw, Sparkles, FolderOpen, MousePointerClick, Move, List, GitBranch, Loader2 } from 'lucide-react';
-import { cancelPreviewStream, fetchHierarchy, interruptDevice, previewScenario, previewScenarioStream } from '@/features/devices/services/api';
+import {
+  FileText,
+  Trash2,
+  Circle,
+  Square,
+  RefreshCw,
+  Sparkles,
+  FolderOpen,
+  MousePointerClick,
+  Move,
+  List,
+  GitBranch,
+  Loader2
+} from 'lucide-react';
+import {
+  cancelPreviewStream,
+  fetchHierarchy,
+  interruptDevice,
+  previewScenario,
+  previewScenarioStream
+} from '@/features/devices/services/api';
 import {
   createPreviewRunSession,
-  type ActivePreviewTrace,
+  type ActivePreviewTrace
 } from '@/features/devices/lib/preview-run-session';
 import type { FixedLayoutPluginContext } from '@flowgram.ai/fixed-layout-editor';
 import { StepDetailPanel } from './flow-editor/step-detail-panel';
@@ -42,7 +61,7 @@ import type { FlowStep } from './scenario-steps/types';
 import {
   findStepByFlowgramId,
   mergeStepByFlowgramId,
-  patchStepByFlowgramId,
+  patchStepByFlowgramId
 } from '@/features/scenario-templates/components/scenario-flow-editor/patch-step-tree';
 import { applyStepsToFlowgramDocument } from '@/features/scenario-templates/components/scenario-flow-editor/flow-doc-sync';
 import type { FlowgramRunState } from '@/features/scenario-templates/components/scenario-flow-editor/flowgram-scenario-context';
@@ -56,20 +75,28 @@ import { stepsToGraph } from '../utils/steps-to-graph';
 import type { FlowNode, FlowEdge } from './scenario-steps/types';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import { findSelectorInXml } from '@/features/devices/utils/control-record-xml';
-import { buildTapSelectorStep, normalizeSelectorStepFields } from '@/features/devices/lib/scenario-selector-step';
+import {
+  buildTapSelectorStep,
+  normalizeSelectorStepFields
+} from '@/features/devices/lib/scenario-selector-step';
 import { useConfirm } from '@/providers/modal-provider';
 
 const DynamicFlowgramCanvas = dynamic(
   () =>
-    import('@/features/scenario-templates/components/scenario-flow-editor/canvas').then((m) => m.FlowgramCanvas),
+    import(
+      '@/features/scenario-templates/components/scenario-flow-editor/canvas'
+    ).then((m) => m.FlowgramCanvas),
   {
     ssr: false,
     loading: () => (
-      <div className="flex min-h-[min(380px,42vh)] items-center justify-center rounded-md border border-border bg-muted/20">
-        <Loader2 className="size-6 animate-spin text-muted-foreground" aria-hidden />
+      <div className='flex min-h-[min(380px,42vh)] items-center justify-center rounded-md border border-border bg-muted/20'>
+        <Loader2
+          className='size-6 animate-spin text-muted-foreground'
+          aria-hidden
+        />
       </div>
-    ),
-  },
+    )
+  }
 );
 
 type SelectorBy =
@@ -90,16 +117,23 @@ const ALLOWED_SELECTOR_BY: readonly SelectorBy[] = [
   'description',
   'descriptionContains',
   'descriptionStartsWith',
-  'content-desc',
+  'content-desc'
 ];
 
-function normalizeSelectorBy(by: unknown, fallback: SelectorBy = 'text'): SelectorBy {
+function normalizeSelectorBy(
+  by: unknown,
+  fallback: SelectorBy = 'text'
+): SelectorBy {
   const raw = String(by ?? '').trim();
   if (!raw) return fallback;
   if (ALLOWED_SELECTOR_BY.includes(raw as SelectorBy)) return raw as SelectorBy;
 
   const lower = raw.toLowerCase().replace(/\s+/g, '');
-  if (lower === 'content-desc' || lower === 'contentdesc' || lower === 'accessibilityid') {
+  if (
+    lower === 'content-desc' ||
+    lower === 'contentdesc' ||
+    lower === 'accessibilityid'
+  ) {
     return 'content-desc';
   }
   if (lower === 'description') {
@@ -131,34 +165,55 @@ function sanitizeScenarioStep(step: any): any {
     if (!Number.isFinite(c) || c < 1) next.count = 3;
   }
   if (next.type === 'random_pick' && Array.isArray(next.branches)) {
-    next.branches = next.branches.filter((br: any) => Array.isArray(br?.steps) && br.steps.length > 0);
+    next.branches = next.branches.filter(
+      (br: any) => Array.isArray(br?.steps) && br.steps.length > 0
+    );
   }
   if (next.selector && typeof next.selector === 'object') {
     next.selector = {
       ...next.selector,
-      ...(next.selector.by != null ? { by: normalizeSelectorBy(next.selector.by) } : {}),
+      ...(next.selector.by != null
+        ? { by: normalizeSelectorBy(next.selector.by) }
+        : {})
     };
   }
   if (next.condition && typeof next.condition === 'object') {
     const cond = { ...(next.condition as Record<string, any>) };
-    if (cond.element_exists && typeof cond.element_exists === 'object' && cond.element_exists.by != null) {
-      cond.element_exists = { ...cond.element_exists, by: normalizeSelectorBy(cond.element_exists.by) };
+    if (
+      cond.element_exists &&
+      typeof cond.element_exists === 'object' &&
+      cond.element_exists.by != null
+    ) {
+      cond.element_exists = {
+        ...cond.element_exists,
+        by: normalizeSelectorBy(cond.element_exists.by)
+      };
     }
-    if (cond.element_not_exists && typeof cond.element_not_exists === 'object' && cond.element_not_exists.by != null) {
-      cond.element_not_exists = { ...cond.element_not_exists, by: normalizeSelectorBy(cond.element_not_exists.by) };
+    if (
+      cond.element_not_exists &&
+      typeof cond.element_not_exists === 'object' &&
+      cond.element_not_exists.by != null
+    ) {
+      cond.element_not_exists = {
+        ...cond.element_not_exists,
+        by: normalizeSelectorBy(cond.element_not_exists.by)
+      };
     }
     next.condition = cond;
   }
 
   if (Array.isArray(next.then)) next.then = next.then.map(sanitizeScenarioStep);
   if (Array.isArray(next.else)) next.else = next.else.map(sanitizeScenarioStep);
-  if (Array.isArray(next.steps)) next.steps = next.steps.map(sanitizeScenarioStep);
+  if (Array.isArray(next.steps))
+    next.steps = next.steps.map(sanitizeScenarioStep);
   if (Array.isArray(next.branches)) {
     next.branches = next.branches.map((br: any) => {
       if (!br || typeof br !== 'object') return br;
       return {
         ...br,
-        ...(Array.isArray(br.steps) ? { steps: br.steps.map(sanitizeScenarioStep) } : {}),
+        ...(Array.isArray(br.steps)
+          ? { steps: br.steps.map(sanitizeScenarioStep) }
+          : {})
       };
     });
   }
@@ -174,7 +229,13 @@ function sanitizeScenarioStepsForApi(input: unknown): any[] {
 function flattenVarDefs(vars: Record<string, any>): Record<string, any> {
   const out: Record<string, any> = {};
   for (const [k, v] of Object.entries(vars)) {
-    if (v !== null && typeof v === 'object' && !Array.isArray(v) && 'type' in v && 'default' in v) {
+    if (
+      v !== null &&
+      typeof v === 'object' &&
+      !Array.isArray(v) &&
+      'type' in v &&
+      'default' in v
+    ) {
       out[k] = (v as { default?: unknown }).default;
     } else {
       out[k] = v;
@@ -223,22 +284,69 @@ type Step =
         | 'bottom_right'
         | 'search_bar';
     }
-  | { type: 'tap'; selector?: { by?: SelectorBy; value?: string }; fallback?: { rx?: number; ry?: number }; timeout?: number }
+  | {
+      type: 'tap';
+      selector?: { by?: SelectorBy; value?: string };
+      fallback?: { rx?: number; ry?: number };
+      timeout?: number;
+    }
   | { type: 'tap_ratio'; x: number; y: number }
-  | { type: 'swipe_ratio'; x1: number; y1: number; x2: number; y2: number; duration_ms?: number }
-  | { type: 'tap_selector'; by: SelectorBy; value: string; fallback_rx?: number; fallback_ry?: number; timeout?: number }
+  | {
+      type: 'swipe_ratio';
+      x1: number;
+      y1: number;
+      x2: number;
+      y2: number;
+      duration_ms?: number;
+    }
+  | {
+      type: 'tap_selector';
+      by: SelectorBy;
+      value: string;
+      fallback_rx?: number;
+      fallback_ry?: number;
+      timeout?: number;
+    }
   | { type: 'wait_element'; by: SelectorBy; value: string; timeout?: number }
   | { type: 'assert_element'; by: SelectorBy; value: string; timeout?: number }
-  | { type: 'input_selector'; by: SelectorBy; value: string; text: string; clear_first?: boolean }
-  | { type: 'long_tap_selector'; by: SelectorBy; value: string; duration_ms?: number }
-  | { type: 'scroll_to'; by: SelectorBy; value: string; direction?: 'down' | 'up'; max_swipes?: number }
+  | {
+      type: 'input_selector';
+      by: SelectorBy;
+      value: string;
+      text: string;
+      clear_first?: boolean;
+    }
+  | {
+      type: 'long_tap_selector';
+      by: SelectorBy;
+      value: string;
+      duration_ms?: number;
+    }
+  | {
+      type: 'scroll_to';
+      by: SelectorBy;
+      value: string;
+      direction?: 'down' | 'up';
+      max_swipes?: number;
+    }
   | { type: 'wait_stable'; timeout?: number; stable_duration?: number }
   | { type: 'dismiss_popup'; retries?: number }
   | { type: 'input_text'; via: 'u2' | 'a11y_key'; text: string }
   | { type: 'key'; key: string }
   | { type: 'scroll_down'; repeats: number; start_x_ratio?: number | string }
-  | { type: 'set_variable'; name: string; value?: string; from_list?: string[]; increment?: number }
-  | { type: 'run_scenario'; scenario_id?: string; scenario_name?: string; variables?: Record<string, any> };
+  | {
+      type: 'set_variable';
+      name: string;
+      value?: string;
+      from_list?: string[];
+      increment?: number;
+    }
+  | {
+      type: 'run_scenario';
+      scenario_id?: string;
+      scenario_name?: string;
+      variables?: Record<string, any>;
+    };
 
 type Props = {
   campaign: CampaignOut;
@@ -258,27 +366,29 @@ function coerceSteps(raw: any[]): Step[] {
         return {
           type: 'open_url',
           url: String(s.url || ''),
-          package: (s.package != null && String(s.package).trim()) ? String(s.package).trim() : undefined
+          package:
+            s.package != null && String(s.package).trim()
+              ? String(s.package).trim()
+              : undefined
         };
       case 'wait':
         return { type: 'wait', seconds: Number(s.seconds || 0) };
       case 'tap_position':
         return {
           type: 'tap_position',
-          pos: (
-            s.pos === 'top_left'
-            || s.pos === 'top_center'
-            || s.pos === 'top_right'
-            || s.pos === 'middle_left'
-            || s.pos === 'middle_center'
-            || s.pos === 'middle_right'
-            || s.pos === 'bottom_left'
-            || s.pos === 'bottom_center'
-            || s.pos === 'bottom_right'
-            || s.pos === 'search_bar'
-          )
-            ? s.pos
-            : 'middle_center'
+          pos:
+            s.pos === 'top_left' ||
+            s.pos === 'top_center' ||
+            s.pos === 'top_right' ||
+            s.pos === 'middle_left' ||
+            s.pos === 'middle_center' ||
+            s.pos === 'middle_right' ||
+            s.pos === 'bottom_left' ||
+            s.pos === 'bottom_center' ||
+            s.pos === 'bottom_right' ||
+            s.pos === 'search_bar'
+              ? s.pos
+              : 'middle_center'
         };
       case 'tap':
         return {
@@ -287,19 +397,25 @@ function coerceSteps(raw: any[]): Step[] {
             ? {
                 selector: {
                   ...(s.selector.by ? { by: s.selector.by } : {}),
-                  ...(s.selector.value != null ? { value: String(s.selector.value) } : {}),
-                },
+                  ...(s.selector.value != null
+                    ? { value: String(s.selector.value) }
+                    : {})
+                }
               }
             : {}),
           ...(s.fallback && typeof s.fallback === 'object'
             ? {
                 fallback: {
-                  ...(s.fallback.rx != null ? { rx: Number(s.fallback.rx) } : {}),
-                  ...(s.fallback.ry != null ? { ry: Number(s.fallback.ry) } : {}),
-                },
+                  ...(s.fallback.rx != null
+                    ? { rx: Number(s.fallback.rx) }
+                    : {}),
+                  ...(s.fallback.ry != null
+                    ? { ry: Number(s.fallback.ry) }
+                    : {})
+                }
               }
             : {}),
-          ...(s.timeout != null ? { timeout: Number(s.timeout) } : {}),
+          ...(s.timeout != null ? { timeout: Number(s.timeout) } : {})
         };
       case 'tap_ratio':
         return {
@@ -327,9 +443,16 @@ function coerceSteps(raw: any[]): Step[] {
           ...(s.fallback && typeof s.fallback === 'object'
             ? { fallback: s.fallback }
             : s.fallback_rx != null && s.fallback_ry != null
-              ? { fallback: { rx: Number(s.fallback_rx), ry: Number(s.fallback_ry) }, fallback_rx: Number(s.fallback_rx), fallback_ry: Number(s.fallback_ry) }
+              ? {
+                  fallback: {
+                    rx: Number(s.fallback_rx),
+                    ry: Number(s.fallback_ry)
+                  },
+                  fallback_rx: Number(s.fallback_rx),
+                  fallback_ry: Number(s.fallback_ry)
+                }
               : {}),
-          ...(s.timeout != null ? { timeout: Number(s.timeout) } : {}),
+          ...(s.timeout != null ? { timeout: Number(s.timeout) } : {})
         }) as Step;
       }
       case 'wait_element': {
@@ -341,7 +464,7 @@ function coerceSteps(raw: any[]): Step[] {
           by,
           value,
           timeout: Number(s.timeout ?? 10),
-          ...(s.poll != null ? { poll: Number(s.poll) } : {}),
+          ...(s.poll != null ? { poll: Number(s.poll) } : {})
         }) as Step;
       }
       case 'assert_element': {
@@ -353,7 +476,7 @@ function coerceSteps(raw: any[]): Step[] {
           by,
           value,
           timeout: Number(s.timeout ?? 5),
-          ...(s.poll != null ? { poll: Number(s.poll) } : {}),
+          ...(s.poll != null ? { poll: Number(s.poll) } : {})
         }) as Step;
       }
       case 'input_selector': {
@@ -365,7 +488,7 @@ function coerceSteps(raw: any[]): Step[] {
           by,
           value,
           text: String(s.text ?? ''),
-          clear_first: s.clear_first !== false,
+          clear_first: s.clear_first !== false
         }) as Step;
       }
       case 'long_tap_selector': {
@@ -376,7 +499,7 @@ function coerceSteps(raw: any[]): Step[] {
           selector: { by, value },
           by,
           value,
-          duration_ms: Number(s.duration_ms ?? 800),
+          duration_ms: Number(s.duration_ms ?? 800)
         }) as Step;
       }
       case 'scroll_to': {
@@ -388,19 +511,21 @@ function coerceSteps(raw: any[]): Step[] {
           by,
           value,
           direction: s.direction === 'up' ? 'up' : 'down',
-          max_swipes: Number(s.max_swipes ?? 5),
+          max_swipes: Number(s.max_swipes ?? 5)
         }) as Step;
       }
       case 'wait_stable':
         return {
           type: 'wait_stable',
           ...(s.timeout != null ? { timeout: Number(s.timeout) } : {}),
-          ...(s.stable_duration != null ? { stable_duration: Number(s.stable_duration) } : {}),
+          ...(s.stable_duration != null
+            ? { stable_duration: Number(s.stable_duration) }
+            : {})
         };
       case 'dismiss_popup':
         return {
           type: 'dismiss_popup',
-          ...(s.retries != null ? { retries: Number(s.retries) } : {}),
+          ...(s.retries != null ? { retries: Number(s.retries) } : {})
         };
       case 'input_text':
         return {
@@ -426,7 +551,9 @@ function coerceSteps(raw: any[]): Step[] {
           type: 'set_variable',
           name: String(s.name || ''),
           ...(s.value != null ? { value: String(s.value) } : {}),
-          ...(Array.isArray(s.from_list) ? { from_list: s.from_list.map(String) } : {}),
+          ...(Array.isArray(s.from_list)
+            ? { from_list: s.from_list.map(String) }
+            : {}),
           ...(s.increment != null ? { increment: Number(s.increment) } : {})
         };
       default:
@@ -440,11 +567,15 @@ function coerceSteps(raw: any[]): Step[] {
 /** Tắt tạm UI Flowgram (toggle + canvas). Đổi thành `true` để bật lại. */
 const ENABLE_FLOWGRAM_SCENARIO_UI = false;
 
-export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: Props) {
+export function ScenarioDialog({
+  campaign,
+  scenario: scenarioProp,
+  children
+}: Props) {
   /** Prefer explicit prop; else first scenario row (API order) — legacy JSON field removed. */
   const effectiveRow = useMemo(
     () => scenarioProp ?? campaign.scenarios?.[0],
-    [scenarioProp, campaign.scenarios],
+    [scenarioProp, campaign.scenarios]
   );
   const [open, setOpen] = useState(false);
   const [instructions, setInstructions] = useState('');
@@ -456,7 +587,9 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
   const [rawJson, setRawJson] = useState('');
   const tScenarioForm = useTranslations('components.scenariosForm');
   const tCommon = useTranslations('common');
-  const tScenarioValidation = useTranslations('campaignsFeature.scenarioValidation');
+  const tScenarioValidation = useTranslations(
+    'campaignsFeature.scenarioValidation'
+  );
   const confirm = useConfirm();
   const { data: accountGroups = [] } = useAccountGroups();
   const [deviceModel, setDeviceModel] = useState('');
@@ -464,10 +597,13 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
   const [browserApp, setBrowserApp] = useState('');
   const [deviceNotes, setDeviceNotes] = useState('');
   // PATCH /campaigns/:id/scenario when no row yet; else scenario row APIs
-  const { mutate: saveScenario, isPending: savingLegacy } = useUpdateCampaignScenario();
-  const { mutate: compileScenario, isPending: compilingLegacy } = useCompileCampaignScenario();
+  const { mutate: saveScenario, isPending: savingLegacy } =
+    useUpdateCampaignScenario();
+  const { mutate: compileScenario, isPending: compilingLegacy } =
+    useCompileCampaignScenario();
   const { mutate: saveScenarioRow, isPending: savingRow } = useUpdateScenario();
-  const { mutate: compileScenarioRow, isPending: compilingRow } = useCompileScenario();
+  const { mutate: compileScenarioRow, isPending: compilingRow } =
+    useCompileScenario();
   const useRowApi = Boolean(effectiveRow?.id);
   const isPending = useRowApi ? savingRow : savingLegacy;
   const compiling = useRowApi ? compilingRow : compilingLegacy;
@@ -475,13 +611,17 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
   const [previewSerial, setPreviewSerial] = useState('');
   const [xmlSerial, setXmlSerial] = useState('');
   /** Nhiều màn hình: mỗi lần "Thu thập XML" = 1 snapshot từ màn hình hiện tại */
-  const [collectedXmls, setCollectedXmls] = useState<Array<{ id: string; xml: string }>>([]);
+  const [collectedXmls, setCollectedXmls] = useState<
+    Array<{ id: string; xml: string }>
+  >([]);
   const [previewingAll, setPreviewingAll] = useState(false);
   const [fetchingXml, setFetchingXml] = useState(false);
   const [recording, setRecording] = useState(false);
   const recordingRef = useRef(false);
   /** Thủ công: thêm tap_ratio / swipe_ratio từ mirror (không dùng chế độ Ghi). */
-  const [coordPickMode, setCoordPickMode] = useState<null | 'tap' | 'swipe'>(null);
+  const [coordPickMode, setCoordPickMode] = useState<null | 'tap' | 'swipe'>(
+    null
+  );
   const deviceMirrorRef = useRef<HTMLDivElement>(null);
   /** XML cached from device — used for instant tap→selector without backend roundtrip */
   const [recordXml, setRecordXml] = useState<string | null>(null);
@@ -493,15 +633,22 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
   const [flowCanvasKey, setFlowCanvasKey] = useState(0);
   const [flowSelectedFgId, setFlowSelectedFgId] = useState<string | null>(null);
   const [flowDetailStep, setFlowDetailStep] = useState<FlowStep | null>(null);
-  const [flowRunStates, setFlowRunStates] = useState<Record<string, FlowgramRunState>>({});
+  const [flowRunStates, setFlowRunStates] = useState<
+    Record<string, FlowgramRunState>
+  >({});
   const [stepRunStates, setStepRunStates] = useState<
     Record<string, 'idle' | 'running' | 'ok' | 'error'>
   >({});
-  const [flowCoordPick, setFlowCoordPick] = useState<null | { fgId: string; kind: 'tap' | 'swipe' }>(null);
+  const [flowCoordPick, setFlowCoordPick] = useState<null | {
+    fgId: string;
+    kind: 'tap' | 'swipe';
+  }>(null);
   const flowCtxRef = useRef<FixedLayoutPluginContext | null>(null);
   const stepsRef = useRef<Step[]>([]);
   const flowSelectedFgIdRef = useRef<string | null>(null);
-  const flowDetailDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flowDetailDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
   const flowRunAbortRef = useRef<AbortController | null>(null);
   const stepRunAbortRef = useRef<AbortController | null>(null);
   const flowRunningIdsRef = useRef<Set<string>>(new Set());
@@ -512,7 +659,7 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
   const previewRunIdRef = useRef(0);
   const previewSession = useMemo(
     () => createPreviewRunSession(activePreviewRef, previewRunIdRef),
-    [],
+    []
   );
 
   const hardStopPreview = useCallback(() => {
@@ -583,7 +730,9 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
       return;
     }
     const found = findStepByFlowgramId(steps as FlowStep[], flowSelectedFgId);
-    setFlowDetailStep(found ? (JSON.parse(JSON.stringify(found)) as FlowStep) : null);
+    setFlowDetailStep(
+      found ? (JSON.parse(JSON.stringify(found)) as FlowStep) : null
+    );
   }, [flowSelectedFgId, steps]);
 
   // Debounced graph sync: stepsToGraph is O(n) — avoid running on every keystroke.
@@ -598,26 +747,34 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
     }, 300);
   }, []);
 
-  const replaceStepsAndGraph = useCallback((next: Step[]) => {
-    setSteps(next);
-    scheduleGraphSync(next);
-  }, [scheduleGraphSync]);
-
-  const appendStepsWithGraphSync = useCallback((append: (prev: Step[]) => Step[]) => {
-    // Compute next outside updater so we can schedule graph sync without
-    // calling setState from inside a setState updater.
-    setSteps((prev) => {
-      const next = append(prev);
+  const replaceStepsAndGraph = useCallback(
+    (next: Step[]) => {
+      setSteps(next);
       scheduleGraphSync(next);
-      return next;
-    });
-  }, [scheduleGraphSync]);
+    },
+    [scheduleGraphSync]
+  );
+
+  const appendStepsWithGraphSync = useCallback(
+    (append: (prev: Step[]) => Step[]) => {
+      // Compute next outside updater so we can schedule graph sync without
+      // calling setState from inside a setState updater.
+      setSteps((prev) => {
+        const next = append(prev);
+        scheduleGraphSync(next);
+        return next;
+      });
+    },
+    [scheduleGraphSync]
+  );
 
   const handleFlowRunLeaf = useCallback(
     async (fgId: string, step: FlowStep) => {
       const serial = previewSerial?.trim();
       if (!serial) {
-        toast.error('Chọn thiết bị trong dropdown "Chọn device để test" (cùng hàng với Test toàn bộ)');
+        toast.error(
+          'Chọn thiết bị trong dropdown "Chọn device để test" (cùng hàng với Test toàn bộ)'
+        );
         return;
       }
       if (flowRunningIdsRef.current.has(fgId)) return;
@@ -635,12 +792,15 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
           [payload],
           previewSession.makeStreamHandler(runId, serial, (ev) => {
             if (ev.event === 'step_done') {
-              setFlowRunStates((s) => ({ ...s, [fgId]: ev.ok ? 'ok' : 'error' }));
+              setFlowRunStates((s) => ({
+                ...s,
+                [fgId]: ev.ok ? 'ok' : 'error'
+              }));
               if (!ev.ok) toast.error(String(ev.message ?? 'Step lỗi'));
             }
           }),
           ctrl.signal,
-          flattenVarDefs(variables),
+          flattenVarDefs(variables)
         );
       } catch (e) {
         if (!ctrl.signal.aborted) {
@@ -659,18 +819,23 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
         }, 2800);
       }
     },
-    [previewSerial, variables, previewSession],
+    [previewSerial, variables, previewSession]
   );
 
   const handleFlowDetailChange = useCallback(
     (next: FlowStep) => {
       setFlowDetailStep(JSON.parse(JSON.stringify(next)) as FlowStep);
-      if (flowDetailDebounceRef.current) clearTimeout(flowDetailDebounceRef.current);
+      if (flowDetailDebounceRef.current)
+        clearTimeout(flowDetailDebounceRef.current);
       flowDetailDebounceRef.current = setTimeout(() => {
         const fgId = flowSelectedFgIdRef.current;
         const ctx = flowCtxRef.current;
         if (!fgId || !ctx) return;
-        const patched = patchStepByFlowgramId(stepsRef.current as FlowStep[], fgId, next);
+        const patched = patchStepByFlowgramId(
+          stepsRef.current as FlowStep[],
+          fgId,
+          next
+        );
         try {
           const synced = applyStepsToFlowgramDocument(ctx, patched);
           replaceStepsAndGraph(synced as Step[]);
@@ -679,7 +844,7 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
         }
       }, 240);
     },
-    [replaceStepsAndGraph],
+    [replaceStepsAndGraph]
   );
 
   const flowWorkbench = useMemo(
@@ -688,16 +853,18 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
       selectedFgId: flowSelectedFgId,
       setSelectedFgId: setFlowSelectedFgId,
       runStates: flowRunStates,
-      onRunLeafStep: handleFlowRunLeaf,
+      onRunLeafStep: handleFlowRunLeaf
     }),
-    [previewSerial, flowSelectedFgId, flowRunStates, handleFlowRunLeaf],
+    [previewSerial, flowSelectedFgId, flowRunStates, handleFlowRunLeaf]
   );
 
   const handleInlineRunStep = useCallback(
     async (step: FlowStep, runKey: string) => {
       const serial = (previewSerial || devices[0]?.serial || '').trim();
       if (!serial) {
-        toast.error('Chọn thiết bị trong dropdown "Chọn device để test" (cùng hàng với Test toàn bộ)');
+        toast.error(
+          'Chọn thiết bị trong dropdown "Chọn device để test" (cùng hàng với Test toàn bộ)'
+        );
         return;
       }
       if (stepRunStates[runKey] === 'running') return;
@@ -708,7 +875,10 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
       const runId = previewSession.beginRun();
 
       setStepRunStates((s) => ({ ...s, [runKey]: 'running' }));
-      const payload = JSON.parse(JSON.stringify(step)) as Record<string, unknown>;
+      const payload = JSON.parse(JSON.stringify(step)) as Record<
+        string,
+        unknown
+      >;
       delete payload._fgId;
 
       try {
@@ -717,12 +887,15 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
           [payload],
           previewSession.makeStreamHandler(runId, serial, (ev) => {
             if (ev.event === 'step_done') {
-              setStepRunStates((s) => ({ ...s, [runKey]: ev.ok ? 'ok' : 'error' }));
+              setStepRunStates((s) => ({
+                ...s,
+                [runKey]: ev.ok ? 'ok' : 'error'
+              }));
               if (!ev.ok) toast.error(String(ev.message ?? 'Step lỗi'));
             }
           }),
           ctrl.signal,
-          flattenVarDefs(variables),
+          flattenVarDefs(variables)
         );
       } catch (e) {
         if (ctrl.signal.aborted) {
@@ -748,7 +921,7 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
         }
       }
     },
-    [previewSerial, devices, stepRunStates, variables, previewSession],
+    [previewSerial, devices, stepRunStates, variables, previewSession]
   );
 
   const handleFetchXml = async () => {
@@ -762,7 +935,9 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
           ...prev,
           { id: `xml-${Date.now()}-${prev.length}`, xml: trimmed }
         ]);
-        toast.success(`Đã thêm màn hình #${collectedXmls.length + 1} (${trimmed.length.toLocaleString()} ký tự)`);
+        toast.success(
+          `Đã thêm màn hình #${collectedXmls.length + 1} (${trimmed.length.toLocaleString()} ký tự)`
+        );
       } else {
         toast.warning('Thiết bị không trả XML');
       }
@@ -774,8 +949,12 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
     }
   };
 
-  useEffect(() => { recordingRef.current = recording; }, [recording]);
-  useEffect(() => { recordXmlRef.current = recordXml; }, [recordXml]);
+  useEffect(() => {
+    recordingRef.current = recording;
+  }, [recording]);
+  useEffect(() => {
+    recordXmlRef.current = recordXml;
+  }, [recordXml]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -791,7 +970,10 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
   useEffect(() => {
     if (coordPickMode || flowCoordPick) {
       queueMicrotask(() =>
-        deviceMirrorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }),
+        deviceMirrorRef.current?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'nearest'
+        })
       );
     }
   }, [coordPickMode, flowCoordPick]);
@@ -805,7 +987,9 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
         setRecordXml(xml.trim());
         return xml.trim();
       } else {
-        toast.error('Thiết bị không trả XML — kiểm tra u2/uiautomator2 có đang chạy không');
+        toast.error(
+          'Thiết bị không trả XML — kiểm tra u2/uiautomator2 có đang chạy không'
+        );
       }
     } catch {
       toast.error('Lấy XML thất bại');
@@ -820,139 +1004,226 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
    * Fires hit_test → gets best selector (resource-id / text / content-desc) →
    * appends tap_selector step to the scenario automatically.
    */
-  const handleRecordTap = useCallback((serial: string, rx: number, ry: number) => {
-    if (!recordingRef.current) return;
-    const xml = recordXmlRef.current;
-    const rx3 = parseFloat(rx.toFixed(3));
-    const ry3 = parseFloat(ry.toFixed(3));
+  const handleRecordTap = useCallback(
+    (serial: string, rx: number, ry: number) => {
+      if (!recordingRef.current) return;
+      const xml = recordXmlRef.current;
+      const rx3 = parseFloat(rx.toFixed(3));
+      const ry3 = parseFloat(ry.toFixed(3));
 
-    if (xml) {
-      const sel = findSelectorInXml(xml, rx, ry);
-      if (sel) {
+      if (xml) {
+        const sel = findSelectorInXml(xml, rx, ry);
+        if (sel) {
+          appendStepsWithGraphSync((prev) => [
+            ...prev,
+            buildTapSelectorStep({
+              by: sel.by,
+              value: sel.value,
+              selector: sel.selector,
+              rx: rx3,
+              ry: ry3
+            }) as Step
+          ]);
+          toast.success(`tap_selector by=${sel.by}: "${sel.value}"`, {
+            duration: 2000
+          });
+        } else {
+          // XML có nhưng không tìm thấy element có text/id — flat XML (STF u2 limitation)
+          appendStepsWithGraphSync((prev) => [
+            ...prev,
+            { type: 'tap_ratio', x: rx3, y: ry3 }
+          ]);
+          toast.warning(
+            'XML không có UI elements — dùng tap_ratio. Cần bật Accessibility Service trên thiết bị để ghi tap_selector.',
+            { duration: 5000 }
+          );
+        }
+        setTimeout(() => {
+          if (recordingRef.current) refreshRecordXml(serial);
+        }, 1000);
+      } else {
         appendStepsWithGraphSync((prev) => [
           ...prev,
-          buildTapSelectorStep({
-            by: sel.by,
-            value: sel.value,
-            selector: sel.selector,
-            rx: rx3,
-            ry: ry3,
-          }) as Step,
+          { type: 'tap_ratio', x: rx3, y: ry3 }
         ]);
-        toast.success(`tap_selector by=${sel.by}: "${sel.value}"`, { duration: 2000 });
-      } else {
-        // XML có nhưng không tìm thấy element có text/id — flat XML (STF u2 limitation)
-        appendStepsWithGraphSync((prev) => [...prev, { type: 'tap_ratio', x: rx3, y: ry3 }]);
-        toast.warning(
-          'XML không có UI elements — dùng tap_ratio. Cần bật Accessibility Service trên thiết bị để ghi tap_selector.',
-          { duration: 5000 }
-        );
+        toast.info('Thêm tap_ratio — bấm "Ghi kịch bản" để lấy XML trước', {
+          duration: 3000
+        });
       }
-      setTimeout(() => { if (recordingRef.current) refreshRecordXml(serial); }, 1000);
-    } else {
-      appendStepsWithGraphSync((prev) => [...prev, { type: 'tap_ratio', x: rx3, y: ry3 }]);
-      toast.info('Thêm tap_ratio — bấm "Ghi kịch bản" để lấy XML trước', { duration: 3000 });
-    }
-  }, [refreshRecordXml, appendStepsWithGraphSync]);
+    },
+    [refreshRecordXml, appendStepsWithGraphSync]
+  );
 
-  const activateCoordPick = useCallback((mode: 'tap' | 'swipe') => {
-    if (recording) {
-      toast.warning('Tắt Ghi trước khi lấy tọa độ thủ công trên mirror.');
-      return;
-    }
-    setCoordPickMode((prev) => (prev === mode ? null : mode));
-  }, [recording]);
+  const activateCoordPick = useCallback(
+    (mode: 'tap' | 'swipe') => {
+      if (recording) {
+        toast.warning('Tắt Ghi trước khi lấy tọa độ thủ công trên mirror.');
+        return;
+      }
+      setCoordPickMode((prev) => (prev === mode ? null : mode));
+    },
+    [recording]
+  );
 
   const handleEmbedTapForCoords = useCallback(
     (serial: string, rx: number, ry: number) => {
       const rx3 = parseFloat(rx.toFixed(3));
       const ry3 = parseFloat(ry.toFixed(3));
 
-      if (showFlowEditUi && flowCoordPick?.kind === 'tap' && flowCtxRef.current && flowCoordPick.fgId) {
+      if (
+        showFlowEditUi &&
+        flowCoordPick?.kind === 'tap' &&
+        flowCtxRef.current &&
+        flowCoordPick.fgId
+      ) {
         const ctx = flowCtxRef.current;
         const fgId = flowCoordPick.fgId;
-        const merged = mergeStepByFlowgramId(stepsRef.current as FlowStep[], fgId, (prev) => {
-          if (prev.type === 'tap_ratio') return { ...prev, x: rx3, y: ry3 } as FlowStep;
-          if (prev.type === 'tap') {
-            const t = prev as FlowStep & { fallback?: { rx?: number; ry?: number } };
-            return {
-              ...t,
-              fallback: { ...(t.fallback ?? {}), rx: rx3, ry: ry3 },
-            } as FlowStep;
+        const merged = mergeStepByFlowgramId(
+          stepsRef.current as FlowStep[],
+          fgId,
+          (prev) => {
+            if (prev.type === 'tap_ratio')
+              return { ...prev, x: rx3, y: ry3 } as FlowStep;
+            if (prev.type === 'tap') {
+              const t = prev as FlowStep & {
+                fallback?: { rx?: number; ry?: number };
+              };
+              return {
+                ...t,
+                fallback: { ...(t.fallback ?? {}), rx: rx3, ry: ry3 }
+              } as FlowStep;
+            }
+            if (prev.type === 'swipe_ratio')
+              return { ...prev, x1: rx3, y1: ry3 } as FlowStep;
+            return prev;
           }
-          if (prev.type === 'swipe_ratio') return { ...prev, x1: rx3, y1: ry3 } as FlowStep;
-          return prev;
-        });
+        );
         const synced = applyStepsToFlowgramDocument(ctx, merged);
         replaceStepsAndGraph(synced as Step[]);
         setFlowCoordPick(null);
-        toast.success(`Đã gán tọa độ (${rx3}, ${ry3}) cho node`, { duration: 2000 });
+        toast.success(`Đã gán tọa độ (${rx3}, ${ry3}) cho node`, {
+          duration: 2000
+        });
         setTimeout(() => void refreshRecordXml(serial), 800);
         return;
       }
 
       if (coordPickMode !== 'tap') return;
-      appendStepsWithGraphSync((prev) => [...prev, { type: 'tap_ratio', x: rx3, y: ry3 }]);
+      appendStepsWithGraphSync((prev) => [
+        ...prev,
+        { type: 'tap_ratio', x: rx3, y: ry3 }
+      ]);
       setCoordPickMode(null);
       toast.success(`Đã thêm tap_ratio (${rx3}, ${ry3})`, { duration: 2000 });
       setTimeout(() => {
         void refreshRecordXml(serial);
       }, 800);
     },
-    [showFlowEditUi, flowCoordPick, coordPickMode, refreshRecordXml, appendStepsWithGraphSync, replaceStepsAndGraph],
+    [
+      showFlowEditUi,
+      flowCoordPick,
+      coordPickMode,
+      refreshRecordXml,
+      appendStepsWithGraphSync,
+      replaceStepsAndGraph
+    ]
   );
 
   const handleEmbedSwipeForCoords = useCallback(
-    (serial: string, rx1: number, ry1: number, rx2: number, ry2: number, durationMs: number) => {
+    (
+      serial: string,
+      rx1: number,
+      ry1: number,
+      rx2: number,
+      ry2: number,
+      durationMs: number
+    ) => {
       const x1 = parseFloat(rx1.toFixed(3));
       const y1 = parseFloat(ry1.toFixed(3));
       const x2 = parseFloat(rx2.toFixed(3));
       const y2 = parseFloat(ry2.toFixed(3));
       const duration_ms = Math.round(Math.max(100, Math.min(durationMs, 2000)));
 
-      if (showFlowEditUi && flowCoordPick?.kind === 'swipe' && flowCtxRef.current && flowCoordPick.fgId) {
+      if (
+        showFlowEditUi &&
+        flowCoordPick?.kind === 'swipe' &&
+        flowCtxRef.current &&
+        flowCoordPick.fgId
+      ) {
         const ctx = flowCtxRef.current;
         const fgId = flowCoordPick.fgId;
-        const merged = mergeStepByFlowgramId(stepsRef.current as FlowStep[], fgId, (prev) => {
-          if (prev.type === 'swipe_ratio') {
-            return { ...prev, x1, y1, x2, y2, duration_ms } as FlowStep;
+        const merged = mergeStepByFlowgramId(
+          stepsRef.current as FlowStep[],
+          fgId,
+          (prev) => {
+            if (prev.type === 'swipe_ratio') {
+              return { ...prev, x1, y1, x2, y2, duration_ms } as FlowStep;
+            }
+            return prev;
           }
-          return prev;
-        });
+        );
         const synced = applyStepsToFlowgramDocument(ctx, merged);
         replaceStepsAndGraph(synced as Step[]);
         setFlowCoordPick(null);
-        toast.success(`Đã gán swipe_ratio cho node: (${x1},${y1})→(${x2},${y2})`, { duration: 2500 });
+        toast.success(
+          `Đã gán swipe_ratio cho node: (${x1},${y1})→(${x2},${y2})`,
+          { duration: 2500 }
+        );
         setTimeout(() => void refreshRecordXml(serial), 800);
         return;
       }
 
       if (coordPickMode !== 'swipe') return;
-      appendStepsWithGraphSync((prev) => [...prev, { type: 'swipe_ratio', x1, y1, x2, y2, duration_ms }]);
+      appendStepsWithGraphSync((prev) => [
+        ...prev,
+        { type: 'swipe_ratio', x1, y1, x2, y2, duration_ms }
+      ]);
       setCoordPickMode(null);
-      toast.success(`Đã thêm swipe_ratio (${x1},${y1})→(${x2},${y2})`, { duration: 2000 });
+      toast.success(`Đã thêm swipe_ratio (${x1},${y1})→(${x2},${y2})`, {
+        duration: 2000
+      });
       setTimeout(() => {
         void refreshRecordXml(serial);
       }, 800);
     },
-    [showFlowEditUi, flowCoordPick, coordPickMode, refreshRecordXml, appendStepsWithGraphSync, replaceStepsAndGraph],
+    [
+      showFlowEditUi,
+      flowCoordPick,
+      coordPickMode,
+      refreshRecordXml,
+      appendStepsWithGraphSync,
+      replaceStepsAndGraph
+    ]
   );
 
   const handleRecordSwipe = useCallback(
-    (serial: string, rx1: number, ry1: number, rx2: number, ry2: number, durationMs: number) => {
+    (
+      serial: string,
+      rx1: number,
+      ry1: number,
+      rx2: number,
+      ry2: number,
+      durationMs: number
+    ) => {
       if (!recordingRef.current) return;
       const x1 = parseFloat(rx1.toFixed(3));
       const y1 = parseFloat(ry1.toFixed(3));
       const x2 = parseFloat(rx2.toFixed(3));
       const y2 = parseFloat(ry2.toFixed(3));
       const duration_ms = Math.round(Math.max(100, Math.min(durationMs, 2000)));
-      appendStepsWithGraphSync((prev) => [...prev, { type: 'swipe_ratio', x1, y1, x2, y2, duration_ms }]);
-      toast.success(`Đã thêm swipe_ratio (${x1},${y1})→(${x2},${y2}) ${duration_ms}ms`, { duration: 2000 });
+      appendStepsWithGraphSync((prev) => [
+        ...prev,
+        { type: 'swipe_ratio', x1, y1, x2, y2, duration_ms }
+      ]);
+      toast.success(
+        `Đã thêm swipe_ratio (${x1},${y1})→(${x2},${y2}) ${duration_ms}ms`,
+        { duration: 2000 }
+      );
       setTimeout(() => {
         if (recordingRef.current) void refreshRecordXml(serial);
       }, 1000);
     },
-    [refreshRecordXml, appendStepsWithGraphSync],
+    [refreshRecordXml, appendStepsWithGraphSync]
   );
 
   const removeCollectedXml = (id: string) => {
@@ -982,7 +1253,9 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
 
     if (effectiveRow) {
       currentInstructions = effectiveRow.instructions ?? '';
-      currentSteps = Array.isArray(effectiveRow.steps) ? coerceSteps(effectiveRow.steps) : [];
+      currentSteps = Array.isArray(effectiveRow.steps)
+        ? coerceSteps(effectiveRow.steps)
+        : [];
       currentVariables = (effectiveRow as ScenarioOut).variables ?? {};
       const sc: any = (campaign.scenario as any) ?? {};
       const ctx: any = sc.device_context ?? {};
@@ -1002,15 +1275,27 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
     // Load graph model if available and valid, else derive from steps.
     // Validate that each node has required `id` and `order` fields before trusting
     // the stored data (guards against old records saved before the graph refactor).
-    const rawNodes: unknown[] = Array.isArray((effectiveRow as any)?.nodes) ? (effectiveRow as any).nodes : [];
+    const rawNodes: unknown[] = Array.isArray((effectiveRow as any)?.nodes)
+      ? (effectiveRow as any).nodes
+      : [];
     const validNodes = rawNodes.filter(
-      (n): n is FlowNode => typeof n === 'object' && n !== null && typeof (n as any).id === 'string' && typeof (n as any).order === 'string',
+      (n): n is FlowNode =>
+        typeof n === 'object' &&
+        n !== null &&
+        typeof (n as any).id === 'string' &&
+        typeof (n as any).order === 'string'
     );
     if (validNodes.length > 0) {
       setGraphNodes(validNodes);
-      setGraphEdges(Array.isArray((effectiveRow as any)?.edges) ? (effectiveRow as any).edges : []);
+      setGraphEdges(
+        Array.isArray((effectiveRow as any)?.edges)
+          ? (effectiveRow as any).edges
+          : []
+      );
     } else if (currentSteps.length > 0) {
-      const { nodes, edges } = stepsToGraph(currentSteps as Record<string, unknown>[]);
+      const { nodes, edges } = stepsToGraph(
+        currentSteps as Record<string, unknown>[]
+      );
       setGraphNodes(nodes);
       setGraphEdges(edges);
     } else {
@@ -1022,7 +1307,15 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
     setBrowserApp(currentBrowserApp);
     setDeviceNotes(currentDeviceNotes);
     setRawJson(
-      JSON.stringify({ instructions: currentInstructions, steps: currentSteps, variables: currentVariables }, null, 2)
+      JSON.stringify(
+        {
+          instructions: currentInstructions,
+          steps: currentSteps,
+          variables: currentVariables
+        },
+        null,
+        2
+      )
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, campaign.scenario, campaign.scenarios, effectiveRow]);
@@ -1033,7 +1326,10 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
   const xmlSerialInitedRef = useRef(false);
   const previewSerialInitedRef = useRef(false);
   useEffect(() => {
-    if (!open) { xmlSerialInitedRef.current = false; return; }
+    if (!open) {
+      xmlSerialInitedRef.current = false;
+      return;
+    }
     if (!xmlSerialInitedRef.current && devices.length > 0 && !xmlSerial) {
       xmlSerialInitedRef.current = true;
       setXmlSerial(devices[0].serial);
@@ -1041,8 +1337,15 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
   }, [open, devices, xmlSerial]);
 
   useEffect(() => {
-    if (!open) { previewSerialInitedRef.current = false; return; }
-    if (!previewSerialInitedRef.current && devices.length > 0 && !previewSerial) {
+    if (!open) {
+      previewSerialInitedRef.current = false;
+      return;
+    }
+    if (
+      !previewSerialInitedRef.current &&
+      devices.length > 0 &&
+      !previewSerial
+    ) {
       previewSerialInitedRef.current = true;
       setPreviewSerial(devices[0].serial);
     }
@@ -1056,7 +1359,7 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
   const handleSave = () => {
     const sanitizedSteps = sanitizeScenarioStepsForApi(steps);
     const check = validateScenarioStepsForApi(sanitizedSteps, (key, values) =>
-      tScenarioValidation(key, values),
+      tScenarioValidation(key, values)
     );
     if (!check.ok) {
       toast.error(check.message);
@@ -1074,23 +1377,44 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
             nodes: graphNodes as any,
             edges: graphEdges as any,
             // Empty string clears the binding on the backend.
-            account_group_id: accountGroupId ? accountGroupId : '',
-          },
+            account_group_id: accountGroupId ? accountGroupId : ''
+          }
         },
         {
-          onSuccess: () => { toast.success('Lưu kịch bản thành công'); setOpen(false); },
-          onError: (err) => { toast.error(formatFarmApiError(err, 'Lưu kịch bản thất bại')); },
+          onSuccess: () => {
+            toast.success('Lưu kịch bản thành công');
+            setOpen(false);
+          },
+          onError: (err) => {
+            toast.error(formatFarmApiError(err, 'Lưu kịch bản thất bại'));
+          }
         }
       );
     } else {
       const existing = (campaign.scenario as any) ?? {};
-      const deviceContext = { device_model: deviceModel, android_version: androidVersion, browser_app: browserApp, notes: deviceNotes };
-      const next: Record<string, any> = { ...existing, instructions, steps: sanitizedSteps, variables, device_context: deviceContext };
+      const deviceContext = {
+        device_model: deviceModel,
+        android_version: androidVersion,
+        browser_app: browserApp,
+        notes: deviceNotes
+      };
+      const next: Record<string, any> = {
+        ...existing,
+        instructions,
+        steps: sanitizedSteps,
+        variables,
+        device_context: deviceContext
+      };
       saveScenario(
         { id: campaign.id, scenario: next },
         {
-          onSuccess: () => { toast.success('Lưu kịch bản thành công'); setOpen(false); },
-          onError: (err) => { toast.error(formatFarmApiError(err, 'Lưu kịch bản thất bại')); },
+          onSuccess: () => {
+            toast.success('Lưu kịch bản thành công');
+            setOpen(false);
+          },
+          onError: (err) => {
+            toast.error(formatFarmApiError(err, 'Lưu kịch bản thất bại'));
+          }
         }
       );
     }
@@ -1111,12 +1435,16 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
     try {
       const res = await previewScenario(serial, sanitizedSteps);
       const failed =
-        res.step_results?.filter((r) => r && typeof r.ok === 'boolean' && !r.ok) ?? [];
+        res.step_results?.filter(
+          (r) => r && typeof r.ok === 'boolean' && !r.ok
+        ) ?? [];
       if (failed.length > 0) {
         const idxList = failed.map((r) => `#${(r.index ?? 0) + 1}`).join(', ');
         toast.error(`Một số bước lỗi: ${idxList}`);
       } else {
-        toast.success('Đã gửi toàn bộ kịch bản lên thiết bị (backend không báo lỗi step)');
+        toast.success(
+          'Đã gửi toàn bộ kịch bản lên thiết bị (backend không báo lỗi step)'
+        );
       }
     } catch {
       toast.error('Test kịch bản thất bại');
@@ -1124,7 +1452,6 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
       setPreviewingAll(false);
     }
   };
-
 
   const handleCompile = async () => {
     const text = instructions.trim();
@@ -1143,18 +1470,26 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
     if (collectedXmls.length > 0) {
       uiXml = collectedXmls
         .map(
-          (s, i) =>
-            `\n\n--- UI hierarchy (màn hình ${i + 1}) ---\n\n${s.xml}`
+          (s, i) => `\n\n--- UI hierarchy (màn hình ${i + 1}) ---\n\n${s.xml}`
         )
         .join('');
       toast.info(`Đang gửi ${collectedXmls.length} màn hình vào prompt AI…`);
     } else if (xmlSerial) {
       deviceSerial = xmlSerial;
-      toast.info('Backend sẽ gọi uiautomator2 lấy XML từ thiết bị, đang gọi AI…');
+      toast.info(
+        'Backend sẽ gọi uiautomator2 lấy XML từ thiết bị, đang gọi AI…'
+      );
     }
     if (useRowApi && effectiveRow?.id) {
       compileScenarioRow(
-        { campaignId: campaign.id, scenarioId: effectiveRow.id, instructions: text, uiXml, deviceSerial, deviceContext },
+        {
+          campaignId: campaign.id,
+          scenarioId: effectiveRow.id,
+          instructions: text,
+          uiXml,
+          deviceSerial,
+          deviceContext
+        },
         {
           onSuccess: (data) => {
             setInstructions(data.instructions ?? text);
@@ -1163,22 +1498,34 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
             setFlowCanvasKey((k) => k + 1);
             toast.success('AI đã tạo kịch bản từ mô tả');
           },
-          onError: () => { toast.error('Gọi AI sinh kịch bản thất bại'); },
+          onError: () => {
+            toast.error('Gọi AI sinh kịch bản thất bại');
+          }
         }
       );
     } else {
       compileScenario(
-        { id: campaign.id, instructions: text, uiXml, deviceSerial, deviceContext },
+        {
+          id: campaign.id,
+          instructions: text,
+          uiXml,
+          deviceSerial,
+          deviceContext
+        },
         {
           onSuccess: (data) => {
             const sc: any = data.scenario ?? {};
             setInstructions(sc.instructions ?? text);
-            const currentSteps = Array.isArray(sc.steps) ? coerceSteps(sc.steps) : [];
+            const currentSteps = Array.isArray(sc.steps)
+              ? coerceSteps(sc.steps)
+              : [];
             replaceStepsAndGraph(currentSteps);
             setFlowCanvasKey((k) => k + 1);
             toast.success('AI đã tạo kịch bản từ mô tả');
           },
-          onError: () => { toast.error('Gọi AI sinh kịch bản thất bại'); },
+          onError: () => {
+            toast.error('Gọi AI sinh kịch bản thất bại');
+          }
         }
       );
     }
@@ -1203,9 +1550,8 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
       }
       const nextInstructions = String(sc.instructions ?? '');
       const nextSteps = coerceSteps(sc.steps);
-      const nextVariables = (sc.variables && typeof sc.variables === 'object')
-        ? sc.variables
-        : {};
+      const nextVariables =
+        sc.variables && typeof sc.variables === 'object' ? sc.variables : {};
       const ctx: any = sc.device_context ?? {};
       setDeviceModel(String(ctx.device_model ?? ''));
       setAndroidVersion(String(ctx.android_version ?? ''));
@@ -1221,7 +1567,7 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
         ...sc,
         instructions: nextInstructions,
         steps: nextSteps,
-        variables: nextVariables,
+        variables: nextVariables
       };
       setRawJson(JSON.stringify(preserved, null, 2));
       toast.success('Đã áp dụng JSON vào kịch bản');
@@ -1231,15 +1577,23 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
   };
 
   const handleAddStep = () => {
-    appendStepsWithGraphSync((prev) => [...prev, { type: 'launch_app', package: '' }]);
+    appendStepsWithGraphSync((prev) => [
+      ...prev,
+      { type: 'launch_app', package: '' }
+    ]);
     if (showFlowEditUi) setFlowCanvasKey((k) => k + 1);
   };
-
 
   /** Other scenarios in the campaign — used for the "load from template" picker. */
   const { data: allScenarios = [] } = useScenarios(campaign.id);
   const loadableScenarios = useMemo(
-    () => allScenarios.filter((s) => s.id !== effectiveRow?.id && Array.isArray(s.steps) && s.steps.length > 0),
+    () =>
+      allScenarios.filter(
+        (s) =>
+          s.id !== effectiveRow?.id &&
+          Array.isArray(s.steps) &&
+          s.steps.length > 0
+      ),
     [allScenarios, effectiveRow?.id]
   );
 
@@ -1251,9 +1605,9 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
         .map((s) => ({
           id: s.id,
           name: s.name,
-          steps: Array.isArray(s.steps) ? s.steps : [],
+          steps: Array.isArray(s.steps) ? s.steps : []
         })),
-    [allScenarios, effectiveRow?.id],
+    [allScenarios, effectiveRow?.id]
   );
 
   const handleLoadFromScenario = (scenarioId: string) => {
@@ -1265,19 +1619,23 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
           title: tScenarioForm('loadOverwriteTitle'),
           description: tScenarioForm('loadOverwriteDescription', {
             count: steps.length,
-            name: source.name,
+            name: source.name
           }),
           confirmText: tCommon('confirm'),
           cancelText: tCommon('cancel'),
-          zIndex: 2000,
+          zIndex: 2000
         });
         if (!ok) return;
       }
-      const loaded = Array.isArray(source.steps) ? coerceSteps(source.steps) : [];
+      const loaded = Array.isArray(source.steps)
+        ? coerceSteps(source.steps)
+        : [];
       replaceStepsAndGraph(loaded);
       setFlowCanvasKey((k) => k + 1);
       if (source.instructions) setInstructions(source.instructions);
-      toast.success(`Đã tải ${(source.steps as any[]).length} bước từ "${source.name}"`);
+      toast.success(
+        `Đã tải ${(source.steps as any[]).length} bước từ "${source.name}"`
+      );
     })();
   };
 
@@ -1288,31 +1646,40 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         {children ?? (
-          <Button size="sm" variant="outline" className="gap-1 text-[10px]">
-            <FileText size={12} strokeWidth={2} className="opacity-80" />
+          <Button size='sm' variant='outline' className='gap-1 text-[10px]'>
+            <FileText size={12} strokeWidth={2} className='opacity-80' />
             Kịch bản
           </Button>
         )}
       </DialogTrigger>
-      <DialogContent
-        className="z-[1000] max-w-5xl lg:max-w-6xl max-h-[92vh] min-h-0 md:min-h-[48vh] overflow-hidden flex flex-col rounded-lg p-3 sm:p-4 gap-0 sm:max-w-[min(100%-2rem,72rem)] [&>button.absolute]:right-3 [&>button.absolute]:top-3 [&>button.absolute]:h-7 [&>button.absolute]:w-7 [&>button.absolute_svg]:!size-3.5"
-      >
-        <DialogHeader className="shrink-0">
-          <div className="flex items-center justify-between gap-3 flex-wrap">
-            <DialogTitle className="text-base">
-              {effectiveRow ? `Kịch bản: ${effectiveRow.name}` : 'Kịch bản campaign'}
+      <DialogContent className='z-[1000] flex max-h-[92vh] min-h-0 max-w-5xl flex-col gap-0 overflow-hidden rounded-lg p-3 sm:max-w-[min(100%-2rem,72rem)] sm:p-4 md:min-h-[48vh] lg:max-w-6xl [&>button.absolute]:right-3 [&>button.absolute]:top-3 [&>button.absolute]:h-7 [&>button.absolute]:w-7 [&>button.absolute_svg]:!size-3.5'>
+        <DialogHeader className='shrink-0'>
+          <div className='flex flex-wrap items-center justify-between gap-3'>
+            <DialogTitle className='text-base'>
+              {effectiveRow
+                ? `Kịch bản: ${effectiveRow.name}`
+                : 'Kịch bản campaign'}
             </DialogTitle>
             {loadableScenarios.length > 0 && (
-              <div className="flex items-center gap-1.5">
-                <FolderOpen size={12} className="text-muted-foreground shrink-0" />
-                <span className="text-[11px] text-muted-foreground whitespace-nowrap">Tải từ kịch bản:</span>
+              <div className='flex items-center gap-1.5'>
+                <FolderOpen
+                  size={12}
+                  className='shrink-0 text-muted-foreground'
+                />
+                <span className='whitespace-nowrap text-[11px] text-muted-foreground'>
+                  Tải từ kịch bản:
+                </span>
                 <Select onValueChange={handleLoadFromScenario}>
-                  <SelectTrigger className="h-7 text-[11px] w-[160px]">
-                    <SelectValue placeholder="Chọn kịch bản…" />
+                  <SelectTrigger className='h-7 w-[160px] text-[11px]'>
+                    <SelectValue placeholder='Chọn kịch bản…' />
                   </SelectTrigger>
                   <SelectContent>
                     {loadableScenarios.map((s) => (
-                      <SelectItem key={s.id} value={s.id} className="text-[11px]">
+                      <SelectItem
+                        key={s.id}
+                        value={s.id}
+                        className='text-[11px]'
+                      >
                         {s.name} ({(s.steps as any[]).length} bước)
                       </SelectItem>
                     ))}
@@ -1322,428 +1689,523 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
             )}
           </div>
         </DialogHeader>
-        <Separator className="shrink-0" />
-        <div
-          className="flex flex-col lg:flex-row gap-4 pt-2 min-h-0 flex-1 overflow-hidden"
-        >
-          <div
-            className="min-w-0 flex-1 min-h-[12rem] overflow-y-auto overflow-x-hidden space-y-4 order-1"
-          >
-          <div className="space-y-1">
-            <p className="text-xs font-medium">Mô tả (ngôn ngữ tự nhiên)</p>
-            <p className="text-[11px] text-muted-foreground">
-              Ví dụ: &quot;Vào Google, tìm tin tức công nghệ hôm nay, mở kết quả đầu tiên và kéo xuống cuối trang&quot;.
-            </p>
-            <Textarea
-              className="h-24 text-[11px]"
-              value={instructions}
-              onChange={(e) => setInstructions(e.target.value)}
-            />
-            {devices.length > 0 && (
-              <p className="text-[11px] text-muted-foreground">
-                Để AI sinh đúng selector (tap_selector, input_text): chọn thiết bị → <strong>Mở điều khiển</strong> → vào đúng màn hình cần automation (tap, mở app…) → quay lại đây bấm <strong>Sinh kịch bản bằng AI</strong> (sẽ lấy XML từ màn hình hiện tại).
+        <Separator className='shrink-0' />
+        <div className='flex min-h-0 flex-1 flex-col gap-4 overflow-hidden pt-2 lg:flex-row'>
+          <div className='order-1 min-h-[12rem] min-w-0 flex-1 space-y-4 overflow-y-auto overflow-x-hidden'>
+            <div className='space-y-1'>
+              <p className='text-xs font-medium'>Mô tả (ngôn ngữ tự nhiên)</p>
+              <p className='text-[11px] text-muted-foreground'>
+                Ví dụ: &quot;Vào Google, tìm tin tức công nghệ hôm nay, mở kết
+                quả đầu tiên và kéo xuống cuối trang&quot;.
               </p>
-            )}
-            <div className="flex flex-wrap items-center justify-between pt-1 gap-2">
-              <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-                {devices.length > 0 && (
-                  <>
-                    <span>Thiết bị để lấy UI XML:</span>
-                    <Select value={xmlSerial || '_none'} onValueChange={(v) => setXmlSerial(v === '_none' ? '' : v)}>
-                      <SelectTrigger className="h-6 text-[11px] w-[140px]">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="_none" className="text-[11px]">Không gửi XML</SelectItem>
-                        {devices.map((d) => (
-                          <SelectItem key={d.id} value={d.serial} className="text-[11px]">
-                            {d.name || d.serial}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    {xmlSerial && (
-                      <>
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          onClick={handleFetchXml}
-                          disabled={fetchingXml}
-                        >
-                          {fetchingXml ? 'Đang thu thập…' : 'Thu thập XML'}
-                        </Button>
-                        <span className="text-[10px] text-muted-foreground">
-                          Mỗi lần bấm = 1 màn hình. Điều khiển bên phải, chuyển màn rồi thu thập. Sinh kịch bản sẽ gửi tất cả vào prompt AI.
-                        </span>
-                        {collectedXmls.length > 0 && (
-                          <>
-                            <span className="text-[11px] text-green-600 dark:text-green-400 font-medium">
-                              Đã thu {collectedXmls.length} màn hình
-                            </span>
-                            <Button size="sm" variant="ghost" className="h-7 text-[10px]" onClick={clearAllCollectedXmls}>
-                              Xóa tất cả
-                            </Button>
-                          </>
-                        )}
-                      </>
-                    )}
-                  </>
-                )}
-              </div>
-              {collectedXmls.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 mt-1">
-                  {collectedXmls.map((s, i) => (
-                    <span
-                      key={s.id}
-                      className="inline-flex items-center gap-1 rounded bg-muted px-2 py-0.5 text-[11px]"
-                    >
-                      Màn hình {i + 1} ({(s.xml.length / 1000).toFixed(1)}k)
-                      <button
-                        type="button"
-                        className="p-0.5 text-destructive hover:bg-destructive/10 rounded"
-                        onClick={() => removeCollectedXml(s.id)}
-                        title="Xóa màn hình này"
-                      >
-                        <Trash2 size={10} />
-                      </button>
-                    </span>
-                  ))}
-                </div>
+              <Textarea
+                className='h-24 text-[11px]'
+                value={instructions}
+                onChange={(e) => setInstructions(e.target.value)}
+              />
+              {devices.length > 0 && (
+                <p className='text-[11px] text-muted-foreground'>
+                  Để AI sinh đúng selector (tap_selector, input_text): chọn
+                  thiết bị → <strong>Mở điều khiển</strong> → vào đúng màn hình
+                  cần automation (tap, mở app…) → quay lại đây bấm{' '}
+                  <strong>Sinh kịch bản bằng AI</strong> (sẽ lấy XML từ màn hình
+                  hiện tại).
+                </p>
               )}
-              <Button
-                size="sm"
-                variant="default"
-                className="gap-1.5 bg-[#10a37f] hover:bg-[#0d8f6f] text-white border-0"
-                onClick={handleCompile}
-                disabled={compiling}
-                title="Gửi mô tả + XML lên OpenAI (ChatGPT) để sinh kịch bản"
-              >
-                <Sparkles size={12} strokeWidth={2} className="shrink-0 opacity-90" />
-                {compiling ? 'ChatGPT đang sinh…' : 'Sinh bằng ChatGPT'}
-              </Button>
-            </div>
-          </div>
-
-          <div className="space-y-1">
-            <p className="text-xs font-medium">Thông tin thiết bị (tùy chọn)</p>
-            <p className="text-[11px] text-muted-foreground">
-              Gợi ý cho AI về loại máy sẽ chạy campaign này (không bắt buộc, chỉ là hint).
-            </p>
-            <div className="grid grid-cols-2 gap-2">
-              <div className="space-y-1">
-                <p className="text-[11px] text-muted-foreground">Model / dòng máy</p>
-                <Input
-                  className="h-7 text-[11px]"
-                  value={deviceModel}
-                  onChange={(e) => setDeviceModel(e.target.value)}
-                  placeholder="Galaxy S23, Pixel 8…"
-                />
-              </div>
-              <div className="space-y-1">
-                <p className="text-[11px] text-muted-foreground">Android version</p>
-                <Input
-                  className="h-7 text-[11px]"
-                  value={androidVersion}
-                  onChange={(e) => setAndroidVersion(e.target.value)}
-                  placeholder="Android 13, 14…"
-                />
-              </div>
-              <div className="space-y-1">
-                <p className="text-[11px] text-muted-foreground">Ưu tiên browser / app</p>
-                <Input
-                  className="h-7 text-[11px]"
-                  value={browserApp}
-                  onChange={(e) => setBrowserApp(e.target.value)}
-                  placeholder="Chrome, Facebook…"
-                />
-              </div>
-              <div className="space-y-1">
-                <p className="text-[11px] text-muted-foreground">Ghi chú khác</p>
-                <Input
-                  className="h-7 text-[11px]"
-                  value={deviceNotes}
-                  onChange={(e) => setDeviceNotes(e.target.value)}
-                  placeholder="màn hình nhỏ, ưu tiên tap bằng text…"
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="space-y-1">
-            <p className="text-xs font-medium">Raw scenario JSON (optional)</p>
-            <p className="text-[11px] text-muted-foreground">
-              Paste <code className="rounded bg-muted px-1">{'{"scenario": {...}}'}</code> or{' '}
-              <code className="rounded bg-muted px-1">{'{"instructions": ..., "steps": [...]}'}</code>. Sẽ ghi đè form bên dưới.
-            </p>
-            <Textarea
-              className="h-32 font-mono text-[11px]"
-              value={rawJson}
-              onChange={(e) => setRawJson(e.target.value)}
-              placeholder='{"instructions": "...", "steps": [...]}'
-            />
-            <div className="flex justify-end pt-1">
-              <Button size="sm" variant="outline" onClick={handleApplyJson}>
-                Áp dụng JSON
-              </Button>
-            </div>
-          </div>
-
-          {/* Account group picker — binds scenario to a pool of accounts for rotation */}
-          <div className="space-y-1">
-            <p className="text-xs font-medium">{tScenarioForm('accountGroupLabel')}</p>
-            <Select
-              value={accountGroupId || '_none'}
-              onValueChange={(v) => setAccountGroupId(v === '_none' ? '' : v)}
-            >
-              <SelectTrigger className="h-7 text-[11px] w-full max-w-sm">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="_none" className="text-[11px]">
-                  {tScenarioForm('accountGroupNone')}
-                </SelectItem>
-                {accountGroups.map((g) => (
-                  <SelectItem key={g.id} value={g.id} className="text-[11px]">
-                    {g.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {accountGroupId && (() => {
-              const picked = accountGroups.find((g) => g.id === accountGroupId);
-              if (!picked) return null;
-              return (
-                <p className="text-[10px] text-muted-foreground">
-                  {tScenarioForm('accountGroupCaption', {
-                    count: picked.member_count,
-                    strategy: picked.rotation_strategy,
-                  })}
-                </p>
-              );
-            })()}
-            <p className="text-[10px] text-muted-foreground">
-              {tScenarioForm('accountGroupHint')}
-            </p>
-          </div>
-
-          {/* DF-001: Variables */}
-          <div className="space-y-2">
-            <details className="group">
-              <summary className="cursor-pointer text-xs font-medium flex items-center gap-1">
-                <span>Biến (Variables)</span>
-                <span className="text-muted-foreground font-normal">
-                  — {'${VAR}'} trong steps sẽ được thay thế khi chạy
-                </span>
-              </summary>
-              <div className="pt-2 space-y-2">
-                <VariableEditor
-                  variables={variables}
-                  onChange={setVariables}
-                />
-                <p className="text-[10px] text-muted-foreground leading-relaxed">
-                  Crawl nhóm FB (ví dụ):{' '}
-                  <code className="rounded bg-muted px-1 font-mono">GROUP_NAME</code>,{' '}
-                  <code className="rounded bg-muted px-1 font-mono">GROUP_XPATH</code>,{' '}
-                  <code className="rounded bg-muted px-1 font-mono">MAX_SCROLLS</code>,{' '}
-                  <code className="rounded bg-muted px-1 font-mono">SCROLL_X_RATIO</code>{' '}
-                  (dùng trong <code className="rounded bg-muted px-1 font-mono">scroll_down.start_x_ratio</code>),{' '}
-                  <code className="rounded bg-muted px-1 font-mono">SAVE_COLLECTION</code>.
-                </p>
-              </div>
-            </details>
-          </div>
-
-          <div className="space-y-2">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="text-xs font-medium">Các bước thực thi</p>
-              <div className="flex flex-wrap items-center gap-2">
-                {/* Ẩn khi ENABLE_FLOWGRAM_SCENARIO_UI = false — xem hằng số đầu file scenario-dialog */}
-                {ENABLE_FLOWGRAM_SCENARIO_UI && (
-                  <div className="flex items-center rounded-md border border-border p-0.5">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant={flowEditMode ? 'ghost' : 'secondary'}
-                      className="h-6 gap-1 rounded-sm px-2 text-[10px]"
-                      onClick={() => setFlowEditMode(false)}
-                      title="Chỉnh danh sách có thụt lề (kéo thả)"
-                    >
-                      <List size={12} />
-                      Danh sách
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant={flowEditMode ? 'secondary' : 'ghost'}
-                      className="h-6 gap-1 rounded-sm px-2 text-[10px]"
-                      onClick={() => {
-                        if (!flowEditMode) setFlowCanvasKey((k) => k + 1);
-                        setFlowEditMode(true);
-                      }}
-                      title="Flowgram.ai — sơ đồ tuyến tính + khối lồng"
-                    >
-                      <GitBranch size={12} />
-                      Flow
-                    </Button>
+              <div className='flex flex-wrap items-center justify-between gap-2 pt-1'>
+                <div className='flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground'>
+                  {devices.length > 0 && (
+                    <>
+                      <span>Thiết bị để lấy UI XML:</span>
+                      <Select
+                        value={xmlSerial || '_none'}
+                        onValueChange={(v) =>
+                          setXmlSerial(v === '_none' ? '' : v)
+                        }
+                      >
+                        <SelectTrigger className='h-6 w-[140px] text-[11px]'>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value='_none' className='text-[11px]'>
+                            Không gửi XML
+                          </SelectItem>
+                          {devices.map((d) => (
+                            <SelectItem
+                              key={d.id}
+                              value={d.serial}
+                              className='text-[11px]'
+                            >
+                              {d.name || d.serial}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {xmlSerial && (
+                        <>
+                          <Button
+                            size='sm'
+                            variant='secondary'
+                            onClick={handleFetchXml}
+                            disabled={fetchingXml}
+                          >
+                            {fetchingXml ? 'Đang thu thập…' : 'Thu thập XML'}
+                          </Button>
+                          <span className='text-[10px] text-muted-foreground'>
+                            Mỗi lần bấm = 1 màn hình. Điều khiển bên phải,
+                            chuyển màn rồi thu thập. Sinh kịch bản sẽ gửi tất cả
+                            vào prompt AI.
+                          </span>
+                          {collectedXmls.length > 0 && (
+                            <>
+                              <span className='text-[11px] font-medium text-green-600 dark:text-green-400'>
+                                Đã thu {collectedXmls.length} màn hình
+                              </span>
+                              <Button
+                                size='sm'
+                                variant='ghost'
+                                className='h-7 text-[10px]'
+                                onClick={clearAllCollectedXmls}
+                              >
+                                Xóa tất cả
+                              </Button>
+                            </>
+                          )}
+                        </>
+                      )}
+                    </>
+                  )}
+                </div>
+                {collectedXmls.length > 0 && (
+                  <div className='mt-1 flex flex-wrap gap-1.5'>
+                    {collectedXmls.map((s, i) => (
+                      <span
+                        key={s.id}
+                        className='inline-flex items-center gap-1 rounded bg-muted px-2 py-0.5 text-[11px]'
+                      >
+                        Màn hình {i + 1} ({(s.xml.length / 1000).toFixed(1)}k)
+                        <button
+                          type='button'
+                          className='rounded p-0.5 text-destructive hover:bg-destructive/10'
+                          onClick={() => removeCollectedXml(s.id)}
+                          title='Xóa màn hình này'
+                        >
+                          <Trash2 size={10} />
+                        </button>
+                      </span>
+                    ))}
                   </div>
                 )}
-                {devices.length > 0 && (
-                  <>
-                    <Select value={previewSerial || '_none'} onValueChange={(v) => setPreviewSerial(v === '_none' ? '' : v)}>
-                      <SelectTrigger className="h-6 text-[11px] w-[140px]">
-                        <SelectValue placeholder="Chọn device để test" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="_none" className="text-[11px]">Chọn device để test</SelectItem>
-                        {devices.map((d) => (
-                          <SelectItem key={d.id} value={d.serial} className="text-[11px]">
-                            {d.name || d.serial}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={handlePreviewAll}
-                      disabled={previewingAll || !steps.length || (!previewSerial && devices.length === 0)}
-                    >
-                      {previewingAll ? 'Đang test…' : 'Test toàn bộ'}
-                    </Button>
-                  </>
-                )}
-                <Button size="sm" variant="outline" onClick={handleAddStep}>
-                  Thêm bước
+                <Button
+                  size='sm'
+                  variant='default'
+                  className='gap-1.5 border-0 bg-[#10a37f] text-white hover:bg-[#0d8f6f]'
+                  onClick={handleCompile}
+                  disabled={compiling}
+                  title='Gửi mô tả + XML lên OpenAI (ChatGPT) để sinh kịch bản'
+                >
+                  <Sparkles
+                    size={12}
+                    strokeWidth={2}
+                    className='shrink-0 opacity-90'
+                  />
+                  {compiling ? 'ChatGPT đang sinh…' : 'Sinh bằng ChatGPT'}
                 </Button>
               </div>
             </div>
 
-            {showFlowEditUi ? (
-              <div className="space-y-2">
-                {flowCoordPick && (
-                  <div className="rounded-md border border-sky-400/50 bg-sky-50/90 px-2 py-1.5 text-[10px] text-sky-900 dark:bg-sky-950/30 dark:text-sky-200">
-                    {flowCoordPick.kind === 'tap'
-                      ? 'Chạm một điểm trên mirror bên phải để gán tọa độ cho node đang chọn. Esc để hủy.'
-                      : 'Vuốt trên mirror để gán swipe_ratio cho node đang chọn. Esc để hủy.'}
-                  </div>
-                )}
-                <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(260px,320px)] lg:items-start">
-                  <div className="relative min-h-[min(380px,48vh)] overflow-hidden rounded-md border border-border bg-muted/10">
-                    <DynamicFlowgramCanvas
-                      key={`scenario-flow-${flowCanvasKey}`}
-                      steps={steps as any[]}
-                      workbench={flowWorkbench}
-                      onFlowCtx={(ctx) => {
-                        flowCtxRef.current = ctx;
-                      }}
-                      onStepsChange={(newSteps) => {
-                        replaceStepsAndGraph(newSteps as Step[]);
-                      }}
-                    />
-                  </div>
-                  <div className="max-h-[min(48vh,520px)] min-h-[120px] overflow-y-auto rounded-md border border-border bg-card">
-                    {flowDetailStep ? (
-                      <StepDetailPanel
-                        step={flowDetailStep}
-                        onChange={handleFlowDetailChange}
-                        onClose={() => setFlowSelectedFgId(null)}
-                        onRequestPickSelector={undefined}
-                        onRequestPickTapCoords={
-                          flowSelectedFgId
-                            ? () => {
-                                setFlowCoordPick({ fgId: flowSelectedFgId, kind: 'tap' });
-                                setCoordPickMode(null);
-                                toast.info('Chạm mirror để gán tọa độ cho node này');
-                              }
-                            : undefined
-                        }
-                        onRequestPickSwipeCoords={
-                          flowSelectedFgId
-                            ? () => {
-                                setFlowCoordPick({ fgId: flowSelectedFgId, kind: 'swipe' });
-                                setCoordPickMode(null);
-                                toast.info('Vuốt trên mirror để gán swipe_ratio');
-                              }
-                            : undefined
-                        }
-                      />
-                    ) : (
-                      <p className="p-3 text-[11px] text-muted-foreground leading-relaxed">
-                        Chọn node trên flow (nút con trỏ trên thẻ) để chỉnh chi tiết. Nút play chạy một bước — cần chọn
-                        thiết bị ở dropdown &quot;Chọn device để test&quot;.
-                      </p>
-                    )}
-                  </div>
-                </div>
-                <p className="text-[10px] text-muted-foreground leading-relaxed">
-                  <strong>Luồng nối</strong> do Flowgram (fixed-layout) vẽ tự động theo thứ tự dọc và nhánh
-                  (if/loop/random). Kéo thả node để đổi thứ tự.{' '}
-                  <strong>Không hỗ trợ kéo dây tự do</strong> giữa hai cổng bất kỳ — cần editor dạng free-graph
-                  (vd. React Flow) nếu muốn nối tùy ý.
-                </p>
-              </div>
-            ) : steps.length === 0 ? (
-              <p className="text-[11px] text-muted-foreground">
-                Chưa có bước nào. Bạn có thể dùng AI để sinh, chế độ Flow (+ giữa các node), hoặc Thêm bước.
+            <div className='space-y-1'>
+              <p className='text-xs font-medium'>
+                Thông tin thiết bị (tùy chọn)
               </p>
-            ) : (
-              <div>
-                <FlowEditor
-                  steps={steps as any[]}
-                  onChange={(newSteps) => {
-                    // Sync steps immediately; debounce expensive graph rebuild to avoid
-                    // per-keystroke O(n) stepsToGraph calls during config edits.
-                    setSteps(newSteps as Step[]);
-                    scheduleGraphSync(newSteps as Step[]);
-                  }}
-                  maxHeight="min(380px, 42vh)"
-                  compact
-                  nestedInDialog
-                  campaignScenarios={runScenarioCampaignOptions}
-                  onRunStep={handleInlineRunStep}
-                  stepRunStates={stepRunStates}
-                  onStopInlineRun={hardStopPreview}
-                />
+              <p className='text-[11px] text-muted-foreground'>
+                Gợi ý cho AI về loại máy sẽ chạy campaign này (không bắt buộc,
+                chỉ là hint).
+              </p>
+              <div className='grid grid-cols-2 gap-2'>
+                <div className='space-y-1'>
+                  <p className='text-[11px] text-muted-foreground'>
+                    Model / dòng máy
+                  </p>
+                  <Input
+                    className='h-7 text-[11px]'
+                    value={deviceModel}
+                    onChange={(e) => setDeviceModel(e.target.value)}
+                    placeholder='Galaxy S23, Pixel 8…'
+                  />
+                </div>
+                <div className='space-y-1'>
+                  <p className='text-[11px] text-muted-foreground'>
+                    Android version
+                  </p>
+                  <Input
+                    className='h-7 text-[11px]'
+                    value={androidVersion}
+                    onChange={(e) => setAndroidVersion(e.target.value)}
+                    placeholder='Android 13, 14…'
+                  />
+                </div>
+                <div className='space-y-1'>
+                  <p className='text-[11px] text-muted-foreground'>
+                    Ưu tiên browser / app
+                  </p>
+                  <Input
+                    className='h-7 text-[11px]'
+                    value={browserApp}
+                    onChange={(e) => setBrowserApp(e.target.value)}
+                    placeholder='Chrome, Facebook…'
+                  />
+                </div>
+                <div className='space-y-1'>
+                  <p className='text-[11px] text-muted-foreground'>
+                    Ghi chú khác
+                  </p>
+                  <Input
+                    className='h-7 text-[11px]'
+                    value={deviceNotes}
+                    onChange={(e) => setDeviceNotes(e.target.value)}
+                    placeholder='màn hình nhỏ, ưu tiên tap bằng text…'
+                  />
+                </div>
               </div>
-            )}
-          </div>
+            </div>
 
+            <div className='space-y-1'>
+              <p className='text-xs font-medium'>
+                Raw scenario JSON (optional)
+              </p>
+              <p className='text-[11px] text-muted-foreground'>
+                Paste{' '}
+                <code className='rounded bg-muted px-1'>
+                  {'{"scenario": {...}}'}
+                </code>{' '}
+                or{' '}
+                <code className='rounded bg-muted px-1'>
+                  {'{"instructions": ..., "steps": [...]}'}
+                </code>
+                . Sẽ ghi đè form bên dưới.
+              </p>
+              <Textarea
+                className='h-32 font-mono text-[11px]'
+                value={rawJson}
+                onChange={(e) => setRawJson(e.target.value)}
+                placeholder='{"instructions": "...", "steps": [...]}'
+              />
+              <div className='flex justify-end pt-1'>
+                <Button size='sm' variant='outline' onClick={handleApplyJson}>
+                  Áp dụng JSON
+                </Button>
+              </div>
+            </div>
 
-          <div className="flex justify-end gap-2 pt-2">
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => setOpen(false)}
-              disabled={isPending || compiling}
-            >
-              Đóng
-            </Button>
-            <Button
-              size="sm"
-              onClick={handleSave}
-              disabled={isPending}
-            >
-              {isPending ? 'Đang lưu…' : 'Lưu kịch bản'}
-            </Button>
-          </div>
+            {/* Account group picker — binds scenario to a pool of accounts for rotation */}
+            <div className='space-y-1'>
+              <p className='text-xs font-medium'>
+                {tScenarioForm('accountGroupLabel')}
+              </p>
+              <Select
+                value={accountGroupId || '_none'}
+                onValueChange={(v) => setAccountGroupId(v === '_none' ? '' : v)}
+              >
+                <SelectTrigger className='h-7 w-full max-w-sm text-[11px]'>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value='_none' className='text-[11px]'>
+                    {tScenarioForm('accountGroupNone')}
+                  </SelectItem>
+                  {accountGroups.map((g) => (
+                    <SelectItem key={g.id} value={g.id} className='text-[11px]'>
+                      {g.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {accountGroupId &&
+                (() => {
+                  const picked = accountGroups.find(
+                    (g) => g.id === accountGroupId
+                  );
+                  if (!picked) return null;
+                  return (
+                    <p className='text-[10px] text-muted-foreground'>
+                      {tScenarioForm('accountGroupCaption', {
+                        count: picked.member_count,
+                        strategy: picked.rotation_strategy
+                      })}
+                    </p>
+                  );
+                })()}
+              <p className='text-[10px] text-muted-foreground'>
+                {tScenarioForm('accountGroupHint')}
+              </p>
+            </div>
+
+            {/* DF-001: Variables */}
+            <div className='space-y-2'>
+              <details className='group'>
+                <summary className='flex cursor-pointer items-center gap-1 text-xs font-medium'>
+                  <span>Biến (Variables)</span>
+                  <span className='font-normal text-muted-foreground'>
+                    — {'${VAR}'} trong steps sẽ được thay thế khi chạy
+                  </span>
+                </summary>
+                <div className='space-y-2 pt-2'>
+                  <VariableEditor
+                    variables={variables}
+                    onChange={setVariables}
+                  />
+                  <p className='text-[10px] leading-relaxed text-muted-foreground'>
+                    Crawl nhóm FB (ví dụ):{' '}
+                    <code className='rounded bg-muted px-1 font-mono'>
+                      GROUP_NAME
+                    </code>
+                    ,{' '}
+                    <code className='rounded bg-muted px-1 font-mono'>
+                      GROUP_XPATH
+                    </code>
+                    ,{' '}
+                    <code className='rounded bg-muted px-1 font-mono'>
+                      MAX_SCROLLS
+                    </code>
+                    ,{' '}
+                    <code className='rounded bg-muted px-1 font-mono'>
+                      SCROLL_X_RATIO
+                    </code>{' '}
+                    (dùng trong{' '}
+                    <code className='rounded bg-muted px-1 font-mono'>
+                      scroll_down.start_x_ratio
+                    </code>
+                    ),{' '}
+                    <code className='rounded bg-muted px-1 font-mono'>
+                      SAVE_COLLECTION
+                    </code>
+                    .
+                  </p>
+                </div>
+              </details>
+            </div>
+
+            <div className='space-y-2'>
+              <div className='flex flex-wrap items-center justify-between gap-2'>
+                <p className='text-xs font-medium'>Các bước thực thi</p>
+                <div className='flex flex-wrap items-center gap-2'>
+                  {/* Ẩn khi ENABLE_FLOWGRAM_SCENARIO_UI = false — xem hằng số đầu file scenario-dialog */}
+                  {ENABLE_FLOWGRAM_SCENARIO_UI && (
+                    <div className='flex items-center rounded-md border border-border p-0.5'>
+                      <Button
+                        type='button'
+                        size='sm'
+                        variant={flowEditMode ? 'ghost' : 'secondary'}
+                        className='h-6 gap-1 rounded-sm px-2 text-[10px]'
+                        onClick={() => setFlowEditMode(false)}
+                        title='Chỉnh danh sách có thụt lề (kéo thả)'
+                      >
+                        <List size={12} />
+                        Danh sách
+                      </Button>
+                      <Button
+                        type='button'
+                        size='sm'
+                        variant={flowEditMode ? 'secondary' : 'ghost'}
+                        className='h-6 gap-1 rounded-sm px-2 text-[10px]'
+                        onClick={() => {
+                          if (!flowEditMode) setFlowCanvasKey((k) => k + 1);
+                          setFlowEditMode(true);
+                        }}
+                        title='Flowgram.ai — sơ đồ tuyến tính + khối lồng'
+                      >
+                        <GitBranch size={12} />
+                        Flow
+                      </Button>
+                    </div>
+                  )}
+                  {devices.length > 0 && (
+                    <>
+                      <Select
+                        value={previewSerial || '_none'}
+                        onValueChange={(v) =>
+                          setPreviewSerial(v === '_none' ? '' : v)
+                        }
+                      >
+                        <SelectTrigger className='h-6 w-[140px] text-[11px]'>
+                          <SelectValue placeholder='Chọn device để test' />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value='_none' className='text-[11px]'>
+                            Chọn device để test
+                          </SelectItem>
+                          {devices.map((d) => (
+                            <SelectItem
+                              key={d.id}
+                              value={d.serial}
+                              className='text-[11px]'
+                            >
+                              {d.name || d.serial}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Button
+                        size='sm'
+                        variant='outline'
+                        onClick={handlePreviewAll}
+                        disabled={
+                          previewingAll ||
+                          !steps.length ||
+                          (!previewSerial && devices.length === 0)
+                        }
+                      >
+                        {previewingAll ? 'Đang test…' : 'Test toàn bộ'}
+                      </Button>
+                    </>
+                  )}
+                  <Button size='sm' variant='outline' onClick={handleAddStep}>
+                    Thêm bước
+                  </Button>
+                </div>
+              </div>
+
+              {showFlowEditUi ? (
+                <div className='space-y-2'>
+                  {flowCoordPick && (
+                    <div className='rounded-md border border-sky-400/50 bg-sky-50/90 px-2 py-1.5 text-[10px] text-sky-900 dark:bg-sky-950/30 dark:text-sky-200'>
+                      {flowCoordPick.kind === 'tap'
+                        ? 'Chạm một điểm trên mirror bên phải để gán tọa độ cho node đang chọn. Esc để hủy.'
+                        : 'Vuốt trên mirror để gán swipe_ratio cho node đang chọn. Esc để hủy.'}
+                    </div>
+                  )}
+                  <div className='grid gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(260px,320px)] lg:items-start'>
+                    <div className='relative min-h-[min(380px,48vh)] overflow-hidden rounded-md border border-border bg-muted/10'>
+                      <DynamicFlowgramCanvas
+                        key={`scenario-flow-${flowCanvasKey}`}
+                        steps={steps as any[]}
+                        workbench={flowWorkbench}
+                        onFlowCtx={(ctx) => {
+                          flowCtxRef.current = ctx;
+                        }}
+                        onStepsChange={(newSteps) => {
+                          replaceStepsAndGraph(newSteps as Step[]);
+                        }}
+                      />
+                    </div>
+                    <div className='max-h-[min(48vh,520px)] min-h-[120px] overflow-y-auto rounded-md border border-border bg-card'>
+                      {flowDetailStep ? (
+                        <StepDetailPanel
+                          step={flowDetailStep}
+                          onChange={handleFlowDetailChange}
+                          onClose={() => setFlowSelectedFgId(null)}
+                          onRequestPickSelector={undefined}
+                          onRequestPickTapCoords={
+                            flowSelectedFgId
+                              ? () => {
+                                  setFlowCoordPick({
+                                    fgId: flowSelectedFgId,
+                                    kind: 'tap'
+                                  });
+                                  setCoordPickMode(null);
+                                  toast.info(
+                                    'Chạm mirror để gán tọa độ cho node này'
+                                  );
+                                }
+                              : undefined
+                          }
+                          onRequestPickSwipeCoords={
+                            flowSelectedFgId
+                              ? () => {
+                                  setFlowCoordPick({
+                                    fgId: flowSelectedFgId,
+                                    kind: 'swipe'
+                                  });
+                                  setCoordPickMode(null);
+                                  toast.info(
+                                    'Vuốt trên mirror để gán swipe_ratio'
+                                  );
+                                }
+                              : undefined
+                          }
+                        />
+                      ) : (
+                        <p className='p-3 text-[11px] leading-relaxed text-muted-foreground'>
+                          Chọn node trên flow (nút con trỏ trên thẻ) để chỉnh
+                          chi tiết. Nút play chạy một bước — cần chọn thiết bị ở
+                          dropdown &quot;Chọn device để test&quot;.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <p className='text-[10px] leading-relaxed text-muted-foreground'>
+                    <strong>Luồng nối</strong> do Flowgram (fixed-layout) vẽ tự
+                    động theo thứ tự dọc và nhánh (if/loop/random). Kéo thả node
+                    để đổi thứ tự. <strong>Không hỗ trợ kéo dây tự do</strong>{' '}
+                    giữa hai cổng bất kỳ — cần editor dạng free-graph (vd. React
+                    Flow) nếu muốn nối tùy ý.
+                  </p>
+                </div>
+              ) : steps.length === 0 ? (
+                <p className='text-[11px] text-muted-foreground'>
+                  Chưa có bước nào. Bạn có thể dùng AI để sinh, chế độ Flow (+
+                  giữa các node), hoặc Thêm bước.
+                </p>
+              ) : (
+                <div>
+                  <FlowEditor
+                    steps={steps as any[]}
+                    onChange={(newSteps) => {
+                      // Sync steps immediately; debounce expensive graph rebuild to avoid
+                      // per-keystroke O(n) stepsToGraph calls during config edits.
+                      setSteps(newSteps as Step[]);
+                      scheduleGraphSync(newSteps as Step[]);
+                    }}
+                    maxHeight='min(380px, 42vh)'
+                    compact
+                    nestedInDialog
+                    campaignScenarios={runScenarioCampaignOptions}
+                    onRunStep={handleInlineRunStep}
+                    stepRunStates={stepRunStates}
+                    onStopInlineRun={hardStopPreview}
+                  />
+                </div>
+              )}
+            </div>
+
+            <div className='flex justify-end gap-2 pt-2'>
+              <Button
+                size='sm'
+                variant='ghost'
+                onClick={() => setOpen(false)}
+                disabled={isPending || compiling}
+              >
+                Đóng
+              </Button>
+              <Button size='sm' onClick={handleSave} disabled={isPending}>
+                {isPending ? 'Đang lưu…' : 'Lưu kịch bản'}
+              </Button>
+            </div>
           </div>
           {devices.length > 0 && embedSerial && (
             <div
               ref={deviceMirrorRef}
-              className="flex min-h-0 w-full shrink-0 flex-col self-stretch border-t border-border pt-3 order-2 lg:w-[320px] lg:min-w-[320px] lg:border-l lg:border-t-0 lg:pt-0 lg:pl-3 overflow-y-auto lg:max-h-full max-h-[min(52vh,520px)]"
+              className='order-2 flex max-h-[min(52vh,520px)] min-h-0 w-full shrink-0 flex-col self-stretch overflow-y-auto border-t border-border pt-3 lg:max-h-full lg:w-[320px] lg:min-w-[320px] lg:border-l lg:border-t-0 lg:pl-3 lg:pt-0'
             >
               {!xmlSerial && (
-                <p className="mb-2 rounded-md bg-muted/50 px-2 py-1 text-[10px] text-muted-foreground">
-                  Đang xem <span className="font-mono text-foreground">{embedSerial.slice(0, 12)}…</span>
-                  . Chọn thiết bị ở &quot;Thiết bị để lấy UI XML&quot; nếu cần XML khác cho AI.
+                <p className='mb-2 rounded-md bg-muted/50 px-2 py-1 text-[10px] text-muted-foreground'>
+                  Đang xem{' '}
+                  <span className='font-mono text-foreground'>
+                    {embedSerial.slice(0, 12)}…
+                  </span>
+                  . Chọn thiết bị ở &quot;Thiết bị để lấy UI XML&quot; nếu cần
+                  XML khác cho AI.
                 </p>
               )}
-              <div className="flex items-center justify-between mb-2 shrink-0 gap-2">
-                <p className="text-[11px] font-medium text-muted-foreground">Điều khiển</p>
+              <div className='mb-2 flex shrink-0 items-center justify-between gap-2'>
+                <p className='text-[11px] font-medium text-muted-foreground'>
+                  Điều khiển
+                </p>
                 <Button
-                  size="sm"
+                  size='sm'
                   variant={recording ? 'destructive' : 'outline'}
-                  className="h-7 gap-1 text-[10px] px-2"
+                  className='h-7 gap-1 px-2 text-[10px]'
                   onClick={async () => {
                     const next = !recording;
                     if (next && coordPickMode) setCoordPickMode(null);
@@ -1758,81 +2220,94 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
                     }
                     setRecording(next);
                   }}
-                  title={recording ? 'Dừng ghi kịch bản' : 'Bật ghi: lấy XML → mỗi tap tự thêm tap_selector'}
+                  title={
+                    recording
+                      ? 'Dừng ghi kịch bản'
+                      : 'Bật ghi: lấy XML → mỗi tap tự thêm tap_selector'
+                  }
                 >
                   {recording ? (
                     <>
-                      <Square size={9} className="fill-current" /> Dừng ghi
+                      <Square size={9} className='fill-current' /> Dừng ghi
                     </>
                   ) : (
                     <>
-                      <Circle size={9} className="text-red-500 fill-red-500" /> Ghi
+                      <Circle size={9} className='fill-red-500 text-red-500' />{' '}
+                      Ghi
                     </>
                   )}
                 </Button>
               </div>
-              <div className="mb-2 flex flex-wrap gap-1.5">
+              <div className='mb-2 flex flex-wrap gap-1.5'>
                 <Button
-                  type="button"
-                  size="sm"
+                  type='button'
+                  size='sm'
                   variant={coordPickMode === 'tap' ? 'default' : 'outline'}
-                  className="h-7 gap-1 text-[10px] px-2"
+                  className='h-7 gap-1 px-2 text-[10px]'
                   disabled={recording}
                   onClick={() => activateCoordPick('tap')}
-                  title="Cuộn tới mirror rồi chạm một điểm để thêm tap_ratio"
+                  title='Cuộn tới mirror rồi chạm một điểm để thêm tap_ratio'
                 >
                   <MousePointerClick size={12} />
                   Chạm lấy tọa độ
                 </Button>
                 <Button
-                  type="button"
-                  size="sm"
+                  type='button'
+                  size='sm'
                   variant={coordPickMode === 'swipe' ? 'default' : 'outline'}
-                  className="h-7 gap-1 text-[10px] px-2"
+                  className='h-7 gap-1 px-2 text-[10px]'
                   disabled={recording}
                   onClick={() => activateCoordPick('swipe')}
-                  title="Vuốt trên mirror để thêm swipe_ratio"
+                  title='Vuốt trên mirror để thêm swipe_ratio'
                 >
                   <Move size={12} />
                   Vuốt lấy đoạn
                 </Button>
               </div>
               {coordPickMode === 'tap' && (
-                <div className="mb-2 rounded-md border border-sky-400/40 bg-sky-50 px-2 py-1.5 text-[10px] text-sky-900 dark:bg-sky-950/30 dark:text-sky-200">
-                  <strong>CHẠM TỌA ĐỘ:</strong> chạm một điểm trên màn hình bên dưới — thêm{' '}
-                  <code className="text-[9px]">tap_ratio</code>. Esc để hủy.
+                <div className='mb-2 rounded-md border border-sky-400/40 bg-sky-50 px-2 py-1.5 text-[10px] text-sky-900 dark:bg-sky-950/30 dark:text-sky-200'>
+                  <strong>CHẠM TỌA ĐỘ:</strong> chạm một điểm trên màn hình bên
+                  dưới — thêm <code className='text-[9px]'>tap_ratio</code>. Esc
+                  để hủy.
                 </div>
               )}
               {coordPickMode === 'swipe' && (
-                <div className="mb-2 rounded-md border border-sky-400/40 bg-sky-50 px-2 py-1.5 text-[10px] text-sky-900 dark:bg-sky-950/30 dark:text-sky-200">
+                <div className='mb-2 rounded-md border border-sky-400/40 bg-sky-50 px-2 py-1.5 text-[10px] text-sky-900 dark:bg-sky-950/30 dark:text-sky-200'>
                   <strong>Vuốt:</strong> kéo trên màn hình bên dưới — thêm{' '}
-                  <code className="text-[9px]">swipe_ratio</code>. Esc để hủy.
+                  <code className='text-[9px]'>swipe_ratio</code>. Esc để hủy.
                 </div>
               )}
               {recording && (
-                <div className="mb-1.5 flex items-center justify-between gap-1 rounded bg-amber-50 px-2 py-1 dark:bg-amber-950/30">
-                  <p className="text-[10px] text-amber-800 dark:text-amber-400">
+                <div className='mb-1.5 flex items-center justify-between gap-1 rounded bg-amber-50 px-2 py-1 dark:bg-amber-950/30'>
+                  <p className='text-[10px] text-amber-800 dark:text-amber-400'>
                     {recordXml ? (
                       <>
-                        Đang ghi — tap → <code className="text-[9px]">tap_selector</code>, vuốt →{' '}
-                        <code className="text-[9px]">swipe_ratio</code>. Đổi màn → làm mới XML.
+                        Đang ghi — tap →{' '}
+                        <code className='text-[9px]'>tap_selector</code>, vuốt →{' '}
+                        <code className='text-[9px]'>swipe_ratio</code>. Đổi màn
+                        → làm mới XML.
                       </>
                     ) : (
-                      <span className="text-destructive">Chưa có XML — tap → tap_ratio; vuốt vẫn ghi swipe_ratio</span>
+                      <span className='text-destructive'>
+                        Chưa có XML — tap → tap_ratio; vuốt vẫn ghi swipe_ratio
+                      </span>
                     )}
                   </p>
                   <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-6 shrink-0 gap-0.5 px-1.5 text-[10px]"
+                    size='sm'
+                    variant='ghost'
+                    className='h-6 shrink-0 gap-0.5 px-1.5 text-[10px]'
                     disabled={refreshingXml}
                     onClick={() => {
                       const s = xmlSerial || devices[0]?.serial;
                       if (s) void refreshRecordXml(s);
                     }}
-                    title="Làm mới XML sau khi đổi màn hình"
+                    title='Làm mới XML sau khi đổi màn hình'
                   >
-                    <RefreshCw size={10} className={refreshingXml ? 'animate-spin' : ''} />
+                    <RefreshCw
+                      size={10}
+                      className={refreshingXml ? 'animate-spin' : ''}
+                    />
                     {refreshingXml ? '…' : 'Làm mới'}
                   </Button>
                 </div>
@@ -1842,9 +2317,14 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
                 compact
                 hideStepMonitor
                 onTap={
-                  recording || coordPickMode === 'tap' || (showFlowEditUi && flowCoordPick?.kind === 'tap')
+                  recording ||
+                  coordPickMode === 'tap' ||
+                  (showFlowEditUi && flowCoordPick?.kind === 'tap')
                     ? (serial, rx, ry) => {
-                        if (coordPickMode === 'tap' || (showFlowEditUi && flowCoordPick?.kind === 'tap')) {
+                        if (
+                          coordPickMode === 'tap' ||
+                          (showFlowEditUi && flowCoordPick?.kind === 'tap')
+                        ) {
                           handleEmbedTapForCoords(serial, rx, ry);
                           return;
                         }
@@ -1853,10 +2333,22 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
                     : undefined
                 }
                 onSwipe={
-                  recording || coordPickMode === 'swipe' || (showFlowEditUi && flowCoordPick?.kind === 'swipe')
+                  recording ||
+                  coordPickMode === 'swipe' ||
+                  (showFlowEditUi && flowCoordPick?.kind === 'swipe')
                     ? (serial, rx1, ry1, rx2, ry2, ms) => {
-                        if (coordPickMode === 'swipe' || (showFlowEditUi && flowCoordPick?.kind === 'swipe')) {
-                          handleEmbedSwipeForCoords(serial, rx1, ry1, rx2, ry2, ms);
+                        if (
+                          coordPickMode === 'swipe' ||
+                          (showFlowEditUi && flowCoordPick?.kind === 'swipe')
+                        ) {
+                          handleEmbedSwipeForCoords(
+                            serial,
+                            rx1,
+                            ry1,
+                            rx2,
+                            ry2,
+                            ms
+                          );
                           return;
                         }
                         handleRecordSwipe(serial, rx1, ry1, rx2, ry2, ms);
@@ -1871,5 +2363,3 @@ export function ScenarioDialog({ campaign, scenario: scenarioProp, children }: P
     </Dialog>
   );
 }
-
-

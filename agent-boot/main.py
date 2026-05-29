@@ -259,6 +259,17 @@ def _run_relay(args: argparse.Namespace) -> None:
             if ingest is not None:
                 await ingest.stop()
 
+    # uvloop is ~2x faster than the stdlib selector loop for I/O-bound work
+    # (ADB sockets, scrcpy stream, gRPC, atx-agent HTTP). Install it before
+    # `asyncio.run()` so the relay loop picks it up. Not available on Windows
+    # — fall back to the stdlib loop silently.
+    try:
+        import uvloop  # type: ignore[import-not-found]
+        uvloop.install()
+        print("[agent-boot] uvloop installed (libuv-backed asyncio loop)", file=sys.stderr)
+    except ImportError:
+        pass
+
     asyncio.run(_run())
 
 

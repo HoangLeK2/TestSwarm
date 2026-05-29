@@ -27,7 +27,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 logger = logging.getLogger("relay.scrcpy")
 
@@ -59,7 +59,14 @@ def _is_idr(data: bytes) -> bool:
     return False
 
 
-def _relay_enqueue(q: asyncio.Queue, frame: bytes, is_cfg: bool, is_key: bool, on_p_drop=None) -> None:
+def _relay_enqueue(
+    q: Any,
+    frame: bytes,
+    is_cfg: bool,
+    is_key: bool,
+    on_p_drop=None,
+    serial: Optional[str] = None,
+) -> None:
     """Module-level enqueue — avoids closure allocation per frame at 30fps.
 
     Called via call_soon_threadsafe from the relay thread.
@@ -68,17 +75,40 @@ def _relay_enqueue(q: asyncio.Queue, frame: bytes, is_cfg: bool, is_key: bool, o
     on_p_drop: optional callable invoked when a P-frame is dropped so the
     relay thread can immediately request an IDR — limits decoder freeze to
     ~100ms instead of waiting up to 1s for the next natural IDR interval.
+    serial: when `q` is a FairSendQueue, frames are routed to the matching
+    per-device lane so one phone's backlog can't starve another's frames.
     """
+    # Fan out to the FairSendQueue's per-device lane when available; otherwise
+    # behave like a plain asyncio.Queue.
+    has_serial_api = hasattr(q, "put_nowait_with_serial")
+
+    def _put(item):
+        if has_serial_api:
+            q.put_nowait_with_serial(item, serial)
+        else:
+            q.put_nowait(item)
+
+    def _peek_lane():
+        # Drop-oldest needs to peek/pop the *same* lane that filled up.
+        # FairSendQueue exposes the internal per-device asyncio.Queue via
+        # `_per_dev`; fall back to the queue itself otherwise.
+        if has_serial_api and serial:
+            return q._per_dev.get(serial)  # noqa: SLF001 — single owner module
+        return q
+
     try:
-        q.put_nowait(frame)
+        _put(frame)
     except asyncio.QueueFull:
         if not is_cfg and not is_key:
             if on_p_drop is not None:
                 on_p_drop()  # signal relay thread to request IDR
             return  # P-frame: drop, IDR will follow shortly
+        lane = _peek_lane()
+        if lane is None:
+            return
         try:
-            q.get_nowait()   # evict oldest to make room for IDR/config
-            q.put_nowait(frame)
+            lane.get_nowait()   # evict oldest to make room for IDR/config
+            _put(frame)
         except (asyncio.QueueEmpty, asyncio.QueueFull):
             pass
 
@@ -168,6 +198,11 @@ _IDR_REQUEST_WINDOW = max(
     _IDR_REQUEST_AFTER,
     float(os.environ.get("SCRCPY_IDR_REQUEST_WINDOW_S", "20.0")),
 )
+# Minimum gap between IDR requests. Raises the previous 0.5s to a tunable
+# default of 1.0s — multi-day runs with several OEM devices in a soft stall
+# would otherwise spam ~120 IDR requests/min total, burning CPU + ADB for
+# zero recovery. Per-OEM env override below for stubborn codecs.
+_IDR_REQUEST_MIN_GAP = max(0.2, float(os.environ.get("SCRCPY_IDR_REQUEST_MIN_GAP_S", "1.0")))
 
 # scrcpy 3.3.x control message type. Hardcoded to the bundled server version
 # (see _BUNDLED_JAR_VERSION); re-check if you bump the jar.
@@ -798,17 +833,26 @@ class ScrcpyRelaySession:
                             f"scrcpy frame timeout ({_FRAME_TIMEOUT:.1f}s) — encoder stalled"
                         )
                     now = time.monotonic()
-                    if now - self._last_idr_request_t >= 0.5:
+                    if now - self._last_idr_request_t >= _IDR_REQUEST_MIN_GAP:
                         self._last_idr_request_t = now
                         self._request_idr()
                         if idr_window_start <= 0 or (now - idr_window_start) > _IDR_REQUEST_WINDOW:
                             idr_window_start = now
                             idr_request_count = 0
                         idr_request_count += 1
-                        logger.info(
-                            "[%s] scrcpy: %.1fs without frame — requested IDR keyframe",
-                            self._serial, elapsed,
-                        )
+                        # Multi-day stability: only log first IDR per stall
+                        # episode at INFO; subsequent retries go to DEBUG so a
+                        # stuck OEM encoder cannot fill GB of logs in a week.
+                        if idr_request_count == 1:
+                            logger.info(
+                                "[%s] scrcpy: %.1fs without frame — requested IDR keyframe",
+                                self._serial, elapsed,
+                            )
+                        else:
+                            logger.debug(
+                                "[%s] scrcpy: %.1fs without frame — IDR retry %d",
+                                self._serial, elapsed, idr_request_count,
+                            )
                         if idr_request_count >= _IDR_MAX_REQUESTS:
                             raise RuntimeError(
                                 "scrcpy repeated no-frame stalls "
@@ -825,7 +869,7 @@ class ScrcpyRelaySession:
             if self._need_idr:
                 self._need_idr = False
                 now = time.monotonic()
-                if now - self._last_idr_request_t >= 0.5:
+                if now - self._last_idr_request_t >= _IDR_REQUEST_MIN_GAP:
                     self._last_idr_request_t = now
                     self._request_idr()
                     logger.debug("[%s] IDR requested after P-frame queue drop", self._serial)
@@ -871,7 +915,13 @@ class ScrcpyRelaySession:
             # Dispatch via module-level function. Pass _mark_idr_needed so the
             # asyncio thread can signal back when a P-frame is dropped.
             self._loop.call_soon_threadsafe(
-                _relay_enqueue, self._send_queue, frame, is_cfg, is_key, self._mark_idr_needed
+                _relay_enqueue,
+                self._send_queue,
+                frame,
+                is_cfg,
+                is_key,
+                self._mark_idr_needed,
+                self._serial,
             )
 
     def _connect_with_retry(self, host: str, port: int, timeout: float) -> socket.socket:

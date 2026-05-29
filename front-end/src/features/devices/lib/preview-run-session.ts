@@ -6,11 +6,15 @@ export type ActivePreviewTrace = {
   runId: number;
 };
 
-type PreviewEvent = { event: string; trace_id?: string; [key: string]: unknown };
+type PreviewEvent = {
+  event: string;
+  trace_id?: string;
+  [key: string]: unknown;
+};
 
 export function createPreviewRunSession(
   activeRef: { current: ActivePreviewTrace | null },
-  runIdRef: { current: number },
+  runIdRef: { current: number }
 ) {
   const beginRun = () => ++runIdRef.current;
 
@@ -30,23 +34,21 @@ export function createPreviewRunSession(
     return active;
   };
 
-  const makeStreamHandler = (
-    runId: number,
-    serial: string,
-    onEvent?: (ev: PreviewEvent) => void,
-  ) => (ev: PreviewEvent) => {
-    if (ev.event === 'start' && typeof ev.trace_id === 'string') {
-      onStreamStart(runId, serial, ev.trace_id);
-    } else if (ev.event === 'done' || ev.event === 'error') {
-      onStreamEnd(runId);
-    }
-    onEvent?.(ev);
-  };
+  const makeStreamHandler =
+    (runId: number, serial: string, onEvent?: (ev: PreviewEvent) => void) =>
+    (ev: PreviewEvent) => {
+      if (ev.event === 'start' && typeof ev.trace_id === 'string') {
+        onStreamStart(runId, serial, ev.trace_id);
+      } else if (ev.event === 'done' || ev.event === 'error') {
+        onStreamEnd(runId);
+      }
+      onEvent?.(ev);
+    };
 
   return {
     beginRun,
     onStreamEnd,
     takeActiveForCancel,
-    makeStreamHandler,
+    makeStreamHandler
   };
 }

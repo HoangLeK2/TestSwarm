@@ -293,6 +293,12 @@ def request_edge_extra_data(
     if parent_id is None and parent_var:
         parent_id = ctx.get(parent_var)
     return_items = _edge_extra_should_return_items(step, collection)
+    comment_defaults: dict[str, Any] = {}
+    if strategy in COMMENT_STRATEGIES:
+        from services.extract_profiles import DEFAULT_EXTRACT_PROFILE, get_profile_defaults
+        from services.scenario_step_contract import resolve_extract_profile
+
+        comment_defaults = get_profile_defaults(resolve_extract_profile(step), strategy)
     context = {
         "schema_version": 1,
         "context_id": scenario.get("_execution_id") or scenario.get("_run_hash_scope") or serial,
@@ -311,20 +317,30 @@ def request_edge_extra_data(
         "parent_id": parent_id,
         "parent_post_id": parent_post_id,
         "post_key": step.get("post_key") or ctx.get("last_post_key"),
-        "max_items": int(step.get("max_items") or 50),
+        "max_items": int(
+            step.get("max_items")
+            or comment_defaults.get("max_items")
+            or (400 if strategy in COMMENT_STRATEGIES else 50)
+        ),
         "source_index": int(ctx.get("_loop_iter", 0) or 0),
         "persist": bool(collection),
         "return_items": return_items,
         "package_name": step.get("package_name") or step.get("current_package") or "",
     }
+    for key, val in comment_defaults.items():
+        context.setdefault(key, val)
     for key in (
         "comment_scroll_passes",
+        "comment_swipes_per_dump",
         "comment_scroll_distance",
         "comment_scroll_duration_ms",
         "comment_scroll_pause_s",
         "comment_no_growth_break",
         "min_comment_scan_passes",
-        "expand_see_more",
+        "comment_max_snapshots",
+        "comment_xml_max_bytes",
+        "hierarchy_compressed",
+        "hierarchy_dump_timeout_s",
         "expand_see_more_max_passes",
         "expand_see_more_scroll",
         "expand_see_more_scroll_distance",
@@ -341,6 +357,10 @@ def request_edge_extra_data(
     ):
         if key in step:
             context[key] = step[key]
+    if strategy in COMMENT_STRATEGIES:
+        context["expand_see_more"] = False
+    elif "expand_see_more" in step:
+        context["expand_see_more"] = step["expand_see_more"]
     if strategy not in COMMENT_STRATEGIES and "expand_see_more" not in context:
         from services.extract_profiles import DEFAULT_EXTRACT_PROFILE, get_profile_defaults
         from services.scenario_step_contract import resolve_extract_profile

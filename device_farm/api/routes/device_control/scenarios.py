@@ -42,6 +42,28 @@ def _unregister_preview(serial: str, trace_id: str) -> None:
 def _get_preview_entry(serial: str, trace_id: str) -> Optional[dict]:
     with _ACTIVE_PREVIEWS_LOCK:
         return _ACTIVE_PREVIEWS.get((serial, trace_id))
+
+
+def cancel_all_previews_for_serial(
+    serial: str,
+    user_id: Optional[str] = None,
+) -> int:
+    """Signal cancel on every in-flight preview stream for a device.
+
+    Used by interrupt/stop when the client has not yet captured trace_id from
+    the SSE ``start`` event, or when cancel-by-trace_id returns 404.
+    """
+    cancelled = 0
+    with _ACTIVE_PREVIEWS_LOCK:
+        for (s, _tid), entry in list(_ACTIVE_PREVIEWS.items()):
+            if s != serial:
+                continue
+            owner_id = entry.get("user_id")
+            if owner_id and user_id and owner_id != user_id:
+                continue
+            entry["event"].set()
+            cancelled += 1
+    return cancelled
 from api.auth import policy
 from api.auth.context import AuthContext
 from api.deps import caller_auth_from_request
@@ -51,7 +73,7 @@ from core.config import Config
 from db import crud as repo
 from db.database import AsyncSessionLocal
 from db.crud.scenario_device_variable import get_scenario_device_variables
-from common.variable_resolver import normalize_device_vars
+from common.variable_resolver import normalize_device_vars, normalize_variable_map
 from runtime.core import DeviceManager
 
 log = logging.getLogger(__name__)
@@ -167,11 +189,82 @@ async def _resolve_device_runtime_vars(
                 return {}
             raw = await get_scenario_device_variables(db, scenario_id, device.id)
             db_vars = normalize_device_vars(raw)
-            # Inline draft vars win over persisted vars for preview ergonomics.
-            return {**db_vars, **inline_vars}
+            # Persisted vars win over inline drafts so a save-before-run is not
+            # shadowed by stale UI state. Unsaved device-var edits require save.
+            return {**inline_vars, **db_vars}
     except Exception as exc:
         log.warning("preview device vars resolve failed: %s", exc)
         return inline_vars
+
+
+async def _resolve_scenario_scope_vars(
+    scenario_id: str,
+    user_id: Optional[str],
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    """Load campaign + scenario variable maps from DB for preview/run."""
+    try:
+        async with AsyncSessionLocal() as db:
+            scenario = await repo.get_scenario(db, scenario_id)
+            if not scenario:
+                return {}, {}
+            campaign = await repo.get_campaign(db, scenario.campaign_id)
+            if user_id and campaign and getattr(campaign, "user_id", None) != user_id:
+                return {}, {}
+            campaign_vars = normalize_variable_map(
+                (campaign.variables or {}) if campaign else {}
+            )
+            scenario_vars = normalize_variable_map(scenario.variables or {})
+            return campaign_vars, scenario_vars
+    except Exception as exc:
+        log.warning("preview scenario vars resolve failed: %s", exc)
+        return {}, {}
+
+
+def merge_preview_variable_layers(
+    *,
+    client_vars: Optional[Dict[str, Any]] = None,
+    campaign_vars: Optional[Dict[str, Any]] = None,
+    scenario_vars: Optional[Dict[str, Any]] = None,
+    device_vars: Optional[Dict[str, Any]] = None,
+    account_vars: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Merge variable scopes for preview/run (lowest → highest priority)."""
+    return {
+        **(client_vars or {}),
+        **(campaign_vars or {}),
+        **(scenario_vars or {}),
+        **(device_vars or {}),
+        **(account_vars or {}),
+    }
+
+
+async def _apply_preview_variables(
+    body: ScenarioPreviewRequest,
+    serial_or_device_id: str,
+    user_id: Optional[str],
+) -> None:
+    """Resolve DB-backed vars into ``body.variables`` (mutates *body* in place)."""
+    campaign_vars: Dict[str, Any] = {}
+    scenario_vars: Dict[str, Any] = {}
+    if body.scenario_id:
+        campaign_vars, scenario_vars = await _resolve_scenario_scope_vars(
+            body.scenario_id,
+            user_id,
+        )
+    device_vars = await _resolve_device_runtime_vars(
+        serial_or_device_id,
+        user_id,
+        body.scenario_id,
+        body.scenario_device_vars,
+    )
+    acct_vars = await _resolve_account_group_vars(body.account_group_id, user_id)
+    body.variables = merge_preview_variable_layers(
+        client_vars=body.variables,
+        campaign_vars=campaign_vars,
+        scenario_vars=scenario_vars,
+        device_vars=device_vars,
+        account_vars=acct_vars,
+    )
 
 
 async def _execute_scenario_body(
@@ -226,20 +319,7 @@ def build_scenarios_router(
         if not device:
             return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
         user_id = _resolve_user_id_from_request(request)
-        device_vars = await _resolve_device_runtime_vars(
-            serial,
-            user_id,
-            body.scenario_id,
-            body.scenario_device_vars,
-        )
-        # Inject __ACCOUNT_* vars from the bound account group (if any) so a
-        # test run can exercise login steps without first saving the scenario.
-        # Device-specific variables override the global scenario/campaign vars
-        # that the client sends in body.variables.
-        acct_vars = await _resolve_account_group_vars(body.account_group_id, user_id)
-        merged = {**device_vars, **acct_vars}
-        if merged:
-            body.variables = {**(body.variables or {}), **merged}
+        await _apply_preview_variables(body, serial, user_id)
         return await _execute_scenario_body(
             manager, serial, body, trace_source="api.preview", user_id=user_id
         )
@@ -265,19 +345,7 @@ def build_scenarios_router(
             total_steps=len(body.steps),
         )
         user_id = _resolve_user_id_from_request(request)
-        device_vars = await _resolve_device_runtime_vars(
-            serial,
-            user_id,
-            body.scenario_id,
-            body.scenario_device_vars,
-        )
-
-        # Same account-group rotation hook as the non-stream preview. Device
-        # vars share the global namespace and override body.variables.
-        acct_vars = await _resolve_account_group_vars(body.account_group_id, user_id)
-        merged = {**device_vars, **acct_vars}
-        if merged:
-            body.variables = {**(body.variables or {}), **merged}
+        await _apply_preview_variables(body, serial, user_id)
 
         cancel_event = threading.Event()
         _register_preview(serial, trace_id, cancel_event, user_id=user_id)
@@ -365,14 +433,7 @@ def build_scenarios_router(
         if not device:
             return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)
         user_id = _resolve_user_id_from_request(request)
-        device_vars = await _resolve_device_runtime_vars(
-            serial,
-            user_id,
-            body.scenario_id,
-            body.scenario_device_vars,
-        )
-        if device_vars:
-            body.variables = {**(body.variables or {}), **device_vars}
+        await _apply_preview_variables(body, serial, user_id)
         return await _execute_scenario_body(
             manager, serial, body, trace_source="api.run", user_id=user_id
         )
@@ -399,14 +460,7 @@ def build_scenarios_router(
         if not device_id:
             return JSONResponse({"error": "Session not found"}, status_code=404)
         caller_id = ctx.user_id
-        device_vars = await _resolve_device_runtime_vars(
-            device_id,
-            caller_id,
-            body.scenario_id,
-            body.scenario_device_vars,
-        )
-        if device_vars:
-            body.variables = {**(body.variables or {}), **device_vars}
+        await _apply_preview_variables(body, device_id, caller_id)
         if not body.steps:
             return JSONResponse(
                 {"error": "steps must be a non-empty array"},

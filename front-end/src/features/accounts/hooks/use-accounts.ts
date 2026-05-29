@@ -5,13 +5,17 @@ import {
   type AccountCreate,
   type AccountUpdate
 } from '../services/api';
-import type { BulkImportBody, RoundRobinBody } from '../../device-farm/services/generated/DeviceFarmApi';
+import type {
+  BulkImportBody,
+  RoundRobinBody
+} from '../../device-farm/services/generated/DeviceFarmApi';
 
 const KEYS = {
   list: ['accounts'] as const,
   detail: (id: string) => ['accounts', id] as const,
   devices: (id: string) => ['accounts', id, 'devices'] as const,
-  events: (id: string, cursor?: string) => ['accounts', id, 'events', cursor] as const
+  events: (id: string, cursor?: string) =>
+    ['accounts', id, 'events', cursor] as const
 };
 
 export function useAccounts(query?: {
@@ -61,8 +65,13 @@ export function useCreateAccount() {
 export function useUpdateAccount() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ accountId, data }: { accountId: string; data: AccountUpdate }) =>
-      accountsApi.update(accountId, data),
+    mutationFn: ({
+      accountId,
+      data
+    }: {
+      accountId: string;
+      data: AccountUpdate;
+    }) => accountsApi.update(accountId, data),
     onSuccess: (_, { accountId }) => {
       qc.invalidateQueries({ queryKey: KEYS.list });
       qc.invalidateQueries({ queryKey: KEYS.detail(accountId) });
@@ -81,8 +90,13 @@ export function useDeleteAccount() {
 export function useUpdateAccountStatus() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ accountId, status }: { accountId: string; status: string }) =>
-      accountsApi.updateStatus(accountId, status),
+    mutationFn: ({
+      accountId,
+      status
+    }: {
+      accountId: string;
+      status: string;
+    }) => accountsApi.updateStatus(accountId, status),
     onSuccess: (_, { accountId }) => {
       qc.invalidateQueries({ queryKey: KEYS.list });
       qc.invalidateQueries({ queryKey: KEYS.detail(accountId) });
@@ -147,8 +161,13 @@ export function useAssignDeviceToAccount() {
 export function useUnassignDeviceFromAccount() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ accountId, deviceId }: { accountId: string; deviceId: string }) =>
-      accountsApi.unassignDevice(accountId, deviceId),
+    mutationFn: ({
+      accountId,
+      deviceId
+    }: {
+      accountId: string;
+      deviceId: string;
+    }) => accountsApi.unassignDevice(accountId, deviceId),
     onSuccess: (_, { accountId }) => {
       qc.invalidateQueries({ queryKey: KEYS.devices(accountId) });
       qc.invalidateQueries({ queryKey: KEYS.list });

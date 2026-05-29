@@ -43,7 +43,7 @@ function elementToNode(el: Element, depth: number): HierarchyTreeNode {
     bounds: parseBounds(el.getAttribute('bounds') ?? ''),
     clickable: el.getAttribute('clickable') === 'true',
     children: [],
-    depth,
+    depth
   };
   for (let i = 0; i < el.children.length; i++) {
     const child = el.children[i];
@@ -84,7 +84,7 @@ export function parseHierarchyTree(xml: string): HierarchyTreeNode | null {
       bounds: null,
       clickable: false,
       children: topNodes.map((el) => elementToNode(el, 1)),
-      depth: 0,
+      depth: 0
     };
     return synthetic;
   } catch {
@@ -98,7 +98,7 @@ export function parseHierarchyTree(xml: string): HierarchyTreeNode | null {
  */
 export function searchTree(
   root: HierarchyTreeNode,
-  query: string,
+  query: string
 ): Set<number> {
   const matching = new Set<number>();
   if (!query.trim()) return matching;
@@ -137,7 +137,11 @@ export function searchTree(
  *   2. Prefer clickable-self; else promote to nearest clickable ancestor.
  *   3. Smallest-area wins within the chosen pool.
  */
-export function findNodeIdAtRatio(root: HierarchyTreeNode, rx: number, ry: number): number | null {
+export function findNodeIdAtRatio(
+  root: HierarchyTreeNode,
+  rx: number,
+  ry: number
+): number | null {
   // Prefer root bounds. If synthetic wrapper (null bounds), infer from largest child.
   let screenBounds = root.bounds;
   if (!screenBounds) {
@@ -146,7 +150,10 @@ export function findNodeIdAtRatio(root: HierarchyTreeNode, rx: number, ry: numbe
       if (!c.bounds) continue;
       const [x1, y1, x2, y2] = c.bounds;
       const a = (x2 - x1) * (y2 - y1);
-      if (a > bestArea) { bestArea = a; screenBounds = c.bounds; }
+      if (a > bestArea) {
+        bestArea = a;
+        screenBounds = c.bounds;
+      }
     }
   }
   if (!screenBounds) return null;
@@ -156,10 +163,17 @@ export function findNodeIdAtRatio(root: HierarchyTreeNode, rx: number, ry: numbe
   const px = rx * dw;
   const py = ry * dh;
 
-  type Cand = { node: HierarchyTreeNode; area: number; clickableAncestor: HierarchyTreeNode | null };
+  type Cand = {
+    node: HierarchyTreeNode;
+    area: number;
+    clickableAncestor: HierarchyTreeNode | null;
+  };
   const candidates: Cand[] = [];
 
-  function walk(node: HierarchyTreeNode, nearestClickableAnc: HierarchyTreeNode | null) {
+  function walk(
+    node: HierarchyTreeNode,
+    nearestClickableAnc: HierarchyTreeNode | null
+  ) {
     const ownClickable = node.clickable ? node : nearestClickableAnc;
     if (!node.bounds) {
       node.children.forEach((c) => walk(c, ownClickable));
@@ -171,7 +185,7 @@ export function findNodeIdAtRatio(root: HierarchyTreeNode, rx: number, ry: numbe
     candidates.push({
       node,
       area: (x2 - x1) * (y2 - y1),
-      clickableAncestor: ownClickable,
+      clickableAncestor: ownClickable
     });
     node.children.forEach((c) => walk(c, ownClickable));
   }
@@ -202,7 +216,10 @@ export function findNodeIdAtRatio(root: HierarchyTreeNode, rx: number, ry: numbe
     if (!n.bounds) continue;
     const [x1, y1, x2, y2] = n.bounds;
     const area = (x2 - x1) * (y2 - y1);
-    if (area < bestArea) { bestArea = area; bestId = n.id; }
+    if (area < bestArea) {
+      bestArea = area;
+      bestId = n.id;
+    }
   }
   return bestId;
 }
@@ -212,9 +229,16 @@ export function findNodeIdAtRatio(root: HierarchyTreeNode, rx: number, ry: numbe
  * `com.sec.android.app.launcher:id/icon`). Using resource-id taps the *first*
  * match in the XML, not the icon you picked — prefer text / content-desc.
  */
-export function isAmbiguousLauncherResourceId(resourceId: string, pkg: string): boolean {
+export function isAmbiguousLauncherResourceId(
+  resourceId: string,
+  pkg: string
+): boolean {
   if (!resourceId || !resourceId.includes('/')) return false;
-  if (!/:id\/(icon|label|title|icon_text|text|name|bubble_text)$/i.test(resourceId)) {
+  if (
+    !/:id\/(icon|label|title|icon_text|text|name|bubble_text)$/i.test(
+      resourceId
+    )
+  ) {
     return false;
   }
   const prefixes = [
@@ -224,15 +248,20 @@ export function isAmbiguousLauncherResourceId(resourceId: string, pkg: string): 
     'com.miui.home',
     'com.huawei.android.launcher',
     'com.oppo.launcher',
-    'com.vivo.launcher',
+    'com.vivo.launcher'
   ];
-  return prefixes.some((p) => pkg.startsWith(p) || resourceId.startsWith(`${p}:`));
+  return prefixes.some(
+    (p) => pkg.startsWith(p) || resourceId.startsWith(`${p}:`)
+  );
 }
 
 /**
  * Pick the best selector for a node (same priority as hierarchy-selectors.ts).
  */
-export function bestSelector(node: HierarchyTreeNode): { by: string; value: string } {
+export function bestSelector(node: HierarchyTreeNode): {
+  by: string;
+  value: string;
+} {
   const rid = node.resourceId?.trim() ?? '';
   const ambiguous =
     rid && isAmbiguousLauncherResourceId(rid, node.pkg?.trim() ?? '');

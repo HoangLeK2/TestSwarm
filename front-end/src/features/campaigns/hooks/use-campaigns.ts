@@ -1,23 +1,35 @@
 'use client';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
-import { campaignsApi, dlqApi, executionsApi, scenariosApi, tasksApi, workflowsApi } from '../services/api';
+import {
+  campaignsApi,
+  dlqApi,
+  executionsApi,
+  scenariosApi,
+  tasksApi,
+  workflowsApi
+} from '../services/api';
 import type {
   CampaignCreate,
   CampaignOut,
   CampaignRunResponse,
   CampaignStatus,
   ScenarioCreate,
-  ScenarioUpdate,
+  ScenarioUpdate
 } from '../types';
 import { isCampaignActiveExecution } from '../types';
-import { fleetRun, fleetStatus, type FleetStatusResult } from '../../devices/services/api';
+import {
+  fleetRun,
+  fleetStatus,
+  type FleetStatusResult
+} from '../../devices/services/api';
 
 const KEYS = {
   list: ['campaigns'] as const,
   detail: (id: string) => ['campaigns', id] as const,
   devices: (id: string) => ['campaigns', id, 'devices'] as const,
-  scenarios: (campaignId: string) => ['campaigns', campaignId, 'scenarios'] as const,
+  scenarios: (campaignId: string) =>
+    ['campaigns', campaignId, 'scenarios'] as const
 };
 
 export function useCampaigns() {
@@ -26,10 +38,11 @@ export function useCampaigns() {
     queryFn: campaignsApi.list,
     refetchInterval: (query) => {
       const data = query.state.data as CampaignOut[] | undefined;
-      return data && data.some((c: CampaignOut) => isCampaignActiveExecution(c.status))
+      return data &&
+        data.some((c: CampaignOut) => isCampaignActiveExecution(c.status))
         ? 3000
         : false;
-    },
+    }
   });
 }
 
@@ -52,8 +65,13 @@ export function useCampaignDevices(campaignId: string) {
 export function useAddDeviceToCampaign() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ campaignId, deviceId }: { campaignId: string; deviceId: string }) =>
-      campaignsApi.addDevice(campaignId, deviceId),
+    mutationFn: ({
+      campaignId,
+      deviceId
+    }: {
+      campaignId: string;
+      deviceId: string;
+    }) => campaignsApi.addDevice(campaignId, deviceId),
     onSuccess: (_, { campaignId }) => {
       qc.invalidateQueries({ queryKey: KEYS.devices(campaignId) });
       qc.invalidateQueries({ queryKey: KEYS.list });
@@ -64,8 +82,13 @@ export function useAddDeviceToCampaign() {
 export function useRemoveDeviceFromCampaign() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ campaignId, deviceId }: { campaignId: string; deviceId: string }) =>
-      campaignsApi.removeDevice(campaignId, deviceId),
+    mutationFn: ({
+      campaignId,
+      deviceId
+    }: {
+      campaignId: string;
+      deviceId: string;
+    }) => campaignsApi.removeDevice(campaignId, deviceId),
     onSuccess: (_, { campaignId }) => {
       qc.invalidateQueries({ queryKey: KEYS.devices(campaignId) });
       qc.invalidateQueries({ queryKey: KEYS.list });
@@ -89,17 +112,17 @@ export function useUpdateCampaignStatus() {
     onMutate: async ({ id, status }) => {
       await Promise.all([
         qc.cancelQueries({ queryKey: KEYS.list }),
-        qc.cancelQueries({ queryKey: KEYS.detail(id) }),
+        qc.cancelQueries({ queryKey: KEYS.detail(id) })
       ]);
       const previousList = qc.getQueryData<CampaignOut[]>(KEYS.list);
       const previousDetail = qc.getQueryData<CampaignOut>(KEYS.detail(id));
       qc.setQueryData<CampaignOut[] | undefined>(KEYS.list, (old) =>
         old?.map((campaign) =>
-          campaign.id === id ? { ...campaign, status } : campaign,
-        ),
+          campaign.id === id ? { ...campaign, status } : campaign
+        )
       );
       qc.setQueryData<CampaignOut | undefined>(KEYS.detail(id), (old) =>
-        old ? { ...old, status } : old,
+        old ? { ...old, status } : old
       );
       return { previousList, previousDetail };
     },
@@ -118,7 +141,7 @@ export function useUpdateCampaignStatus() {
       await Promise.all([
         qc.refetchQueries({ queryKey: KEYS.list }),
         qc.refetchQueries({ queryKey: KEYS.detail(id) }),
-        qc.refetchQueries({ queryKey: ['campaign-workflows', id] }),
+        qc.refetchQueries({ queryKey: ['campaign-workflows', id] })
       ]);
     }
   });
@@ -137,8 +160,13 @@ export function useDeleteCampaign() {
 export function useUpdateCampaignScenario() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, scenario }: { id: string; scenario: Record<string, any> }) =>
-      campaignsApi.updateScenario(id, scenario),
+    mutationFn: ({
+      id,
+      scenario
+    }: {
+      id: string;
+      scenario: Record<string, any>;
+    }) => campaignsApi.updateScenario(id, scenario),
     onSuccess: (_data, { id }) => {
       qc.invalidateQueries({ queryKey: KEYS.list });
       qc.invalidateQueries({ queryKey: KEYS.detail(id) });
@@ -182,7 +210,9 @@ export function useCampaignProgress(campaignId: string, enabled: boolean) {
       // active tasks. This prevents /api/tasks spam when no tasks exist.
       if (!tasks) return 2000;
       if (tasks.length === 0) return false;
-      const hasActiveTask = tasks.some((t) => t.status !== 'DONE' && t.status !== 'FAILED');
+      const hasActiveTask = tasks.some(
+        (t) => t.status !== 'DONE' && t.status !== 'FAILED'
+      );
       return hasActiveTask ? 2000 : false;
     },
     select: (tasks) => {
@@ -192,8 +222,15 @@ export function useCampaignProgress(campaignId: string, enabled: boolean) {
       const running = tasks.filter((t) => t.status === 'RUNNING').length;
       const pending = tasks.filter((t) => t.status === 'PENDING').length;
       const terminal = done + failed;
-      return { total, done, failed, running, pending, pct: total ? Math.round((terminal / total) * 100) : 0 };
-    },
+      return {
+        total,
+        done,
+        failed,
+        running,
+        pending,
+        pct: total ? Math.round((terminal / total) * 100) : 0
+      };
+    }
   });
 }
 
@@ -203,54 +240,76 @@ export function useScenarios(campaignId: string) {
   return useQuery({
     queryKey: KEYS.scenarios(campaignId),
     queryFn: () => scenariosApi.list(campaignId),
-    enabled: !!campaignId,
+    enabled: !!campaignId
   });
 }
 
 export function useCreateScenario() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ campaignId, data }: { campaignId: string; data: ScenarioCreate }) =>
-      scenariosApi.create(campaignId, data),
+    mutationFn: ({
+      campaignId,
+      data
+    }: {
+      campaignId: string;
+      data: ScenarioCreate;
+    }) => scenariosApi.create(campaignId, data),
     onSuccess: (_, { campaignId }) => {
       qc.invalidateQueries({ queryKey: KEYS.scenarios(campaignId) });
       qc.invalidateQueries({ queryKey: KEYS.list });
-    },
+    }
   });
 }
 
 export function useUpdateScenario() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ campaignId, scenarioId, data }: { campaignId: string; scenarioId: string; data: ScenarioUpdate }) =>
-      scenariosApi.update(campaignId, scenarioId, data),
+    mutationFn: ({
+      campaignId,
+      scenarioId,
+      data
+    }: {
+      campaignId: string;
+      scenarioId: string;
+      data: ScenarioUpdate;
+    }) => scenariosApi.update(campaignId, scenarioId, data),
     onSuccess: (_, { campaignId }) => {
       qc.invalidateQueries({ queryKey: KEYS.scenarios(campaignId) });
       qc.invalidateQueries({ queryKey: KEYS.list });
-    },
+    }
   });
 }
 
 export function useDeleteScenario() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ campaignId, scenarioId }: { campaignId: string; scenarioId: string }) =>
-      scenariosApi.delete(campaignId, scenarioId),
+    mutationFn: ({
+      campaignId,
+      scenarioId
+    }: {
+      campaignId: string;
+      scenarioId: string;
+    }) => scenariosApi.delete(campaignId, scenarioId),
     onSuccess: (_, { campaignId }) => {
       qc.invalidateQueries({ queryKey: KEYS.scenarios(campaignId) });
       qc.invalidateQueries({ queryKey: KEYS.list });
-    },
+    }
   });
 }
 
 export function useReorderScenarios() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ campaignId, orderedIds }: { campaignId: string; orderedIds: string[] }) =>
-      scenariosApi.reorder(campaignId, orderedIds),
+    mutationFn: ({
+      campaignId,
+      orderedIds
+    }: {
+      campaignId: string;
+      orderedIds: string[];
+    }) => scenariosApi.reorder(campaignId, orderedIds),
     onSuccess: (data, { campaignId }) => {
       qc.setQueryData(KEYS.scenarios(campaignId), data);
-    },
+    }
   });
 }
 
@@ -269,12 +328,12 @@ export function useCompileScenario() {
         instructions: params.instructions,
         uiXml: params.uiXml,
         deviceSerial: params.deviceSerial,
-        deviceContext: params.deviceContext,
+        deviceContext: params.deviceContext
       }),
     onSuccess: (_, { campaignId }) => {
       qc.invalidateQueries({ queryKey: KEYS.scenarios(campaignId) });
       qc.invalidateQueries({ queryKey: KEYS.list });
-    },
+    }
   });
 }
 
@@ -285,7 +344,7 @@ export function useCampaignWorkflows(campaignId: string, enabled: boolean) {
     queryKey: ['campaign-workflows', campaignId],
     queryFn: () => workflowsApi.listForCampaign(campaignId),
     enabled,
-    refetchInterval: 3000,
+    refetchInterval: 3000
   });
 }
 
@@ -294,7 +353,7 @@ export function useDeviceRunningWorkflows(serial: string, enabled: boolean) {
     queryKey: ['device-running-workflows', serial],
     queryFn: () => workflowsApi.listForDevice(serial),
     enabled: enabled && !!serial,
-    refetchInterval: 3000,
+    refetchInterval: 3000
   });
 }
 
@@ -303,7 +362,7 @@ export function useWorkflowSteps(workflowId: string, enabled: boolean) {
     queryKey: ['workflow-steps', workflowId],
     queryFn: () => workflowsApi.steps(workflowId),
     enabled: enabled && !!workflowId,
-    refetchInterval: 2000,
+    refetchInterval: 2000
   });
 }
 
@@ -312,7 +371,7 @@ export function useWorkflowProgress(workflowId: string, enabled: boolean) {
     queryKey: ['workflow-progress', workflowId],
     queryFn: () => workflowsApi.progress(workflowId),
     enabled: enabled && !!workflowId,
-    refetchInterval: 2000,
+    refetchInterval: 2000
   });
 }
 
@@ -322,7 +381,7 @@ export function useWorkflowPause() {
     mutationFn: (workflowId: string) => workflowsApi.pause(workflowId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['campaign-workflows'] });
-    },
+    }
   });
 }
 
@@ -332,7 +391,7 @@ export function useWorkflowResume() {
     mutationFn: (workflowId: string) => workflowsApi.resume(workflowId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['campaign-workflows'] });
-    },
+    }
   });
 }
 
@@ -342,28 +401,46 @@ export function useWorkflowCancel() {
     mutationFn: (workflowId: string) => workflowsApi.cancel(workflowId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['campaign-workflows'] });
-    },
+    }
   });
 }
 
 export function useStepAction(campaignId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ action, deviceSerial }: { action: 'retry' | 'skip'; deviceSerial?: string }) =>
-      campaignsApi.stepAction(campaignId, action, deviceSerial),
+    mutationFn: ({
+      action,
+      deviceSerial
+    }: {
+      action: 'retry' | 'skip';
+      deviceSerial?: string;
+    }) => campaignsApi.stepAction(campaignId, action, deviceSerial),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['workflow-progress'] });
       qc.invalidateQueries({ queryKey: ['campaign-workflows', campaignId] });
-    },
+    }
   });
 }
 
-export function useDlqEntries(enabled: boolean, status?: string, campaignId?: string) {
+export function useDlqEntries(
+  enabled: boolean,
+  status?: string,
+  campaignId?: string
+) {
   return useQuery({
     queryKey: ['dlq-entries', status ?? 'all', campaignId ?? 'global'],
     queryFn: () => dlqApi.list({ status, campaignId, limit: 100 }),
     enabled,
-    refetchInterval: enabled ? 5000 : false,
+    refetchInterval: enabled ? 5000 : false
+  });
+}
+
+export function useDlqSummary(enabled: boolean, campaignId?: string) {
+  return useQuery({
+    queryKey: ['dlq-summary', campaignId ?? 'global'],
+    queryFn: () => dlqApi.summary({ campaignId }),
+    enabled,
+    refetchInterval: enabled ? 5000 : false
   });
 }
 
@@ -375,7 +452,7 @@ export function useRetryDlqEntry() {
       qc.invalidateQueries({ queryKey: ['dlq-entries'] });
       qc.invalidateQueries({ queryKey: ['campaign-workflows'] });
       qc.invalidateQueries({ queryKey: ['workflow-progress'] });
-    },
+    }
   });
 }
 
@@ -385,65 +462,99 @@ export function useDismissDlqEntry() {
     mutationFn: (dlqId: string) => dlqApi.dismiss(dlqId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['dlq-entries'] });
-    },
+    }
   });
 }
 
-export function useLatestExecutionArtifacts(campaignId: string, enabled: boolean) {
+export function useLatestExecutionArtifacts(
+  campaignId: string,
+  enabled: boolean
+) {
   return useQuery({
     queryKey: ['campaign-artifacts', campaignId],
     enabled: enabled && !!campaignId,
     queryFn: async () => {
-      const listing = await executionsApi.list({ campaignId, limit: 1, offset: 0 });
+      const listing = await executionsApi.list({
+        campaignId,
+        limit: 1,
+        offset: 0
+      });
       const latest = listing.items?.[0];
       if (!latest) {
-        return { execution: null, artifacts: [] as import('../types').ExecutionArtifact[] };
+        return {
+          execution: null,
+          artifacts: [] as import('../types').ExecutionArtifact[]
+        };
       }
       const artifacts = await executionsApi.listArtifacts(latest.id);
       return { execution: latest, artifacts };
     },
-    refetchInterval: enabled ? 5000 : false,
+    refetchInterval: enabled ? 5000 : false
   });
 }
 
 // ── Fleet run ─────────────────────────────────────────────────────────────────
 
 /** Fleet run: dispatch campaign scenario to ALL READY devices. */
-export function useFleetRunCampaign(onDone?: (result: FleetStatusResult) => void) {
+export function useFleetRunCampaign(
+  onDone?: (result: FleetStatusResult) => void
+) {
   const mutation = useMutation({
     mutationFn: (campaign: CampaignOut) => {
       const scenarios = campaign.scenarios ?? [];
       const steps = scenarios.flatMap((s) => s.steps);
       if (!Array.isArray(steps) || !steps.length) {
-        return Promise.reject(new Error('Campaign chưa có kịch bản (steps). Hãy thiết lập kịch bản trước.'));
+        return Promise.reject(
+          new Error(
+            'Campaign chưa có kịch bản (steps). Hãy thiết lập kịch bản trước.'
+          )
+        );
       }
       return fleetRun(steps as Array<Record<string, unknown>>);
     },
     onSuccess: (data) => {
       const deadline = Date.now() + 10 * 60 * 1000;
       const t = setInterval(async () => {
-        if (Date.now() > deadline) { clearInterval(t); return; }
+        if (Date.now() > deadline) {
+          clearInterval(t);
+          return;
+        }
         try {
           const s = await fleetStatus(data.run_id);
-          if (s.all_complete) { clearInterval(t); onDone?.(s); }
-        } catch { /* ignore */ }
+          if (s.all_complete) {
+            clearInterval(t);
+            onDone?.(s);
+          }
+        } catch {
+          /* ignore */
+        }
       }, 3000);
-    },
+    }
   });
   return mutation;
 }
 
-const TERMINAL_STATUSES = ['DONE', 'FAILED', 'COMPLETED', 'CANCELLED', 'TERMINATED'];
+const TERMINAL_STATUSES = [
+  'DONE',
+  'FAILED',
+  'COMPLETED',
+  'CANCELLED',
+  'TERMINATED'
+];
 const POLL_INTERVAL_MS = 2000;
 const POLL_TIMEOUT_MS = 10 * 60 * 1000;
 
-const _engineStorageKey = (campaignId: string) => `df_campaign_engine:${campaignId}`;
+const _engineStorageKey = (campaignId: string) =>
+  `df_campaign_engine:${campaignId}`;
 
 export type RunCampaignOptions = {
   onTemporalFallback?: () => void;
 };
 
-export function useRunCampaign(onAllDone?: () => void, options?: RunCampaignOptions) {
+export function useRunCampaign(
+  onAllDone?: () => void,
+  options?: RunCampaignOptions
+) {
   const qc = useQueryClient();
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -457,8 +568,13 @@ export function useRunCampaign(onAllDone?: () => void, options?: RunCampaignOpti
   useEffect(() => clearPollTimer, []);
 
   return useMutation({
-    mutationFn: ({ id, deviceSerials }: { id: string; deviceSerials?: string[] }) =>
-      campaignsApi.run(id, deviceSerials),
+    mutationFn: ({
+      id,
+      deviceSerials
+    }: {
+      id: string;
+      deviceSerials?: string[];
+    }) => campaignsApi.run(id, deviceSerials),
     onSuccess: async (data: CampaignRunResponse, { id }) => {
       // TODO(account-groups): when backend surfaces a warning field for
       // empty/exhausted account groups on CampaignRunResponse
@@ -482,7 +598,11 @@ export function useRunCampaign(onAllDone?: () => void, options?: RunCampaignOpti
       }
 
       const resetToIdle = async () => {
-        try { await campaignsApi.updateStatus(id, 'idle'); } catch { /* ignore */ }
+        try {
+          await campaignsApi.updateStatus(id, 'idle');
+        } catch {
+          /* ignore */
+        }
         qc.invalidateQueries({ queryKey: KEYS.list });
         qc.invalidateQueries({ queryKey: KEYS.detail(id) });
         onAllDone?.();
@@ -493,13 +613,23 @@ export function useRunCampaign(onAllDone?: () => void, options?: RunCampaignOpti
       if (engine === 'temporal' && workflowIds?.length) {
         const deadline = Date.now() + POLL_TIMEOUT_MS;
         pollTimerRef.current = setInterval(async () => {
-          if (Date.now() > deadline) { clearPollTimer(); await resetToIdle(); return; }
+          if (Date.now() > deadline) {
+            clearPollTimer();
+            await resetToIdle();
+            return;
+          }
           try {
             const res = await workflowsApi.listForCampaign(id);
-            const allTerminal = res.workflows.length >= workflowIds.length &&
+            const allTerminal =
+              res.workflows.length >= workflowIds.length &&
               res.workflows.every((w) => TERMINAL_STATUSES.includes(w.status));
-            if (allTerminal) { clearPollTimer(); await resetToIdle(); }
-          } catch { /* ignore */ }
+            if (allTerminal) {
+              clearPollTimer();
+              await resetToIdle();
+            }
+          } catch {
+            /* ignore */
+          }
         }, POLL_INTERVAL_MS);
         return;
       }
@@ -509,13 +639,23 @@ export function useRunCampaign(onAllDone?: () => void, options?: RunCampaignOpti
       if (taskIds?.length) {
         const deadline = Date.now() + POLL_TIMEOUT_MS;
         pollTimerRef.current = setInterval(async () => {
-          if (Date.now() > deadline) { clearPollTimer(); await resetToIdle(); return; }
+          if (Date.now() > deadline) {
+            clearPollTimer();
+            await resetToIdle();
+            return;
+          }
           try {
             const tasks = await tasksApi.list(taskIds);
-            const allTerminal = tasks.length >= taskIds.length &&
+            const allTerminal =
+              tasks.length >= taskIds.length &&
               tasks.every((task) => TERMINAL_STATUSES.includes(task.status));
-            if (allTerminal) { clearPollTimer(); await resetToIdle(); }
-          } catch { /* ignore */ }
+            if (allTerminal) {
+              clearPollTimer();
+              await resetToIdle();
+            }
+          } catch {
+            /* ignore */
+          }
         }, POLL_INTERVAL_MS);
         return;
       }

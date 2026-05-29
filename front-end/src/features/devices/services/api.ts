@@ -48,9 +48,12 @@ export async function fetchLiveDevices(opts?: {
   if (opts?.limit != null) params.set('limit', String(opts.limit));
   if (opts?.offset) params.set('offset', String(opts.offset));
   const qs = params.toString() ? `?${params.toString()}` : '';
-  const { data } = await farmApi.get<LiveDevicesResponse | Device[]>(`/devices/live${qs}`);
+  const { data } = await farmApi.get<LiveDevicesResponse | Device[]>(
+    `/devices/live${qs}`
+  );
   if (Array.isArray(data)) return data;
-  if (data && Array.isArray((data as LiveDevicesResponse).devices)) return (data as LiveDevicesResponse).devices;
+  if (data && Array.isArray((data as LiveDevicesResponse).devices))
+    return (data as LiveDevicesResponse).devices;
   return [];
 }
 
@@ -81,13 +84,15 @@ export async function fleetRun(
     steps,
     filter_state: opts?.filter_state ?? 'READY',
     ...(opts?.filter_model ? { filter_model: opts.filter_model } : {}),
-    ...(opts?.max_devices != null ? { max_devices: opts.max_devices } : {}),
+    ...(opts?.max_devices != null ? { max_devices: opts.max_devices } : {})
   });
   return data;
 }
 
 export async function fleetStatus(runId?: string): Promise<FleetStatusResult> {
-  const url = runId ? `/fleet/status?run_id=${encodeURIComponent(runId)}` : '/fleet/status';
+  const url = runId
+    ? `/fleet/status?run_id=${encodeURIComponent(runId)}`
+    : '/fleet/status';
   const { data } = await farmApi.get<FleetStatusResult>(url);
   return data;
 }
@@ -98,12 +103,17 @@ export async function fetchTasks(): Promise<Task[]> {
 }
 
 export async function restartDevice(serial: string): Promise<unknown> {
-  const { data } = await farmApi.post(`/device/${encodeURIComponent(serial)}/restart`);
+  const { data } = await farmApi.post(
+    `/device/${encodeURIComponent(serial)}/restart`
+  );
   return data;
 }
 
 /** UI hierarchy XML (uiautomator2 page source). refresh=true skips backend cache (force fresh dump). On 503 returns "". */
-export async function fetchHierarchy(serial: string, refresh = false): Promise<string> {
+export async function fetchHierarchy(
+  serial: string,
+  refresh = false
+): Promise<string> {
   const key = serial;
   const now = Date.now();
   if ((hierarchyFailureUntil.get(key) ?? 0) > now) return '';
@@ -114,7 +124,9 @@ export async function fetchHierarchy(serial: string, refresh = false): Promise<s
   // request entirely so we don't spam the network with 503s.
   const task = (async () => {
     try {
-      const { isHierarchyEnabled } = await import('@/features/core/services/safe-mode');
+      const { isHierarchyEnabled } = await import(
+        '@/features/core/services/safe-mode'
+      );
       if (!isHierarchyEnabled()) return '';
     } catch {
       /* module not available — fall through */
@@ -127,7 +139,8 @@ export async function fetchHierarchy(serial: string, refresh = false): Promise<s
       hierarchyFailureUntil.delete(key);
       return typeof data === 'string' ? data : '';
     } catch (err: unknown) {
-      const status = (err as { response?: { status?: number } })?.response?.status;
+      const status = (err as { response?: { status?: number } })?.response
+        ?.status;
       if (status === 503) {
         hierarchyFailureUntil.set(key, Date.now() + HIERARCHY_503_COOLDOWN_MS);
         return '';
@@ -143,9 +156,11 @@ export async function fetchHierarchy(serial: string, refresh = false): Promise<s
 
 /** Fetch full screenshot as base64 for visual anchoring. */
 export async function fetchScreenshotB64(
-  serial: string,
+  serial: string
 ): Promise<{ screenshot: string; width: number; height: number }> {
-  const { data } = await farmApi.get(`/screenshot-b64/${encodeURIComponent(serial)}`);
+  const { data } = await farmApi.get(
+    `/screenshot-b64/${encodeURIComponent(serial)}`
+  );
   return data as { screenshot: string; width: number; height: number };
 }
 
@@ -173,16 +188,22 @@ export async function cropBase64(
       const cw = x2 - x1;
       const ch = y2 - y1;
       // Reject crops that are too small to be useful for template matching
-      if (cw < MIN_CROP_PX || ch < MIN_CROP_PX) { resolve(undefined); return; }
+      if (cw < MIN_CROP_PX || ch < MIN_CROP_PX) {
+        resolve(undefined);
+        return;
+      }
       const canvas = document.createElement('canvas');
       canvas.width = cw;
       canvas.height = ch;
       const ctx = canvas.getContext('2d');
-      if (!ctx) { resolve(undefined); return; }
+      if (!ctx) {
+        resolve(undefined);
+        return;
+      }
       ctx.drawImage(img, x1, y1, cw, ch, 0, 0, cw, ch);
       // Strip "data:image/jpeg;base64," prefix. Quality 0.80 is sufficient
       // for image template matching and keeps file size reasonable.
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.80);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
       resolve(dataUrl.split(',')[1]);
     };
     img.onerror = () => resolve(undefined);
@@ -196,7 +217,10 @@ export async function tapSelector(
   by: 'resource-id' | 'text' | 'xpath' | 'class name',
   value: string
 ): Promise<void> {
-  await farmApi.post(`/tap_selector/${encodeURIComponent(serial)}`, { by, value });
+  await farmApi.post(`/tap_selector/${encodeURIComponent(serial)}`, {
+    by,
+    value
+  });
 }
 
 /** Given tap coordinates (pixels), infer a friendly selector from current UI hierarchy. */
@@ -204,13 +228,19 @@ export async function hitTestSelector(
   serial: string,
   rx: number,
   ry: number
-): Promise<{ by: 'resource-id' | 'text' | 'xpath' | 'class name'; value: string } | null> {
-  const { data } = await farmApi.post<{ by: string | null; value: string | null }>(
-    `/devices/${encodeURIComponent(serial)}/hit_test`,
-    { rx, ry }
-  );
+): Promise<{
+  by: 'resource-id' | 'text' | 'xpath' | 'class name';
+  value: string;
+} | null> {
+  const { data } = await farmApi.post<{
+    by: string | null;
+    value: string | null;
+  }>(`/devices/${encodeURIComponent(serial)}/hit_test`, { rx, ry });
   if (!data || !data.by || !data.value) return null;
-  return { by: data.by as 'resource-id' | 'text' | 'xpath' | 'class name', value: data.value };
+  return {
+    by: data.by as 'resource-id' | 'text' | 'xpath' | 'class name',
+    value: data.value
+  };
 }
 
 export type FetchEventsResponse = {
@@ -274,7 +304,9 @@ export interface StfStatus {
 
 export async function stfStatus(serial: string): Promise<StfStatus | null> {
   try {
-    const { data } = await farmApi.get<StfStatus>(`/stf/status/${encodeURIComponent(serial)}`);
+    const { data } = await farmApi.get<StfStatus>(
+      `/stf/status/${encodeURIComponent(serial)}`
+    );
     return data;
   } catch {
     return null;
@@ -283,70 +315,114 @@ export async function stfStatus(serial: string): Promise<StfStatus | null> {
 
 export async function stfGetClipboard(serial: string): Promise<string | null> {
   try {
-    const { data } = await farmApi.get<{ text: string }>(`/stf/clipboard/${encodeURIComponent(serial)}`);
+    const { data } = await farmApi.get<{ text: string }>(
+      `/stf/clipboard/${encodeURIComponent(serial)}`
+    );
     return data.text;
   } catch {
     return null;
   }
 }
 
-export async function stfSetClipboard(serial: string, text: string): Promise<boolean> {
+export async function stfSetClipboard(
+  serial: string,
+  text: string
+): Promise<boolean> {
   try {
-    const { data } = await farmApi.post<{ ok: boolean }>(`/stf/clipboard/${encodeURIComponent(serial)}`, { text });
+    const { data } = await farmApi.post<{ ok: boolean }>(
+      `/stf/clipboard/${encodeURIComponent(serial)}`,
+      { text }
+    );
     return data.ok;
   } catch {
     return false;
   }
 }
 
-export async function stfSetWifi(serial: string, enabled: boolean): Promise<boolean> {
+export async function stfSetWifi(
+  serial: string,
+  enabled: boolean
+): Promise<boolean> {
   try {
-    const { data } = await farmApi.post<{ ok: boolean }>(`/stf/wifi/${encodeURIComponent(serial)}`, { enabled });
+    const { data } = await farmApi.post<{ ok: boolean }>(
+      `/stf/wifi/${encodeURIComponent(serial)}`,
+      { enabled }
+    );
     return data.ok;
   } catch {
     return false;
   }
 }
 
-export async function stfSetBluetooth(serial: string, enabled: boolean): Promise<boolean> {
+export async function stfSetBluetooth(
+  serial: string,
+  enabled: boolean
+): Promise<boolean> {
   try {
-    const { data } = await farmApi.post<{ ok: boolean }>(`/stf/bluetooth/${encodeURIComponent(serial)}`, { enabled });
+    const { data } = await farmApi.post<{ ok: boolean }>(
+      `/stf/bluetooth/${encodeURIComponent(serial)}`,
+      { enabled }
+    );
     return data.ok;
   } catch {
     return false;
   }
 }
 
-export async function stfSetKeyguard(serial: string, enabled: boolean): Promise<boolean> {
+export async function stfSetKeyguard(
+  serial: string,
+  enabled: boolean
+): Promise<boolean> {
   try {
-    const { data } = await farmApi.post<{ ok: boolean }>(`/stf/keyguard/${encodeURIComponent(serial)}`, { enabled });
+    const { data } = await farmApi.post<{ ok: boolean }>(
+      `/stf/keyguard/${encodeURIComponent(serial)}`,
+      { enabled }
+    );
     return data.ok;
   } catch {
     return false;
   }
 }
 
-export async function stfSetWakeLock(serial: string, enabled: boolean): Promise<boolean> {
+export async function stfSetWakeLock(
+  serial: string,
+  enabled: boolean
+): Promise<boolean> {
   try {
-    const { data } = await farmApi.post<{ ok: boolean }>(`/stf/wakelock/${encodeURIComponent(serial)}`, { enabled });
+    const { data } = await farmApi.post<{ ok: boolean }>(
+      `/stf/wakelock/${encodeURIComponent(serial)}`,
+      { enabled }
+    );
     return data.ok;
   } catch {
     return false;
   }
 }
 
-export async function stfSetRinger(serial: string, mode: 'silent' | 'vibrate' | 'normal'): Promise<boolean> {
+export async function stfSetRinger(
+  serial: string,
+  mode: 'silent' | 'vibrate' | 'normal'
+): Promise<boolean> {
   try {
-    const { data } = await farmApi.post<{ ok: boolean }>(`/stf/ringer/${encodeURIComponent(serial)}`, { mode });
+    const { data } = await farmApi.post<{ ok: boolean }>(
+      `/stf/ringer/${encodeURIComponent(serial)}`,
+      { mode }
+    );
     return data.ok;
   } catch {
     return false;
   }
 }
 
-export async function stfSetMute(serial: string, enabled: boolean): Promise<boolean> {
+export async function stfSetMute(
+  serial: string,
+  enabled: boolean
+): Promise<boolean> {
   try {
-    const { data } = await farmApi.post<{ ok: boolean }>(`/stf/mute/${encodeURIComponent(serial)}`, { enabled });
+    const { data } = await farmApi.post<{ ok: boolean }>(
+      `/stf/mute/${encodeURIComponent(serial)}`,
+      { enabled }
+    );
     return data.ok;
   } catch {
     return false;
@@ -355,25 +431,35 @@ export async function stfSetMute(serial: string, enabled: boolean): Promise<bool
 
 export async function stfIdentify(serial: string): Promise<boolean> {
   try {
-    const { data } = await farmApi.post<{ ok: boolean }>(`/stf/identify/${encodeURIComponent(serial)}`);
+    const { data } = await farmApi.post<{ ok: boolean }>(
+      `/stf/identify/${encodeURIComponent(serial)}`
+    );
     return data.ok;
   } catch {
     return false;
   }
 }
 
-export async function stfGetDisplay(serial: string): Promise<Record<string, unknown> | null> {
+export async function stfGetDisplay(
+  serial: string
+): Promise<Record<string, unknown> | null> {
   try {
-    const { data } = await farmApi.get(`/stf/display/${encodeURIComponent(serial)}`);
+    const { data } = await farmApi.get(
+      `/stf/display/${encodeURIComponent(serial)}`
+    );
     return data as Record<string, unknown>;
   } catch {
     return null;
   }
 }
 
-export async function stfGetProperties(serial: string): Promise<Record<string, unknown> | null> {
+export async function stfGetProperties(
+  serial: string
+): Promise<Record<string, unknown> | null> {
   try {
-    const { data } = await farmApi.get(`/stf/properties/${encodeURIComponent(serial)}`);
+    const { data } = await farmApi.get(
+      `/stf/properties/${encodeURIComponent(serial)}`
+    );
     return data as Record<string, unknown>;
   } catch {
     return null;
@@ -403,13 +489,15 @@ export async function previewScenarioStream(
   variables?: Record<string, any>,
   accountGroupId?: string | null,
   scenarioId?: string | null,
-  scenarioDeviceVars?: Record<string, any> | null,
+  scenarioDeviceVars?: Record<string, any> | null
 ): Promise<void> {
   // Use farmApi's baseURL for the SSE endpoint
   const baseUrl = farmApi.defaults.baseURL || '';
   const url = `${baseUrl}/devices/${encodeURIComponent(serial)}/scenario/preview-stream`;
 
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json'
+  };
   const rawToken = tokenStorage.getAuthToken();
   if (rawToken) headers['Authorization'] = `Bearer ${rawToken}`;
 
@@ -424,7 +512,7 @@ export async function previewScenarioStream(
     method: 'POST',
     headers,
     body: JSON.stringify(body),
-    signal,
+    signal
   });
 
   if (!response.ok || !response.body) {
@@ -448,7 +536,9 @@ export async function previewScenarioStream(
         try {
           const data = JSON.parse(line.slice(6));
           onEvent(data);
-        } catch { /* skip malformed */ }
+        } catch {
+          /* skip malformed */
+        }
       }
     }
   }
@@ -459,10 +549,13 @@ export async function previewScenarioStream(
  * cleanup so the server drops the scenario even if the SSE TCP close has not
  * yet been observed by `request.is_disconnected()` on the server side.
  */
-export async function cancelPreviewStream(serial: string, traceId: string): Promise<void> {
+export async function cancelPreviewStream(
+  serial: string,
+  traceId: string
+): Promise<void> {
   try {
     await farmApi.post(
-      `/devices/${encodeURIComponent(serial)}/scenario/preview-stream/${encodeURIComponent(traceId)}/cancel`,
+      `/devices/${encodeURIComponent(serial)}/scenario/preview-stream/${encodeURIComponent(traceId)}/cancel`
     );
   } catch {
     /* stream already finished / trace unknown — ignore */
@@ -470,9 +563,12 @@ export async function cancelPreviewStream(serial: string, traceId: string): Prom
 }
 
 /** Cancel all running scenarios on a device so the user can take manual control. */
-export async function interruptDevice(serial: string): Promise<{ ok: boolean; cancelled_workflows: string[] }> {
-  const { data } = await farmApi.post<{ ok: boolean; cancelled_workflows: string[] }>(
-    `/devices/${encodeURIComponent(serial)}/interrupt`,
-  );
+export async function interruptDevice(
+  serial: string
+): Promise<{ ok: boolean; cancelled_workflows: string[] }> {
+  const { data } = await farmApi.post<{
+    ok: boolean;
+    cancelled_workflows: string[];
+  }>(`/devices/${encodeURIComponent(serial)}/interrupt`);
   return data;
 }

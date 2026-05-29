@@ -25,14 +25,26 @@ export class WebGLRenderer {
       this.contextLost = false;
       this.init();
     };
-    this.canvas.addEventListener('webglcontextlost', this.onContextLostBound as EventListener, false);
-    this.canvas.addEventListener('webglcontextrestored', this.onContextRestoredBound, false);
+    this.canvas.addEventListener(
+      'webglcontextlost',
+      this.onContextLostBound as EventListener,
+      false
+    );
+    this.canvas.addEventListener(
+      'webglcontextrestored',
+      this.onContextRestoredBound,
+      false
+    );
     this.init();
   }
 
   render(source: TexImageSource, width: number, height: number): void {
     if (this.contextLost || !this.gl) return;
-    if (width > 0 && height > 0 && (width !== this.width || height !== this.height)) {
+    if (
+      width > 0 &&
+      height > 0 &&
+      (width !== this.width || height !== this.height)
+    ) {
       this.width = width;
       this.height = height;
       this.canvas.width = width;
@@ -71,7 +83,8 @@ export class WebGLRenderer {
     let lit = 0;
     const total = sampleW * sampleH;
     for (let i = 0; i < pixels.length; i += 4) {
-      const luma = (pixels[i] * 0.2126) + (pixels[i + 1] * 0.7152) + (pixels[i + 2] * 0.0722);
+      const luma =
+        pixels[i] * 0.2126 + pixels[i + 1] * 0.7152 + pixels[i + 2] * 0.0722;
       if (luma < 8) dark += 1;
       if (luma > 24) lit += 1;
     }
@@ -79,8 +92,16 @@ export class WebGLRenderer {
   }
 
   dispose(): void {
-    this.canvas.removeEventListener('webglcontextlost', this.onContextLostBound as EventListener, false);
-    this.canvas.removeEventListener('webglcontextrestored', this.onContextRestoredBound, false);
+    this.canvas.removeEventListener(
+      'webglcontextlost',
+      this.onContextLostBound as EventListener,
+      false
+    );
+    this.canvas.removeEventListener(
+      'webglcontextrestored',
+      this.onContextRestoredBound,
+      false
+    );
     this.destroyResources();
     this.gl = null;
   }
@@ -98,7 +119,7 @@ export class WebGLRenderer {
         // intermittent black frames during stillness. Preserving the buffer
         // keeps the last decoded frame visible until a new one arrives.
         preserveDrawingBuffer: true,
-        premultipliedAlpha: false,
+        premultipliedAlpha: false
       }) as WebGLRenderingContext | null) || null;
     if (!gl) return;
     this.gl = gl;
@@ -142,18 +163,8 @@ export class WebGLRenderer {
     this.texCoordLoc = gl.getAttribLocation(program, 'aTexCoord');
     this.samplerLoc = gl.getUniformLocation(program, 'uTexture');
 
-    const positions = new Float32Array([
-      -1, -1,
-      1, -1,
-      -1, 1,
-      1, 1,
-    ]);
-    const texCoords = new Float32Array([
-      0, 0,
-      1, 0,
-      0, 1,
-      1, 1,
-    ]);
+    const positions = new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]);
+    const texCoords = new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]);
 
     this.positionBuffer = gl.createBuffer();
     this.texCoordBuffer = gl.createBuffer();

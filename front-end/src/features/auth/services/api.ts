@@ -1,9 +1,24 @@
 import { farmApi } from '@/lib/farm-api';
 
 export type LoginPayload = { email: string; password: string };
-export type RegisterPayload = { email: string; name: string; password: string; role?: string };
-export type TokenResponse = { access_token: string; refresh_token: string; token_type: string };
-export type UserOut = { id: string; email: string; name: string; role: string; api_key: string };
+export type RegisterPayload = {
+  email: string;
+  name: string;
+  password: string;
+  role?: string;
+};
+export type TokenResponse = {
+  access_token: string;
+  refresh_token: string;
+  token_type: string;
+};
+export type UserOut = {
+  id: string;
+  email: string;
+  name: string;
+  role: string;
+  api_key: string;
+};
 
 export const authApi = {
   login: (data: LoginPayload) =>

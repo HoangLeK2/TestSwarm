@@ -2,7 +2,20 @@
 
 import { useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
-import { CheckCircle2, XCircle, Pause, Loader2, Clock, ChevronDown, ChevronRight, Smartphone, List, AlertTriangle, RefreshCw, SkipForward } from 'lucide-react';
+import {
+  CheckCircle2,
+  XCircle,
+  Pause,
+  Loader2,
+  Clock,
+  ChevronDown,
+  ChevronRight,
+  Smartphone,
+  List,
+  AlertTriangle,
+  RefreshCw,
+  SkipForward
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Progress } from '@/components/ui/progress';
 import { Button } from '@/components/ui/button';
@@ -29,46 +42,58 @@ function parseScenarioId(workflowId: string): string {
 
 function StatusBadge({ status }: { status: string }) {
   const t = useTranslations('campaignsFeature.list');
-  const cfg: Record<string, { icon: React.ReactNode; cls: string; label: string }> = {
+  const cfg: Record<
+    string,
+    { icon: React.ReactNode; cls: string; label: string }
+  > = {
     RUNNING: {
       icon: <Loader2 size={10} className='animate-spin' />,
       cls: 'bg-blue-500/15 text-blue-600 dark:text-blue-400',
-      label: t('monitorWfStatusRunning'),
+      label: t('monitorWfStatusRunning')
     },
     COMPLETED: {
       icon: <CheckCircle2 size={10} />,
       cls: 'bg-green-500/15 text-green-600 dark:text-green-400',
-      label: t('monitorWfStatusCompleted'),
+      label: t('monitorWfStatusCompleted')
     },
     FAILED: {
       icon: <XCircle size={10} />,
       cls: 'bg-red-500/15 text-red-600 dark:text-red-400',
-      label: t('monitorWfStatusFailed'),
+      label: t('monitorWfStatusFailed')
     },
     PAUSED: {
       icon: <Pause size={10} />,
       cls: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
-      label: t('monitorWfStatusPaused'),
+      label: t('monitorWfStatusPaused')
     },
     paused_on_error: {
       icon: <AlertTriangle size={10} />,
       cls: 'bg-orange-500/15 text-orange-600 dark:text-orange-400 animate-pulse',
-      label: t('monitorWfStatusPausedOnError'),
+      label: t('monitorWfStatusPausedOnError')
     },
     CANCELLED: {
       icon: <XCircle size={10} />,
       cls: 'bg-muted text-muted-foreground',
-      label: t('monitorWfStatusCancelled'),
+      label: t('monitorWfStatusCancelled')
     },
     TERMINATED: {
       icon: <XCircle size={10} />,
       cls: 'bg-muted text-muted-foreground',
-      label: t('monitorWfStatusTerminated'),
-    },
+      label: t('monitorWfStatusTerminated')
+    }
   };
-  const c = cfg[status] ?? { icon: <Clock size={10} />, cls: 'bg-muted text-muted-foreground', label: status };
+  const c = cfg[status] ?? {
+    icon: <Clock size={10} />,
+    cls: 'bg-muted text-muted-foreground',
+    label: status
+  };
   return (
-    <span className={cn('inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-bold', c.cls)}>
+    <span
+      className={cn(
+        'inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-bold',
+        c.cls
+      )}
+    >
       {c.icon}
       {c.label}
     </span>
@@ -93,7 +118,11 @@ function StepDots({ current, total }: { current: number; total: number }) {
             key={i}
             className={cn(
               'h-1.5 rounded-full transition-all',
-              active ? 'w-3 bg-primary' : done ? 'w-1.5 bg-primary/60' : 'w-1.5 bg-muted',
+              active
+                ? 'w-3 bg-primary'
+                : done
+                  ? 'w-1.5 bg-primary/60'
+                  : 'w-1.5 bg-muted'
             )}
           />
         );
@@ -115,7 +144,10 @@ export function WorkflowProgressCard({ wf, campaignId }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [dismissed, setDismissed] = useState(false);
 
-  const isActive = wf.status === 'RUNNING' || wf.status === 'PAUSED' || wf.status === 'paused_on_error';
+  const isActive =
+    wf.status === 'RUNNING' ||
+    wf.status === 'PAUSED' ||
+    wf.status === 'paused_on_error';
   const { data: prog } = useWorkflowProgress(wf.workflow_id, isActive);
   const stepAction = useStepAction(campaignId);
 
@@ -124,16 +156,25 @@ export function WorkflowProgressCard({ wf, campaignId }: Props) {
 
   const current = prog?.current_step ?? 0;
   const total = prog?.total_steps ?? 0;
-  const pct = total > 0 ? Math.round((current / total) * 100) : wf.status === 'COMPLETED' ? 100 : 0;
+  const pct =
+    total > 0
+      ? Math.round((current / total) * 100)
+      : wf.status === 'COMPLETED'
+        ? 100
+        : 0;
   const stepType = prog?.current_step_type ?? '';
   const message = prog?.message ?? '';
-  const loopIter = prog?.loop_iteration != null && prog.loop_iteration >= 0 ? prog.loop_iteration : null;
+  const loopIter =
+    prog?.loop_iteration != null && prog.loop_iteration >= 0
+      ? prog.loop_iteration
+      : null;
   // paused_on_error can come from the live progress poll (more up-to-date than wf.status)
   // dismissed is optimistically set when user clicks Retry/Skip to hide the bar immediately.
   const isPausedOnError =
     !dismissed &&
     (prog?.status === 'paused_on_error' || wf.status === 'paused_on_error');
-  const errorMessage = prog?.error_message || (isPausedOnError ? message : null);
+  const errorMessage =
+    prog?.error_message || (isPausedOnError ? message : null);
 
   // When the status transitions back to running (after retry/skip was acknowledged by
   // the server) reset dismissed so the bar can reappear if the workflow errors again.
@@ -148,21 +189,31 @@ export function WorkflowProgressCard({ wf, campaignId }: Props) {
       {/* ── Summary row (always visible, clickable) ── */}
       <button
         type='button'
-        className='w-full px-4 py-3 text-left hover:bg-accent/40 transition-colors'
+        className='w-full px-4 py-3 text-left transition-colors hover:bg-accent/40'
         onClick={() => setExpanded((v) => !v)}
       >
         {/* Row 1: chevron + serial + status */}
-        <div className='flex items-center gap-2 mb-2'>
-          {expanded
-            ? <ChevronDown size={12} className='shrink-0 text-muted-foreground' />
-            : <ChevronRight size={12} className='shrink-0 text-muted-foreground' />
-          }
+        <div className='mb-2 flex items-center gap-2'>
+          {expanded ? (
+            <ChevronDown size={12} className='shrink-0 text-muted-foreground' />
+          ) : (
+            <ChevronRight
+              size={12}
+              className='shrink-0 text-muted-foreground'
+            />
+          )}
           <Smartphone size={11} className='shrink-0 text-muted-foreground' />
-          <span className='font-mono text-[11px] font-semibold truncate flex-1' title={serial}>
+          <span
+            className='flex-1 truncate font-mono text-[11px] font-semibold'
+            title={serial}
+          >
             {serial}
           </span>
           {scenarioId && (
-            <span className='text-[9px] text-muted-foreground font-mono shrink-0' title={scenarioId}>
+            <span
+              className='shrink-0 font-mono text-[9px] text-muted-foreground'
+              title={scenarioId}
+            >
               #{scenarioId.slice(0, 8)}
             </span>
           )}
@@ -170,24 +221,24 @@ export function WorkflowProgressCard({ wf, campaignId }: Props) {
         </div>
 
         {/* Row 2: progress bar + counter */}
-        <div className='flex items-center gap-2 mb-1.5 pl-[26px]'>
+        <div className='mb-1.5 flex items-center gap-2 pl-[26px]'>
           <Progress
             value={pct}
             className={cn(
               'h-1.5 flex-1',
               wf.status === 'FAILED' && '[&>div]:bg-destructive',
               wf.status === 'PAUSED' && '[&>div]:bg-amber-500',
-              wf.status === 'COMPLETED' && '[&>div]:bg-green-500',
+              wf.status === 'COMPLETED' && '[&>div]:bg-green-500'
             )}
           />
-          <span className='text-[10px] tabular-nums text-muted-foreground shrink-0'>
+          <span className='shrink-0 text-[10px] tabular-nums text-muted-foreground'>
             {total > 0 ? `${current}/${total}` : pct > 0 ? `${pct}%` : '—'}
           </span>
         </div>
 
         {/* Row 3: step dots */}
         {total > 0 && (
-          <div className='pl-[26px] mb-1.5'>
+          <div className='mb-1.5 pl-[26px]'>
             <StepDots current={current} total={total} />
           </div>
         )}
@@ -201,22 +252,32 @@ export function WorkflowProgressCard({ wf, campaignId }: Props) {
               </span>
             )}
             {loopIter !== null && (
-              <span className='text-[9px]'>{t('monitorWfLoopRound', { n: loopIter + 1 })}</span>
+              <span className='text-[9px]'>
+                {t('monitorWfLoopRound', { n: loopIter + 1 })}
+              </span>
             )}
             {message && (
-              <span className='truncate flex-1 italic' title={message}>{message}</span>
+              <span className='flex-1 truncate italic' title={message}>
+                {message}
+              </span>
             )}
           </div>
         )}
 
         {wf.status === 'FAILED' && message && (
-          <p className='mt-1 pl-[26px] text-[10px] text-destructive truncate' title={message}>
+          <p
+            className='mt-1 truncate pl-[26px] text-[10px] text-destructive'
+            title={message}
+          >
             {message}
           </p>
         )}
 
         {isPausedOnError && errorMessage && (
-          <p className='mt-1 pl-[26px] text-[10px] text-orange-600 dark:text-orange-400 truncate' title={errorMessage}>
+          <p
+            className='mt-1 truncate pl-[26px] text-[10px] text-orange-600 dark:text-orange-400'
+            title={errorMessage}
+          >
             {t('monitorWfErrorPrefix')} {errorMessage}
           </p>
         )}
@@ -224,25 +285,31 @@ export function WorkflowProgressCard({ wf, campaignId }: Props) {
 
       {/* ── Retry / Skip bar (shown when paused on error) ── */}
       {isPausedOnError && (
-        <div className='flex items-center gap-2 px-4 py-2 border-t bg-orange-500/5'>
-          <AlertTriangle size={11} className='text-orange-500 shrink-0' />
-          <span className='text-[10px] text-orange-600 dark:text-orange-400 flex-1'>
+        <div className='flex items-center gap-2 border-t bg-orange-500/5 px-4 py-2'>
+          <AlertTriangle size={11} className='shrink-0 text-orange-500' />
+          <span className='flex-1 text-[10px] text-orange-600 dark:text-orange-400'>
             {t('monitorWfPausedPrompt')}
           </span>
           <Button
             size='sm'
             variant='outline'
-            className='h-6 gap-1 px-2 text-[10px] border-orange-400 text-orange-600 hover:bg-orange-500/10'
+            className='h-6 gap-1 border-orange-400 px-2 text-[10px] text-orange-600 hover:bg-orange-500/10'
             disabled={stepAction.isPending}
             onClick={(e) => {
               e.stopPropagation();
               setDismissed(true);
-              stepAction.mutate({ action: 'retry', deviceSerial: serial }, {
-                onError: () => setDismissed(false),
-              });
+              stepAction.mutate(
+                { action: 'retry', deviceSerial: serial },
+                {
+                  onError: () => setDismissed(false)
+                }
+              );
             }}
           >
-            <RefreshCw size={10} className={stepAction.isPending ? 'animate-spin' : ''} />
+            <RefreshCw
+              size={10}
+              className={stepAction.isPending ? 'animate-spin' : ''}
+            />
             {t('monitorActionRetry')}
           </Button>
           <Button
@@ -253,9 +320,12 @@ export function WorkflowProgressCard({ wf, campaignId }: Props) {
             onClick={(e) => {
               e.stopPropagation();
               setDismissed(true);
-              stepAction.mutate({ action: 'skip', deviceSerial: serial }, {
-                onError: () => setDismissed(false),
-              });
+              stepAction.mutate(
+                { action: 'skip', deviceSerial: serial },
+                {
+                  onError: () => setDismissed(false)
+                }
+              );
             }}
           >
             <SkipForward size={10} />
@@ -266,16 +336,24 @@ export function WorkflowProgressCard({ wf, campaignId }: Props) {
 
       {/* ── Expanded: device left + steps right ── */}
       {expanded && (
-        <div className='border-t bg-card overflow-hidden'>
+        <div className='overflow-hidden border-t bg-card'>
           <div className='flex min-h-0 divide-x overflow-x-auto'>
             <div className='w-[320px] shrink-0 p-2 md:w-[420px]'>
-              <DeviceControlEmbed initialSerial={serial} compact hideStepMonitor readOnlyPreview />
+              <DeviceControlEmbed
+                initialSerial={serial}
+                compact
+                hideStepMonitor
+                readOnlyPreview
+              />
             </div>
             <div className='min-w-0 flex-1 px-3 py-3'>
               <p className='mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground'>
                 <List size={10} /> {t('monitorStepsHeading')}
               </p>
-              <WorkflowStepList wf={wf} maxHeight='min(560px, calc(90dvh - 320px))' />
+              <WorkflowStepList
+                wf={wf}
+                maxHeight='min(560px, calc(90dvh - 320px))'
+              />
             </div>
           </div>
         </div>

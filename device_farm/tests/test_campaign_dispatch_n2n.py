@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import ExitStack
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -28,6 +29,10 @@ def _campaign(campaign_id: str, *, user_id: str = "user-1"):
 
 def _device(device_id: str, serial: str):
     return SimpleNamespace(id=device_id, serial=serial)
+
+
+def _db_device(device_id: str, serial: str, *, last_seen):
+    return SimpleNamespace(id=device_id, serial=serial, last_seen=last_seen)
 
 
 def _scenario(scenario_id: str, *, has_steps: bool = True):
@@ -72,6 +77,38 @@ async def test_dispatch_single_device_single_scenario_n2n():
     assert started_input.device_serial == "SN001"
     assert started_input.execution_id == "exec-1"
     assert started_input.campaign_vars["__USER_ID__"] == "user-1"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_skips_all_stale_offline_devices_before_creating_execution():
+    db = _make_db_mock()
+    temporal = AsyncMock()
+    temporal.start_workflow = AsyncMock()
+    old_seen = datetime.now(timezone.utc) - timedelta(hours=1)
+    create_execution = AsyncMock()
+
+    with ExitStack() as stack:
+        stack.enter_context(patch("services.campaign_dispatch.AsyncSessionLocal", return_value=db))
+        stack.enter_context(patch("services.campaign_dispatch.repo.get_campaign", return_value=_campaign("camp-offline")))
+        stack.enter_context(
+            patch(
+                "services.campaign_dispatch.repo.list_campaign_devices",
+                return_value=[_db_device("dev-1", "SN001", last_seen=old_seen)],
+            )
+        )
+        stack.enter_context(patch("services.device_liveness.relay_has_device", return_value=False))
+        stack.enter_context(
+            patch("services.device_liveness.db_has_open_session", new_callable=AsyncMock, return_value=False)
+        )
+        stack.enter_context(patch("db.crud.execution.create_execution", create_execution))
+
+        result, status = await enqueue_campaign_run_temporal("camp-offline", temporal)
+
+    assert status == 400
+    assert result["error"] == "No online devices available for campaign dispatch"
+    assert result["skipped_offline_device_serials"] == ["SN001"]
+    create_execution.assert_not_awaited()
+    temporal.start_workflow.assert_not_awaited()
 
 
 @pytest.mark.asyncio

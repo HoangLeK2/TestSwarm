@@ -107,7 +107,10 @@ function formToPayload(form: FormState): NotificationChannelInput {
   };
 }
 
-function typeLabel(type: NotificationChannelType, t: ReturnType<typeof useTranslations>) {
+function typeLabel(
+  type: NotificationChannelType,
+  t: ReturnType<typeof useTranslations>
+) {
   if (type === 'telegram') return t('types.telegram');
   if (type === 'webhook') return t('types.webhook');
   return t('types.in_app');
@@ -154,12 +157,18 @@ function ChannelDialog({
         : createChannel.mutateAsync(payload);
       mutation
         .then(() => {
-          toast.success(isEdit ? t('toasts.channelUpdated') : t('toasts.channelCreated'));
+          toast.success(
+            isEdit ? t('toasts.channelUpdated') : t('toasts.channelCreated')
+          );
           onOpenChange(false);
         })
-        .catch((err) => toast.error(err?.response?.data?.detail ?? t('errors.saveFailed')));
+        .catch((err) =>
+          toast.error(err?.response?.data?.detail ?? t('errors.saveFailed'))
+        );
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : t('errors.invalidConfig'));
+      toast.error(
+        err instanceof Error ? err.message : t('errors.invalidConfig')
+      );
     }
   };
 
@@ -167,16 +176,22 @@ function ChannelDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className='max-w-2xl'>
         <DialogHeader>
-          <DialogTitle>{isEdit ? t('editChannel') : t('createChannel')}</DialogTitle>
+          <DialogTitle>
+            {isEdit ? t('editChannel') : t('createChannel')}
+          </DialogTitle>
         </DialogHeader>
         <div className='grid gap-4'>
           <div className='grid gap-2'>
-            <Label htmlFor='notification-channel-name'>{t('fields.name')}</Label>
+            <Label htmlFor='notification-channel-name'>
+              {t('fields.name')}
+            </Label>
             <Input
               id='notification-channel-name'
               value={form.name}
               placeholder={t('placeholders.channelName')}
-              onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, name: event.target.value }))
+              }
             />
           </div>
           <div className='grid gap-2 sm:grid-cols-2'>
@@ -185,7 +200,10 @@ function ChannelDialog({
               <Select
                 value={form.type}
                 onValueChange={(value) =>
-                  setForm((current) => ({ ...current, type: value as NotificationChannelType }))
+                  setForm((current) => ({
+                    ...current,
+                    type: value as NotificationChannelType
+                  }))
                 }
               >
                 <SelectTrigger>
@@ -193,17 +211,23 @@ function ChannelDialog({
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value='in_app'>{t('types.in_app')}</SelectItem>
-                  <SelectItem value='telegram'>{t('types.telegram')}</SelectItem>
+                  <SelectItem value='telegram'>
+                    {t('types.telegram')}
+                  </SelectItem>
                   <SelectItem value='webhook'>{t('types.webhook')}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
             <div className='flex items-end justify-between rounded-md border px-3 py-2'>
-              <Label htmlFor='notification-channel-enabled'>{t('fields.enabled')}</Label>
+              <Label htmlFor='notification-channel-enabled'>
+                {t('fields.enabled')}
+              </Label>
               <Switch
                 id='notification-channel-enabled'
                 checked={form.enabled}
-                onCheckedChange={(enabled) => setForm((current) => ({ ...current, enabled }))}
+                onCheckedChange={(enabled) =>
+                  setForm((current) => ({ ...current, enabled }))
+                }
               />
             </div>
           </div>
@@ -215,7 +239,10 @@ function ChannelDialog({
                   id='telegram-token'
                   value={form.botToken}
                   onChange={(event) =>
-                    setForm((current) => ({ ...current, botToken: event.target.value }))
+                    setForm((current) => ({
+                      ...current,
+                      botToken: event.target.value
+                    }))
                   }
                 />
               </div>
@@ -225,7 +252,10 @@ function ChannelDialog({
                   id='telegram-chat'
                   value={form.chatId}
                   onChange={(event) =>
-                    setForm((current) => ({ ...current, chatId: event.target.value }))
+                    setForm((current) => ({
+                      ...current,
+                      chatId: event.target.value
+                    }))
                   }
                 />
               </div>
@@ -238,7 +268,10 @@ function ChannelDialog({
                 id='webhook-url'
                 value={form.webhookUrl}
                 onChange={(event) =>
-                  setForm((current) => ({ ...current, webhookUrl: event.target.value }))
+                  setForm((current) => ({
+                    ...current,
+                    webhookUrl: event.target.value
+                  }))
                 }
               />
               <Label htmlFor='webhook-headers'>{t('fields.headersJson')}</Label>
@@ -246,7 +279,10 @@ function ChannelDialog({
                 id='webhook-headers'
                 value={form.headersText}
                 onChange={(event) =>
-                  setForm((current) => ({ ...current, headersText: event.target.value }))
+                  setForm((current) => ({
+                    ...current,
+                    headersText: event.target.value
+                  }))
                 }
                 className='min-h-24 font-mono text-xs'
               />
@@ -262,7 +298,9 @@ function ChannelDialog({
                   <Label key={eventName} className='text-xs font-normal'>
                     <Checkbox
                       checked={form.events.includes(eventName)}
-                      onCheckedChange={(checked) => toggleEvent(eventName, checked === true)}
+                      onCheckedChange={(checked) =>
+                        toggleEvent(eventName, checked === true)
+                      }
                     />
                     <span className='ml-2'>{label}</span>
                   </Label>
@@ -285,7 +323,10 @@ function ChannelDialog({
   );
 }
 
-function formatEventBadge(eventName: string, t: ReturnType<typeof useTranslations<'notificationsFeature'>>) {
+function formatEventBadge(
+  eventName: string,
+  t: ReturnType<typeof useTranslations<'notificationsFeature'>>
+) {
   const labelKey = eventLabelKey(eventName);
   return t.has(labelKey) ? t(labelKey) : eventName;
 }
@@ -306,7 +347,9 @@ export function NotificationChannelSettings() {
     testChannel
       .mutateAsync(id)
       .then(() => toast.success(t('toasts.testSent')))
-      .catch((err) => toast.error(err?.response?.data?.detail ?? t('errors.testFailed')));
+      .catch((err) =>
+        toast.error(err?.response?.data?.detail ?? t('errors.testFailed'))
+      );
   };
 
   return (
@@ -327,7 +370,9 @@ export function NotificationChannelSettings() {
           {t('loadingChannels')}
         </div>
       ) : error ? (
-        <div className='text-sm text-destructive'>{t('errors.loadChannels')}</div>
+        <div className='text-sm text-destructive'>
+          {t('errors.loadChannels')}
+        </div>
       ) : sortedChannels.length === 0 ? (
         <div className='rounded-lg border border-dashed bg-muted/20 p-12 text-center'>
           <Bell className='mx-auto mb-3 size-10 text-muted-foreground' />
@@ -342,7 +387,9 @@ export function NotificationChannelSettings() {
                 <TableHead>{t('fields.type')}</TableHead>
                 <TableHead>{t('fields.events')}</TableHead>
                 <TableHead>{t('fields.enabled')}</TableHead>
-                <TableHead className='w-32 text-right'>{t('fields.actions')}</TableHead>
+                <TableHead className='w-32 text-right'>
+                  {t('fields.actions')}
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -353,7 +400,11 @@ export function NotificationChannelSettings() {
                   <TableCell>
                     <div className='flex max-w-[420px] flex-wrap gap-1'>
                       {channel.events.slice(0, 4).map((eventName) => (
-                        <Badge key={eventName} variant='outline' className='text-[10px]'>
+                        <Badge
+                          key={eventName}
+                          variant='outline'
+                          className='text-[10px]'
+                        >
                           {formatEventBadge(eventName, t)}
                         </Badge>
                       ))}
@@ -395,7 +446,9 @@ export function NotificationChannelSettings() {
                         onClick={() => {
                           deleteChannel
                             .mutateAsync(channel.id)
-                            .then(() => toast.success(t('toasts.channelDeleted')))
+                            .then(() =>
+                              toast.success(t('toasts.channelDeleted'))
+                            )
                             .catch(() => toast.error(t('errors.deleteFailed')));
                         }}
                       >

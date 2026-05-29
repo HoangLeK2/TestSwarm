@@ -12,7 +12,10 @@ import type { FlowStep } from '@/features/campaigns/components/scenario-steps/ty
 import { flowDocToSteps, stepsToFlowDoc } from './converters';
 
 /** Ghi đè document trên ctx từ steps[]; trả về steps đã chuẩn hóa (có `_fgId` theo node id). */
-export function applyStepsToFlowgramDocument(ctx: FixedLayoutPluginContext, steps: FlowStep[]): FlowStep[] {
+export function applyStepsToFlowgramDocument(
+  ctx: FixedLayoutPluginContext,
+  steps: FlowStep[]
+): FlowStep[] {
   // Build FlowDocumentJSON (start / các node nội dung / end) rồi nạp vào editor
   ctx.document.fromJSON(stepsToFlowDoc(steps));
   // Serialize lại để mọi node nhận _fgId khớp id trên canvas

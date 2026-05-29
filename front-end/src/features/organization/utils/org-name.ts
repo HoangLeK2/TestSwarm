@@ -5,4 +5,3 @@ export function formatOrgDisplayName(
   const n = (name ?? '').trim();
   return n.length ? n : fallback;
 }
-

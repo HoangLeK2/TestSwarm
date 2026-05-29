@@ -36,7 +36,7 @@ export function DeviceControlEmbed({
   readOnlyPreview = false,
   onTap,
   onSwipe,
-  onDragGesture,
+  onDragGesture
 }: Props) {
   const {
     devices,
@@ -64,7 +64,7 @@ export function DeviceControlEmbed({
 
   if (error) {
     return (
-      <div className="rounded border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+      <div className='rounded border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive'>
         {error}
       </div>
     );
@@ -72,16 +72,19 @@ export function DeviceControlEmbed({
 
   if (activeDevices.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border py-8 text-center">
-        <p className="text-xs text-muted-foreground">Chưa có thiết bị hoạt động</p>
+      <div className='flex flex-col items-center justify-center rounded-lg border border-dashed border-border py-8 text-center'>
+        <p className='text-xs text-muted-foreground'>
+          Chưa có thiết bị hoạt động
+        </p>
       </div>
     );
   }
 
   if (!selectedDevice) {
     return (
-      <div className="rounded border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
-        Thiết bị đã chọn chưa kết nối. Chọn thiết bị khác trong danh sách campaign.
+      <div className='rounded border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-400'>
+        Thiết bị đã chọn chưa kết nối. Chọn thiết bị khác trong danh sách
+        campaign.
       </div>
     );
   }
@@ -89,26 +92,31 @@ export function DeviceControlEmbed({
   return (
     <div className={compact ? 'w-full min-w-0 max-w-full' : ''}>
       {selectedDevice.serial !== initialSerial && (
-        <p className="mb-1 text-[10px] text-muted-foreground">
-          Thiết bị {initialSerial} chưa online — đang hiển thị: {selectedDevice.serial}
+        <p className='mb-1 text-[10px] text-muted-foreground'>
+          Thiết bị {initialSerial} chưa online — đang hiển thị:{' '}
+          {selectedDevice.serial}
         </p>
       )}
       <DeviceTile
         device={selectedDevice}
-        logLines={compact ? [] : logs[selectedDevice.serial] ?? []}
+        logLines={compact ? [] : (logs[selectedDevice.serial] ?? [])}
         mode={mode}
         wsSend={wsSend}
         onToggleMode={handleToggleMode}
         onRestart={handleRestart}
-        onTap={onTap ? (rx, ry) => onTap(selectedDevice.serial, rx, ry) : undefined}
+        onTap={
+          onTap ? (rx, ry) => onTap(selectedDevice.serial, rx, ry) : undefined
+        }
         onSwipe={
           onSwipe
-            ? (rx1, ry1, rx2, ry2, ms) => onSwipe(selectedDevice.serial, rx1, ry1, rx2, ry2, ms)
+            ? (rx1, ry1, rx2, ry2, ms) =>
+                onSwipe(selectedDevice.serial, rx1, ry1, rx2, ry2, ms)
             : undefined
         }
         onDragGesture={
           onDragGesture
-            ? (rx1, ry1, rx2, ry2, ms) => onDragGesture(selectedDevice.serial, rx1, ry1, rx2, ry2, ms)
+            ? (rx1, ry1, rx2, ry2, ms) =>
+                onDragGesture(selectedDevice.serial, rx1, ry1, rx2, ry2, ms)
             : undefined
         }
         compact={compact}

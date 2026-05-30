@@ -78,32 +78,34 @@ services:
     ports:
       - "8233:8080"   # Temporal UI at http://localhost:8233
 
-  # redis:
-  #   image: redis:7-alpine
-  #   restart: unless-stopped
-  #   env_file:
-  #     - ./.env
-  #   extra_hosts:
-  #     - "host.docker.internal:host-gateway"
-  #   ports:
-  #     - "6379:6379"
-  #   healthcheck:
-  #     test: ["CMD", "redis-cli", "ping"]
-  #     interval: 5s
-  #     timeout: 3s
-  #     retries: 5
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
-  # redis-ui:
-  #   image: rediscommander/redis-commander:latest
-  #   platform: linux/amd64
-  #   restart: unless-stopped
-  #   depends_on:
-  #     redis:
-  #       condition: service_healthy
-  #   environment:
-  #     REDIS_HOSTS: local:redis:6379
-  #   ports:
-  #     - "${REDIS_UI_PORT:-5540}:8081"
+  redis-ui:
+    image: rediscommander/redis-commander:latest
+    platform: linux/amd64
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    ports:
+      - "${REDIS_UI_PORT:-5540}:8081"
 
   farm:
     build:

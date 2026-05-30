@@ -2,6 +2,7 @@
 import { useMutation } from '@tanstack/react-query';
 import { useRouter } from '@/i18n/navigation';
 import { tokenStorage } from '@/lib/token-storage';
+import { armAuthRefreshTimer } from '@/lib/farm-api';
 import { authApi } from '../services/api';
 import { ROUTES } from '@/config/routes';
 import { consumeAuthReturnTo } from '@/features/content/lib/permalink';
@@ -16,8 +17,9 @@ export function useLogin() {
       tokenStorage.setTokens({
         idToken: data.access_token,
         refreshToken: data.refresh_token,
-        expiresAt: Date.now() + 60 * 60 * 1000 // access token 1h
+        expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000
       });
+      armAuthRefreshTimer(data.expires_in);
       // Fetch user info and store
       const user = await authApi.me();
       tokenStorage.setUser({

@@ -164,17 +164,34 @@ async def heartbeat(manager: DeviceManager) -> None:
 
 
 async def get_ws_user_id(ws: WebSocket) -> Optional[str]:
-    """Extract user_id from JWT passed as ?token=... in the WebSocket URL.
-
-    WebSockets are the one place we accept a query-string token because
-    browsers cannot set custom headers on WS upgrades. The decode itself
-    goes through the unified AuthContext path so WS and HTTP share the
-    same token validation rules.
-    """
-    from api.auth.context import try_decode_access_token
-
-    ctx = try_decode_access_token(ws.query_params.get("token"))
+    """Extract user_id from JWT passed as ?token=... in the WebSocket URL."""
+    ctx = await authenticate_ws(ws)
     return ctx.user_id if ctx else None
+
+
+def _extract_ws_token(ws: WebSocket) -> Optional[str]:
+    token = (ws.query_params.get("token") or "").strip()
+    if token:
+        return token
+    proto = (ws.headers.get("sec-websocket-protocol") or "").strip()
+    for part in proto.split(","):
+        candidate = part.strip()
+        if candidate.startswith("Bearer."):
+            return candidate[len("Bearer.") :].strip() or None
+    return None
+
+
+async def authenticate_ws(ws: WebSocket):
+    """Verify JWT for WebSocket handshake; returns AuthContext or None."""
+    from api.auth.context import AuthContext, AuthError, decode_access_token
+
+    token = _extract_ws_token(ws)
+    if not token:
+        return None
+    try:
+        return decode_access_token(token)
+    except AuthError:
+        return None
 
 
 class WebSocketManager:
@@ -203,6 +220,7 @@ class WebSocketManager:
         self._allowed_serials: Dict[str, Optional[set[str]]] = {}
         self._conn_sender_groups: Dict[str, list[asyncio.Task]] = {}
         self._session_to_conn: Dict[str, str] = {}
+        self._conn_sessions: Dict[str, Optional[str]] = {}
         self._max_devices_per_ws: int = max(1, int(os.environ.get("MAX_DEVICES_PER_WS", "3")))
         self._lock = asyncio.Lock()
         self._db_enabled = db_enabled
@@ -253,7 +271,13 @@ class WebSocketManager:
         except Exception:
             return set()
 
-    async def connect(self, ws: WebSocket, user_id: Optional[str] = None) -> None:
+    async def connect(
+        self,
+        ws: WebSocket,
+        user_id: Optional[str] = None,
+        *,
+        session_id: Optional[str] = None,
+    ) -> None:
         await ws.accept()
         conn_id = str(uuid.uuid4())
         # ctrl_q: JSON status/control — maxsize=16 (small msgs, generous headroom)
@@ -274,6 +298,7 @@ class WebSocketManager:
             self._allowed_serials[conn_id] = allowed_serials
             self._conn_sender_groups[conn_id] = []
             self._conn_send_locks[conn_id] = asyncio.Lock()
+            self._conn_sessions[conn_id] = session_id
             if session_id:
                 self._session_to_conn[session_id] = conn_id
         if prev_ws_to_close is not None:
@@ -281,6 +306,11 @@ class WebSocketManager:
                 await prev_ws_to_close.close(code=4001)
             except Exception:
                 pass
+
+        if session_id:
+            from auth.ws_session_registry import get_ws_session_registry
+
+            await get_ws_session_registry().register(conn_id, session_id, ws)
 
         all_devs = self.manager.all_devices()
         visible_devs = all_devs
@@ -318,13 +348,15 @@ class WebSocketManager:
             recv_task = asyncio.create_task(self._receiver(ws))
             # Ping loop keeps TCP alive; excluded from wait so silent failures don't tear down connection.
             ping_task = asyncio.create_task(self._ws_ping_loop(ws, ws_send_lock))
+            watchdog_task = asyncio.create_task(self._ws_pong_watchdog(ws, ws_send_lock))
             done, pending = await asyncio.wait(
                 [send_task, recv_task], return_when=asyncio.FIRST_COMPLETED
             )
             ping_task.cancel()
+            watchdog_task.cancel()
             for t in pending:
                 t.cancel()
-            for t in [*pending, ping_task]:
+            for t in [*pending, ping_task, watchdog_task]:
                 try:
                     await t
                 except asyncio.CancelledError:
@@ -366,6 +398,7 @@ class WebSocketManager:
             self._allowed_serials.pop(conn_id, None)
             self._conn_sender_groups.pop(conn_id, None)
             self._conn_send_locks.pop(conn_id, None)
+            self._conn_sessions.pop(conn_id, None)
             if session_id and self._session_to_conn.get(session_id) == conn_id:
                 self._session_to_conn.pop(session_id, None)
 
@@ -403,13 +436,42 @@ class WebSocketManager:
             except Exception:
                 return
 
-    async def _ws_ping_loop(self, ws: WebSocket, ws_send_lock: asyncio.Lock, interval: float = 20.0) -> None:
-        """JSON-level ping to keep TCP alive (WS protocol ping is disabled due to uvicorn drain assertion)."""
+            if session_id and self._session_to_conn.get(session_id) == conn_id:
+                self._session_to_conn.pop(session_id, None)
+        from auth.ws_session_registry import get_ws_session_registry
+
+        await get_ws_session_registry().unregister(conn_id)
+
+    async def _ws_ping_loop(
+        self, ws: WebSocket, ws_send_lock: asyncio.Lock, interval: float = 30.0
+    ) -> None:
+        """JSON-level ping to keep TCP alive."""
         try:
             while True:
                 await asyncio.sleep(interval)
                 async with ws_send_lock:
                     await ws.send_json({"type": "ping", "ts": time.time()})
+        except Exception:
+            pass
+
+    async def _ws_pong_watchdog(
+        self,
+        ws: WebSocket,
+        ws_send_lock: asyncio.Lock,
+        *,
+        interval: float = 30.0,
+        timeout: float = 60.0,
+    ) -> None:
+        last_pong = time.monotonic()
+        ws.state.last_pong_at = last_pong  # type: ignore[attr-defined]
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                seen = float(getattr(ws.state, "last_pong_at", last_pong))
+                if time.monotonic() - seen > timeout:
+                    async with ws_send_lock:
+                        await ws.close(code=4408)
+                    return
         except Exception:
             pass
 
@@ -556,6 +618,17 @@ class WebSocketManager:
                 continue
 
             msg_type = data.get("type")
+            if msg_type in ("pong", "ping"):
+                try:
+                    ws.state.last_pong_at = time.monotonic()  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+                if msg_type == "ping":
+                    try:
+                        await ws.send_json({"type": "pong", "ts": time.time()})
+                    except Exception:
+                        break
+                continue
             serial = data.get("serial")
             if conn_id is not None:
                 allowed_serials = self._allowed_serials.get(conn_id)

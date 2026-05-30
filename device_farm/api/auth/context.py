@@ -6,7 +6,12 @@ from typing import Optional
 
 from jose import JWTError, ExpiredSignatureError, jwt
 
-from core.security import jwt_algorithm, jwt_secret_key
+from auth.secret_versioning import (
+    JwtKeyRevokedError,
+    all_verify_materials,
+    verify_material_for_kid,
+)
+from core.security import jwt_algorithm
 
 
 @dataclass(frozen=True)
@@ -20,6 +25,9 @@ class AuthContext:
     user_id: str
     token_type: str
     raw_token: str
+    session_id: str | None = None
+    org_id: str | None = None
+    roles: tuple[str, ...] = ()
 
     @property
     def is_access(self) -> bool:
@@ -36,6 +44,10 @@ class AuthError(Exception):
         super().__init__(message)
 
 
+class TokenRevokedKeyError(AuthError):
+    code = "TOKEN_EXPIRED_KEY_REVOKED"
+
+
 class TokenExpiredError(AuthError):
     code = "TOKEN_EXPIRED"
 
@@ -44,21 +56,50 @@ def decode_access_token(raw_token: str) -> AuthContext:
     """Decode an access JWT into an AuthContext, raising AuthError on failure."""
     if not raw_token:
         raise AuthError("missing token")
-    try:
-        payload = jwt.decode(raw_token, jwt_secret_key(), algorithms=[jwt_algorithm()])
-    except ExpiredSignatureError as exc:
-        raise TokenExpiredError(f"invalid token: {exc}") from exc
-    except JWTError as exc:
-        raise AuthError(f"invalid token: {exc}") from exc
+    header = jwt.get_unverified_header(raw_token)
+    kid = header.get("kid")
+    candidates = []
+    if kid:
+        try:
+            candidates = [verify_material_for_kid(str(kid))]
+        except JwtKeyRevokedError as exc:
+            raise TokenRevokedKeyError(str(exc)) from exc
+    else:
+        candidates = all_verify_materials()
+
+    payload = None
+    last_exc: Exception | None = None
+    for material in candidates:
+        try:
+            payload = jwt.decode(raw_token, material.secret, algorithms=[jwt_algorithm()])
+            break
+        except ExpiredSignatureError as exc:
+            raise TokenExpiredError(f"invalid token: {exc}") from exc
+        except JWTError as exc:
+            last_exc = exc
+            continue
+    if payload is None:
+        raise AuthError(f"invalid token: {last_exc}") from last_exc
 
     user_id = str(payload.get("sub") or "").strip()
     token_type = str(payload.get("type") or "access").strip() or "access"
+    session_id = str(payload.get("sid") or "").strip() or None
+    org_id = str(payload.get("org_id") or "").strip() or None
+    raw_roles = payload.get("roles") or []
+    roles = tuple(str(r).strip() for r in raw_roles if str(r).strip())
     if not user_id:
         raise AuthError("token missing sub")
     if token_type == "refresh":
         raise AuthError("refresh token not allowed here")
 
-    return AuthContext(user_id=user_id, token_type=token_type, raw_token=raw_token)
+    return AuthContext(
+        user_id=user_id,
+        token_type=token_type,
+        raw_token=raw_token,
+        session_id=session_id,
+        org_id=org_id,
+        roles=roles,
+    )
 
 
 def try_decode_access_token(raw_token: Optional[str]) -> Optional[AuthContext]:

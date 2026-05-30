@@ -85,6 +85,7 @@ packages = ["."]
 [project.scripts]
 device-farm = "main:main"
 export-openapi = "export_openapi:main"
+df-admin = "df_admin:main"
 
 [tool.uv]
 environments = ["sys_platform == 'darwin'", "sys_platform == 'linux'", "sys_platform == 'win32'"]

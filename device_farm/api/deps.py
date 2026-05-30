@@ -38,7 +38,7 @@ DB = Annotated[AsyncSession, Depends(_get_db)]
 def _auth_http_401(exc: AuthError) -> HTTPException:
     detail: str | dict = (
         {"code": exc.code}
-        if exc.code in {"TOKEN_EXPIRED", "INVALID_TOKEN"}
+        if exc.code in {"TOKEN_EXPIRED", "INVALID_TOKEN", "TOKEN_EXPIRED_KEY_REVOKED"}
         else "Invalid or expired token"
     )
     return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=detail)
@@ -154,13 +154,29 @@ AdminUser = Annotated[User, Depends(_get_current_admin)]
 
 
 def require_permission(obj: str, act: str):
-    async def _require_permission(user: CurrentUser) -> None:
+    async def _require_permission(request: Request, user: CurrentUser, db: DB) -> None:
         domain = permission_domain(user)
         enforcer = build_enforcer_for_user(user, domain=domain)
         if not enforcer.enforce(str(user.id), domain, obj, act):
+            try:
+                from services.security_audit import emit_security_event
+
+                await emit_security_event(
+                    db,
+                    action="admin.access.denied",
+                    user_id=user.id,
+                    org_id=getattr(user, "org_id", None),
+                    entity_type="route",
+                    entity_id=f"{obj}:{act}",
+                    ip_address=request.client.host if request.client else None,
+                    user_agent=request.headers.get("user-agent"),
+                    details={"path": request.url.path},
+                )
+            except Exception:
+                pass
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Permission denied",
+                detail={"code": "FORBIDDEN_ROLE", "required": f"{obj}:{act}"},
             )
 
     return _require_permission

@@ -24,6 +24,7 @@ from services.organization_invite import (
   invitation_is_expired,
 )
 from auth.lockout import admin_unlock
+from rate_limit import rate_limit
 from services.security_audit import emit_security_event
 
 router = APIRouter(prefix="/organizations", tags=["organizations"])
@@ -134,7 +135,11 @@ async def list_organization_members(db: DB, user: CurrentUser):
   dependencies=[Depends(require_permission("organizations", "manage"))],
 )
 async def invite_organization_member(
-  body: OrganizationMemberInvite, request: Request, db: DB, user: CurrentUser
+  body: OrganizationMemberInvite,
+  request: Request,
+  db: DB,
+  user: CurrentUser,
+  _rate_limit: None = Depends(rate_limit("10/hour", key="user")),
 ):
   org_id = await _current_org_id(db, user)
   ip, ua = _client_meta(request)

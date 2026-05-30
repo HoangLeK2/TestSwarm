@@ -1,0 +1,41 @@
+replicaCount: 1
+
+image:
+  repository: device-farm/runtime
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8081
+
+ingress:
+  enabled: false
+  className: nginx
+  host: device-farm.local
+  tls: false
+
+env:
+  SECRET_KEY: change-me
+  JWT_ACTIVE_KID: v1
+  RATE_LIMIT_ENABLED: "true"
+  HEALTHCHECK_DB_PING_INTERVAL_SEC: "10"
+  HEALTHCHECK_SAFE_MODE_DEBOUNCE_COUNT: "3"
+  JWT_SECRET_OVERLAP_HOURS: "24"
+  JWT_SECRET_MAX_AGE_DAYS: "90"
+
+redis:
+  enabled: false
+  url: redis://redis:6379/0
+
+resources: {}
+
+probes:
+  livenessPath: /health
+  readinessPath: /health/ready
+
+rateLimit:
+  bypassTokenSecretName: rate-limit-bypass
+
+secrets:
+  existingSecret: ""

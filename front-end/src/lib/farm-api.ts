@@ -5,6 +5,13 @@
 import axios, { type AxiosRequestConfig } from 'axios';
 import { tokenStorage } from './token-storage';
 
+function newRequestId(): string {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return `req-${Date.now().toString(36)}`;
+}
+
 /** Must match `OrganizationProvider` storage key. */
 const CURRENT_ORG_STORAGE_KEY = 'device-farm:current-organization-id';
 
@@ -104,8 +111,70 @@ export const farmApi = axios.create({
   headers: { 'Content-Type': 'application/json' }
 });
 
+const MAX_429_RETRIES = 3;
+const BASE_429_DELAY_MS = 1_000;
+const MAX_429_DELAY_MS = 30_000;
+
+type FarmApiRequestConfig = AxiosRequestConfig & {
+  _retry?: boolean;
+  /** Number of 429 retries already attempted for this request. */
+  _429RetryCount?: number;
+  /** Opt out of automatic 429 backoff (e.g. login form handles errors inline). */
+  _skip429Retry?: boolean;
+};
+
+function parseRetryAfterMs(header: string | undefined): number | null {
+  if (!header?.trim()) return null;
+  const trimmed = header.trim();
+  const seconds = Number(trimmed);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(seconds * 1000, MAX_429_DELAY_MS);
+  }
+  const until = Date.parse(trimmed);
+  if (!Number.isNaN(until)) {
+    return Math.min(Math.max(0, until - Date.now()), MAX_429_DELAY_MS);
+  }
+  return null;
+}
+
+function backoff429DelayMs(
+  attempt: number,
+  retryAfterHeader: string | undefined
+): number {
+  const fromHeader = parseRetryAfterMs(retryAfterHeader);
+  if (fromHeader != null) return fromHeader;
+  const exp = BASE_429_DELAY_MS * 2 ** attempt;
+  const capped = Math.min(exp, MAX_429_DELAY_MS);
+  // 75–100% jitter to avoid thundering herd on shared rate-limit windows.
+  return Math.round(capped * (0.75 + Math.random() * 0.25));
+}
+
+function sleep429(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function retryAfter429(
+  err: { response?: { headers?: Record<string, string | undefined> } },
+  original: FarmApiRequestConfig
+) {
+  const attempt = original._429RetryCount ?? 0;
+  if (attempt >= MAX_429_RETRIES) return null;
+
+  original._429RetryCount = attempt + 1;
+  const retryAfter =
+    err.response?.headers?.['retry-after'] ??
+    err.response?.headers?.['Retry-After'];
+  const delay = backoff429DelayMs(attempt, retryAfter);
+  await sleep429(delay);
+  return farmApi(original);
+}
+
 // Attach access token and ngrok-skip header when using ngrok
 farmApi.interceptors.request.use((config) => {
+  config.headers = config.headers ?? {};
+  if (!config.headers['X-Request-Id']) {
+    config.headers['X-Request-Id'] = newRequestId();
+  }
   const token = tokenStorage.getAuthToken();
   if (token) config.headers.Authorization = `Bearer ${token}`;
   if (typeof window !== 'undefined') {
@@ -119,6 +188,42 @@ farmApi.interceptors.request.use((config) => {
   }
   return config;
 });
+
+// --- Proactive refresh (60s before expiry) ---
+let _refreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleProactiveRefresh(expiresInSec: number | undefined) {
+  if (typeof window === 'undefined') return;
+  if (_refreshTimer) {
+    clearTimeout(_refreshTimer);
+    _refreshTimer = null;
+  }
+  const ttlMs = Math.max(60, Number(expiresInSec || 3600)) * 1000;
+  const delay = Math.max(5_000, ttlMs - 60_000);
+  _refreshTimer = setTimeout(async () => {
+    const refreshToken = tokenStorage.getRefreshToken();
+    if (!refreshToken) return;
+    try {
+      const { data } = await axios.post<{
+        access_token: string;
+        refresh_token: string;
+        expires_in?: number;
+      }>(`${API_BASE_URL}/auth/refresh`, { refresh_token: refreshToken });
+      tokenStorage.setTokens({
+        idToken: data.access_token,
+        refreshToken: data.refresh_token,
+        expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000
+      });
+      scheduleProactiveRefresh(data.expires_in);
+    } catch {
+      /* reactive interceptor handles hard failure */
+    }
+  }, delay);
+}
+
+export function armAuthRefreshTimer(expiresInSec?: number) {
+  scheduleProactiveRefresh(expiresInSec);
+}
 
 // --- Refresh logic ---
 let _isRefreshing = false;
@@ -135,7 +240,13 @@ function _processQueue(error: unknown, token: string | null) {
 farmApi.interceptors.response.use(
   (res) => res,
   async (err) => {
-    const original = err.config as AxiosRequestConfig & { _retry?: boolean };
+    const original = err.config as FarmApiRequestConfig | undefined;
+    if (!original) return Promise.reject(err);
+
+    if (err.response?.status === 429 && !original._skip429Retry) {
+      const retried = await retryAfter429(err, original);
+      if (retried) return retried;
+    }
 
     if (err.response?.status === 401 && !original._retry) {
       const pathname =
@@ -183,8 +294,9 @@ farmApi.interceptors.response.use(
         tokenStorage.setTokens({
           idToken: data.access_token,
           refreshToken: data.refresh_token,
-          expiresAt: Date.now() + 60 * 60 * 1000 // 1h
+          expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000
         });
+        scheduleProactiveRefresh(data.expires_in);
         _processQueue(null, data.access_token);
         original.headers = {
           ...original.headers,

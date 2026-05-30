@@ -136,6 +136,50 @@ def lockout_duration_minutes() -> int:
         return 30
 
 
+def session_idle_timeout_days() -> int:
+    raw = (os.environ.get("AUTH_SESSION_IDLE_TIMEOUT_DAYS") or "30").strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 30
+
+
+def db_ping_interval_sec() -> int:
+    raw = (os.environ.get("HEALTHCHECK_DB_PING_INTERVAL_SEC") or "10").strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 10
+
+
+def db_ping_debounce_count() -> int:
+    raw = (os.environ.get("HEALTHCHECK_SAFE_MODE_DEBOUNCE_COUNT") or "3").strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 3
+
+
+def jwt_secret_overlap_hours() -> int:
+    raw = (os.environ.get("JWT_SECRET_OVERLAP_HOURS") or "24").strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 24
+
+
+def jwt_secret_max_age_days() -> int:
+    raw = (os.environ.get("JWT_SECRET_MAX_AGE_DAYS") or "90").strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 90
+
+
+def rate_limit_enabled() -> bool:
+    return (os.environ.get("RATE_LIMIT_ENABLED") or "1").strip().lower() not in {"0", "false", "no"}
+
+
 # ── SMTP / organization invites ─────────────────────────────────────────────
 
 

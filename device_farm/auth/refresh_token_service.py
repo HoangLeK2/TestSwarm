@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from auth.session_service import device_fingerprint, touch_session
 from core.env import refresh_expire_days
 from db.models.refresh_token import RefreshToken
 from db.models.user import User
@@ -30,18 +31,25 @@ async def issue_refresh_token(
     user_id: str,
     *,
     device_fingerprint: str | None = None,
-) -> str:
+    last_ip: str | None = None,
+    user_agent: str | None = None,
+) -> tuple[str, str]:
+    """Return (raw_token, session_id)."""
     raw = secrets.token_urlsafe(48)
-    expires_at = datetime.now(timezone.utc) + timedelta(days=refresh_expire_days())
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(days=refresh_expire_days())
     row = RefreshToken(
         user_id=user_id,
         token_hash=hash_refresh_token(raw),
         expires_at=expires_at,
         device_fingerprint=device_fingerprint,
+        last_used_at=now,
+        last_ip=(last_ip or None),
+        user_agent=(user_agent or None),
     )
     db.add(row)
     await db.flush()
-    return raw
+    return raw, row.id
 
 
 async def revoke_refresh_token(db: AsyncSession, raw: str) -> bool:
@@ -61,8 +69,14 @@ async def revoke_refresh_token(db: AsyncSession, raw: str) -> bool:
 async def rotate_refresh_token(
     db: AsyncSession,
     raw: str,
-) -> tuple[User, str]:
-    """Validate refresh token, revoke it, issue a new one. Returns user + new raw token."""
+    *,
+    last_ip: str | None = None,
+    user_agent: str | None = None,
+) -> tuple[User, str, str]:
+    """Validate refresh token, revoke it, issue a new one.
+
+    Returns (user, new_raw_token, new_session_id).
+    """
     token_hash = hash_refresh_token(raw)
     row = (
         await db.execute(
@@ -86,8 +100,16 @@ async def rotate_refresh_token(
     if user is None or not user.is_active:
         raise RefreshTokenError("INVALID_REFRESH")
 
+    await touch_session(db, row, ip=last_ip, user_agent=user_agent)
     row.revoked_at = now
-    new_raw = await issue_refresh_token(
-        db, user.id, device_fingerprint=row.device_fingerprint
+    fp = row.device_fingerprint
+    if not fp and (last_ip or user_agent):
+        fp = device_fingerprint(user_agent=user_agent, ip=last_ip)
+    new_raw, session_id = await issue_refresh_token(
+        db,
+        user.id,
+        device_fingerprint=fp,
+        last_ip=last_ip or row.last_ip,
+        user_agent=user_agent or row.user_agent,
     )
-    return user, new_raw
+    return user, new_raw, session_id

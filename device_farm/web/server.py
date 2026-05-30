@@ -36,7 +36,7 @@ from db.database import init_db
 from runtime.core import DeviceManager, TaskQueue
 from runtime.lifecycle import LifecycleManager, LifecyclePhase
 from common.session_lock import SessionLockStore
-from .ws import WebSocketManager, DeviceAgentSession, get_ws_user_id, heartbeat
+from .ws import WebSocketManager, DeviceAgentSession, authenticate_ws, heartbeat
 from .ws_lifecycle import DeviceLifecycleWsManager
 
 log = logging.getLogger(__name__)
@@ -164,7 +164,14 @@ def create_app(
                 pass
         log.info("Device Farm server started")
 
-        # Single lifecycle owner for this app run. Every long-lived coroutine,
+        try:
+            from auth.secret_versioning import reload_jwt_secrets
+
+            reload_jwt_secrets()
+        except Exception as exc:
+            log.warning("JWT secret store init skipped: %s", exc)
+
+        # Single lifecycle owner for this app run.
         # subprocess, or async-closeable resource registers here so shutdown
         # tears them down in reverse-phase order with per-entry timeout.
         lifecycle = LifecycleManager()
@@ -260,9 +267,44 @@ def create_app(
                 _event_cleanup_loop,
             )
         if config.database.enabled:
+            from runtime.db_health import DbHealthMonitor, db_ping_loop
+
+            db_health = DbHealthMonitor()
+            _app.state.db_health = db_health
+
+            async def _session_idle_loop() -> None:
+                import asyncio as _aio
+                from auth.session_service import revoke_idle_sessions
+                from db.database import AsyncSessionLocal
+
+                while True:
+                    await _aio.sleep(86400)
+                    try:
+                        async with AsyncSessionLocal() as db:
+                            revoked = await revoke_idle_sessions(db)
+                            await db.commit()
+                            if revoked:
+                                from auth.ws_session_registry import get_ws_session_registry
+
+                                await get_ws_session_registry().close_sessions(revoked, code=4408)
+                    except Exception as exc:
+                        log.warning("session idle maintenance failed: %s", exc)
+
+            lifecycle.register_task(
+                LifecyclePhase.BACKGROUND,
+                "session-idle-maintenance",
+                _session_idle_loop,
+            )
+            lifecycle.register_task(
+                LifecyclePhase.BACKGROUND,
+                "db-health-ping",
+                lambda: db_ping_loop(db_health),
+            )
+
             try:
                 await init_db()
                 log.info("PostgreSQL connected and tables ready")
+                db_health.mark_connected()
                 try:
                     from db.database import AsyncSessionLocal
                     from services.account_state import refresh_account_state_gauges
@@ -272,10 +314,11 @@ def create_app(
                 except Exception as gauge_exc:
                     log.debug("account_state gauge init skipped: %s", gauge_exc)
             except Exception as exc:  # noqa: BLE001
-                # Fail fast: continuing with a half-migrated schema causes opaque
-                # runtime 500s (e.g. UndefinedColumnError during campaign dispatch).
-                log.exception("PostgreSQL init failed; aborting startup")
-                raise RuntimeError("PostgreSQL init failed; check migrations/schema") from exc
+                log.exception("PostgreSQL init failed; entering DB safe mode")
+                db_health.mark_disconnected()
+                log.warning(
+                    "Continuing startup in DB safe mode — CRUD routes return SERVICE_DEGRADED"
+                )
 
             # Phase 1 — crash recovery: mark executions stuck in 'running' (from a
             # crashed previous session) as failed + DLQ them so operators can retry.
@@ -951,7 +994,9 @@ def create_app(
     )
     if db_enabled:
         from services.user_action_audit import UserActionAuditMiddleware
+        from web.db_safe_mode import DbSafeModeMiddleware
 
+        app.add_middleware(DbSafeModeMiddleware)
         app.add_middleware(UserActionAuditMiddleware)
     app.add_middleware(RequestLogMiddleware)
 
@@ -982,6 +1027,66 @@ def create_app(
     # Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 
     # ── Health endpoints ──
+    @app.get("/health")
+    async def root_health():
+        return {"status": "alive", "ts": int(time.time())}
+
+    @app.get("/health/ready")
+    async def root_readiness():
+        monitor = getattr(app.state, "db_health", None)
+        if monitor is not None and getattr(monitor, "safe_mode", False):
+            from fastapi.responses import JSONResponse
+
+            return JSONResponse({"status": "degraded"}, status_code=503)
+        if db_enabled:
+            try:
+                from sqlalchemy import text as sa_text
+                from db.database import AsyncSessionLocal
+
+                async with AsyncSessionLocal() as session:
+                    await session.execute(sa_text("SELECT 1"))
+            except Exception:
+                from fastapi.responses import JSONResponse
+
+                return JSONResponse({"status": "degraded"}, status_code=503)
+        return {"status": "ready"}
+
+    @app.get("/api/server/status")
+    async def api_server_status():
+        monitor = getattr(app.state, "db_health", None)
+        if monitor is None:
+            return {
+                "safe_mode": False,
+                "db_connected": bool(db_enabled),
+                "version": "1.0.0",
+                "started_at": time.time(),
+            }
+        return monitor.status_payload()
+
+    @app.get("/api/server/version")
+    async def api_server_version():
+        commit = (os.environ.get("GIT_COMMIT") or os.environ.get("BUILD_COMMIT") or "").strip()
+        if not commit:
+            try:
+                import subprocess
+
+                commit = (
+                    subprocess.check_output(
+                        ["git", "rev-parse", "--short", "HEAD"],
+                        cwd=str(Path(__file__).resolve().parents[1]),
+                        text=True,
+                        stderr=subprocess.DEVNULL,
+                    ).strip()
+                )
+            except Exception:
+                commit = "unknown"
+        build_time = (os.environ.get("BUILD_TIME") or "").strip() or None
+        return {
+            "version": "1.0.0",
+            "commit": commit,
+            "build_time": build_time,
+        }
+
     @app.get("/api/live")
     async def liveness():
         return {"status": "ok"}
@@ -1009,7 +1114,7 @@ def create_app(
 
     @app.get("/api/health")
     async def health():
-        return await readiness()
+        return {"status": "alive", "ts": int(time.time())}
 
     @app.get("/api/relay/status")
     async def relay_status(_: AdminUser):
@@ -1095,9 +1200,46 @@ def create_app(
     @app.websocket("/ws")
     async def websocket_endpoint(ws: WebSocket):
         user_id: Optional[str] = None
+        session_id: Optional[str] = None
         if db_enabled:
-            user_id = await get_ws_user_id(ws)
-        await ws_manager.connect(ws, user_id=user_id)
+            ctx = await authenticate_ws(ws)
+            if ctx is None:
+                from services.security_audit import emit_security_event
+                from db.database import AsyncSessionLocal
+
+                try:
+                    async with AsyncSessionLocal() as db:
+                        await emit_security_event(
+                            db,
+                            action="ws.auth.rejected",
+                            ip_address=ws.client.host if ws.client else None,
+                            user_agent=ws.headers.get("user-agent"),
+                        )
+                        await db.commit()
+                except Exception:
+                    pass
+                await ws.close(code=4401)
+                return
+            user_id = ctx.user_id
+            session_id = ctx.session_id
+            try:
+                from services.security_audit import emit_security_event
+                from db.database import AsyncSessionLocal
+
+                async with AsyncSessionLocal() as db:
+                    await emit_security_event(
+                        db,
+                        action="ws.connected",
+                        user_id=user_id,
+                        entity_type="session",
+                        entity_id=session_id,
+                        ip_address=ws.client.host if ws.client else None,
+                        user_agent=ws.headers.get("user-agent"),
+                    )
+                    await db.commit()
+            except Exception:
+                pass
+        await ws_manager.connect(ws, user_id=user_id, session_id=session_id)
 
     @app.websocket("/ws/lifecycle")
     async def lifecycle_websocket_endpoint(ws: WebSocket):

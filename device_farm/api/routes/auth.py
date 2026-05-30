@@ -22,6 +22,7 @@ from api.schemas.auth import (
     TokenResponse,
     UserOut,
 )
+from rate_limit import rate_limit
 from auth.jwt_service import issue_access_token
 from auth.lockout import (
     admin_unlock,
@@ -38,6 +39,7 @@ from auth.refresh_token_service import (
     revoke_refresh_token,
     rotate_refresh_token,
 )
+from auth.session_service import device_fingerprint
 from db import crud as repo
 from services.organization_invite import accept_organization_invitation
 from services.security_audit import emit_security_event
@@ -103,7 +105,7 @@ async def register(body: RegisterRequest, db: DB):
     )
 
 
-@router.post("/login", response_model=TokenResponse)
+@router.post("/login", response_model=TokenResponse, dependencies=[Depends(rate_limit("30/min", key="ip"))])
 async def login(body: LoginRequest, request: Request, db: DB):
     ip, ua = _client_meta(request)
     user = await repo.get_user_by_email(db, body.email)
@@ -200,12 +202,20 @@ async def login(body: LoginRequest, request: Request, db: DB):
             user_agent=ua,
         )
 
+    fp = device_fingerprint(user_agent=ua, ip=ip)
+    refresh, session_id = await issue_refresh_token(
+        db,
+        user.id,
+        device_fingerprint=fp,
+        last_ip=ip,
+        user_agent=ua,
+    )
     access, expires_in, jti = issue_access_token(
         user_id=user.id,
         org_id=org_id,
         roles=_roles_for_user(user, org_role),
+        session_id=session_id,
     )
-    refresh = await issue_refresh_token(db, user.id)
     await emit_security_event(
         db,
         action="auth.login.success",
@@ -221,14 +231,20 @@ async def login(body: LoginRequest, request: Request, db: DB):
         access_token=access,
         refresh_token=refresh,
         expires_in=expires_in,
+        session_id=session_id,
     )
 
 
-@router.post("/refresh", response_model=TokenResponse)
+@router.post("/refresh", response_model=TokenResponse, dependencies=[Depends(rate_limit("60/min", key="ip"))])
 async def refresh(body: RefreshRequest, request: Request, db: DB):
     ip, ua = _client_meta(request)
     try:
-        user, new_refresh = await rotate_refresh_token(db, body.refresh_token)
+        user, new_refresh, session_id = await rotate_refresh_token(
+            db,
+            body.refresh_token,
+            last_ip=ip,
+            user_agent=ua,
+        )
     except RefreshTokenError as exc:
         if exc.code == "REFRESH_REVOKED":
             await emit_security_event(
@@ -246,6 +262,7 @@ async def refresh(body: RefreshRequest, request: Request, db: DB):
         user_id=user.id,
         org_id=org_id,
         roles=_roles_for_user(user, org_role),
+        session_id=session_id,
     )
     await emit_security_event(
         db,
@@ -265,7 +282,7 @@ async def refresh(body: RefreshRequest, request: Request, db: DB):
     )
 
 
-@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_permission("me", "read"))])
 async def logout(body: LogoutRequest, request: Request, db: DB, user: CurrentUser):
     ip, ua = _client_meta(request)
     if body.refresh_token:

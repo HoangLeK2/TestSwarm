@@ -275,13 +275,18 @@ async def test_require_permission_denies_forbidden_role():
 
     app.dependency_overrides[deps._get_current_user] = lambda: _user("operator")
 
+    async def fake_db():
+        yield object()
+
+    app.dependency_overrides[deps._get_db] = fake_db
+
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         response = await client.get("/users")
 
     assert response.status_code == 403
-    assert response.json()["detail"] == "Permission denied"
+    assert response.json()["detail"]["code"] == "FORBIDDEN_ROLE"
 
 
 @pytest.mark.asyncio
@@ -620,6 +625,11 @@ async def test_scenario_template_route_allows_org_member_read(monkeypatch):
 
     app.dependency_overrides[deps._get_current_user] = lambda: user
     app.dependency_overrides[deps._get_db] = fake_db
+    monkeypatch.setattr(
+        scenario_template_routes,
+        "org_member_user_ids",
+        AsyncMock(return_value=[user.id]),
+    )
     monkeypatch.setattr(
         scenario_template_routes,
         "list_templates",

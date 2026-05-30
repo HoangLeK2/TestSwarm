@@ -17,6 +17,36 @@ from db.database import AsyncSessionLocal
 from tenancy.background import lookup_device_by_serial
 
 
+async def assert_org_resource(
+    *,
+    resource_org_id: str | None,
+    user_org_id: str | None,
+    user_id: str,
+    resource_id: str,
+    resource_type: str = "resource",
+) -> None:
+    """Cross-org access returns 404 and emits ownership.violation audit."""
+    if not resource_org_id or not user_org_id or resource_org_id == user_org_id:
+        return
+    async with AsyncSessionLocal() as db:
+        from services.security_audit import emit_security_event
+
+        await emit_security_event(
+            db,
+            action="ownership.violation",
+            user_id=user_id,
+            org_id=user_org_id,
+            entity_type=resource_type,
+            entity_id=resource_id,
+            details={"resource_org_id": resource_org_id},
+        )
+        await db.commit()
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail={"code": "NOT_FOUND"},
+    )
+
+
 async def assert_owns_device(ctx: AuthContext, serial: str) -> None:
     async with AsyncSessionLocal() as db:
         ref = await lookup_device_by_serial(db, serial)

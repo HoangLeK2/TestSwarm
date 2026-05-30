@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 import pytest
 
-from api.routes.auth import _make_access_token
+from auth.jwt_service import issue_access_token
 from services.user_action_audit import (
     AuditWriteDispatcher,
     UserActionAuditMiddleware,
@@ -147,7 +147,7 @@ async def test_user_action_middleware_schedules_authenticated_mutation():
     async def update_tags(device_id: str):
         return {"id": device_id}
 
-    token = _make_access_token("user-1")
+    token, _, _ = issue_access_token(user_id="user-1", org_id="org-1", roles=["owner"])
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.patch(
             "/api/devices/dev-1/tags?token=secret&view=full",

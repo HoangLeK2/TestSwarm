@@ -42,6 +42,8 @@ from .relay_agent import RelayAgent, RelayAgentJob, RelayAgentJobItem, RelayAgen
 from .scenario_device_variable import ScenarioDeviceVariable
 from .notification import Notification, NotificationChannel
 from .activity import ActivityLog
+from .refresh_token import RefreshToken
+from .password_history import PasswordHistory
 
 __all__ = [
     "User",
@@ -85,4 +87,6 @@ __all__ = [
     "Notification",
     "NotificationChannel",
     "ActivityLog",
+    "RefreshToken",
+    "PasswordHistory",
 ]

@@ -22,6 +22,10 @@ async def log_activity(
     entity_id: Optional[str] = None,
     device_serial: Optional[str] = None,
     user_id: Optional[str] = None,
+    org_id: Optional[str] = None,
+    ip_address: Optional[str] = None,
+    user_agent: Optional[str] = None,
+    outcome: Optional[str] = None,
     details: Optional[dict[str, Any]] = None,
 ) -> ActivityLog:
     record = ActivityLog(
@@ -30,6 +34,10 @@ async def log_activity(
         entity_id=entity_id,
         device_serial=device_serial,
         user_id=user_id,
+        org_id=org_id,
+        ip_address=ip_address,
+        user_agent=(user_agent or "")[:255] or None,
+        outcome=outcome,
         details=details or {},
     )
     db.add(record)

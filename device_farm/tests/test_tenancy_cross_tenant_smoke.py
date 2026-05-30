@@ -66,6 +66,29 @@ async def test_ac2_get_campaign_other_org_returns_404(tenancy_session_factory):
 
 
 @pytest.mark.asyncio
+async def test_ac2_get_account_other_org_returns_404(tenancy_session_factory):
+    from db.models.account import Account
+
+    app = build_tenancy_api_app(tenancy_session_factory)
+    fx = await seed_two_org_fixture(tenancy_session_factory)
+    async with tenancy_session_factory() as session:
+        session.add(
+            Account(
+                id="acct-beta-1",
+                platform="facebook",
+                username="beta_user",
+                user_id=fx["user_b"],
+                org_id=fx["org_b"],
+            )
+        )
+        await session.commit()
+
+    async with api_client_for_user(app, USER_A, ORG_A) as client:
+        resp = await client.get("/api/accounts/acct-beta-1")
+        assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_ac5_bob_sees_only_beta_devices(tenancy_session_factory):
     app = build_tenancy_api_app(tenancy_session_factory)
     await seed_two_org_fixture(tenancy_session_factory)

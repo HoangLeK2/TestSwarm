@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from jose import JWTError, jwt
+from jose import JWTError, ExpiredSignatureError, jwt
 
 from core.security import jwt_algorithm, jwt_secret_key
 
@@ -29,6 +29,16 @@ class AuthContext:
 class AuthError(Exception):
     """Raised when a token is absent, malformed, expired, or not an access token."""
 
+    code: str = "INVALID_TOKEN"
+
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        self.code = code or self.code
+        super().__init__(message)
+
+
+class TokenExpiredError(AuthError):
+    code = "TOKEN_EXPIRED"
+
 
 def decode_access_token(raw_token: str) -> AuthContext:
     """Decode an access JWT into an AuthContext, raising AuthError on failure."""
@@ -36,6 +46,8 @@ def decode_access_token(raw_token: str) -> AuthContext:
         raise AuthError("missing token")
     try:
         payload = jwt.decode(raw_token, jwt_secret_key(), algorithms=[jwt_algorithm()])
+    except ExpiredSignatureError as exc:
+        raise TokenExpiredError(f"invalid token: {exc}") from exc
     except JWTError as exc:
         raise AuthError(f"invalid token: {exc}") from exc
 

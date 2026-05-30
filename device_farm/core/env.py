@@ -96,6 +96,46 @@ def refresh_expire_days() -> int:
     return int(os.environ.get("REFRESH_EXPIRE_DAYS", "30"))
 
 
+def password_min_length() -> int:
+    raw = (os.environ.get("AUTH_PASSWORD_MIN_LENGTH") or "12").strip()
+    try:
+        return max(8, int(raw))
+    except ValueError:
+        return 12
+
+
+def password_history_size() -> int:
+    raw = (os.environ.get("AUTH_PASSWORD_HISTORY_SIZE") or "5").strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 5
+
+
+def lockout_failed_threshold() -> int:
+    raw = (os.environ.get("AUTH_LOCKOUT_FAILED_THRESHOLD") or "5").strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 5
+
+
+def lockout_window_minutes() -> int:
+    raw = (os.environ.get("AUTH_LOCKOUT_WINDOW_MINUTES") or "15").strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 15
+
+
+def lockout_duration_minutes() -> int:
+    raw = (os.environ.get("AUTH_LOCKOUT_DURATION_MINUTES") or "30").strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 30
+
+
 # ── SMTP / organization invites ─────────────────────────────────────────────
 
 

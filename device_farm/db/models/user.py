@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.database import Base
@@ -30,6 +30,9 @@ class User(Base):
         index=True,
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    failed_login_count: Mapped[int] = mapped_column(Integer, default=0)
+    locked_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_failed_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
     devices: Mapped[list["Device"]] = relationship("Device", back_populates="user")
     campaigns: Mapped[list["Campaign"]] = relationship("Campaign", back_populates="user")

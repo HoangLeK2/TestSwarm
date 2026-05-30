@@ -12,6 +12,7 @@ export type TokenResponse = {
   access_token: string;
   refresh_token: string;
   token_type: string;
+  expires_in?: number;
 };
 export type UserOut = {
   id: string;
@@ -29,5 +30,10 @@ export const authApi = {
   register: (data: RegisterPayload) =>
     farmApi.post<UserOut>('/auth/register', data).then((r) => r.data),
 
-  me: () => farmApi.get<UserOut>('/auth/me').then((r) => r.data)
+  me: () => farmApi.get<UserOut>('/auth/me').then((r) => r.data),
+
+  logout: (refreshToken?: string | null) =>
+    farmApi
+      .post('/auth/logout', { refresh_token: refreshToken ?? null })
+      .then((r) => r.data)
 };

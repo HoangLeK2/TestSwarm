@@ -17,6 +17,7 @@ from api.routes.auth import router as auth_router
 from db.database import Base
 from db.models import Organization, OrganizationMember, User
 from db import crud as repo
+from auth.password_service import hash_password
 
 
 @pytest_asyncio.fixture
@@ -64,7 +65,7 @@ async def test_login_blocked_when_org_disabled(session_factory, monkeypatch):
             id="user-ed",
             email="ed@stale.example",
             name="Ed",
-            hashed_password="hashed",
+            hashed_password=hash_password("secret"),
             org_id="org-stale",
         )
         session.add_all([org, user])
@@ -84,10 +85,6 @@ async def test_login_blocked_when_org_disabled(session_factory, monkeypatch):
         return user
 
     monkeypatch.setattr(repo, "get_user_by_email", fake_get_user_by_email)
-
-    from api.routes import auth as auth_routes
-
-    monkeypatch.setattr(auth_routes._pwd, "verify", lambda *_a, **_k: True)
 
     app = _build_auth_app(session_factory)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:

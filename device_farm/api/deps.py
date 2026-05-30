@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import AuthContext, policy
 from api.auth.rbac import build_enforcer_for_user, is_superadmin, permission_domain
-from api.auth.context import AuthError, decode_access_token, extract_bearer
+from api.auth.context import AuthError, TokenExpiredError, decode_access_token, extract_bearer
 from db.database import AsyncSessionLocal
 from db.models import Organization, User
 from db import crud as repo
@@ -35,6 +35,15 @@ async def _get_db() -> AsyncGenerator[AsyncSession, None]:
 DB = Annotated[AsyncSession, Depends(_get_db)]
 
 
+def _auth_http_401(exc: AuthError) -> HTTPException:
+    detail: str | dict = (
+        {"code": exc.code}
+        if exc.code in {"TOKEN_EXPIRED", "INVALID_TOKEN"}
+        else "Invalid or expired token"
+    )
+    return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=detail)
+
+
 def _auth_context_from_creds(
     credentials: HTTPAuthorizationCredentials | None,
 ) -> AuthContext:
@@ -42,10 +51,7 @@ def _auth_context_from_creds(
     try:
         return decode_access_token(raw or "")
     except AuthError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
-        ) from exc
+        raise _auth_http_401(exc) from exc
 
 
 async def _get_auth_context(
@@ -194,10 +200,7 @@ async def _current_user_from_request(request: Request, db: AsyncSession) -> User
         try:
             ctx = decode_access_token(raw_token)
         except AuthError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired token",
-            ) from exc
+            raise _auth_http_401(exc) from exc
         try:
             request.state.auth = ctx
         except Exception:

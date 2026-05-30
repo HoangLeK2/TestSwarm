@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from api.deps import CurrentUser, DB, require_permission
 from api.auth.rbac import is_superadmin
@@ -23,8 +23,16 @@ from services.organization_invite import (
   create_and_email_invitation,
   invitation_is_expired,
 )
+from auth.lockout import admin_unlock
+from services.security_audit import emit_security_event
 
 router = APIRouter(prefix="/organizations", tags=["organizations"])
+
+
+def _client_meta(request: Request) -> tuple[str | None, str | None]:
+  ip = request.client.host if request.client else None
+  ua = request.headers.get("user-agent")
+  return ip, ua
 
 
 def _org_to_out(org) -> OrganizationOut:
@@ -126,9 +134,10 @@ async def list_organization_members(db: DB, user: CurrentUser):
   dependencies=[Depends(require_permission("organizations", "manage"))],
 )
 async def invite_organization_member(
-  body: OrganizationMemberInvite, db: DB, user: CurrentUser
+  body: OrganizationMemberInvite, request: Request, db: DB, user: CurrentUser
 ):
   org_id = await _current_org_id(db, user)
+  ip, ua = _client_meta(request)
   email = (body.email or "").strip().lower()
   if not email:
     raise HTTPException(status_code=400, detail={"code": "INVALID_EMAIL"})
@@ -153,6 +162,18 @@ async def invite_organization_member(
     if code == "ORG_NOT_FOUND":
       raise HTTPException(status_code=404, detail={"code": "NO_ORGANIZATION"})
     raise
+
+  await emit_security_event(
+    db,
+    action="member.invited",
+    user_id=user.id,
+    org_id=org_id,
+    entity_type="user",
+    entity_id=None,
+    ip_address=ip,
+    user_agent=ua,
+    details={"email": invitation.email, "role": invitation.role},
+  )
 
   return OrganizationMemberInviteOut(
     email=invitation.email,
@@ -232,10 +253,12 @@ async def preview_organization_invitation(token: str, db: DB):
 async def update_organization_member(
   member_user_id: str,
   body: OrganizationMemberUpdate,
+  request: Request,
   db: DB,
   user: CurrentUser,
 ):
   org_id = await _current_org_id(db, user)
+  ip, ua = _client_meta(request)
   new_role = (body.role or "").strip().lower()
   if new_role not in ("member", "supervisor"):
     raise HTTPException(status_code=400, detail={"code": "INVALID_ROLE"})
@@ -245,6 +268,7 @@ async def update_organization_member(
   member = await repo.get_organization_member(db, org_id, member_user_id)
   if member is None:
     raise HTTPException(status_code=404, detail={"code": "NOT_FOUND"})
+  old_role = member.role
   if member.role == "owner":
     raise HTTPException(status_code=400, detail={"code": "CANNOT_CHANGE_OWNER"})
   if member.role == new_role:
@@ -264,7 +288,50 @@ async def update_organization_member(
   target_user = await repo.get_user(db, member_user_id)
   if target_user is None:
     raise HTTPException(status_code=404, detail={"code": "NOT_FOUND"})
+  await emit_security_event(
+    db,
+    action="member.role_changed",
+    user_id=user.id,
+    org_id=org_id,
+    entity_type="user",
+    entity_id=member_user_id,
+    ip_address=ip,
+    user_agent=ua,
+    details={"old_role": old_role, "new_role": new_role},
+  )
   return _member_out(updated, target_user)
+
+
+@router.post(
+  "/members/{member_user_id}/unlock",
+  status_code=status.HTTP_204_NO_CONTENT,
+  dependencies=[Depends(require_permission("organizations", "manage"))],
+)
+async def unlock_organization_member(
+  member_user_id: str,
+  request: Request,
+  db: DB,
+  user: CurrentUser,
+):
+  org_id = await _current_org_id(db, user)
+  ip, ua = _client_meta(request)
+  member = await repo.get_organization_member(db, org_id, member_user_id)
+  if member is None:
+    raise HTTPException(status_code=404, detail={"code": "NOT_FOUND"})
+  target = await repo.get_user(db, member_user_id)
+  if target is None:
+    raise HTTPException(status_code=404, detail={"code": "NOT_FOUND"})
+  await admin_unlock(db, target)
+  await emit_security_event(
+    db,
+    action="account.admin_unlocked",
+    user_id=user.id,
+    org_id=org_id,
+    entity_type="user",
+    entity_id=member_user_id,
+    ip_address=ip,
+    user_agent=ua,
+  )
 
 
 @router.delete(

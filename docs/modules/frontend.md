@@ -73,11 +73,26 @@ flowchart TB
 | Campaigns/scenarios | `/dashboard/campaigns`, `/scenario-flow/{id}`, `/dashboard/scenario-templates` | campaigns, scenario templates, executions |
 | Accounts | `/dashboard/accounts`, `/dashboard/device-farm/account-groups` | accounts, account groups |
 | Device groups | `/dashboard/device-groups` | device groups |
-| Content | `/dashboard/content` | content/extraction |
+| Content | `/dashboard/content`, `/dashboard/content/{id}` | content/extraction |
+
+Content detail permalink flow: API E2E `device_farm/tests/test_content_permalink_e2e.py`; client bounce `front-end/src/features/content/lib/permalink-flow.test.ts` (`pnpm test:content:permalink-e2e`).
 | Schedules | `/dashboard/schedules` | schedules |
 | Notifications | `/dashboard/notifications` | notifications |
 | Analytics | `/dashboard/activity-history` | analytics/activity |
 | Relay agents | `/dashboard/relay-agents` | relay agents |
+
+## UC-11-03 — Fleet operator device list (`/dashboard/devices`)
+
+| Item | Detail |
+|------|--------|
+| Persona | Fleet operator (`role`: `operator` or `admin`) |
+| Route | `/dashboard/devices` → `DeviceList` (`front-end/src/features/devices/components/device-list/`) |
+| API | `GET /devices`, **`GET /devices/fleet/stats`** (`useFleetStats`), `GET /relay-agents` for live transport |
+| Online/offline | `isDeviceOnlineForList`: relay `status === 'online'` **or** `last_seen` within 60s (DB heartbeat) |
+| Identity columns | Name, serial, brand/model, Android/SDK, ADB serial, screen, tags, connection host |
+| Access | Any authenticated user; nav item has no `roles` restriction. Unauthenticated → login; wrong org → tenancy-scoped empty list (backend). |
+| Failure UI | Loading copy, `loadError` on query failure, empty state when no devices |
+| Verify | `pnpm verify:nav` (includes `device-online.test.ts`) |
 
 ## Agent Implementation Checklist
 
@@ -85,7 +100,8 @@ flowchart TB
 - When backend API changes, regenerate or check OpenAPI and generated client.
 - If using a Next API proxy, document whether it is proxy-only or owns frontend
   transformation behavior.
-- Keep dashboard navigation aligned with actual feature folders.
+- Keep dashboard navigation aligned with actual feature folders (`src/config/dashboard-nav.ts`, `pnpm verify:nav`).
+- Main sidebar groups: devices, campaigns/schedules, library, operations (notifications). Settings: organization + relay agents.
 
 ## Open Risks
 

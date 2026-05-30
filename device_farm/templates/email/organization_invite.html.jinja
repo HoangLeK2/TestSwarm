@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <title>Lời mời tham gia {{ org_name }}</title>
+</head>
+<body style="margin:0;padding:0;background-color:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;color:#0f172a;">
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color:#f1f5f9;padding:40px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" style="max-width:600px;width:100%;background-color:#ffffff;border-radius:24px;overflow:hidden;border:1px solid #e2e8f0;box-shadow:0 20px 60px -20px rgba(15,23,42,0.18);">
+          <!-- Accent bar (matches auth card gradient line) -->
+          <tr>
+            <td style="height:4px;background:linear-gradient(90deg,transparent 0%,#3b82f6 50%,transparent 100%);font-size:0;line-height:0;">&nbsp;</td>
+          </tr>
+          <tr>
+            <td style="padding:36px 32px 8px 32px;text-align:center;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center">
+                <tr>
+                  <td style="width:48px;height:48px;border-radius:16px;background-color:#eff6ff;border:1px solid #bfdbfe;text-align:center;vertical-align:middle;font-size:22px;line-height:48px;">
+                    &#128241;
+                  </td>
+                </tr>
+              </table>
+              <p style="margin:16px 0 4px 0;font-size:13px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#2563eb;">
+                Device Farm
+              </p>
+              <h1 style="margin:0 0 8px 0;font-size:24px;font-weight:700;line-height:1.3;color:#0f172a;">
+                Lời mời tham gia tổ chức
+              </h1>
+              <p style="margin:0;font-size:15px;line-height:1.6;color:#64748b;">
+                <strong style="color:#0f172a;">{{ inviter }}</strong> mời bạn vào
+                <strong style="color:#2563eb;">{{ org_name }}</strong>
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:8px 32px 24px 32px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color:#f8fafc;border-radius:16px;border:1px solid #e2e8f0;">
+                <tr>
+                  <td style="padding:20px 20px 4px 20px;">
+                    <p style="margin:0 0 8px 0;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:#64748b;">
+                      Email được mời
+                    </p>
+                    <p style="margin:0;font-size:15px;font-weight:600;color:#0f172a;word-break:break-all;">
+                      {{ recipient_email }}
+                    </p>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 20px 20px 20px;">
+                    {% if existing_user %}
+                    <p style="margin:0;font-size:14px;line-height:1.65;color:#475569;">
+                      Bạn đã có tài khoản — hãy <strong>đăng nhập</strong> bằng email trên để chấp nhận lời mời.
+                    </p>
+                    {% else %}
+                    <p style="margin:0;font-size:14px;line-height:1.65;color:#475569;">
+                      Bạn chưa có tài khoản — hãy <strong>đăng ký</strong> bằng đúng email trên, sau đó đăng nhập để tham gia.
+                    </p>
+                    {% endif %}
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td align="center" style="padding:0 32px 28px 32px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td align="center" style="border-radius:12px;background-color:#2563eb;">
+                    <a href="{{ accept_url }}" target="_blank" style="display:inline-block;padding:14px 32px;font-size:15px;font-weight:600;color:#ffffff;text-decoration:none;border-radius:12px;">
+                      Chấp nhận lời mời
+                    </a>
+                  </td>
+                </tr>
+              </table>
+              <p style="margin:16px 0 0 0;font-size:12px;line-height:1.5;color:#94a3b8;">
+                Liên kết có hiệu lực trong <strong style="color:#64748b;">{{ expire_days }} ngày</strong>
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 32px 28px 32px;">
+              <p style="margin:0 0 12px 0;font-size:13px;font-weight:600;color:#0f172a;">
+                Các bước tiếp theo
+              </p>
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                {% if existing_user %}
+                <tr>
+                  <td style="padding:8px 0;vertical-align:top;width:28px;font-size:14px;font-weight:700;color:#2563eb;">1.</td>
+                  <td style="padding:8px 0;font-size:14px;line-height:1.55;color:#475569;">Nhấn nút <strong>Chấp nhận lời mời</strong> ở trên</td>
+                </tr>
+                <tr>
+                  <td style="padding:8px 0;vertical-align:top;font-size:14px;font-weight:700;color:#2563eb;">2.</td>
+                  <td style="padding:8px 0;font-size:14px;line-height:1.55;color:#475569;">Đăng nhập bằng tài khoản hiện có</td>
+                </tr>
+                <tr>
+                  <td style="padding:8px 0;vertical-align:top;font-size:14px;font-weight:700;color:#2563eb;">3.</td>
+                  <td style="padding:8px 0;font-size:14px;line-height:1.55;color:#475569;">Bắt đầu làm việc trong <strong>{{ org_name }}</strong></td>
+                </tr>
+                {% else %}
+                <tr>
+                  <td style="padding:8px 0;vertical-align:top;width:28px;font-size:14px;font-weight:700;color:#2563eb;">1.</td>
+                  <td style="padding:8px 0;font-size:14px;line-height:1.55;color:#475569;">Nhấn nút <strong>Chấp nhận lời mời</strong> ở trên</td>
+                </tr>
+                <tr>
+                  <td style="padding:8px 0;vertical-align:top;font-size:14px;font-weight:700;color:#2563eb;">2.</td>
+                  <td style="padding:8px 0;font-size:14px;line-height:1.55;color:#475569;">Đăng ký tài khoản bằng email <strong>{{ recipient_email }}</strong></td>
+                </tr>
+                <tr>
+                  <td style="padding:8px 0;vertical-align:top;font-size:14px;font-weight:700;color:#2563eb;">3.</td>
+                  <td style="padding:8px 0;font-size:14px;line-height:1.55;color:#475569;">Đăng nhập và tham gia <strong>{{ org_name }}</strong></td>
+                </tr>
+                {% endif %}
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 32px 24px 32px;">
+              <p style="margin:0;font-size:12px;line-height:1.6;color:#94a3b8;word-break:break-all;">
+                Nếu nút không hoạt động, sao chép liên kết sau vào trình duyệt:<br />
+                <a href="{{ accept_url }}" style="color:#2563eb;text-decoration:underline;">{{ accept_url }}</a>
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:20px 32px;background-color:#f8fafc;border-top:1px solid #e2e8f0;text-align:center;">
+              <p style="margin:0 0 4px 0;font-size:12px;line-height:1.5;color:#94a3b8;">
+                Nếu bạn không mong đợi email này, bạn có thể bỏ qua.
+              </p>
+              <p style="margin:0;font-size:11px;color:#cbd5e1;">
+                &copy; {{ year }} Device Farm
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

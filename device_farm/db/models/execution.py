@@ -87,6 +87,14 @@ class Execution(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    pause_signal_received_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    cancel_signal_received_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancel_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Scenario executor resumes from this index on restart (steps must be idempotent).
     checkpoint_step: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

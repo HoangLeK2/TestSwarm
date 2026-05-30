@@ -6,15 +6,28 @@ import io
 import logging
 from typing import AsyncGenerator
 
-from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response, StreamingResponse
 
-from api.deps import CurrentUser, DB
+from api.auth.content_share import create_content_share_token, verify_content_share_token
+from api.deps import CurrentUser, DB, require_permission
+from api.org_scope import data_owner_user_id
 from api.schemas.content import (
-    CollectionCreate, CollectionOut, ContentItemOut, ContentStatsOut,
+    CollectionCreate,
+    CollectionOut,
+    ContentArtifactOut,
+    ContentDetailOut,
+    ContentItemOut,
+    ContentPermalinkOut,
+    ContentStatsOut,
     SaveContentBody,
 )
 from db.crud import content as content_crud
+from services.content_artifacts import (
+    collect_content_artifacts,
+    merge_execution_artifacts,
+    read_artifact_bytes,
+)
 
 log = logging.getLogger(__name__)
 
@@ -98,7 +111,10 @@ async def _xlsx_bytes(db, filters: dict) -> bytes:
 # ── Streaming Export ──────────────────────────────────────────────────────────
 
 
-@router.get("/export/stream")
+@router.get(
+    "/export/stream",
+    dependencies=[Depends(require_permission("content", "read"))],
+)
 async def stream_export(
     db: DB,
     user: CurrentUser,
@@ -122,9 +138,11 @@ async def stream_export(
             "content_type": content_type, "search": search,
             "device_serial": device_serial, "campaign_id": campaign_id,
             "execution_id": execution_id,
-            "user_id": user.id,
         }.items() if v is not None
     }
+    owner_id = data_owner_user_id(user)
+    if owner_id:
+        filters["user_id"] = owner_id
 
     if format == "csv":
         filename = "content-export.csv"
@@ -144,10 +162,39 @@ async def stream_export(
     )
 
 
+@router.post("/export", dependencies=[Depends(require_permission("content", "read"))])
+async def legacy_export_removed():
+    raise HTTPException(404, "Content export endpoint removed")
+
+
+@router.get(
+    "/exports/list",
+    dependencies=[Depends(require_permission("content", "read"))],
+)
+async def legacy_export_list_removed():
+    raise HTTPException(404, "Content export endpoint removed")
+
+
+@router.get(
+    "/exports/{export_id}",
+    dependencies=[Depends(require_permission("content", "read"))],
+)
+async def legacy_export_detail_removed(export_id: str):
+    raise HTTPException(404, "Content export endpoint removed")
+
+
+@router.get(
+    "/exports/{export_id}/download",
+    dependencies=[Depends(require_permission("content", "read"))],
+)
+async def legacy_export_download_removed(export_id: str):
+    raise HTTPException(404, "Content export endpoint removed")
+
+
 # ── Content Items ─────────────────────────────────────────────────────────────
 
 
-@router.get("")
+@router.get("", dependencies=[Depends(require_permission("content", "read"))])
 async def list_content(
     db: DB,
     user: CurrentUser,
@@ -163,6 +210,7 @@ async def list_content(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ):
+    owner_id = data_owner_user_id(user)
     items, total = await content_crud.query_content(
         db,
         collection=collection,
@@ -174,7 +222,7 @@ async def list_content(
         execution_id=execution_id,
         content_hash=content_hash,
         parent_id=parent_id,
-        user_id=user.id,
+        user_id=owner_id,
         limit=limit,
         offset=offset,
     )
@@ -186,12 +234,17 @@ async def list_content(
     }
 
 
-@router.get("/stats", response_model=ContentStatsOut)
+@router.get(
+    "/stats",
+    response_model=ContentStatsOut,
+    dependencies=[Depends(require_permission("content", "read"))],
+)
 async def get_stats(db: DB, user: CurrentUser):
-    return await content_crud.content_stats(db, user_id=user.id)
+    owner_id = data_owner_user_id(user)
+    return await content_crud.content_stats(db, user_id=owner_id)
 
 
-@router.post("/save")
+@router.post("/save", dependencies=[Depends(require_permission("content", "create"))])
 async def save_content(body: SaveContentBody, db: DB, user: CurrentUser):
     """Save extracted content with deduplication (used by scenarios and MCP)."""
     from services.content_store import save_content_item
@@ -209,17 +262,122 @@ async def save_content(body: SaveContentBody, db: DB, user: CurrentUser):
     return result
 
 
-@router.get("/{item_id}")
-async def get_content_item(item_id: str, db: DB, user: CurrentUser):
-    item = await content_crud.get_content_item(db, item_id, user_id=user.id)
+async def _load_content_item(
+    db: DB,
+    item_id: str,
+    user: CurrentUser,
+    share: str | None,
+):
+    if share:
+        verify_content_share_token(share, content_id=item_id)
+        item = await content_crud.get_content_item(db, item_id, user_id=None)
+    else:
+        owner_id = data_owner_user_id(user)
+        item = await content_crud.get_content_item(db, item_id, user_id=owner_id)
+    if not item:
+        status = 403 if share else 404
+        raise HTTPException(status, "Content item not found")
+    return item
+
+
+async def _execution_step_artifact_pairs(
+    db: DB,
+    item,
+    user: CurrentUser,
+) -> list[tuple[str, str | None]]:
+    if not item.execution_id:
+        return []
+    from api.routes.executions import _extract_step_artifacts, _get_or_404
+    from db.crud.device import get_device
+    from db.crud.execution import list_execution_results
+
+    try:
+        await _get_or_404(db, item.execution_id, user.id)
+    except HTTPException:
+        return []
+
+    pairs: list[tuple[str, str | None]] = []
+    results = await list_execution_results(db, item.execution_id)
+    for er in results:
+        device = await get_device(db, er.device_id)
+        serial = device.serial if device else None
+        for step_art in _extract_step_artifacts(
+            item.execution_id,
+            serial or "unknown",
+            (er.passed_steps or []) + (er.failed_steps or []),
+            er.created_at,
+        ):
+            pairs.append((step_art.artifact_type, step_art.url))
+    return pairs
+
+
+@router.get(
+    "/{item_id}",
+    response_model=ContentDetailOut,
+    dependencies=[Depends(require_permission("content", "read"))],
+)
+async def get_content_item(
+    item_id: str,
+    db: DB,
+    user: CurrentUser,
+    share: str | None = Query(None, description="Content share JWT from permalink"),
+):
+    item = await _load_content_item(db, item_id, user, share)
+    return await _item_detail_out(db, item, user)
+
+
+@router.get(
+    "/{item_id}/artifacts/{artifact_id}/download",
+    dependencies=[Depends(require_permission("content", "read"))],
+)
+async def download_content_artifact(
+    item_id: str,
+    artifact_id: str,
+    db: DB,
+    user: CurrentUser,
+    share: str | None = Query(None),
+):
+    item = await _load_content_item(db, item_id, user, share)
+    artifacts = await _collect_all_artifacts(db, item, user)
+    try:
+        payload, filename, mime_type = await read_artifact_bytes(
+            item, artifact_id, artifacts
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(410, "Artifact expired or unavailable") from exc
+    log.info(
+        "content artifact_download item_id=%s artifact_id=%s user_id=%s bytes=%s",
+        item_id,
+        artifact_id,
+        user.id,
+        len(payload),
+    )
+    return Response(
+        content=payload,
+        media_type=mime_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post(
+    "/{item_id}/permalink",
+    response_model=ContentPermalinkOut,
+    dependencies=[Depends(require_permission("content", "create"))],
+)
+async def create_content_permalink(item_id: str, db: DB, user: CurrentUser):
+    owner_id = data_owner_user_id(user)
+    item = await content_crud.get_content_item(db, item_id, user_id=owner_id)
     if not item:
         raise HTTPException(404, "Content item not found")
-    return _item_to_out(item)
+    token = create_content_share_token(user_id=user.id, content_id=item_id)
+    path = f"/dashboard/content/{item_id}?share={token}"
+    return ContentPermalinkOut(token=token, path=path)
 
 
-@router.delete("/{item_id}")
+@router.delete("/{item_id}", dependencies=[Depends(require_permission("content", "delete"))])
 async def delete_content_item(item_id: str, db: DB, user: CurrentUser):
-    ok = await content_crud.delete_content_item(db, item_id, user_id=user.id)
+    owner_id = data_owner_user_id(user)
+    ok = await content_crud.delete_content_item(db, item_id, user_id=owner_id)
     if not ok:
         raise HTTPException(404, "Content item not found")
     await db.commit()
@@ -229,9 +387,14 @@ async def delete_content_item(item_id: str, db: DB, user: CurrentUser):
 # ── Collections ───────────────────────────────────────────────────────────────
 
 
-@router.get("/collections/list", response_model=list[CollectionOut])
+@router.get(
+    "/collections/list",
+    response_model=list[CollectionOut],
+    dependencies=[Depends(require_permission("content", "read"))],
+)
 async def list_collections(db: DB, user: CurrentUser):
-    colls = await content_crud.list_collections(db, user_id=user.id)
+    owner_id = data_owner_user_id(user)
+    colls = await content_crud.list_collections(db, user_id=owner_id)
     return [
         CollectionOut(
             id=c.id, name=c.name, description=c.description,
@@ -241,7 +404,10 @@ async def list_collections(db: DB, user: CurrentUser):
     ]
 
 
-@router.post("/collections")
+@router.post(
+    "/collections",
+    dependencies=[Depends(require_permission("content", "create"))],
+)
 async def create_collection(body: CollectionCreate, db: DB, user: CurrentUser):
     coll = await content_crud.get_or_create_collection(
         db,
@@ -254,9 +420,13 @@ async def create_collection(body: CollectionCreate, db: DB, user: CurrentUser):
     return {"id": coll.id, "name": coll.name}
 
 
-@router.delete("/collections/{name}")
+@router.delete(
+    "/collections/{name}",
+    dependencies=[Depends(require_permission("content", "delete"))],
+)
 async def delete_collection(name: str, db: DB, user: CurrentUser):
-    count = await content_crud.delete_collection(db, name, user_id=user.id)
+    owner_id = data_owner_user_id(user)
+    count = await content_crud.delete_collection(db, name, user_id=owner_id)
     await db.commit()
     return {"ok": True, "items_deleted": count}
 
@@ -264,8 +434,42 @@ async def delete_collection(name: str, db: DB, user: CurrentUser):
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-def _item_to_out(item) -> dict:
-    return {
+def _item_to_out(item, *, include_raw: bool = False) -> dict:
+    raw = item.raw_data if isinstance(item.raw_data, dict) else {}
+    return ContentItemOut(
+        id=item.id,
+        collection=item.collection,
+        platform=item.platform,
+        content_type=item.content_type,
+        title=item.title,
+        body=item.body,
+        author=item.author,
+        author_id=item.author_id,
+        url=item.url,
+        likes_count=item.likes_count,
+        comments_count=item.comments_count,
+        shares_count=item.shares_count,
+        views_count=item.views_count,
+        media_urls=item.media_urls or [],
+        screenshot_path=item.screenshot_path,
+        tags=item.tags or "",
+        raw_data=raw if include_raw else None,
+        device_serial=item.device_serial,
+        campaign_id=item.campaign_id,
+        execution_id=item.execution_id,
+        scenario_name=item.scenario_name,
+        extracted_at=item.extracted_at,
+        content_date=item.content_date,
+        created_at=item.created_at,
+        content_hash=item.content_hash,
+        parent_id=item.parent_id,
+        item_level=int(item.item_level or 0),
+    ).model_dump(mode="json", exclude_none=include_raw is False)
+
+
+def _build_payload(item) -> dict:
+    raw = item.raw_data if isinstance(item.raw_data, dict) else {}
+    payload = {
         "id": item.id,
         "collection": item.collection,
         "platform": item.platform,
@@ -273,17 +477,41 @@ def _item_to_out(item) -> dict:
         "title": item.title,
         "body": item.body,
         "author": item.author,
+        "author_id": item.author_id,
         "url": item.url,
         "likes_count": item.likes_count,
         "comments_count": item.comments_count,
         "shares_count": item.shares_count,
         "views_count": item.views_count,
+        "media_urls": item.media_urls or [],
         "tags": item.tags,
         "device_serial": item.device_serial,
         "campaign_id": item.campaign_id,
         "execution_id": item.execution_id,
+        "scenario_name": item.scenario_name,
         "extracted_at": item.extracted_at.isoformat() if item.extracted_at else None,
+        "content_date": item.content_date.isoformat() if item.content_date else None,
         "content_hash": item.content_hash,
         "parent_id": item.parent_id,
         "item_level": item.item_level,
+        "raw_data": raw,
+    }
+    return payload
+
+
+async def _collect_all_artifacts(db, item, user: CurrentUser) -> list[dict]:
+    artifacts = collect_content_artifacts(item)
+    steps = await _execution_step_artifact_pairs(db, item, user)
+    return merge_execution_artifacts(item, artifacts, steps)
+
+
+async def _item_detail_out(db, item, user: CurrentUser) -> dict:
+    base = _item_to_out(item, include_raw=True)
+    artifacts = [
+        ContentArtifactOut(**a) for a in await _collect_all_artifacts(db, item, user)
+    ]
+    return {
+        **base,
+        "artifacts": [a.model_dump(mode="json") for a in artifacts],
+        "payload": _build_payload(item),
     }

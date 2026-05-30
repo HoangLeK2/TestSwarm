@@ -19,6 +19,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Link } from '@/i18n/navigation';
 import { ROUTES } from '@/config/routes';
+import { AuthInviteEmailBanner } from '@/features/auth/components/auth-invite-email-banner';
+import { useAuthEmailFromQuery } from '@/features/auth/lib/auth-query-defaults';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import { cn } from '@/lib/utils';
 
@@ -32,6 +34,7 @@ export default function SignInPage() {
   const tPage = useTranslations('auth.signInPage');
   const tCommon = useTranslations('common');
   const [showPassword, setShowPassword] = useState(false);
+  const emailFromQuery = useAuthEmailFromQuery();
 
   const schema = z.object({
     email: z.string().email(tAuth('errors.invalidEmail')),
@@ -44,7 +47,8 @@ export default function SignInPage() {
     handleSubmit,
     formState: { errors }
   } = useForm<FormData>({
-    resolver: zodResolver(schema)
+    resolver: zodResolver(schema),
+    defaultValues: { email: emailFromQuery, password: '' }
   });
 
   return (
@@ -68,6 +72,8 @@ export default function SignInPage() {
             </p>
           </div>
         </div>
+
+        <AuthInviteEmailBanner />
 
         <form
           onSubmit={handleSubmit((d) => mutate(d))}

@@ -17,7 +17,20 @@ class Organization(Base):
     business_name: Mapped[str] = mapped_column(String(255), nullable=False)
     business_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     business_logo: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    slug: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, unique=True)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="active", server_default="active"
+    )
+    plan: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="standard", server_default="standard"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_now,
+        onupdate=_now,
+        server_default="CURRENT_TIMESTAMP",
+    )
 
     # Webhook config: POST to webhook_url on task complete/failed events.
     # webhook_events: comma-separated list e.g. "task.complete,task.failed"
@@ -44,7 +57,7 @@ class OrganizationMember(Base):
     user_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    role: Mapped[str] = mapped_column(String(20), default="member")  # owner | member
+    role: Mapped[str] = mapped_column(String(20), default="member")  # owner | member | supervisor
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     organization: Mapped["Organization"] = relationship("Organization", back_populates="members")

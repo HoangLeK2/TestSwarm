@@ -375,6 +375,48 @@ export function useWorkflowProgress(workflowId: string, enabled: boolean) {
   });
 }
 
+function useInvalidateCampaignControl(qc: ReturnType<typeof useQueryClient>) {
+  return (campaignId: string) => {
+    qc.invalidateQueries({ queryKey: KEYS.list });
+    qc.invalidateQueries({ queryKey: KEYS.detail(campaignId) });
+    qc.invalidateQueries({ queryKey: ['campaign-workflows', campaignId] });
+    qc.invalidateQueries({ queryKey: ['campaign-workflows'] });
+  };
+}
+
+export function useCampaignPause() {
+  const qc = useQueryClient();
+  const invalidate = useInvalidateCampaignControl(qc);
+  return useMutation({
+    mutationFn: (campaignId: string) => campaignsApi.pause(campaignId),
+    onSuccess: (_data, campaignId) => invalidate(campaignId)
+  });
+}
+
+export function useCampaignResume() {
+  const qc = useQueryClient();
+  const invalidate = useInvalidateCampaignControl(qc);
+  return useMutation({
+    mutationFn: (campaignId: string) => campaignsApi.resume(campaignId),
+    onSuccess: (_data, campaignId) => invalidate(campaignId)
+  });
+}
+
+export function useCampaignCancel() {
+  const qc = useQueryClient();
+  const invalidate = useInvalidateCampaignControl(qc);
+  return useMutation({
+    mutationFn: ({
+      campaignId,
+      reason
+    }: {
+      campaignId: string;
+      reason?: string;
+    }) => campaignsApi.cancel(campaignId, reason),
+    onSuccess: (_data, { campaignId }) => invalidate(campaignId)
+  });
+}
+
 export function useWorkflowPause() {
   const qc = useQueryClient();
   return useMutation({

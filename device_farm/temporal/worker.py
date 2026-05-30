@@ -17,6 +17,8 @@ from temporal.relay_onboarding_workflows import RelayOnboardingWorkflow
 from temporal.schedule_activities import ScheduleActivities, set_scheduler_deps
 from temporal.schedule_workflow import ScheduleRunWorkflow
 from temporal.shared import TASK_QUEUE_NAME
+from temporal.account_state_activities import AccountStateActivities
+from temporal.account_state_workflows import AccountCooldownTickWorkflow
 from temporal.workflows import ScenarioWorkflow, ScenarioStepsWorkflow
 
 log = logging.getLogger(__name__)
@@ -54,6 +56,7 @@ async def create_temporal_worker(
         # Primary worker: full activity set including schedule dispatch.
         set_scheduler_deps(queue=queue, manager=manager, temporal_client=client, temporal_config=cfg)
         _schedule_activities = ScheduleActivities()
+        _account_state_activities = AccountStateActivities()
         activity_list = [
             _activities.execute_device_action,
             _activities.execute_device_action_batch,
@@ -67,6 +70,7 @@ async def create_temporal_worker(
             _schedule_activities.create_run_record,
             _schedule_activities.dispatch_schedule,
             _schedule_activities.finalize_schedule_run,
+            _account_state_activities.process_expired_account_cooldowns,
             _relay_onboarding_activities.prepare_relay_onboarding_job,
             _relay_onboarding_activities.run_relay_onboarding_item,
             _relay_onboarding_activities.finish_relay_onboarding_job,
@@ -90,7 +94,13 @@ async def create_temporal_worker(
     return Worker(
         client,
         task_queue=task_queue,
-        workflows=[ScenarioWorkflow, ScenarioStepsWorkflow, ScheduleRunWorkflow, RelayOnboardingWorkflow],
+        workflows=[
+            ScenarioWorkflow,
+            ScenarioStepsWorkflow,
+            ScheduleRunWorkflow,
+            RelayOnboardingWorkflow,
+            AccountCooldownTickWorkflow,
+        ],
         activities=activity_list,
         max_concurrent_activities=cfg.worker_max_concurrent_activities,
         max_concurrent_workflow_tasks=cfg.worker_max_concurrent_workflows,

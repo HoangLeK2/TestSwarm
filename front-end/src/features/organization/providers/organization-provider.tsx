@@ -2,12 +2,35 @@
 
 import React from 'react';
 import type { ProtoOrganization } from '@/features/device-farm';
-import { listOrganizations } from '../services/farm-org-api';
+import { useOrganizationsQuery } from '../hooks/use-organizations';
+
+const CURRENT_ORG_STORAGE_KEY = 'device-farm:current-organization-id';
+
+function isPersonalWorkspaceName(name: string | undefined | null): boolean {
+  return Boolean(name?.trim().endsWith("'s Workspace"));
+}
+
+function pickDefaultOrganization(
+  organizations: ProtoOrganization[],
+  storedId: string | null
+): ProtoOrganization {
+  if (storedId) {
+    const fromStorage = organizations.find((o) => o.id === storedId);
+    if (fromStorage) return fromStorage;
+  }
+  const shared = organizations.filter(
+    (o) => !isPersonalWorkspaceName(o.businessName)
+  );
+  return shared[0] ?? organizations[0];
+}
 
 type OrganizationContextValue = {
   organizations: ProtoOrganization[];
   currentOrg: ProtoOrganization | null;
   setCurrentOrg: (org: ProtoOrganization | null) => void;
+  isLoading: boolean;
+  isError: boolean;
+  refetch: () => void;
 };
 
 const OrganizationContext =
@@ -18,40 +41,57 @@ export function OrganizationProvider({
 }: {
   children: React.ReactNode;
 }) {
-  const [organizations, setOrganizations] = React.useState<ProtoOrganization[]>(
-    []
-  );
-  const [currentOrg, setCurrentOrg] = React.useState<ProtoOrganization | null>(
-    null
-  );
+  const {
+    data: organizations = [],
+    isLoading,
+    isError,
+    refetch
+  } = useOrganizationsQuery();
+  const [currentOrg, setCurrentOrgState] =
+    React.useState<ProtoOrganization | null>(null);
 
   React.useEffect(() => {
-    let cancelled = false;
-    listOrganizations()
-      .then((orgs) => {
-        if (cancelled) return;
-        setOrganizations(orgs);
-        if (!currentOrg && orgs.length > 0) {
-          setCurrentOrg(orgs[0]);
-        }
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setOrganizations([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (!organizations.length) {
+      setCurrentOrgState(null);
+      return;
+    }
+
+    setCurrentOrgState((prev) => {
+      if (prev && organizations.some((o) => o.id === prev.id)) {
+        return organizations.find((o) => o.id === prev.id) ?? prev;
+      }
+
+      const storedId =
+        typeof window !== 'undefined'
+          ? localStorage.getItem(CURRENT_ORG_STORAGE_KEY)?.trim() || null
+          : null;
+
+      return pickDefaultOrganization(organizations, storedId);
+    });
+  }, [organizations]);
+
+  const setCurrentOrg = React.useCallback((org: ProtoOrganization | null) => {
+    setCurrentOrgState(org);
+    if (typeof window === 'undefined') return;
+    if (org) {
+      localStorage.setItem(CURRENT_ORG_STORAGE_KEY, org.id);
+    } else {
+      localStorage.removeItem(CURRENT_ORG_STORAGE_KEY);
+    }
   }, []);
 
   const value = React.useMemo<OrganizationContextValue>(
     () => ({
       organizations,
       currentOrg,
-      setCurrentOrg
+      setCurrentOrg,
+      isLoading,
+      isError,
+      refetch: () => {
+        void refetch();
+      }
     }),
-    [organizations, currentOrg]
+    [organizations, currentOrg, setCurrentOrg, isLoading, isError, refetch]
   );
 
   return (
@@ -67,7 +107,10 @@ export function useOrganizationContext() {
     return {
       organizations: [],
       currentOrg: null,
-      setCurrentOrg: () => {}
+      setCurrentOrg: () => {},
+      isLoading: false,
+      isError: false,
+      refetch: () => {}
     } satisfies OrganizationContextValue;
   }
   return ctx;

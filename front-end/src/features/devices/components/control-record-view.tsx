@@ -138,6 +138,7 @@ import {
 import { isSelectorPickableStep } from '@/features/campaigns/components/flow-editor/selector-pick';
 import { applyStepsToFlowgramDocument } from '@/features/scenario-templates/components/scenario-flow-editor/flow-doc-sync';
 import type { FlowgramRunState } from '@/features/scenario-templates/components/scenario-flow-editor/flowgram-scenario-context';
+import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
 
 /**
  * Template variables are stored as metadata dicts:
@@ -215,9 +216,16 @@ export function ControlRecordView({
       initialScenarioId,
       initialTemplateId
     );
-  const { setSkipTapRecordingWhilePick } = record;
   const { read_only: safeReadOnly, stream_hierarchy: safeHierarchy } =
     useSafeMode();
+  const devicePerms = useResourcePermissions('devices');
+  const campaignPerms = useResourcePermissions('campaigns');
+  const templatePerms = useResourcePermissions('scenario-templates');
+  const canExecuteDevice = devicePerms.canExecute && !safeReadOnly;
+  const canSaveWork =
+    !safeReadOnly &&
+    (save.templateContext ? templatePerms.canUpdate : campaignPerms.canUpdate);
+  const { setSkipTapRecordingWhilePick } = record;
 
   const [highlightBounds, setHighlightBounds] = useState<
     [number, number, number, number] | null
@@ -1613,15 +1621,23 @@ export function ControlRecordView({
                     variant='secondary'
                     className='h-5 shrink-0 px-1.5 text-[9px]'
                     onClick={selector.tap}
-                    disabled={!selectedDevice || safeReadOnly}
-                    title={safeReadOnly ? 'Safe mode: read-only' : undefined}
+                    disabled={!selectedDevice || !canExecuteDevice}
+                    title={
+                      !canExecuteDevice
+                        ? safeReadOnly
+                          ? 'Safe mode: read-only'
+                          : undefined
+                        : undefined
+                    }
                   >
                     Tap
                   </Button>
                 </div>
-                {safeReadOnly ? (
+                {!canExecuteDevice ? (
                   <p className='text-[10px] italic text-muted-foreground'>
-                    Safe mode: không cho điều khiển / thêm bước.
+                    {safeReadOnly
+                      ? 'Safe mode: không cho điều khiển / thêm bước.'
+                      : 'Bạn không có quyền điều khiển thiết bị.'}
                   </p>
                 ) : (
                   <div className='flex flex-wrap gap-1'>
@@ -1985,11 +2001,15 @@ export function ControlRecordView({
                     }}
                     disabled={
                       steps.items.length === 0 ||
-                      safeReadOnly ||
+                      !canSaveWork ||
                       save.savingTemplate
                     }
                     title={
-                      safeReadOnly ? 'Safe mode: không cho lưu' : undefined
+                      !canSaveWork
+                        ? safeReadOnly
+                          ? 'Safe mode: không cho lưu'
+                          : undefined
+                        : undefined
                     }
                   >
                     <Save className='size-3.5' />

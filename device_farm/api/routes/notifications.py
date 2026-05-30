@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import func, select
 
-from api.deps import CurrentUser, DB
+from api.deps import CurrentUser, DB, require_permission
+from api.org_scope import data_owner_user_id
+from db import crud as repo
+from tenancy.context import get_current_org_id
 from api.schemas.notification import (
     NotificationChannelCreate,
     NotificationChannelOut,
@@ -26,6 +29,18 @@ def _notification_service(request: Request) -> NotificationService:
     return NotificationService(getattr(request.app.state, "ws_manager", None))
 
 
+async def _resolve_org_id(db: DB, user: CurrentUser) -> str:
+    org_id = getattr(user, "org_id", None) or get_current_org_id()
+    if not org_id:
+        org_id = await repo.get_user_org_id(db, user.id)
+    if not org_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Organization context required",
+        )
+    return org_id
+
+
 async def _get_channel_or_404(db: DB, channel_id: str, user_id: str) -> NotificationChannel:
     result = await db.execute(
         select(NotificationChannel).where(
@@ -39,25 +54,36 @@ async def _get_channel_or_404(db: DB, channel_id: str, user_id: str) -> Notifica
     return channel
 
 
-async def _get_notification_or_404(db: DB, notification_id: str, user_id: str) -> Notification:
-    result = await db.execute(
-        select(Notification).where(
-            Notification.id == notification_id,
-            Notification.user_id == user_id,
-        )
-    )
+async def _get_notification_or_404(
+    db: DB, notification_id: str, user: CurrentUser
+) -> Notification:
+    stmt = select(Notification).where(Notification.id == notification_id)
+    owner_id = data_owner_user_id(user)
+    if owner_id:
+        stmt = stmt.where(Notification.user_id == owner_id)
+    result = await db.execute(stmt)
     notification = result.scalar_one_or_none()
     if notification is None:
         raise HTTPException(status_code=404, detail="Notification not found")
     return notification
 
 
-async def _ensure_default_channel(db: DB, user_id: str) -> None:
+def _apply_notification_user_filter(stmt, user: CurrentUser):
+    owner_id = data_owner_user_id(user)
+    if owner_id:
+        return stmt.where(Notification.user_id == owner_id)
+    return stmt
+
+
+async def _ensure_default_channel(db: DB, user: CurrentUser) -> None:
+    org_id = await _resolve_org_id(db, user)
     result = await db.execute(
-        select(NotificationChannel.id).where(
-            NotificationChannel.user_id == user_id,
+        select(NotificationChannel.id)
+        .where(
+            NotificationChannel.user_id == user.id,
             NotificationChannel.type == "in_app",
         )
+        .limit(1)
     )
     if result.scalar_one_or_none():
         return
@@ -68,15 +94,20 @@ async def _ensure_default_channel(db: DB, user_id: str) -> None:
             config={},
             events=DEFAULT_EVENTS,
             is_enabled=True,
-            user_id=user_id,
+            user_id=user.id,
+            org_id=org_id,
         )
     )
     await db.flush()
 
 
-@router.get("/notification-channels", response_model=list[NotificationChannelOut])
+@router.get(
+    "/notification-channels",
+    response_model=list[NotificationChannelOut],
+    dependencies=[Depends(require_permission("notifications", "read"))],
+)
 async def list_channels(db: DB, user: CurrentUser):
-    await _ensure_default_channel(db, user.id)
+    await _ensure_default_channel(db, user)
     result = await db.execute(
         select(NotificationChannel)
         .where(NotificationChannel.user_id == user.id)
@@ -89,8 +120,10 @@ async def list_channels(db: DB, user: CurrentUser):
     "/notification-channels",
     response_model=NotificationChannelOut,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission("notifications", "create"))],
 )
 async def create_channel(body: NotificationChannelCreate, db: DB, user: CurrentUser):
+    org_id = await _resolve_org_id(db, user)
     channel = NotificationChannel(
         name=body.name,
         type=body.type,
@@ -98,13 +131,18 @@ async def create_channel(body: NotificationChannelCreate, db: DB, user: CurrentU
         events=body.events,
         is_enabled=body.is_enabled,
         user_id=user.id,
+        org_id=org_id,
     )
     db.add(channel)
     await db.flush()
     return channel
 
 
-@router.patch("/notification-channels/{channel_id}", response_model=NotificationChannelOut)
+@router.patch(
+    "/notification-channels/{channel_id}",
+    response_model=NotificationChannelOut,
+    dependencies=[Depends(require_permission("notifications", "update"))],
+)
 async def update_channel(
     channel_id: str,
     body: NotificationChannelPatch,
@@ -120,7 +158,11 @@ async def update_channel(
     return channel
 
 
-@router.delete("/notification-channels/{channel_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/notification-channels/{channel_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission("notifications", "delete"))],
+)
 async def delete_channel(channel_id: str, db: DB, user: CurrentUser):
     channel = await _get_channel_or_404(db, channel_id, user.id)
     await db.delete(channel)
@@ -130,6 +172,7 @@ async def delete_channel(channel_id: str, db: DB, user: CurrentUser):
 @router.post(
     "/notification-channels/{channel_id}/test",
     response_model=TestNotificationOut,
+    dependencies=[Depends(require_permission("notifications", "execute"))],
 )
 async def test_channel(
     channel_id: str,
@@ -145,7 +188,11 @@ async def test_channel(
     return TestNotificationOut(ok=True, message="Test notification sent")
 
 
-@router.get("/notifications", response_model=NotificationListOut)
+@router.get(
+    "/notifications",
+    response_model=NotificationListOut,
+    dependencies=[Depends(require_permission("notifications", "read"))],
+)
 async def list_notifications(
     db: DB,
     user: CurrentUser,
@@ -153,8 +200,10 @@ async def list_notifications(
     offset: int = 0,
     limit: int = 50,
 ):
-    q = select(Notification).where(Notification.user_id == user.id)
-    count_q = select(func.count(Notification.id)).where(Notification.user_id == user.id)
+    q = _apply_notification_user_filter(select(Notification), user)
+    count_q = _apply_notification_user_filter(
+        select(func.count(Notification.id)), user
+    )
     if unread is not None:
         q = q.where(Notification.is_read.is_(not unread))
         count_q = count_q.where(Notification.is_read.is_(not unread))
@@ -174,35 +223,39 @@ async def list_notifications(
     )
 
 
-@router.get("/notifications/unread-count", response_model=UnreadCountOut)
+@router.get(
+    "/notifications/unread-count",
+    response_model=UnreadCountOut,
+    dependencies=[Depends(require_permission("notifications", "read"))],
+)
 async def unread_count(db: DB, user: CurrentUser):
-    count = (
-        await db.execute(
-            select(func.count(Notification.id)).where(
-                Notification.user_id == user.id,
-                Notification.is_read.is_(False),
-            )
-        )
-    ).scalar() or 0
+    stmt = _apply_notification_user_filter(select(func.count(Notification.id)), user)
+    stmt = stmt.where(Notification.is_read.is_(False))
+    count = (await db.execute(stmt)).scalar() or 0
     return UnreadCountOut(count=count)
 
 
-@router.patch("/notifications/{notification_id}/read", response_model=NotificationOut)
+@router.patch(
+    "/notifications/{notification_id}/read",
+    response_model=NotificationOut,
+    dependencies=[Depends(require_permission("notifications", "update"))],
+)
 async def mark_read(notification_id: str, db: DB, user: CurrentUser):
-    notification = await _get_notification_or_404(db, notification_id, user.id)
+    notification = await _get_notification_or_404(db, notification_id, user)
     notification.is_read = True
     await db.flush()
     return notification
 
 
-@router.post("/notifications/read-all", response_model=UnreadCountOut)
+@router.post(
+    "/notifications/read-all",
+    response_model=UnreadCountOut,
+    dependencies=[Depends(require_permission("notifications", "update"))],
+)
 async def mark_all_read(db: DB, user: CurrentUser):
-    result = await db.execute(
-        select(Notification).where(
-            Notification.user_id == user.id,
-            Notification.is_read.is_(False),
-        )
-    )
+    stmt = _apply_notification_user_filter(select(Notification), user)
+    stmt = stmt.where(Notification.is_read.is_(False))
+    result = await db.execute(stmt)
     rows = list(result.scalars().all())
     for notification in rows:
         notification.is_read = True

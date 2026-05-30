@@ -42,6 +42,20 @@ export type StepActionResponse = {
   total: number;
 };
 
+export type CampaignControlResponse = {
+  campaign_id: string;
+  status: string;
+  executions_affected: number;
+  executions: Array<{
+    execution_id: string;
+    status: string;
+    effective_transition: boolean;
+    error?: string;
+  }>;
+  workflows_signalled?: number;
+  warning?: string;
+};
+
 export type ScenarioDeviceVariablesOut = {
   scenario_id: string;
   device_id: string;
@@ -63,6 +77,20 @@ export const campaignsApi = {
   updateStatus: (id: string, status: CampaignStatus) =>
     farmApi
       .patch<CampaignOut>(`/campaigns/${id}/status`, { status })
+      .then((r) => r.data),
+  pause: (id: string) =>
+    farmApi
+      .post<CampaignControlResponse>(`/campaigns/${id}/pause`)
+      .then((r) => r.data),
+  resume: (id: string) =>
+    farmApi
+      .post<CampaignControlResponse>(`/campaigns/${id}/resume`)
+      .then((r) => r.data),
+  cancel: (id: string, reason?: string) =>
+    farmApi
+      .post<CampaignControlResponse>(`/campaigns/${id}/cancel`, {
+        reason: reason ?? ''
+      })
       .then((r) => r.data),
   run: (id: string, deviceSerials?: string[]) =>
     farmApi

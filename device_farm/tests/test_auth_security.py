@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -66,6 +67,13 @@ class _FakeDevice:
         self.user_id = user_id
 
 
+class _FakeUser(SimpleNamespace):
+    id: str
+    role: str
+    org_id: str
+    is_active: bool
+
+
 class _FakeTask:
     def __init__(self, task_id: str, target: str | None, name: str = "") -> None:
         self.id = task_id
@@ -104,13 +112,24 @@ def _mock_manager():
 # ---------------------------------------------------------------------------
 
 @contextmanager
-def _db_patch(db_devices: list[_FakeDevice]):
+def _db_patch(
+    db_devices: list[_FakeDevice],
+    *,
+    user_roles: dict[str, str] | None = None,
+    session_execute_side_effect=None,
+):
     mock_session = AsyncMock()
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=False)
+    if session_execute_side_effect is not None:
+        mock_session.execute.side_effect = session_execute_side_effect
     mock_session_cls = MagicMock(return_value=mock_session)
+    user_roles = user_roles or {}
 
-    async def fake_list_devices(db, user_id=None):
+    async def fake_get_user_org_id(db, user_id: str):
+        return "org-test"
+
+    async def fake_list_devices(db, org_id=None, user_id=None):
         if user_id is None:
             return list(db_devices)
         return [d for d in db_devices if d.user_id == user_id]
@@ -121,10 +140,28 @@ def _db_patch(db_devices: list[_FakeDevice]):
             from fastapi import HTTPException
             raise HTTPException(status_code=403, detail="Not authorized for this device")
 
+    async def fake_get_user(db, user_id: str):
+        return _FakeUser(
+            id=user_id,
+            role="operator",
+            org_id="org-test",
+            is_active=True,
+        )
+
+    async def fake_get_organization_role_for_user(db, user_id: str, org_id: str | None):
+        return user_roles.get(user_id, "owner")
+
     with (
         patch("api.routes.public.AsyncSessionLocal", mock_session_cls),
+        patch("api.deps.AsyncSessionLocal", mock_session_cls),
+        patch("api.routes.public.repo.get_user_org_id", side_effect=fake_get_user_org_id),
         patch("api.routes.public.repo.list_devices", side_effect=fake_list_devices),
         patch("api.deps.policy.assert_owns_device", side_effect=fake_assert_owns_device),
+        patch("api.deps.repo.get_user", side_effect=fake_get_user),
+        patch(
+            "api.deps.repo.get_organization_role_for_user",
+            side_effect=fake_get_organization_role_for_user,
+        ),
     ):
         yield
 
@@ -143,7 +180,7 @@ def _make_public_app(db_enabled: bool, queue=None):
     return app
 
 
-def _make_device_control_app(db_enabled: bool):
+def _make_device_control_app(db_enabled: bool, *, enforce_role: bool = False):
     """Minimal app with one /tap/{serial} route + device_auth dependency."""
     from fastapi import Depends
     from api.deps import make_device_auth_dependency
@@ -157,7 +194,38 @@ def _make_device_control_app(db_enabled: bool):
         return {"ok": True, "serial": serial}
 
     device_auth = make_device_auth_dependency(db_enabled)
-    app.include_router(router, dependencies=[Depends(device_auth)])
+    dependencies = [Depends(device_auth)]
+    if enforce_role:
+        from api.deps import require_request_permission
+
+        dependencies.append(
+            Depends(require_request_permission(db_enabled, "devices", "execute"))
+        )
+    app.include_router(router, dependencies=dependencies)
+    return app
+
+
+def _make_real_device_control_app(db_enabled: bool):
+    from fastapi import Depends
+
+    from api.deps import make_device_auth_dependency
+    from api.routes.device_control import build_device_control_router
+    from common.session_lock import SessionLockStore
+    from core.config import Config
+
+    app = FastAPI()
+    config = Config()
+    config.database.enabled = db_enabled
+    manager = MagicMock()
+    device = MagicMock()
+    manager.get_device.return_value = device
+    router = build_device_control_router(
+        manager,
+        _mock_queue(),
+        config,
+        SessionLockStore(),
+    )
+    app.include_router(router, dependencies=[Depends(make_device_auth_dependency(db_enabled))])
     return app
 
 
@@ -449,3 +517,66 @@ class TestDeviceSerialOwnership:
             async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
                 resp = await ac.post("/tap/not-mine", headers=_auth("user-1"))
         assert "authorized" in resp.json().get("detail", "").lower()
+
+
+class TestAppRoleAuthorization:
+
+    @pytest.mark.anyio
+    async def test_member_cannot_execute_device_control_even_when_owning_device(self):
+        """Ownership alone is not enough for control-plane actions."""
+        db_devices = [_FakeDevice("serial-mine", user_id="user-1")]
+        with _jwt_patch(), _db_patch(db_devices, user_roles={"user-1": "member"}):
+            app = _make_device_control_app(db_enabled=True, enforce_role=True)
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                resp = await ac.post("/tap/serial-mine", headers=_auth("user-1"))
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "Permission denied"
+
+    @pytest.mark.anyio
+    async def test_owner_can_execute_device_control_for_owned_device(self):
+        db_devices = [_FakeDevice("serial-mine", user_id="user-1")]
+        with _jwt_patch(), _db_patch(db_devices, user_roles={"user-1": "owner"}):
+            app = _make_device_control_app(db_enabled=True, enforce_role=True)
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                resp = await ac.post("/tap/serial-mine", headers=_auth("user-1"))
+
+        assert resp.status_code == 200
+
+    @pytest.mark.anyio
+    async def test_real_device_control_router_requires_execute_role(self):
+        db_devices = [_FakeDevice("serial-mine", user_id="user-1")]
+        with _jwt_patch(), _db_patch(db_devices, user_roles={"user-1": "member"}):
+            app = _make_real_device_control_app(db_enabled=True)
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                resp = await ac.post(
+                    "/api/tap/serial-mine",
+                    json={"x": 1, "y": 2},
+                    headers=_auth("user-1"),
+                )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "Permission denied"
+
+    @pytest.mark.anyio
+    async def test_public_events_are_filtered_to_owned_device_serials(self):
+        class Recorder:
+            def get_recent(self, limit, serial=None, event_type=None):
+                return [
+                    {"id": "mine", "serial": "serial-mine"},
+                    {"id": "other", "serial": "serial-other"},
+                ]
+
+        db_devices = [_FakeDevice("serial-mine", user_id="user-1")]
+        with _jwt_patch(), _db_patch(
+            db_devices,
+            user_roles={"user-1": "member"},
+            session_execute_side_effect=RuntimeError("force event-recorder fallback"),
+        ):
+            app = _make_public_app(db_enabled=True)
+            app.state.event_recorder = Recorder()
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+                resp = await ac.get("/api/events", headers=_auth("user-1"))
+
+        assert resp.status_code == 200
+        assert [event["serial"] for event in resp.json()["events"]] == ["serial-mine"]

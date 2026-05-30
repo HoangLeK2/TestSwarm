@@ -24,6 +24,7 @@ import { useWorkflowProgress, useStepAction } from '../../hooks/use-campaigns';
 import type { WorkflowInfo } from '../../types';
 import { useCampaignFlowI18n } from '../flow-editor/flow-i18n';
 import { WorkflowStepList } from '../workflow-step-list';
+import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -140,6 +141,7 @@ interface Props {
 
 export function WorkflowProgressCard({ wf, campaignId }: Props) {
   const t = useTranslations('campaignsFeature.list');
+  const { canExecute } = useResourcePermissions('campaigns');
   const { getStepTypeName } = useCampaignFlowI18n();
   const [expanded, setExpanded] = useState(false);
   const [dismissed, setDismissed] = useState(false);
@@ -284,7 +286,7 @@ export function WorkflowProgressCard({ wf, campaignId }: Props) {
       </button>
 
       {/* ── Retry / Skip bar (shown when paused on error) ── */}
-      {isPausedOnError && (
+      {isPausedOnError && canExecute && (
         <div className='flex items-center gap-2 border-t bg-orange-500/5 px-4 py-2'>
           <AlertTriangle size={11} className='shrink-0 text-orange-500' />
           <span className='flex-1 text-[10px] text-orange-600 dark:text-orange-400'>

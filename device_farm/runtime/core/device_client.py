@@ -737,8 +737,14 @@ class DeviceClient:
                 loop.call_soon_threadsafe(_sync_put, q, msg)
 
     def on_agent_status(self, payload: Dict[str, Any]) -> None:
-        self.brand           = payload.get("brand",         self.brand)
-        self.model           = payload.get("model",         self.model)
+        if "brand" in payload:
+            incoming = str(payload.get("brand") or "").strip()
+            if incoming:
+                self.brand = incoming
+        if "model" in payload:
+            incoming = str(payload.get("model") or "").strip()
+            if incoming:
+                self.model = incoming
         self.android_version = payload.get("android",       self.android_version)
         self.screen_width    = payload.get("screen_width",  self.screen_width)
         self.screen_height   = payload.get("screen_height", self.screen_height)

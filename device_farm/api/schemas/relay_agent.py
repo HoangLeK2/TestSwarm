@@ -18,6 +18,7 @@ class RelayAgentOut(BaseModel):
     serials: list[str]
     device_names: dict[str, str] = Field(default_factory=dict)
     status: str
+    live_connected: bool = False
     connected_at: datetime
     last_heartbeat_at: Optional[datetime] = None
     disconnected_at: Optional[datetime] = None

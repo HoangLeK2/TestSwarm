@@ -16,11 +16,14 @@ split into smaller modules for easier maintenance:
 from .enums import (  # noqa: F401 — re-export for convenient access
     UserRole, CampaignStatus, ExecutionStatus, ExecutionResultStatus,
     AccountStatus, AccountEventType, DLQStatus, RunStatus, ScheduleTargetType,
-    McpSessionStatus,
+    McpSessionStatus, DeviceFsmState, DeviceFsmEvent,
 )
 from .user import User
 from .organization import Organization, OrganizationMember
+from .organization_invitation import OrganizationInvitation
+from .tenant_settings import TenantSettings
 from .device import Device, DeviceSession
+from .device_fsm import DeviceFsmSnapshot, DeviceStateTransition
 from .device_group import DeviceGroup, DeviceGroupMember
 from .campaign import Campaign, CampaignDevice, Scenario
 from .mcp_session import McpSession
@@ -44,8 +47,12 @@ __all__ = [
     "User",
     "Organization",
     "OrganizationMember",
+    "OrganizationInvitation",
+    "TenantSettings",
     "Device",
     "DeviceSession",
+    "DeviceFsmSnapshot",
+    "DeviceStateTransition",
     "DeviceGroup",
     "DeviceGroupMember",
     "Campaign",

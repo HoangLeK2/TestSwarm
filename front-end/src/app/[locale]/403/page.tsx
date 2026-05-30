@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { AuthLogo } from '@/features/auth/components/auth-logo';
 import { Link } from '@/i18n/navigation';
+import { ROUTES } from '@/config/routes';
 import { Home } from 'lucide-react';
 import { getTranslations } from 'next-intl/server';
 
@@ -41,7 +42,7 @@ export default async function ForbiddenPage() {
           {/* Action Buttons */}
           <div className='space-y-3'>
             <Button asChild className='w-full' variant='outline'>
-              <Link href='/dashboard/product'>
+              <Link href={ROUTES.DASHBOARD.ROOT}>
                 <Home className='mr-2 h-4 w-4' />
                 {t('goHome')}
               </Link>

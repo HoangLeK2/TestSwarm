@@ -1,14 +1,19 @@
-# Pre-built image bundle (no build). Load image first: ./scripts/docker-load.sh
-# macOS: run ./scripts/docker-up.sh (starts host ADB + compose).
+# Offline bundle: load image first (./scripts/docker-load.sh), then compose up.
+#   ./scripts/docker-up.sh up -d
+
+name: agent-boot
+
 services:
   agent-boot:
     image: agent-boot:0.1.0
-    environment:
-      ADB_SERVER_SOCKET: tcp:host.docker.internal:5037
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    container_name: agent-boot
+    restart: unless-stopped
     env_file:
       - path: .env
         required: false
-    # Default: ADB connectivity check. Relay: see INSTALL.md
-    command: ["bash", "-lc", "adb -H host.docker.internal -P 5037 devices"]
+    environment:
+      ADB_HOST: host.docker.internal
+      ADB_PORT: "5037"
+      ADB_SERVER_SOCKET: tcp:host.docker.internal:5037
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

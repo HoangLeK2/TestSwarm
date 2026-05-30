@@ -1,10 +1,22 @@
+import type { DeviceOut, RelayAgentOut } from '../services/manage-api';
 import {
-  isPendingDevice,
-  type DeviceOut,
-  type RelayAgentOut
-} from '../services/manage-api';
+  getRelayConnectionState,
+  isRelayOperational
+} from './relay-agent-status';
 
 const LAST_SEEN_ONLINE_MS = 60_000;
+const PENDING_SERIAL_PREFIX = 'pending-';
+
+function isPendingDevice(device: { serial: string }): boolean {
+  return device.serial.startsWith(PENDING_SERIAL_PREFIX);
+}
+
+function isRelayManagedDevice(device: DeviceOut): boolean {
+  return Boolean(
+    (device.adb_serial && device.adb_serial.trim()) ||
+      (device.adb_ip && device.adb_ip.trim())
+  );
+}
 
 /** Resolve the relay agent currently associated with a registered device. */
 export function resolveDeviceRelay(
@@ -30,8 +42,30 @@ export function isDeviceOnlineForList(
   if (isPendingDevice(device)) return false;
 
   const relay = resolveDeviceRelay(device, relayMap);
-  if (relay?.status === 'online') return true;
+  const relayOperational =
+    relay &&
+    (relay.live_connected === true ||
+      isRelayOperational(getRelayConnectionState(relay)));
+
+  if (isRelayManagedDevice(device)) {
+    return Boolean(relayOperational);
+  }
+
+  if (relayOperational) return true;
 
   if (!device.last_seen) return false;
   return now - new Date(device.last_seen).getTime() < LAST_SEEN_ONLINE_MS;
+}
+
+/** Operator-facing transport counts for fleet summary (matches list filter). */
+export function computeDeviceTransportCounts(
+  devices: DeviceOut[],
+  relayMap: Record<string, RelayAgentOut>,
+  now = Date.now()
+): { online: number; offline: number; total: number } {
+  let online = 0;
+  for (const device of devices) {
+    if (isDeviceOnlineForList(device, relayMap, now)) online += 1;
+  }
+  return { online, offline: devices.length - online, total: devices.length };
 }

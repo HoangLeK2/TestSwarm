@@ -65,7 +65,7 @@ flowchart LR
 | Auth | `/api/auth/register`, `/api/auth/login`, `/api/auth/refresh`, `/api/auth/me` | `device_farm/api/routes/auth.py` | generated/client expected |
 | Users | `/api/users*` | `device_farm/api/routes/users.py` | generated/client expected |
 | Organizations | `/api/organizations*` | `device_farm/api/routes/organizations.py` | verify parity |
-| Devices | `/api/devices*`, pairing, tags, sessions, bootstrap/restart | `device_farm/api/routes/devices.py` | mixed generated/proxy |
+| Devices | `/api/devices*`, pairing, tags, sessions, bootstrap/restart, **`GET /api/devices/fleet/stats`** | `device_farm/api/routes/devices.py` | mixed generated/proxy |
 | Device groups | `/api/device-groups*` | `device_farm/api/routes/device_groups.py` | generated/client expected |
 | Campaigns | `/api/campaigns*`, nested scenarios, runs, content stats | `device_farm/api/routes/campaigns.py` | generated/client expected |
 | Scenario device config | `/api/campaigns/{campaign_id}/scenarios/{scenario_id}/devices/{device_id}/variables` | `device_farm/api/routes/campaigns.py` | generated/client expected |

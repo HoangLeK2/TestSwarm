@@ -9,7 +9,9 @@ Endpoints:
     DELETE /api/executions/{id}                         Delete execution (204)
     POST   /api/executions/{id}/start                   Mark as running
     POST   /api/executions/{id}/finish                  Mark as completed/failed/cancelled
-    POST   /api/executions/{id}/cancel                  Cancel execution
+    POST   /api/executions/{id}/pause                   Pause execution (Temporal signal)
+    POST   /api/executions/{id}/resume                  Resume paused execution
+    POST   /api/executions/{id}/cancel                  Cancel execution (body: reason)
 
     GET    /api/executions/{id}/devices                 List assigned devices
     POST   /api/executions/{id}/devices                 Add device
@@ -26,11 +28,14 @@ import logging
 import os
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from api.deps import CurrentUser, DB
+from api.deps import CurrentUser, DB, require_permission
+from api.org_scope import data_owner_user_id
 from api.schemas.execution import (
     AddDeviceBody,
+    ExecutionCancelBody,
+    ExecutionControlOut,
     ExecutionCreate,
     ExecutionListOut,
     ExecutionOut,
@@ -64,38 +69,52 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/executions", tags=["executions"])
 
 
+def _dlq_scope_kwargs(user: CurrentUser) -> dict[str, str]:
+    org_id = getattr(user, "org_id", None)
+    if org_id:
+        return {"org_id": str(org_id)}
+    return {"user_id": str(user.id)}
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-async def _get_or_404(db, execution_id: str, user_id: str):
-    ex = await get_execution(db, execution_id)
-    if not ex or ex.user_id != user_id:
-        raise HTTPException(status_code=404, detail="Execution not found")
-    return ex
+async def _get_or_404(db, execution_id: str, user: CurrentUser):
+    from api.execution_access import get_execution_for_user
+
+    return await get_execution_for_user(db, execution_id, user)
 
 
 # ── Execution CRUD ────────────────────────────────────────────────────────────
 
 
-@router.post("", response_model=ExecutionOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=ExecutionOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission("executions", "create"))],
+)
 async def create_execution_endpoint(body: ExecutionCreate, db: DB, user: CurrentUser):
+    from db import crud as repo
+
+    user_org = getattr(user, "org_id", None) or await repo.get_user_org_id(db, user.id)
     if body.campaign_id:
         campaign = await get_campaign(db, body.campaign_id)
-        if campaign is None or campaign.user_id != user.id:
+        if campaign is None or (user_org and campaign.org_id != user_org):
             raise HTTPException(status_code=404, detail="Campaign not found")
     if body.scenario_id:
         scenario = await get_scenario(db, body.scenario_id)
         if scenario is None:
             raise HTTPException(status_code=404, detail="Scenario not found")
         owner_campaign = await get_campaign(db, scenario.campaign_id)
-        if owner_campaign is None or owner_campaign.user_id != user.id:
+        if owner_campaign is None or (user_org and owner_campaign.org_id != user_org):
             raise HTTPException(status_code=404, detail="Scenario not found")
         if body.campaign_id and scenario.campaign_id != body.campaign_id:
             raise HTTPException(status_code=400, detail="Scenario does not belong to campaign")
 
     for device_id in body.device_ids:
         device = await get_device(db, device_id)
-        if device is None or device.user_id != user.id:
+        if device is None or (user_org and device.org_id != user_org):
             raise HTTPException(status_code=404, detail=f"Device not found: {device_id}")
 
     ex = await create_execution(
@@ -115,7 +134,11 @@ async def create_execution_endpoint(body: ExecutionCreate, db: DB, user: Current
     return ExecutionOut.model_validate(ex)
 
 
-@router.get("", response_model=ExecutionListOut)
+@router.get(
+    "",
+    response_model=ExecutionListOut,
+    dependencies=[Depends(require_permission("executions", "read"))],
+)
 async def list_executions_endpoint(
     db: DB,
     user: CurrentUser,
@@ -128,7 +151,8 @@ async def list_executions_endpoint(
 ):
     items, total = await list_executions(
         db,
-        user_id=user.id,
+        org_id=getattr(user, "org_id", None),
+        user_id=data_owner_user_id(user),
         run_type=run_type,
         status=status_filter,
         campaign_id=campaign_id,
@@ -253,7 +277,11 @@ async def _maybe_notify_dlq_threshold(
         log.warning("DLQ threshold notification failed: %s", exc)
 
 
-@router.get("/dlq", response_model=list[DLQEntryOut])
+@router.get(
+    "/dlq",
+    response_model=list[DLQEntryOut],
+    dependencies=[Depends(require_permission("executions", "read"))],
+)
 async def list_dlq(
     request: Request,
     db: DB,
@@ -293,7 +321,7 @@ async def list_dlq(
 
     entries = await list_dlq_entries_for_user(
         db,
-        user_id=user.id,
+        **_dlq_scope_kwargs(user),
         status=norm_status,
         campaign_id=norm_campaign,
         offset=max(offset, 0),
@@ -302,7 +330,11 @@ async def list_dlq(
     return [DLQEntryOut.model_validate(e) for e in entries]
 
 
-@router.get("/dlq/summary", response_model=DLQSummaryOut)
+@router.get(
+    "/dlq/summary",
+    response_model=DLQSummaryOut,
+    dependencies=[Depends(require_permission("executions", "read"))],
+)
 async def dlq_summary(
     request: Request,
     db: DB,
@@ -327,7 +359,7 @@ async def dlq_summary(
 
     pending_count = await count_dlq_entries_for_user(
         db,
-        user_id=user.id,
+        **_dlq_scope_kwargs(user),
         status="pending",
         campaign_id=norm_campaign,
     )
@@ -348,19 +380,26 @@ async def dlq_summary(
     )
 
 
-@router.post("/dlq/{dlq_id}/retry", response_model=DLQEntryOut)
+@router.post(
+    "/dlq/{dlq_id}/retry",
+    response_model=DLQEntryOut,
+    dependencies=[Depends(require_permission("executions", "execute"))],
+)
 async def retry_dlq(dlq_id: str, request: Request, db: DB, user: CurrentUser):
     """Re-enqueue a DLQ entry for retry with idempotent state transition."""
     from db.crud.execution_dlq import begin_dlq_retry_for_user, set_dlq_status
     from services.campaign_dispatch import enqueue_campaign_run_temporal
 
-    entry, changed = await begin_dlq_retry_for_user(db, dlq_id, user.id)
+    entry, changed = await begin_dlq_retry_for_user(db, dlq_id, **_dlq_scope_kwargs(user))
     if entry is None:
         raise HTTPException(status_code=404, detail="DLQ entry not found")
 
-    execution = await get_execution(db, entry.execution_id)
-    if execution is None or execution.user_id != user.id:
-        raise HTTPException(status_code=404, detail="Execution not found")
+    from api.execution_access import get_execution_for_user
+
+    try:
+        execution = await get_execution_for_user(db, entry.execution_id, user)
+    except HTTPException:
+        raise HTTPException(status_code=404, detail="Execution not found") from None
     if not execution.campaign_id:
         await set_dlq_status(
             db,
@@ -384,11 +423,13 @@ async def retry_dlq(dlq_id: str, request: Request, db: DB, user: CurrentUser):
         await db.commit()
         raise HTTPException(status_code=503, detail="Temporal is unavailable")
 
+    from db import crud as repo
     from db.crud.device import get_device_by_serial
     from services.device_liveness import is_device_dispatchable
 
+    user_org = getattr(user, "org_id", None) or await repo.get_user_org_id(db, user.id)
     device = await get_device_by_serial(db, entry.device_serial)
-    if device is None or device.user_id != user.id:
+    if device is None or (user_org and device.org_id != user_org):
         await set_dlq_status(db, dlq_id, "dismissed", error="Device is not available for retry")
         await db.commit()
         return DLQEntryOut.model_validate(entry)
@@ -432,11 +473,15 @@ async def retry_dlq(dlq_id: str, request: Request, db: DB, user: CurrentUser):
         raise HTTPException(status_code=500, detail=f"Retry enqueue failed: {exc}")
 
 
-@router.delete("/dlq/{dlq_id}", status_code=204)
+@router.delete(
+    "/dlq/{dlq_id}",
+    status_code=204,
+    dependencies=[Depends(require_permission("executions", "execute"))],
+)
 async def dismiss_dlq(dlq_id: str, db: DB, user: CurrentUser):
     """Dismiss a DLQ entry without retrying."""
     from db.crud.execution_dlq import dismiss_dlq_entry_for_user
-    ok = await dismiss_dlq_entry_for_user(db, dlq_id, user.id)
+    ok = await dismiss_dlq_entry_for_user(db, dlq_id, **_dlq_scope_kwargs(user))
     if not ok:
         raise HTTPException(status_code=404, detail="DLQ entry not found")
     await db.commit()
@@ -445,13 +490,20 @@ async def dismiss_dlq(dlq_id: str, db: DB, user: CurrentUser):
 # ── Execution CRUD ────────────────────────────────────────────────────────────
 
 
-@router.get("/{execution_id}", response_model=ExecutionOut)
+@router.get(
+    "/{execution_id}",
+    response_model=ExecutionOut,
+    dependencies=[Depends(require_permission("executions", "read"))],
+)
 async def get_execution_endpoint(execution_id: str, db: DB, user: CurrentUser):
-    ex = await _get_or_404(db, execution_id, user.id)
+    ex = await _get_or_404(db, execution_id, user)
     return ExecutionOut.model_validate(ex)
 
 
-@router.get("/{execution_id}/stats")
+@router.get(
+    "/{execution_id}/stats",
+    dependencies=[Depends(require_permission("executions", "read"))],
+)
 async def get_execution_stats_endpoint(execution_id: str, db: DB, user: CurrentUser):
     """Phase 5 — crawl stats for an execution: content count, LLM fallbacks,
     dedup skipped (from Execution.meta), latest checkpoint, run time per device.
@@ -459,8 +511,10 @@ async def get_execution_stats_endpoint(execution_id: str, db: DB, user: CurrentU
     from db.crud.content import count_by_execution
     from db.crud.execution import list_execution_results
 
-    ex = await _get_or_404(db, execution_id, user.id)
-    content_count = await count_by_execution(db, execution_id, user_id=user.id)
+    ex = await _get_or_404(db, execution_id, user)
+    content_count = await count_by_execution(
+        db, execution_id, user_id=data_owner_user_id(user)
+    )
     results = await list_execution_results(db, execution_id)
 
     total_run_sec = 0.0
@@ -491,98 +545,249 @@ async def get_execution_stats_endpoint(execution_id: str, db: DB, user: CurrentU
     }
 
 
-@router.patch("/{execution_id}", response_model=ExecutionOut)
+@router.patch(
+    "/{execution_id}",
+    response_model=ExecutionOut,
+    dependencies=[Depends(require_permission("executions", "update"))],
+)
 async def patch_execution_endpoint(
     execution_id: str, body: ExecutionPatch, db: DB, user: CurrentUser
 ):
-    await _get_or_404(db, execution_id, user.id)
+    await _get_or_404(db, execution_id, user)
     patch = body.model_dump(exclude_none=True)
     ex = await update_execution(db, execution_id, **patch)
     return ExecutionOut.model_validate(ex)
 
 
-@router.delete("/{execution_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{execution_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission("executions", "delete"))],
+)
 async def delete_execution_endpoint(execution_id: str, db: DB, user: CurrentUser):
-    await _get_or_404(db, execution_id, user.id)
+    await _get_or_404(db, execution_id, user)
     await delete_execution(db, execution_id)
 
 
-@router.post("/{execution_id}/start", response_model=ExecutionOut)
+@router.post(
+    "/{execution_id}/start",
+    response_model=ExecutionOut,
+    dependencies=[Depends(require_permission("executions", "execute"))],
+)
 async def start_endpoint(execution_id: str, db: DB, user: CurrentUser):
-    await _get_or_404(db, execution_id, user.id)
+    await _get_or_404(db, execution_id, user)
     ex = await start_execution(db, execution_id)
     return ExecutionOut.model_validate(ex)
 
 
-@router.post("/{execution_id}/finish", response_model=ExecutionOut)
+@router.post(
+    "/{execution_id}/finish",
+    response_model=ExecutionOut,
+    dependencies=[Depends(require_permission("executions", "execute"))],
+)
 async def finish_endpoint(execution_id: str, body: FinishBody, db: DB, user: CurrentUser):
-    await _get_or_404(db, execution_id, user.id)
+    await _get_or_404(db, execution_id, user)
     ex = await finish_execution(db, execution_id, status=body.status)
     return ExecutionOut.model_validate(ex)
 
 
-@router.post("/{execution_id}/cancel", response_model=ExecutionOut)
-async def cancel_endpoint(execution_id: str, db: DB, user: CurrentUser):
-    await _get_or_404(db, execution_id, user.id)
-    ex = await finish_execution(db, execution_id, status="cancelled")
-    return ExecutionOut.model_validate(ex)
+async def _temporal_client_from_request(request: Request):
+    config = getattr(request.app.state, "config", None)
+    if config is None or not getattr(config, "temporal", None) or not config.temporal.enabled:
+        return None
+    from temporal.worker import get_temporal_client
+
+    return await get_temporal_client(config.temporal)
+
+
+def _control_error(exc: Exception) -> HTTPException:
+    from services.execution_control import ExecutionControlError
+
+    if isinstance(exc, ExecutionControlError):
+        return HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": exc.message},
+        )
+    raise exc
+
+
+@router.post(
+    "/{execution_id}/pause",
+    response_model=ExecutionControlOut,
+    dependencies=[Depends(require_permission("executions", "execute"))],
+)
+async def pause_execution_endpoint(
+    execution_id: str, request: Request, db: DB, user: CurrentUser,
+):
+    await _get_or_404(db, execution_id, user)
+    from services.execution_control import pause_execution
+
+    try:
+        client = await _temporal_client_from_request(request)
+        result = await pause_execution(
+            db, execution_id, user_id=user.id, temporal_client=client,
+        )
+        await db.commit()
+        return ExecutionControlOut(
+            execution_id=result.execution_id,
+            status=result.status,
+            action=result.action,
+            effective_transition=result.effective_transition,
+            workflows_signalled=result.workflows_signalled,
+        )
+    except Exception as exc:
+        raise _control_error(exc) from exc
+
+
+@router.post(
+    "/{execution_id}/resume",
+    response_model=ExecutionControlOut,
+    dependencies=[Depends(require_permission("executions", "execute"))],
+)
+async def resume_execution_endpoint(
+    execution_id: str, request: Request, db: DB, user: CurrentUser,
+):
+    await _get_or_404(db, execution_id, user)
+    from services.execution_control import resume_execution
+
+    try:
+        client = await _temporal_client_from_request(request)
+        result = await resume_execution(
+            db, execution_id, user_id=user.id, temporal_client=client,
+        )
+        await db.commit()
+        return ExecutionControlOut(
+            execution_id=result.execution_id,
+            status=result.status,
+            action=result.action,
+            effective_transition=result.effective_transition,
+            workflows_signalled=result.workflows_signalled,
+        )
+    except Exception as exc:
+        raise _control_error(exc) from exc
+
+
+@router.post(
+    "/{execution_id}/cancel",
+    response_model=ExecutionControlOut,
+    dependencies=[Depends(require_permission("executions", "execute"))],
+)
+async def cancel_endpoint(
+    execution_id: str,
+    request: Request,
+    db: DB,
+    user: CurrentUser,
+    body: ExecutionCancelBody | None = None,
+):
+    await _get_or_404(db, execution_id, user)
+    from services.execution_control import cancel_execution
+
+    reason = (body.reason if body else "") or None
+    session_store = getattr(request.app.state, "session_store", None)
+    try:
+        client = await _temporal_client_from_request(request)
+        result = await cancel_execution(
+            db,
+            execution_id,
+            user_id=user.id,
+            reason=reason,
+            temporal_client=client,
+            session_store=session_store,
+        )
+        await db.commit()
+        return ExecutionControlOut(
+            execution_id=result.execution_id,
+            status=result.status,
+            action=result.action,
+            effective_transition=result.effective_transition,
+            workflows_signalled=result.workflows_signalled,
+            warning=result.warning,
+        )
+    except Exception as exc:
+        raise _control_error(exc) from exc
 
 
 # ── Device management ─────────────────────────────────────────────────────────
 
 
-@router.get("/{execution_id}/devices")
+@router.get(
+    "/{execution_id}/devices",
+    dependencies=[Depends(require_permission("executions", "read"))],
+)
 async def list_devices_endpoint(execution_id: str, db: DB, user: CurrentUser):
-    await _get_or_404(db, execution_id, user.id)
+    await _get_or_404(db, execution_id, user)
     devices = await list_execution_devices(db, execution_id)
     return [{"id": d.id, "serial": d.serial, "name": d.name} for d in devices]
 
 
-@router.post("/{execution_id}/devices", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{execution_id}/devices",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission("executions", "update"))],
+)
 async def add_device_endpoint(
     execution_id: str, body: AddDeviceBody, db: DB, user: CurrentUser
 ):
-    await _get_or_404(db, execution_id, user.id)
+    await _get_or_404(db, execution_id, user)
+    from db import crud as repo
+
+    user_org = getattr(user, "org_id", None) or await repo.get_user_org_id(db, user.id)
     device = await get_device(db, body.device_id)
-    if device is None or device.user_id != user.id:
+    if device is None or (user_org and device.org_id != user_org):
         raise HTTPException(status_code=404, detail="Device not found")
 
     link = await add_device_to_execution(db, execution_id, body.device_id)
     return {"execution_id": link.execution_id, "device_id": link.device_id}
 
 
-@router.delete("/{execution_id}/devices/{device_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{execution_id}/devices/{device_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission("executions", "update"))],
+)
 async def remove_device_endpoint(
     execution_id: str, device_id: str, db: DB, user: CurrentUser
 ):
-    await _get_or_404(db, execution_id, user.id)
+    await _get_or_404(db, execution_id, user)
     await remove_device_from_execution(db, execution_id, device_id)
 
 
 # ── Result management ─────────────────────────────────────────────────────────
 
 
-@router.get("/{execution_id}/results", response_model=list[ExecutionResultOut])
+@router.get(
+    "/{execution_id}/results",
+    response_model=list[ExecutionResultOut],
+    dependencies=[Depends(require_permission("executions", "read"))],
+)
 async def list_results_endpoint(execution_id: str, db: DB, user: CurrentUser):
-    await _get_or_404(db, execution_id, user.id)
+    await _get_or_404(db, execution_id, user)
     results = await list_execution_results(db, execution_id)
     return [ExecutionResultOut.model_validate(r) for r in results]
 
 
-@router.get("/{execution_id}/results/{device_id}", response_model=ExecutionResultOut)
+@router.get(
+    "/{execution_id}/results/{device_id}",
+    response_model=ExecutionResultOut,
+    dependencies=[Depends(require_permission("executions", "read"))],
+)
 async def get_result_endpoint(execution_id: str, device_id: str, db: DB, user: CurrentUser):
-    await _get_or_404(db, execution_id, user.id)
+    await _get_or_404(db, execution_id, user)
     er = await get_execution_result(db, execution_id, device_id)
     if er is None:
         raise HTTPException(status_code=404, detail="Result not found")
     return ExecutionResultOut.model_validate(er)
 
 
-@router.put("/{execution_id}/results/{device_id}", response_model=ExecutionResultOut)
+@router.put(
+    "/{execution_id}/results/{device_id}",
+    response_model=ExecutionResultOut,
+    dependencies=[Depends(require_permission("executions", "update"))],
+)
 async def upsert_result_endpoint(
     execution_id: str, device_id: str, body: UpsertResultBody, db: DB, user: CurrentUser
 ):
-    await _get_or_404(db, execution_id, user.id)
+    await _get_or_404(db, execution_id, user)
     er = await upsert_execution_result(
         db,
         execution_id=execution_id,
@@ -598,9 +803,13 @@ async def upsert_result_endpoint(
     return ExecutionResultOut.model_validate(er)
 
 
-@router.get("/{execution_id}/summary", response_model=SummaryOut)
+@router.get(
+    "/{execution_id}/summary",
+    response_model=SummaryOut,
+    dependencies=[Depends(require_permission("executions", "read"))],
+)
 async def summary_endpoint(execution_id: str, db: DB, user: CurrentUser):
-    await _get_or_404(db, execution_id, user.id)
+    await _get_or_404(db, execution_id, user)
     data = await execution_summary(db, execution_id)
     return SummaryOut(**data)
 
@@ -658,7 +867,11 @@ def _extract_step_artifacts(execution_id: str, device_serial: str, steps: list, 
     return out
 
 
-@router.get("/{execution_id}/artifacts", response_model=list[ExecutionArtifactOut])
+@router.get(
+    "/{execution_id}/artifacts",
+    response_model=list[ExecutionArtifactOut],
+    dependencies=[Depends(require_permission("executions", "read"))],
+)
 async def list_execution_artifacts(
     execution_id: str,
     db: DB,
@@ -670,7 +883,7 @@ async def list_execution_artifacts(
     from db.crud.content import query_content
     from db.crud.device import get_device
 
-    await _get_or_404(db, execution_id, user.id)
+    await _get_or_404(db, execution_id, user)
     artifacts: list[ExecutionArtifactOut] = []
 
     results = await list_execution_results(db, execution_id)

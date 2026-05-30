@@ -11,6 +11,7 @@ import {
   useUpdateScenarioTemplate
 } from '../../hooks/use-scenario-templates';
 import { ROUTES } from '@/config/routes';
+import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
 
 // ─── Dynamically import the actual canvas to avoid SSR / InversifyJS issues ───
 
@@ -46,6 +47,7 @@ export function ScenarioFlowEditor({ templateId }: Props) {
   const router = useRouter();
   const { data: template, isLoading } = useScenarioTemplate(templateId);
   const updateMutation = useUpdateScenarioTemplate();
+  const { canUpdate } = useResourcePermissions('scenario-templates');
   const [isSaving, setIsSaving] = useState(false);
   // Track latest steps from canvas changes
   const latestStepsRef = useRef<Record<string, any>[]>([]);
@@ -125,17 +127,19 @@ export function ScenarioFlowEditor({ templateId }: Props) {
           }}
         />
         <span style={nameStyle}>{template.name}</span>
-        <button onClick={handleSave} disabled={isSaving} style={saveBtn}>
-          {isSaving ? (
-            <Loader2
-              size={14}
-              style={{ animation: 'spin 1s linear infinite' }}
-            />
-          ) : (
-            <Save size={14} />
-          )}
-          Lưu
-        </button>
+        {canUpdate ? (
+          <button onClick={handleSave} disabled={isSaving} style={saveBtn}>
+            {isSaving ? (
+              <Loader2
+                size={14}
+                style={{ animation: 'spin 1s linear infinite' }}
+              />
+            ) : (
+              <Save size={14} />
+            )}
+            Lưu
+          </button>
+        ) : null}
       </div>
 
       {/* Canvas */}

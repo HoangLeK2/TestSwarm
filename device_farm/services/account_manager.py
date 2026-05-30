@@ -14,12 +14,9 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from db.database import AsyncSessionLocal
-from db.crud.account import (
-    get_account,
-    get_expired_cooldown_accounts,
-    update_account,
-)
-from db.models.enums import AccountEventType
+from db.crud.account import get_account, update_account
+from db.models.enums import AccountEventType, AccountState
+from services.account_state import AccountStateService
 from services.account_event_recorder import get_account_event_recorder
 
 logger = logging.getLogger(__name__)
@@ -105,19 +102,29 @@ async def end_account_usage(
             "usage_reset_date": today,
         }
 
-        if new_today >= _DAILY_USAGE_LIMIT and account.status == "active":
-            cooldown_until = now + timedelta(minutes=_COOLDOWN_MINUTES)
-            kwargs["status"] = "cooldown"
-            kwargs["cooldown_until"] = cooldown_until
-            entered_cooldown = True
-            logger.info(
-                "Account %s entered cooldown (%.1f min used today). Resumes at %s",
-                account_id,
-                new_today,
-                cooldown_until.isoformat(),
-            )
-
         await update_account(db, account_id, reload=False, **kwargs)
+
+        effective_state = getattr(account, "state", None) or account.status
+        if new_today >= _DAILY_USAGE_LIMIT and effective_state == AccountState.ACTIVE.value:
+            try:
+                svc = AccountStateService()
+                await svc.transition(
+                    db,
+                    account_id,
+                    to=AccountState.COOLDOWN,
+                    reason="daily usage limit reached",
+                    ttl_seconds=int(_COOLDOWN_MINUTES * 60),
+                    actor="system",
+                )
+                entered_cooldown = True
+                logger.info(
+                    "Account %s entered cooldown (%.1f min used today)",
+                    account_id,
+                    new_today,
+                )
+            except Exception as exc:
+                logger.warning("account cooldown FSM transition failed: %s", exc)
+
         await db.commit()
 
         rec = get_account_event_recorder()
@@ -145,43 +152,27 @@ async def end_account_usage(
                     "cooldown_minutes": _COOLDOWN_MINUTES,
                 },
             )
-        await rec.flush_all()
+        async with AsyncSessionLocal() as flush_db:
+            while rec._pending:
+                n = await rec.flush(flush_db)
+                if n == 0:
+                    break
 
 
 async def check_and_reset_cooldowns() -> int:
     """
-    Background task: reset accounts whose cooldown_until has passed back to active.
+    Background task: FSM transition cooldown → active when TTL elapsed.
     Returns the number of accounts reset.
     """
+    from services.account_state import process_expired_cooldowns
+
     async with AsyncSessionLocal() as db:
-        expired = await get_expired_cooldown_accounts(db)
-        if not expired:
-            return 0
-
-        now = datetime.now(timezone.utc)
-        reset_count = 0
-        rec = get_account_event_recorder()
-        for account in expired:
-            await update_account(
-                db,
-                account.id,
-                status="active",
-                cooldown_until=None,
-                usage_today_minutes=0.0,
-                usage_reset_date=now.date(),
-                reload=False,
-            )
-            rec.record(
-                account_id=account.id,
-                event_type=AccountEventType.COOLDOWN_CLEARED,
-                user_id=account.user_id,
-                platform=account.platform,
-            )
-            reset_count += 1
-            logger.info("Account %s cooldown expired — reset to active", account.id)
-
+        reset_count = await process_expired_cooldowns(db)
         await db.commit()
-        await rec.flush_all()
+        rec = get_account_event_recorder()
+        while rec._pending:
+            if await rec.flush(db) == 0:
+                break
         return reset_count
 
 

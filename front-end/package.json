@@ -16,7 +16,9 @@
     "format:check": "prettier -c -w .",
     "prepare": "husky",
     "build-and-scan": "./scripts/build-and-scan.sh",
-    "gen:api": "swagger-typescript-api generate -p ./generate/openapi.json -o ./src/features/device-farm/services/generated --axios --clean-output --name DeviceFarmApi.ts --api-class-name DeviceFarmHttpClient"
+    "gen:api": "swagger-typescript-api generate -p ./generate/openapi.json -o ./src/features/device-farm/services/generated --axios --clean-output --name DeviceFarmApi.ts --api-class-name DeviceFarmHttpClient",
+    "verify:nav": "node scripts/verify-nav-routes.mjs && node --experimental-strip-types --test src/lib/nav-access.test.ts src/lib/rbac/rbac.test.ts src/features/devices/lib/device-online.test.ts src/features/devices/lib/device-fsm.test.ts src/features/devices/lib/session-owner.test.ts src/features/devices/lib/lifecycle-events.test.ts src/features/devices/lib/lifecycle-cache.test.ts src/features/devices/lib/lifecycle-use-cases.test.ts src/features/devices/lib/lifecycle-message-handler.test.ts src/features/devices/lib/relay-agent-status.test.ts src/features/content/lib/artifact-url.test.ts src/features/content/lib/download.test.ts src/features/content/lib/permalink-flow.test.ts",
+    "test:content:permalink-e2e": "node --experimental-strip-types --test src/features/content/lib/permalink-flow.test.ts"
   },
   "lint-staged": {
     "**/*.{js,jsx,tsx,ts}": [

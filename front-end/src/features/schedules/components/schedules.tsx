@@ -13,6 +13,7 @@ import { getScheduleColumns } from './schedule-columns';
 import { FileText } from 'lucide-react';
 import Link from 'next/link';
 import { ROUTES } from '@/config/routes';
+import { Can } from '@/features/auth';
 
 export function Schedules() {
   const tList = useTranslations('schedulesFeature.list');
@@ -54,10 +55,12 @@ export function Schedules() {
                 </span>{' '}
                 {tList('countLabel')}
               </p>
-              <Button size='sm' onClick={() => setCreateOpen(true)}>
-                <Plus size={16} className='mr-1' />
-                {tList('trigger')}
-              </Button>
+              <Can object='schedules' action='create'>
+                <Button size='sm' onClick={() => setCreateOpen(true)}>
+                  <Plus size={16} className='mr-1' />
+                  {tList('trigger')}
+                </Button>
+              </Can>
             </div>
           )}
 
@@ -90,10 +93,12 @@ export function Schedules() {
                       {tList('quickStartGoCampaigns')}
                     </Link>
                   </Button>
-                  <Button size='sm' onClick={() => setCreateOpen(true)}>
-                    <Plus size={16} className='mr-1' />
-                    {tList('trigger')}
-                  </Button>
+                  <Can object='schedules' action='create'>
+                    <Button size='sm' onClick={() => setCreateOpen(true)}>
+                      <Plus size={16} className='mr-1' />
+                      {tList('trigger')}
+                    </Button>
+                  </Can>
                 </div>
               </div>
             </div>

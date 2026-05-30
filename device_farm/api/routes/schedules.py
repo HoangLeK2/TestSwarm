@@ -18,9 +18,10 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from api.deps import CurrentUser, DB
+from api.deps import CurrentUser, DB, require_permission
+from api.org_scope import data_owner_user_id
 from api.schemas.schedule import (
     ScheduleCreate,
     ScheduleOut,
@@ -55,9 +56,12 @@ def _get_scheduler(request: Request):
     return scheduler
 
 
-async def _get_schedule_or_404(db, schedule_id: str, user_id: str):
+async def _get_schedule_or_404(db, schedule_id: str, user: CurrentUser):
     schedule = await get_schedule(db, schedule_id)
-    if not schedule or schedule.user_id != user_id:
+    if not schedule:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    owner_id = data_owner_user_id(user)
+    if owner_id and schedule.user_id != owner_id:
         raise HTTPException(status_code=404, detail="Schedule not found")
     return schedule
 
@@ -110,18 +114,29 @@ def _run_to_out(r) -> ScheduleRunOut:
 # ── Schedule CRUD ─────────────────────────────────────────────────────────────
 
 
-@router.get("", response_model=list[ScheduleOut])
+@router.get(
+    "",
+    response_model=list[ScheduleOut],
+    dependencies=[Depends(require_permission("schedules", "read"))],
+)
 async def list_schedules_endpoint(
     db: DB,
     user: CurrentUser,
     offset: int = 0,
     limit: int = 50,
 ):
-    schedules = await list_schedules(db, user_id=user.id, offset=offset, limit=limit)
+    schedules = await list_schedules(
+        db, user_id=data_owner_user_id(user), offset=offset, limit=limit
+    )
     return [_to_out(s) for s in schedules]
 
 
-@router.post("", response_model=ScheduleOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=ScheduleOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission("schedules", "create"))],
+)
 async def create_schedule_endpoint(
     body: ScheduleCreate,
     request: Request,
@@ -165,13 +180,21 @@ async def create_schedule_endpoint(
     return _to_out(schedule)
 
 
-@router.get("/{schedule_id}", response_model=ScheduleOut)
+@router.get(
+    "/{schedule_id}",
+    response_model=ScheduleOut,
+    dependencies=[Depends(require_permission("schedules", "read"))],
+)
 async def get_schedule_endpoint(schedule_id: str, db: DB, user: CurrentUser):
-    schedule = await _get_schedule_or_404(db, schedule_id, user.id)
+    schedule = await _get_schedule_or_404(db, schedule_id, user)
     return _to_out(schedule)
 
 
-@router.patch("/{schedule_id}", response_model=ScheduleOut)
+@router.patch(
+    "/{schedule_id}",
+    response_model=ScheduleOut,
+    dependencies=[Depends(require_permission("schedules", "update"))],
+)
 async def update_schedule_endpoint(
     schedule_id: str,
     body: SchedulePatch,
@@ -179,7 +202,7 @@ async def update_schedule_endpoint(
     db: DB,
     user: CurrentUser,
 ):
-    await _get_schedule_or_404(db, schedule_id, user.id)
+    await _get_schedule_or_404(db, schedule_id, user)
 
     scheduler = _get_scheduler(request)
     patch = body.model_dump(exclude_none=True)
@@ -194,28 +217,36 @@ async def update_schedule_endpoint(
     return _to_out(schedule)
 
 
-@router.delete("/{schedule_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{schedule_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission("schedules", "delete"))],
+)
 async def delete_schedule_endpoint(
     schedule_id: str,
     request: Request,
     db: DB,
     user: CurrentUser,
 ):
-    await _get_schedule_or_404(db, schedule_id, user.id)
+    await _get_schedule_or_404(db, schedule_id, user)
     scheduler = _get_scheduler(request)
     deleted = await scheduler.delete(db, schedule_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Schedule not found")
 
 
-@router.post("/{schedule_id}/toggle", response_model=ScheduleOut)
+@router.post(
+    "/{schedule_id}/toggle",
+    response_model=ScheduleOut,
+    dependencies=[Depends(require_permission("schedules", "update"))],
+)
 async def toggle_schedule_endpoint(
     schedule_id: str,
     request: Request,
     db: DB,
     user: CurrentUser,
 ):
-    existing = await _get_schedule_or_404(db, schedule_id, user.id)
+    existing = await _get_schedule_or_404(db, schedule_id, user)
     scheduler = _get_scheduler(request)
     schedule = await scheduler.toggle(db, schedule_id, not existing.is_enabled)
     if schedule is None:
@@ -223,14 +254,18 @@ async def toggle_schedule_endpoint(
     return _to_out(schedule)
 
 
-@router.post("/{schedule_id}/run-now", response_model=TriggerResponse)
+@router.post(
+    "/{schedule_id}/run-now",
+    response_model=TriggerResponse,
+    dependencies=[Depends(require_permission("schedules", "execute"))],
+)
 async def run_now_endpoint(
     schedule_id: str,
     request: Request,
     db: DB,
     user: CurrentUser,
 ):
-    await _get_schedule_or_404(db, schedule_id, user.id)
+    await _get_schedule_or_404(db, schedule_id, user)
     scheduler = _get_scheduler(request)
     try:
         run_id = await scheduler.trigger_now(db, schedule_id)
@@ -242,7 +277,11 @@ async def run_now_endpoint(
 # ── Run History ───────────────────────────────────────────────────────────────
 
 
-@router.get("/{schedule_id}/runs", response_model=list[ScheduleRunOut])
+@router.get(
+    "/{schedule_id}/runs",
+    response_model=list[ScheduleRunOut],
+    dependencies=[Depends(require_permission("schedules", "read"))],
+)
 async def list_runs_endpoint(
     schedule_id: str,
     db: DB,
@@ -250,19 +289,23 @@ async def list_runs_endpoint(
     offset: int = 0,
     limit: int = 50,
 ):
-    await _get_schedule_or_404(db, schedule_id, user.id)
+    await _get_schedule_or_404(db, schedule_id, user)
     runs = await list_schedule_runs(db, schedule_id, offset=offset, limit=limit)
     return [_run_to_out(r) for r in runs]
 
 
-@router.get("/{schedule_id}/runs/{run_id}", response_model=ScheduleRunOut)
+@router.get(
+    "/{schedule_id}/runs/{run_id}",
+    response_model=ScheduleRunOut,
+    dependencies=[Depends(require_permission("schedules", "read"))],
+)
 async def get_run_endpoint(
     schedule_id: str,
     run_id: str,
     db: DB,
     user: CurrentUser,
 ):
-    await _get_schedule_or_404(db, schedule_id, user.id)
+    await _get_schedule_or_404(db, schedule_id, user)
     run = await get_schedule_run(db, run_id)
     if not run or run.schedule_id != schedule_id:
         raise HTTPException(status_code=404, detail="Run not found")

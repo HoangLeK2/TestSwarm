@@ -7,9 +7,10 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from jose import JWTError, jwt
 
+from api.deps import require_request_permission, resolve_effective_org_id_for_user_id
 from core.config import Config
 from core.security import jwt_algorithm, jwt_secret_key
 from db import crud as repo
@@ -20,16 +21,25 @@ from runtime.core import DeviceManager, TaskQueue
 _OFFLINE_LIVE_STATES = {"DISCONNECTED", "DEAD"}
 
 
-def _apply_realtime_connectivity(device: dict, relay_lookup=None) -> None:
+def _apply_realtime_connectivity(
+    device: dict,
+    *,
+    relay_online: bool = False,
+    requires_relay: bool = False,
+) -> None:
     """Downshift stale runtime entries that no longer have any live transport."""
     state = str(device.get("state") or "").upper()
     if state in _OFFLINE_LIVE_STATES:
         return
 
-    serial = str(device.get("serial") or "").strip()
+    if requires_relay and not relay_online:
+        device["state"] = "DISCONNECTED"
+        device["touch_method"] = "none"
+        device["stf_connected"] = False
+        return
+
     agent_connected = bool(device.get("agent_connected"))
     u2_ready = bool(device.get("u2_ready"))
-    relay_online = bool(relay_lookup(serial)) if relay_lookup and serial else False
     if agent_connected or u2_ready or relay_online:
         return
 
@@ -79,7 +89,8 @@ async def _get_live_device_map(request: Request, db_enabled: bool) -> Optional[d
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     async with AsyncSessionLocal() as db:
-        db_devices = await repo.list_devices(db, user_id=user_id)
+        org_id = await resolve_effective_org_id_for_user_id(request, db, user_id)
+        db_devices = await repo.list_devices(db, org_id=org_id, user_id=user_id)
         out: dict[str, dict[str, str]] = {}
         for device in db_devices:
             serial = str(getattr(device, "serial", "") or "").strip()
@@ -89,9 +100,20 @@ async def _get_live_device_map(request: Request, db_enabled: bool) -> Optional[d
             brand = str(getattr(device, "brand", "") or "").strip()
             model = str(getattr(device, "model", "") or "").strip()
             display_name = name or " ".join(p for p in [brand, model] if p).strip() or serial
+            aliases = {serial}
+            adb_serial = str(getattr(device, "adb_serial", "") or "").strip()
+            if adb_serial:
+                aliases.add(adb_serial)
+            adb_ip = str(getattr(device, "adb_ip", "") or "").strip()
+            adb_port = int(getattr(device, "adb_port", 5555) or 5555)
+            if adb_ip:
+                aliases.add(adb_ip)
+                aliases.add(f"{adb_ip}:{adb_port}")
             out[serial] = {
                 "name": name,
                 "display_name": display_name,
+                "requires_relay": bool(adb_serial or adb_ip),
+                "relay_aliases": sorted(aliases),
             }
         return out
 
@@ -110,6 +132,8 @@ def build_public_router(
     db_enabled: bool,
 ) -> APIRouter:
     router = APIRouter()
+    devices_read = require_request_permission(db_enabled, "devices", "read")
+    executions_read = require_request_permission(db_enabled, "executions", "read")
 
     @router.get("/ping")
     async def ping():
@@ -117,7 +141,7 @@ def build_public_router(
 
     api = APIRouter(prefix="/api")
 
-    @api.get("/devices/live")
+    @api.get("/devices/live", dependencies=[Depends(devices_read)])
     async def api_devices_live(
         request: Request,
         state: Optional[str] = None,
@@ -135,16 +159,35 @@ def build_public_router(
                 d["display_name"] = info.get("display_name", d.get("serial", ""))
         try:
             from runtime.transports.adb_relay_server import get_relay_manager
+            from runtime.transports.agent_control_servicer import get_control_servicer
 
             relay = get_relay_manager()
+            ctrl = get_control_servicer()
         except Exception:
             relay = None
+            ctrl = None
 
-        def _relay_lookup(serial: str) -> bool:
-            return bool(relay is not None and relay.relay_for_serial(serial))
+        def _relay_online_for_serial(serial: str) -> bool:
+            serial = str(serial or "").strip()
+            if not serial:
+                return False
+            if relay is not None and relay.relay_for_serial(serial):
+                return True
+            if ctrl is not None and ctrl.conn_for_serial(serial):
+                return True
+            return False
 
         for d in devices:
-            _apply_realtime_connectivity(d, relay_lookup=_relay_lookup)
+            serial = str(d.get("serial") or "")
+            info = allowed_devices.get(serial, {}) if allowed_devices else {}
+            requires_relay = bool(info.get("requires_relay"))
+            aliases = info.get("relay_aliases") or ([serial] if serial else [])
+            relay_online = any(_relay_online_for_serial(str(alias)) for alias in aliases)
+            _apply_realtime_connectivity(
+                d,
+                relay_online=relay_online,
+                requires_relay=requires_relay,
+            )
         store = getattr(request.app.state, "session_store", None)
         for d in devices:
             serial = d.get("serial", "")
@@ -194,7 +237,7 @@ def build_public_router(
             out["scrcpy_max_fps"] = getattr(dev, "scrcpy_max_fps", 30)
         return out
 
-    @api.get("/events")
+    @api.get("/events", dependencies=[Depends(devices_read)])
     async def api_events(
         request: Request,
         serial: Optional[str] = None,
@@ -204,6 +247,7 @@ def build_public_router(
     ):
         """Return device events — from DB if available, else in-memory buffer."""
         _verify_token_only(request)
+        allowed_serials = await _get_live_allowed_serials(request, db_enabled)
 
         # Try DB first (persistent history)
         if db_enabled:
@@ -212,8 +256,15 @@ def build_public_router(
                 from sqlalchemy import select, func, desc
 
                 async with AsyncSessionLocal() as db:
+                    if allowed_serials is not None and not allowed_serials:
+                        return {"total": 0, "offset": offset, "limit": limit, "events": []}
+                    if allowed_serials is not None and serial and serial not in allowed_serials:
+                        return {"total": 0, "offset": offset, "limit": limit, "events": []}
                     q = select(DeviceEvent)
                     count_q = select(func.count(DeviceEvent.id))
+                    if allowed_serials is not None:
+                        q = q.where(DeviceEvent.serial.in_(allowed_serials))
+                        count_q = count_q.where(DeviceEvent.serial.in_(allowed_serials))
                     if serial:
                         q = q.where(DeviceEvent.serial == serial)
                         count_q = count_q.where(DeviceEvent.serial == serial)
@@ -252,11 +303,16 @@ def build_public_router(
         if recorder is None:
             return {"total": 0, "offset": offset, "limit": limit, "events": []}
         events = recorder.get_recent(limit=limit + offset, serial=serial, event_type=event)
+        if allowed_serials is not None:
+            events = [
+                item for item in events
+                if str(item.get("serial") or "") in allowed_serials
+            ]
         total = len(events)
         events = events[offset : offset + limit]
         return {"total": total, "offset": offset, "limit": limit, "events": events}
 
-    @api.get("/tasks")
+    @api.get("/tasks", dependencies=[Depends(executions_read)])
     async def api_tasks(
         request: Request,
         ids: Optional[str] = None,

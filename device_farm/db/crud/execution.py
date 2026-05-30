@@ -11,6 +11,7 @@ from typing import Optional
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from db.models.campaign import Campaign
 from db.models.execution import Execution, ExecutionDevice, ExecutionResult
 from db.models.device import Device
 from db.models.utils import _now, _uuid
@@ -66,6 +67,7 @@ async def get_execution(db: AsyncSession, execution_id: str) -> Optional[Executi
 async def list_executions(
     db: AsyncSession,
     *,
+    org_id: Optional[str] = None,
     user_id: Optional[str] = None,
     campaign_id: Optional[str] = None,
     scenario_id: Optional[str] = None,
@@ -75,7 +77,11 @@ async def list_executions(
     limit: int = 50,
 ) -> tuple[list[Execution], int]:
     q = select(Execution).order_by(Execution.created_at.desc())
-    if user_id is not None:
+    if org_id:
+        q = q.join(Campaign, Execution.campaign_id == Campaign.id).where(
+            Campaign.org_id == org_id
+        )
+    elif user_id is not None:
         q = q.where(Execution.user_id == user_id)
     if campaign_id is not None:
         q = q.where(Execution.campaign_id == campaign_id)
@@ -139,6 +145,70 @@ async def finish_execution(
     execution.finished_at = datetime.now(timezone.utc)
     await db.flush()
     return execution
+
+
+async def list_running_executions_for_campaign(
+    db: AsyncSession, campaign_id: str
+) -> list[Execution]:
+    result = await db.execute(
+        select(Execution).where(
+            Execution.campaign_id == campaign_id,
+            Execution.status.in_(("running", "paused")),
+        )
+    )
+    return list(result.scalars().all())
+
+
+async def pause_execution_record(
+    db: AsyncSession, execution_id: str, *, now: datetime | None = None
+) -> tuple[Optional[Execution], bool]:
+    """Mark execution paused. Returns (execution, transitioned) — False if already paused."""
+    execution = await get_execution(db, execution_id)
+    if execution is None:
+        return None, False
+    if execution.status == "paused":
+        return execution, False
+    ts = now or datetime.now(timezone.utc)
+    execution.status = "paused"
+    execution.pause_signal_received_at = ts
+    await db.flush()
+    return execution, True
+
+
+async def resume_execution_record(
+    db: AsyncSession, execution_id: str
+) -> Optional[Execution]:
+    execution = await get_execution(db, execution_id)
+    if execution is None:
+        return None
+    if execution.status != "paused":
+        return execution
+    execution.status = "running"
+    await db.flush()
+    return execution
+
+
+async def cancel_execution_record(
+    db: AsyncSession,
+    execution_id: str,
+    *,
+    reason: str | None = None,
+    now: datetime | None = None,
+) -> tuple[Optional[Execution], bool]:
+    """Mark execution cancelled. Returns (execution, transitioned)."""
+    execution = await get_execution(db, execution_id)
+    if execution is None:
+        return None, False
+    if execution.status == "cancelled":
+        return execution, False
+    ts = now or datetime.now(timezone.utc)
+    execution.status = "cancelled"
+    execution.cancel_reason = reason
+    execution.cancel_signal_received_at = ts
+    execution.cancelled_at = ts
+    execution.finished_at = ts
+    await db.flush()
+    return execution, True
 
 
 # ── ExecutionDevice (join) ────────────────────────────────────────────────────
@@ -294,6 +364,10 @@ __all__ = [
     "delete_execution",
     "start_execution",
     "finish_execution",
+    "list_running_executions_for_campaign",
+    "pause_execution_record",
+    "resume_execution_record",
+    "cancel_execution_record",
     # ExecutionDevice
     "add_device_to_execution",
     "remove_device_from_execution",

@@ -28,6 +28,7 @@ class DeviceOut(BaseModel):
     adb_port: int = 5555
     tags: str = ""  # DF-004: comma-separated device tags
     relay_id: Optional[str] = None
+    state: str = "unknown"  # FSM state at control plane (DF-T-02-002)
 
 
 class SessionOut(BaseModel):

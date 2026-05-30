@@ -7,10 +7,11 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, Index, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.database import Base
+from tenancy.models import TenantScopedModel
 from .utils import _now, _uuid
 
 
-class NotificationChannel(Base):
+class NotificationChannel(TenantScopedModel, Base):
     __tablename__ = "notification_channels"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -34,7 +35,7 @@ class NotificationChannel(Base):
     )
 
 
-class Notification(Base):
+class Notification(TenantScopedModel, Base):
     __tablename__ = "notifications"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)

@@ -15,13 +15,17 @@ from api.routes import auth as auth_routes
 from api.routes.auth import router as auth_router
 from db.crud.organization import (
     create_personal_org_for_user,
+    get_organization_role_for_user,
+    list_all_organizations,
     make_personal_org_name,
 )
 from db.database import Base
 from db.migrations import _CompatConn
 from db.models import Organization, OrganizationMember, User
+from db.superadmin import ensure_superadmin_from_env, verify_superadmin_password
 
 personal_org_backfill = import_module("db.migrations.037_personal_org_backfill")
+superadmin_migration = import_module("db.migrations.051_superadmin_global_access")
 
 
 @pytest_asyncio.fixture
@@ -128,6 +132,26 @@ async def test_create_personal_org_for_user_skips_existing_membership(session_fa
 
 
 @pytest.mark.asyncio
+async def test_superadmin_has_owner_role_for_any_org_without_membership(session_factory):
+    async with session_factory() as session:
+        user = User(
+            id="super-1",
+            email="super@example.com",
+            name="Super",
+            hashed_password="hashed",
+            role="superadmin",
+        )
+        org_a = Organization(id="org-a", business_name="A")
+        org_b = Organization(id="org-b", business_name="B")
+        session.add_all([user, org_a, org_b])
+        await session.flush()
+
+        assert await get_organization_role_for_user(session, user.id, org_a.id) == "owner"
+        orgs = await list_all_organizations(session)
+        assert sorted(org.id for org in orgs) == ["org-a", "org-b"]
+
+
+@pytest.mark.asyncio
 async def test_register_route_creates_default_org(session_factory):
     app = _build_auth_app(session_factory)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
@@ -157,17 +181,42 @@ async def test_register_route_creates_default_org(session_factory):
 
 
 @pytest.mark.asyncio
+async def test_register_route_ignores_requested_privileged_role(session_factory):
+    app = _build_auth_app(session_factory)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+        response = await client.post(
+            "/api/auth/register",
+            json={
+                "email": "privileged@example.com",
+                "name": "Privileged",
+                "password": "secret123",
+                "role": "superadmin",
+            },
+        )
+        assert response.status_code == 201, response.text
+        assert response.json()["role"] == "operator"
+
+    async with session_factory() as session:
+        role = (
+            await session.execute(
+                select(User.role).where(User.email == "privileged@example.com")
+            )
+        ).scalar_one()
+        assert role == "operator"
+
+
+@pytest.mark.asyncio
 async def test_register_route_rolls_back_user_when_org_creation_fails(
     session_factory,
     monkeypatch,
 ):
-    async def fail_personal_org(*_args, **_kwargs):
+    async def fail_user_create(*_args, **_kwargs):
         raise RuntimeError("org create failed")
 
     monkeypatch.setattr(
         auth_routes.repo,
-        "create_personal_org_for_user",
-        fail_personal_org,
+        "create_user_with_default_org",
+        fail_user_create,
     )
 
     app = _build_auth_app(session_factory)
@@ -215,3 +264,76 @@ async def test_personal_org_backfill_migration_is_idempotent(engine):
             )
         ).all()
         assert rows == [("Orphan's Workspace", "owner")]
+
+
+@pytest.mark.asyncio
+async def test_superadmin_migration_seeds_env_configured_account(engine, monkeypatch):
+    monkeypatch.setenv("DEVICE_FARM_SUPERADMIN_EMAIL", "root@example.com")
+    monkeypatch.setenv("DEVICE_FARM_SUPERADMIN_PASSWORD", "secret123")
+    monkeypatch.setenv("DEVICE_FARM_SUPERADMIN_NAME", "Root User")
+
+    async with engine.begin() as conn:
+        compat = _CompatConn(conn)
+        await superadmin_migration.upgrade(compat)
+        await superadmin_migration.upgrade(compat)
+
+        users = (
+            await conn.execute(
+                select(
+                    User.name,
+                    User.role,
+                    User.org_id,
+                    User.hashed_password,
+                ).where(User.email == "root@example.com")
+            )
+        ).all()
+        assert len(users) == 1
+        name, role, org_id, hashed_password = users[0]
+        assert name == "Root User"
+        assert role == "superadmin"
+        assert org_id is None
+        assert superadmin_migration.verify_password("secret123", hashed_password)
+
+
+@pytest.mark.asyncio
+async def test_superadmin_migration_skips_seed_without_password(engine, monkeypatch):
+    monkeypatch.setenv("DEVICE_FARM_SUPERADMIN_EMAIL", "root@example.com")
+    monkeypatch.delenv("DEVICE_FARM_SUPERADMIN_PASSWORD", raising=False)
+
+    async with engine.begin() as conn:
+        await superadmin_migration.upgrade(_CompatConn(conn))
+
+        user = (
+            await conn.execute(select(User).where(User.email == "root@example.com"))
+        ).scalar_one_or_none()
+        assert user is None
+
+
+@pytest.mark.asyncio
+async def test_ensure_superadmin_from_env_creates_after_migration_was_applied(
+    session_factory,
+    monkeypatch,
+):
+    monkeypatch.setenv("DEVICE_FARM_SUPERADMIN_EMAIL", "late-root@example.com")
+    monkeypatch.setenv("DEVICE_FARM_SUPERADMIN_PASSWORD", "secret123")
+    monkeypatch.setenv("DEVICE_FARM_SUPERADMIN_NAME", "Late Root")
+
+    async with session_factory() as session:
+        created = await ensure_superadmin_from_env(session)
+        await session.commit()
+        assert created is not None
+        assert created.email == "late-root@example.com"
+        assert created.name == "Late Root"
+        assert created.role == "superadmin"
+        assert created.org_id is not None
+        assert verify_superadmin_password("secret123", created.hashed_password)
+
+        again = await ensure_superadmin_from_env(session)
+        await session.commit()
+        rows = (
+            await session.execute(
+                select(User).where(User.email == "late-root@example.com")
+            )
+        ).scalars().all()
+        assert len(rows) == 1
+        assert again is not None

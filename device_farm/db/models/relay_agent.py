@@ -7,10 +7,11 @@ from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db.database import Base
+from tenancy.models import TenantScopedModel
 from .utils import _now, _uuid
 
 
-class RelayAgent(Base):
+class RelayAgent(TenantScopedModel, Base):
     __tablename__ = "relay_agents"
 
     id:       Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -33,7 +34,7 @@ class RelayAgent(Base):
     created_at:        Mapped[datetime]           = mapped_column(DateTime(timezone=True), default=_now, nullable=False)
 
 
-class RelayAgentToken(Base):
+class RelayAgentToken(TenantScopedModel, Base):
     __tablename__ = "relay_agent_tokens"
 
     id:         Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -48,7 +49,7 @@ class RelayAgentToken(Base):
     created_at:   Mapped[datetime]           = mapped_column(DateTime(timezone=True), default=_now, nullable=False)
 
 
-class RelayAgentJob(Base):
+class RelayAgentJob(TenantScopedModel, Base):
     __tablename__ = "relay_agent_jobs"
 
     id:       Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -68,7 +69,7 @@ class RelayAgentJob(Base):
     updated_at:  Mapped[datetime]           = mapped_column(DateTime(timezone=True), default=_now, nullable=False)
 
 
-class RelayAgentJobItem(Base):
+class RelayAgentJobItem(TenantScopedModel, Base):
     __tablename__ = "relay_agent_job_items"
 
     id:        Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)

@@ -53,7 +53,13 @@ def _build_app(scheduler: MagicMock) -> FastAPI:
         yield AsyncMock()
 
     async def _user_override():
-        return SimpleNamespace(id="user-1", role="user", is_active=True)
+        return SimpleNamespace(
+            id="user-1",
+            role="operator",
+            org_role="owner",
+            is_active=True,
+            org_id="org-1",
+        )
 
     app.dependency_overrides[_get_db] = _db_override
     app.dependency_overrides[_get_current_user] = _user_override

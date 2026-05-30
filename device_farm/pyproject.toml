@@ -12,6 +12,7 @@ dependencies = [
     "pillow>=10.0.0",
     "numpy>=1.24.0",
     "fastapi>=0.110.0",
+    "casbin>=1.43.0",
     "uvicorn[standard]>=0.27.0",
     "websockets>=12.0",
     "aiohttp>=3.9.0",
@@ -55,12 +56,15 @@ dependencies = [
     "xxhash>=3.4",                # Fast non-crypto hash (Phase 5 change detection / Bloom filter)
     "ftfy>=6.2",                  # Fix mojibake / weird Unicode from social media text
     "cssselect>=1.2",             # CSS selector → XPath translation for lxml
+    "aiosmtplib>=3.0.0",          # async SMTP for org invite emails
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "pytest-asyncio>=0.24",
     "httpx>=0.27",
+    "aiosqlite>=0.20",
 ]
 # Heavy OCR backend — install via `pip install device-farm[ocr]` or skip and rely on Tesseract subprocess
 ocr = [
@@ -74,6 +78,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["."]
+
+[tool.hatch.build.targets.wheel.force-include]
+"templates" = "templates"
 
 [project.scripts]
 device-farm = "main:main"

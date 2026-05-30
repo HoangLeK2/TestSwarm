@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   accountsApi,
   type AccountCreate,
+  type AccountStateTransitionBody,
   type AccountUpdate
 } from '../services/api';
 import type {
@@ -87,19 +88,20 @@ export function useDeleteAccount() {
   });
 }
 
-export function useUpdateAccountStatus() {
+export function useTransitionAccountState() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({
       accountId,
-      status
+      body
     }: {
       accountId: string;
-      status: string;
-    }) => accountsApi.updateStatus(accountId, status),
+      body: AccountStateTransitionBody;
+    }) => accountsApi.transitionState(accountId, body),
     onSuccess: (_, { accountId }) => {
       qc.invalidateQueries({ queryKey: KEYS.list });
       qc.invalidateQueries({ queryKey: KEYS.detail(accountId) });
+      qc.invalidateQueries({ queryKey: KEYS.events(accountId) });
     }
   });
 }

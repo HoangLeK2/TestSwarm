@@ -18,8 +18,15 @@ from starlette.websockets import WebSocketDisconnect as StarletteWSDisconnect
 from services import pairing as _pairing_mod
 from core.config import Config
 from db import crud as repo
+from db.crud.user import get_user_org_id
 from db.database import AsyncSessionLocal
 from runtime.core import DeviceManager, DeviceState
+from tenancy.background import (
+    ensure_device_org_id,
+    list_device_serials_for_user,
+    lookup_device_by_key,
+)
+from tenancy.context import tenant_context
 
 log = logging.getLogger(__name__)
 
@@ -242,8 +249,7 @@ class WebSocketManager:
             return set()
         try:
             async with AsyncSessionLocal() as db:
-                devices = await repo.list_devices(db, user_id=user_id)
-                return {d.serial for d in devices if d.serial}
+                return await list_device_serials_for_user(db, user_id)
         except Exception:
             return set()
 
@@ -875,10 +881,12 @@ class DeviceAgentSession:
             elif key and self._ws_manager._db_enabled:
                 try:
                     async with AsyncSessionLocal() as db:
-                        key_device = await repo.get_device_by_key(db, key)
-                        if key_device is not None and not str(key_device.serial).startswith("pending-"):
-                            serial = str(key_device.serial)
-                            adb_serial_hint = str(getattr(key_device, "adb_serial", "") or serial).strip()
+                        key_ref = await lookup_device_by_key(db, key)
+                        if key_ref is not None and not str(key_ref.serial).startswith(
+                            "pending-"
+                        ):
+                            serial = str(key_ref.serial)
+                            adb_serial_hint = serial
                             log.info(
                                 "[DEVICE-WS] mapped app serial %s to registered key serial %s",
                                 app_serial,
@@ -961,20 +969,8 @@ class DeviceAgentSession:
                     meta["adb_port"] = 5555
                 try:
                     async with AsyncSessionLocal() as db:
-                        kw = _bind_pending_kw_only(meta)
-                        try:
-                            bound = await repo.bind_pending_device(
-                                db, key, serial, **kw
-                            )
-                        except TypeError as te:
-                            if "unexpected keyword argument" not in str(te):
-                                raise
-                            for drop in ("adb_ip", "adb_port"):
-                                kw.pop(drop, None)
-                            bound = await repo.bind_pending_device(
-                                db, key, serial, **kw
-                            )
-                        if not bound:
+                        key_ref = await lookup_device_by_key(db, key)
+                        if not key_ref:
                             await ws.send_json(
                                 {
                                     "type": "error",
@@ -983,11 +979,53 @@ class DeviceAgentSession:
                             )
                             await ws.close(code=4001)
                             return
-                        db_sess = await repo.open_session(
-                            db, bound.id, ws.client.host if ws.client else ""
-                        )
-                        bound_device = bound
-                        db_session_id = db_sess.id
+                        work_org = key_ref.org_id
+                        if not work_org and key_ref.user_id:
+                            work_org = await get_user_org_id(db, key_ref.user_id)
+                        if not work_org:
+                            await ws.send_json(
+                                {
+                                    "type": "error",
+                                    "message": "Thiết bị chưa gắn tổ chức. Đăng ký lại thiết bị trên dashboard.",
+                                }
+                            )
+                            await ws.close(code=4001)
+                            return
+                        if key_ref.org_id is None:
+                            await ensure_device_org_id(
+                                db, key_ref.device_id, work_org
+                            )
+                            await db.flush()
+                        kw = _bind_pending_kw_only(meta)
+                        with tenant_context(work_org):
+                            try:
+                                bound = await repo.bind_pending_device(
+                                    db, key, serial, **kw
+                                )
+                            except TypeError as te:
+                                if "unexpected keyword argument" not in str(te):
+                                    raise
+                                for drop in ("adb_ip", "adb_port"):
+                                    kw.pop(drop, None)
+                                bound = await repo.bind_pending_device(
+                                    db, key, serial, **kw
+                                )
+                            if not bound:
+                                await ws.send_json(
+                                    {
+                                        "type": "error",
+                                        "message": "Mã QR không hợp lệ hoặc đã dùng. Đăng ký thiết bị mới và quét đúng mã QR.",
+                                    }
+                                )
+                                await ws.close(code=4001)
+                                return
+                            db_sess = await repo.open_session(
+                                db,
+                                bound.id,
+                                ws.client.host if ws.client else "",
+                            )
+                            bound_device = bound
+                            db_session_id = db_sess.id
                         await db.commit()
                         log.info("Bound pending device key=%s… → serial=%s", key[:8], serial)
                 except Exception as db_exc:

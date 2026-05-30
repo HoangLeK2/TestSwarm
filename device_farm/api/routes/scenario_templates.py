@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
-from api.deps import CurrentUser, DB
+from api.deps import CurrentUser, DB, require_permission
+from api.org_scope import org_member_user_ids
 from api.schemas.scenario_template import (
     ScenarioTemplateCreate,
     ScenarioTemplateOut,
@@ -37,18 +38,34 @@ def _to_out(t) -> ScenarioTemplateOut:
     )
 
 
-@router.get("", response_model=list[ScenarioTemplateOut])
+@router.get(
+    "",
+    response_model=list[ScenarioTemplateOut],
+    dependencies=[Depends(require_permission("scenario-templates", "read"))],
+)
 async def list_scenario_templates(
     db: DB,
-    _: CurrentUser,
+    user: CurrentUser,
     category: str | None = None,
     tags: str | None = None,
 ):
-    templates = await list_templates(db, category=category, tags=tags)
+    org_id = getattr(user, "org_id", None)
+    user_ids = await org_member_user_ids(db, org_id) if org_id else [user.id]
+    templates = await list_templates(
+        db,
+        category=category,
+        tags=tags,
+        user_ids=user_ids,
+    )
     return [_to_out(t) for t in templates]
 
 
-@router.post("", response_model=ScenarioTemplateOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=ScenarioTemplateOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission("scenario-templates", "create"))],
+)
 async def create_scenario_template(
     body: ScenarioTemplateCreate,
     db: DB,
@@ -70,7 +87,11 @@ async def create_scenario_template(
     return _to_out(tmpl)
 
 
-@router.get("/{template_id}", response_model=ScenarioTemplateOut)
+@router.get(
+    "/{template_id}",
+    response_model=ScenarioTemplateOut,
+    dependencies=[Depends(require_permission("scenario-templates", "read"))],
+)
 async def get_scenario_template(template_id: str, db: DB, _: CurrentUser):
     tmpl = await get_template(db, template_id)
     if tmpl is None:
@@ -78,7 +99,11 @@ async def get_scenario_template(template_id: str, db: DB, _: CurrentUser):
     return _to_out(tmpl)
 
 
-@router.patch("/{template_id}", response_model=ScenarioTemplateOut)
+@router.patch(
+    "/{template_id}",
+    response_model=ScenarioTemplateOut,
+    dependencies=[Depends(require_permission("scenario-templates", "update"))],
+)
 async def update_scenario_template(
     template_id: str,
     body: ScenarioTemplateUpdate,
@@ -98,7 +123,11 @@ async def update_scenario_template(
     return _to_out(tmpl)
 
 
-@router.delete("/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{template_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission("scenario-templates", "delete"))],
+)
 async def delete_scenario_template(template_id: str, db: DB, _: CurrentUser):
     tmpl = await get_template(db, template_id)
     if tmpl is None:
@@ -113,6 +142,7 @@ async def delete_scenario_template(template_id: str, db: DB, _: CurrentUser):
     "/{template_id}/duplicate",
     response_model=ScenarioTemplateOut,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission("scenario-templates", "create"))],
 )
 async def duplicate_scenario_template(
     template_id: str,

@@ -12,6 +12,7 @@ async def create_campaign(
     db: AsyncSession,
     name: str,
     user_id: str,
+    org_id: str | None = None,
     description: str = "",
     variables: dict | None = None,
     target_group_id: str | None = None,
@@ -19,6 +20,7 @@ async def create_campaign(
     campaign = Campaign(
         name=name,
         user_id=user_id,
+        org_id=org_id,  # type: ignore[arg-type]
         description=description,
         variables=variables or {},
         target_group_id=target_group_id,
@@ -31,12 +33,12 @@ async def create_campaign(
 async def get_campaign_by_name(
     db: AsyncSession,
     *,
-    user_id: str,
+    org_id: str,
     name: str,
 ) -> Optional[Campaign]:
     result = await db.execute(
         select(Campaign)
-        .where(Campaign.user_id == user_id, Campaign.name == name)
+        .where(Campaign.org_id == org_id, Campaign.name == name)
         .order_by(Campaign.created_at.desc())
         .limit(1)
     )
@@ -48,9 +50,13 @@ async def get_campaign(db: AsyncSession, campaign_id: str) -> Optional[Campaign]
     return result.scalar_one_or_none()
 
 
-async def list_campaigns(db: AsyncSession, user_id: Optional[str] = None) -> list[Campaign]:
+async def list_campaigns(
+    db: AsyncSession, *, org_id: Optional[str] = None, user_id: Optional[str] = None
+) -> list[Campaign]:
     q = select(Campaign).order_by(Campaign.created_at.desc())
-    if user_id:
+    if org_id:
+        q = q.where(Campaign.org_id == org_id)
+    elif user_id:
         q = q.where(Campaign.user_id == user_id)
     result = await db.execute(q)
     return list(result.scalars().all())

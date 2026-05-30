@@ -1,48 +1,59 @@
-# agent-boot — Docker bundle (image + compose)
+# agent-boot — Docker Compose (offline bundle)
 
-Gói này gồm:
-
-- `agent-boot-image-<version>.tar` — Docker image (`docker load`)
-- `docker-compose.yml` — cấu hình chạy chuẩn
-- `scripts/docker-load.sh` — load image
-- `scripts/docker-up.sh` — bật ADB trên Mac host + `docker compose`
-
-**Không chứa** `.env` (secret). Copy từ `.env.example` trên máy khách.
-
-## Yêu cầu (macOS)
-
-- Docker Desktop
-- `adb` trên Mac: `brew install android-platform-tools`
-- Điện thoại USB debugging
-
-## Cài đặt
+## Cài nhanh
 
 ```bash
 tar -xzf agent-boot-docker-0.1.0.tar.gz
 cd agent-boot-docker-0.1.0
 
 ./scripts/docker-load.sh
-cp .env.example .env
-# Sửa RELAY_SERVER, RELAY_API_KEY, RELAY_ENROLLMENT_TOKEN trong .env
+cp .env.example .env          # sửa RELAY_SERVER, RELAY_API_KEY, RELAY_ENROLLMENT_TOKEN
+./scripts/docker-up.sh up -d    # bật ADB host + docker compose up -d
+./scripts/docker-up.sh logs -f  # xem log relay
 ```
 
-## Test ADB (container → host ADB → điện thoại)
+`docker-up.sh` tự:
+
+1. Bật `adb -a nodaemon server` trên **máy host** (nếu port 5037 chưa listen)
+2. Chạy `docker compose up -d`
+
+Container mặc định chạy **relay**: `uv run main.py --relay-only`.
+
+## Chỉ dùng docker compose (đã bật ADB host)
 
 ```bash
-./scripts/docker-up.sh --abort-on-container-exit
+adb -a nodaemon server &        # một lần trên host
+docker compose up -d
+docker compose logs -f
+docker compose down
 ```
 
-Phải thấy serial + `device`.
+## ADB
 
-## Chạy relay agent
+USB ở **host**; container kết nối `host.docker.internal:5037`.
+
+```
+Điện thoại ──USB──► adb server (host)
+                         ▲
+                         │ host.docker.internal:5037
+                    agent-boot container (relay)
+```
+
+Kiểm tra trên host: `adb devices` → phải có `device`.
+
+## Linux: USB trong container (không cần host ADB)
+
+Chỉ khi chạy từ source repo (có `docker-compose.linux-usb.yml`):
 
 ```bash
-./scripts/docker-up.sh run --rm agent-boot \
-  bash -lc "uv run main.py --relay-only"
+docker compose -f docker-compose.yml -f docker-compose.linux-usb.yml up -d --build
 ```
 
-## Lưu ý
+## Xử lý sự cố
 
-- USB ở **Mac host**; container chỉ là ADB client qua `host.docker.internal:5037`.
-- `docker-up.sh` tự bật `adb -a` trên host nếu port 5037 chưa listen.
-- Image build trên Mac Apple Silicon thường là `linux/arm64` — máy đích cần tương thích.
+| Lỗi | Cách xử lý |
+|-----|------------|
+| `host ADB not reachable` | Trên host: `adb -a nodaemon server` hoặc `./scripts/docker-up.sh up -d` |
+| `image not found` | `./scripts/docker-load.sh` |
+| Container restart loop | `docker compose logs`; kiểm tra `.env` RELAY_* |
+| `exec format error` | Sai CPU arch — build lại image trên máy đích |

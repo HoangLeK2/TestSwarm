@@ -22,6 +22,15 @@ import {
   type DeviceOut,
   type RelayAgentOut
 } from '../services/manage-api';
+import { RelayAgentStatusBadge } from './relay-agent-status-badge';
+import { invalidateDeviceFleetQueries } from '../hooks/use-devices';
+import {
+  getRelayConnectionState,
+  getVisibleRelaySerials,
+  isRelayOperational
+} from '../lib/relay-agent-status';
+
+import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
 
 interface RelayAgentCardProps {
   agent: RelayAgentOut;
@@ -36,12 +45,16 @@ function RelayAgentCard({
 }: RelayAgentCardProps) {
   const qc = useQueryClient();
   const t = useTranslations('relayAgentsFeature');
+  const relayPerms = useResourcePermissions('relay-agents');
+  const devicePerms = useResourcePermissions('devices');
+  const canBootstrap = relayPerms.canExecute;
+  const canRegisterDevice = devicePerms.canCreate;
 
   const { mutate: bootstrapAll, isPending } = useMutation({
     mutationFn: () => relayAgentsApi.bootstrapAll(agent.relay_id),
     onSuccess: (result) => {
       qc.invalidateQueries({ queryKey: ['relay-agents'] });
-      qc.invalidateQueries({ queryKey: ['devices'] });
+      invalidateDeviceFleetQueries(qc);
       const msg =
         t('bootstrapAllResult', { ok: result.ok, total: result.total }) +
         (result.failed > 0
@@ -61,7 +74,7 @@ function RelayAgentCard({
     mutationFn: (serial: string) =>
       relayAgentsApi.registerDevice(agent.relay_id, serial, { name: serial }),
     onSuccess: (device) => {
-      qc.invalidateQueries({ queryKey: ['devices'] });
+      invalidateDeviceFleetQueries(qc);
       qc.invalidateQueries({ queryKey: ['relay-agents'] });
       onDeviceRegistered?.(device);
     },
@@ -70,37 +83,40 @@ function RelayAgentCard({
     }
   });
 
-  const online = agent.status === 'online';
-  const realSerials = agent.serials.filter((s) => !s.startsWith('pending-'));
+  const connectionState = getRelayConnectionState(agent, {
+    busy: isPending
+  });
+  const online = isRelayOperational(connectionState);
+  const realSerials = getVisibleRelaySerials(agent, { busy: isPending });
 
   return (
     <div className='flex flex-col gap-2 rounded-lg border border-border bg-card p-3'>
       <div className='flex items-center justify-between gap-2'>
-        <div className='flex min-w-0 items-center gap-2'>
-          <span
-            className={`size-2 shrink-0 rounded-full ${online ? 'bg-green-500' : 'bg-gray-400'}`}
-          />
+        <div className='flex min-w-0 flex-wrap items-center gap-2'>
           <span className='truncate text-sm font-medium'>
             {agent.hostname || agent.relay_id}
           </span>
+          <RelayAgentStatusBadge state={connectionState} />
           <span className='shrink-0 text-[11px] text-muted-foreground'>
             {agent.ip}
           </span>
         </div>
-        <Button
-          size='sm'
-          variant='outline'
-          className='h-7 shrink-0 px-2 text-xs'
-          disabled={isPending || !online || realSerials.length === 0}
-          onClick={() => bootstrapAll()}
-        >
-          {isPending ? (
-            <Loader2 className='mr-1 size-3 animate-spin' />
-          ) : (
-            <RefreshCw className='mr-1 size-3' />
-          )}
-          {t('bootstrapAll')}
-        </Button>
+        {canBootstrap ? (
+          <Button
+            size='sm'
+            variant='outline'
+            className='h-7 shrink-0 px-2 text-xs'
+            disabled={isPending || !online || realSerials.length === 0}
+            onClick={() => bootstrapAll()}
+          >
+            {isPending ? (
+              <Loader2 className='mr-1 size-3 animate-spin' />
+            ) : (
+              <RefreshCw className='mr-1 size-3' />
+            )}
+            {t('bootstrapAll')}
+          </Button>
+        ) : null}
       </div>
 
       <div className='flex flex-wrap gap-1'>
@@ -124,7 +140,7 @@ function RelayAgentCard({
                   <span className='text-[10px] text-muted-foreground'>
                     {t('registered')}
                   </span>
-                ) : (
+                ) : canRegisterDevice ? (
                   <Button
                     type='button'
                     size='icon'
@@ -140,7 +156,7 @@ function RelayAgentCard({
                       <Plus className='size-3' />
                     )}
                   </Button>
-                )}
+                ) : null}
               </span>
             );
           })
@@ -169,7 +185,9 @@ export function RelayAgentsPanel({
   const t = useTranslations('relayAgentsFeature');
   const [open, setOpen] = useState(false);
   const didAutoOpen = useRef(false);
-  const hasOnline = agents.some((a) => a.status === 'online');
+  const hasOnline = agents.some(
+    (a) => getRelayConnectionState(a) === 'connected'
+  );
 
   useEffect(() => {
     if (hasOnline && !didAutoOpen.current) {
@@ -178,7 +196,9 @@ export function RelayAgentsPanel({
     }
   }, [hasOnline]);
 
-  const onlineCount = agents.filter((a) => a.status === 'online').length;
+  const connectedCount = agents.filter(
+    (a) => getRelayConnectionState(a) === 'connected'
+  ).length;
 
   if (agents.length === 0) return null;
 
@@ -194,7 +214,10 @@ export function RelayAgentsPanel({
           <Server className='size-4 text-muted-foreground' />
           <span>{t('title')}</span>
           <span className='rounded-full bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground'>
-            {t('onlineSummary', { online: onlineCount, total: agents.length })}
+            {t('onlineSummary', {
+              connected: connectedCount,
+              total: agents.length
+            })}
           </span>
         </button>
       </CollapsibleTrigger>

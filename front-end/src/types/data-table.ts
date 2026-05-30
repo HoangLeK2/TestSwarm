@@ -6,6 +6,7 @@ declare module '@tanstack/react-table' {
   // biome-ignore lint/correctness/noUnusedVariables: Interface type parameters required by @tanstack/react-table
   interface ColumnMeta<TData extends RowData, TValue> {
     cellClassName?: string;
+    headerClassName?: string;
     label?: string;
     placeholder?: string;
     variant?: FilterVariant;

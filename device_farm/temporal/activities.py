@@ -344,8 +344,18 @@ class DeviceActivities:
         )
         cancel_event = threading.Event()
 
+        from services.execution_pause_flags import is_execution_paused_async
+
         for batch_pos, (step, step_idx) in enumerate(zip(inp.steps, inp.step_indices)):
             activity.heartbeat(f"batch:{batch_pos}/{len(inp.steps)}")
+            if activity.is_cancelled():
+                break
+            if inp.execution_id and await is_execution_paused_async(inp.execution_id):
+                return DeviceActionBatchResult(
+                    results=results,
+                    first_failure_index=-1,
+                    paused_mid_batch=True,
+                )
             step_type = step.get("type", "")
             mini_scenario: dict[str, Any] = {"steps": [step]}
             if inp.scenario_config:
@@ -687,13 +697,17 @@ class DeviceActivities:
             try:
                 from datetime import datetime, timezone as _tz
                 from db.database import activity_session
-                from db.crud.execution import upsert_execution_result
+                from db.crud.execution import get_execution, update_execution, upsert_execution_result
                 from db.crud.device import get_device_by_serial
                 er_status = "passed" if success else "failed"
                 passed_steps = [s for s in step_results if s.get("ok")]
                 failed_steps = [s for s in step_results if not s.get("ok")]
                 _device_id = None
                 async with activity_session() as db:
+                    ex_row = await get_execution(db, execution_id)
+                    if ex_row and ex_row.status not in ("cancelled", "paused"):
+                        terminal = "completed" if success else "failed"
+                        await update_execution(db, execution_id, status=terminal)
                     device = await get_device_by_serial(db, device_serial)
                     if device:
                         _device_id = device.id

@@ -4,10 +4,13 @@ import re
 import unicodedata
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models import Organization, OrganizationMember, User
+
+
+_SUPERADMIN_ROLE = "superadmin"
 
 
 _DIACRITIC_MAP = str.maketrans({"đ": "d", "Đ": "D"})
@@ -70,19 +73,211 @@ async def create_personal_org_for_user(
     if result.scalar_one_or_none() is not None:
         return None
 
-    return await create_organization(
+    org = await create_organization(
         db,
         owner_id=user.id,
         business_name=make_personal_org_name(user.name, user.email),
         business_email=user.email,
     )
+    # Set user's current org if unset (tenant scoping).
+    if not getattr(user, "org_id", None):
+        try:
+            user.org_id = org.id  # type: ignore[attr-defined]
+            await db.flush()
+        except Exception:
+            pass
+    return org
 
 
 async def list_organizations_for_user(db: AsyncSession, user_id: str) -> list[Organization]:
-    result = await db.execute(
-        select(Organization)
-        .join(OrganizationMember, OrganizationMember.organization_id == Organization.id)
-        .where(OrganizationMember.user_id == user_id)
-        .order_by(Organization.created_at)
+    items, _ = await query_organizations(
+        db, user_id=user_id, limit=10_000, order_desc=False
     )
-    return list(result.scalars().all())
+    return items
+
+
+async def list_all_organizations(db: AsyncSession) -> list[Organization]:
+    items, _ = await query_organizations(
+        db, user_id=None, limit=10_000, order_desc=False
+    )
+    return items
+
+
+def _organization_search_filter(q, search: str | None):
+    if not search:
+        return q
+    escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    pattern = f"%{escaped}%"
+    return q.where(
+        or_(
+            Organization.business_name.ilike(pattern, escape="\\"),
+            Organization.business_email.ilike(pattern, escape="\\"),
+        )
+    )
+
+
+async def query_organizations(
+    db: AsyncSession,
+    *,
+    user_id: str | None = None,
+    search: str | None = None,
+    offset: int = 0,
+    limit: int = 50,
+    ensure_id: str | None = None,
+    order_desc: bool = True,
+) -> tuple[list[Organization], int]:
+    """Paginated organization list. ``user_id=None`` returns all orgs (superadmin)."""
+    safe_limit = min(max(limit, 1), 100)
+    safe_offset = max(offset, 0)
+
+    q = select(Organization)
+    if user_id is not None:
+        q = (
+            q.join(OrganizationMember, OrganizationMember.organization_id == Organization.id)
+            .where(OrganizationMember.user_id == user_id)
+        )
+    q = _organization_search_filter(q, (search or "").strip() or None)
+
+    count_q = select(func.count()).select_from(q.subquery())
+    total = int((await db.execute(count_q)).scalar_one() or 0)
+
+    # Prefer shared team orgs over the auto-created personal workspace when listing.
+    personal_last = Organization.business_name.like("%'s Workspace")
+    order = Organization.created_at.desc() if order_desc else Organization.created_at.asc()
+    rows = await db.execute(
+        q.order_by(personal_last.asc(), order)
+        .offset(safe_offset)
+        .limit(safe_limit)
+    )
+    items = list(rows.scalars().all())
+
+    if ensure_id and not any(o.id == ensure_id for o in items):
+        extra_q = select(Organization).where(Organization.id == ensure_id)
+        if user_id is not None:
+            extra_q = (
+                extra_q.join(
+                    OrganizationMember,
+                    OrganizationMember.organization_id == Organization.id,
+                ).where(OrganizationMember.user_id == user_id)
+            )
+        extra = (await db.execute(extra_q.limit(1))).scalar_one_or_none()
+        if extra is not None:
+            items = [extra, *items]
+
+    return items, total
+
+
+async def get_organization_role_for_user(
+    db: AsyncSession, user_id: str, organization_id: str | None
+) -> str | None:
+    if not organization_id:
+        return None
+    role = (
+        await db.execute(select(User.role).where(User.id == user_id).limit(1))
+    ).scalar_one_or_none()
+    if role == _SUPERADMIN_ROLE:
+        return "owner"
+    return (
+        await db.execute(
+            select(OrganizationMember.role)
+            .where(OrganizationMember.user_id == user_id)
+            .where(OrganizationMember.organization_id == organization_id)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+async def list_organization_members(
+    db: AsyncSession, organization_id: str
+) -> list[tuple[OrganizationMember, User]]:
+    result = await db.execute(
+        select(OrganizationMember, User)
+        .join(User, User.id == OrganizationMember.user_id)
+        .where(OrganizationMember.organization_id == organization_id)
+        .order_by(OrganizationMember.created_at)
+    )
+    return list(result.all())
+
+
+async def get_organization_member(
+    db: AsyncSession, organization_id: str, user_id: str
+) -> OrganizationMember | None:
+    return (
+        await db.execute(
+            select(OrganizationMember)
+            .where(OrganizationMember.organization_id == organization_id)
+            .where(OrganizationMember.user_id == user_id)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+async def add_organization_member(
+    db: AsyncSession,
+    *,
+    organization_id: str,
+    user_id: str,
+    role: str = "member",
+) -> OrganizationMember:
+    member = OrganizationMember(
+        organization_id=organization_id,
+        user_id=user_id,
+        role=role,
+    )
+    db.add(member)
+    await db.flush()
+    return member
+
+
+async def remove_organization_member(
+    db: AsyncSession, organization_id: str, user_id: str
+) -> bool:
+    member = await get_organization_member(db, organization_id, user_id)
+    if member is None:
+        return False
+    await db.delete(member)
+    await db.flush()
+    return True
+
+
+async def count_organization_owners(
+    db: AsyncSession, organization_id: str
+) -> int:
+    result = await db.execute(
+        select(func.count())
+        .select_from(OrganizationMember)
+        .where(OrganizationMember.organization_id == organization_id)
+        .where(OrganizationMember.role == "owner")
+    )
+    return int(result.scalar_one() or 0)
+
+
+async def update_organization_member_role(
+    db: AsyncSession,
+    *,
+    organization_id: str,
+    user_id: str,
+    role: str,
+) -> OrganizationMember | None:
+    member = await get_organization_member(db, organization_id, user_id)
+    if member is None:
+        return None
+    member.role = role
+    await db.flush()
+    return member
+
+
+async def get_current_org_for_user(db: AsyncSession, user_id: str) -> Organization | None:
+    """Current organization for auth scoping.
+
+    Today this is `users.org_id` (primary org) if set, else first membership.
+    """
+    row = (
+        await db.execute(select(User.org_id).where(User.id == user_id).limit(1))
+    ).scalar_one_or_none()
+    if row:
+        return (
+            await db.execute(select(Organization).where(Organization.id == row).limit(1))
+        ).scalar_one_or_none()
+    orgs = await list_organizations_for_user(db, user_id)
+    return orgs[0] if orgs else None

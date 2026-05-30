@@ -6,6 +6,7 @@ export type RegisterPayload = {
   name: string;
   password: string;
   role?: string;
+  inviteToken?: string;
 };
 export type TokenResponse = {
   access_token: string;
@@ -18,6 +19,7 @@ export type UserOut = {
   name: string;
   role: string;
   api_key: string;
+  orgRole?: string | null;
 };
 
 export const authApi = {

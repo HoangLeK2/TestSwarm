@@ -4,6 +4,7 @@ import re
 from pydantic import BaseModel, Field, field_validator
 
 from api.schemas.scenario import FlowNodeModel, FlowEdgeModel
+from api.schemas.scenario_validation import ScenarioValidationSummaryOut
 
 
 class ScenarioCreate(BaseModel):
@@ -67,6 +68,8 @@ class ScenarioOut(BaseModel):
     edges: list = []
     account_group_id: Optional[str] = None
     account_group_name: Optional[str] = None
+    last_validation_summary: Optional[ScenarioValidationSummaryOut] = None
+    last_validated_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 

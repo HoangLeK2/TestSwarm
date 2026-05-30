@@ -9,7 +9,8 @@ Endpoints:
     GET    /api/accounts/{id}                        Get account detail
     PATCH  /api/accounts/{id}                        Update account
     DELETE /api/accounts/{id}                        Delete account
-    PATCH  /api/accounts/{id}/status                 Update status
+    PATCH  /api/accounts/{id}/status                 Update status (legacy)
+    POST   /api/accounts/{id}/state                  FSM state transition
     GET    /api/accounts/{id}/devices                List devices assigned to account
     POST   /api/accounts/{id}/devices                Assign device to account
     DELETE /api/accounts/{id}/devices/{device_id}    Unassign device from account
@@ -21,11 +22,14 @@ from __future__ import annotations
 
 import csv
 import io
-from typing import List, Optional
+import os
+from datetime import datetime, timezone
+from typing import List, NoReturn, Optional
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 
-from api.deps import CurrentUser, DB
+from api.deps import CurrentUser, DB, require_permission
+from api.org_scope import data_owner_user_id, resource_visible_to_user
 from api.schemas.account import (
     AccountCreate,
     AccountOut,
@@ -39,6 +43,10 @@ from api.schemas.account import (
     DeviceAccountOut,
     RoundRobinBody,
     SetPrimaryBody,
+)
+from api.schemas.account_state import (
+    AccountStateTransitionBody,
+    AccountStateTransitionOut,
 )
 from api.schemas.account_event import AccountEventListOut, AccountEventOut
 from common.crypto import encrypt_password
@@ -55,6 +63,7 @@ from db.crud.account import (
     get_account_by_platform_username,
     list_account_devices,
     list_accounts,
+    list_active_account_ids,
     list_device_accounts,
     round_robin_assign,
     set_primary_account,
@@ -63,25 +72,57 @@ from db.crud.account import (
 )
 from db.models.enums import AccountEventType
 from services.account_event_recorder import get_account_event_recorder
+from services.account_state import (
+    AccountStateError,
+    AccountStateService,
+    InvalidStateTransitionError,
+    InvalidTtlError,
+    StateConflictError,
+)
 
 router = APIRouter(tags=["accounts"])
+
+_DEFAULT_COOLDOWN_SECONDS = int(
+    float(os.environ.get("ACCOUNT_COOLDOWN_MINUTES", "120")) * 60
+)
+
+
+def _raise_account_state_http(exc: AccountStateError) -> NoReturn:
+    if isinstance(exc, StateConflictError):
+        code = status.HTTP_409_CONFLICT
+    elif isinstance(exc, (InvalidStateTransitionError, InvalidTtlError)):
+        code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    else:
+        code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    raise HTTPException(
+        status_code=code,
+        detail={"code": exc.code, "message": str(exc)},
+    ) from exc
 
 
 async def _commit_and_flush_events(db) -> None:
     await db.commit()
-    await get_account_event_recorder().flush_all()
+    rec = get_account_event_recorder()
+    while rec._pending:
+        flushed = await rec.flush(db)
+        if flushed == 0:
+            break
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 
 def _account_to_out(account) -> AccountOut:
+    state = getattr(account, "state", None) or account.status
     return AccountOut(
         id=account.id,
         platform=account.platform,
         username=account.username,
         display_name=account.display_name or "",
         status=account.status,
+        state=state,
+        state_reason=getattr(account, "state_reason", None),
+        state_changed_at=getattr(account, "state_changed_at", None),
         cooldown_until=account.cooldown_until,
         proxy_id=account.proxy_id,
         notes=account.notes or "",
@@ -130,12 +171,21 @@ async def _get_account_or_404(account_id: str, db):
 # ── Account endpoints ──────────────────────────────────────────────────────────
 
 
-@router.get("/accounts", response_model=List[AccountOut])
+@router.get(
+    "/accounts",
+    response_model=List[AccountOut],
+    dependencies=[Depends(require_permission("accounts", "read"))],
+)
 async def list_accounts_endpoint(
     db: DB,
     user: CurrentUser,
     platform: Optional[str] = Query(None),
     account_status: Optional[str] = Query(None, alias="status"),
+    state: Optional[str] = Query(None),
+    include_states: Optional[List[str]] = Query(
+        None,
+        description="Override default listing; comma-separated in OpenAPI as repeated params",
+    ),
     tags: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -145,15 +195,22 @@ async def list_accounts_endpoint(
         db,
         platform=platform,
         status=account_status,
+        state=state,
+        include_states=include_states,
         tags=tags,
-        user_id=user.id,
+        user_id=data_owner_user_id(user),
         limit=limit,
         offset=offset,
     )
     return [_account_to_out(a) for a in accounts]
 
 
-@router.post("/accounts", response_model=AccountOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/accounts",
+    response_model=AccountOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission("accounts", "create"))],
+)
 async def create_account_endpoint(body: AccountCreate, db: DB, user: CurrentUser):
     """Create a new account. Password is encrypted before storage."""
     existing = await get_account_by_platform_username(db, body.platform, body.username)
@@ -172,6 +229,7 @@ async def create_account_endpoint(body: AccountCreate, db: DB, user: CurrentUser
         notes=body.notes,
         tags=body.tags,
         user_id=user.id,
+        org_id=getattr(user, "org_id", None),
         account_metadata=body.account_metadata,
     )
     get_account_event_recorder().record(
@@ -186,7 +244,12 @@ async def create_account_endpoint(body: AccountCreate, db: DB, user: CurrentUser
     return _account_to_out(account)
 
 
-@router.post("/accounts/import", response_model=BulkImportResult, status_code=status.HTTP_200_OK)
+@router.post(
+    "/accounts/import",
+    response_model=BulkImportResult,
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_permission("accounts", "create"))],
+)
 async def bulk_import_json(body: BulkImportBody, db: DB, user: CurrentUser):
     """Bulk import accounts from a JSON array. Duplicate (platform, username) pairs are skipped."""
     rows = [r.model_dump() for r in body.accounts]
@@ -199,6 +262,7 @@ async def bulk_import_json(body: BulkImportBody, db: DB, user: CurrentUser):
     "/accounts/import-csv",
     response_model=BulkImportResult,
     status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_permission("accounts", "create"))],
 )
 async def bulk_import_csv(
     db: DB,
@@ -305,26 +369,79 @@ async def bulk_import_csv(
     return BulkImportResult(created=created, skipped=skipped, total=total)
 
 
-@router.post("/accounts/round-robin", response_model=dict)
+@router.post(
+    "/accounts/round-robin",
+    response_model=dict,
+    dependencies=[Depends(require_permission("accounts", "execute"))],
+)
 async def round_robin_assign_endpoint(body: RoundRobinBody, db: DB, user: CurrentUser):
-    """Auto-assign accounts to devices in round-robin order."""
-    created = await round_robin_assign(db, body.account_ids, body.device_ids)
+    """Auto-assign active accounts to devices in round-robin order."""
+    active_ids = await list_active_account_ids(db, body.account_ids)
+    created = await round_robin_assign(db, active_ids, body.device_ids)
     await db.commit()
     return {
         "created": created,
-        "accounts": len(body.account_ids),
+        "accounts": len(active_ids),
+        "accounts_requested": len(body.account_ids),
         "devices": len(body.device_ids),
     }
 
 
-@router.get("/accounts/{account_id}", response_model=AccountWithLinksOut)
+@router.post(
+    "/accounts/{account_id}/state",
+    response_model=AccountStateTransitionOut,
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_permission("accounts", "update"))],
+)
+async def transition_account_state(
+    account_id: str,
+    body: AccountStateTransitionBody,
+    db: DB,
+    user: CurrentUser,
+):
+    """Transition account FSM state with validation, audit, and domain event."""
+    await _get_account_or_404(account_id, db)
+    svc = AccountStateService()
+    try:
+        account = await svc.transition(
+            db,
+            account_id,
+            to=body.to,
+            reason=body.reason,
+            ttl_seconds=body.ttl_seconds,
+            actor=user.id,
+            expected_state_changed_at=body.expected_state_changed_at,
+        )
+    except AccountStateError as exc:
+        _raise_account_state_http(exc)
+
+    await _commit_and_flush_events(db)
+    return AccountStateTransitionOut(
+        id=account.id,
+        state=account.state,
+        status=account.status,
+        state_reason=account.state_reason,
+        state_changed_at=account.state_changed_at,
+        cooldown_until=account.cooldown_until,
+    )
+
+
+@router.get(
+    "/accounts/{account_id}",
+    response_model=AccountWithLinksOut,
+    dependencies=[Depends(require_permission("accounts", "read"))],
+)
 async def get_account_endpoint(account_id: str, db: DB, user: CurrentUser):
     """Get account details including device links."""
     account = await _get_account_or_404(account_id, db)
     return _account_to_detail_out(account)
 
 
-@router.get("/accounts/{account_id}/events", response_model=AccountEventListOut)
+@router.get(
+    "/accounts/{account_id}/events",
+    response_model=AccountEventListOut,
+    dependencies=[Depends(require_permission("accounts", "read"))],
+)
 async def list_account_events_endpoint(
     account_id: str,
     db: DB,
@@ -335,7 +452,12 @@ async def list_account_events_endpoint(
 ):
     """Paginated account profile / session timeline (newest first)."""
     account = await _get_account_or_404(account_id, db)
-    if account.user_id and account.user_id != user.id:
+    if account.user_id and not await resource_visible_to_user(
+        db,
+        user,
+        owner_user_id=account.user_id,
+        org_id=getattr(account, "org_id", None),
+    ):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
     items, next_cursor, has_more = await list_account_events(
         db,
@@ -351,7 +473,11 @@ async def list_account_events_endpoint(
     )
 
 
-@router.patch("/accounts/{account_id}", response_model=AccountOut)
+@router.patch(
+    "/accounts/{account_id}",
+    response_model=AccountOut,
+    dependencies=[Depends(require_permission("accounts", "update"))],
+)
 async def update_account_endpoint(
     account_id: str, body: AccountUpdate, db: DB, user: CurrentUser
 ):
@@ -378,7 +504,11 @@ async def update_account_endpoint(
     return _account_to_out(account)
 
 
-@router.delete("/accounts/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/accounts/{account_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission("accounts", "delete"))],
+)
 async def delete_account_endpoint(account_id: str, db: DB, user: CurrentUser):
     """Delete account and all its device links (cascade)."""
     existing = await _get_account_or_404(account_id, db)
@@ -393,34 +523,31 @@ async def delete_account_endpoint(account_id: str, db: DB, user: CurrentUser):
     await _commit_and_flush_events(db)
 
 
-@router.patch("/accounts/{account_id}/status", response_model=AccountOut)
+@router.patch(
+    "/accounts/{account_id}/status",
+    response_model=AccountOut,
+    dependencies=[Depends(require_permission("accounts", "update"))],
+)
 async def update_account_status(
     account_id: str, body: AccountStatusUpdate, db: DB, user: CurrentUser
 ):
-    """Manually set account status (active / banned / cooldown / disabled)."""
-    existing = await _get_account_or_404(account_id, db)
-    old_status = existing.status
-    extra: dict = {}
-    if body.status == "active":
-        extra["cooldown_until"] = None
-        extra["usage_today_minutes"] = 0.0
-    account = await update_account(db, account_id, status=body.status, **extra)
-    rec = get_account_event_recorder()
-    rec.record(
-        account_id=account_id,
-        event_type=AccountEventType.STATUS_CHANGED,
-        user_id=user.id,
-        platform=existing.platform,
-        details={"old_status": old_status, "new_status": body.status},
-    )
-    if body.status == "banned":
-        rec.record(
-            account_id=account_id,
-            event_type=AccountEventType.BANNED,
-            user_id=user.id,
-            platform=existing.platform,
-            details={"source": "manual"},
+    """Set account status via FSM (legacy alias). Prefer POST /state."""
+    await _get_account_or_404(account_id, db)
+    ttl = body.ttl_seconds
+    if body.status == "cooldown" and ttl is None:
+        ttl = _DEFAULT_COOLDOWN_SECONDS
+    svc = AccountStateService()
+    try:
+        account = await svc.transition(
+            db,
+            account_id,
+            to=body.status,
+            reason=body.reason,
+            ttl_seconds=ttl if body.status == "cooldown" else None,
+            actor=user.id,
         )
+    except AccountStateError as exc:
+        _raise_account_state_http(exc)
     await _commit_and_flush_events(db)
     return _account_to_out(account)
 
@@ -428,7 +555,11 @@ async def update_account_status(
 # ── Account ↔ Device assignment endpoints ─────────────────────────────────────
 
 
-@router.get("/accounts/{account_id}/devices", response_model=List[DeviceAccountOut])
+@router.get(
+    "/accounts/{account_id}/devices",
+    response_model=List[DeviceAccountOut],
+    dependencies=[Depends(require_permission("accounts", "read"))],
+)
 async def list_account_devices_endpoint(account_id: str, db: DB, user: CurrentUser):
     """List all device-account links for an account."""
     await _get_account_or_404(account_id, db)
@@ -440,6 +571,7 @@ async def list_account_devices_endpoint(account_id: str, db: DB, user: CurrentUs
     "/accounts/{account_id}/devices",
     response_model=DeviceAccountOut,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission("accounts", "update"))],
 )
 async def assign_device_to_account(
     account_id: str, body: AssignDeviceBody, db: DB, user: CurrentUser
@@ -464,6 +596,7 @@ async def assign_device_to_account(
 @router.delete(
     "/accounts/{account_id}/devices/{device_id}",
     status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_permission("accounts", "update"))],
 )
 async def unassign_device_from_account(
     account_id: str, device_id: str, db: DB, user: CurrentUser
@@ -486,7 +619,11 @@ async def unassign_device_from_account(
 # ── Device-centric account endpoints ──────────────────────────────────────────
 
 
-@router.get("/devices/{device_id}/accounts", response_model=List[DeviceAccountOut])
+@router.get(
+    "/devices/{device_id}/accounts",
+    response_model=List[DeviceAccountOut],
+    dependencies=[Depends(require_permission("accounts", "read"))],
+)
 async def list_device_accounts_endpoint(device_id: str, db: DB, user: CurrentUser):
     """List all accounts assigned to a device."""
     links = await list_device_accounts(db, device_id)
@@ -497,6 +634,7 @@ async def list_device_accounts_endpoint(device_id: str, db: DB, user: CurrentUse
     "/devices/{device_id}/accounts",
     response_model=DeviceAccountOut,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission("accounts", "update"))],
 )
 async def assign_account_to_device_endpoint(
     device_id: str, body: AssignAccountBody, db: DB, user: CurrentUser
@@ -512,7 +650,11 @@ async def assign_account_to_device_endpoint(
     return _link_to_out(link)
 
 
-@router.post("/devices/{device_id}/accounts/primary", response_model=DeviceAccountOut)
+@router.post(
+    "/devices/{device_id}/accounts/primary",
+    response_model=DeviceAccountOut,
+    dependencies=[Depends(require_permission("accounts", "update"))],
+)
 async def set_primary_account_endpoint(
     device_id: str, body: SetPrimaryBody, db: DB, user: CurrentUser
 ):

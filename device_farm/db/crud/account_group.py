@@ -35,6 +35,7 @@ async def create_group(
     description: str = "",
     platform: str,
     rotation_strategy: str = "round_robin",
+    org_id: Optional[str] = None,
 ) -> AccountGroup:
     group = AccountGroup(
         user_id=user_id,
@@ -42,6 +43,7 @@ async def create_group(
         description=description,
         platform=platform,
         rotation_strategy=rotation_strategy,
+        org_id=org_id,
     )
     db.add(group)
     await db.flush()
@@ -82,9 +84,10 @@ async def list_groups(
     q = (
         select(AccountGroup, func.coalesce(count_sq.c.cnt, 0))
         .outerjoin(count_sq, count_sq.c.group_id == AccountGroup.id)
-        .where(AccountGroup.user_id == user_id)
         .order_by(AccountGroup.created_at.desc())
     )
+    if user_id:
+        q = q.where(AccountGroup.user_id == user_id)
     if platform:
         q = q.where(AccountGroup.platform == platform)
     rows = (await db.execute(q)).all()
@@ -177,6 +180,7 @@ async def add_members(
                 group_id=group.id,
                 account_id=account_id,
                 position=start_pos + offset,
+                org_id=group.org_id,
             )
         )
     await db.flush()
@@ -206,6 +210,7 @@ async def list_members(
             AccountGroupMember.account_id,
             Account.username,
             Account.display_name,
+            Account.state,
             Account.status,
             AccountGroupMember.position,
             AccountGroupMember.last_used_at,
@@ -220,10 +225,11 @@ async def list_members(
             "account_id": r[0],
             "username": r[1],
             "display_name": r[2] or "",
-            "status": r[3],
-            "position": int(r[4] or 0),
-            "last_used_at": r[5],
-            "added_at": r[6],
+            "state": r[3],
+            "status": r[4],
+            "position": int(r[5] or 0),
+            "last_used_at": r[6],
+            "added_at": r[7],
         }
         for r in rows
     ]
@@ -250,9 +256,9 @@ async def pick_next_batch(
       is updated atomically inside the same transaction to prevent two
       concurrent callers picking the same stale members.
 
-    Filters out accounts that are not ``status='active'`` and accounts whose
+    Filters out accounts that are not ``state='active'`` and accounts whose
     ``cooldown_until`` is still in the future. An empty group (or a group
-    where every account is banned/cooldown) returns ``[]``.
+    where every account is non-active) returns ``[]``.
 
     Callers MUST commit the surrounding transaction; the cursor/last_used_at
     updates are buffered until commit, so a rollback undoes the rotation.
@@ -280,7 +286,7 @@ async def pick_next_batch(
         .join(Account, Account.id == AccountGroupMember.account_id)
         .where(
             AccountGroupMember.group_id == group_id,
-            Account.status == "active",
+            Account.state == "active",
             or_(
                 Account.cooldown_until.is_(None),
                 Account.cooldown_until <= now,
@@ -294,7 +300,7 @@ async def pick_next_batch(
         .join(Account, Account.id == AccountGroupMember.account_id)
         .where(
             AccountGroupMember.group_id == group_id,
-            Account.status == "active",
+            Account.state == "active",
             or_(
                 Account.cooldown_until.is_(None),
                 Account.cooldown_until <= now,

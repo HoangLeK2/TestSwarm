@@ -10,6 +10,7 @@ from sqlalchemy import delete
 
 from db.models import Device, CampaignDevice
 from db.models.utils import _now
+from db.crud.device_state import ensure_device_state
 
 
 PENDING_SERIAL_PREFIX = "pending-"
@@ -54,14 +55,15 @@ async def get_device(db: AsyncSession, device_id: str) -> Optional[Device]:
 
 
 async def get_or_create_device(
-    db: AsyncSession, serial: str, user_id: Optional[str] = None
+    db: AsyncSession, serial: str, user_id: Optional[str] = None, org_id: Optional[str] = None
 ) -> Device:
     """Get existing device by serial, or create a new one (auto-register)."""
     device = await get_device_by_serial(db, serial)
     if device is None:
-        device = Device(serial=serial, user_id=user_id)
+        device = Device(serial=serial, user_id=user_id, org_id=org_id)  # type: ignore[arg-type]
         db.add(device)
         await db.flush()
+        await ensure_device_state(db, device.id)
     return device
 
 
@@ -70,10 +72,12 @@ async def create_device(
     serial: str,
     name: str = "",
     user_id: Optional[str] = None,
+    org_id: Optional[str] = None,
 ) -> Device:
-    device = Device(serial=serial, name=name, user_id=user_id)
+    device = Device(serial=serial, name=name, user_id=user_id, org_id=org_id)  # type: ignore[arg-type]
     db.add(device)
     await db.flush()
+    await ensure_device_state(db, device.id)
     return device
 
 
@@ -81,12 +85,14 @@ async def create_pending_device(
     db: AsyncSession,
     user_id: str,
     name: str = "",
+    org_id: Optional[str] = None,
 ) -> Device:
     """Tạo bản ghi thiết bị chưa kết nối (đăng ký). Serial = pending-{uuid}."""
     serial = f"{PENDING_SERIAL_PREFIX}{uuid.uuid4().hex}"
-    device = Device(serial=serial, name=name or "Thiết bị mới", user_id=user_id)
+    device = Device(serial=serial, name=name or "Thiết bị mới", user_id=user_id, org_id=org_id)  # type: ignore[arg-type]
     db.add(device)
     await db.flush()
+    await ensure_device_state(db, device.id)
     return device
 
 
@@ -261,9 +267,17 @@ async def touch_device_last_seen(db: AsyncSession, serial: str) -> None:
     )
 
 
-async def list_devices(db: AsyncSession, user_id: Optional[str] = None) -> list[Device]:
+async def list_devices(
+    db: AsyncSession,
+    *,
+    org_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+) -> list[Device]:
     q = select(Device).order_by(Device.created_at)
-    if user_id:
+    # Prefer org scoping (multi-user org). `user_id` kept for legacy call sites.
+    if org_id:
+        q = q.where(Device.org_id == org_id)
+    elif user_id:
         q = q.where(Device.user_id == user_id)
     result = await db.execute(q)
     return list(result.scalars().all())

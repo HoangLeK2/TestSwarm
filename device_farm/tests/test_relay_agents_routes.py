@@ -158,7 +158,8 @@ async def test_list_relay_agents_dedupes_same_hostname_rows():
     fake_user.id = "user-a"
 
     with patch("api.routes.relay_agents.repo") as mock_repo, \
-         patch("api.routes.relay_agents._get_live_caps", return_value={"wlan_ip": "172.16.0.182"}):
+         patch("api.routes.relay_agents._get_live_caps", return_value={"wlan_ip": "172.16.0.182"}), \
+         patch("api.routes.relay_agents._live_relay_serials", return_value={"10AE7S00HD002JK"}):
         mock_repo.list_relay_agents = AsyncMock(
             return_value=[_row("relay-old", "offline", 0), _row("relay-new", "online", 10)]
         )
@@ -212,7 +213,11 @@ async def test_list_relay_agents_uses_alias_owner_map_and_cached_caps():
         }
 
     with patch("api.routes.relay_agents.repo") as mock_repo, \
-         patch("api.routes.relay_agents._get_live_caps", side_effect=_fake_caps):
+         patch("api.routes.relay_agents._get_live_caps", side_effect=_fake_caps), \
+         patch(
+             "api.routes.relay_agents._live_relay_serials",
+             return_value={"192.168.1.20:5555", "192.168.1.21:5555"},
+         ):
         mock_repo.list_relay_agents = AsyncMock(return_value=[fake_row])
         mock_repo.list_devices = AsyncMock(return_value=[owned_by_other])
 
@@ -221,6 +226,44 @@ async def test_list_relay_agents_uses_alias_owner_map_and_cached_caps():
     assert len(result) == 1
     assert result[0].serials == ["192.168.1.20:5555"]
     assert caps_calls == ["192.168.1.20:5555", "192.168.1.21:5555"]
+
+
+@pytest.mark.asyncio
+async def test_list_relay_agents_hides_serials_when_control_channel_offline():
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from datetime import datetime, timezone
+
+    from api.routes.relay_agents import list_relay_agents
+
+    fake_row = MagicMock()
+    fake_row.relay_id = "relay-x"
+    fake_row.hostname = "agent-host"
+    fake_row.ip = "192.168.1.10"
+    fake_row.version = "test"
+    fake_row.serials = ["192.168.1.20:5555"]
+    fake_row.status = "online"
+    fake_row.connected_at = datetime.now(timezone.utc)
+    fake_row.last_heartbeat_at = fake_row.connected_at
+    fake_row.disconnected_at = None
+    fake_row.user_id = "user-a"
+    fake_row.enrollment_token_id = "tok-a"
+
+    fake_db = AsyncMock()
+    fake_user = MagicMock()
+    fake_user.id = "user-a"
+
+    with patch("api.routes.relay_agents.repo") as mock_repo, \
+         patch("api.routes.relay_agents._live_relay_serials", return_value=None):
+        mock_repo.list_relay_agents = AsyncMock(return_value=[fake_row])
+        mock_repo.list_devices = AsyncMock(return_value=[])
+
+        result = await list_relay_agents(db=fake_db, user=fake_user)
+
+    assert len(result) == 1
+    assert result[0].status == "offline"
+    assert result[0].live_connected is False
+    assert result[0].serials == []
+    assert result[0].device_names == {}
 
 
 @pytest.mark.asyncio
@@ -234,6 +277,7 @@ async def test_relay_token_routes_are_user_scoped():
     fake_db = AsyncMock()
     fake_user = MagicMock()
     fake_user.id = "user-a"
+    fake_user.org_id = "org-a"
 
     fake_row = MagicMock()
     fake_row.id = "tok-1"
@@ -253,7 +297,7 @@ async def test_relay_token_routes_are_user_scoped():
         )
         assert created.token == "dfra_secret"
         mock_repo.create_relay_agent_token.assert_awaited_once_with(
-            fake_db, user_id="user-a", name="office"
+            fake_db, user_id="user-a", name="office", org_id="org-a"
         )
 
         mock_repo.list_relay_agent_tokens = AsyncMock(return_value=[fake_row])

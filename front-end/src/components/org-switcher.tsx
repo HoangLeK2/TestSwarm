@@ -1,6 +1,6 @@
 'use client';
 
-import { ChevronsUpDown, Settings, UserPlus, Check } from 'lucide-react';
+import { ChevronsUpDown, Settings, UserPlus, Check, Search } from 'lucide-react';
 import * as React from 'react';
 
 import {
@@ -27,13 +27,36 @@ import Image from 'next/image';
 import { ROUTES } from '@/config/routes';
 import { useConfirm } from '@/providers/modal-provider';
 import { formatOrgDisplayName } from '@/features/organization/utils/org-name';
+import { useQueryClient } from '@tanstack/react-query';
+import { Input } from '@/components/ui/input';
+import { useOrganizationsInfinite } from '@/features/organization/hooks/use-organizations';
 
 export function OrgSwitcher() {
   const { open } = useSidebar();
-  const { currentOrg, organizations, setCurrentOrg } = useOrganization();
+  const { currentOrg, setCurrentOrg } = useOrganization();
   const router = useRouter();
   const t = useTranslations('organization');
   const confirm = useConfirm();
+  const queryClient = useQueryClient();
+  const [orgSearch, setOrgSearch] = React.useState('');
+  const [orgSearchInput, setOrgSearchInput] = React.useState('');
+  const {
+    data: orgPages,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage
+  } = useOrganizationsInfinite(orgSearch);
+
+  const switcherOrgs = React.useMemo(() => {
+    const merged =
+      orgPages?.pages.flatMap((p) => p?.items ?? []) ?? [];
+    const seen = new Set<string>();
+    return merged.filter((org) => {
+      if (seen.has(org.id)) return false;
+      seen.add(org.id);
+      return true;
+    });
+  }, [orgPages]);
 
   const noNameFallback = t('noName');
 
@@ -51,6 +74,7 @@ export function OrgSwitcher() {
     });
     if (confirmed) {
       setCurrentOrg(org);
+      await queryClient.invalidateQueries();
       router.push(ROUTES.DASHBOARD.ROOT);
     }
   };
@@ -63,7 +87,9 @@ export function OrgSwitcher() {
     router.push(ROUTES.DASHBOARD.ORGANIZATION_MEMBER);
   };
 
-  const enableShowOrgList = organizations.length > 1;
+  const enableShowOrgList =
+    switcherOrgs.length > 1 ||
+    (orgPages?.pages[0]?.total ?? switcherOrgs.length) > 1;
 
   return (
     <SidebarMenu>
@@ -155,6 +181,25 @@ export function OrgSwitcher() {
                   {t('shortTitle')}
                 </DropdownMenuLabel>
 
+                <div className='px-2 pb-2'>
+                  <div className='relative'>
+                    <Search className='absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground' />
+                    <Input
+                      value={orgSearchInput}
+                      onChange={(e) => setOrgSearchInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          setOrgSearch(orgSearchInput.trim());
+                        }
+                      }}
+                      placeholder={t('searchOrgs')}
+                      className='h-8 pl-8 text-xs'
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </div>
+                </div>
+
                 <DropdownMenuItem
                   className={cn(
                     'flex items-center justify-between bg-muted/50 p-2',
@@ -178,7 +223,7 @@ export function OrgSwitcher() {
                   <Check className='h-4 w-4 text-foreground' />
                 </DropdownMenuItem>
 
-                {organizations
+                {switcherOrgs
                   .filter((org) => org.id !== currentOrg?.id)
                   .map((org: ProtoOrganization) => (
                     <DropdownMenuItem
@@ -200,6 +245,18 @@ export function OrgSwitcher() {
                       </OverflowTooltip>
                     </DropdownMenuItem>
                   ))}
+
+                {hasNextPage ? (
+                  <DropdownMenuItem
+                    className='justify-center p-2 text-xs text-muted-foreground'
+                    onSelect={(e) => {
+                      e.preventDefault();
+                      void fetchNextPage();
+                    }}
+                  >
+                    {isFetchingNextPage ? '…' : t('loadMoreOrgs')}
+                  </DropdownMenuItem>
+                ) : null}
               </>
             )}
           </DropdownMenuContent>

@@ -44,6 +44,12 @@ import {
   TableHeader,
   TableRow
 } from '@/components/ui/table';
+import { RelayAgentStatusBadge } from '@/features/devices/components/relay-agent-status-badge';
+import {
+  getRelayConnectionState,
+  getVisibleRelaySerials,
+  isRelayOperational
+} from '@/features/devices/lib/relay-agent-status';
 import {
   devicesApi,
   relayAgentsApi,
@@ -53,11 +59,13 @@ import {
   type RelayAgentTokenCreated,
   type RelayAgentTokenOut
 } from '@/features/devices/services/manage-api';
+import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
 
 function RelayTokenSection({ tokens }: { tokens: RelayAgentTokenOut[] }) {
   const qc = useQueryClient();
   const t = useTranslations('relayAgentsFeature');
   const format = useFormatter();
+  const perms = useResourcePermissions('relay-agents');
   const [createOpen, setCreateOpen] = useState(false);
   const [createdOpen, setCreatedOpen] = useState(false);
   const [revokeId, setRevokeId] = useState<string | null>(null);
@@ -110,14 +118,16 @@ function RelayTokenSection({ tokens }: { tokens: RelayAgentTokenOut[] }) {
               </p>
             </div>
           </div>
-          <Button
-            size='sm'
-            className='shrink-0'
-            onClick={() => setCreateOpen(true)}
-          >
-            <Plus className='mr-1.5 size-3.5' />
-            {t('createToken')}
-          </Button>
+          {perms.canCreate ? (
+            <Button
+              size='sm'
+              className='shrink-0'
+              onClick={() => setCreateOpen(true)}
+            >
+              <Plus className='mr-1.5 size-3.5' />
+              {t('createToken')}
+            </Button>
+          ) : null}
         </div>
 
         {activeTokens.length === 0 ? (
@@ -156,17 +166,19 @@ function RelayTokenSection({ tokens }: { tokens: RelayAgentTokenOut[] }) {
                       : '—'}
                   </TableCell>
                   <TableCell className='text-right'>
-                    <Button
-                      type='button'
-                      size='icon'
-                      variant='ghost'
-                      className='size-8 text-destructive hover:text-destructive'
-                      title={t('revokeToken')}
-                      disabled={isRevoking}
-                      onClick={() => setRevokeId(token.id)}
-                    >
-                      <Trash2 className='size-3.5' />
-                    </Button>
+                    {perms.canDelete ? (
+                      <Button
+                        type='button'
+                        size='icon'
+                        variant='ghost'
+                        className='size-8 text-destructive hover:text-destructive'
+                        title={t('revokeToken')}
+                        disabled={isRevoking}
+                        onClick={() => setRevokeId(token.id)}
+                      >
+                        <Trash2 className='size-3.5' />
+                      </Button>
+                    ) : null}
                   </TableCell>
                 </TableRow>
               ))}
@@ -296,6 +308,7 @@ function RelayAgentCard({
   const qc = useQueryClient();
   const format = useFormatter();
   const t = useTranslations('relayAgentsFeature');
+  const perms = useResourcePermissions('relay-agents');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
 
@@ -349,10 +362,11 @@ function RelayAgentCard({
     }
   });
 
-  const online = agent.status === 'online';
-  const realSerials = agent.serials.filter((s) => !s.startsWith('pending-'));
-  const selectedSerials = realSerials.filter((serial) => selected.has(serial));
   const busy = isProvisioning || isClaiming;
+  const connectionState = getRelayConnectionState(agent, { busy });
+  const online = isRelayOperational(connectionState);
+  const realSerials = getVisibleRelaySerials(agent, { busy });
+  const selectedSerials = realSerials.filter((serial) => selected.has(serial));
   const terminal =
     activeJob &&
     ['completed', 'completed_with_errors', 'failed', 'cancelled'].includes(
@@ -378,9 +392,7 @@ function RelayAgentCard({
             <p className='truncate text-sm font-semibold'>
               {agent.hostname || agent.relay_id}
             </p>
-            <Badge variant={online ? 'default' : 'secondary'}>
-              {online ? t('statusOnline') : t('statusOffline')}
-            </Badge>
+            <RelayAgentStatusBadge state={connectionState} />
           </div>
           <p className='text-xs text-muted-foreground'>{agent.ip}</p>
           <p className='truncate font-mono text-[10px] text-muted-foreground'>
@@ -394,76 +406,80 @@ function RelayAgentCard({
       </div>
 
       <div className='flex flex-wrap items-center gap-2'>
-        <Button
-          type='button'
-          size='sm'
-          variant='outline'
-          className='h-7 px-2 text-xs'
-          disabled={!online || realSerials.length === 0}
-          onClick={selectAll}
-        >
-          <CheckSquare className='mr-1 size-3' />
-          {t('selectAll')}
-        </Button>
-        <Button
-          type='button'
-          size='sm'
-          variant='outline'
-          className='h-7 px-2 text-xs'
-          disabled={busy || !online || selectedSerials.length === 0}
-          onClick={() =>
-            provisionJob({ mode: 'selected', serials: selectedSerials })
-          }
-        >
-          {isProvisioning ? (
-            <Loader2 className='mr-1 size-3 animate-spin' />
-          ) : (
-            <RefreshCw className='mr-1 size-3' />
-          )}
-          {t('provisionSelected')}
-        </Button>
-        <Button
-          type='button'
-          size='sm'
-          variant='outline'
-          className='h-7 px-2 text-xs'
-          disabled={busy || !online || realSerials.length === 0}
-          onClick={() => provisionJob({ mode: 'all_visible' })}
-        >
-          {t('provisionAll')}
-        </Button>
-        <Button
-          type='button'
-          size='sm'
-          className='h-7 px-2 text-xs'
-          disabled={busy || !online || selectedSerials.length === 0}
-          onClick={() =>
-            claimConnectJob({
-              mode: 'selected',
-              serials: selectedSerials,
-              connect: true
-            })
-          }
-        >
-          {isClaiming ? (
-            <Loader2 className='mr-1 size-3 animate-spin' />
-          ) : (
-            <Plus className='mr-1 size-3' />
-          )}
-          {t('registerConnectSelected')}
-        </Button>
-        <Button
-          type='button'
-          size='sm'
-          variant='secondary'
-          className='h-7 px-2 text-xs'
-          disabled={busy || !online || realSerials.length === 0}
-          onClick={() =>
-            claimConnectJob({ mode: 'all_visible', connect: true })
-          }
-        >
+        {perms.canExecute ? (
+          <>
+            <Button
+              type='button'
+              size='sm'
+              variant='outline'
+              className='h-7 px-2 text-xs'
+              disabled={!online || realSerials.length === 0}
+              onClick={selectAll}
+            >
+              <CheckSquare className='mr-1 size-3' />
+              {t('selectAll')}
+            </Button>
+            <Button
+              type='button'
+              size='sm'
+              variant='outline'
+              className='h-7 px-2 text-xs'
+              disabled={busy || !online || selectedSerials.length === 0}
+              onClick={() =>
+                provisionJob({ mode: 'selected', serials: selectedSerials })
+              }
+            >
+              {isProvisioning ? (
+                <Loader2 className='mr-1 size-3 animate-spin' />
+              ) : (
+                <RefreshCw className='mr-1 size-3' />
+              )}
+              {t('provisionSelected')}
+            </Button>
+            <Button
+              type='button'
+              size='sm'
+              variant='outline'
+              className='h-7 px-2 text-xs'
+              disabled={busy || !online || realSerials.length === 0}
+              onClick={() => provisionJob({ mode: 'all_visible' })}
+            >
+              {t('provisionAll')}
+            </Button>
+            <Button
+              type='button'
+              size='sm'
+              className='h-7 px-2 text-xs'
+              disabled={busy || !online || selectedSerials.length === 0}
+              onClick={() =>
+                claimConnectJob({
+                  mode: 'selected',
+                  serials: selectedSerials,
+                  connect: true
+                })
+              }
+            >
+              {isClaiming ? (
+                <Loader2 className='mr-1 size-3 animate-spin' />
+              ) : (
+                <Plus className='mr-1 size-3' />
+              )}
+              {t('registerConnectSelected')}
+            </Button>
+            <Button
+              type='button'
+              size='sm'
+              variant='secondary'
+              className='h-7 px-2 text-xs'
+              disabled={busy || !online || realSerials.length === 0}
+              onClick={() =>
+                claimConnectJob({ mode: 'all_visible', connect: true })
+              }
+            >
           {t('registerConnectAll')}
         </Button>
+          </>
+        ) : null}
       </div>
 
       <div className='divide-y rounded-md border border-border'>
@@ -573,7 +589,9 @@ export default function RelayAgentsPage() {
     staleTime: 30_000
   });
 
-  const onlineCount = agents.filter((a) => a.status === 'online').length;
+  const connectedCount = agents.filter(
+    (a) => getRelayConnectionState(a) === 'connected'
+  ).length;
   const registeredSerials = new Set<string>();
   for (const device of devices) {
     registeredSerials.add(device.serial);
@@ -594,7 +612,7 @@ export default function RelayAgentsPage() {
           {!isLoading && agents.length > 0 && (
             <p className='mt-1 text-sm text-muted-foreground'>
               {t('onlineSummary', {
-                online: onlineCount,
+                connected: connectedCount,
                 total: agents.length
               })}
             </p>

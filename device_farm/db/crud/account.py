@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from db.models.account import Account, DeviceAccount
+from db.models.enums import AccountState
 
 _BULK_BATCH_SIZE = 500  # rows per INSERT batch
 
@@ -26,8 +27,10 @@ async def create_account(
     notes: str = "",
     tags: str = "",
     user_id: Optional[str] = None,
+    org_id: Optional[str] = None,
     account_metadata: Optional[dict] = None,
 ) -> Account:
+    now = datetime.now(timezone.utc)
     account = Account(
         platform=platform,
         username=username,
@@ -36,7 +39,11 @@ async def create_account(
         notes=notes,
         tags=tags,
         user_id=user_id,
+        org_id=org_id,
         account_metadata=account_metadata or {},
+        status=AccountState.ACTIVE.value,
+        state=AccountState.ACTIVE.value,
+        state_changed_at=now,
     )
     db.add(account)
     await db.flush()
@@ -69,6 +76,8 @@ async def list_accounts(
     *,
     platform: Optional[str] = None,
     status: Optional[str] = None,
+    state: Optional[str] = None,
+    include_states: Optional[List[str]] = None,
     tags: Optional[str] = None,
     user_id: Optional[str] = None,
     limit: int = 50,
@@ -77,8 +86,12 @@ async def list_accounts(
     stmt = select(Account).order_by(Account.created_at.desc())
     if platform:
         stmt = stmt.where(Account.platform == platform)
-    if status:
-        stmt = stmt.where(Account.status == status)
+    if include_states:
+        stmt = stmt.where(Account.state.in_(include_states))
+    elif state:
+        stmt = stmt.where(Account.state == state)
+    elif status:
+        stmt = stmt.where(Account.state == status)
     if tags:
         # Substring match on comma-separated tags field.
         stmt = stmt.where(Account.tags.contains(tags))
@@ -96,7 +109,11 @@ async def update_account(
     password_encrypted: Optional[str] = None,
     display_name: Optional[str] = None,
     status: Optional[str] = None,
+    state: Optional[str] = None,
+    state_reason: Optional[str] = None,
+    state_changed_at: Optional[datetime] = None,
     cooldown_until: Optional[datetime] = None,
+    clear_cooldown_until: bool = False,
     proxy_id: Optional[str] = None,
     notes: Optional[str] = None,
     tags: Optional[str] = None,
@@ -114,7 +131,17 @@ async def update_account(
         values["display_name"] = display_name
     if status is not None:
         values["status"] = status
-    if cooldown_until is not None:
+        values.setdefault("state", status)
+    if state is not None:
+        values["state"] = state
+        values["status"] = state
+    if state_reason is not None:
+        values["state_reason"] = state_reason
+    if state_changed_at is not None:
+        values["state_changed_at"] = state_changed_at
+    if clear_cooldown_until:
+        values["cooldown_until"] = None
+    elif cooldown_until is not None:
         values["cooldown_until"] = cooldown_until
     if proxy_id is not None:
         values["proxy_id"] = proxy_id
@@ -173,6 +200,7 @@ def _prepare_account_row(row: dict, user_id: Optional[str]) -> Optional[dict]:
         "user_id": user_id,
         "metadata": {},
         "status": "active",
+        "state": "active",
         "total_usage_minutes": 0.0,
         "usage_today_minutes": 0.0,
     }
@@ -246,7 +274,7 @@ async def get_expired_cooldown_accounts(db: AsyncSession) -> List[Account]:
     now = datetime.now(timezone.utc)
     result = await db.execute(
         select(Account).where(
-            Account.status == "cooldown",
+            Account.state == AccountState.COOLDOWN.value,
             Account.cooldown_until <= now,
         )
     )
@@ -269,7 +297,7 @@ async def get_available_account(
     stmt = (
         select(Account)
         .where(Account.platform == platform)
-        .where(Account.status == "active")
+        .where(Account.state == AccountState.ACTIVE.value)
         .where((Account.cooldown_until.is_(None)) | (Account.cooldown_until < now))
     )
     if user_id is not None:
@@ -409,10 +437,25 @@ async def get_primary_account_for_device(
             DeviceAccount.device_id == device_id,
             DeviceAccount.is_primary.is_(True),
             Account.platform == platform,
-            Account.status == "active",
+            Account.state == AccountState.ACTIVE.value,
         )
     )
     return result.scalar_one_or_none()
+
+
+async def list_active_account_ids(
+    db: AsyncSession, account_ids: List[str]
+) -> List[str]:
+    """Return subset of account_ids that are in active FSM state (round-robin pool)."""
+    if not account_ids:
+        return []
+    result = await db.execute(
+        select(Account.id).where(
+            Account.id.in_(account_ids),
+            Account.state == AccountState.ACTIVE.value,
+        )
+    )
+    return [str(r[0]) for r in result.all()]
 
 
 async def round_robin_assign(

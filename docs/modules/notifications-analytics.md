@@ -19,7 +19,7 @@ state transitions themselves.
 |---|---|
 | Notification routes | `device_farm/api/routes/notifications.py` |
 | Analytics routes | `device_farm/api/routes/analytics.py` |
-| Services | `device_farm/services/notification_service.py`, `device_farm/services/activity_logger.py`, `device_farm/services/webhook_dispatcher.py` |
+| Services | `device_farm/services/notification_service.py`, `device_farm/services/activity_logger.py`, `device_farm/services/user_action_audit.py`, `device_farm/services/webhook_dispatcher.py` |
 | Models | `device_farm/db/models/notification.py`, `device_farm/db/models/activity.py` |
 | Frontend | `front-end/src/features/notifications/*`, `front-end/src/features/analytics/*` |
 
@@ -30,8 +30,10 @@ state transitions themselves.
 ```mermaid
 flowchart LR
     DomainEvent[Domain event] --> ActivityLogger[activity_logger.py]
+    MutatingAPI[POST/PATCH/PUT/DELETE API request] --> UserActionAudit[user_action_audit.py]
     DomainEvent --> NotificationService[notification_service.py]
     ActivityLogger --> ActivityLog[(activity_log)]
+    UserActionAudit --> ActivityLog
     NotificationService --> Notification[(notifications)]
     NotificationService --> Channel{Channel enabled?}
     Channel -->|in-app| Notification
@@ -47,6 +49,16 @@ flowchart LR
 - Notification channels define delivery targets and channel configuration.
 - Notifications are user-visible records with read/unread behavior.
 - Activity logs are append-style records for dashboard history.
+- Authenticated mutating API requests are recorded by middleware as
+  `user.*` actions with method, route template, status, request id, outcome,
+  duration, user id, and org id.
+- The audit middleware does not read or store request bodies. Query/path
+  metadata is redacted for password/token/secret-like keys and large values are
+  truncated before persistence.
+- Audit writes are queued off the request path and committed in batches. Tuning
+  knobs: `DEVICE_FARM_AUDIT_QUEUE_SIZE` (default `10000`),
+  `DEVICE_FARM_AUDIT_BATCH_SIZE` (default `100`), and
+  `DEVICE_FARM_AUDIT_FLUSH_INTERVAL_SECONDS` (default `0.25`).
 - Domain modules should emit events through services rather than writing UI
   records directly.
 

@@ -5,12 +5,11 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.database import AsyncSessionLocal, activity_session
 from db.models.activity import ActivityLog
-from db.models.device import Device
+from tenancy.background import lookup_device_owner_by_serial
 
 log = logging.getLogger(__name__)
 
@@ -39,10 +38,8 @@ async def log_activity(
 
 
 async def _resolve_device_user(db: AsyncSession, serial: str | None) -> Optional[str]:
-    if not serial:
-        return None
-    result = await db.execute(select(Device.user_id).where(Device.serial == serial))
-    return result.scalar_one_or_none()
+    user_id, _org_id = await lookup_device_owner_by_serial(db, serial or "")
+    return user_id
 
 
 def _device_event_to_activity(entry: dict[str, Any]) -> Optional[tuple[str, dict[str, Any]]]:

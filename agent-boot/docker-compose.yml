@@ -1,13 +1,33 @@
-# macOS: ADB server must run on the host (USB). Use ./scripts/docker-up.sh instead of
-# raw `docker compose up` so host adb listens on 0.0.0.0:5037 for the container.
+# agent-boot — chạy relay qua Docker Compose.
+#
+# Chuẩn (USB trên host, container gọi ADB qua host.docker.internal):
+#   cp .env.example .env   # điền RELAY_*
+#   ./scripts/docker-up.sh up -d --build
+#
+# Hoặc tự bật ADB host rồi:
+#   adb -a nodaemon server &
+#   docker compose up -d --build
+#
+# Linux USB trực tiếp trong container (không cần host ADB):
+#   docker compose -f docker-compose.yml -f docker-compose.linux-usb.yml up -d --build
+
+name: agent-boot
+
 services:
   agent-boot:
     build:
       context: .
       dockerfile: Dockerfile
+    image: agent-boot:0.1.0
+    container_name: agent-boot
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
     environment:
+      ADB_HOST: host.docker.internal
+      ADB_PORT: "5037"
       ADB_SERVER_SOCKET: tcp:host.docker.internal:5037
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # Default: one-shot ADB check. Run relay: ./scripts/docker-up.sh run --rm agent-boot ...
-    command: ["bash", "-lc", "adb -H host.docker.internal -P 5037 devices"]
+    # CMD from Dockerfile: uv run main.py --relay-only (via entrypoint)

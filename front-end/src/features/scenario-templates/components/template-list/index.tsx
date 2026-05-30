@@ -16,6 +16,7 @@ import { getTemplateColumns } from './columns';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { useConfirm } from '@/providers/modal-provider';
+import { Can } from '@/features/auth';
 
 const CATEGORIES = ['all', 'general', 'facebook', 'tiktok', 'utility'] as const;
 
@@ -121,7 +122,9 @@ export function TemplateList() {
               </span>{' '}
               {t('countLabel')}
             </p>
-            <CreateTemplateDialog />
+            <Can object='scenario-templates' action='create'>
+              <CreateTemplateDialog />
+            </Can>
           </div>
 
           {/* Category tabs + search */}
@@ -166,7 +169,9 @@ export function TemplateList() {
                 {t('emptyDescription')}
               </p>
               <div className='mt-6'>
-                <CreateTemplateDialog />
+                <Can object='scenario-templates' action='create'>
+                  <CreateTemplateDialog />
+                </Can>
               </div>
             </div>
           )}

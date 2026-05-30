@@ -1,24 +1,47 @@
 
 from __future__ import annotations
 
+import logging
+import time
 import uuid
 from pathlib import Path
 
 from pydantic import BaseModel
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse
 
-from api.deps import CurrentUser, DB
+from api.deps import AdminUser, CurrentUser, DB, require_permission
+from api.org_scope import data_owner_user_id, device_visible_to_user
+from api.auth.rbac import build_enforcer_for_user, permission_domain
 from runtime.core import DeviceManager
 from api.schemas.device import (
     DeviceCreate,
     DeviceOut,
     SessionOut,
 )
+from api.schemas.fleet_stats import (
+    FleetStatsFiltersOut,
+    FleetStatsOut,
+    SessionOwnerAnomalyOut,
+    build_device_state_counts,
+    build_session_owner_counts,
+)
 from api.schemas.device_group import UpdateTagsBody
 from db import crud as repo
+from db.crud.fleet_stats import (
+    FleetStatsNotFoundError,
+    FleetStatsValidationError,
+    query_fleet_stats,
+)
 from db.crud.device_group import update_device_tags
+from db.crud.device_state import get_device_state, get_device_states_map
+from db.models.enums import DeviceFsmState
+from services.device_state.exceptions import IllegalDeviceTransitionError
+from services.device_state.service import ApplyOutcome, DeviceStateService
 from services import pairing as _pairing_mod
+from web.metrics import fleet_stats_duration_seconds, fleet_stats_requests_total
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/devices", tags=["devices"])
 
@@ -57,7 +80,11 @@ _APK_CANDIDATES = [
 ]
 
 
-@router.get("/stf-apk", summary="Download STFService APK")
+@router.get(
+    "/stf-apk",
+    summary="Download STFService APK",
+    dependencies=[Depends(require_permission("devices", "read"))],
+)
 async def download_stf_apk():
     """
     Serve the STFService.apk used by Android devices.
@@ -93,7 +120,11 @@ class ConnectByIpBody(BaseModel):
     port: int = 5555
 
 
-@router.post("/connect-adb", status_code=status.HTTP_200_OK)
+@router.post(
+    "/connect-adb",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_permission("devices", "execute"))],
+)
 async def connect_device_by_ip(request: Request, body: ConnectByIpBody, user: CurrentUser):
     """
     Backend chủ động kết nối tới thiết bị qua ADB over TCP.
@@ -116,7 +147,12 @@ async def connect_device_by_ip(request: Request, body: ConnectByIpBody, user: Cu
     return {"ok": True, "serial": client.serial}
 
 
-@router.post("/register", response_model=DeviceOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/register",
+    response_model=DeviceOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission("devices", "create"))],
+)
 async def register_device(body: RegisterDeviceBody, db: DB, user: CurrentUser):
     """
     Đăng ký thiết bị: chỉ tạo bản ghi (serial = pending-xxx), chưa kết nối điện thoại.
@@ -125,9 +161,14 @@ async def register_device(body: RegisterDeviceBody, db: DB, user: CurrentUser):
     display_name = (body.name or "Thiết bị mới").strip()
     if body.description and body.description.strip():
         display_name = f"{display_name} — {body.description.strip()}"
-    device = await repo.create_pending_device(db, user.id, display_name)
+    device = await repo.create_pending_device(
+        db,
+        user.id,
+        display_name,
+        org_id=getattr(user, "org_id", None),
+    )
     await db.commit()
-    return _to_out(device)
+    return _to_out(device, state=DeviceFsmState.UNKNOWN.value)
 
 
 # ── Pairing (legacy / optional) ───────────────────────────────────────────────
@@ -136,7 +177,11 @@ class PairBulkBody(BaseModel):
     count: int = 1
 
 
-@router.post("/pair", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/pair",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission("devices", "create"))],
+)
 async def create_pairing(request: Request, user: CurrentUser):
  
     pairing_id = str(uuid.uuid4())
@@ -151,7 +196,11 @@ async def create_pairing(request: Request, user: CurrentUser):
     return {"pairing_id": pairing_id, "qr_url": qr_url}
 
 
-@router.post("/pair/bulk", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/pair/bulk",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission("devices", "create"))],
+)
 async def create_pairing_bulk(request: Request, body: PairBulkBody, user: CurrentUser):
     """
     Tạo nhiều pairing cùng lúc để kết nối nhiều thiết bị. Mỗi thiết bị dùng một URL (copy hoặc quét QR).
@@ -172,7 +221,10 @@ async def create_pairing_bulk(request: Request, body: PairBulkBody, user: Curren
     return {"pairings": pairings}
 
 
-@router.get("/pair/{pairing_id}")
+@router.get(
+    "/pair/{pairing_id}",
+    dependencies=[Depends(require_permission("devices", "read"))],
+)
 async def poll_pairing(pairing_id: str, user: CurrentUser):
     """Poll until device connects and pairing is complete."""
     p = _pairing_mod.store.get(pairing_id)
@@ -183,9 +235,15 @@ async def poll_pairing(pairing_id: str, user: CurrentUser):
 
 # ── Device CRUD ───────────────────────────────────────────────────────────────
 
-@router.get("", response_model=list[DeviceOut])
+@router.get(
+    "",
+    response_model=list[DeviceOut],
+    dependencies=[Depends(require_permission("devices", "read"))],
+)
 async def list_devices(request: Request, db: DB, user: CurrentUser):
-    devices = await repo.list_devices(db, user_id=user.id)
+    devices = await repo.list_devices(
+        db, org_id=getattr(user, "org_id", None), user_id=data_owner_user_id(user)
+    )
     manager: DeviceManager | None = getattr(request.app.state, "manager", None)
     ctrl = _get_ctrl_servicer_optional()
 
@@ -250,17 +308,114 @@ async def list_devices(request: Request, db: DB, user: CurrentUser):
         adb_serial = str(getattr(runtime_device, "_adb_serial", "") or "").strip()
         return adb_serial or None
 
+    states_map = await get_device_states_map(db, [d.id for d in devices])
+
+    def _state_for(device_id: str, smap: dict) -> str:
+        row = smap.get(device_id)
+        return row.state if row else DeviceFsmState.UNKNOWN.value
+
     return [
         _to_out(
             d,
             relay_id=_resolve_relay_id(d),
             adb_serial=_resolve_runtime_adb_serial(d),
+            state=_state_for(d.id, states_map),
         )
         for d in devices
     ]
 
 
-@router.post("", response_model=DeviceOut, status_code=status.HTTP_201_CREATED)
+def _can_view_owner_details(user) -> bool:
+    if getattr(user, "role", None) == "admin":
+        return True
+    domain = permission_domain(user)
+    enforcer = build_enforcer_for_user(user, domain=domain)
+    return bool(enforcer.enforce(str(user.id), domain, "devices", "manage"))
+
+
+@router.get(
+    "/fleet/stats",
+    response_model=FleetStatsOut,
+    dependencies=[Depends(require_permission("devices", "read"))],
+)
+async def fleet_stats(
+    db: DB,
+    user: CurrentUser,
+    group_id: str | None = Query(default=None),
+    relay_host: str | None = Query(default=None),
+):
+    """Fleet health summary: device FSM counts and active sessions by owner type."""
+    org_id = getattr(user, "org_id", None)
+    if not org_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Organization context required")
+
+    can_view_owner_details = _can_view_owner_details(user)
+    started = time.perf_counter()
+    try:
+        stats = await query_fleet_stats(
+            db,
+            org_id=org_id,
+            group_id=group_id,
+            relay_host=relay_host,
+            include_owner_anomalies=can_view_owner_details,
+        )
+    except FleetStatsValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except FleetStatsNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    elapsed = time.perf_counter() - started
+    try:
+        fleet_stats_duration_seconds.observe(elapsed)
+        fleet_stats_requests_total.labels(
+            has_group_filter=str(bool(group_id)).lower(),
+            has_relay_filter=str(bool(relay_host)).lower(),
+        ).inc()
+    except Exception:
+        pass
+
+    log.info(
+        "fleet_stats org=%s group=%s relay=%s devices=%s sessions=%s latency_ms=%.1f",
+        org_id,
+        group_id,
+        relay_host,
+        stats.device_total,
+        stats.active_session_total,
+        elapsed * 1000,
+    )
+
+    owner_anomalies = None
+    if can_view_owner_details:
+        owner_anomalies = [
+            SessionOwnerAnomalyOut(
+                session_id=a.session_id,
+                device_id=a.device_id,
+                device_serial=a.device_serial,
+                owner_type=a.owner_type,
+                owner_id=a.owner_id,
+                reason=a.reason,
+            )
+            for a in stats.owner_anomalies
+        ]
+
+    return FleetStatsOut(
+        filters=FleetStatsFiltersOut(
+            organization_id=stats.filters.organization_id,
+            group_id=stats.filters.group_id,
+            relay_host=stats.filters.relay_host,
+        ),
+        devices=build_device_state_counts(stats.devices_by_state),
+        active_sessions=build_session_owner_counts(stats.active_sessions_by_owner),
+        owner_anomalies=owner_anomalies,
+    )
+
+
+@router.post(
+    "",
+    response_model=DeviceOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission("devices", "create"))],
+)
 async def create_device(body: DeviceCreate, db: DB, user: CurrentUser):
     """
     Đăng ký thiết bị thủ công bằng serial (dùng cho script/admin).
@@ -275,7 +430,7 @@ async def create_device(body: DeviceCreate, db: DB, user: CurrentUser):
     existing = await repo.get_device_by_serial(db, body.serial)
     if existing:
         # Already owned by another user → hard conflict
-        if existing.user_id and existing.user_id != user.id:
+        if existing.org_id and existing.org_id != getattr(user, "org_id", None):
             raise HTTPException(
                 status_code=409,
                 detail="Serial already registered by another user",
@@ -284,6 +439,10 @@ async def create_device(body: DeviceCreate, db: DB, user: CurrentUser):
         # Unowned device created by agent / background flow → claim it
         if existing.user_id is None:
             await repo.assign_device_to_user(db, body.serial, user.id)
+            try:
+                existing.org_id = getattr(user, "org_id", None)
+            except Exception:
+                pass
 
         # For the same user, treat as idempotent and allow renaming
         if body.name and body.name != existing.name:
@@ -292,37 +451,72 @@ async def create_device(body: DeviceCreate, db: DB, user: CurrentUser):
         # existing object is still valid representation
         return _to_out(existing)
 
-    device = await repo.create_device(db, body.serial, body.name, user.id)
+    device = await repo.create_device(
+        db,
+        body.serial,
+        body.name,
+        user.id,
+        org_id=getattr(user, "org_id", None),
+    )
     return _to_out(device)
 
 
-@router.get("/{device_id}", response_model=DeviceOut)
+@router.get(
+    "/{device_id}",
+    response_model=DeviceOut,
+    dependencies=[Depends(require_permission("devices", "read"))],
+)
 async def get_device(device_id: str, db: DB, user: CurrentUser):
     device = await repo.get_device(db, device_id)
-    if not device or device.user_id != user.id:
+    if not device or device.org_id != getattr(user, "org_id", None):
         raise HTTPException(status_code=404, detail="Device not found")
-    return _to_out(device)
+    state_row = await get_device_state(db, device_id)
+    state = state_row.state if state_row else DeviceFsmState.UNKNOWN.value
+    return _to_out(device, state=state)
 
 
-@router.delete("/{device_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{device_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission("devices", "delete"))],
+)
 async def delete_device(device_id: str, db: DB, user: CurrentUser):
     """
     Xoá thiết bị của user hiện tại và mọi liên kết campaign-device.
     """
     device = await repo.get_device(db, device_id)
-    if not device or device.user_id != user.id:
+    if not device or device.org_id != getattr(user, "org_id", None):
         raise HTTPException(status_code=404, detail="Device not found")
+    org_id = device.org_id
+    state_row = await get_device_state(db, device_id)
+    from_state = state_row.state if state_row else None
+    session_id = state_row.session_id if state_row else None
     await repo.delete_device(db, device_id)
     await db.commit()
+    try:
+        from services.device_state.ws_publisher import publisher as lifecycle_publisher
+
+        await lifecycle_publisher.publish_unpaired(
+            device_id=device_id,
+            organization_id=org_id,
+            from_state=from_state,
+            session_id=session_id,
+        )
+    except Exception as exc:
+        log.debug("lifecycle unpaired publish skipped: %s", exc)
     return
 
 
-@router.patch("/{device_id}/tags", response_model=DeviceOut)
+@router.patch(
+    "/{device_id}/tags",
+    response_model=DeviceOut,
+    dependencies=[Depends(require_permission("devices", "update"))],
+)
 async def update_tags(
     device_id: str, body: UpdateTagsBody, db: DB, user: CurrentUser
 ):
     device = await repo.get_device(db, device_id)
-    if not device or device.user_id != user.id:
+    if not device or device.org_id != getattr(user, "org_id", None):
         raise HTTPException(status_code=404, detail="Device not found")
     await update_device_tags(db, device_id, body.tags)
     await db.commit()
@@ -330,10 +524,14 @@ async def update_tags(
     return _to_out(device)
 
 
-@router.get("/{device_id}/sessions", response_model=list[SessionOut])
+@router.get(
+    "/{device_id}/sessions",
+    response_model=list[SessionOut],
+    dependencies=[Depends(require_permission("devices", "read"))],
+)
 async def device_sessions(device_id: str, db: DB, user: CurrentUser):
     device = await repo.get_device(db, device_id)
-    if not device or device.user_id != user.id:
+    if not device or device.org_id != getattr(user, "org_id", None):
         raise HTTPException(status_code=404, detail="Device not found")
     sessions = await repo.list_sessions(db, device_id)
     return [
@@ -378,14 +576,14 @@ def _serial_reachable(ctrl, relay, serial: str) -> bool:
 async def _resolve_relay_serial(
     db,
     device_id: str,
-    user_id: str,
+    user: CurrentUser,
     ctrl,
     relay,
     manager: DeviceManager | None = None,
 ) -> str:
     """Return a serial reachable on gRPC control and/or the video/WS relay."""
     device = await repo.get_device(db, device_id)
-    if not device or device.user_id != user_id:
+    if not await device_visible_to_user(db, user, device):
         raise HTTPException(status_code=404, detail="Device not found")
     if device.serial.startswith("pending-"):
         raise HTTPException(status_code=409, detail="Device not yet paired")
@@ -441,7 +639,7 @@ async def _resolve_relay_serial(
 async def _dispatch_relay_command(
     db,
     device_id: str,
-    user_id: str,
+    user: CurrentUser,
     manager: DeviceManager | None,
     *,
     kind: str,
@@ -456,7 +654,7 @@ async def _dispatch_relay_command(
             detail="relay transport not available",
         )
 
-    serial = await _resolve_relay_serial(db, device_id, user_id, ctrl, relay, manager)
+    serial = await _resolve_relay_serial(db, device_id, user, ctrl, relay, manager)
 
     if ctrl is not None and ctrl.conn_for_serial(serial):
         method = getattr(ctrl, kind)
@@ -495,35 +693,95 @@ async def _dispatch_relay_command(
     )
 
 
-@router.post("/{device_id}/bootstrap", response_model=RelayCommandOut)
+class DeviceReviveOut(BaseModel):
+    device_id: str
+    from_state: str
+    to_state: str
+    actor: str
+
+
+@router.post(
+    "/{device_id}/revive",
+    response_model=DeviceReviveOut,
+    summary="Revive a DEAD device (admin)",
+    dependencies=[Depends(require_permission("devices", "manage"))],
+)
+async def revive_device(device_id: str, db: DB, admin: AdminUser):
+    """Transition DEAD → CONNECTING after physical intervention (DF-T-02-005)."""
+    device = await repo.get_device(db, device_id)
+    org_id = getattr(admin, "org_id", None)
+    if not device or device.org_id != org_id:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    svc = DeviceStateService()
+    try:
+        result = await svc.revive(
+            db,
+            device_id,
+            actor=admin.id,
+            device_serial=device.serial,
+        )
+    except IllegalDeviceTransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    if result.outcome != ApplyOutcome.APPLIED:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Revive not applied (outcome={result.outcome.value})",
+        )
+    return DeviceReviveOut(
+        device_id=device_id,
+        from_state=result.from_state.value if result.from_state else DeviceFsmState.DEAD.value,
+        to_state=result.to_state.value if result.to_state else DeviceFsmState.CONNECTING.value,
+        actor=admin.id,
+    )
+
+
+@router.post(
+    "/{device_id}/bootstrap",
+    response_model=RelayCommandOut,
+    dependencies=[Depends(require_permission("devices", "execute"))],
+)
 async def bootstrap_device(device_id: str, request: Request, db: DB, user: CurrentUser):
     manager: DeviceManager | None = getattr(request.app.state, "manager", None)
     return await _dispatch_relay_command(
-        db, device_id, user.id, manager, kind="bootstrap", timeout=180.0
+        db, device_id, user, manager, kind="bootstrap", timeout=180.0
     )
 
 
-@router.post("/{device_id}/restart-u2", response_model=RelayCommandOut)
+@router.post(
+    "/{device_id}/restart-u2",
+    response_model=RelayCommandOut,
+    dependencies=[Depends(require_permission("devices", "execute"))],
+)
 async def restart_u2(device_id: str, request: Request, db: DB, user: CurrentUser):
     manager: DeviceManager | None = getattr(request.app.state, "manager", None)
     return await _dispatch_relay_command(
-        db, device_id, user.id, manager, kind="restart_u2", timeout=60.0
+        db, device_id, user, manager, kind="restart_u2", timeout=60.0
     )
 
 
-@router.post("/{device_id}/restart-atx", response_model=RelayCommandOut)
+@router.post(
+    "/{device_id}/restart-atx",
+    response_model=RelayCommandOut,
+    dependencies=[Depends(require_permission("devices", "execute"))],
+)
 async def restart_atx(device_id: str, request: Request, db: DB, user: CurrentUser):
     manager: DeviceManager | None = getattr(request.app.state, "manager", None)
     return await _dispatch_relay_command(
-        db, device_id, user.id, manager, kind="restart_atx", timeout=30.0
+        db, device_id, user, manager, kind="restart_atx", timeout=30.0
     )
 
 
-@router.post("/{device_id}/restart-scrcpy", response_model=RelayCommandOut)
+@router.post(
+    "/{device_id}/restart-scrcpy",
+    response_model=RelayCommandOut,
+    dependencies=[Depends(require_permission("devices", "execute"))],
+)
 async def restart_scrcpy(device_id: str, request: Request, db: DB, user: CurrentUser):
     manager: DeviceManager | None = getattr(request.app.state, "manager", None)
     return await _dispatch_relay_command(
-        db, device_id, user.id, manager, kind="restart_scrcpy", timeout=30.0
+        db, device_id, user, manager, kind="restart_scrcpy", timeout=30.0
     )
 
 
@@ -532,6 +790,7 @@ def _to_out(
     *,
     relay_id: str | None = None,
     adb_serial: str | None = None,
+    state: str = DeviceFsmState.UNKNOWN.value,
 ) -> DeviceOut:
     return DeviceOut(
         id=d.id, serial=d.serial, name=d.name,
@@ -545,4 +804,5 @@ def _to_out(
         adb_port=getattr(d, "adb_port", 5555),
         tags=getattr(d, "tags", "") or "",
         relay_id=relay_id,
+        state=state,
     )

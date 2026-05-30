@@ -2,6 +2,7 @@ export const ROUTES = {
   AUTH: {
     SIGN_IN: '/auth/sign-in',
     SIGN_UP: '/auth/sign-up',
+    ACCEPT_INVITE: '/auth/accept-invite',
     FORGOT_PASSWORD: '/auth/forgot-password',
     RESET_PASSWORD: '/auth/reset-password',
     VERIFY_EMAIL: '/auth/verify-email',
@@ -34,7 +35,9 @@ export const ROUTES = {
   },
   CAMPAIGNS: {
     ROOT: '/dashboard/campaigns',
-    DETAIL: (id: string) => `/dashboard/campaigns/${id}`
+    /** Opens campaigns list and auto-opens monitor for the campaign (modal). */
+    DETAIL: (id: string) =>
+      `/dashboard/campaigns?campaign_id=${encodeURIComponent(id)}`
   },
   DEVICE_GROUPS: {
     ROOT: '/dashboard/device-groups'
@@ -57,9 +60,12 @@ export const ROUTES = {
   },
   CONTENT: {
     ROOT: '/dashboard/content',
+    DETAIL: (id: string) => `/dashboard/content/${id}`,
     /** Jump to content page pre-filtered by campaign */
     BY_CAMPAIGN: (campaignId: string) =>
-      `/dashboard/content?campaign_id=${encodeURIComponent(campaignId)}`
+      `/dashboard/content?campaign_id=${encodeURIComponent(campaignId)}`,
+    BY_EXECUTION: (executionId: string) =>
+      `/dashboard/content?execution_id=${encodeURIComponent(executionId)}`
   },
   NOTIFICATIONS: {
     ROOT: '/dashboard/notifications'
@@ -67,6 +73,7 @@ export const ROUTES = {
   DASHBOARD: {
     ROOT: '/dashboard',
     ORGANIZATION: '/dashboard/settings/organization',
+    ORGANIZATION_LIST: '/dashboard/settings/organizations',
     ORGANIZATION_MEMBER: '/dashboard/settings/organization/members',
     /** @deprecated Use ORGANIZATION; org is resolved from context, not URL. */
     ORGANIZATION_SETTINGS: (_id?: string) => '/dashboard/settings/organization',

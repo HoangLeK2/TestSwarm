@@ -94,3 +94,58 @@ def access_expire_hours() -> int:
 
 def refresh_expire_days() -> int:
     return int(os.environ.get("REFRESH_EXPIRE_DAYS", "30"))
+
+
+# ── SMTP / organization invites ─────────────────────────────────────────────
+
+
+def device_farm_frontend_url() -> str:
+    return (
+        os.environ.get("DEVICE_FARM_FRONTEND_URL", "").strip()
+        or os.environ.get("FRONTEND_URL", "").strip()
+        or "http://localhost:3000"
+    )
+
+
+def org_invite_expire_days() -> int:
+    raw = (os.environ.get("ORG_INVITE_EXPIRE_DAYS") or "7").strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 7
+
+
+def smtp_host() -> str:
+    return (os.environ.get("SMTP_HOST") or "").strip()
+
+
+def smtp_port() -> int:
+    raw = (os.environ.get("SMTP_PORT") or "587").strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return 587
+
+
+def smtp_user() -> str:
+    return (os.environ.get("SMTP_USER") or "").strip()
+
+
+def smtp_password() -> str:
+    return (os.environ.get("SMTP_PASSWORD") or "").strip()
+
+
+def smtp_from_address() -> str:
+    return (
+        os.environ.get("SMTP_FROM", "").strip()
+        or os.environ.get("SMTP_USER", "").strip()
+        or "noreply@device-farm.local"
+    )
+
+
+def smtp_use_tls() -> bool:
+    return (os.environ.get("SMTP_USE_TLS", "1").strip().lower() not in {"0", "false", "no"})
+
+
+def smtp_use_ssl() -> bool:
+    return _truthy("SMTP_USE_SSL")

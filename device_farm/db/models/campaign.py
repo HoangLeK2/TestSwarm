@@ -7,14 +7,15 @@ from sqlalchemy import DateTime, ForeignKey, JSON, String, Text, UniqueConstrain
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.database import Base
+from tenancy.models import TenantScopedModel
 from .enums import CampaignStatus
 from .utils import _now, _uuid
 
 
-class Campaign(Base):
+class Campaign(TenantScopedModel, Base):
 
     __tablename__ = "campaigns"
-    __table_args__ = (UniqueConstraint("user_id", "name"),)
+    __table_args__ = (UniqueConstraint("org_id", "name"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -84,6 +85,8 @@ class Scenario(Base):
         index=True,
     )
     order: Mapped[int] = mapped_column(default=0)
+    last_validation_summary: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    last_validated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now

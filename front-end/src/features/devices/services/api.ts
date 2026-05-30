@@ -116,7 +116,8 @@ export async function fetchHierarchy(
 ): Promise<string> {
   const key = serial;
   const now = Date.now();
-  if ((hierarchyFailureUntil.get(key) ?? 0) > now) return '';
+  // Allow refresh=true through during bootstrap even if a recent 503 set cooldown.
+  if (!refresh && (hierarchyFailureUntil.get(key) ?? 0) > now) return '';
   const pending = hierarchyInFlight.get(key);
   if (pending) return pending;
 

@@ -1,18 +1,26 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import type { Device, Task, WsMessage } from '../types';
 import { createWs } from '../services/ws';
 import { fetchConfig, fetchLiveDevices, fetchTasks } from '../services/api';
-import { devicesApi } from '../services/manage-api';
+import { devicesApi, relayAgentsApi, type DeviceOut } from '../services/manage-api';
+import { hasOperationalRelayAgent } from '../lib/relay-agent-status';
 import { useConfirm } from '@/providers/modal-provider';
+import { useOrganization } from '@/features/organization/hooks/use-organization';
+
+function isRelayManagedDevice(device: DeviceOut): boolean {
+  return Boolean(
+    (device.adb_serial && device.adb_serial.trim()) ||
+      (device.adb_ip && device.adb_ip.trim())
+  );
+}
 
 export function useDeviceFarm() {
   const [devices, setDevices] = useState<Device[]>([]);
-  const [registeredSerials, setRegisteredSerials] = useState<Set<string>>(
-    new Set()
-  );
+  const [registeredDevices, setRegisteredDevices] = useState<DeviceOut[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [wsConnected, setWsConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -24,6 +32,30 @@ export function useDeviceFarm() {
   const t = useTranslations('devicesFarm');
   const tCommon = useTranslations('common');
   const confirm = useConfirm();
+  const { currentOrg } = useOrganization();
+  const currentOrgId = currentOrg?.id ?? null;
+
+  const registeredSerials = useMemo(
+    () => new Set(registeredDevices.map((d) => d.serial)),
+    [registeredDevices]
+  );
+  const relayManagedSerials = useMemo(
+    () =>
+      new Set(
+        registeredDevices
+          .filter(isRelayManagedDevice)
+          .map((device) => device.serial)
+      ),
+    [registeredDevices]
+  );
+
+  const { data: relayAgents = [] } = useQuery({
+    queryKey: ['relay-agents', currentOrgId],
+    queryFn: relayAgentsApi.list,
+    staleTime: 10_000,
+    refetchInterval: 15_000
+  });
+  const relayLive = hasOperationalRelayAgent(relayAgents);
 
   const wsSend = useCallback((obj: object) => wsRef.current?.send(obj), []);
   const refreshTasks = useCallback(() => {
@@ -32,26 +64,20 @@ export function useDeviceFarm() {
       .catch(() => {});
   }, []);
 
-  // Fetch user's registered devices to filter the live list
-  useEffect(() => {
-    devicesApi
-      .list()
-      .then((list) => setRegisteredSerials(new Set(list.map((d) => d.serial))))
-      .catch(() => {});
-  }, []);
-
-  // Fetch live device list on mount AND on page focus/visibility change
   const refreshDevices = useCallback(() => {
+    if (!currentOrgId) return;
     fetchLiveDevices()
       .then((live) => setDevices(live))
       .catch(() => {});
     devicesApi
       .list()
-      .then((list) => setRegisteredSerials(new Set(list.map((d) => d.serial))))
+      .then((list) => setRegisteredDevices(list))
       .catch(() => {});
-  }, []);
+  }, [currentOrgId]);
 
   useEffect(() => {
+    setDevices([]);
+    setRegisteredDevices([]);
     refreshDevices();
   }, [refreshDevices]);
 
@@ -134,14 +160,11 @@ export function useDeviceFarm() {
           );
         });
         // If we see a new device via WebSocket that is now registered, update serial set
-        setRegisteredSerials((prev) => {
-          if (prev.has(msg.serial)) return prev;
-          // Re-fetch to pick up newly paired devices
+        setRegisteredDevices((prev) => {
+          if (prev.some((d) => d.serial === msg.serial)) return prev;
           devicesApi
             .list()
-            .then((list) =>
-              setRegisteredSerials(new Set(list.map((d) => d.serial)))
-            )
+            .then((list) => setRegisteredDevices(list))
             .catch(() => {});
           return prev;
         });
@@ -183,8 +206,14 @@ export function useDeviceFarm() {
     [confirm, t, tCommon, wsSend]
   );
 
-  const myDevices = devices.filter((device) =>
-    registeredSerials.has(device.serial)
+  const myDevices = useMemo(
+    () =>
+      devices.filter((device) => {
+        if (!registeredSerials.has(device.serial)) return false;
+        if (relayManagedSerials.has(device.serial) && !relayLive) return false;
+        return true;
+      }),
+    [devices, registeredSerials, relayManagedSerials, relayLive]
   );
 
   return {

@@ -22,6 +22,10 @@
       "callback": {
         "title": "Processing Sign In | Device farm",
         "description": "Processing your sign in information"
+      },
+      "acceptInvite": {
+        "title": "Accept invitation | Device farm",
+        "description": "Join an organization from your invite link"
       }
     },
     "organization": {
@@ -62,7 +66,7 @@
       "footerMergedEditor": "Form or advanced JSON: globals plus overrides. Values identical to globals are not stored as overrides — remove a key in JSON to inherit global.",
       "footerUsingGlobal": "Using global variables.",
       "parseInvalidJson": "Invalid JSON (syntax error).",
-      "parseInvalidRoot": "JSON must be an object, e.g. {\"group_name\": \"abc\"}",
+      "parseInvalidRoot": "JSON must be an object, e.g. '{\"group_name\": \"abc\"}'",
       "parseUnknown": "Invalid JSON",
       "invalidAtDevice": "Invalid JSON for device {serial}",
       "saveFailed": "Failed to save device variables"
@@ -226,10 +230,12 @@
       "vc_release": "VC Release"
     },
     "members": "Members",
+    "organizations_list": "All organizations",
     "organization_general": "Overview",
     "nav_group_devices": "Devices",
     "nav_group_automation": "Campaigns & schedules",
     "nav_group_library": "Accounts, scripts & results",
+    "nav_group_operations": "Notifications & alerts",
     "activity_history": "Activity History",
     "gln": "GLN Management",
     "totp": "TOTP Management",
@@ -248,10 +254,40 @@
     "relay_agents": "Connection hosts",
     "notifications": "Notifications"
   },
+  "contentFeature": {
+    "detail": {
+      "title": "Content evidence",
+      "breadcrumbContent": "Collected results",
+      "breadcrumbCampaign": "Campaign",
+      "breadcrumbDetail": "Detail",
+      "backToList": "Back to list",
+      "loading": "Loading content…",
+      "loadError": "Could not load this content item.",
+      "metadataTitle": "Trace metadata",
+      "payloadTitle": "Payload",
+      "payloadHint": "Full normalized payload at collection time (read-only).",
+      "artifactsTitle": "Artifacts",
+      "artifactsEmpty": "No screenshots or hierarchy captures for this item.",
+      "artifactExpired": "This artifact is no longer available.",
+      "download": "Download",
+      "loadingPreview": "Loading preview…",
+      "noPreview": "No preview available.",
+      "loadFullArtifact": "Load full content",
+      "copyPermalink": "Copy permalink",
+      "permalinkCopied": "Permalink copied",
+      "metaExtractedAt": "Extracted at",
+      "metaDevice": "Device",
+      "metaCampaign": "Campaign",
+      "metaExecution": "Execution",
+      "metaScenario": "Scenario",
+      "metaAuthor": "Author",
+      "metaUrl": "Source URL"
+    }
+  },
   "relayAgentsFeature": {
     "title": "Connection hosts",
     "subtitle": "Manage agent-boot hosts and enrollment tokens for your devices.",
-    "onlineSummary": "{online}/{total} online",
+    "onlineSummary": "{connected}/{total} connected",
     "loading": "Loading...",
     "empty": "No connection hosts online",
     "emptyHint": "Start agent-boot on a machine with USB/Wi‑Fi ADB, set RELAY_ENROLLMENT_TOKEN, and connect to this farm.",
@@ -260,8 +296,16 @@
     "bootstrapAllResult": "Prepared: {ok}/{total} succeeded",
     "registerDevice": "Register device",
     "registered": "registered",
-    "statusOnline": "Online",
-    "statusOffline": "Offline",
+    "connectionStatus": {
+      "inactive": "Inactive",
+      "connecting": "Connecting",
+      "connected": "Connected"
+    },
+    "statusInactive": "Inactive",
+    "statusConnecting": "Connecting",
+    "statusConnected": "Connected",
+    "statusOnline": "Connected",
+    "statusOffline": "Inactive",
     "deviceCount": "{count, plural, one {# device} other {# devices}}",
     "tokens": "Enrollment tokens",
     "tokensDescription": "Create a token and set RELAY_ENROLLMENT_TOKEN in agent-boot .env so the agent is owned by your account.",
@@ -386,8 +430,25 @@
       "testAccountHint": "Looks like a test/dev account — verify before production use",
       "statusActive": "Active",
       "statusCooldown": "Cooldown",
+      "statusSuspended": "Suspended",
       "statusBanned": "Banned",
-      "statusDisabled": "Disabled"
+      "statusRetired": "Retired",
+      "statusDisabled": "Disabled",
+      "cooldownUntil": "Until {time}"
+    },
+    "stateDialog": {
+      "trigger": "Change state",
+      "triggerTo": "Move to {status}",
+      "title": "Change state — {username}",
+      "currentState": "Current: {status}",
+      "targetState": "New state",
+      "reason": "Reason",
+      "ttlHours": "Cooldown duration (hours)",
+      "ttlRequired": "Enter a positive number of hours",
+      "lastReason": "Last note: {reason}",
+      "submit": "Apply",
+      "submitting": "Applying...",
+      "submitFailed": "State transition failed"
     },
     "createDialog": {
       "trigger": "New Account",
@@ -650,6 +711,7 @@
       "fleetFailed": "Fleet run failed",
       "runFailed": "Run campaign failed",
       "titleNeedDevice": "Add at least 1 device before running",
+      "titleAddScenario": "Add scenario",
       "titleRun": "Run campaign",
       "runDialogNotReady": "This campaign does not have enough devices or scenarios to run.",
       "runDialogSelectAll": "Select all",
@@ -663,6 +725,7 @@
       "titleResume": "Resume",
       "titleDelete": "Delete campaign",
       "cancelConfirm": "Cancel all running workflows?",
+      "cancelUndoWarning": "Cancel does not undo actions already posted on social platforms (comments, likes, messages, etc.).",
       "titlePauseAll": "Pause ({count} workflows)",
       "titleResumeAll": "Resume ({count} workflows)",
       "titleCancelAll": "Cancel all",
@@ -735,6 +798,9 @@
       "colStatus": "Status",
       "colTime": "Time",
       "colDevices": "Devices",
+      "colScenarios": "Scenarios",
+      "colSetup": "Setup",
+      "colActions": "Actions",
       "runStatsPassed": "Passed",
       "runStatsFailed": "Failed",
       "runStatsRunning": "Running",
@@ -761,6 +827,10 @@
       "createSuccess": "Scenario added",
       "createFailed": "Add scenario failed",
       "trigger": "Scenarios ({scenarios} scenarios · {steps} steps)",
+      "summaryEmpty": "Add scenario",
+      "summaryCount": "{scenarios} scenarios · {steps} steps",
+      "summaryTitle": "View and edit scenarios",
+      "emptyDescription": "This campaign has no scenario steps yet. Add a scenario before running.",
       "title": "Scenarios — {campaign}",
       "empty": "No scenarios yet. Add the first scenario.",
       "addButton": "Add scenario",
@@ -1635,14 +1705,39 @@
     "notConnected": "Not connected",
     "online": "Online",
     "offline": "Offline",
+    "transportOnline": "Transport live",
+    "transportOffline": "No transport",
     "connect": "Connect",
     "deleteDevice": "Delete device",
     "deleteConfirm": "Delete this device? Related campaigns will also be unlinked from this device.",
+    "realtime": {
+      "connected": "Lifecycle stream live",
+      "reconnecting": "Lifecycle stream reconnecting…"
+    },
+    "lifecycleToast": {
+      "deadTitle": "{label} marked dead",
+      "deadDescription": "Reconnect timeout exceeded — physical intervention may be required.",
+      "deadReason": "Reason: {reason}"
+    },
+    "revive": {
+      "label": "Revive",
+      "description": "Mark device ready for re-bootstrap after physical fix (cable, power, network).",
+      "confirmTitle": "Revive {label}?",
+      "confirmDescription": "State will change DEAD → CONNECTING. The agent must reconnect before the device is usable again.",
+      "confirmAction": "Revive device",
+      "cancel": "Cancel",
+      "running": "Reviving…",
+      "toastRunning": "Reviving {label}…",
+      "toastSuccess": "{label} revived",
+      "toastSuccessDetail": "New state: {state}",
+      "toastFailed": "Could not revive {label}"
+    },
     "columns": {
       "device": "Device",
       "status": "Status",
       "specs": "Specs",
       "lastSeen": "Last seen",
+      "lastHeartbeat": "Last heartbeat",
       "tags": "Tags",
       "connectionHost": "Connection host"
     },
@@ -1652,9 +1747,31 @@
       "statusAll": "All",
       "statusOnline": "Online",
       "statusOffline": "Offline",
+      "transportOnline": "Transport online",
+      "transportOffline": "Transport offline",
       "sortLastSeen": "Last connected",
       "reset": "Reset",
       "showing": "Showing {count}/{total}"
+    },
+    "fleetStats": {
+      "title": "Status summary ({total} devices)",
+      "loadError": "Could not load fleet stats.",
+      "activeSessions": "Active sessions ({total})",
+      "sessionOwner": {
+        "user": "User",
+        "execution": "Execution",
+        "campaign": "Campaign",
+        "system": "System",
+        "unknown": "Unknown"
+      }
+    },
+    "fsm": {
+      "unknown": "Unknown",
+      "connecting": "Connecting",
+      "online": "Online",
+      "busy": "Busy",
+      "reconnecting": "Reconnecting",
+      "dead": "Dead"
     },
     "labels": {
       "model": "Model",
@@ -2325,6 +2442,8 @@
     "inviteMembers": "Invite members",
     "switchOrg": "Switch organization",
     "switchOrgConfirmation": "Switch to {name}? Your dashboard will update for this organization.",
+    "searchOrgs": "Search organizations…",
+    "loadMoreOrgs": "Load more",
     "shortTitle": "Organization",
     "noOrganization": "No organization",
     "description": "Manage organizations in the system",
@@ -2392,6 +2511,7 @@
       "authorizedPersonAddress": "Authorized Person Address",
       "notes": "Notes",
       "createdAt": "Created At",
+      "organizationId": "ID",
       "representative": "Representative",
       "email": "Email"
     },
@@ -2401,6 +2521,7 @@
       "authorizedPersonInfo": "Authorized Person Information"
     },
     "messages": {
+      "loadError": "Could not load organization information",
       "createFailed": "An error occurred while creating organization",
       "updateFailed": "An error occurred while updating organization",
       "noData": "No organizations found",
@@ -2452,8 +2573,15 @@
       "title": "People",
       "description": "Teammates that have access to this workspace.",
       "inviteNewMember": "Invite New Member",
-      "inviteDescription": "Generate an invite code for a new team member",
+      "inviteDescription": "Enter an email to send an invitation. They can sign in if they already have an account or register a new one.",
+      "inviteSentExisting": "Sign-in invitation sent to {email}",
+      "inviteSentNew": "Sign-up invitation sent to {email}",
+      "inviteEmailNotSent": "Invitation created for {email} but email was not sent. Check SMTP settings on the server.",
+      "userNotFound": "No account found for this email. Ask them to register first.",
+      "alreadyMember": "This person is already a member of the workspace.",
+      "memberName": "Name",
       "emailAddress": "Email Address",
+      "role": "Role",
       "enterEmailAddress": "Enter email address",
       "inviting": "Inviting...",
       "generateInviteCode": "Generate Invite Code",
@@ -2479,14 +2607,48 @@
       "userCheckFailed": "Failed to check user",
       "checkingUser": "Checking...",
       "checkUserFirstMessage": "Please enter a valid email before sending invite",
+      "invalidEmail": "Invalid email address",
+      "invalidRole": "Invalid invitation role",
+      "noOrganization": "No active organization found",
       "organizationSupervisor": "Organization Supervisor",
       "staff": "Staff",
-      "cannotEditOwner": "Only organization owners can edit other owners"
+      "supervisor": "Operator",
+      "cannotEditOwner": "Only organization owners can edit other owners",
+      "cannotChangeOwnRole": "You cannot change your own role",
+      "changeRoleSuccess": "Member role updated"
+    },
+    "inviteAccept": {
+      "title": "Organization invitation",
+      "subtitle": "You have been invited to join {org}",
+      "existingUserHint": "You already have an account — sign in with the email above to accept.",
+      "newUserHint": "No account yet — register with the same email above, then sign in.",
+      "signIn": "Sign in",
+      "signUp": "Create account",
+      "loading": "Loading invitation...",
+      "missingToken": "This invite link is invalid.",
+      "invalidToken": "Invitation not found or has been revoked.",
+      "expired": "This invitation has expired.",
+      "acceptFailed": "Could not accept the invitation. Sign in with the invited email.",
+      "accepting": "Accepting invitation...",
+      "accepted": "You joined the organization. Redirecting...",
+      "goSignIn": "Go to sign in",
+      "orgDisabled": "This organization is disabled. Contact an administrator.",
+      "authEmailBanner": "You are joining via invitation — use email {email}.",
+      "wrongAccountLoggedIn": "You are signed in as {currentEmail}. This invitation was sent to {invitedEmail}.",
+      "switchAccount": "Sign out and continue",
+      "useAnotherAccount": "Use a different account to accept this invitation."
     },
     "listing": {
       "title": "Organizations",
       "description": "Manage your organizations and team members",
-      "noOrganizationsFound": "No organizations found"
+      "noOrganizationsFound": "No organizations found",
+      "searchPlaceholder": "Search by name or email…",
+      "search": "Search",
+      "loadMore": "Load more",
+      "showing": "{from}–{to} of {total}",
+      "pageOf": "Page {current} / {total}",
+      "prev": "Previous",
+      "next": "Next"
     },
     "errors": {
       "notFound": "Organization not found"
@@ -2680,7 +2842,10 @@
       "unknownDevice": "Unknown device",
       "task": "Task",
       "deviceSerial": "Device {serial}",
+      "deviceLine": "Device {device}",
+      "performedBy": "By {user}",
       "duration": "{seconds}s",
+      "durationMs": "{ms} ms",
       "actionLabels": {
         "device_connect": "Device connected",
         "device_disconnect": "Device disconnected",
@@ -2689,7 +2854,28 @@
         "task_failed": "Task failed",
         "campaign_run": "Campaign started",
         "campaign_complete": "Campaign completed",
-        "schedule_triggered": "Schedule triggered"
+        "schedule_triggered": "Schedule triggered",
+        "user_action": "User action"
+      },
+      "operationLabels": {
+        "generic": "User action",
+        "device_interrupt": "Stop device action",
+        "device_screen_attach": "Start screen streaming",
+        "device_screen_detach": "Stop screen streaming",
+        "device_bootstrap": "Bootstrap device",
+        "device_restart_u2": "Restart U2",
+        "device_restart_atx": "Restart ATX",
+        "device_restart_scrcpy": "Restart screen streaming",
+        "campaign_pause": "Pause campaign",
+        "campaign_resume": "Resume campaign",
+        "campaign_cancel": "Cancel campaign",
+        "schedule_run_now": "Run schedule now",
+        "schedule_toggle": "Toggle schedule"
+      },
+      "outcomeLabels": {
+        "success": "Success",
+        "rejected": "Rejected",
+        "error": "Error"
       },
       "reasonLabels": {
         "unknown": "Unknown reason",
@@ -2717,6 +2903,12 @@
     "loading": "Loading",
     "loadingChannels": "Loading notification channels",
     "empty": "No notifications",
+    "emptyHint": "Device and campaign alerts will appear here.",
+    "markAllRead": "Mark all as read",
+    "unreadBadge": "{count} unread",
+    "timeGroupToday": "Today",
+    "timeGroupEarlier": "Earlier",
+    "unknownDevice": "Unknown device",
     "noChannels": "No notification channels",
     "manageChannels": "Manage channels",
     "addChannel": "Add channel",
@@ -2741,8 +2933,23 @@
       "headersJson": "Headers JSON"
     },
     "placeholders": {
-      "channelName": "e.g. Browser"
+      "channelName": "e.g. Browser",
+      "botToken": "123456789:ABCdefGHIjklMNOpqrsTUVwxyz",
+      "chatId": "-1001234567890 or @my_channel",
+      "webhookUrl": "https://hooks.example.com/notify"
     },
+    "inAppHint": "Alerts appear in the dashboard and the header notification bell.",
+    "telegramSetupTitle": "Connect Telegram",
+    "telegramSetupIntro": "Deliver alerts to a Telegram group or channel via Bot API.",
+    "telegramStep1": "Open @BotFather on Telegram, create a bot, and copy the token.",
+    "telegramStep2": "Add the bot to your target group/channel with permission to post.",
+    "telegramStep3": "Enter the Chat ID (negative number for supergroups or @public_channel).",
+    "botTokenHint": "Token from BotFather — keep it secret.",
+    "chatIdHint": "Group/channel ID or @username.",
+    "testHint": "After saving, use the send-test action in the channel table.",
+    "webhookSetupTitle": "HTTP webhook",
+    "webhookSetupIntro": "POST JSON to your URL when a subscribed event fires.",
+    "headersHint": "Optional JSON object of extra request headers.",
     "eventLabels": {
       "device_disconnect": "Device disconnected",
       "device_reconnect": "Device reconnected",
@@ -2785,7 +2992,10 @@
       "invalidConfig": "Invalid channel config",
       "loadChannels": "Could not load notification channels",
       "testFailed": "Test failed",
-      "deleteFailed": "Delete failed"
+      "deleteFailed": "Delete failed",
+      "telegramTokenRequired": "Bot token is required for Telegram channels",
+      "telegramChatRequired": "Chat ID is required for Telegram channels",
+      "webhookUrlRequired": "Webhook URL is required"
     }
   },
   "errors": {

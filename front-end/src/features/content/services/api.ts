@@ -1,4 +1,5 @@
 import { farmApi, deviceFarmBackendBase } from '@/lib/farm-api';
+import { filenameFromContentDisposition } from '@/features/content/lib/download';
 import { tokenStorage } from '@/lib/token-storage';
 
 export interface ContentItem {
@@ -21,7 +22,9 @@ export interface ContentItem {
   raw_data: Record<string, unknown> | null;
   device_serial: string | null;
   campaign_id: string | null;
-  run_id: string | null;
+  /** @deprecated Prefer execution_id — kept for list compatibility */
+  run_id?: string | null;
+  execution_id?: string | null;
   scenario_name: string | null;
   extracted_at: string | null;
   content_date: string | null;
@@ -29,6 +32,30 @@ export interface ContentItem {
   content_hash: string;
   parent_id: string | null;
   item_level: number;
+}
+
+export type ContentArtifactKind = 'image' | 'xml' | 'json' | 'text';
+
+export interface ContentArtifact {
+  id: string;
+  kind: ContentArtifactKind | string;
+  label: string;
+  source: string;
+  url: string | null;
+  inline: boolean;
+  size_bytes: number | null;
+  status: string;
+  mime_type: string | null;
+}
+
+export interface ContentDetail extends ContentItem {
+  artifacts: ContentArtifact[];
+  payload: Record<string, unknown>;
+}
+
+export interface ContentPermalink {
+  token: string;
+  path: string;
 }
 
 export interface ContentListResponse {
@@ -126,7 +153,38 @@ export const contentApi = {
     farmApi.get<ContentStats>('/content/stats').then((r) => r.data),
 
   getItem: async (id: string): Promise<ContentItem> =>
-    farmApi.get<ContentItem>(`/content/${id}`).then((r) => r.data),
+    contentApi.getDetail(id),
+
+  getDetail: async (id: string, shareToken?: string | null): Promise<ContentDetail> =>
+    farmApi
+      .get<ContentDetail>(`/content/${id}`, {
+        params: shareToken ? { share: shareToken } : undefined
+      })
+      .then((r) => r.data),
+
+  createPermalink: async (id: string): Promise<ContentPermalink> =>
+    farmApi.post<ContentPermalink>(`/content/${id}/permalink`).then((r) => r.data),
+
+  downloadArtifact: async (
+    contentId: string,
+    artifactId: string,
+    shareToken?: string | null
+  ): Promise<{ blob: Blob; filename: string | null }> => {
+    const response = await farmApi.get(
+      `/content/${contentId}/artifacts/${encodeURIComponent(artifactId)}/download`,
+      {
+        responseType: 'blob',
+        params: shareToken ? { share: shareToken } : undefined
+      }
+    );
+    const disposition = response.headers['content-disposition'] as
+      | string
+      | undefined;
+    return {
+      blob: response.data as Blob,
+      filename: filenameFromContentDisposition(disposition)
+    };
+  },
 
   deleteItem: async (id: string): Promise<void> => {
     await farmApi.delete(`/content/${id}`);

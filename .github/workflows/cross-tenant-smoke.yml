@@ -1,0 +1,40 @@
+name: cross-tenant-smoke
+
+on:
+  pull_request:
+    paths:
+      - 'device_farm/**'
+      - '.github/workflows/cross-tenant-smoke.yml'
+  push:
+    branches: [main, master, dev]
+    paths:
+      - 'device_farm/**'
+      - '.github/workflows/cross-tenant-smoke.yml'
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: device_farm
+
+jobs:
+  cross-tenant-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install backend + dev test deps
+        run: uv sync --extra dev --group dev
+
+      - name: Run tenancy smoke suite
+        env:
+          TENANCY_STRICT_MODE: 'true'
+        run: |
+          uv run pytest -q \
+            tests/test_tenancy_cross_tenant_smoke.py \
+            tests/test_tenancy_org_disabled.py \
+            tests/test_tenancy_devices_smoke.py \
+            tests/test_personal_org.py

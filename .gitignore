@@ -32,5 +32,5 @@ node_modules/
 .next/
 STFService.apk/java_pid*.hprof
 STFService.apk/java_pid*.hprof
-
+.claude/
 # gRPC: relay_pb2*.py are tracked; re-run scripts/gen_proto.sh after editing proto/relay.proto

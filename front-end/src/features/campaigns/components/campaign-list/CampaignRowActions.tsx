@@ -8,8 +8,6 @@ import {
   Square,
   Trash2,
   MoreHorizontal,
-  Smartphone,
-  FileText,
   BarChart3,
   MonitorPlay
 } from 'lucide-react';
@@ -39,24 +37,29 @@ import { CampaignRunProgress } from './CampaignRunProgress';
 import {
   useCampaignDevices,
   useCampaignWorkflows,
+  useCampaignCancel,
+  useCampaignPause,
+  useCampaignResume,
   useDeleteCampaign,
   useRunCampaign,
-  useScenarios,
-  useUpdateCampaignStatus,
-  useWorkflowPause,
-  useWorkflowResume,
-  useWorkflowCancel
+  useScenarios
 } from '../../hooks/use-campaigns';
 import type { CampaignOut } from '../../types';
 import { isCampaignActiveExecution, isIdleStatus } from '../../types';
 import { useConfirm } from '@/providers/modal-provider';
+import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
 
-export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
+export function CampaignRowActions({
+  campaign,
+  layout = 'inline'
+}: {
+  campaign: CampaignOut;
+  layout?: 'inline' | 'stacked';
+}) {
   const t = useTranslations('campaignsFeature.list');
   const tCommon = useTranslations('common');
   const confirm = useConfirm();
-  const tAdd = useTranslations('campaignsFeature.addDevices');
-  const tScenario = useTranslations('campaignsFeature.scenarioList');
+  const perms = useResourcePermissions('campaigns');
   const router = useRouter();
 
   const [runDialogOpen, setRunDialogOpen] = useState(false);
@@ -66,8 +69,6 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
   const { data: devices = [] } = useCampaignDevices(campaign.id);
   const { data: scenarios = [] } = useScenarios(campaign.id);
 
-  const { mutate: patchCampaignStatus, isPending: isPatchingCampaign } =
-    useUpdateCampaignStatus();
   const runMutation = useRunCampaign(() => toast.success(t('campaignDone')), {
     onTemporalFallback: () => toast.warning(t('temporalFallback'))
   });
@@ -79,23 +80,77 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
     isCampaignActiveExecution(campaign.status)
   );
   const workflows = wfData?.workflows ?? [];
+  const hasActiveWorkflows = workflows.some(
+    (w) =>
+      w.status === 'RUNNING' ||
+      w.status === 'PAUSED' ||
+      w.status === 'paused_on_error'
+  );
   const runningWorkflowIds = workflows
     .filter((w) => w.status === 'RUNNING')
     .map((w) => w.workflow_id);
   const pausedWorkflowIds = workflows
-    .filter((w) => w.status === 'PAUSED' || w.status === 'paused_on_error')
+    .filter(
+      (w) => w.status === 'PAUSED' || w.status === 'paused_on_error'
+    )
     .map((w) => w.workflow_id);
-  const activeWorkflowIds = [...runningWorkflowIds, ...pausedWorkflowIds];
-  const hasActiveWorkflows = activeWorkflowIds.length > 0;
 
-  const { mutate: pauseWf, isPending: isPausing } = useWorkflowPause();
-  const { mutate: resumeWf, isPending: isResuming } = useWorkflowResume();
-  const { mutateAsync: cancelWf, isPending: isCancelling } =
-    useWorkflowCancel();
+  const { mutate: pauseCampaign, isPending: isPausing } = useCampaignPause();
+  const { mutate: resumeCampaign, isPending: isResuming } = useCampaignResume();
+  const { mutateAsync: cancelCampaign, isPending: isCancelling } =
+    useCampaignCancel();
 
-  const previewSerial = devices[0]?.serial ?? '';
   const totalSteps = scenarios.reduce((s, sc) => s + sc.steps.length, 0);
   const hasScenario = totalSteps > 0;
+
+  type PrimaryAction = {
+    label: string;
+    onClick: () => void;
+    disabled: boolean;
+    tooltip?: string;
+  };
+
+  const primaryAction: PrimaryAction = (() => {
+    if (isRunning) {
+      return {
+        label: t('titleRun'),
+        onClick: () => {},
+        disabled: true,
+        tooltip: t('loading')
+      };
+    }
+
+    if (layout === 'stacked') {
+      if (!hasScenario) {
+        return {
+          label: t('titleAddScenario'),
+          onClick: () => setScenarioOpen(true),
+          disabled: !perms.canUpdate,
+          tooltip: t('missingScenario')
+        };
+      }
+      if (devices.length === 0) {
+        return {
+          label: t('titleNeedDevice'),
+          onClick: () => setAddDevicesOpen(true),
+          disabled: !perms.canUpdate,
+          tooltip: t('titleNeedDevice')
+        };
+      }
+    }
+
+    const canRun = devices.length > 0 && hasScenario;
+    return {
+      label: t('titleRun'),
+      onClick: () => setRunDialogOpen(true),
+      disabled: !canRun || !perms.canExecute,
+      tooltip: !hasScenario
+        ? t('missingScenario')
+        : devices.length === 0
+          ? t('titleNeedDevice')
+          : undefined
+    };
+  })();
 
   const handleDelete = () => {
     void (async () => {
@@ -116,89 +171,90 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
   };
 
   const handlePauseAll = () => {
-    runningWorkflowIds.forEach((id) =>
-      pauseWf(id, { onError: () => toast.error(`Pause failed: ${id}`) })
-    );
-    toast.info(t('pausingAll', { count: runningWorkflowIds.length }));
+    pauseCampaign(campaign.id, {
+      onSuccess: (data) => {
+        toast.info(t('pausingAll', { count: data.workflows_signalled ?? 0 }));
+      },
+      onError: () => toast.error(t('runFailed'))
+    });
   };
 
   const handleResumeAll = () => {
-    if (campaign.status === 'paused') {
-      patchCampaignStatus(
-        { id: campaign.id, status: 'running' },
-        { onError: () => toast.error(t('runFailed')) }
-      );
-      toast.info(
-        t('resumingAll', { count: Math.max(1, pausedWorkflowIds.length) })
-      );
-      return;
-    }
-    pausedWorkflowIds.forEach((id) =>
-      resumeWf(id, { onError: () => toast.error(`Resume failed: ${id}`) })
-    );
-    toast.info(t('resumingAll', { count: pausedWorkflowIds.length }));
+    resumeCampaign(campaign.id, {
+      onSuccess: () => {
+        toast.info(
+          t('resumingAll', {
+            count: workflows.filter(
+              (w) => w.status === 'PAUSED' || w.status === 'paused_on_error'
+            ).length || 1
+          })
+        );
+      },
+      onError: () => toast.error(t('runFailed'))
+    });
   };
 
   const handleCancelAll = async () => {
     const ok = await confirm({
       title: t('titleCancelAll'),
-      description: t('cancelConfirm'),
+      description: `${t('cancelConfirm')}\n\n${t('cancelUndoWarning')}`,
       confirmText: tCommon('confirm'),
       cancelText: tCommon('cancel'),
       confirmVariant: 'destructive',
       zIndex: 10000
     });
     if (!ok) return;
-    const results = await Promise.allSettled(
-      activeWorkflowIds.map((id) => cancelWf(id))
-    );
-    const failed = results.filter((r) => r.status === 'rejected').length;
-    if (failed > 0) {
-      toast.error(`Cancel failed for ${failed} workflow(s)`);
-      return;
-    }
-    patchCampaignStatus(
-      { id: campaign.id, status: 'idle' },
-      {
-        onError: () => toast.error(t('runFailed'))
+    try {
+      const data = await cancelCampaign({ campaignId: campaign.id });
+      if (data.warning) {
+        toast.warning(data.warning, { duration: 8000 });
       }
-    );
-    toast.info(t('cancellingAll', { count: activeWorkflowIds.length }));
+      toast.info(t('cancellingAll', { count: data.workflows_signalled ?? 0 }));
+    } catch {
+      toast.error(t('runFailed'));
+    }
   };
 
   const running = isCampaignActiveExecution(campaign.status);
-  const disabledRun =
-    isPatchingCampaign || isRunning || devices.length === 0 || !hasScenario;
-  const disabledRunReason = !hasScenario
-    ? tScenario('emptyDescription')
-    : devices.length === 0
-      ? t('titleNeedDevice')
-      : t('loading');
+  const showPause =
+    campaign.status === 'running' &&
+    (hasActiveWorkflows || runningWorkflowIds.length > 0);
+  const showResume = campaign.status === 'paused' || pausedWorkflowIds.length > 0;
 
   return (
-    <div className='flex min-w-0 items-center justify-end'>
-      <div className='flex flex-nowrap items-center justify-end gap-2'>
+    <div
+      className={cn(
+        'flex min-w-0',
+        layout === 'stacked' ? 'w-full flex-col gap-2' : 'items-center justify-end'
+      )}
+    >
+      <div
+        className={cn(
+          'flex shrink-0 items-center gap-1.5',
+          layout === 'stacked' ? 'w-full flex-wrap' : 'flex-nowrap'
+        )}
+      >
         <CampaignRunProgress campaignId={campaign.id} isRunning={running} />
 
-        {isIdleStatus(campaign.status) && (
+        {isIdleStatus(campaign.status) && perms.canExecute && (
           <>
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
                   size='sm'
                   variant='default'
-                  className='h-8 gap-1.5 px-3 text-xs font-semibold'
-                  disabled={disabledRun}
-                  onClick={() => setRunDialogOpen(true)}
+                  className='h-8 shrink-0 gap-1.5 px-3 text-xs font-semibold'
+                  disabled={primaryAction.disabled}
+                  onClick={primaryAction.onClick}
                 >
-                  {t('titleRun')}
+                  {primaryAction.label}
                 </Button>
               </TooltipTrigger>
-              {disabledRun && (
+              {primaryAction.disabled && primaryAction.tooltip ? (
                 <TooltipContent side='top' className='text-xs'>
-                  {disabledRunReason}
+                  {primaryAction.tooltip}
                 </TooltipContent>
-              )}
+              ) : null}
             </Tooltip>
 
             <RunCampaignDialog
@@ -240,36 +296,36 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
           </>
         )}
 
-        {running && runningWorkflowIds.length > 0 && (
+        {showPause && perms.canExecute && (
           <Button
             size='sm'
             variant='outline'
-            className='h-8 gap-1.5 px-3 text-xs'
+            className='h-8 shrink-0 gap-1.5 px-2.5 text-xs'
             disabled={isPausing}
             onClick={handlePauseAll}
           >
             <Pause size={13} />
-            {t('titlePause')}
+            <span className='hidden xl:inline'>{t('titlePause')}</span>
           </Button>
         )}
-        {running && pausedWorkflowIds.length > 0 && (
+        {showResume && perms.canExecute && (
           <Button
             size='sm'
             variant='outline'
-            className='h-8 gap-1.5 px-3 text-xs text-green-600 hover:text-green-600'
-            disabled={isResuming || isPatchingCampaign}
+            className='h-8 shrink-0 gap-1.5 px-2.5 text-xs text-green-600 hover:text-green-600'
+            disabled={isResuming}
             onClick={handleResumeAll}
           >
             <Play size={13} />
-            {t('titleResume')}
+            <span className='hidden xl:inline'>{t('titleResume')}</span>
           </Button>
         )}
-        {running && hasActiveWorkflows && (
+        {running && hasActiveWorkflows && perms.canExecute && (
           <Button
             size='sm'
             variant='ghost'
             className='h-8 w-8 p-0 text-destructive hover:text-destructive'
-            disabled={isPatchingCampaign || isCancelling}
+            disabled={isCancelling}
             onClick={handleCancelAll}
             title={t('titleCancel') ?? 'Huỷ'}
             aria-label='Huỷ'
@@ -284,10 +340,12 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
             size='sm'
             variant='secondary'
             className={cn(
-              'h-8 gap-2 border px-2.5 text-xs shadow-sm transition-colors duration-200',
+              'h-8 shrink-0 gap-2 border px-2 text-xs shadow-sm transition-colors duration-200',
+              layout === 'inline' && 'xl:px-2.5',
               'cursor-pointer hover:border-primary/30 hover:bg-primary/[0.06]',
               running && 'border-primary/25 bg-primary/[0.07] text-primary'
             )}
+            title={t('titleMonitor')}
           >
             <span className='relative flex size-4 shrink-0 items-center justify-center'>
               <MonitorPlay
@@ -303,10 +361,11 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
                 />
               )}
             </span>
-            {t('titleMonitor')}
+            <span className='hidden xl:inline'>{t('titleMonitor')}</span>
           </Button>
         </CampaignMonitorDialog>
 
+        {(perms.canUpdate || perms.canDelete) && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
@@ -319,25 +378,6 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align='end' className='w-56'>
-            <DropdownMenuItem
-              className='gap-2'
-              onSelect={() => setAddDevicesOpen(true)}
-            >
-              <Smartphone size={14} />
-              {tAdd('trigger', { count: devices.length })}
-            </DropdownMenuItem>
-
-            <DropdownMenuItem
-              className='gap-2'
-              onSelect={() => setScenarioOpen(true)}
-            >
-              <FileText size={14} />
-              {tScenario('trigger', {
-                scenarios: scenarios.length,
-                steps: totalSteps
-              })}
-            </DropdownMenuItem>
-
             <DropdownMenuItem asChild className='gap-2'>
               <Link href={ROUTES.CONTENT.BY_CAMPAIGN(campaign.id)}>
                 <BarChart3 size={14} />
@@ -345,17 +385,22 @@ export function CampaignRowActions({ campaign }: { campaign: CampaignOut }) {
               </Link>
             </DropdownMenuItem>
 
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              className='gap-2 text-destructive focus:text-destructive'
-              disabled={isDeleting}
-              onClick={handleDelete}
-            >
-              <Trash2 size={14} />
-              {t('titleDelete')}
-            </DropdownMenuItem>
+            {perms.canDelete ? (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  className='gap-2 text-destructive focus:text-destructive'
+                  disabled={isDeleting}
+                  onClick={handleDelete}
+                >
+                  <Trash2 size={14} />
+                  {t('titleDelete')}
+                </DropdownMenuItem>
+              </>
+            ) : null}
           </DropdownMenuContent>
         </DropdownMenu>
+        )}
       </div>
 
       <AddDevicesToCampaignDialog

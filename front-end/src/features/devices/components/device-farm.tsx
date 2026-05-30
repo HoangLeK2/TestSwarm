@@ -17,6 +17,7 @@ import {
   PaginationPrevious
 } from '@/components/ui/pagination';
 import { cn } from '@/lib/utils';
+import { Can } from '@/features/auth';
 import { Smartphone, Plus } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { farmApi } from '@/lib/farm-api';
@@ -162,12 +163,14 @@ export function DeviceFarm() {
               : t('noConnectedDevicesHint')}
           </p>
           <div className='flex flex-wrap items-center justify-center gap-2'>
-            <Button asChild size='sm' variant='outline'>
-              <Link href={ROUTES.DEVICES.MANAGE}>
-                <Plus size={14} className='mr-1.5' />
-                {t('addDevice')}
-              </Link>
-            </Button>
+            <Can object='devices' action='create'>
+              <Button asChild size='sm' variant='outline'>
+                <Link href={ROUTES.DEVICES.MANAGE}>
+                  <Plus size={14} className='mr-1.5' />
+                  {t('addDevice')}
+                </Link>
+              </Button>
+            </Can>
           </div>
         </div>
       ) : (

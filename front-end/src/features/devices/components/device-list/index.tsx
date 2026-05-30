@@ -5,14 +5,24 @@ import { Smartphone } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import type { DeviceOut, RelayAgentOut } from '../../services/manage-api';
 import { relayAgentsApi } from '../../services/manage-api';
-import { useDevices } from '../../hooks/use-devices';
+import { useDevices, useFleetStats } from '../../hooks/use-devices';
+import { useDeviceListRealtime } from '../../hooks/use-device-list-realtime';
+import { useLifecycleWsConnected } from '../../lib/lifecycle-ws-store';
 import { RegisterDeviceDialog } from '../register-device-dialog';
 import { DataTable } from '@/components/ui/table/data-table';
 import { useDataTable } from '@/hooks/use-data-table';
 import { isDeviceOnlineForList } from '../../lib/device-online';
+import {
+  matchesDeviceFsmFilter,
+  type DeviceFsmFilterKey
+} from '../../lib/device-fsm';
 import { getDeviceColumns } from './columns';
 import { ConnectDialog } from './ConnectDialog';
-import { useTranslations } from 'next-intl';
+import { FleetStatsSummary } from './FleetStatsSummary';
+import { useLocale, useTranslations } from 'next-intl';
+import { enUS, vi } from 'date-fns/locale';
+import { Can } from '@/features/auth';
+import { useAuthContext } from '@/features/auth/providers/auth-provider';
 import { useConfirm } from '@/providers/modal-provider';
 import {
   Select,
@@ -24,16 +34,28 @@ import {
 import { Button } from '@/components/ui/button';
 import { ArrowDownWideNarrow, ArrowUpWideNarrow } from 'lucide-react';
 
+const DEFAULT_FILTER: DeviceFsmFilterKey = 'all';
+
 export function DeviceList() {
+  const locale = useLocale();
+  const dateLocale = locale.startsWith('vi') ? vi : enUS;
   const t = useTranslations('devicesList');
   const tCommon = useTranslations('common');
   const confirm = useConfirm();
+  const { user } = useAuthContext();
+  useDeviceListRealtime();
+  const wsLive = useLifecycleWsConnected();
+
   const { data: devices, isLoading, error } = useDevices();
+  const {
+    data: fleetStats,
+    isLoading: fleetStatsLoading,
+    isError: fleetStatsError
+  } = useFleetStats();
   const [connectDevice, setConnectDevice] = useState<DeviceOut | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<
-    'all' | 'online' | 'offline'
-  >('all');
+  const [statusFilter, setStatusFilter] =
+    useState<DeviceFsmFilterKey>(DEFAULT_FILTER);
   const [sortLastSeenDesc, setSortLastSeenDesc] = useState(true);
 
   const { data: relayAgents } = useQuery<RelayAgentOut[]>({
@@ -49,7 +71,6 @@ export function DeviceList() {
       m[agent.relay_id] = agent;
       for (const serial of agent.serials) {
         m[serial] = agent;
-        // TCP serial "ip:port" → also index by ip alone so USB-serial devices match
         const colonIdx = serial.lastIndexOf(':');
         if (colonIdx > 0) {
           m[serial.slice(0, colonIdx)] = agent;
@@ -64,12 +85,9 @@ export function DeviceList() {
   const filteredSortedData = useMemo(() => {
     const isOnline = (d: DeviceOut) => isDeviceOnlineForList(d, relayMap);
 
-    const filtered =
-      statusFilter === 'all'
-        ? data
-        : data.filter((d) =>
-            statusFilter === 'online' ? isOnline(d) : !isOnline(d)
-          );
+    const filtered = data.filter((d) =>
+      matchesDeviceFsmFilter(d, statusFilter, isOnline)
+    );
 
     const toTs = (d: DeviceOut) =>
       d.last_seen ? new Date(d.last_seen).getTime() : 0;
@@ -80,6 +98,7 @@ export function DeviceList() {
     });
     return sorted;
   }, [data, relayMap, sortLastSeenDesc, statusFilter]);
+
   const registeredSerials = useMemo(() => {
     const serials = new Set<string>();
     for (const device of data) {
@@ -98,9 +117,10 @@ export function DeviceList() {
         setDeletingId,
         setConnectDevice,
         relayMap,
-        confirm
+        confirm,
+        dateLocale
       }),
-    [deletingId, t, tCommon, relayMap, confirm]
+    [deletingId, t, tCommon, relayMap, confirm, dateLocale]
   );
 
   const { table } = useDataTable<DeviceOut>({
@@ -109,24 +129,59 @@ export function DeviceList() {
     pageCount: 1
   });
 
-  if (isLoading)
-    return <p className='text-sm text-muted-foreground'>{t('loading')}</p>;
-  if (error)
+  if (error && !devices)
     return <p className='text-sm text-destructive'>{t('loadError')}</p>;
 
   return (
     <div className='space-y-4'>
-      <div className='flex items-center justify-between'>
-        <h2 className='text-lg font-semibold'>
-          {t('title', { count: devices?.length ?? 0 })}
-        </h2>
-        <RegisterDeviceDialog
-          relayAgents={relayAgents ?? []}
-          registeredSerials={registeredSerials}
-        />
+      <div className='flex items-center justify-between gap-3'>
+        <div className='flex min-w-0 flex-wrap items-center gap-2'>
+          <h2 className='text-lg font-semibold'>
+            {t('title', { count: devices?.length ?? 0 })}
+          </h2>
+          {user ? (
+            <span
+              className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs ${
+                wsLive
+                  ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+                  : 'bg-muted text-muted-foreground'
+              }`}
+              title={
+                wsLive ? t('realtime.connected') : t('realtime.reconnecting')
+              }
+            >
+              <span
+                className={`mr-1.5 inline-block size-1.5 rounded-full ${
+                  wsLive
+                    ? 'bg-emerald-500'
+                    : 'bg-muted-foreground/60 animate-pulse'
+                }`}
+              />
+              {wsLive ? t('realtime.connected') : t('realtime.reconnecting')}
+            </span>
+          ) : null}
+        </div>
+        <Can object='devices' action='create'>
+          <RegisterDeviceDialog
+            relayAgents={relayAgents ?? []}
+            registeredSerials={registeredSerials}
+          />
+        </Can>
       </div>
 
-      {!devices?.length && (
+      <FleetStatsSummary
+        stats={fleetStats}
+        devices={data}
+        relayMap={relayMap}
+        isLoading={fleetStatsLoading}
+        isError={fleetStatsError}
+      />
+
+      {isLoading && !devices ? (
+        <p className='text-sm text-muted-foreground'>{t('loading')}</p>
+      ) : null}
+
+      {!isLoading && !devices?.length && (
         <div className='rounded-lg border border-dashed border-border p-12 text-center'>
           <Smartphone className='mx-auto mb-3 size-10 text-muted-foreground' />
           <p className='text-sm text-muted-foreground'>
@@ -148,20 +203,18 @@ export function DeviceList() {
                 <Select
                   value={statusFilter}
                   onValueChange={(v) =>
-                    setStatusFilter(v as typeof statusFilter)
+                    setStatusFilter(v as DeviceFsmFilterKey)
                   }
                 >
-                  <SelectTrigger className='h-8 w-[160px]'>
+                  <SelectTrigger className='h-8 w-[180px]'>
                     <SelectValue placeholder={t('filters.statusPlaceholder')} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value='all'>
-                      {t('filters.statusAll')}
-                    </SelectItem>
-                    <SelectItem value='online'>
+                    <SelectItem value='all'>{t('filters.statusAll')}</SelectItem>
+                    <SelectItem value='transport_online'>
                       {t('filters.statusOnline')}
                     </SelectItem>
-                    <SelectItem value='offline'>
+                    <SelectItem value='transport_offline'>
                       {t('filters.statusOffline')}
                     </SelectItem>
                   </SelectContent>
@@ -181,13 +234,13 @@ export function DeviceList() {
                 )}
                 {t('filters.sortLastSeen')}
               </Button>
-              {(statusFilter !== 'all' || !sortLastSeenDesc) && (
+              {(statusFilter !== DEFAULT_FILTER || !sortLastSeenDesc) && (
                 <Button
                   variant='ghost'
                   size='sm'
                   className='h-8'
                   onClick={() => {
-                    setStatusFilter('all');
+                    setStatusFilter(DEFAULT_FILTER);
                     setSortLastSeenDesc(true);
                   }}
                 >

@@ -5,6 +5,9 @@
 import axios, { type AxiosRequestConfig } from 'axios';
 import { tokenStorage } from './token-storage';
 
+/** Must match `OrganizationProvider` storage key. */
+const CURRENT_ORG_STORAGE_KEY = 'device-farm:current-organization-id';
+
 /** Origin of the Device Farm HTTP API (no `/api` suffix). */
 export const deviceFarmBackendBase = (
   process.env.NEXT_PUBLIC_PRODUCT_API_URL || 'http://localhost:8081'
@@ -105,6 +108,12 @@ export const farmApi = axios.create({
 farmApi.interceptors.request.use((config) => {
   const token = tokenStorage.getAuthToken();
   if (token) config.headers.Authorization = `Bearer ${token}`;
+  if (typeof window !== 'undefined') {
+    const orgId = localStorage.getItem(CURRENT_ORG_STORAGE_KEY)?.trim();
+    if (orgId) {
+      config.headers['X-Organization-Id'] = orgId;
+    }
+  }
   if (backendBase.includes('ngrok')) {
     config.headers['ngrok-skip-browser-warning'] = '1';
   }

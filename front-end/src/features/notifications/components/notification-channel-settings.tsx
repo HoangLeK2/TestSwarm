@@ -1,9 +1,10 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import { Bell, Loader2, Pencil, Plus, Send, Trash2 } from 'lucide-react';
+import { Bell, ExternalLink, Loader2, Pencil, Plus, Send, Trash2 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -116,6 +117,128 @@ function typeLabel(
   return t('types.in_app');
 }
 
+function ChannelTypeSetup({
+  form,
+  setForm,
+  t
+}: {
+  form: FormState;
+  setForm: (updater: (current: FormState) => FormState) => void;
+  t: ReturnType<typeof useTranslations<'notificationsFeature'>>;
+}) {
+  if (form.type === 'in_app') {
+    return (
+      <div className='rounded-lg border border-dashed bg-muted/30 px-4 py-3 text-sm text-muted-foreground'>
+        {t('inAppHint')}
+      </div>
+    );
+  }
+
+  if (form.type === 'telegram') {
+    return (
+      <div className='space-y-4 rounded-lg border bg-muted/20 p-4'>
+        <div>
+          <p className='text-sm font-medium'>{t('telegramSetupTitle')}</p>
+          <p className='mt-1 text-xs text-muted-foreground'>
+            {t('telegramSetupIntro')}
+          </p>
+        </div>
+        <ol className='list-decimal space-y-1 pl-4 text-xs text-muted-foreground'>
+          <li>{t('telegramStep1')}</li>
+          <li>{t('telegramStep2')}</li>
+          <li>{t('telegramStep3')}</li>
+        </ol>
+        <a
+          href='https://t.me/BotFather'
+          target='_blank'
+          rel='noopener noreferrer'
+          className='inline-flex items-center gap-1 text-xs text-primary hover:underline'
+        >
+          @BotFather
+          <ExternalLink className='size-3' />
+        </a>
+        <div className='grid gap-3'>
+          <div className='grid gap-2'>
+            <Label htmlFor='telegram-token'>{t('fields.botToken')}</Label>
+            <Input
+              id='telegram-token'
+              type='password'
+              autoComplete='off'
+              value={form.botToken}
+              placeholder={t('placeholders.botToken')}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  botToken: event.target.value
+                }))
+              }
+            />
+            <p className='text-xs text-muted-foreground'>{t('botTokenHint')}</p>
+          </div>
+          <div className='grid gap-2'>
+            <Label htmlFor='telegram-chat'>{t('fields.chatId')}</Label>
+            <Input
+              id='telegram-chat'
+              value={form.chatId}
+              placeholder={t('placeholders.chatId')}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  chatId: event.target.value
+                }))
+              }
+            />
+            <p className='text-xs text-muted-foreground'>{t('chatIdHint')}</p>
+          </div>
+        </div>
+        <p className='text-xs text-muted-foreground'>{t('testHint')}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className='space-y-4 rounded-lg border bg-muted/20 p-4'>
+      <div>
+        <p className='text-sm font-medium'>{t('webhookSetupTitle')}</p>
+        <p className='mt-1 text-xs text-muted-foreground'>
+          {t('webhookSetupIntro')}
+        </p>
+      </div>
+      <div className='grid gap-2'>
+        <Label htmlFor='webhook-url'>{t('fields.webhookUrl')}</Label>
+        <Input
+          id='webhook-url'
+          type='url'
+          value={form.webhookUrl}
+          placeholder={t('placeholders.webhookUrl')}
+          onChange={(event) =>
+            setForm((current) => ({
+              ...current,
+              webhookUrl: event.target.value
+            }))
+          }
+        />
+      </div>
+      <div className='grid gap-2'>
+        <Label htmlFor='webhook-headers'>{t('fields.headersJson')}</Label>
+        <Textarea
+          id='webhook-headers'
+          value={form.headersText}
+          placeholder='{}'
+          onChange={(event) =>
+            setForm((current) => ({
+              ...current,
+              headersText: event.target.value
+            }))
+          }
+          className='min-h-24 font-mono text-xs'
+        />
+        <p className='text-xs text-muted-foreground'>{t('headersHint')}</p>
+      </div>
+    </div>
+  );
+}
+
 function ChannelDialog({
   open,
   channel,
@@ -131,6 +254,12 @@ function ChannelDialog({
   const updateChannel = useUpdateNotificationChannel();
   const isEdit = !!channel;
   const saving = createChannel.isPending || updateChannel.isPending;
+
+  useEffect(() => {
+    if (open) {
+      setForm(channelToForm(channel));
+    }
+  }, [open, channel]);
 
   const toggleEvent = (event: string, checked: boolean) => {
     setForm((current) => ({
@@ -150,6 +279,20 @@ function ChannelDialog({
       }
       if (payload.events.length === 0) {
         toast.error(t('errors.eventRequired'));
+        return;
+      }
+      if (form.type === 'telegram') {
+        if (!form.botToken.trim()) {
+          toast.error(t('errors.telegramTokenRequired'));
+          return;
+        }
+        if (!form.chatId.trim()) {
+          toast.error(t('errors.telegramChatRequired'));
+          return;
+        }
+      }
+      if (form.type === 'webhook' && !form.webhookUrl.trim()) {
+        toast.error(t('errors.webhookUrlRequired'));
         return;
       }
       const mutation = isEdit
@@ -174,13 +317,14 @@ function ChannelDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className='max-w-2xl'>
-        <DialogHeader>
+      <DialogContent className='flex max-h-[min(90vh,720px)] max-w-2xl flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl'>
+        <DialogHeader className='shrink-0 border-b px-6 py-4'>
           <DialogTitle>
             {isEdit ? t('editChannel') : t('createChannel')}
           </DialogTitle>
         </DialogHeader>
-        <div className='grid gap-4'>
+
+        <div className='min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4'>
           <div className='grid gap-2'>
             <Label htmlFor='notification-channel-name'>
               {t('fields.name')}
@@ -206,10 +350,10 @@ function ChannelDialog({
                   }))
                 }
               >
-                <SelectTrigger>
+                <SelectTrigger className='w-full'>
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent className='z-[10001]'>
                   <SelectItem value='in_app'>{t('types.in_app')}</SelectItem>
                   <SelectItem value='telegram'>
                     {t('types.telegram')}
@@ -218,76 +362,25 @@ function ChannelDialog({
                 </SelectContent>
               </Select>
             </div>
-            <div className='flex items-end justify-between rounded-md border px-3 py-2'>
+            <div className='grid gap-2'>
               <Label htmlFor='notification-channel-enabled'>
                 {t('fields.enabled')}
               </Label>
-              <Switch
-                id='notification-channel-enabled'
-                checked={form.enabled}
-                onCheckedChange={(enabled) =>
-                  setForm((current) => ({ ...current, enabled }))
-                }
-              />
+              <div className='flex h-9 items-center justify-between rounded-md border border-input px-3 shadow-xs'>
+                <span className='text-sm text-muted-foreground'>
+                  {form.enabled ? t('status.on') : t('status.off')}
+                </span>
+                <Switch
+                  id='notification-channel-enabled'
+                  checked={form.enabled}
+                  onCheckedChange={(enabled) =>
+                    setForm((current) => ({ ...current, enabled }))
+                  }
+                />
+              </div>
             </div>
           </div>
-          {form.type === 'telegram' ? (
-            <div className='grid gap-2 sm:grid-cols-2'>
-              <div className='grid gap-2'>
-                <Label htmlFor='telegram-token'>{t('fields.botToken')}</Label>
-                <Input
-                  id='telegram-token'
-                  value={form.botToken}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      botToken: event.target.value
-                    }))
-                  }
-                />
-              </div>
-              <div className='grid gap-2'>
-                <Label htmlFor='telegram-chat'>{t('fields.chatId')}</Label>
-                <Input
-                  id='telegram-chat'
-                  value={form.chatId}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      chatId: event.target.value
-                    }))
-                  }
-                />
-              </div>
-            </div>
-          ) : null}
-          {form.type === 'webhook' ? (
-            <div className='grid gap-2'>
-              <Label htmlFor='webhook-url'>{t('fields.webhookUrl')}</Label>
-              <Input
-                id='webhook-url'
-                value={form.webhookUrl}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    webhookUrl: event.target.value
-                  }))
-                }
-              />
-              <Label htmlFor='webhook-headers'>{t('fields.headersJson')}</Label>
-              <Textarea
-                id='webhook-headers'
-                value={form.headersText}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    headersText: event.target.value
-                  }))
-                }
-                className='min-h-24 font-mono text-xs'
-              />
-            </div>
-          ) : null}
+          <ChannelTypeSetup form={form} setForm={setForm} t={t} />
           <div className='grid gap-2'>
             <Label>{t('fields.events')}</Label>
             <div className='grid gap-2 rounded-md border p-3 sm:grid-cols-2'>
@@ -295,7 +388,10 @@ function ChannelDialog({
                 const labelKey = eventLabelKey(eventName);
                 const label = t.has(labelKey) ? t(labelKey) : eventName;
                 return (
-                  <Label key={eventName} className='text-xs font-normal'>
+                  <Label
+                    key={eventName}
+                    className='flex cursor-pointer items-center text-xs font-normal'
+                  >
                     <Checkbox
                       checked={form.events.includes(eventName)}
                       onCheckedChange={(checked) =>
@@ -309,7 +405,8 @@ function ChannelDialog({
             </div>
           </div>
         </div>
-        <DialogFooter>
+
+        <DialogFooter className='shrink-0 border-t bg-background px-6 py-4'>
           <Button variant='outline' onClick={() => onOpenChange(false)}>
             {t('actions.cancel')}
           </Button>
@@ -342,6 +439,7 @@ export function NotificationChannelSettings() {
     () => [...channels].sort((a, b) => a.name.localeCompare(b.name)),
     [channels]
   );
+  const perms = useResourcePermissions('notifications');
 
   const runTest = (id: string) => {
     testChannel
@@ -359,10 +457,12 @@ export function NotificationChannelSettings() {
           <h1 className='text-xl font-semibold tracking-tight'>{t('title')}</h1>
           <p className='text-sm text-muted-foreground'>{t('subtitle')}</p>
         </div>
-        <Button size='sm' onClick={() => setCreateOpen(true)}>
-          <Plus size={15} />
-          {t('addChannel')}
-        </Button>
+        {perms.canCreate ? (
+          <Button size='sm' onClick={() => setCreateOpen(true)}>
+            <Plus size={15} />
+            {t('addChannel')}
+          </Button>
+        ) : null}
       </div>
       {isLoading ? (
         <div className='flex items-center gap-2 text-sm text-muted-foreground'>
@@ -422,38 +522,46 @@ export function NotificationChannelSettings() {
                   </TableCell>
                   <TableCell>
                     <div className='flex justify-end gap-1'>
-                      <Button
-                        variant='ghost'
-                        size='icon'
-                        className='size-8'
-                        onClick={() => runTest(channel.id)}
-                        disabled={testChannel.isPending}
-                      >
-                        <Send size={14} />
-                      </Button>
-                      <Button
-                        variant='ghost'
-                        size='icon'
-                        className='size-8'
-                        onClick={() => setEditing(channel)}
-                      >
-                        <Pencil size={14} />
-                      </Button>
-                      <Button
-                        variant='destructive-ghost'
-                        size='icon'
-                        className='size-8'
-                        onClick={() => {
-                          deleteChannel
-                            .mutateAsync(channel.id)
-                            .then(() =>
-                              toast.success(t('toasts.channelDeleted'))
-                            )
-                            .catch(() => toast.error(t('errors.deleteFailed')));
-                        }}
-                      >
-                        <Trash2 size={14} />
-                      </Button>
+                      {perms.canExecute ? (
+                        <Button
+                          variant='ghost'
+                          size='icon'
+                          className='size-8'
+                          onClick={() => runTest(channel.id)}
+                          disabled={testChannel.isPending}
+                        >
+                          <Send size={14} />
+                        </Button>
+                      ) : null}
+                      {perms.canUpdate ? (
+                        <Button
+                          variant='ghost'
+                          size='icon'
+                          className='size-8'
+                          onClick={() => setEditing(channel)}
+                        >
+                          <Pencil size={14} />
+                        </Button>
+                      ) : null}
+                      {perms.canDelete ? (
+                        <Button
+                          variant='destructive-ghost'
+                          size='icon'
+                          className='size-8'
+                          onClick={() => {
+                            deleteChannel
+                              .mutateAsync(channel.id)
+                              .then(() =>
+                                toast.success(t('toasts.channelDeleted'))
+                              )
+                              .catch(() =>
+                                toast.error(t('errors.deleteFailed'))
+                              );
+                          }}
+                        >
+                          <Trash2 size={14} />
+                        </Button>
+                      ) : null}
                     </div>
                   </TableCell>
                 </TableRow>

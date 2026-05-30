@@ -248,20 +248,21 @@ async def claim_relay_serial(db: AsyncSession, relay_row, *, serial: str, user_i
     if RELAY_SAME_WIFI_FILTER_ENABLED and not serial_is_same_lan(serial, relay_row, caps):
         raise RelayOnboardingError(403, "device is not on the same WiFi/LAN as this relay agent")
 
-    all_devices = await repo.list_devices_by_serial_aliases(db, _aliases_for_lookup([serial]))
-    existing = find_matching_device(serial, all_devices)
+    from db.crud.user import get_user_org_id
+    from services.device_registration import DeviceRegistrationError, get_or_claim_device_for_user
+
     display_name = cap_display_name(serial, caps)
-    if existing:
-        if existing.user_id and existing.user_id != user_id:
-            raise RelayOnboardingError(409, "serial already registered by another user")
-        if existing.user_id is None:
-            await repo.assign_device_to_user(db, str(getattr(existing, "serial", "") or serial), user_id)
-            existing.user_id = user_id
-        if display_name and display_name != existing.name:
-            await repo.update_device_name(db, existing.id, display_name)
-            existing.name = display_name
-    else:
-        existing = await repo.create_device(db, serial, display_name, user_id)
+    org_id = await get_user_org_id(db, user_id)
+    try:
+        existing = await get_or_claim_device_for_user(
+            db,
+            serial=serial,
+            display_name=display_name,
+            user_id=user_id,
+            org_id=org_id,
+        )
+    except DeviceRegistrationError as exc:
+        raise RelayOnboardingError(exc.status_code, exc.detail) from exc
 
     db_serial = str(getattr(existing, "serial", "") or serial)
     if caps:

@@ -23,6 +23,13 @@ need_cmd() {
 need_cmd adb
 need_cmd docker
 
+if ! docker info >/dev/null 2>&1; then
+  echo "error: Docker daemon is not running." >&2
+  echo "  macOS: open -a Docker   (wait until whale icon is steady)" >&2
+  echo "  then: docker info" >&2
+  exit 1
+fi
+
 if ! docker compose version >/dev/null 2>&1; then
   echo "error: docker compose (v2) is required" >&2
   exit 1
@@ -48,7 +55,7 @@ adb -P "$ADB_PORT" devices || true
 compose_subcommands=(up run build down ps logs exec pull stop restart config)
 
 if [[ $# -eq 0 ]]; then
-  set -- up --build --abort-on-container-exit
+  set -- up -d --build
 else
   is_subcommand=false
   for sub in "${compose_subcommands[@]}"; do
@@ -58,7 +65,7 @@ else
     fi
   done
   if [[ "$is_subcommand" == false ]]; then
-    set -- up --build "$@"
+    set -- up -d --build "$@"
   fi
 fi
 

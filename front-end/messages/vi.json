@@ -22,6 +22,10 @@
       "callback": {
         "title": "Đang xử lý đăng nhập | Device Farm",
         "description": "Đang xử lý thông tin đăng nhập của bạn"
+      },
+      "acceptInvite": {
+        "title": "Chấp nhận lời mời | Device Farm",
+        "description": "Tham gia tổ chức qua liên kết mời"
       }
     },
     "organization": {
@@ -62,7 +66,7 @@
       "footerMergedEditor": "Form hoặc JSON nâng cao: global + override. Giá trị trùng global không lưu override — xóa key trong JSON để kế thừa global.",
       "footerUsingGlobal": "Đang dùng biến global.",
       "parseInvalidJson": "JSON không hợp lệ (sai cú pháp).",
-      "parseInvalidRoot": "JSON phải là object, ví dụ {\"group_name\": \"abc\"}",
+      "parseInvalidRoot": "JSON phải là object, ví dụ '{\"group_name\": \"abc\"}'",
       "parseUnknown": "JSON không hợp lệ",
       "invalidAtDevice": "JSON không hợp lệ ở thiết bị {serial}",
       "saveFailed": "Lưu biến thiết bị thất bại"
@@ -228,10 +232,12 @@
       "vc_release": "Phát hành VC"
     },
     "members": "Thành viên",
+    "organizations_list": "Danh sách tổ chức",
     "organization_general": "Tổng quan tổ chức",
     "nav_group_devices": "Thiết bị",
     "nav_group_automation": "Chiến dịch & lịch chạy",
     "nav_group_library": "Tài khoản, kịch bản & kết quả",
+    "nav_group_operations": "Thông báo & cảnh báo",
     "activity_history": "Lịch sử hoạt động",
     "devices": "Danh sách thiết bị",
     "device_farm": "Xem thiết bị",
@@ -248,10 +254,40 @@
     "relay_agents": "Máy kết nối điện thoại",
     "notifications": "Thông báo"
   },
+  "contentFeature": {
+    "detail": {
+      "title": "Bằng chứng nội dung",
+      "breadcrumbContent": "Dữ liệu thu thập",
+      "breadcrumbCampaign": "Chiến dịch",
+      "breadcrumbDetail": "Chi tiết",
+      "backToList": "Quay lại danh sách",
+      "loading": "Đang tải nội dung…",
+      "loadError": "Không tải được bản ghi này.",
+      "metadataTitle": "Metadata truy vết",
+      "payloadTitle": "Payload",
+      "payloadHint": "Payload chuẩn hóa tại thời điểm thu thập (chỉ đọc).",
+      "artifactsTitle": "Artifact",
+      "artifactsEmpty": "Chưa có screenshot hoặc hierarchy cho mục này.",
+      "artifactExpired": "Artifact đã hết hạn hoặc không còn.",
+      "download": "Tải xuống",
+      "loadingPreview": "Đang tải xem trước…",
+      "noPreview": "Không có bản xem trước.",
+      "loadFullArtifact": "Tải toàn bộ nội dung",
+      "copyPermalink": "Sao chép permalink",
+      "permalinkCopied": "Đã sao chép permalink",
+      "metaExtractedAt": "Thời gian cào",
+      "metaDevice": "Thiết bị",
+      "metaCampaign": "Chiến dịch",
+      "metaExecution": "Lần chạy",
+      "metaScenario": "Kịch bản",
+      "metaAuthor": "Tác giả",
+      "metaUrl": "URL nguồn"
+    }
+  },
   "relayAgentsFeature": {
     "title": "Máy kết nối điện thoại",
     "subtitle": "Máy tính cắm USB/Wi‑Fi tới điện thoại, chạy phần mềm agent-boot để farm điều khiển từ xa.",
-    "onlineSummary": "{online}/{total} đang kết nối",
+    "onlineSummary": "{connected}/{total} kết nối",
     "loading": "Đang tải...",
     "empty": "Chưa có máy kết nối nào",
     "emptyHint": "Trên máy tính có điện thoại (ADB), chạy agent-boot, đặt RELAY_ENROLLMENT_TOKEN trong .env rồi kết nối tới farm.",
@@ -260,8 +296,16 @@
     "bootstrapAllResult": "Thiết lập: {ok}/{total} thành công",
     "registerDevice": "Đăng ký thiết bị",
     "registered": "đã đăng ký",
-    "statusOnline": "Đang kết nối",
-    "statusOffline": "Ngắt kết nối",
+    "connectionStatus": {
+      "inactive": "Đang không hoạt động",
+      "connecting": "Đang kết nối",
+      "connected": "Kết nối"
+    },
+    "statusInactive": "Đang không hoạt động",
+    "statusConnecting": "Đang kết nối",
+    "statusConnected": "Kết nối",
+    "statusOnline": "Kết nối",
+    "statusOffline": "Đang không hoạt động",
     "deviceCount": "{count} thiết bị",
     "tokens": "Token đăng ký",
     "tokensDescription": "Tạo token rồi dán vào RELAY_ENROLLMENT_TOKEN (.env trên máy kết nối) để máy đó gắn với tài khoản của bạn.",
@@ -386,8 +430,25 @@
       "testAccountHint": "Tài khoản có dấu hiệu môi trường thử — kiểm tra trước khi dùng trên production",
       "statusActive": "Hoạt động",
       "statusCooldown": "Tạm nghỉ",
+      "statusSuspended": "Tạm khóa",
       "statusBanned": "Đã cấm",
-      "statusDisabled": "Đã tắt"
+      "statusRetired": "Ngừng dùng",
+      "statusDisabled": "Đã tắt",
+      "cooldownUntil": "Đến {time}"
+    },
+    "stateDialog": {
+      "trigger": "Đổi trạng thái",
+      "triggerTo": "Chuyển sang {status}",
+      "title": "Đổi trạng thái — {username}",
+      "currentState": "Hiện tại: {status}",
+      "targetState": "Trạng thái mới",
+      "reason": "Lý do",
+      "ttlHours": "Thời gian cooldown (giờ)",
+      "ttlRequired": "Nhập số giờ dương",
+      "lastReason": "Ghi chú gần nhất: {reason}",
+      "submit": "Áp dụng",
+      "submitting": "Đang áp dụng...",
+      "submitFailed": "Không thể đổi trạng thái"
     },
     "createDialog": {
       "trigger": "Tạo tài khoản",
@@ -660,6 +721,7 @@
       "fleetFailed": "Fleet run thất bại",
       "runFailed": "Chạy chiến dịch thất bại",
       "titleNeedDevice": "Thêm thiết bị",
+      "titleAddScenario": "Thêm kịch bản",
       "titleContent": "Dữ liệu thu thập",
       "titleRun": "Chạy chiến dịch",
       "runDialogNotReady": "Chưa có đủ thiết bị hoặc kịch bản để chạy chiến dịch này.",
@@ -674,6 +736,7 @@
       "titleResume": "Tiếp tục chạy",
       "titleDelete": "Xoá chiến dịch",
       "cancelConfirm": "Huỷ tất cả workflow đang chạy?",
+      "cancelUndoWarning": "Huỷ không hoàn tác thao tác đã thực hiện trên mạng xã hội (bài viết, bình luận, v.v.).",
       "titlePauseAll": "Tạm dừng ({count} workflow)",
       "titleResumeAll": "Tiếp tục ({count} workflow)",
       "titleCancelAll": "Huỷ tất cả",
@@ -745,6 +808,9 @@
       "colStatus": "Trạng thái",
       "colTime": "Thời gian",
       "colDevices": "Thiết bị",
+      "colScenarios": "Kịch bản",
+      "colSetup": "Chuẩn bị",
+      "colActions": "Hành động",
       "loading": "Đang tải…",
       "loadError": "Lỗi tải danh sách chiến dịch",
       "campaignCountLabel": "chiến dịch",
@@ -761,6 +827,10 @@
       "createSuccess": "Đã thêm kịch bản",
       "createFailed": "Thêm kịch bản thất bại",
       "trigger": "Kịch bản ({scenarios} kịch bản · {steps} bước)",
+      "summaryEmpty": "Thêm kịch bản",
+      "summaryCount": "{scenarios} kịch bản · {steps} bước",
+      "summaryTitle": "Xem và chỉnh sửa kịch bản",
+      "emptyDescription": "Campaign chưa có kịch bản. Thêm kịch bản trước khi chạy.",
       "title": "Kịch bản — {campaign}",
       "empty": "Chưa có kịch bản nào. Thêm kịch bản đầu tiên.",
       "addButton": "Thêm kịch bản",
@@ -1637,14 +1707,39 @@
     "notConnected": "Chưa kết nối",
     "online": "Trực tuyến",
     "offline": "Ngoại tuyến",
+    "transportOnline": "Kênh truyền đang hoạt động",
+    "transportOffline": "Không có kênh truyền",
     "connect": "Kết nối",
     "deleteDevice": "Xoá thiết bị",
     "deleteConfirm": "Xoá thiết bị này? Các campaign liên quan cũng sẽ bỏ liên kết với thiết bị.",
+    "realtime": {
+      "connected": "Luồng vòng đời đang hoạt động",
+      "reconnecting": "Đang kết nối lại luồng vòng đời…"
+    },
+    "lifecycleToast": {
+      "deadTitle": "{label} đã ngừng hoạt động",
+      "deadDescription": "Quá thời gian chờ kết nối lại — có thể cần can thiệp vật lý (cáp, sạc, mạng).",
+      "deadReason": "Lý do: {reason}"
+    },
+    "revive": {
+      "label": "Hồi sinh",
+      "description": "Đánh dấu thiết bị sẵn sàng khởi động lại sau khi đã sửa lỗi vật lý.",
+      "confirmTitle": "Hồi sinh {label}?",
+      "confirmDescription": "Trạng thái sẽ chuyển từ chết → đang kết nối. Máy kết nối phải kết nối lại trước khi dùng được.",
+      "confirmAction": "Hồi sinh thiết bị",
+      "cancel": "Huỷ",
+      "running": "Đang hồi sinh…",
+      "toastRunning": "Đang hồi sinh {label}…",
+      "toastSuccess": "Đã hồi sinh {label}",
+      "toastSuccessDetail": "Trạng thái mới: {state}",
+      "toastFailed": "Không hồi sinh được {label}"
+    },
     "columns": {
       "device": "Thiết bị",
       "status": "Trạng thái",
       "specs": "Thông số",
       "lastSeen": "Lần cuối",
+      "lastHeartbeat": "Lần báo hiệu gần nhất",
       "tags": "Nhãn",
       "connectionHost": "Máy kết nối"
     },
@@ -1654,14 +1749,36 @@
       "statusAll": "Tất cả",
       "statusOnline": "Trực tuyến",
       "statusOffline": "Ngoại tuyến",
+      "transportOnline": "Kênh truyền đang hoạt động",
+      "transportOffline": "Không có kênh truyền",
       "sortLastSeen": "Lần kết nối gần nhất",
       "reset": "Đặt lại",
       "showing": "Hiển thị {count}/{total}"
     },
+    "fleetStats": {
+      "title": "Thống kê trạng thái ({total} thiết bị)",
+      "loadError": "Không tải được thống kê đội thiết bị.",
+      "activeSessions": "Phiên đang chạy ({total})",
+      "sessionOwner": {
+        "user": "Người dùng",
+        "execution": "Thực thi",
+        "campaign": "Chiến dịch",
+        "system": "Hệ thống",
+        "unknown": "Không rõ"
+      }
+    },
+    "fsm": {
+      "unknown": "Chưa rõ",
+      "connecting": "Đang kết nối",
+      "online": "Trực tuyến",
+      "busy": "Bận",
+      "reconnecting": "Đang kết nối lại",
+      "dead": "Đã chết"
+    },
     "labels": {
-      "model": "Model",
+      "model": "Mẫu máy",
       "android": "Android",
-      "adbSerial": "ADB serial",
+      "adbSerial": "Serial ADB",
       "screen": "Màn hình"
     },
     "connectDialog": {
@@ -1682,9 +1799,9 @@
       "sendToPhone": "Gửi link xuống điện thoại",
       "sendingToPhone": "Đang gửi…",
       "sentToPhone": "Đã gửi link xuống điện thoại",
-      "errorPushToPhone": "Không gửi được link xuống điện thoại. Kiểm tra máy kết nối (agent-boot) và app Chức năng thiết bị.",
-      "pickAdbSerial": "Chọn ADB serial",
-      "pickAdbSerialHint": "Nhiều máy cắm USB — chọn đúng serial của máy cần mở link này."
+      "errorPushToPhone": "Không gửi được liên kết xuống điện thoại. Kiểm tra máy kết nối và app Chức năng thiết bị.",
+      "pickAdbSerial": "Chọn serial ADB",
+      "pickAdbSerialHint": "Nhiều máy cắm USB — chọn đúng serial của máy cần mở liên kết này."
     },
     "commands": {
       "setup": {
@@ -1753,12 +1870,12 @@
   },
   "devicesConnect": {
     "title": "Kết nối thiết bị lên cloud",
-    "description": "Server chạy trên cloud nên thiết bị phải <strong>chủ động kết nối lên server</strong>. Chọn số thiết bị, tạo link — mỗi điện thoại mở app <strong>STFService</strong> và <strong>dán link</strong> (hoặc quét QR) để kết nối. Không cần cùng mạng.",
+    "description": "Server chạy trên cloud nên thiết bị phải <strong>chủ động kết nối lên server</strong>. Chọn số thiết bị, tạo liên kết — mỗi điện thoại mở app <strong>Chức năng thiết bị</strong> và <strong>dán liên kết</strong> (hoặc quét QR) để kết nối. Không cần cùng mạng.",
     "countLabel": "Số thiết bị cần kết nối (1–{max})",
     "createLinks": "Tạo link kết nối",
     "creating": "Đang tạo…",
     "cancel": "Hủy",
-    "instructionHint": "Mở app <strong>STFService</strong> → dán link hoặc quét QR. Trạng thái cập nhật tự động.",
+    "instructionHint": "Mở app <strong>Chức năng thiết bị</strong> → dán liên kết hoặc quét QR. Trạng thái cập nhật tự động.",
     "progressLabel": "Tiến độ kết nối",
     "progressCount": "{connected}/{total} thiết bị",
     "deviceWaiting": "Thiết bị {index} — Đang chờ…",
@@ -1775,12 +1892,12 @@
     "title": "Đăng ký thiết bị",
     "titleQr": "Quét mã QR để kết nối",
     "titleConnected": "Thiết bị đã kết nối",
-    "description": "Đặt tên thiết bị, rồi quét QR bằng app <strong>STFService</strong> để gắn thiết bị này với tài khoản của bạn.",
+    "description": "Đặt tên thiết bị, rồi quét QR bằng app <strong>Chức năng thiết bị</strong> để gắn thiết bị này với tài khoản của bạn.",
     "nameLabel": "Tên thiết bị",
     "namePlaceholder": "VD: Điện thoại test 1",
     "deviceLabel": "Thiết bị cần đăng ký",
-    "devicePlaceholder": "Chọn serial từ agent-boot",
-    "noAvailableDevices": "Chưa thấy thiết bị cùng WiFi/LAN với agent-boot. Bạn vẫn có thể đăng ký bằng QR bên dưới.",
+    "devicePlaceholder": "Chọn serial từ máy kết nối",
+    "noAvailableDevices": "Chưa thấy thiết bị cùng Wi‑Fi/LAN với máy kết nối. Bạn vẫn có thể đăng ký bằng QR bên dưới.",
     "descLabel": "Ghi chú (tuỳ chọn)",
     "descPlaceholder": "VD: Phòng QA, máy Samsung...",
     "submit": "Đăng ký",
@@ -1789,13 +1906,13 @@
     "confirmMessage": "Thiết bị <strong>{name}</strong> đã được tạo. Bạn có muốn kết nối ngay bây giờ không?",
     "connectNow": "Kết nối ngay",
     "connectLater": "Để sau",
-    "qrInstruction": "Mở app <strong>STFService</strong> trên điện thoại — quét QR hoặc dán link bên dưới.",
+    "qrInstruction": "Mở app <strong>Chức năng thiết bị</strong> trên điện thoại — quét QR hoặc dán liên kết bên dưới.",
     "waiting": "Đang chờ thiết bị kết nối…",
     "generatingQr": "Đang tạo mã QR…",
     "sendToPhone": "Gửi link xuống điện thoại",
     "sendingToPhone": "Đang gửi…",
     "sentToPhone": "Đã gửi link xuống điện thoại",
-    "successMessage": "Thiết bị đã online và sẵn sàng điều khiển.",
+    "successMessage": "Thiết bị đã trực tuyến và sẵn sàng điều khiển.",
     "infoSerial": "Serial",
     "infoAndroid": "Android",
     "infoResolution": "Màn hình",
@@ -1842,12 +1959,12 @@
     "restartDeviceConfirmDescription": "Gửi lệnh khởi động lại tới thiết bị {serial}?",
     "deviceInactive": "Thiết bị chưa hoạt động",
     "stepMonitor": {
-      "steps": "Steps",
+      "steps": "Bước",
       "running": "Đang chạy",
       "title": "Theo dõi bước",
       "loading": "Đang tải...",
-      "noWorkflows": "Không có workflow đang chạy.",
-      "campaignLabel": "Campaign"
+      "noWorkflows": "Không có quy trình đang chạy.",
+      "campaignLabel": "Chiến dịch"
     },
     "header": {
       "realtimeOk": "Kết nối realtime ổn định",
@@ -2260,7 +2377,10 @@
       "unknownDevice": "Thiết bị không xác định",
       "task": "Tác vụ",
       "deviceSerial": "Thiết bị {serial}",
+      "deviceLine": "Thiết bị {device}",
+      "performedBy": "Bởi {user}",
       "duration": "{seconds} giây",
+      "durationMs": "{ms} ms",
       "actionLabels": {
         "device_connect": "Kết nối thiết bị",
         "device_disconnect": "Mất kết nối",
@@ -2269,7 +2389,28 @@
         "task_failed": "Tác vụ thất bại",
         "campaign_run": "Chạy chiến dịch",
         "campaign_complete": "Chiến dịch hoàn tất",
-        "schedule_triggered": "Kích hoạt lịch chạy"
+        "schedule_triggered": "Kích hoạt lịch chạy",
+        "user_action": "Thao tác người dùng"
+      },
+      "operationLabels": {
+        "generic": "Thao tác người dùng",
+        "device_interrupt": "Dừng thao tác trên thiết bị",
+        "device_screen_attach": "Bật truyền màn hình",
+        "device_screen_detach": "Tắt truyền màn hình",
+        "device_bootstrap": "Khởi động thiết bị",
+        "device_restart_u2": "Khởi động lại U2",
+        "device_restart_atx": "Khởi động lại ATX",
+        "device_restart_scrcpy": "Khởi động lại truyền màn hình",
+        "campaign_pause": "Tạm dừng chiến dịch",
+        "campaign_resume": "Tiếp tục chiến dịch",
+        "campaign_cancel": "Huỷ chiến dịch",
+        "schedule_run_now": "Chạy lịch ngay",
+        "schedule_toggle": "Bật/tắt lịch chạy"
+      },
+      "outcomeLabels": {
+        "success": "Thành công",
+        "rejected": "Bị từ chối",
+        "error": "Lỗi"
       },
       "reasonLabels": {
         "unknown": "Không rõ nguyên nhân",
@@ -2297,6 +2438,12 @@
     "loading": "Đang tải",
     "loadingChannels": "Đang tải kênh thông báo",
     "empty": "Chưa có thông báo",
+    "emptyHint": "Cảnh báo thiết bị và chiến dịch sẽ hiển thị tại đây.",
+    "markAllRead": "Đánh dấu đã đọc",
+    "unreadBadge": "{count} chưa đọc",
+    "timeGroupToday": "Hôm nay",
+    "timeGroupEarlier": "Trước đó",
+    "unknownDevice": "Thiết bị không xác định",
     "noChannels": "Chưa có kênh thông báo",
     "manageChannels": "Quản lý kênh",
     "addChannel": "Thêm kênh",
@@ -2321,8 +2468,23 @@
       "headersJson": "Headers JSON"
     },
     "placeholders": {
-      "channelName": "Ví dụ: Trình duyệt"
+      "channelName": "Ví dụ: Trình duyệt",
+      "botToken": "123456789:ABCdefGHIjklMNOpqrsTUVwxyz",
+      "chatId": "-1001234567890 hoặc @my_channel",
+      "webhookUrl": "https://hooks.example.com/notify"
     },
+    "inAppHint": "Thông báo hiển thị trong dashboard và biểu tượng chuông trên header.",
+    "telegramSetupTitle": "Kết nối Telegram",
+    "telegramSetupIntro": "Gửi cảnh báo tới nhóm hoặc kênh Telegram qua Bot API.",
+    "telegramStep1": "Mở @BotFather trên Telegram, tạo bot mới và sao chép token.",
+    "telegramStep2": "Thêm bot vào nhóm/kênh nhận thông báo (quyền gửi tin).",
+    "telegramStep3": "Lấy Chat ID (số âm với supergroup hoặc @username kênh công khai).",
+    "botTokenHint": "Token do BotFather cấp, giữ bí mật.",
+    "chatIdHint": "ID nhóm/kênh hoặc username bắt đầu bằng @.",
+    "testHint": "Sau khi lưu, dùng nút gửi thử trên bảng kênh để kiểm tra.",
+    "webhookSetupTitle": "Webhook HTTP",
+    "webhookSetupIntro": "POST JSON tới URL của bạn mỗi khi có sự kiện khớp.",
+    "headersHint": "Tuỳ chọn. JSON object header gửi kèm request.",
     "eventLabels": {
       "device_disconnect": "Thiết bị ngắt kết nối",
       "device_reconnect": "Thiết bị kết nối lại",
@@ -2365,7 +2527,10 @@
       "invalidConfig": "Cấu hình kênh không hợp lệ",
       "loadChannels": "Không tải được kênh thông báo",
       "testFailed": "Gửi thử thất bại",
-      "deleteFailed": "Xóa kênh thất bại"
+      "deleteFailed": "Xóa kênh thất bại",
+      "telegramTokenRequired": "Bot token là bắt buộc cho kênh Telegram",
+      "telegramChatRequired": "Chat ID là bắt buộc cho kênh Telegram",
+      "webhookUrlRequired": "Webhook URL là bắt buộc"
     }
   },
   "errors": {
@@ -3187,6 +3352,8 @@
     "inviteMembers": "Mời thành viên",
     "switchOrg": "Chuyển tổ chức",
     "switchOrgConfirmation": "Chuyển sang tổ chức {name}? Bảng điều khiển sẽ cập nhật theo tổ chức được chọn.",
+    "searchOrgs": "Tìm tổ chức…",
+    "loadMoreOrgs": "Tải thêm",
     "shortTitle": "Tổ chức",
     "noOrganization": "Chưa có tổ chức",
     "description": "Quản lý các tổ chức trong hệ thống",
@@ -3254,6 +3421,7 @@
       "authorizedPersonAddress": "Địa chỉ người được uỷ quyền",
       "notes": "Ghi chú",
       "createdAt": "Ngày tạo",
+      "organizationId": "ID",
       "representative": "Người đại diện",
       "email": "Email"
     },
@@ -3263,6 +3431,7 @@
       "authorizedPersonInfo": "Thông tin người được uỷ quyền"
     },
     "messages": {
+      "loadError": "Không thể tải thông tin tổ chức",
       "createFailed": "Không thể tạo tổ chức",
       "updateFailed": "Không thể cập nhật tổ chức",
       "noData": "Không tìm thấy tổ chức",
@@ -3314,8 +3483,15 @@
       "title": "Thành viên",
       "description": "Những người có quyền truy cập không gian làm việc này.",
       "inviteNewMember": "Mời thành viên mới",
-      "inviteDescription": "Tạo mã mời cho thành viên mới",
+      "inviteDescription": "Nhập email để gửi lời mời. Người nhận có thể đăng nhập nếu đã có tài khoản hoặc đăng ký mới.",
+      "inviteSentExisting": "Đã gửi lời mời đăng nhập tới {email}",
+      "inviteSentNew": "Đã gửi lời mời đăng ký tới {email}",
+      "inviteEmailNotSent": "Đã tạo lời mời cho {email} nhưng chưa gửi được email. Kiểm tra cấu hình SMTP trên server.",
+      "userNotFound": "Không tìm thấy tài khoản với email này. Hãy nhờ họ đăng ký trước.",
+      "alreadyMember": "Người này đã là thành viên của không gian làm việc.",
+      "memberName": "Tên",
       "emailAddress": "Địa chỉ email",
+      "role": "Vai trò",
       "enterEmailAddress": "Nhập địa chỉ email",
       "inviting": "Đang mời...",
       "generateInviteCode": "Tạo mã mời",
@@ -3341,14 +3517,48 @@
       "userCheckFailed": "Không kiểm tra được người dùng",
       "checkingUser": "Đang kiểm tra...",
       "checkUserFirstMessage": "Nhập email hợp lệ trước khi gửi lời mời",
+      "invalidEmail": "Địa chỉ email không hợp lệ",
+      "invalidRole": "Vai trò mời không hợp lệ",
+      "noOrganization": "Không tìm thấy tổ chức hiện tại",
       "organizationSupervisor": "Giám sát tổ chức",
       "staff": "Nhân viên",
-      "cannotEditOwner": "Chỉ chủ sở hữu tổ chức mới có thể chỉnh sửa chủ sở hữu khác"
+      "supervisor": "Vận hành",
+      "cannotEditOwner": "Chỉ chủ sở hữu tổ chức mới có thể chỉnh sửa chủ sở hữu khác",
+      "cannotChangeOwnRole": "Bạn không thể đổi vai trò của chính mình",
+      "changeRoleSuccess": "Đã cập nhật vai trò thành viên"
+    },
+    "inviteAccept": {
+      "title": "Lời mời tham gia tổ chức",
+      "subtitle": "Bạn được mời tham gia {org}",
+      "existingUserHint": "Bạn đã có tài khoản — hãy đăng nhập bằng email ở trên để chấp nhận lời mời.",
+      "newUserHint": "Chưa có tài khoản — hãy đăng ký bằng đúng email ở trên, sau đó đăng nhập.",
+      "signIn": "Đăng nhập",
+      "signUp": "Đăng ký tài khoản",
+      "loading": "Đang tải lời mời...",
+      "missingToken": "Liên kết mời không hợp lệ.",
+      "invalidToken": "Lời mời không tồn tại hoặc đã bị hủy.",
+      "expired": "Lời mời đã hết hạn.",
+      "acceptFailed": "Không thể chấp nhận lời mời. Hãy đăng nhập đúng email được mời.",
+      "accepting": "Đang chấp nhận lời mời...",
+      "accepted": "Đã tham gia tổ chức. Đang chuyển hướng...",
+      "goSignIn": "Đến trang đăng nhập",
+      "orgDisabled": "Tổ chức này đã bị vô hiệu hóa. Liên hệ quản trị viên.",
+      "authEmailBanner": "Bạn đang tham gia qua lời mời — hãy dùng email {email}.",
+      "wrongAccountLoggedIn": "Bạn đang đăng nhập bằng {currentEmail}. Lời mời được gửi tới {invitedEmail}.",
+      "switchAccount": "Đăng xuất và tiếp tục",
+      "useAnotherAccount": "Dùng tài khoản khác để chấp nhận lời mời này."
     },
     "listing": {
       "title": "Tổ chức",
       "description": "Quản lý tổ chức và thành viên",
-      "noOrganizationsFound": "Không tìm thấy tổ chức"
+      "noOrganizationsFound": "Không tìm thấy tổ chức",
+      "searchPlaceholder": "Tìm theo tên hoặc email…",
+      "search": "Tìm kiếm",
+      "loadMore": "Tải thêm",
+      "showing": "{from}–{to} / {total}",
+      "pageOf": "Trang {current} / {total}",
+      "prev": "Trước",
+      "next": "Sau"
     },
     "errors": {
       "notFound": "Không tìm thấy tổ chức"

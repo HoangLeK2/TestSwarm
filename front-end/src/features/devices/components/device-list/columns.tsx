@@ -1,7 +1,11 @@
+'use client';
+
 import { formatDistanceToNow } from 'date-fns';
-import { vi } from 'date-fns/locale';
+import { enUS, vi } from 'date-fns/locale';
+import type { Locale } from 'date-fns';
 import { QrCode, Trash2, Wifi, WifiOff } from 'lucide-react';
 import type { ColumnDef } from '@tanstack/react-table';
+import { useQueryClient } from '@tanstack/react-query';
 import { Badge } from '../../../../components/ui/badge';
 import { Button } from '../../../../components/ui/button';
 import {
@@ -14,6 +18,14 @@ import {
   isDeviceOnlineForList,
   resolveDeviceRelay
 } from '../../lib/device-online';
+import {
+  DEVICE_FSM_BADGE_CLASS,
+  DEVICE_FSM_BADGE_VARIANT,
+  deviceFsmStateOf,
+  type DeviceFsmStateKey
+} from '../../lib/device-fsm';
+import { ReviveDeviceButton } from './ReviveDeviceButton';
+import { removeDeviceFromCache } from '../../hooks/use-devices';
 import { TagsCell } from './TagsCell';
 import { DeviceCmdButton } from './BootstrapDialog';
 import type { ConfirmModalOptions } from '@/providers/modal-provider';
@@ -22,6 +34,9 @@ import {
   TooltipContent,
   TooltipTrigger
 } from '@/components/ui/tooltip';
+import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
+import { normalizeNavUserRole } from '@/lib/nav-access';
+import { useAuthContext } from '@/features/auth/providers/auth-provider';
 
 function DeviceActionsCell({
   device,
@@ -44,6 +59,13 @@ function DeviceActionsCell({
   t: (key: string, values?: Record<string, any>) => string;
   tCommon: (key: string, values?: Record<string, any>) => string;
 }) {
+  const qc = useQueryClient();
+  const perms = useResourcePermissions('devices');
+  const { user } = useAuthContext();
+  const platformRole = normalizeNavUserRole(user?.role);
+  const canReviveDead =
+    platformRole === 'admin' || platformRole === 'superadmin';
+
   const handleDelete = async () => {
     const ok = await confirm({
       title: t('deleteDevice'),
@@ -53,49 +75,59 @@ function DeviceActionsCell({
       confirmVariant: 'destructive',
       zIndex: 10_000
     });
+    if (!ok) return;
+
     setDeletingId(device.id);
     try {
       await devicesApi.delete(device.id);
-      window.location.reload();
+      removeDeviceFromCache(qc, device.id);
     } finally {
       setDeletingId((prev) => (prev === device.id ? null : prev));
     }
   };
 
   const hasRelay = !!resolveDeviceRelay(device, relayMap);
+  const fsm = deviceFsmStateOf(device);
 
   return (
     <div className='flex items-center justify-end gap-1'>
-      {hasRelay && (
+      {canReviveDead && fsm === 'dead' && (
+        <ReviveDeviceButton device={device} />
+      )}
+      {perms.canExecute && hasRelay && fsm !== 'dead' && (
         <>
           <DeviceCmdButton device={device} cmd='bootstrap' />
           <DeviceCmdButton device={device} cmd='restart_u2' />
           <DeviceCmdButton device={device} cmd='restart_scrcpy' />
         </>
       )}
-      <Button
-        size='sm'
-        variant='outline'
-        onClick={() => setConnectDevice(device)}
-      >
-        <QrCode size={14} className='mr-1.5' />
-        {t('connect')}
-      </Button>
-      <Tooltip delayDuration={400}>
-        <TooltipTrigger asChild>
-          <Button
-            size='icon'
-            variant='ghost'
-            className='size-7 text-destructive hover:text-destructive'
-            disabled={deletingId === device.id}
-            onClick={handleDelete}
-            aria-label={t('deleteDevice')}
-          >
-            <Trash2 size={14} />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side='bottom'>{t('deleteDevice')}</TooltipContent>
-      </Tooltip>
+      {perms.canExecute ? (
+        <Button
+          size='sm'
+          variant='outline'
+          onClick={() => setConnectDevice(device)}
+        >
+          <QrCode size={14} className='mr-1.5' />
+          {t('connect')}
+        </Button>
+      ) : null}
+      {perms.canDelete ? (
+        <Tooltip delayDuration={400}>
+          <TooltipTrigger asChild>
+            <Button
+              size='icon'
+              variant='ghost'
+              className='size-7 text-destructive hover:text-destructive'
+              disabled={deletingId === device.id}
+              onClick={handleDelete}
+              aria-label={t('deleteDevice')}
+            >
+              <Trash2 size={14} />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side='bottom'>{t('deleteDevice')}</TooltipContent>
+        </Tooltip>
+      ) : null}
     </div>
   );
 }
@@ -107,7 +139,8 @@ export function getDeviceColumns({
   setDeletingId,
   setConnectDevice,
   relayMap = {},
-  confirm
+  confirm,
+  dateLocale = vi
 }: {
   t: (key: string, values?: Record<string, any>) => string;
   tCommon: (key: string, values?: Record<string, any>) => string;
@@ -118,6 +151,7 @@ export function getDeviceColumns({
   setConnectDevice: (device: DeviceOut | null) => void;
   relayMap?: Record<string, RelayAgentOut>;
   confirm: (options: ConfirmModalOptions) => Promise<boolean>;
+  dateLocale?: Locale;
 }): ColumnDef<DeviceOut>[] {
   return [
     {
@@ -147,27 +181,41 @@ export function getDeviceColumns({
       cell: ({ row }) => {
         const d = row.original;
         const pending = isPendingDevice(d);
-        const isOnline = isDeviceOnlineForList(d, relayMap);
+        if (pending) {
+          return (
+            <Badge variant='outline' className='text-[11px]'>
+              {t('notConnected')}
+            </Badge>
+          );
+        }
+
+        const fsm = deviceFsmStateOf(d);
+        const transportOnline = isDeviceOnlineForList(d, relayMap);
+        const variant = DEVICE_FSM_BADGE_VARIANT[fsm];
+        const extraClass = DEVICE_FSM_BADGE_CLASS[fsm] ?? '';
 
         return (
-          <Badge
-            variant={pending ? 'outline' : isOnline ? 'secondary' : 'outline'}
-            className='inline-flex items-center gap-1 text-[11px]'
-          >
-            {pending ? (
-              t('notConnected')
-            ) : isOnline ? (
-              <>
-                <Wifi size={10} />
-                {t('online')}
-              </>
-            ) : (
-              <>
-                <WifiOff size={10} />
-                {t('offline')}
-              </>
-            )}
-          </Badge>
+          <div className='flex flex-col gap-1'>
+            <Badge
+              variant={variant}
+              className={`inline-flex w-fit items-center gap-1 text-[11px] ${extraClass}`}
+            >
+              {t(`fsm.${fsm}` as `fsm.${DeviceFsmStateKey}`)}
+            </Badge>
+            <span className='inline-flex items-center gap-1 text-[10px] text-muted-foreground'>
+              {transportOnline ? (
+                <>
+                  <Wifi size={10} className='text-green-600' />
+                  {t('transportOnline')}
+                </>
+              ) : (
+                <>
+                  <WifiOff size={10} />
+                  {t('transportOffline')}
+                </>
+              )}
+            </span>
+          </div>
         );
       }
     },
@@ -216,19 +264,36 @@ export function getDeviceColumns({
     },
     {
       id: 'lastSeen',
-      header: t('columns.lastSeen'),
+      header: t('columns.lastHeartbeat'),
       cell: ({ row }) => {
         const d = row.original;
         if (!d.last_seen)
           return <span className='text-[11px] text-muted-foreground'>—</span>;
 
+        const at = new Date(d.last_seen);
+        const relative = formatDistanceToNow(at, {
+          addSuffix: true,
+          locale: dateLocale
+        });
+        const absolute = at.toLocaleString(
+          dateLocale === vi ? 'vi-VN' : 'en-US',
+          {
+            dateStyle: 'short',
+            timeStyle: 'medium'
+          }
+        );
+
         return (
-          <span className='text-[11px] text-muted-foreground'>
-            {formatDistanceToNow(new Date(d.last_seen), {
-              addSuffix: true,
-              locale: vi
-            })}
-          </span>
+          <Tooltip delayDuration={300}>
+            <TooltipTrigger asChild>
+              <span className='cursor-default text-[11px] text-muted-foreground'>
+                {relative}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side='top' className='font-mono text-xs'>
+              {absolute}
+            </TooltipContent>
+          </Tooltip>
         );
       }
     },

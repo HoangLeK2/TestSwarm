@@ -401,6 +401,8 @@ class TestFinalizeCampaignExecutionResult:
         }
 
         upsert_mock = AsyncMock()
+        get_execution_mock = AsyncMock(return_value=SimpleNamespace(status="running", meta={}))
+        update_execution_mock = AsyncMock()
         get_device_mock = AsyncMock(return_value=mock_device)
 
         with ExitStack() as stack:
@@ -411,6 +413,12 @@ class TestFinalizeCampaignExecutionResult:
             ))
             stack.enter_context(patch(
                 "db.crud.device.get_device_by_serial", get_device_mock
+            ))
+            stack.enter_context(patch(
+                "db.crud.execution.get_execution", get_execution_mock
+            ))
+            stack.enter_context(patch(
+                "db.crud.execution.update_execution", update_execution_mock
             ))
             stack.enter_context(patch(
                 "db.crud.execution.upsert_execution_result", upsert_mock
@@ -450,6 +458,8 @@ class TestFinalizeCampaignExecutionResult:
         }
 
         upsert_mock = AsyncMock()
+        get_execution_mock = AsyncMock(return_value=SimpleNamespace(status="running", meta={}))
+        update_execution_mock = AsyncMock()
         get_device_mock = AsyncMock(return_value=mock_device)
 
         with ExitStack() as stack:
@@ -459,6 +469,12 @@ class TestFinalizeCampaignExecutionResult:
             ))
             stack.enter_context(patch(
                 "db.crud.device.get_device_by_serial", get_device_mock
+            ))
+            stack.enter_context(patch(
+                "db.crud.execution.get_execution", get_execution_mock
+            ))
+            stack.enter_context(patch(
+                "db.crud.execution.update_execution", update_execution_mock
             ))
             stack.enter_context(patch(
                 "db.crud.execution.upsert_execution_result", upsert_mock
@@ -810,6 +826,7 @@ class TestDlqRetryReenqueue:
         db = AsyncMock()
         user = MagicMock()
         user.id = "user-1"
+        user.org_id = "org-1"
         entry = MagicMock()
         entry.id = "dlq-1"
         entry.execution_id = "exec-1"
@@ -823,6 +840,7 @@ class TestDlqRetryReenqueue:
         execution.id = "exec-1"
         execution.user_id = "user-1"
         execution.campaign_id = "camp-1"
+        campaign = SimpleNamespace(id="camp-1", org_id="org-1")
         request = MagicMock()
         request.app.state.scheduler = MagicMock()
         request.app.state.scheduler._client = AsyncMock()
@@ -835,13 +853,12 @@ class TestDlqRetryReenqueue:
             set_status_mock = stack.enter_context(
                 patch("db.crud.execution_dlq.set_dlq_status", AsyncMock(return_value=entry))
             )
-            stack.enter_context(
-                patch.object(executions_route, "get_execution", AsyncMock(return_value=execution))
-            )
+            stack.enter_context(patch("api.execution_access.get_execution", AsyncMock(return_value=execution)))
+            stack.enter_context(patch("api.execution_access.get_campaign", AsyncMock(return_value=campaign)))
             stack.enter_context(
                 patch(
                     "db.crud.device.get_device_by_serial",
-                    AsyncMock(return_value=SimpleNamespace(id="dev-1", serial="SN001", user_id="user-1")),
+                    AsyncMock(return_value=SimpleNamespace(id="dev-1", serial="SN001", user_id="user-1", org_id="org-1")),
                 )
             )
             stack.enter_context(
@@ -867,6 +884,7 @@ class TestDlqRetryReenqueue:
         db = AsyncMock()
         user = MagicMock()
         user.id = "user-1"
+        user.org_id = "org-1"
         entry = MagicMock()
         entry.id = "dlq-1"
         entry.execution_id = "exec-1"
@@ -880,6 +898,7 @@ class TestDlqRetryReenqueue:
         execution.id = "exec-1"
         execution.user_id = "user-1"
         execution.campaign_id = "camp-1"
+        campaign = SimpleNamespace(id="camp-1", org_id="org-1")
         request = MagicMock()
         request.app.state.scheduler = MagicMock()
         request.app.state.scheduler._client = AsyncMock()
@@ -889,9 +908,8 @@ class TestDlqRetryReenqueue:
             stack.enter_context(
                 patch("db.crud.execution_dlq.begin_dlq_retry_for_user", AsyncMock(return_value=(entry, False)))
             )
-            stack.enter_context(
-                patch.object(executions_route, "get_execution", AsyncMock(return_value=execution))
-            )
+            stack.enter_context(patch("api.execution_access.get_execution", AsyncMock(return_value=execution)))
+            stack.enter_context(patch("api.execution_access.get_campaign", AsyncMock(return_value=campaign)))
             enqueue_mock = stack.enter_context(
                 patch("services.campaign_dispatch.enqueue_campaign_run_temporal", AsyncMock())
             )

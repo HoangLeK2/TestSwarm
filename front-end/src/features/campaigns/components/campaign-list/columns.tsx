@@ -3,7 +3,7 @@ import { vi } from 'date-fns/locale';
 import { Badge } from '@/components/ui/badge';
 import type { ColumnDef } from '@tanstack/react-table';
 import type { CampaignOut, CampaignStatus } from '../../types';
-import { CampaignDevicesSummary } from './CampaignDevicesSummary';
+import { CampaignSetupCell } from './CampaignSetupCell';
 import { CampaignRowActions } from './CampaignRowActions';
 import {
   Tooltip,
@@ -13,8 +13,25 @@ import {
 import { useQuery } from '@tanstack/react-query';
 import { executionsApi } from '../../services/api';
 import { CampaignRunStats } from './CampaignRunStats';
+import { cn } from '@/lib/utils';
 
 type TFn = (key: string, values?: Record<string, any>) => string;
+
+function responsiveCol(
+  cellClassName: string,
+  visibility?: 'lg' | 'xl'
+) {
+  const hide =
+    visibility === 'lg'
+      ? 'hidden lg:table-cell'
+      : visibility === 'xl'
+        ? 'hidden xl:table-cell'
+        : undefined;
+  return {
+    cellClassName: cn(cellClassName, hide),
+    headerClassName: hide
+  };
+}
 
 function CampaignLastRunCell({ campaignId }: { campaignId: string }) {
   const { data, isLoading } = useQuery({
@@ -66,19 +83,27 @@ export function getCampaignColumns(
       id: 'name',
       accessorKey: 'name',
       header: t('colName'),
-      size: 320,
+      size: 240,
       meta: { cellClassName: CELL },
       cell: ({ row }) => {
         const c = row.original;
         return (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className='block max-w-[300px] truncate text-sm font-semibold'>
-                {c.name}
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>{c.name}</TooltipContent>
-          </Tooltip>
+          <div className='min-w-0'>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className='block max-w-[12rem] truncate text-sm font-semibold xl:max-w-[16rem]'>
+                  {c.name}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>{c.name}</TooltipContent>
+            </Tooltip>
+            <Badge
+              variant={statusVariant[c.status]}
+              className='mt-1 inline-flex text-[10px] xl:hidden'
+            >
+              {statusLabel[c.status]}
+            </Badge>
+          </div>
         );
       }
     },
@@ -86,7 +111,7 @@ export function getCampaignColumns(
       id: 'descriptionShort',
       header: t('colDescriptionShort'),
       size: 280,
-      meta: { cellClassName: CELL },
+      meta: responsiveCol(CELL, 'xl'),
       cell: ({ row }) => {
         const c = row.original;
         const value = (c.description ?? '').trim();
@@ -109,8 +134,8 @@ export function getCampaignColumns(
     {
       id: 'status',
       header: t('colStatus'),
-      size: 110,
-      meta: { cellClassName: CELL },
+      size: 96,
+      meta: responsiveCol(CELL, 'xl'),
       cell: ({ row }) => {
         const c = row.original;
         return (
@@ -127,21 +152,21 @@ export function getCampaignColumns(
       id: 'lastRun',
       header: t('colLastRun'),
       size: 140,
-      meta: { cellClassName: CELL },
+      meta: responsiveCol(CELL, 'xl'),
       cell: ({ row }) => <CampaignLastRunCell campaignId={row.original.id} />
     },
     {
       id: 'runStats',
       header: t('colRunStats'),
       size: 120,
-      meta: { cellClassName: CELL },
+      meta: responsiveCol(CELL, 'xl'),
       cell: ({ row }) => <CampaignRunStats campaignId={row.original.id} />
     },
     {
       id: 'createdAt',
       header: t('colTime'),
       size: 130,
-      meta: { cellClassName: CELL },
+      meta: responsiveCol(CELL, 'xl'),
       cell: ({ row }) => {
         const c = row.original;
         return (
@@ -155,27 +180,20 @@ export function getCampaignColumns(
       }
     },
     {
-      id: 'devices',
-      header: t('colDevices'),
-      size: 160,
-      meta: { cellClassName: CELL },
-      cell: ({ row }) => {
-        const c = row.original;
-        return (
-          <CampaignDevicesSummary
-            campaignId={c.id}
-            campaignName={c.name}
-            targetGroupId={c.target_group_id}
-          />
-        );
-      }
+      id: 'setup',
+      header: t('colSetup'),
+      size: 176,
+      meta: { cellClassName: cn(CELL, 'whitespace-normal') },
+      cell: ({ row }) => <CampaignSetupCell campaign={row.original} />
     },
     {
       id: 'actions',
-      header: '',
-      size: 220,
+      header: t('colActions'),
+      size: 168,
+      enablePinning: false,
       meta: {
-        cellClassName: `${CELL} whitespace-nowrap`
+        cellClassName: cn(CELL, 'w-[1%] whitespace-nowrap'),
+        headerClassName: 'w-[1%] whitespace-nowrap'
       },
       cell: ({ row }) => {
         const c = row.original;

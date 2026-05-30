@@ -24,4 +24,4 @@ echo "== docker load -i ${TAR} =="
 docker load -i "$TAR"
 
 echo ""
-echo "Next: ./scripts/docker-up.sh --abort-on-container-exit"
+echo "Next: cp .env.example .env && ./scripts/docker-up.sh up -d"

@@ -52,6 +52,28 @@ class FinishBody(BaseModel):
     status: str = Field(default="completed", pattern="^(completed|failed|cancelled)$")
 
 
+class ExecutionCancelBody(BaseModel):
+    reason: str = Field(default="", max_length=2000)
+
+
+class ExecutionControlOut(BaseModel):
+    execution_id: str
+    status: str
+    action: str
+    effective_transition: bool
+    workflows_signalled: int = 0
+    warning: Optional[str] = None
+
+
+class CampaignControlOut(BaseModel):
+    campaign_id: str
+    status: str
+    executions_affected: int
+    executions: list[dict[str, Any]] = Field(default_factory=list)
+    workflows_signalled: int = 0
+    warning: Optional[str] = None
+
+
 class UpsertResultBody(BaseModel):
     status: ExecutionResultStatus = Field(default=ExecutionResultStatus.PENDING)
     passed_steps: list[Any] = Field(default_factory=list)
@@ -96,6 +118,10 @@ class ExecutionOut(BaseModel):
     created_at: datetime
     started_at: Optional[datetime]
     finished_at: Optional[datetime]
+    pause_signal_received_at: Optional[datetime] = None
+    cancel_signal_received_at: Optional[datetime] = None
+    cancelled_at: Optional[datetime] = None
+    cancel_reason: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

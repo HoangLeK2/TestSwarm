@@ -7,10 +7,11 @@ import secrets
 import shlex
 import uuid
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
-from api.deps import CurrentUser, DB
+from api.deps import CurrentUser, DB, require_permission
+from api.org_scope import data_owner_user_id, device_visible_to_user
 from api.schemas.device import DeviceOut
 from api.schemas.relay_agent import (
     BootstrapAllResult,
@@ -25,6 +26,11 @@ from api.schemas.relay_agent import (
 )
 from db import crud as repo
 from services import pairing as _pairing_mod
+from services.device_registration import (
+    DeviceRegistrationError,
+    get_or_claim_device_for_user,
+    http_exception_from_registration,
+)
 from services import relay_onboarding
 from services.relay_onboarding import RELAY_SAME_WIFI_FILTER_ENABLED
 
@@ -60,6 +66,7 @@ def _to_out(row) -> RelayAgentOut:
         serials=list(row.serials or []),
         device_names={},
         status=row.status,
+        live_connected=False,
         connected_at=row.connected_at,
         last_heartbeat_at=row.last_heartbeat_at,
         disconnected_at=row.disconnected_at,
@@ -234,26 +241,53 @@ def _relay_to_out_same_wifi(
     owner_by_alias: dict[str, str],
     user_id: str,
     caps_by_serial: dict[str, dict],
-) -> RelayAgentOut | None:
+) -> RelayAgentOut:
+    out = _to_out(row)
+    live_serials = _live_relay_serials(row.relay_id)
+    out.live_connected = live_serials is not None
+    if live_serials is None:
+        out.status = "offline"
+        out.serials = []
+        out.device_names = {}
+        return out
+
     names: dict[str, str] = {}
     visible_serials: list[str] = []
-    for serial in list(row.serials or []):
+    for serial in sorted(live_serials):
+        if serial.startswith("pending-"):
+            continue
         caps = _cached_live_caps(serial, caps_by_serial)
         if _serial_is_same_wifi(serial, row, caps) and not _serial_owned_by_other_alias(serial, owner_by_alias, user_id):
             visible_serials.append(serial)
             names[serial] = _cap_display_name(serial, caps)
-    if not visible_serials:
-        return None
 
-    out = _to_out(row)
     out.serials = visible_serials
     out.device_names = {s: names.get(s, s) for s in visible_serials}
     return out
 
 
+def _get_ctrl_optional():
+    try:
+        from runtime.transports.agent_control_servicer import get_control_servicer
+
+        return get_control_servicer()
+    except Exception:
+        return None
+
+
+def _live_relay_serials(relay_id: str) -> set[str] | None:
+    """Serials currently reported by agent-boot control channel, or None if disconnected."""
+    svc = _get_ctrl_optional()
+    if svc is None:
+        return None
+    conn = svc.conn_for_relay(relay_id)
+    if conn is None:
+        return None
+    return {str(s).strip() for s in conn.serials if str(s).strip()}
+
+
 def _get_ctrl():
-    from runtime.transports.agent_control_servicer import get_control_servicer
-    svc = get_control_servicer()
+    svc = _get_ctrl_optional()
     if svc is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -396,23 +430,35 @@ async def _dispatch_relay_job(
         )
 
 
-@router.get("", response_model=list[RelayAgentOut])
+@router.get(
+    "",
+    response_model=list[RelayAgentOut],
+    dependencies=[Depends(require_permission("relay-agents", "read"))],
+)
 async def list_relay_agents(db: DB, user: CurrentUser):
-    rows = _dedupe_relay_rows(await repo.list_relay_agents(db, user_id=user.id))
+    rows = _dedupe_relay_rows(await repo.list_relay_agents(db, user_id=data_owner_user_id(user)))
     devices = await repo.list_devices(db)
     owner_by_alias = _device_owner_aliases(devices)
     caps_by_serial: dict[str, dict] = {}
-    out: list[RelayAgentOut] = []
-    for row in rows:
-        item = _relay_to_out_same_wifi(row, owner_by_alias, user.id, caps_by_serial)
-        if item is not None:
-            out.append(item)
-    return out
+    return [
+        _relay_to_out_same_wifi(row, owner_by_alias, user.id, caps_by_serial)
+        for row in rows
+    ]
 
 
-@router.post("/tokens", response_model=RelayAgentTokenCreated, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/tokens",
+    response_model=RelayAgentTokenCreated,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission("relay-agents", "create"))],
+)
 async def create_relay_agent_token(body: RelayAgentTokenCreate, db: DB, user: CurrentUser):
-    raw_token, row = await repo.create_relay_agent_token(db, user_id=user.id, name=body.name)
+    raw_token, row = await repo.create_relay_agent_token(
+        db,
+        user_id=user.id,
+        name=body.name,
+        org_id=getattr(user, "org_id", None),
+    )
     await db.commit()
     return RelayAgentTokenCreated(
         id=row.id,
@@ -426,21 +472,36 @@ async def create_relay_agent_token(body: RelayAgentTokenCreate, db: DB, user: Cu
     )
 
 
-@router.get("/tokens", response_model=list[RelayAgentTokenOut])
+@router.get(
+    "/tokens",
+    response_model=list[RelayAgentTokenOut],
+    dependencies=[Depends(require_permission("relay-agents", "read"))],
+)
 async def list_relay_agent_tokens(db: DB, user: CurrentUser):
-    return await repo.list_relay_agent_tokens(db, user_id=user.id)
+    return await repo.list_relay_agent_tokens(db, user_id=data_owner_user_id(user))
 
 
-@router.delete("/tokens/{token_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/tokens/{token_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission("relay-agents", "delete"))],
+)
 async def revoke_relay_agent_token(token_id: str, db: DB, user: CurrentUser):
-    ok = await repo.revoke_relay_agent_token(db, token_id=token_id, user_id=user.id)
+    ok = await repo.revoke_relay_agent_token(
+        db, token_id=token_id, user_id=data_owner_user_id(user)
+    )
     if not ok:
         raise HTTPException(status_code=404, detail="relay agent token not found")
     await db.commit()
     return None
 
 
-@router.post("/{relay_id}/jobs/provision", response_model=RelayBatchJobOut, status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/{relay_id}/jobs/provision",
+    response_model=RelayBatchJobOut,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_permission("relay-agents", "execute"))],
+)
 async def create_relay_provision_job(
     relay_id: str,
     body: RelayBatchJobCreate,
@@ -448,7 +509,7 @@ async def create_relay_provision_job(
     db: DB,
     user: CurrentUser,
 ):
-    row = await repo.get_relay_agent(db, relay_id, user_id=user.id)
+    row = await repo.get_relay_agent(db, relay_id, user_id=data_owner_user_id(user))
     try:
         job = await relay_onboarding.create_relay_batch_job(
             db,
@@ -465,7 +526,12 @@ async def create_relay_provision_job(
     return _job_to_out(job, await repo.list_relay_job_items(db, job.id, limit=100))
 
 
-@router.post("/{relay_id}/jobs/claim-connect", response_model=RelayBatchJobOut, status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/{relay_id}/jobs/claim-connect",
+    response_model=RelayBatchJobOut,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_permission("relay-agents", "execute"))],
+)
 async def create_relay_claim_connect_job(
     relay_id: str,
     body: RelayBatchJobCreate,
@@ -473,7 +539,7 @@ async def create_relay_claim_connect_job(
     db: DB,
     user: CurrentUser,
 ):
-    row = await repo.get_relay_agent(db, relay_id, user_id=user.id)
+    row = await repo.get_relay_agent(db, relay_id, user_id=data_owner_user_id(user))
     try:
         job = await relay_onboarding.create_relay_batch_job(
             db,
@@ -498,16 +564,26 @@ async def create_relay_claim_connect_job(
     return _job_to_out(job, await repo.list_relay_job_items(db, job.id, limit=100))
 
 
-@router.get("/{relay_id}/jobs/{job_id}", response_model=RelayBatchJobOut)
+@router.get(
+    "/{relay_id}/jobs/{job_id}",
+    response_model=RelayBatchJobOut,
+    dependencies=[Depends(require_permission("relay-agents", "read"))],
+)
 async def get_relay_job(relay_id: str, job_id: str, db: DB, user: CurrentUser):
-    job = await repo.get_relay_job(db, job_id, user_id=user.id, relay_id=relay_id)
+    job = await repo.get_relay_job(
+        db, job_id, user_id=data_owner_user_id(user), relay_id=relay_id
+    )
     if job is None:
         raise HTTPException(status_code=404, detail="relay job not found")
     items = await repo.list_relay_job_items(db, job.id, limit=100)
     return _job_to_out(job, items)
 
 
-@router.get("/{relay_id}/jobs/{job_id}/items", response_model=list[RelayBatchJobItemOut])
+@router.get(
+    "/{relay_id}/jobs/{job_id}/items",
+    response_model=list[RelayBatchJobItemOut],
+    dependencies=[Depends(require_permission("relay-agents", "read"))],
+)
 async def list_relay_job_items(
     relay_id: str,
     job_id: str,
@@ -517,7 +593,9 @@ async def list_relay_job_items(
     limit: int = Query(500, ge=1, le=1000),
     offset: int = Query(0, ge=0),
 ):
-    job = await repo.get_relay_job(db, job_id, user_id=user.id, relay_id=relay_id)
+    job = await repo.get_relay_job(
+        db, job_id, user_id=data_owner_user_id(user), relay_id=relay_id
+    )
     if job is None:
         raise HTTPException(status_code=404, detail="relay job not found")
     items = await repo.list_relay_job_items(db, job.id, status=item_status, limit=limit, offset=offset)
@@ -548,20 +626,26 @@ async def _relay_token_user_id_from_request(request: Request, db: DB) -> str:
     return token_row.user_id
 
 
-@router.get("/{relay_id}", response_model=RelayAgentOut)
+@router.get(
+    "/{relay_id}",
+    response_model=RelayAgentOut,
+    dependencies=[Depends(require_permission("relay-agents", "read"))],
+)
 async def get_relay_agent(relay_id: str, db: DB, user: CurrentUser):
-    row = await repo.get_relay_agent(db, relay_id, user_id=user.id)
+    row = await repo.get_relay_agent(db, relay_id, user_id=data_owner_user_id(user))
     if not row:
         raise HTTPException(status_code=404, detail="relay agent not found")
     devices = await repo.list_devices(db)
     owner_by_alias = _device_owner_aliases(devices)
-    out = _relay_to_out_same_wifi(row, owner_by_alias, user.id, {})
-    if out is None:
-        raise HTTPException(status_code=404, detail="relay agent not found")
-    return out
+    return _relay_to_out_same_wifi(row, owner_by_alias, user.id, {})
 
 
-@router.post("/{relay_id}/devices/{serial}/register", response_model=DeviceOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{relay_id}/devices/{serial}/register",
+    response_model=DeviceOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission("relay-agents", "create"))],
+)
 async def register_relay_device(
     relay_id: str,
     serial: str,
@@ -570,7 +654,7 @@ async def register_relay_device(
     user: CurrentUser,
 ):
     """Register/claim a device from an ADB serial currently reported by agent-boot."""
-    row = await repo.get_relay_agent(db, relay_id, user_id=user.id)
+    row = await repo.get_relay_agent(db, relay_id, user_id=data_owner_user_id(user))
     if not row or row.status != "online":
         raise HTTPException(status_code=404, detail="relay agent not online")
 
@@ -583,19 +667,18 @@ async def register_relay_device(
     # if not _serial_is_same_wifi(serial, row):
     #     raise HTTPException(status_code=403, detail="device is not on the same WiFi/LAN as this relay agent")
 
-    all_devices = await repo.list_devices(db)
-    existing = _find_matching_device(serial, all_devices)
     caps = _get_live_caps(serial)
     display_name = _cap_display_name(serial, caps)
-    if existing:
-        if existing.user_id and existing.user_id != user.id:
-            raise HTTPException(status_code=409, detail="serial already registered by another user")
-        if existing.user_id is None:
-            await repo.assign_device_to_user(db, str(getattr(existing, "serial", "") or serial), user.id)
-        if display_name and display_name != existing.name:
-            await repo.update_device_name(db, existing.id, display_name)
-    else:
-        existing = await repo.create_device(db, serial, display_name, user.id)
+    try:
+        existing = await get_or_claim_device_for_user(
+            db,
+            serial=serial,
+            display_name=display_name,
+            user_id=user.id,
+            org_id=getattr(user, "org_id", None),
+        )
+    except DeviceRegistrationError as exc:
+        raise http_exception_from_registration(exc) from exc
 
     if caps:
         await repo.update_device_metadata(
@@ -621,7 +704,11 @@ async def register_relay_device(
     return _device_to_out(device, relay_id=relay_id)
 
 
-@router.post("/{relay_id}/devices/{serial}/push-connect-url", response_model=RelayCommandOut)
+@router.post(
+    "/{relay_id}/devices/{serial}/push-connect-url",
+    response_model=RelayCommandOut,
+    dependencies=[Depends(require_permission("relay-agents", "execute"))],
+)
 async def push_connect_url_to_device(
     relay_id: str,
     serial: str,
@@ -634,7 +721,7 @@ async def push_connect_url_to_device(
     ),
 ):
     """Send the device-agent URL to STFService via agent-boot/ADB; no QR scan required."""
-    row = await repo.get_relay_agent(db, relay_id, user_id=user.id)
+    row = await repo.get_relay_agent(db, relay_id, user_id=data_owner_user_id(user))
     if not row or row.status != "online":
         raise HTTPException(status_code=404, detail="relay agent not online")
 
@@ -649,15 +736,14 @@ async def push_connect_url_to_device(
     device = None
     if device_id and device_id.strip():
         device = await repo.get_device(db, device_id.strip())
-        if not device or device.user_id != user.id:
+        if not await device_visible_to_user(db, user, device):
             raise HTTPException(status_code=404, detail="device not found")
         matched = _find_matching_device(serial, all_devices)
-        matched_owner = str(getattr(matched, "user_id", "") or "") if matched is not None else ""
-        if matched_owner and matched_owner != user.id:
+        if matched is not None and not await device_visible_to_user(db, user, matched):
             raise HTTPException(status_code=409, detail="serial already registered by another user")
     else:
         device = _find_matching_device(serial, all_devices)
-        if not device or device.user_id != user.id:
+        if not await device_visible_to_user(db, user, device):
             raise HTTPException(status_code=404, detail="registered device not found")
 
     if not str(getattr(device, "serial", "") or "").startswith("pending-") and not _serial_matches_device(serial, device):
@@ -681,14 +767,20 @@ async def push_connect_url_to_device(
     return RelayCommandOut(**res)
 
 
-@router.post("/{relay_id}/bootstrap-all", response_model=BootstrapAllResult)
+@router.post(
+    "/{relay_id}/bootstrap-all",
+    response_model=BootstrapAllResult,
+    dependencies=[Depends(require_permission("relay-agents", "execute"))],
+)
 async def bootstrap_all(relay_id: str, db: DB, user: CurrentUser):
-    row = await repo.get_relay_agent(db, relay_id, user_id=user.id)
+    row = await repo.get_relay_agent(db, relay_id, user_id=data_owner_user_id(user))
     if not row:
         raise HTTPException(status_code=404, detail="relay agent not found")
 
     ctrl = _get_ctrl()
-    user_devices = await repo.list_devices(db, user_id=user.id)
+    user_devices = await repo.list_devices(
+        db, org_id=getattr(user, "org_id", None), user_id=data_owner_user_id(user)
+    )
     user_serial_aliases = {
         alias
         for device in user_devices

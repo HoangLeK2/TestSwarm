@@ -186,30 +186,24 @@ async def get_or_create_collection(
     return coll
 
 
-async def list_collections(db: AsyncSession, *, user_id: str) -> list[ContentCollection]:
-    result = await db.execute(
-        select(ContentCollection)
-        .where(ContentCollection.user_id == user_id)
-        .order_by(ContentCollection.updated_at.desc())
-    )
+async def list_collections(db: AsyncSession, *, user_id: str | None = None) -> list[ContentCollection]:
+    stmt = select(ContentCollection).order_by(ContentCollection.updated_at.desc())
+    if user_id:
+        stmt = stmt.where(ContentCollection.user_id == user_id)
+    result = await db.execute(stmt)
     return list(result.scalars().all())
 
 
-async def delete_collection(db: AsyncSession, name: str, *, user_id: str) -> int:
+async def delete_collection(db: AsyncSession, name: str, *, user_id: str | None = None) -> int:
     """Delete collection + all its items. Returns items deleted."""
-    result = await db.execute(
-        delete(ContentItem).where(
-            ContentItem.collection == name,
-            ContentItem.user_id == user_id,
-        )
-    )
+    item_stmt = delete(ContentItem).where(ContentItem.collection == name)
+    coll_stmt = delete(ContentCollection).where(ContentCollection.name == name)
+    if user_id:
+        item_stmt = item_stmt.where(ContentItem.user_id == user_id)
+        coll_stmt = coll_stmt.where(ContentCollection.user_id == user_id)
+    result = await db.execute(item_stmt)
     count = result.rowcount
-    await db.execute(
-        delete(ContentCollection).where(
-            ContentCollection.name == name,
-            ContentCollection.user_id == user_id,
-        )
-    )
+    await db.execute(coll_stmt)
     return count
 
 
@@ -230,35 +224,31 @@ async def increment_collection_count(
 # ── Stats ─────────────────────────────────────────────────────────────────────
 
 
-async def content_stats(db: AsyncSession, *, user_id: str) -> dict[str, Any]:
+async def content_stats(db: AsyncSession, *, user_id: str | None = None) -> dict[str, Any]:
     """Aggregate content stats."""
-    total = (
-        await db.execute(
-            select(func.count(ContentItem.id)).where(ContentItem.user_id == user_id)
-        )
-    ).scalar_one()
 
-    # By platform
+    def _where(stmt):
+        if user_id:
+            return stmt.where(ContentItem.user_id == user_id)
+        return stmt
+
+    total = (await db.execute(_where(select(func.count(ContentItem.id))))).scalar_one()
+
     platform_rows = await db.execute(
-        select(ContentItem.platform, func.count(ContentItem.id))
-        .where(ContentItem.user_id == user_id)
-        .group_by(ContentItem.platform)
+        _where(select(ContentItem.platform, func.count(ContentItem.id))).group_by(
+            ContentItem.platform
+        )
     )
     by_platform = {row[0] or "unknown": row[1] for row in platform_rows.all()}
 
-    # By collection
     coll_rows = await db.execute(
-        select(ContentItem.collection, func.count(ContentItem.id))
-        .where(ContentItem.user_id == user_id)
-        .group_by(ContentItem.collection)
+        _where(select(ContentItem.collection, func.count(ContentItem.id))).group_by(
+            ContentItem.collection
+        )
     )
     by_collection = {row[0]: row[1] for row in coll_rows.all()}
 
-    # Latest
-    latest = (await db.execute(
-        select(func.max(ContentItem.extracted_at))
-        .where(ContentItem.user_id == user_id)
-    )).scalar_one()
+    latest = (await db.execute(_where(select(func.max(ContentItem.extracted_at))))).scalar_one()
 
     return {
         "total_items": total,

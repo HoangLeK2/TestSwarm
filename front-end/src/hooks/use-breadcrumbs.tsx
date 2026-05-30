@@ -28,6 +28,11 @@ const routeMapping: Record<string, string[]> = {
     'navigation.account_groups'
   ],
   '/dashboard/content': ['navigation.dashboard', 'navigation.content'],
+  '/dashboard/content/:id': [
+    'navigation.dashboard',
+    'navigation.content',
+    'contentFeature.detail.breadcrumbDetail'
+  ],
   '/dashboard/relay-agents': [
     'navigation.dashboard',
     'navigation.relay_agents'

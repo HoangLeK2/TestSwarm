@@ -19,6 +19,7 @@ import {
   useRetryDlqEntry
 } from '../../hooks/use-campaigns';
 import { MonitorSectionHeader } from './monitor-section-header';
+import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
 
 function statusVariant(
   status: string
@@ -38,6 +39,7 @@ function statusLabel(status: string, t: (key: string) => string): string {
 
 export function DlqPanel({ campaignId }: { campaignId?: string }) {
   const t = useTranslations('campaignsFeature.list');
+  const { canExecute } = useResourcePermissions('executions');
   const { data = [], isLoading } = useDlqEntries(true, 'pending', campaignId);
   const { data: summary } = useDlqSummary(true, campaignId);
   const retryMut = useRetryDlqEntry();
@@ -127,63 +129,67 @@ export function DlqPanel({ campaignId }: { campaignId?: string }) {
                 </div>
 
                 <div className='flex shrink-0 gap-1'>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        size='icon'
-                        variant='outline'
-                        className='h-10 w-10'
-                        disabled={isRowPending}
-                        onClick={() => {
-                          setActiveEntryId(entry.id);
-                          retryMut.mutate(entry.id, {
-                            onSuccess: () =>
-                              toast.success(t('monitorDlqRetrySuccess')),
-                            onError: () =>
-                              toast.error(t('monitorDlqRetryFailed')),
-                            onSettled: () => setActiveEntryId(null)
-                          });
-                        }}
-                      >
-                        <RefreshCw
-                          size={18}
-                          className={
-                            isRowPending && retryMut.isPending
-                              ? 'animate-spin'
-                              : ''
-                          }
-                        />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent className='text-sm'>
-                      {t('monitorActionRetry')}
-                    </TooltipContent>
-                  </Tooltip>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        size='icon'
-                        variant='outline'
-                        className='h-10 w-10 text-muted-foreground'
-                        disabled={isRowPending}
-                        onClick={() => {
-                          setActiveEntryId(entry.id);
-                          dismissMut.mutate(entry.id, {
-                            onSuccess: () =>
-                              toast.success(t('monitorDlqDismissSuccess')),
-                            onError: () =>
-                              toast.error(t('monitorDlqDismissFailed')),
-                            onSettled: () => setActiveEntryId(null)
-                          });
-                        }}
-                      >
-                        <Trash2 size={18} />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent className='text-sm'>
-                      {t('monitorActionDismiss')}
-                    </TooltipContent>
-                  </Tooltip>
+                  {canExecute ? (
+                    <>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            size='icon'
+                            variant='outline'
+                            className='h-10 w-10'
+                            disabled={isRowPending}
+                            onClick={() => {
+                              setActiveEntryId(entry.id);
+                              retryMut.mutate(entry.id, {
+                                onSuccess: () =>
+                                  toast.success(t('monitorDlqRetrySuccess')),
+                                onError: () =>
+                                  toast.error(t('monitorDlqRetryFailed')),
+                                onSettled: () => setActiveEntryId(null)
+                              });
+                            }}
+                          >
+                            <RefreshCw
+                              size={18}
+                              className={
+                                isRowPending && retryMut.isPending
+                                  ? 'animate-spin'
+                                  : ''
+                              }
+                            />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent className='text-sm'>
+                          {t('monitorActionRetry')}
+                        </TooltipContent>
+                      </Tooltip>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            size='icon'
+                            variant='outline'
+                            className='h-10 w-10 text-muted-foreground'
+                            disabled={isRowPending}
+                            onClick={() => {
+                              setActiveEntryId(entry.id);
+                              dismissMut.mutate(entry.id, {
+                                onSuccess: () =>
+                                  toast.success(t('monitorDlqDismissSuccess')),
+                                onError: () =>
+                                  toast.error(t('monitorDlqDismissFailed')),
+                                onSettled: () => setActiveEntryId(null)
+                              });
+                            }}
+                          >
+                            <Trash2 size={18} />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent className='text-sm'>
+                          {t('monitorActionDismiss')}
+                        </TooltipContent>
+                      </Tooltip>
+                    </>
+                  ) : null}
                 </div>
               </li>
             );

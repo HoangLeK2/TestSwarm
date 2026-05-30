@@ -5,6 +5,8 @@ import type {
   AccountUpdate,
   AccountWithLinksOut,
   AccountStatusUpdate,
+  AccountStateTransitionBody,
+  AccountStateTransitionOut,
   DeviceAccountOut,
   BulkImportBody,
   BulkImportResult,
@@ -35,6 +37,8 @@ export type {
   AccountUpdate,
   AccountWithLinksOut,
   AccountStatusUpdate,
+  AccountStateTransitionBody,
+  AccountStateTransitionOut,
   DeviceAccountOut,
   BulkImportResult
 };
@@ -43,6 +47,7 @@ export const accountsApi = {
   list: (query?: {
     platform?: string;
     status?: string;
+    state?: string;
     tags?: string;
     limit?: number;
     offset?: number;
@@ -62,11 +67,17 @@ export const accountsApi = {
       .then((r) => r.data),
   delete: (accountId: string) =>
     farmApi.delete(`/accounts/${accountId}`).then((r) => r.data),
-  updateStatus: (accountId: string, status: string) =>
+  /** @deprecated Prefer transitionState — still routed through FSM on the server */
+  updateStatus: (accountId: string, status: string, reason?: string) =>
     farmApi
       .patch<AccountOut>(`/accounts/${accountId}/status`, {
-        status
+        status,
+        reason: reason ?? 'UI status change'
       } as AccountStatusUpdate)
+      .then((r) => r.data),
+  transitionState: (accountId: string, body: AccountStateTransitionBody) =>
+    farmApi
+      .post<AccountStateTransitionOut>(`/accounts/${accountId}/state`, body)
       .then((r) => r.data),
   bulkImport: (data: BulkImportBody) =>
     farmApi

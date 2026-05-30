@@ -7,12 +7,13 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Body
+from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from core.config import Config
-from api.deps import CurrentUser, DB
+from api.deps import CurrentUser, DB, require_permission
+from api.org_scope import campaign_visible_to_user, device_visible_to_user
 from db import crud as repo
 from runtime.core import DeviceManager, TaskQueue
 from services.campaign_dispatch import enqueue_campaign_run_temporal
@@ -66,37 +67,40 @@ def build_campaign_fleet_router(
 ) -> APIRouter:
     router = APIRouter()
 
-    async def _get_campaign_or_404(db: DB, campaign_id: str, user_id: str):
+    async def _get_campaign_or_404(db: DB, campaign_id: str, user: CurrentUser):
         campaign = await repo.get_campaign(db, campaign_id)
-        if not campaign or campaign.user_id != user_id:
+        if not await campaign_visible_to_user(db, user, campaign):
             return None
         return campaign
 
-    async def _assert_campaign_owned(db: DB, campaign_id: str, user_id: str) -> None:
-        if not await _get_campaign_or_404(db, campaign_id, user_id):
+    async def _assert_campaign_owned(db: DB, campaign_id: str, user: CurrentUser) -> None:
+        if not await _get_campaign_or_404(db, campaign_id, user):
             from fastapi import HTTPException
 
             raise HTTPException(status_code=404, detail="Campaign not found")
 
-    async def _assert_workflow_owned(db: DB, workflow_id: str, user_id: str) -> None:
+    async def _assert_workflow_owned(db: DB, workflow_id: str, user: CurrentUser) -> None:
         from fastapi import HTTPException
 
         match = _WORKFLOW_CAMPAIGN_RE.match(workflow_id or "")
         if not match:
             raise HTTPException(status_code=404, detail="Workflow not found")
         campaign_id = match.group(1)
-        await _assert_campaign_owned(db, campaign_id, user_id)
+        await _assert_campaign_owned(db, campaign_id, user)
 
     # ── Campaign → Temporal workflow ─────────────────────────────────
 
-    @router.post("/campaigns/{campaign_id}/run")
+    @router.post(
+        "/campaigns/{campaign_id}/run",
+        dependencies=[Depends(require_permission("campaigns", "execute"))],
+    )
     async def api_run_campaign(
         campaign_id: str,
         db: DB,
         user: CurrentUser,
         body: CampaignRunBody = Body(default_factory=CampaignRunBody),
     ):
-        await _assert_campaign_owned(db, campaign_id, user.id)
+        await _assert_campaign_owned(db, campaign_id, user)
         if not config.database.enabled:
             return JSONResponse(
                 {"error": "Database is disabled; campaigns are not available"},
@@ -168,7 +172,10 @@ def build_campaign_fleet_router(
                 status_code=500,
             )
 
-    @router.get("/execution/runtime")
+    @router.get(
+        "/execution/runtime",
+        dependencies=[Depends(require_permission("executions", "read"))],
+    )
     async def api_execution_runtime():
         """How campaign runs are executed — for UI/docs."""
         return {
@@ -189,7 +196,10 @@ def build_campaign_fleet_router(
 
     # ── Workflow monitoring & control ────────────────────────────────
 
-    @router.get("/campaigns/{campaign_id}/workflows")
+    @router.get(
+        "/campaigns/{campaign_id}/workflows",
+        dependencies=[Depends(require_permission("campaigns", "read"))],
+    )
     async def api_list_campaign_workflows(campaign_id: str, db: DB, user: CurrentUser):
         """List top-level Temporal workflow runs for a campaign.
 
@@ -197,7 +207,7 @@ def build_campaign_fleet_router(
         Child workflows (ScenarioStepsWorkflow) are excluded — they are an
         implementation detail and would flood the list.
         """
-        await _assert_campaign_owned(db, campaign_id, user.id)
+        await _assert_campaign_owned(db, campaign_id, user)
         if not config.temporal.enabled:
             return {
                 "campaign_id": campaign_id,
@@ -264,11 +274,14 @@ def build_campaign_fleet_router(
                 {"error": f"Failed to list workflows: {exc}"}, status_code=500,
             )
 
-    @router.get("/devices/{serial}/running-workflows")
+    @router.get(
+        "/devices/{serial}/running-workflows",
+        dependencies=[Depends(require_permission("executions", "read"))],
+    )
     async def api_device_running_workflows(serial: str, db: DB, user: CurrentUser):
         """List RUNNING/PAUSED top-level scenario workflows for a specific device serial."""
         device = await repo.get_device_by_serial(db, serial)
-        if not device or device.user_id != user.id:
+        if not await device_visible_to_user(db, user, device):
             from fastapi import HTTPException
 
             raise HTTPException(status_code=404, detail="Device not found")
@@ -298,14 +311,17 @@ def build_campaign_fleet_router(
                 {"error": f"Failed to list device workflows: {exc}"}, status_code=500,
             )
 
-    @router.get("/workflows/{workflow_id}/progress")
+    @router.get(
+        "/workflows/{workflow_id}/progress",
+        dependencies=[Depends(require_permission("executions", "read"))],
+    )
     async def api_workflow_progress(workflow_id: str, db: DB, user: CurrentUser):
         """Query real-time progress of a Temporal scenario workflow.
 
         When the child ScenarioStepsWorkflow is paused on error, status is
         overridden to 'paused_on_error' and error_message is populated.
         """
-        await _assert_workflow_owned(db, workflow_id, user.id)
+        await _assert_workflow_owned(db, workflow_id, user)
         try:
             from temporal.workflows import ScenarioWorkflow, ScenarioStepsWorkflow
 
@@ -344,7 +360,10 @@ def build_campaign_fleet_router(
                 {"error": f"Failed to query progress: {exc}"}, status_code=500,
             )
 
-    @router.get("/workflows/{workflow_id}/steps")
+    @router.get(
+        "/workflows/{workflow_id}/steps",
+        dependencies=[Depends(require_permission("executions", "read"))],
+    )
     async def api_workflow_steps(workflow_id: str, db: DB, user: CurrentUser):
         """Query step-by-step execution log for a scenario workflow.
 
@@ -353,7 +372,7 @@ def build_campaign_fleet_router(
 
         Returns a flat list of step entries with index, type, ok, message, depth.
         """
-        await _assert_workflow_owned(db, workflow_id, user.id)
+        await _assert_workflow_owned(db, workflow_id, user)
         if not config.temporal.enabled:
             return JSONResponse({"error": "Temporal is not enabled"}, status_code=503)
         try:
@@ -414,7 +433,10 @@ def build_campaign_fleet_router(
                 {"error": f"Failed to query steps: {exc}"}, status_code=500,
             )
 
-    @router.post("/workflows/{workflow_id}/pause")
+    @router.post(
+        "/workflows/{workflow_id}/pause",
+        dependencies=[Depends(require_permission("executions", "execute"))],
+    )
     async def api_workflow_pause(workflow_id: str, db: DB, user: CurrentUser):
         """Pause a running scenario workflow at the next step boundary.
 
@@ -423,7 +445,7 @@ def build_campaign_fleet_router(
         know. Add campaign-ownership middleware before exposing this to untrusted
         users.
         """
-        await _assert_workflow_owned(db, workflow_id, user.id)
+        await _assert_workflow_owned(db, workflow_id, user)
         try:
             from temporal.workflows import ScenarioStepsWorkflow, ScenarioWorkflow
 
@@ -442,10 +464,13 @@ def build_campaign_fleet_router(
                 {"error": f"Failed to pause: {exc}"}, status_code=500,
             )
 
-    @router.post("/workflows/{workflow_id}/resume")
+    @router.post(
+        "/workflows/{workflow_id}/resume",
+        dependencies=[Depends(require_permission("executions", "execute"))],
+    )
     async def api_workflow_resume(workflow_id: str, db: DB, user: CurrentUser):
         """Resume a paused scenario workflow."""
-        await _assert_workflow_owned(db, workflow_id, user.id)
+        await _assert_workflow_owned(db, workflow_id, user)
         try:
             from temporal.workflows import ScenarioStepsWorkflow, ScenarioWorkflow
 
@@ -464,10 +489,13 @@ def build_campaign_fleet_router(
                 {"error": f"Failed to resume: {exc}"}, status_code=500,
             )
 
-    @router.post("/workflows/{workflow_id}/cancel")
+    @router.post(
+        "/workflows/{workflow_id}/cancel",
+        dependencies=[Depends(require_permission("executions", "execute"))],
+    )
     async def api_workflow_cancel(workflow_id: str, db: DB, user: CurrentUser):
         """Cancel a scenario workflow — cancels both parent and child steps workflow."""
-        await _assert_workflow_owned(db, workflow_id, user.id)
+        await _assert_workflow_owned(db, workflow_id, user)
         try:
             client = await get_temporal_client(config.temporal)
             for wf_id in [workflow_id, f"{workflow_id}:steps"]:
@@ -481,14 +509,20 @@ def build_campaign_fleet_router(
                 {"error": f"Failed to cancel: {exc}"}, status_code=500,
             )
 
-    @router.post("/devices/{serial}/interrupt")
-    async def api_device_interrupt(serial: str):
+    @router.post(
+        "/devices/{serial}/interrupt",
+        dependencies=[Depends(require_permission("devices", "execute"))],
+    )
+    async def api_device_interrupt(serial: str, db: DB, user: CurrentUser):
         """Cancel all running scenarios on a device to allow manual takeover.
 
         Cancels every matching Temporal workflow, then force-resets the
         in-process _scenario_active counter so the WebSocket input gate opens
         immediately without waiting for the activity to acknowledge cancellation.
         """
+        db_device = await repo.get_device_by_serial(db, serial)
+        if not await device_visible_to_user(db, user, db_device):
+            raise HTTPException(status_code=404, detail="Device not found")
         device = manager.get_device(serial)
         if not device:
             return JSONResponse({"error": f"Device {serial} not found"}, status_code=404)

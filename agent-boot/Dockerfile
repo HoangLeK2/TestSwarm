@@ -23,7 +23,12 @@ RUN uv sync --frozen --no-dev
 # App source
 COPY . .
 
-# Default: use host adb server (Docker Desktop macOS).
-ENV ADB_SERVER_SOCKET="tcp:host.docker.internal:5037"
+RUN chmod +x docker/entrypoint.sh
 
-CMD ["bash", "-lc", "adb -H host.docker.internal -P 5037 devices"]
+ENV ADB_HOST=host.docker.internal \
+    ADB_PORT=5037 \
+    ADB_SERVER_SOCKET=tcp:host.docker.internal:5037 \
+    ADB_WAIT_SECONDS=120
+
+ENTRYPOINT ["/app/docker/entrypoint.sh"]
+CMD ["uv", "run", "main.py", "--relay-only"]

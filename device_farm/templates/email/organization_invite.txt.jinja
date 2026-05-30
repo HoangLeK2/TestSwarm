@@ -1,0 +1,30 @@
+Device Farm — Lời mời tham gia tổ chức
+=====================================
+
+{{ inviter }} mời bạn tham gia "{{ org_name }}".
+
+Email được mời: {{ recipient_email }}
+
+{% if existing_user -%}
+Bạn đã có tài khoản — hãy đăng nhập bằng email trên để chấp nhận lời mời.
+{% else -%}
+Bạn chưa có tài khoản — hãy đăng ký bằng đúng email trên, sau đó đăng nhập.
+{% endif %}
+
+Chấp nhận lời mời (hiệu lực {{ expire_days }} ngày):
+{{ accept_url }}
+
+Các bước tiếp theo:
+{% if existing_user -%}
+1. Mở liên kết ở trên
+2. Đăng nhập bằng tài khoản hiện có
+3. Bắt đầu làm việc trong {{ org_name }}
+{% else -%}
+1. Mở liên kết ở trên
+2. Đăng ký tài khoản bằng {{ recipient_email }}
+3. Đăng nhập và tham gia {{ org_name }}
+{% endif %}
+
+Nếu bạn không mong đợi email này, bạn có thể bỏ qua.
+
+© {{ year }} Device Farm

@@ -225,33 +225,33 @@ class ScenarioWorkflow:
                 failed_message=f"Workflow error: {exc}",
             )
 
+    async def _forward_signal(self, signal_name: str) -> None:
+        child_id = f"{workflow.info().workflow_id}:steps"
+        try:
+            await workflow.get_external_workflow_handle(child_id).signal(signal_name)
+        except Exception:
+            pass
+
     @workflow.signal
     async def pause(self) -> None:
-        """Signal to pause execution.
-
-        LIMITATION: Pause only takes effect BEFORE the ScenarioStepsWorkflow child
-        workflow starts. If the child is already running, it continues until it
-        completes — Temporal child workflows do not receive signals from their parent.
-        Effectively this means pause works as a pre-execution gate, not a mid-execution
-        step-boundary pause.
-
-        To pause mid-execution, the child workflow would need its own pause signal
-        and the parent would need to forward it — a future enhancement.
-        """
+        """Pause at the next step boundary (child workflow polls between steps)."""
         self._paused = True
         self._progress.status = WorkflowStatus.PAUSED.value
+        await self._forward_signal("pause")
 
     @workflow.signal
     async def resume(self) -> None:
-        """Signal to resume paused execution."""
+        """Resume paused execution."""
         self._paused = False
         self._progress.status = WorkflowStatus.RUNNING.value
+        await self._forward_signal("resume")
 
     @workflow.signal
     async def cancel_scenario(self) -> None:
-        """Signal to cancel the scenario gracefully."""
+        """Cancel gracefully: finish current atomic step, then stop."""
         self._cancelled = True
         self._progress.status = WorkflowStatus.CANCELLED.value
+        await self._forward_signal("cancel_scenario")
 
     @workflow.signal
     async def retry_step(self) -> None:
@@ -322,6 +322,7 @@ class ScenarioStepsWorkflow:
     def __init__(self) -> None:
         self._step_log: list[dict] = []
         self._paused = False
+        self._cancelled = False
         self._paused_on_error = False
         self._error_action = ""   # "retry" | "skip"
         self._error_message = ""  # last error message while paused_on_error
@@ -332,6 +333,11 @@ class ScenarioStepsWorkflow:
 
     @workflow.signal
     async def resume(self) -> None:
+        self._paused = False
+
+    @workflow.signal
+    async def cancel_scenario(self) -> None:
+        self._cancelled = True
         self._paused = False
 
     @workflow.signal
@@ -355,8 +361,25 @@ class ScenarioStepsWorkflow:
         }
 
     async def _wait_if_paused(self) -> None:
-        if self._paused:
-            await workflow.wait_condition(lambda: not self._paused)
+        if self._paused and not self._cancelled:
+            await workflow.wait_condition(lambda: not self._paused or self._cancelled)
+
+    def _cancelled_result(
+        self,
+        inp: "StepsInput",
+        steps_executed: int,
+        step_results: list,
+        runtime_vars: dict,
+        runtime_context: dict,
+    ) -> StepsResult:
+        return StepsResult(
+            success=False,
+            steps_executed=steps_executed,
+            step_results=step_results,
+            runtime_vars=runtime_vars,
+            context=runtime_context,
+            failed_message="Cancelled during execution",
+        )
 
     async def _apply_error_policy(
         self,
@@ -515,6 +538,7 @@ class ScenarioStepsWorkflow:
                     campaign_vars=inp.campaign_vars,
                     scenario_config=getattr(inp, "scenario_config", {}),
                     scenario_registry=inp.scenario_registry,
+                    execution_id=inp.execution_id,
                 ),
                 result_type=DeviceActionBatchResult,
                 # 120 s per step, cap at 10 min
@@ -528,6 +552,11 @@ class ScenarioStepsWorkflow:
             for r in batch_result.results:
                 _append(r)
                 steps_executed += 1
+            if batch_result.paused_mid_batch:
+                await self._wait_if_paused()
+                if self._cancelled:
+                    return False, "Cancelled during execution", -1
+                return True, "", -1
             if batch_result.first_failure_index >= 0:
                 failed = batch_result.results[batch_result.first_failure_index]
                 failed_orig_idx = orig_indices[batch_result.first_failure_index]
@@ -561,6 +590,10 @@ class ScenarioStepsWorkflow:
                         ),
                     )
             await self._wait_if_paused()
+            if self._cancelled:
+                return self._cancelled_result(
+                    inp, steps_executed, step_results, runtime_vars, runtime_context,
+                )
             # Resolve variables in step
             step = _resolve_step(raw_step, runtime_vars, inp.variables, inp.campaign_vars, idx)
             step_type = step.get("type", "")

@@ -8,9 +8,23 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from db.models.campaign import Campaign
 from db.models.execution_dlq import ExecutionDLQ
 from db.models.execution import Execution
 from db.models.utils import _uuid
+
+
+def _execution_scope_where(
+    org_id: str | None,
+    user_id: str | None,
+):
+    if org_id:
+        return Execution.id.in_(
+            select(Execution.id)
+            .join(Campaign, Execution.campaign_id == Campaign.id)
+            .where(Campaign.org_id == org_id)
+        )
+    return Execution.user_id == user_id
 
 
 async def create_dlq_entry(
@@ -101,7 +115,8 @@ async def list_dlq_entries(
 async def list_dlq_entries_for_user(
     db: AsyncSession,
     *,
-    user_id: str,
+    user_id: str | None = None,
+    org_id: str | None = None,
     status: Optional[str] = None,
     execution_id: Optional[str] = None,
     campaign_id: Optional[str] = None,
@@ -111,9 +126,14 @@ async def list_dlq_entries_for_user(
     q = (
         select(ExecutionDLQ)
         .join(Execution, Execution.id == ExecutionDLQ.execution_id)
-        .where(Execution.user_id == user_id)
         .order_by(ExecutionDLQ.created_at.desc())
     )
+    if org_id:
+        q = q.join(Campaign, Execution.campaign_id == Campaign.id).where(
+            Campaign.org_id == org_id
+        )
+    elif user_id:
+        q = q.where(Execution.user_id == user_id)
     if status is not None:
         q = q.where(ExecutionDLQ.status == status)
     if execution_id is not None:
@@ -127,15 +147,20 @@ async def list_dlq_entries_for_user(
 async def count_dlq_entries_for_user(
     db: AsyncSession,
     *,
-    user_id: str,
+    user_id: str | None = None,
+    org_id: str | None = None,
     status: Optional[str] = None,
     campaign_id: Optional[str] = None,
 ) -> int:
-    q = (
-        select(func.count(ExecutionDLQ.id))
-        .join(Execution, Execution.id == ExecutionDLQ.execution_id)
-        .where(Execution.user_id == user_id)
+    q = select(func.count(ExecutionDLQ.id)).join(
+        Execution, Execution.id == ExecutionDLQ.execution_id
     )
+    if org_id:
+        q = q.join(Campaign, Execution.campaign_id == Campaign.id).where(
+            Campaign.org_id == org_id
+        )
+    elif user_id:
+        q = q.where(Execution.user_id == user_id)
     if status is not None:
         q = q.where(ExecutionDLQ.status == status)
     if campaign_id is not None:
@@ -178,7 +203,9 @@ async def begin_dlq_retry(db: AsyncSession, dlq_id: str) -> tuple[Optional[Execu
 async def begin_dlq_retry_for_user(
     db: AsyncSession,
     dlq_id: str,
-    user_id: str,
+    user_id: str | None = None,
+    *,
+    org_id: str | None = None,
 ) -> tuple[Optional[ExecutionDLQ], bool]:
     """
     User-scoped idempotent retry transition.
@@ -209,7 +236,7 @@ async def begin_dlq_retry_for_user(
         .where(
             ExecutionDLQ.id == dlq_id,
             ExecutionDLQ.execution_id.in_(
-                select(Execution.id).where(Execution.user_id == user_id)
+                select(Execution.id).where(_execution_scope_where(org_id, user_id))
             ),
             ExecutionDLQ.status == "pending",
         )
@@ -226,7 +253,7 @@ async def begin_dlq_retry_for_user(
     stmt = (
         select(ExecutionDLQ)
         .join(Execution, Execution.id == ExecutionDLQ.execution_id)
-        .where(ExecutionDLQ.id == dlq_id, Execution.user_id == user_id)
+        .where(ExecutionDLQ.id == dlq_id, _execution_scope_where(org_id, user_id))
     )
     result = await db.execute(stmt)
     entry = result.scalar_one_or_none()
@@ -272,11 +299,17 @@ async def dismiss_dlq_entry(db: AsyncSession, dlq_id: str) -> bool:
     return True
 
 
-async def dismiss_dlq_entry_for_user(db: AsyncSession, dlq_id: str, user_id: str) -> bool:
+async def dismiss_dlq_entry_for_user(
+    db: AsyncSession,
+    dlq_id: str,
+    user_id: str | None = None,
+    *,
+    org_id: str | None = None,
+) -> bool:
     stmt = (
         select(ExecutionDLQ)
         .join(Execution, Execution.id == ExecutionDLQ.execution_id)
-        .where(ExecutionDLQ.id == dlq_id, Execution.user_id == user_id)
+        .where(ExecutionDLQ.id == dlq_id, _execution_scope_where(org_id, user_id))
     )
     result = await db.execute(stmt)
     entry = result.scalar_one_or_none()

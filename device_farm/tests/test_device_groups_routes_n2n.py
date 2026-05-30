@@ -27,6 +27,7 @@ from api.routes.device_groups import router as device_groups_router
 from db.database import Base
 from db.models.device import Device
 from db.models.device_group import DeviceGroup, DeviceGroupMember  # noqa: F401  — register tables
+from tenancy.context import set_current_org_id
 
 
 @pytest_asyncio.fixture
@@ -52,14 +53,27 @@ def _build_app(session_factory) -> FastAPI:
             yield s
 
     async def _user_override():
-        return SimpleNamespace(id="user-1", role="user", is_active=True)
+        set_current_org_id("org-1")
+        return SimpleNamespace(
+            id="user-1",
+            role="operator",
+            org_role="owner",
+            is_active=True,
+            org_id="org-1",
+        )
 
     app.dependency_overrides[_get_db] = _db_override
     app.dependency_overrides[_get_current_user] = _user_override
     return app
 
 
-async def _seed_devices(session_factory, ids: list[str], owner: str = "user-1") -> None:
+async def _seed_devices(
+    session_factory,
+    ids: list[str],
+    owner: str = "user-1",
+    *,
+    org_id: str = "org-1",
+) -> None:
     async with session_factory() as s:
         for did in ids:
             s.add(
@@ -68,6 +82,7 @@ async def _seed_devices(session_factory, ids: list[str], owner: str = "user-1") 
                     serial=f"SERIAL_{did}",
                     name=f"dev-{did}",
                     user_id=owner,
+                    org_id=org_id,
                     created_at=datetime.now(timezone.utc),
                 )
             )
@@ -134,9 +149,9 @@ async def test_add_devices_idempotent(session_factory):
 
 @pytest.mark.asyncio
 async def test_add_devices_filters_other_users(session_factory):
-    """Devices belonging to another user must be silently dropped."""
+    """Devices in another org must be silently dropped."""
     await _seed_devices(session_factory, ["mine"], owner="user-1")
-    await _seed_devices(session_factory, ["theirs"], owner="user-2")
+    await _seed_devices(session_factory, ["theirs"], owner="user-2", org_id="org-2")
     app = _build_app(session_factory)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
         gid = (await ac.post("/api/device-groups", json={"name": "G"})).json()["id"]
@@ -183,7 +198,13 @@ async def test_add_to_other_users_group_404(session_factory):
             yield s
 
     async def _user_override():
-        return SimpleNamespace(id="user-2", role="user", is_active=True)
+        return SimpleNamespace(
+            id="user-2",
+            role="operator",
+            org_role="owner",
+            is_active=True,
+            org_id="org-2",
+        )
 
     app2.dependency_overrides[_get_db] = _db_override
     app2.dependency_overrides[_get_current_user] = _user_override

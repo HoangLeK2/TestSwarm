@@ -357,7 +357,10 @@ async def enqueue_campaign_run_temporal(
             campaign_id=campaign_id,
             user_id=getattr(campaign, "user_id", None),
             status="running",
-            meta={"scenarios_count": len(scenarios)},
+            meta={
+                "scenarios_count": len(scenarios),
+                "org_id": getattr(campaign, "org_id", None),
+            },
         )
         execution_id = execution_record.id
         for d in devices:

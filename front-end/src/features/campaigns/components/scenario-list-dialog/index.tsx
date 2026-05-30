@@ -36,6 +36,7 @@ import {
 } from '../../hooks/use-campaigns';
 import type { CampaignOut, ScenarioOut } from '../../types';
 import { ScenarioRow } from './ScenarioRow';
+import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
 
 export function ScenarioListDialog({
   campaign,
@@ -55,6 +56,7 @@ export function ScenarioListDialog({
   const finalOpen = isControlled ? controlledOpen : open;
   const onOpenChange = isControlled ? controlledOnOpenChange : setOpen;
   const qc = useQueryClient();
+  const { canUpdate } = useResourcePermissions('campaigns');
   const { data: scenarios = [], refetch } = useScenarios(campaign.id);
   const { mutate: createScenario, isPending: isCreating } = useCreateScenario();
   const { mutateAsync: reorderScenarios, isPending: isReordering } =
@@ -86,7 +88,7 @@ export function ScenarioListDialog({
   };
 
   const handleDragEnd = async (event: DragEndEvent) => {
-    if (isReordering) return;
+    if (isReordering || !canUpdate) return;
     const { active, over } = event;
     if (!over || active.id === over.id) return;
 
@@ -158,7 +160,7 @@ export function ScenarioListDialog({
                       campaign={campaign}
                       scenario={s}
                       onDeleted={() => refetch()}
-                      dragDisabled={isReordering}
+                      dragDisabled={isReordering || !canUpdate}
                     />
                   ))}
                 </div>
@@ -166,16 +168,18 @@ export function ScenarioListDialog({
             </DndContext>
           )}
 
-          <Button
-            variant='outline'
-            size='sm'
-            className='mt-1 gap-1.5'
-            disabled={isCreating}
-            onClick={handleAdd}
-          >
-            <Plus size={13} />
-            {t('addButton')}
-          </Button>
+          {canUpdate ? (
+            <Button
+              variant='outline'
+              size='sm'
+              className='mt-1 gap-1.5'
+              disabled={isCreating}
+              onClick={handleAdd}
+            >
+              <Plus size={13} />
+              {t('addButton')}
+            </Button>
+          ) : null}
         </div>
       </DialogContent>
     </Dialog>

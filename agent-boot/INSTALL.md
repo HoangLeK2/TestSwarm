@@ -54,35 +54,40 @@ Bootstrap lần đầu (cài STF/u2 trên máy):
 uv run main.py
 ```
 
-## Docker (macOS — thiết bị USB trên Mac)
+## Docker Compose
 
-USB không vào container được (Docker Desktop chạy VM). Agent trong container gọi **ADB server trên Mac** qua `host.docker.internal:5037`.
+USB trên **host** (macOS Docker Desktop); container chạy relay, gọi ADB qua `host.docker.internal:5037`.
 
-### Chạy nhanh (khuyến nghị)
-
-Script tự bật `adb -a` trên host rồi chạy compose:
-
-```bash
-./scripts/docker-up.sh --abort-on-container-exit
-```
-
-Phải thấy serial + `device` trong log container.
-
-### Chạy relay trong container
+### Chạy relay (khuyến nghị)
 
 ```bash
 cp .env.example .env   # điền RELAY_SERVER, RELAY_API_KEY, RELAY_ENROLLMENT_TOKEN
-./scripts/docker-up.sh run --rm agent-boot bash -lc "uv run main.py --relay-only"
+./scripts/docker-up.sh up -d    # adb host + docker compose up -d
+./scripts/docker-up.sh logs -f
 ```
 
-### Export image `.tar` (mang sang máy khác, không cần build lại)
+Hoặc thủ công:
+
+```bash
+adb -a nodaemon server &
+docker compose up -d --build
+docker compose logs -f
+```
+
+### Linux: USB trong container
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.linux-usb.yml up -d --build
+```
+
+### Export image `.tar` (mang sang máy khác)
 
 ```bash
 ./scripts/docker-save-image.sh
 # -> dist/agent-boot-image-0.1.0.tar
 
 docker load -i dist/agent-boot-image-0.1.0.tar
-./scripts/docker-up.sh run --rm agent-boot adb devices
+./scripts/docker-up.sh up -d
 ```
 
 ### Gói ship cho khách (khuyến nghị)

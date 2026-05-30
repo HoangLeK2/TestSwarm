@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.device_group import DeviceGroup, DeviceGroupMember
 from db.models.device import Device
+from tenancy.context import get_current_org_id
 
 
 # ── DeviceGroup CRUD ──────────────────────────────────────────────────────────
@@ -16,6 +17,7 @@ async def create_group(
     db: AsyncSession,
     name: str,
     user_id: str | None = None,
+    org_id: str | None = None,
     description: str = "",
     color: str = "#6366f1",
 ) -> DeviceGroup:
@@ -24,6 +26,7 @@ async def create_group(
         description=description,
         color=color,
         user_id=user_id,
+        org_id=org_id or get_current_org_id(),
     )
     db.add(group)
     await db.flush()
@@ -67,6 +70,7 @@ async def add_devices_to_group(
     db: AsyncSession,
     group_id: str,
     device_ids: list[str],
+    org_id: str | None = None,
 ) -> int:
     """
     Add multiple devices to a group. Already-present memberships are silently skipped
@@ -80,11 +84,16 @@ async def add_devices_to_group(
         )
     )
     existing_ids = {row[0] for row in existing_result.all()}
+    if org_id is None:
+        group_org_result = await db.execute(
+            select(DeviceGroup.org_id).where(DeviceGroup.id == group_id)
+        )
+        org_id = group_org_result.scalar_one_or_none()
 
     inserted = 0
     for did in device_ids:
         if did not in existing_ids:
-            db.add(DeviceGroupMember(group_id=group_id, device_id=did))
+            db.add(DeviceGroupMember(group_id=group_id, device_id=did, org_id=org_id))
             inserted += 1
 
     if inserted:

@@ -58,6 +58,8 @@ const ALLOWED_SELECTOR_BY: readonly SelectorBy[] = [
 
 const HIERARCHY_INTERACTION_PULSE_THROTTLE_MS = 3500;
 const HIERARCHY_INTERACTION_FETCH_COOLDOWN_MS = 3500;
+const HIERARCHY_BOOTSTRAP_RETRY_MS = 1500;
+const HIERARCHY_BOOTSTRAP_MAX_ATTEMPTS = 20;
 const RECORD_XML_POLL_INTERVAL_MS = 1200;
 const RECORD_XML_POLL_TIMEOUT_MS = 4800;
 
@@ -989,16 +991,47 @@ export function useControlRecord(
     errorPrefix
   ]);
 
+  // Bootstrap hierarchy on device select / app change. u2 may not be ready on the
+  // first request after client-side navigation — retry until XML arrives instead
+  // of leaving the tree blank until a full page refresh.
   useEffect(() => {
     if (!autoRefreshHierarchy || !selectedHierarchySerial || hierarchyPaused)
       return;
+    if (hierarchyXml?.trim()) return;
     lastHierarchyAppRef.current = selectedHierarchyApp;
-    fetchAndSetHierarchy(selectedHierarchySerial, true).catch(() => {});
+
+    let cancelled = false;
+    let attempts = 0;
+
+    const bootstrap = async () => {
+      while (!cancelled && attempts < HIERARCHY_BOOTSTRAP_MAX_ATTEMPTS) {
+        attempts += 1;
+        try {
+          const xml = await fetchAndSetHierarchy(
+            selectedHierarchySerial,
+            true
+          );
+          if (xml?.trim() || cancelled) return;
+        } catch {
+          /* retry */
+        }
+        await new Promise((resolve) =>
+          setTimeout(resolve, HIERARCHY_BOOTSTRAP_RETRY_MS)
+        );
+      }
+    };
+
+    void bootstrap();
+    return () => {
+      cancelled = true;
+    };
   }, [
     autoRefreshHierarchy,
     selectedHierarchySerial,
     selectedHierarchyApp,
     hierarchyPaused,
+    hierarchyXml,
+    wsConnected,
     fetchAndSetHierarchy
   ]);
 

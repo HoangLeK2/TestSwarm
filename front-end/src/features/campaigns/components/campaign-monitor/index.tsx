@@ -22,9 +22,16 @@ import { isCampaignActiveExecution } from '../../types';
 interface Props {
   campaign: CampaignOut;
   children?: React.ReactNode;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
-export function CampaignMonitorDialog({ campaign, children }: Props) {
+export function CampaignMonitorDialog({
+  campaign,
+  children,
+  open,
+  onOpenChange
+}: Props) {
   const t = useTranslations('campaignsFeature.list');
   const isRunning = isCampaignActiveExecution(campaign.status);
   const statusLabel = isRunning
@@ -34,32 +41,33 @@ export function CampaignMonitorDialog({ campaign, children }: Props) {
     ? 'bg-green-500/15 text-green-600 dark:text-green-400'
     : 'bg-blue-500/15 text-blue-600 dark:text-blue-400';
 
+  const controlled = open !== undefined;
+  const trigger = children ?? (
+    <Button
+      size='sm'
+      variant='secondary'
+      className='h-7 gap-1.5 border px-2 text-xs shadow-sm'
+    >
+      <MonitorPlay size={13} className='shrink-0' />
+      <span className='max-w-[7rem] truncate'>{t('titleMonitor')}</span>
+    </Button>
+  );
+
   return (
-    <Dialog>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <DialogTrigger asChild>
-            {children ?? (
-              <Button
-                size='sm'
-                variant='secondary'
-                className='h-7 gap-1.5 border px-2 text-xs shadow-sm'
-              >
-                <MonitorPlay size={13} className='shrink-0' />
-                <span className='max-w-[7rem] truncate'>
-                  {t('titleMonitor')}
-                </span>
-              </Button>
-            )}
-          </DialogTrigger>
-        </TooltipTrigger>
-        <TooltipContent
-          side='top'
-          className='max-w-xs text-left text-xs leading-snug'
-        >
-          {t('monitorTooltip')}
-        </TooltipContent>
-      </Tooltip>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      {!controlled ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <DialogTrigger asChild>{trigger}</DialogTrigger>
+          </TooltipTrigger>
+          <TooltipContent
+            side='top'
+            className='max-w-xs text-left text-xs leading-snug'
+          >
+            {t('monitorTooltip')}
+          </TooltipContent>
+        </Tooltip>
+      ) : null}
 
       <DialogContent className='flex max-h-[min(92dvh,1040px)] min-h-0 w-[min(96vw,1120px)] max-w-[1120px] flex-col gap-0 overflow-hidden p-0 sm:rounded-xl'>
         <DialogHeader className='shrink-0 border-b px-6 py-4 pr-14'>

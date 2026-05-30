@@ -8,10 +8,11 @@ from sqlalchemy import DateTime, ForeignKey, Integer, JSON, SmallInteger, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.database import Base
+from tenancy.models import TenantScopedModel
 from .utils import _now, _uuid
 
 
-class ContentItem(Base):
+class ContentItem(TenantScopedModel, Base):
     """Crawled content item (post, profile, video, comment, etc.)."""
 
     __tablename__ = "content_items"
@@ -103,7 +104,7 @@ class ContentItem(Base):
         }
 
 
-class ContentCollection(Base):
+class ContentCollection(TenantScopedModel, Base):
     """Named collection for grouping content items."""
 
     __tablename__ = "content_collections"

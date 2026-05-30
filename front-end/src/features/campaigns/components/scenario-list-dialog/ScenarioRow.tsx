@@ -11,6 +11,7 @@ import { ROUTES } from '@/config/routes';
 import type { CampaignOut, ScenarioOut } from '../../types';
 import { useDeleteScenario } from '../../hooks/use-campaigns';
 import { useConfirm } from '@/providers/modal-provider';
+import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
 
 export function ScenarioRow({
   campaign,
@@ -26,6 +27,7 @@ export function ScenarioRow({
   const t = useTranslations('campaignsFeature.scenarioList');
   const tCommon = useTranslations('common');
   const confirm = useConfirm();
+  const { canUpdate, canDelete } = useResourcePermissions('campaigns');
   const { mutate: deleteScenario, isPending } = useDeleteScenario();
   const {
     attributes,
@@ -80,13 +82,13 @@ export function ScenarioRow({
     >
       <button
         type='button'
-        disabled={dragDisabled}
+        disabled={dragDisabled || !canUpdate}
         {...attributes}
         {...listeners}
         tabIndex={-1}
         title={t('reorderTitle')}
         className={`flex shrink-0 items-center justify-center text-muted-foreground/40 ${
-          dragDisabled
+          dragDisabled || !canUpdate
             ? 'cursor-not-allowed opacity-40'
             : 'cursor-grab hover:text-muted-foreground active:cursor-grabbing'
         }`}
@@ -111,33 +113,37 @@ export function ScenarioRow({
         </div>
       </div>
 
-      <Button
-        size='icon'
-        variant='ghost'
-        className='size-7 shrink-0'
-        title={t('editTitle')}
-        asChild
-      >
-        <Link
-          href={ROUTES.DEVICES.CONTROL_RECORD_EDIT_SCENARIO(
-            campaign.id,
-            scenario.id
-          )}
+      {canUpdate ? (
+        <Button
+          size='icon'
+          variant='ghost'
+          className='size-7 shrink-0'
+          title={t('editTitle')}
+          asChild
         >
-          <ChevronRight size={14} />
-        </Link>
-      </Button>
+          <Link
+            href={ROUTES.DEVICES.CONTROL_RECORD_EDIT_SCENARIO(
+              campaign.id,
+              scenario.id
+            )}
+          >
+            <ChevronRight size={14} />
+          </Link>
+        </Button>
+      ) : null}
 
-      <Button
-        size='icon'
-        variant='ghost'
-        className='size-7 shrink-0 text-destructive hover:text-destructive'
-        disabled={isPending}
-        onClick={handleDelete}
-        title={t('deleteTitle')}
-      >
-        <Trash2 size={12} />
-      </Button>
+      {canDelete ? (
+        <Button
+          size='icon'
+          variant='ghost'
+          className='size-7 shrink-0 text-destructive hover:text-destructive'
+          disabled={isPending}
+          onClick={handleDelete}
+          title={t('deleteTitle')}
+        >
+          <Trash2 size={12} />
+        </Button>
+      ) : null}
     </div>
   );
 }

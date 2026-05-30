@@ -17,6 +17,7 @@ import { useConfirm } from '@/providers/modal-provider';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { ROUTES } from '@/config/routes';
+import { Can } from '@/features/auth';
 
 export function DeviceGroupList() {
   const t = useTranslations('deviceGroupsFeature.list');
@@ -88,7 +89,9 @@ export function DeviceGroupList() {
                 </span>{' '}
                 {t('countLabel')}
               </p>
-              <CreateDeviceGroupDialog />
+              <Can object='device-groups' action='create'>
+                <CreateDeviceGroupDialog />
+              </Can>
             </div>
           )}
 
@@ -111,7 +114,9 @@ export function DeviceGroupList() {
                   <li>{t('quickStartStep3')}</li>
                 </ol>
                 <div className='mt-3 flex flex-wrap justify-center gap-2'>
-                  <CreateDeviceGroupDialog />
+                  <Can object='device-groups' action='create'>
+                <CreateDeviceGroupDialog />
+              </Can>
                   <Button asChild size='sm' variant='outline'>
                     <Link href={ROUTES.CAMPAIGNS.ROOT}>
                       {t('quickStartGoCampaigns')}

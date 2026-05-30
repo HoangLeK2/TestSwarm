@@ -13,11 +13,12 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, JSON, Stri
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.database import Base
+from tenancy.models import TenantScopedModel
 from .enums import RunStatus, ScheduleTargetType
 from .utils import _now, _uuid
 
 
-class Schedule(Base):
+class Schedule(TenantScopedModel, Base):
     """A recurring cron-based schedule that triggers campaign/template/fleet execution."""
 
     __tablename__ = "schedules"
@@ -89,7 +90,7 @@ class Schedule(Base):
         return f"<Schedule {self.name!r} cron={self.cron_expression!r} enabled={self.is_enabled}>"
 
 
-class ScheduleRun(Base):
+class ScheduleRun(TenantScopedModel, Base):
     """Execution history record for a single schedule trigger."""
 
     __tablename__ = "schedule_runs"

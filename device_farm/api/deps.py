@@ -6,13 +6,18 @@ from typing import Annotated, AsyncGenerator
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import AuthContext, policy
+from api.auth.rbac import build_enforcer_for_user, is_superadmin, permission_domain
 from api.auth.context import AuthError, decode_access_token, extract_bearer
 from db.database import AsyncSessionLocal
-from db.models import User
+from db.models import Organization, User
 from db import crud as repo
+from tenancy.context import set_current_org_id
+
+_ORG_HEADER = "x-organization-id"
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -51,18 +56,88 @@ async def _get_auth_context(
     return _auth_context_from_creds(credentials)
 
 
+async def _organization_exists(db: AsyncSession, org_id: str) -> bool:
+    row = await db.execute(
+        select(Organization.id).where(Organization.id == org_id).limit(1)
+    )
+    return row.scalar_one_or_none() is not None
+
+
+async def _resolve_effective_org_id(
+    request: Request | None,
+    db: AsyncSession,
+    user: User,
+) -> str | None:
+    """Org used for tenancy scoping on this request.
+
+    The UI org switcher stores selection in localStorage and sends
+    ``X-Organization-Id``. Without it, we fall back to ``users.org_id``.
+    Superadmin may scope to any existing org; others only orgs they belong to.
+    """
+    base_org = getattr(user, "org_id", None)
+    if request is None:
+        return base_org
+
+    header_org = (request.headers.get(_ORG_HEADER) or "").strip()
+    if not header_org:
+        return base_org
+
+    if not await _organization_exists(db, header_org):
+        return base_org
+
+    if is_superadmin(user):
+        return header_org
+
+    role = await repo.get_organization_role_for_user(db, user.id, header_org)
+    if role:
+        return header_org
+
+    return base_org
+
+
+def _apply_user_org_context(user: User, org_id: str | None) -> None:
+    set_current_org_id(org_id)
+    user.org_id = org_id  # type: ignore[assignment]
+
+
+async def resolve_effective_org_id_for_user_id(
+    request: Request | None,
+    db: AsyncSession,
+    user_id: str,
+) -> str | None:
+    """Resolve tenancy org for JWT-only code paths (e.g. ``/api/devices/live``)."""
+    user = await repo.get_user(db, user_id)
+    if not user:
+        return None
+    org_id = await _resolve_effective_org_id(request, db, user)
+    if org_id:
+        set_current_org_id(org_id)
+    return org_id
+
+
 async def _get_current_user(
+    request: Request,
     db: DB,
     ctx: AuthContext = Depends(_get_auth_context),
 ) -> User:
     user = await repo.get_user(db, ctx.user_id)
     if not user or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    try:
+        org_id = await _resolve_effective_org_id(request, db, user)
+        _apply_user_org_context(user, org_id)
+        request.state.user_id = str(user.id)
+        request.state.org_id = org_id
+        user.org_role = await repo.get_organization_role_for_user(  # type: ignore[attr-defined]
+            db, user.id, org_id
+        )
+    except Exception:
+        pass
     return user
 
 
 async def _get_current_admin(user: User = Depends(_get_current_user)) -> User:
-    if user.role != "admin":
+    if user.role != "admin" and not is_superadmin(user):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin only")
     return user
 
@@ -70,6 +145,101 @@ async def _get_current_admin(user: User = Depends(_get_current_user)) -> User:
 CurrentAuth = Annotated[AuthContext, Depends(_get_auth_context)]
 CurrentUser = Annotated[User, Depends(_get_current_user)]
 AdminUser = Annotated[User, Depends(_get_current_admin)]
+
+
+def require_permission(obj: str, act: str):
+    async def _require_permission(user: CurrentUser) -> None:
+        domain = permission_domain(user)
+        enforcer = build_enforcer_for_user(user, domain=domain)
+        if not enforcer.enforce(str(user.id), domain, obj, act):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Permission denied",
+            )
+
+    return _require_permission
+
+
+def _token_from_request(request: Request) -> str:
+    token = extract_bearer(request.headers.get("authorization"))
+    if token:
+        return token
+
+    path = request.url.path or ""
+    allow_media_query_token = (
+        request.method == "GET"
+        and (
+            path.startswith("/stream/")
+            or path.startswith("/screenshot/")
+            or path.startswith("/screenshot-b64/")
+        )
+    )
+    if allow_media_query_token:
+        return (request.query_params.get("token") or "").strip()
+
+    return ""
+
+
+async def _current_user_from_request(request: Request, db: AsyncSession) -> User:
+    cached = getattr(getattr(request, "state", None), "auth", None)
+    if isinstance(cached, AuthContext):
+        ctx = cached
+    else:
+        raw_token = _token_from_request(request)
+        if not raw_token:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Not authenticated",
+            )
+        try:
+            ctx = decode_access_token(raw_token)
+        except AuthError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired token",
+            ) from exc
+        try:
+            request.state.auth = ctx
+        except Exception:
+            pass
+
+    user = await repo.get_user(db, ctx.user_id)
+    if not user or not user.is_active:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    try:
+        org_id = await _resolve_effective_org_id(request, db, user)
+        _apply_user_org_context(user, org_id)
+        user.org_role = await repo.get_organization_role_for_user(  # type: ignore[attr-defined]
+            db, user.id, org_id
+        )
+    except Exception:
+        pass
+    return user
+
+
+def require_request_permission(db_enabled: bool, obj: str, act: str):
+    """Casbin permission dependency for routes mounted outside the DB api_router.
+
+    Lab mode keeps its existing API-key/no-auth behavior. In DB mode this layers
+    app-role authorization on top of route-specific JWT and ownership checks.
+    """
+    if not db_enabled:
+        async def _no_permission() -> None:
+            return
+
+        return _no_permission
+
+    async def _require_request_permission(request: Request, db: DB) -> None:
+        user = await _current_user_from_request(request, db)
+        domain = permission_domain(user)
+        enforcer = build_enforcer_for_user(user, domain=domain)
+        if not enforcer.enforce(str(user.id), domain, obj, act):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Permission denied",
+            )
+
+    return _require_request_permission
 
 
 def caller_auth_from_request(request: Request) -> AuthContext | None:
@@ -82,7 +252,7 @@ def caller_auth_from_request(request: Request) -> AuthContext | None:
     cached = getattr(getattr(request, "state", None), "auth", None)
     if isinstance(cached, AuthContext):
         return cached
-    token = extract_bearer(request.headers.get("authorization"))
+    token = _token_from_request(request)
     if not token:
         return None
     try:

@@ -1,6 +1,8 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from '@/i18n/navigation';
+import { ROUTES } from '@/config/routes';
 import {
   Search,
   RefreshCw,
@@ -36,13 +38,13 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
+import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
 import { useContent, useContentStats } from '../hooks/use-content';
 import {
   contentApi,
   type ContentItem,
   type ExportFormat
 } from '../services/api';
-import { ContentDetailDialog } from './content-detail-dialog';
 import {
   Select,
   SelectContent,
@@ -512,7 +514,8 @@ function ContentTable({
   onDeleteItem,
   onViewParent,
   hasFilters,
-  onClear
+  onClear,
+  canDelete = false
 }: {
   items: ContentItem[];
   onViewItem: (item: ContentItem) => void;
@@ -520,6 +523,7 @@ function ContentTable({
   onViewParent: (parentId: string) => void;
   hasFilters: boolean;
   onClear: () => void;
+  canDelete?: boolean;
 }) {
   if (items.length === 0)
     return <EmptyState hasFilters={hasFilters} onClear={onClear} />;
@@ -628,19 +632,21 @@ function ContentTable({
                     >
                       <Eye size={15} />
                     </Button>
-                    <Button
-                      size='sm'
-                      variant='ghost'
-                      className='h-8 w-8 p-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive'
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onDeleteItem(item.id);
-                      }}
-                      title='Xoá'
-                      aria-label='Xoá'
-                    >
-                      <Trash2 size={15} />
-                    </Button>
+                    {canDelete ? (
+                      <Button
+                        size='sm'
+                        variant='ghost'
+                        className='h-8 w-8 p-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive'
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDeleteItem(item.id);
+                        }}
+                        title='Xoá'
+                        aria-label='Xoá'
+                      >
+                        <Trash2 size={15} />
+                      </Button>
+                    ) : null}
                   </div>
                 </td>
               </tr>
@@ -660,7 +666,8 @@ function ContentFeed({
   onDeleteItem,
   onViewParent,
   hasFilters,
-  onClear
+  onClear,
+  canDelete = false
 }: {
   items: ContentItem[];
   onViewItem: (item: ContentItem) => void;
@@ -668,6 +675,7 @@ function ContentFeed({
   onViewParent: (parentId: string) => void;
   hasFilters: boolean;
   onClear: () => void;
+  canDelete?: boolean;
 }) {
   if (items.length === 0)
     return <EmptyState hasFilters={hasFilters} onClear={onClear} />;
@@ -680,6 +688,7 @@ function ContentFeed({
           item={item}
           onView={() => onViewItem(item)}
           onDelete={() => onDeleteItem(item.id)}
+          canDelete={canDelete}
           onViewParent={
             item.parent_id ? () => onViewParent(item.parent_id!) : undefined
           }
@@ -693,12 +702,14 @@ function ContentCard({
   item,
   onView,
   onDelete,
-  onViewParent
+  onViewParent,
+  canDelete = false
 }: {
   item: ContentItem;
   onView: () => void;
   onDelete: () => void;
   onViewParent?: () => void;
+  canDelete?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const isComment = item.item_level > 0;
@@ -804,15 +815,17 @@ function ContentCard({
             >
               <Eye size={13} />
             </Button>
-            <Button
-              size='sm'
-              variant='ghost'
-              className='h-7 w-7 p-0 hover:text-destructive'
-              onClick={onDelete}
-              aria-label='Xoá'
-            >
-              <Trash2 size={13} />
-            </Button>
+            {canDelete ? (
+              <Button
+                size='sm'
+                variant='ghost'
+                className='h-7 w-7 p-0 hover:text-destructive'
+                onClick={onDelete}
+                aria-label='Xoá'
+              >
+                <Trash2 size={13} />
+              </Button>
+            ) : null}
           </div>
         </div>
 
@@ -964,17 +977,28 @@ function Pagination({
 interface Props {
   /** Pre-filter by campaign ID (e.g. opened from campaign detail). */
   defaultCampaignId?: string;
+  /** Pre-filter by execution / run ID. */
+  defaultExecutionId?: string;
 }
 
-export function ContentViewer({ defaultCampaignId }: Props) {
+export function ContentViewer({
+  defaultCampaignId,
+  defaultExecutionId
+}: Props) {
+  const router = useRouter();
   const [search, setSearch] = useState('');
   const [campaignId, setCampaignId] = useState(defaultCampaignId ?? '');
+  const [executionId, setExecutionId] = useState(defaultExecutionId ?? '');
   const [collection, setCollection] = useState('');
   const [platform, setPlatform] = useState('');
   const [contentType, setContentType] = useState('');
-  const [viewingItem, setViewingItem] = useState<ContentItem | null>(null);
   const [exporting, setExporting] = useState(false);
   const [pageSize, setPageSize] = useState(50);
+  const { canDelete } = useResourcePermissions('content');
+
+  const openContentDetail = (item: ContentItem) => {
+    router.push(ROUTES.CONTENT.DETAIL(item.id));
+  };
 
   const {
     items,
@@ -990,7 +1014,8 @@ export function ContentViewer({ defaultCampaignId }: Props) {
     reload
   } = useContent(
     {
-      campaign_id: defaultCampaignId || undefined
+      campaign_id: defaultCampaignId || undefined,
+      run_id: defaultExecutionId || undefined
     },
     { pageSize }
   );
@@ -1012,6 +1037,7 @@ export function ContentViewer({ defaultCampaignId }: Props) {
     applyFilters({
       search: search || undefined,
       campaign_id: campaignId || undefined,
+      run_id: executionId || undefined,
       collection: collection || undefined,
       platform: platform || undefined,
       content_type: ct || undefined
@@ -1021,18 +1047,21 @@ export function ContentViewer({ defaultCampaignId }: Props) {
   const applyWithNext = (next: {
     search?: string;
     campaignId?: string;
+    executionId?: string;
     collection?: string;
     platform?: string;
     contentType?: string;
   }) => {
     const nextSearch = next.search ?? search;
     const nextCampaignId = next.campaignId ?? campaignId;
+    const nextExecutionId = next.executionId ?? executionId;
     const nextCollection = next.collection ?? collection;
     const nextPlatform = next.platform ?? platform;
     const nextContentType = next.contentType ?? contentType;
     applyFilters({
       search: nextSearch || undefined,
       campaign_id: nextCampaignId || undefined,
+      run_id: nextExecutionId || undefined,
       collection: nextCollection || undefined,
       platform: nextPlatform || undefined,
       content_type: nextContentType || undefined
@@ -1071,6 +1100,7 @@ export function ContentViewer({ defaultCampaignId }: Props) {
   const handleClear = () => {
     setSearch('');
     setCampaignId('');
+    setExecutionId('');
     setCollection('');
     setPlatform('');
     setContentType('');
@@ -1080,6 +1110,7 @@ export function ContentViewer({ defaultCampaignId }: Props) {
   const hasFilters = !!(
     search ||
     campaignId ||
+    executionId ||
     collection ||
     platform ||
     contentType
@@ -1183,20 +1214,22 @@ export function ContentViewer({ defaultCampaignId }: Props) {
           ) : contentType === 'comment' ? (
             <ContentFeed
               items={items}
-              onViewItem={setViewingItem}
+              onViewItem={openContentDetail}
               onDeleteItem={deleteItem}
               onViewParent={handleViewParent}
               hasFilters={hasFilters}
               onClear={handleClear}
+              canDelete={canDelete}
             />
           ) : (
             <ContentTable
               items={items}
-              onViewItem={setViewingItem}
+              onViewItem={openContentDetail}
               onDeleteItem={deleteItem}
               onViewParent={handleViewParent}
               hasFilters={hasFilters}
               onClear={handleClear}
+              canDelete={canDelete}
             />
           )}
         </div>
@@ -1219,11 +1252,6 @@ export function ContentViewer({ defaultCampaignId }: Props) {
         )}
       </div>
 
-      <ContentDetailDialog
-        item={viewingItem}
-        onClose={() => setViewingItem(null)}
-        onViewParent={handleViewParent}
-      />
     </div>
   );
 }

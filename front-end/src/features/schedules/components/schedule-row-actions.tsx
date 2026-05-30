@@ -15,6 +15,7 @@ import type { ScheduleOut } from '../services/api';
 import { ScheduleFormDialog } from './schedule-form-dialog';
 import { ScheduleRunHistoryDialog } from './schedule-run-history-dialog';
 import { useConfirm } from '@/providers/modal-provider';
+import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
 
 export function ScheduleRowActions({ schedule }: { schedule: ScheduleOut }) {
   const t = useTranslations('schedulesFeature.actions');
@@ -23,6 +24,7 @@ export function ScheduleRowActions({ schedule }: { schedule: ScheduleOut }) {
   const toggleMutation = useToggleSchedule();
   const runNowMutation = useRunNowSchedule();
   const deleteMutation = useDeleteSchedule();
+  const perms = useResourcePermissions('schedules');
 
   const [editOpen, setEditOpen] = useState(false);
 
@@ -74,49 +76,57 @@ export function ScheduleRowActions({ schedule }: { schedule: ScheduleOut }) {
         scheduleName={schedule.name}
       />
 
-      <Button
-        size='icon'
-        variant='ghost'
-        className='size-7 text-amber-600 hover:text-amber-600'
-        disabled={runNowMutation.isPending}
-        onClick={handleRunNow}
-        title={t('runNow')}
-      >
-        <Play size={14} />
-      </Button>
+      {perms.canExecute ? (
+        <Button
+          size='icon'
+          variant='ghost'
+          className='size-7 text-amber-600 hover:text-amber-600'
+          disabled={runNowMutation.isPending}
+          onClick={handleRunNow}
+          title={t('runNow')}
+        >
+          <Play size={14} />
+        </Button>
+      ) : null}
 
-      <Button
-        size='icon'
-        variant='ghost'
-        className={`size-7 ${schedule.is_enabled ? 'text-green-600 hover:text-green-600' : 'text-muted-foreground hover:text-muted-foreground'}`}
-        disabled={toggleMutation.isPending}
-        onClick={handleToggle}
-        title={schedule.is_enabled ? t('disable') : t('enable')}
-      >
-        <Power size={14} />
-      </Button>
+      {perms.canUpdate ? (
+        <Button
+          size='icon'
+          variant='ghost'
+          className={`size-7 ${schedule.is_enabled ? 'text-green-600 hover:text-green-600' : 'text-muted-foreground hover:text-muted-foreground'}`}
+          disabled={toggleMutation.isPending}
+          onClick={handleToggle}
+          title={schedule.is_enabled ? t('disable') : t('enable')}
+        >
+          <Power size={14} />
+        </Button>
+      ) : null}
 
-      <Button
-        size='icon'
-        variant='ghost'
-        className='size-7'
-        disabled={isPending}
-        onClick={() => setEditOpen(true)}
-        title={t('edit')}
-      >
-        <Pencil size={14} />
-      </Button>
+      {perms.canUpdate ? (
+        <Button
+          size='icon'
+          variant='ghost'
+          className='size-7'
+          disabled={isPending}
+          onClick={() => setEditOpen(true)}
+          title={t('edit')}
+        >
+          <Pencil size={14} />
+        </Button>
+      ) : null}
 
-      <Button
-        size='icon'
-        variant='ghost'
-        className='size-7 text-destructive hover:text-destructive'
-        disabled={deleteMutation.isPending}
-        onClick={handleDelete}
-        title={t('delete')}
-      >
-        <Trash2 size={14} />
-      </Button>
+      {perms.canDelete ? (
+        <Button
+          size='icon'
+          variant='ghost'
+          className='size-7 text-destructive hover:text-destructive'
+          disabled={deleteMutation.isPending}
+          onClick={handleDelete}
+          title={t('delete')}
+        >
+          <Trash2 size={14} />
+        </Button>
+      ) : null}
 
       {editOpen && (
         <ScheduleFormDialog

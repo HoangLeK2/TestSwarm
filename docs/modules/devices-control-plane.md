@@ -19,6 +19,7 @@ storage beyond raw capture/extraction endpoints.
 | Area | Source |
 |---|---|
 | Device CRUD and pairing | `device_farm/api/routes/devices.py`, `device_farm/services/pairing.py` |
+| Fleet health summary | `device_farm/api/routes/devices.py` (`GET /devices/fleet/stats`), `device_farm/db/crud/fleet_stats.py` |
 | Device groups | `device_farm/api/routes/device_groups.py`, `device_farm/db/models/device_group.py` |
 | Device control router | `device_farm/api/routes/device_control/__init__.py` |
 | Gestures/UI/STF/sessions/tasks | `device_farm/api/routes/device_control/*.py` |
@@ -109,6 +110,10 @@ flowchart LR
 - Media endpoints expose stream/screenshot surfaces and should be treated as
   device-auth runtime APIs.
 - Device groups are persisted resource groups used by campaign/schedule targeting.
+- `GET /api/devices/fleet/stats` returns org-scoped device FSM counts and active
+  session counts by owner type. Filters: `group_id`, `relay_host`. Callers with
+  `devices:manage` (platform admin or org owner) receive `owner_anomalies`
+  (including sensitive owner ids); read-only callers get `owner_anomalies: null`.
 
 ## Data Contract
 

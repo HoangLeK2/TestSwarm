@@ -22,8 +22,10 @@ from api.deps import _get_current_user, _get_db
 from api.routes.executions import router as executions_router
 from db.crud.execution_dlq import create_dlq_entry
 from db.database import Base
+from db.models.campaign import Campaign
 from db.models.device import Device
 from db.models.execution import Execution
+from tenancy.context import set_current_org_id, tenant_context
 
 
 @pytest_asyncio.fixture
@@ -40,7 +42,12 @@ async def session_factory(engine):
     return async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
 
-def _build_app(session_factory, user_id: str = "u1") -> FastAPI:
+def _build_app(
+    session_factory,
+    user_id: str = "u1",
+    *,
+    org_role: str = "member",
+) -> FastAPI:
     app = FastAPI()
     app.include_router(executions_router, prefix="/api")
 
@@ -49,7 +56,14 @@ def _build_app(session_factory, user_id: str = "u1") -> FastAPI:
             yield s
 
     async def _user_override():
-        return SimpleNamespace(id=user_id, role="user", is_active=True)
+        set_current_org_id("org-1")
+        return SimpleNamespace(
+            id=user_id,
+            role="operator",
+            org_role=org_role,
+            is_active=True,
+            org_id="org-1",
+        )
 
     app.dependency_overrides[_get_db] = _db_override
     app.dependency_overrides[_get_current_user] = _user_override
@@ -58,16 +72,27 @@ def _build_app(session_factory, user_id: str = "u1") -> FastAPI:
 
 async def _seed(session_factory, exec_id: str, campaign_id: str, user_id: str = "u1"):
     async with session_factory() as s:
-        s.add(
-            Execution(
-                id=exec_id,
-                run_type="campaign_run",
-                status="failed",
-                campaign_id=campaign_id,
-                user_id=user_id,
-                created_at=datetime.now(timezone.utc),
+        with tenant_context("org-1"):
+            if campaign_id is not None and await s.get(Campaign, campaign_id) is None:
+                s.add(
+                    Campaign(
+                        id=campaign_id,
+                        name=campaign_id,
+                        user_id=user_id,
+                        org_id="org-1",
+                        created_at=datetime.now(timezone.utc),
+                    )
+                )
+            s.add(
+                Execution(
+                    id=exec_id,
+                    run_type="campaign_run",
+                    status="failed",
+                    campaign_id=campaign_id,
+                    user_id=user_id,
+                    created_at=datetime.now(timezone.utc),
+                )
             )
-        )
         await s.commit()
 
 
@@ -84,6 +109,7 @@ async def _seed_device(session_factory, serial: str, user_id: str = "u1", *, las
                 id=f"dev-{serial}",
                 serial=serial,
                 user_id=user_id,
+                org_id="org-1",
                 last_seen=last_seen,
             )
         )
@@ -197,7 +223,7 @@ async def test_dlq_summary_alerts_when_pending_count_exceeds_threshold(session_f
 
 def _build_app_with_temporal(session_factory, temporal_client, user_id: str = "u1") -> FastAPI:
     """Variant that attaches a fake scheduler holding a Temporal client (or None)."""
-    app = _build_app(session_factory, user_id=user_id)
+    app = _build_app(session_factory, user_id=user_id, org_role="owner")
     fake_scheduler = SimpleNamespace(_client=temporal_client, _cfg=None)
     app.state.scheduler = fake_scheduler
     return app

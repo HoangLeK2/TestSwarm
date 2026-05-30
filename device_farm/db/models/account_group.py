@@ -15,10 +15,11 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.database import Base
+from tenancy.models import TenantScopedModel
 from .utils import _now, _uuid
 
 
-class AccountGroup(Base):
+class AccountGroup(TenantScopedModel, Base):
     """Logical pool of accounts used for per-device rotation within a scenario run.
 
     `rotation_cursor` is bumped atomically inside `pick_next_batch`
@@ -61,7 +62,7 @@ class AccountGroup(Base):
         )
 
 
-class AccountGroupMember(Base):
+class AccountGroupMember(TenantScopedModel, Base):
     """Link row between `account_groups` and `accounts`.
 
     `position` is preserved by CRUD so round-robin walks members in insertion

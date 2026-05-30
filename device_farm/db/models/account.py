@@ -18,22 +18,19 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.database import Base
-from .enums import AccountStatus
+from tenancy.models import TenantScopedModel
+from .enums import AccountState, AccountStatus
 from .utils import _now, _uuid
 
 
-class Account(Base):
+class Account(TenantScopedModel, Base):
     """
     Social media account managed by Device Farm.
 
     Passwords are stored Fernet-encrypted when ACCOUNT_ENCRYPTION_KEY env var is set.
     In dev mode (no key) passwords are stored in plaintext.
 
-    Status state machine:
-        active ↔ cooldown  (auto via usage limit / background reset)
-        active → banned    (manual or auto-detect)
-        active → disabled  (manual)
-        banned/disabled → active  (manual reset)
+    Lifecycle FSM (DF-T-07-005) — canonical field ``state``; ``status`` kept in sync.
     """
 
     __tablename__ = "accounts"
@@ -41,6 +38,7 @@ class Account(Base):
         UniqueConstraint("platform", "username", name="uq_accounts_platform_username"),
         Index("idx_accounts_platform", "platform"),
         Index("idx_accounts_status", "status"),
+        Index("idx_accounts_state", "state"),
         Index("idx_accounts_user_id", "user_id"),
     )
 
@@ -49,9 +47,13 @@ class Account(Base):
     username: Mapped[str] = mapped_column(String(255), nullable=False)
     password_encrypted: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     display_name: Mapped[str] = mapped_column(String(255), default="")
-    status: Mapped[str] = mapped_column(String(20), default=AccountStatus.ACTIVE)
+    status: Mapped[str] = mapped_column(String(20), default=AccountState.ACTIVE)
+    state: Mapped[str] = mapped_column(String(20), default=AccountState.ACTIVE)
+    state_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    state_changed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
-    # Cooldown: set by account_manager when daily usage limit is hit.
     cooldown_until: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -89,7 +91,10 @@ class Account(Base):
     )
 
     def __repr__(self) -> str:  # pragma: no cover
-        return f"<Account {self.platform}:{self.username!r} status={self.status!r}>"
+        return (
+            f"<Account {self.platform}:{self.username!r} "
+            f"state={self.state!r} status={self.status!r}>"
+        )
 
 
 class DeviceAccount(Base):

@@ -2,6 +2,7 @@
 import React from 'react';
 import { ActiveThemeProvider } from '../active-theme';
 import { AuthProvider } from '@/features/auth/providers/auth-provider';
+import { PermissionProvider } from '@/features/auth/providers/permission-provider';
 import { QueryProvider } from '@/providers/query-provider';
 import { NuqsAdapter } from 'nuqs/adapters/next/app';
 import { Toaster } from '../ui/sonner';
@@ -20,12 +21,14 @@ export default function Providers({
       <ModalProvider>
         <ActiveThemeProvider initialTheme={activeThemeValue}>
           <AuthProvider>
-            <NuqsAdapter>
-              <OrganizationProvider>
-                <Toaster duration={3000} position='top-right' />
-                {children}
-              </OrganizationProvider>
-            </NuqsAdapter>
+            <PermissionProvider>
+              <NuqsAdapter>
+                <OrganizationProvider>
+                  <Toaster duration={3000} position='top-right' />
+                  {children}
+                </OrganizationProvider>
+              </NuqsAdapter>
+            </PermissionProvider>
           </AuthProvider>
         </ActiveThemeProvider>
       </ModalProvider>

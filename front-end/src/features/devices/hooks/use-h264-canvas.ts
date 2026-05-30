@@ -324,7 +324,15 @@ export function useH264Video(
         everDisconnectedRef.current = true;
         return;
       }
-      if (!everDisconnectedRef.current) return; // initial connect — no reset
+      if (!everDisconnectedRef.current) {
+        // Initial connect after mount: requestIdr on mount may have raced an
+        // opening socket (common on client-side navigation). Prime the stream now.
+        const s = serialRef.current;
+        if (s) {
+          setTimeout(() => requestIdr(s, 0), 50);
+        }
+        return;
+      }
       everDisconnectedRef.current = false;
       const w = workerRef.current;
       const s = serialRef.current;

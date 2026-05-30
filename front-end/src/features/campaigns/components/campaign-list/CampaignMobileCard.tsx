@@ -1,0 +1,64 @@
+'use client';
+
+import { formatDistanceToNow } from 'date-fns';
+import { vi } from 'date-fns/locale';
+import { Badge } from '@/components/ui/badge';
+import type { CampaignOut, CampaignStatus } from '../../types';
+import { CampaignSetupCell } from './CampaignSetupCell';
+import { CampaignRowActions } from './CampaignRowActions';
+import { CampaignRunStats } from './CampaignRunStats';
+
+export function CampaignMobileCard({
+  campaign,
+  statusLabel,
+  statusVariant
+}: {
+  campaign: CampaignOut;
+  statusLabel: Record<CampaignStatus, string>;
+  statusVariant: Record<
+    CampaignStatus,
+    'secondary' | 'default' | 'outline' | 'destructive'
+  >;
+}) {
+  const description = (campaign.description ?? '').trim();
+
+  return (
+    <article className='rounded-xl border border-border bg-card p-3 shadow-sm'>
+      <div className='flex items-start justify-between gap-2'>
+        <div className='min-w-0 flex-1'>
+          <h3 className='truncate text-sm font-semibold leading-snug'>
+            {campaign.name}
+          </h3>
+          {description ? (
+            <p className='mt-0.5 line-clamp-2 text-[11px] text-muted-foreground'>
+              {description}
+            </p>
+          ) : null}
+        </div>
+        <Badge
+          variant={statusVariant[campaign.status]}
+          className='shrink-0 text-[10px]'
+        >
+          {statusLabel[campaign.status]}
+        </Badge>
+      </div>
+
+      <div className='mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground'>
+        <span>
+          {formatDistanceToNow(new Date(campaign.created_at), {
+            addSuffix: true,
+            locale: vi
+          })}
+        </span>
+        <CampaignRunStats campaignId={campaign.id} />
+      </div>
+
+      <div className='mt-3 space-y-3 [&_[class*="max-w"]]:max-w-none'>
+        <CampaignSetupCell campaign={campaign} />
+        <div className='border-t border-border/60 pt-3'>
+          <CampaignRowActions campaign={campaign} layout='stacked' />
+        </div>
+      </div>
+    </article>
+  );
+}

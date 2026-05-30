@@ -95,8 +95,20 @@ async def test_stale_offline_device_dlq_entries_are_auto_dismissed(session):
     recent_seen = datetime.now(timezone.utc) - timedelta(minutes=1)
     session.add_all(
         [
-            Device(id="dev-old", serial="serial-old", user_id="u1", last_seen=old_seen),
-            Device(id="dev-new", serial="serial-new", user_id="u1", last_seen=recent_seen),
+            Device(
+                id="dev-old",
+                serial="serial-old",
+                user_id="u1",
+                org_id="org-1",
+                last_seen=old_seen,
+            ),
+            Device(
+                id="dev-new",
+                serial="serial-new",
+                user_id="u1",
+                org_id="org-1",
+                last_seen=recent_seen,
+            ),
         ]
     )
     await _seed_execution(session, "exec-old", "camp-A")
@@ -146,8 +158,20 @@ async def test_stale_offline_dlq_auto_dismiss_runs_for_all_users_with_pending(se
     old_seen = datetime.now(timezone.utc) - timedelta(minutes=30)
     session.add_all(
         [
-            Device(id="dev-u1", serial="serial-u1", user_id="u1", last_seen=old_seen),
-            Device(id="dev-u2", serial="serial-u2", user_id="u2", last_seen=old_seen),
+            Device(
+                id="dev-u1",
+                serial="serial-u1",
+                user_id="u1",
+                org_id="org-1",
+                last_seen=old_seen,
+            ),
+            Device(
+                id="dev-u2",
+                serial="serial-u2",
+                user_id="u2",
+                org_id="org-2",
+                last_seen=old_seen,
+            ),
         ]
     )
     await _seed_execution(session, "exec-u1", "camp-1", user_id="u1")

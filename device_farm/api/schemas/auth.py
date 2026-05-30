@@ -6,6 +6,7 @@ class RegisterRequest(BaseModel):
     name: str
     password: str
     role: str = "operator"
+    inviteToken: str | None = None
 
 
 class LoginRequest(BaseModel):
@@ -29,3 +30,4 @@ class UserOut(BaseModel):
     name: str
     role: str
     api_key: str
+    orgRole: str | None = None

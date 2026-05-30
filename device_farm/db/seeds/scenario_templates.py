@@ -32,7 +32,6 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
 
     {
         "name": "Crawl bài viết + bình luận 1 nhóm Facebook",
-        "is_builtin": False,
         "category": "facebook",
         "description": (
             "Crawl bài viết + bình luận 1 nhóm Facebook liên tục (mặc định MAX_SCROLLS=540 ≈ 3h). "
@@ -181,7 +180,6 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
 
     {
         "name": "Crawl bài viết + bình luận 5 profile Facebook (cá nhân)",
-        "is_builtin": False,
         "category": "facebook",
         "description": (
             "Lần lượt crawl timeline 5 profile cá nhân: mỗi vòng lặp tìm kiếm → tab Mọi người/People → "
@@ -426,7 +424,6 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
     {
         "name": "fb_group_1h",
         "display_name": "Crawl nhóm Facebook (~1 giờ)",
-        "is_builtin": False,
         "category": "facebook",
         "description": (
             "Crawl bài viết + bình luận 1 nhóm Facebook liên tục (mặc định MAX_SCROLLS=540 ≈ 3h). "
@@ -592,7 +589,6 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
 
     {
         "name": "craw fb",
-        "is_builtin": False,
         "category": "facebook",
         "description": (
             "Crawl bài viết + bình luận 1 nhóm Facebook. Mặc định dùng biến global group_name. "
@@ -791,8 +787,7 @@ async def seed_builtin_templates(db) -> int:
             )
             changed += 1
         else:
-            # Always sync ALL code-managed templates from BUILTIN_TEMPLATES.
-            # This includes is_builtin=False templates (like fb_group_1h) so step/variable
+            # Always sync ALL code-managed templates from BUILTIN_TEMPLATES so step/variable
             # changes in code are reflected in DB on every restart.
             await update_template(
                 db,

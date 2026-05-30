@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.scenario_template import ScenarioTemplate
@@ -58,15 +58,26 @@ async def list_templates(
     db: AsyncSession,
     category: str | None = None,
     tags: str | None = None,
+    *,
+    user_ids: list[str] | None = None,
 ) -> list[ScenarioTemplate]:
     q = select(ScenarioTemplate).order_by(ScenarioTemplate.created_at.desc())
+    if user_ids is not None:
+        cleaned = [uid for uid in user_ids if uid]
+        visibility = [
+            ScenarioTemplate.is_builtin.is_(True),
+            # System-seeded templates have no owner but must be visible org-wide.
+            ScenarioTemplate.user_id.is_(None),
+        ]
+        if cleaned:
+            visibility.append(ScenarioTemplate.user_id.in_(cleaned))
+        q = q.where(or_(*visibility))
     if category:
         q = q.where(ScenarioTemplate.category == category)
     if tags:
         # tags is comma-separated; filter templates that contain ANY given tag
         tag_list = [t.strip() for t in tags.split(",") if t.strip()]
         if tag_list:
-            from sqlalchemy import or_
             q = q.where(
                 or_(*[ScenarioTemplate.tags.ilike(f"%{tag}%") for tag in tag_list])
             )

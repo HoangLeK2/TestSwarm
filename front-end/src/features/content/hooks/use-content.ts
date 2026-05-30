@@ -8,12 +8,15 @@ import {
   type ContentListResponse,
   type ContentStats
 } from '../services/api';
+import { useOrganization } from '@/features/organization/hooks/use-organization';
 
 export function useContent(
   initialFilters?: ContentFilters,
   opts?: { pageSize?: number }
 ) {
   const pageSize = Math.max(1, Math.min(500, opts?.pageSize ?? 50));
+  const { currentOrg } = useOrganization();
+  const currentOrgId = currentOrg?.id ?? null;
   const [items, setItems] = useState<ContentItem[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
@@ -51,8 +54,9 @@ export function useContent(
   );
 
   useEffect(() => {
+    if (!currentOrgId) return;
     load(filters, page);
-  }, [filters, page, load]);
+  }, [filters, page, load, currentOrgId]);
 
   const applyFilters = useCallback((f: ContentFilters) => {
     setFilters(f);
@@ -86,15 +90,18 @@ export function useContent(
 export function useContentStats() {
   const [stats, setStats] = useState<ContentStats | null>(null);
   const [loading, setLoading] = useState(false);
+  const { currentOrg } = useOrganization();
+  const currentOrgId = currentOrg?.id ?? null;
 
   useEffect(() => {
+    if (!currentOrgId) return;
     setLoading(true);
     contentApi
       .stats()
       .then(setStats)
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, []);
+  }, [currentOrgId]);
 
   return { stats, loading };
 }

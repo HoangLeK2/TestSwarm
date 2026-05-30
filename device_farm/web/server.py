@@ -37,6 +37,7 @@ from runtime.core import DeviceManager, TaskQueue
 from runtime.lifecycle import LifecycleManager, LifecyclePhase
 from common.session_lock import SessionLockStore
 from .ws import WebSocketManager, DeviceAgentSession, get_ws_user_id, heartbeat
+from .ws_lifecycle import DeviceLifecycleWsManager
 
 log = logging.getLogger(__name__)
 api_trace_log = importlib.import_module("structlog").get_logger("api_trace")
@@ -184,7 +185,7 @@ def create_app(
 
                 tick = 0
                 while True:
-                    await _aio.sleep(300)
+                    await _aio.sleep(60)
                     tick += 1
                     try:
                         await check_and_reset_cooldowns()
@@ -262,6 +263,14 @@ def create_app(
             try:
                 await init_db()
                 log.info("PostgreSQL connected and tables ready")
+                try:
+                    from db.database import AsyncSessionLocal
+                    from services.account_state import refresh_account_state_gauges
+
+                    async with AsyncSessionLocal() as _gauge_db:
+                        await refresh_account_state_gauges(_gauge_db)
+                except Exception as gauge_exc:
+                    log.debug("account_state gauge init skipped: %s", gauge_exc)
             except Exception as exc:  # noqa: BLE001
                 # Fail fast: continuing with a half-migrated schema causes opaque
                 # runtime 500s (e.g. UndefinedColumnError during campaign dispatch).
@@ -284,12 +293,51 @@ def create_app(
                 from sqlalchemy import text as _text
                 async with _AslRec() as _db:
                     await _db.execute(_text(
-                        "UPDATE relay_agents SET status='offline', disconnected_at=NOW() "
+                        "UPDATE relay_agents SET status='offline', disconnected_at=NOW(), serials='[]'::json "
                         "WHERE status='online'"
                     ))
                     await _db.commit()
             except Exception as _rec_exc:
                 log.warning("relay agent reconciliation failed (non-fatal): %s", _rec_exc)
+
+            try:
+                from services.device_state import start_agent_state_consumer
+
+                start_agent_state_consumer()
+            except Exception as fsm_exc:
+                log.warning("device FSM consumer start failed (non-fatal): %s", fsm_exc)
+
+            try:
+                from services.device_state.ws_publisher import publisher as lifecycle_publisher
+
+                lifecycle_publisher.set_event_loop(loop)
+                lifecycle_publisher.start()
+                _app.state.lifecycle_publisher = lifecycle_publisher
+                lifecycle.register_sync_resource(
+                    LifecyclePhase.EGRESS,
+                    "lifecycle-publisher",
+                    lifecycle_publisher.stop,
+                )
+            except Exception as pub_exc:
+                log.warning("device lifecycle WS publisher start failed (non-fatal): %s", pub_exc)
+
+            lifecycle.register_task(
+                LifecyclePhase.BACKGROUND,
+                "device-fsm-reconcile",
+                lambda: __import__(
+                    "services.device_state.reconcile",
+                    fromlist=["device_fsm_reconcile_loop"],
+                ).device_fsm_reconcile_loop(),
+            )
+
+            lifecycle.register_task(
+                LifecyclePhase.BACKGROUND,
+                "device-dead-detection",
+                lambda: __import__(
+                    "services.device_state.dead_detector",
+                    fromlist=["dead_detection_loop"],
+                ).dead_detection_loop(),
+            )
 
         # ── Redis shared state ──
         from services import redis_store
@@ -340,6 +388,18 @@ def create_app(
                 from temporal.worker import start_temporal_worker, get_temporal_client
                 temporal_client = await get_temporal_client(config.temporal)
                 temporal_threads = start_temporal_worker(manager, config.temporal, queue=queue)
+                try:
+                    from services.account_state import ensure_account_cooldown_schedule
+
+                    await ensure_account_cooldown_schedule(
+                        temporal_client,
+                        task_queue=config.temporal.task_queue,
+                    )
+                except Exception as sched_exc:
+                    log.warning(
+                        "Account cooldown Temporal schedule registration failed: %s",
+                        sched_exc,
+                    )
             except Exception as exc:
                 log.warning("Temporal worker failed to start: %s — campaign execution will be unavailable", exc)
         else:
@@ -376,32 +436,7 @@ def create_app(
                 )
                 log.info("ADB relay WebSocket server ready on /relay-agent (main port %d)", config.web.port)
 
-                # ── gRPC relay server (HTTP/2 multiplexing for 100+ phones) ──
-                try:
-                    from runtime.transports.grpc_relay_server import start_grpc_server
-                    grpc_port = getattr(config.relay, "port", 50051)
-                    grpc_server = await start_grpc_server(
-                        relay_manager,
-                        api_key=config.relay.api_key or None,
-                        port=grpc_port,
-                        tls_cert_file=getattr(config.relay, "tls_cert_file", ""),
-                        tls_key_file=getattr(config.relay, "tls_key_file", ""),
-                        allow_insecure=bool(getattr(config.relay, "allow_insecure_grpc", True)),
-                    )
-                    _app.state.grpc_server = grpc_server
-                    log.info("gRPC relay server ready on port %d", grpc_port)
-
-                    async def _stop_grpc() -> None:
-                        try:
-                            await grpc_server.stop(grace=5)
-                        except Exception as exc:
-                            log.warning("gRPC relay stop error: %s", exc)
-
-                    lifecycle.register_resource(
-                        LifecyclePhase.TRANSPORT, "grpc_relay", _stop_grpc,
-                    )
-                except Exception as grpc_exc:
-                    log.warning("gRPC relay server failed to start (WS fallback active): %s", grpc_exc)
+                # gRPC relay starts after FSM/relay callbacks are wired (see below).
 
                 # ── Persistence callbacks for AgentControlServicer ─────────────
                 if config.database.enabled:
@@ -409,6 +444,7 @@ def create_app(
                         from runtime.transports.agent_control_servicer import get_control_servicer
                         from db import crud as _ctrl_repo
                         from db.database import AsyncSessionLocal as _AslCtrl
+                        from tenancy.context import tenant_context
 
                         def _relay_ownership_required() -> bool:
                             raw = os.getenv("RELAY_AGENT_OWNERSHIP_REQUIRED", "").strip().lower()
@@ -419,6 +455,7 @@ def create_app(
                         async def _on_ctrl_register(payload: dict) -> bool:
                             async with _AslCtrl() as _db:
                                 try:
+                                    org_id: str | None = None
                                     enrollment_token = str(payload.pop("enrollment_token", "") or "").strip()
                                     if not enrollment_token:
                                         if _relay_ownership_required():
@@ -427,19 +464,39 @@ def create_app(
                                                 payload.get("relay_id", ""),
                                             )
                                             return False
+                                        org_id = await _ctrl_repo.lookup_relay_agent_org_id(
+                                            _db, str(payload.get("relay_id", ""))
+                                        )
+                                        if not org_id:
+                                            log.warning(
+                                                "relay register rejected: no org for relay_id=%s "
+                                                "(enrollment token required for new relays)",
+                                                payload.get("relay_id", ""),
+                                            )
+                                            return False
                                     else:
-                                        token_row = await _ctrl_repo.resolve_relay_agent_token(_db, enrollment_token)
-                                        if token_row is None:
+                                        identity = await _ctrl_repo.lookup_relay_token_enrollment(
+                                            _db, enrollment_token
+                                        )
+                                        if identity is None:
                                             log.warning(
                                                 "relay register rejected: invalid enrollment token relay_id=%s",
                                                 payload.get("relay_id", ""),
                                             )
                                             return False
-                                        payload["user_id"] = token_row.user_id
-                                        payload["enrollment_token_id"] = token_row.id
+                                        org_id, user_id, token_id = identity
+                                        payload["user_id"] = user_id
+                                        payload["enrollment_token_id"] = token_id
 
-                                    await _ctrl_repo.upsert_relay_agent(_db, **payload)
-                                    await _db.commit()
+                                    with tenant_context(org_id):
+                                        if enrollment_token:
+                                            await _ctrl_repo.resolve_relay_agent_token(
+                                                _db, enrollment_token
+                                            )
+                                        await _ctrl_repo.upsert_relay_agent(
+                                            _db, org_id=org_id, **payload
+                                        )
+                                        await _db.commit()
                                     return True
                                 except Exception as _exc:
                                     await _db.rollback()
@@ -447,10 +504,15 @@ def create_app(
                                     return False
 
                         async def _on_ctrl_heartbeat(payload: dict) -> None:
+                            relay_id = str(payload.get("relay_id", ""))
                             async with _AslCtrl() as _db:
                                 try:
-                                    await _ctrl_repo.update_relay_heartbeat(_db, **payload)
-                                    await _db.commit()
+                                    org_id = await _ctrl_repo.lookup_relay_agent_org_id(_db, relay_id)
+                                    if not org_id:
+                                        return
+                                    with tenant_context(org_id):
+                                        await _ctrl_repo.update_relay_heartbeat(_db, **payload)
+                                        await _db.commit()
                                 except Exception as _exc:
                                     await _db.rollback()
                                     log.debug("relay heartbeat update failed: %s", _exc)
@@ -458,8 +520,12 @@ def create_app(
                         async def _on_ctrl_offline(relay_id: str) -> None:
                             async with _AslCtrl() as _db:
                                 try:
-                                    await _ctrl_repo.mark_relay_offline(_db, relay_id)
-                                    await _db.commit()
+                                    org_id = await _ctrl_repo.lookup_relay_agent_org_id(_db, relay_id)
+                                    if not org_id:
+                                        return
+                                    with tenant_context(org_id):
+                                        await _ctrl_repo.mark_relay_offline(_db, relay_id)
+                                        await _db.commit()
                                 except Exception as _exc:
                                     await _db.rollback()
                                     log.warning("relay offline mark failed: %s", _exc)
@@ -522,7 +588,95 @@ def create_app(
                         )
                         return True
 
+                def _schedule_relay_fsm(coro) -> None:
+                    ml = getattr(_app.state, "main_loop", None)
+                    if ml is None:
+                        log.debug("relay FSM schedule skipped: main_loop unset")
+                        return
+                    try:
+                        running = asyncio.get_running_loop()
+                    except RuntimeError:
+                        running = None
+                    try:
+                        if running is ml:
+                            asyncio.create_task(coro)
+                        else:
+                            asyncio.run_coroutine_threadsafe(coro, ml)
+                    except Exception as exc:
+                        log.warning("relay FSM schedule failed: %s", exc)
+
+                async def _run_relay_fsm_online(
+                    relay_serial: str,
+                    *,
+                    logical_serial: str | None = None,
+                    hardware_serial: str | None = None,
+                ) -> None:
+                    from services.device_state.relay_bridge import apply_relay_online
+
+                    try:
+                        await apply_relay_online(
+                            relay_serial,
+                            logical_serial=logical_serial,
+                            hardware_serial=hardware_serial,
+                        )
+                    except Exception as exc:
+                        log.warning(
+                            "relay FSM online failed serial=%s: %s",
+                            relay_serial,
+                            exc,
+                        )
+
+                async def _run_relay_fsm_offline(
+                    relay_serial: str,
+                    *,
+                    logical_serial: str | None = None,
+                    hardware_serial: str | None = None,
+                ) -> None:
+                    from services.device_state.relay_bridge import apply_relay_offline
+
+                    try:
+                        await apply_relay_offline(
+                            relay_serial,
+                            logical_serial=logical_serial,
+                            hardware_serial=hardware_serial,
+                        )
+                    except Exception as exc:
+                        log.warning(
+                            "relay FSM offline failed serial=%s: %s",
+                            relay_serial,
+                            exc,
+                        )
+
+                def _emit_relay_fsm_online(
+                    relay_serial: str,
+                    *,
+                    logical_serial: str | None = None,
+                    hardware_serial: str | None = None,
+                ) -> None:
+                    _schedule_relay_fsm(
+                        _run_relay_fsm_online(
+                            relay_serial,
+                            logical_serial=logical_serial,
+                            hardware_serial=hardware_serial,
+                        )
+                    )
+
+                def _emit_relay_fsm_offline(
+                    relay_serial: str,
+                    *,
+                    logical_serial: str | None = None,
+                    hardware_serial: str | None = None,
+                ) -> None:
+                    _schedule_relay_fsm(
+                        _run_relay_fsm_offline(
+                            relay_serial,
+                            logical_serial=logical_serial,
+                            hardware_serial=hardware_serial,
+                        )
+                    )
+
                 def _on_relay_device_online(serial: str) -> None:
+                    _emit_relay_fsm_online(serial)
                     device_ip = serial.rsplit(":", 1)[0] if ":" in serial else serial
                     # Check if a WS-Agent device already exists for this IP.
                     # If so, reattach scrcpy for it (relay reconnect case).
@@ -649,6 +803,9 @@ def create_app(
                             serial,
                         )
 
+                def _on_relay_device_offline(serial: str) -> None:
+                    _emit_relay_fsm_offline(serial)
+
                 def _on_relay_capabilities_update(serial: str, caps: dict) -> None:
                     """Propagate relay heartbeat capabilities to DeviceClient metadata."""
                     device = _manager_ref.get_device(serial)
@@ -662,9 +819,58 @@ def create_app(
                         "screen_height":caps.get("screen_height", 0),
                         "state":        "READY",
                     })
+                    hw = str(caps.get("hardware_serial") or "").strip()
+                    if hw and (":" in serial or serial != hw):
+                        _emit_relay_fsm_online(serial, hardware_serial=hw)
 
                 relay_manager.set_on_device_online(_on_relay_device_online)
+                relay_manager.set_on_device_offline(_on_relay_device_offline)
                 relay_manager.set_on_capabilities_update(_on_relay_capabilities_update)
+
+                # ── gRPC relay server (after callbacks — avoids missed register events) ──
+                try:
+                    from runtime.transports.grpc_relay_server import start_grpc_server
+                    grpc_port = getattr(config.relay, "port", 50051)
+                    grpc_server = await start_grpc_server(
+                        relay_manager,
+                        api_key=config.relay.api_key or None,
+                        port=grpc_port,
+                        tls_cert_file=getattr(config.relay, "tls_cert_file", ""),
+                        tls_key_file=getattr(config.relay, "tls_key_file", ""),
+                        allow_insecure=bool(getattr(config.relay, "allow_insecure_grpc", True)),
+                    )
+                    _app.state.grpc_server = grpc_server
+                    log.info("gRPC relay server ready on port %d", grpc_port)
+
+                    async def _stop_grpc() -> None:
+                        try:
+                            await grpc_server.stop(grace=5)
+                        except Exception as exc:
+                            log.warning("gRPC relay stop error: %s", exc)
+
+                    lifecycle.register_resource(
+                        LifecyclePhase.TRANSPORT, "grpc_relay", _stop_grpc,
+                    )
+                except Exception as grpc_exc:
+                    log.warning("gRPC relay server failed to start (WS fallback active): %s", grpc_exc)
+
+                async def _bootstrap_relay_fsm_states() -> None:
+                    await asyncio.sleep(3.0)
+                    from services.device_state.relay_bridge import apply_relay_online
+
+                    for serial in relay_manager.list_online_serials():
+                        caps = relay_manager.get_capabilities(serial) or {}
+                        hw = str(caps.get("hardware_serial") or "").strip() or None
+                        try:
+                            await apply_relay_online(serial, hardware_serial=hw)
+                        except Exception as exc:
+                            log.warning(
+                                "relay FSM bootstrap failed serial=%s: %s",
+                                serial,
+                                exc,
+                            )
+
+                _schedule_relay_fsm(_bootstrap_relay_fsm_states())
             except Exception as exc:
                 log.warning("ADB relay WebSocket server failed to start: %s", exc)
 
@@ -743,6 +949,10 @@ def create_app(
         allow_headers=["*"],
         allow_credentials=False if cors_allow_all else bool(cors_allowed_origins),
     )
+    if db_enabled:
+        from services.user_action_audit import UserActionAuditMiddleware
+
+        app.add_middleware(UserActionAuditMiddleware)
     app.add_middleware(RequestLogMiddleware)
 
     # Observe-only / low-bandwidth gates. Toggled via config.safe_mode or
@@ -853,6 +1063,15 @@ def create_app(
         read_only=config.safe_mode.read_only,
     )
     app.state.ws_manager = ws_manager
+    lifecycle_ws_manager = DeviceLifecycleWsManager()
+    app.state.lifecycle_ws_manager = lifecycle_ws_manager
+    if db_enabled:
+        try:
+            from services.device_state.ws_publisher import publisher as lifecycle_publisher
+
+            lifecycle_ws_manager.bind_publisher(lifecycle_publisher)
+        except Exception as exc:
+            log.warning("lifecycle WS publisher bind failed: %s", exc)
     if event_recorder is not None:
         ws_manager.bind_event_recorder(event_recorder)
     if db_enabled:
@@ -879,6 +1098,13 @@ def create_app(
         if db_enabled:
             user_id = await get_ws_user_id(ws)
         await ws_manager.connect(ws, user_id=user_id)
+
+    @app.websocket("/ws/lifecycle")
+    async def lifecycle_websocket_endpoint(ws: WebSocket):
+        if not db_enabled:
+            await ws.close(code=4503, reason="lifecycle stream requires database mode")
+            return
+        await lifecycle_ws_manager.connect(ws)
 
     @app.websocket("/device-agent")
     async def device_agent_endpoint(ws: WebSocket):

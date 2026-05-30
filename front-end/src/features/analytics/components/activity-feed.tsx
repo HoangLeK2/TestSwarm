@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   Clock,
   Loader2,
+  MousePointerClick,
   PlayCircle,
   Smartphone,
   Wifi,
@@ -42,7 +43,23 @@ const ACTION_LABEL_KEY: Record<string, string> = {
   'schedule.triggered': 'schedule_triggered'
 };
 
+const USER_OPERATION_LABEL_KEY: Record<string, string> = {
+  '/api/devices/{serial}/interrupt': 'device_interrupt',
+  '/api/devices/{serial}/scrcpy/attach': 'device_screen_attach',
+  '/api/devices/{serial}/scrcpy/detach': 'device_screen_detach',
+  '/api/devices/{device_id}/bootstrap': 'device_bootstrap',
+  '/api/devices/{device_id}/restart-u2': 'device_restart_u2',
+  '/api/devices/{device_id}/restart-atx': 'device_restart_atx',
+  '/api/devices/{device_id}/restart-scrcpy': 'device_restart_scrcpy',
+  '/api/campaigns/{campaign_id}/pause': 'campaign_pause',
+  '/api/campaigns/{campaign_id}/resume': 'campaign_resume',
+  '/api/campaigns/{campaign_id}/cancel': 'campaign_cancel',
+  '/api/schedules/{schedule_id}/run-now': 'schedule_run_now',
+  '/api/schedules/{schedule_id}/toggle': 'schedule_toggle'
+};
+
 function actionTone(action: string) {
+  if (action.startsWith('user.')) return 'text-sky-500';
   if (
     action.endsWith('.failed') ||
     action === 'device.disconnect' ||
@@ -72,6 +89,9 @@ function formatDate(value: string, locale: string) {
 }
 
 function getActionLabel(action: string, t: ReturnType<typeof useTranslations>) {
+  if (action.startsWith('user.')) {
+    return t('actionLabels.user_action');
+  }
   const labelKey = ACTION_LABEL_KEY[action];
   if (labelKey) {
     return t(`actionLabels.${labelKey}` as 'actionLabels.device_connect');
@@ -88,6 +108,42 @@ function getReasonLabel(reason: string, t: ReturnType<typeof useTranslations>) {
   if (reason.startsWith('ws_closed')) return t('reasonLabels.ws_closed');
   if (reason.startsWith('ws_error')) return t('reasonLabels.ws_error');
   return reason;
+}
+
+function nestedString(value: unknown, key: string) {
+  if (!value || typeof value !== 'object') return '';
+  const record = value as Record<string, unknown>;
+  const child = record[key];
+  return typeof child === 'string' ? child : '';
+}
+
+function getUserOperationLabel(
+  item: ActivityLogItem,
+  t: ReturnType<typeof useTranslations>
+) {
+  const route = item.route_template ?? '';
+  const labelKey = USER_OPERATION_LABEL_KEY[route];
+  if (labelKey) {
+    return t(`operationLabels.${labelKey}` as 'operationLabels.device_interrupt');
+  }
+  return t('operationLabels.generic');
+}
+
+function getOutcomeLabel(
+  outcome: string | null | undefined,
+  t: ReturnType<typeof useTranslations>
+) {
+  if (outcome === 'success') return t('outcomeLabels.success');
+  if (outcome === 'rejected') return t('outcomeLabels.rejected');
+  if (outcome === 'error') return t('outcomeLabels.error');
+  return '';
+}
+
+function formatDurationMs(ms: number, t: ReturnType<typeof useTranslations>) {
+  if (ms >= 1000) {
+    return t('duration', { seconds: Math.round(ms / 1000) });
+  }
+  return t('durationMs', { ms });
 }
 
 function getActivityTitle(
@@ -108,6 +164,9 @@ function getActivityTitle(
     serial ||
     t('unknownDevice');
   const taskName = String(details.name ?? t('task'));
+  if (item.action.startsWith('user.')) {
+    return getUserOperationLabel(item, t);
+  }
 
   switch (item.action) {
     case 'device.connect':
@@ -131,11 +190,48 @@ function getActivityTitle(
   }
 }
 
+function resolveDeviceDisplay(item: ActivityLogItem): string {
+  if (item.device_display?.trim()) return item.device_display.trim();
+  const details = item.details ?? {};
+  const stored = details.device_label;
+  if (typeof stored === 'string' && stored.trim()) return stored.trim();
+  if (item.device_serial?.trim()) return item.device_serial.trim();
+  const pathParams = details.path_params;
+  const serial = nestedString(pathParams, 'serial');
+  if (serial) return serial;
+  return '';
+}
+
 function getActivityDescription(
   item: ActivityLogItem,
   t: ReturnType<typeof useTranslations>
 ) {
   const details = item.details ?? {};
+  if (item.action.startsWith('user.')) {
+    const parts = [];
+    const deviceLabel = resolveDeviceDisplay(item);
+    const pathParams = details.path_params;
+    const hasDeviceRef = Boolean(
+      nestedString(pathParams, 'serial') ||
+        nestedString(pathParams, 'device_id') ||
+        item.device_serial ||
+        item.entity_id
+    );
+    const outcome = getOutcomeLabel(item.outcome, t);
+    if (deviceLabel) {
+      parts.push(t('deviceLine', { device: deviceLabel }));
+    } else if (hasDeviceRef) {
+      parts.push(t('deviceLine', { device: t('unknownDevice') }));
+    }
+    if (item.user_name?.trim()) {
+      parts.push(t('performedBy', { user: item.user_name.trim() }));
+    }
+    if (outcome) parts.push(outcome);
+    if (typeof item.duration_ms === 'number') {
+      parts.push(formatDurationMs(item.duration_ms, t));
+    }
+    return parts.join(' · ');
+  }
   if (item.action === 'device.disconnect' || item.action === 'device.error') {
     const reason = getReasonLabel(String(details.reason ?? ''), t);
     if (item.device_serial) {
@@ -175,7 +271,9 @@ function ActivityRow({
 }) {
   const t = useTranslations('analyticsFeature.activity');
   const Icon =
-    ACTION_ICON[item.action as keyof typeof ACTION_ICON] ?? Smartphone;
+    item.action.startsWith('user.')
+      ? MousePointerClick
+      : ACTION_ICON[item.action as keyof typeof ACTION_ICON] ?? Smartphone;
   const description = getActivityDescription(item, t);
 
   return (
@@ -193,7 +291,7 @@ function ActivityRow({
           </Badge>
         </div>
         {description ? (
-          <p className='mt-1 break-all font-mono text-[11px] text-muted-foreground'>
+          <p className='mt-1 break-words text-[11px] text-muted-foreground'>
             {description}
           </p>
         ) : null}

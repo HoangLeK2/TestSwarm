@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# macOS Docker Desktop: start host ADB (all interfaces), then docker compose (pre-loaded image).
+# Host runs ADB (USB/Wi‑Fi devices); container is ADB client via host.docker.internal:5037.
+# Works on macOS (Docker Desktop) and Linux (Docker Engine + compose plugin).
 #
 # Usage:
 #   ./scripts/docker-up.sh
@@ -21,8 +22,33 @@ need_cmd() {
   fi
 }
 
+adb_port_listening() {
+  local port="$1"
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1
+    return
+  fi
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltn "sport = :$port" 2>/dev/null | grep -q LISTEN
+    return
+  fi
+  if command -v nc >/dev/null 2>&1; then
+    nc -z 127.0.0.1 "$port" >/dev/null 2>&1
+    return
+  fi
+  # Last resort: try connecting via adb itself.
+  adb -P "$port" get-state >/dev/null 2>&1
+}
+
 need_cmd adb
 need_cmd docker
+
+if ! docker info >/dev/null 2>&1; then
+  echo "error: Docker daemon is not running." >&2
+  echo "  macOS: open -a Docker   (wait until whale icon is steady)" >&2
+  echo "  then: docker info" >&2
+  exit 1
+fi
 
 if ! docker compose version >/dev/null 2>&1; then
   echo "error: docker compose (v2) is required" >&2
@@ -34,14 +60,14 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   exit 1
 fi
 
-if command -v lsof >/dev/null 2>&1 && lsof -nP -iTCP:"$ADB_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+if adb_port_listening "$ADB_PORT"; then
   echo "== ADB server already listening on port ${ADB_PORT} =="
 else
   echo "== Starting host ADB server (0.0.0.0:${ADB_PORT}) =="
   adb kill-server 2>/dev/null || true
   nohup adb -a -P "$ADB_PORT" nodaemon server >/tmp/agent-boot-adb-server.log 2>&1 &
   sleep 1
-  if ! lsof -nP -iTCP:"$ADB_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+  if ! adb_port_listening "$ADB_PORT"; then
     echo "error: ADB server did not start; see /tmp/agent-boot-adb-server.log" >&2
     exit 1
   fi
@@ -53,7 +79,7 @@ adb -P "$ADB_PORT" devices || true
 compose_subcommands=(up run build down ps logs exec pull stop restart config)
 
 if [[ $# -eq 0 ]]; then
-  set -- up --abort-on-container-exit
+  set -- up -d
 else
   is_subcommand=false
   for sub in "${compose_subcommands[@]}"; do

@@ -43,6 +43,8 @@ import { CreateGroupDialog } from './create-group-dialog';
 import { EditGroupDialog } from './edit-group-dialog';
 import { GroupMembersDialog } from './group-members-dialog';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
+import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
+import { Can } from '@/features/auth';
 
 export function AccountGroupsList() {
   const t = useTranslations('accountGroupsFeature');
@@ -60,6 +62,7 @@ export function AccountGroupsList() {
 
   const { data: groups, isLoading, error } = useAccountGroups();
   const deleteMutation = useDeleteAccountGroup();
+  const perms = useResourcePermissions('account-groups');
 
   const platforms = useMemo(() => {
     const set = new Set<string>();
@@ -132,7 +135,9 @@ export function AccountGroupsList() {
               </SelectContent>
             </Select>
             <div className='ml-auto'>
-              <CreateGroupDialog />
+              <Can object='account-groups' action='create'>
+                <CreateGroupDialog />
+              </Can>
             </div>
           </div>
 
@@ -146,7 +151,9 @@ export function AccountGroupsList() {
                 {t('emptyDescription')}
               </p>
               <div className='mt-6'>
-                <CreateGroupDialog />
+                <Can object='account-groups' action='create'>
+                  <CreateGroupDialog />
+                </Can>
               </div>
             </div>
           ) : (
@@ -206,33 +213,39 @@ export function AccountGroupsList() {
                       </TableCell>
                       <TableCell>
                         <div className='flex items-center justify-end gap-1'>
-                          <Button
-                            size='sm'
-                            variant='outline'
-                            className='h-7 px-2 text-xs'
-                            onClick={() => setManageTarget(g)}
-                          >
-                            <Users size={13} className='mr-1' />
-                            {t('manageMembers')}
-                          </Button>
-                          <Button
-                            size='icon'
-                            variant='ghost'
-                            className='size-7'
-                            title={t('edit')}
-                            onClick={() => setEditTarget(g)}
-                          >
-                            <Pencil size={13} />
-                          </Button>
-                          <Button
-                            size='icon'
-                            variant='ghost'
-                            className='size-7 text-destructive hover:text-destructive'
-                            title={t('delete')}
-                            onClick={() => setDeleteTarget(g)}
-                          >
-                            <Trash2 size={13} />
-                          </Button>
+                          {perms.canUpdate ? (
+                            <Button
+                              size='sm'
+                              variant='outline'
+                              className='h-7 px-2 text-xs'
+                              onClick={() => setManageTarget(g)}
+                            >
+                              <Users size={13} className='mr-1' />
+                              {t('manageMembers')}
+                            </Button>
+                          ) : null}
+                          {perms.canUpdate ? (
+                            <Button
+                              size='icon'
+                              variant='ghost'
+                              className='size-7'
+                              title={t('edit')}
+                              onClick={() => setEditTarget(g)}
+                            >
+                              <Pencil size={13} />
+                            </Button>
+                          ) : null}
+                          {perms.canDelete ? (
+                            <Button
+                              size='icon'
+                              variant='ghost'
+                              className='size-7 text-destructive hover:text-destructive'
+                              title={t('delete')}
+                              onClick={() => setDeleteTarget(g)}
+                            >
+                              <Trash2 size={13} />
+                            </Button>
+                          ) : null}
                         </div>
                       </TableCell>
                     </TableRow>

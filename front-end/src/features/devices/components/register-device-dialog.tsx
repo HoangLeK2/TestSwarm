@@ -35,6 +35,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
+import { invalidateDeviceFleetQueries } from '@/features/devices/hooks/use-devices';
 import {
   devicesApi,
   relayAgentsApi,
@@ -42,6 +43,7 @@ import {
 } from '@/features/devices/services/manage-api';
 import { getDeviceAgentWsUrl } from '@/lib/farm-api';
 import { useTranslations } from 'next-intl';
+import { getRelayConnectionState, isRelayOperational } from '../lib/relay-agent-status';
 import type {
   DeviceOut,
   RelayAgentOut
@@ -89,7 +91,8 @@ export function RegisterDeviceDialog({
   const relayDeviceChoices = useMemo<RelayDeviceChoice[]>(() => {
     const choices: RelayDeviceChoice[] = [];
     for (const agent of relayAgents) {
-      if (agent.status !== 'online') continue;
+      if (agent.live_connected === false) continue;
+      if (!isRelayOperational(getRelayConnectionState(agent))) continue;
       for (const serial of agent.serials) {
         if (
           !serial ||
@@ -177,7 +180,7 @@ export function RegisterDeviceDialog({
         stopPolling();
         setConnectedDevice(found);
         setStep('connected');
-        qc.invalidateQueries({ queryKey: ['devices'] });
+        invalidateDeviceFleetQueries(qc);
       } catch {
         // ignore transient errors
       }
@@ -204,7 +207,7 @@ export function RegisterDeviceDialog({
       setRegisteredDevice(device);
       qrOpenedAtRef.current = Date.now();
       setStep('qr');
-      qc.invalidateQueries({ queryKey: ['devices'] });
+      invalidateDeviceFleetQueries(qc);
       qc.invalidateQueries({ queryKey: ['relay-agents'] });
     } catch {
       toast.error(t('errorRegister'));

@@ -8,8 +8,10 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from db.crud.user import get_user_org_id
 from db.models.relay_agent import RelayAgent, RelayAgentToken
 from db.models.utils import _now, _uuid
+from tenancy.context import tenant_context
 
 
 RELAY_AGENT_TOKEN_PREFIX = "dfra_"
@@ -25,15 +27,56 @@ def hash_relay_agent_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+async def lookup_relay_agent_org_id(db: AsyncSession, relay_id: str) -> str | None:
+    """Resolve relay org without tenant context (gRPC/background paths)."""
+    table = RelayAgent.__table__
+    result = await db.execute(
+        select(table.c.org_id).where(table.c.relay_id == relay_id).limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def lookup_relay_token_enrollment(
+    db: AsyncSession,
+    raw_token: str,
+) -> tuple[str, str, str] | None:
+    """Return (org_id, user_id, token_id) for a valid enrollment token (unscoped)."""
+    token = (raw_token or "").strip()
+    if not token:
+        return None
+    table = RelayAgentToken.__table__
+    result = await db.execute(
+        select(table.c.org_id, table.c.user_id, table.c.id).where(
+            table.c.token_hash == hash_relay_agent_token(token),
+            table.c.status == "active",
+            table.c.revoked_at.is_(None),
+        ).limit(1)
+    )
+    row = result.first()
+    if row is None:
+        return None
+    org_id, user_id, token_id = row[0], row[1], row[2]
+    if not org_id:
+        org_id = await get_user_org_id(db, user_id)
+    if not org_id:
+        return None
+    return org_id, user_id, token_id
+
+
 async def create_relay_agent_token(
     db: AsyncSession,
     *,
     user_id: str,
     name: str,
+    org_id: str | None = None,
 ) -> tuple[str, RelayAgentToken]:
+    resolved_org_id = org_id or await get_user_org_id(db, user_id)
+    if not resolved_org_id:
+        raise ValueError("user has no organization for relay enrollment token")
     raw_token = generate_relay_agent_token()
     row = RelayAgentToken(
         id=_uuid(),
+        org_id=resolved_org_id,
         user_id=user_id,
         name=(name or "").strip(),
         token_hash=hash_relay_agent_token(raw_token),
@@ -56,22 +99,20 @@ async def list_relay_agent_tokens(db: AsyncSession, *, user_id: str) -> list[Rel
 
 
 async def resolve_relay_agent_token(db: AsyncSession, raw_token: str) -> Optional[RelayAgentToken]:
-    token = (raw_token or "").strip()
-    if not token:
+    identity = await lookup_relay_token_enrollment(db, raw_token)
+    if identity is None:
         return None
-    result = await db.execute(
-        select(RelayAgentToken).where(
-            RelayAgentToken.token_hash == hash_relay_agent_token(token),
-            RelayAgentToken.status == "active",
-            RelayAgentToken.revoked_at.is_(None),
+    org_id, _user_id, token_id = identity
+    with tenant_context(org_id):
+        result = await db.execute(
+            select(RelayAgentToken).where(RelayAgentToken.id == token_id)
         )
-    )
-    row = result.scalar_one_or_none()
-    if row is None:
-        return None
-    row.last_used_at = _now()
-    await db.flush()
-    return row
+        row = result.scalar_one_or_none()
+        if row is None:
+            return None
+        row.last_used_at = _now()
+        await db.flush()
+        return row
 
 
 async def revoke_relay_agent_token(db: AsyncSession, *, token_id: str, user_id: str) -> bool:
@@ -91,6 +132,7 @@ async def revoke_relay_agent_token(db: AsyncSession, *, token_id: str, user_id: 
 async def upsert_relay_agent(
     db: AsyncSession,
     *,
+    org_id: str,
     relay_id: str,
     hostname: str,
     ip: str,
@@ -104,6 +146,7 @@ async def upsert_relay_agent(
         insert(RelayAgent)
         .values(
             id=_uuid(),
+            org_id=org_id,
             relay_id=relay_id,
             hostname=hostname,
             ip=ip,
@@ -120,6 +163,7 @@ async def upsert_relay_agent(
         .on_conflict_do_update(
             index_elements=["relay_id"],
             set_={
+                "org_id":            org_id,
                 "hostname":          hostname,
                 "ip":                ip,
                 "version":           version,
@@ -168,7 +212,7 @@ async def mark_relay_offline(db: AsyncSession, relay_id: str) -> None:
     await db.execute(
         update(RelayAgent)
         .where(RelayAgent.relay_id == relay_id)
-        .values(status="offline", disconnected_at=_now())
+        .values(status="offline", disconnected_at=_now(), serials=[])
     )
 
 

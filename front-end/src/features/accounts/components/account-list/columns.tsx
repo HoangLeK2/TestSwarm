@@ -1,3 +1,5 @@
+'use client';
+
 import { formatDistanceToNow } from 'date-fns';
 import type { Locale } from 'date-fns';
 import { Badge } from '@/components/ui/badge';
@@ -15,10 +17,16 @@ import {
   TooltipTrigger
 } from '@/components/ui/tooltip';
 import { detectAccountEnvironment } from '../../lib/account-environment';
+import {
+  allowedTransitionTargets,
+  type AccountStateKey
+} from '../../lib/account-fsm';
 import type { ColumnDef } from '@tanstack/react-table';
 import type { AccountOut } from '../../services/api';
 import { EditAccountDialog } from '../edit-account-dialog';
 import { AccountHistoryDialog } from '../account-history-dialog';
+import { AccountStateTransitionDialog } from '../account-state-transition-dialog';
+import type { ResourcePermissionFlags } from '@/features/auth/types/resource-permissions';
 
 type TFn = (key: string, values?: Record<string, any>) => string;
 
@@ -28,19 +36,19 @@ const STATUS_VARIANT: Record<
 > = {
   active: 'default',
   cooldown: 'secondary',
+  suspended: 'outline',
   banned: 'destructive',
-  disabled: 'outline'
+  retired: 'outline'
 };
 
-const ACCOUNT_STATUSES = ['active', 'cooldown', 'banned', 'disabled'] as const;
-export type AccountStatusKey = (typeof ACCOUNT_STATUSES)[number];
+export type { AccountStateKey };
 
 export function getAccountColumns(
   t: TFn,
-  statusLabel: Record<AccountStatusKey, string>,
+  statusLabel: Record<AccountStateKey, string>,
   dateLocale: Locale,
-  onDelete: (account: AccountOut) => void,
-  onStatusChange: (account: AccountOut, status: string) => void
+  perms: ResourcePermissionFlags,
+  onDelete: (account: AccountOut) => void
 ): ColumnDef<AccountOut>[] {
   return [
     {
@@ -108,15 +116,39 @@ export function getAccountColumns(
     {
       id: 'status',
       header: t('colStatus'),
-      cell: ({ row }) => (
-        <Badge
-          variant={STATUS_VARIANT[row.original.status] ?? 'outline'}
-          className='text-[11px]'
-        >
-          {statusLabel[row.original.status as AccountStatusKey] ??
-            row.original.status}
-        </Badge>
-      )
+      cell: ({ row }) => {
+        const account = row.original;
+        const state = (account.state || account.status) as AccountStateKey;
+        const label = statusLabel[state] ?? state;
+        const cooldown = account.cooldown_until
+          ? new Date(account.cooldown_until)
+          : null;
+        return (
+          <div className='flex flex-col gap-0.5'>
+            <Badge
+              variant={STATUS_VARIANT[state] ?? 'outline'}
+              className='w-fit text-[11px]'
+            >
+              {label}
+            </Badge>
+            {state === 'cooldown' && cooldown ? (
+              <span className='text-[10px] text-muted-foreground'>
+                {t('cooldownUntil', {
+                  time: formatDistanceToNow(cooldown, {
+                    addSuffix: true,
+                    locale: dateLocale
+                  })
+                })}
+              </span>
+            ) : null}
+            {account.state_reason ? (
+              <span className='max-w-[180px] truncate text-[10px] text-muted-foreground'>
+                {account.state_reason}
+              </span>
+            ) : null}
+          </div>
+        );
+      }
     },
     {
       id: 'tags',
@@ -156,10 +188,16 @@ export function getAccountColumns(
       header: '',
       cell: ({ row }) => {
         const account = row.original;
+        const current = account.state || account.status;
+        const targets = allowedTransitionTargets(current);
         return (
           <div className='flex items-center gap-1'>
             <AccountHistoryDialog account={account} />
-            <EditAccountDialog account={account} />
+            {perms.canUpdate ? <EditAccountDialog account={account} /> : null}
+            {perms.canUpdate && targets.length > 0 ? (
+              <AccountStateTransitionDialog account={account} />
+            ) : null}
+            {perms.canUpdate || perms.canDelete ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button size='icon' variant='ghost' className='size-8'>
@@ -167,25 +205,32 @@ export function getAccountColumns(
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align='end'>
-                {ACCOUNT_STATUSES.filter((s) => s !== account.status).map(
-                  (s) => (
-                    <DropdownMenuItem
-                      key={s}
-                      onClick={() => onStatusChange(account, s)}
-                    >
-                      {t('setStatus', { status: statusLabel[s] })}
-                    </DropdownMenuItem>
-                  )
-                )}
-                <DropdownMenuItem
-                  className='text-destructive'
-                  onClick={() => onDelete(account)}
-                >
-                  <Trash2 size={14} className='mr-2' />
-                  {t('delete')}
-                </DropdownMenuItem>
+                {perms.canUpdate
+                  ? targets.map((target) => (
+                      <AccountStateTransitionDialog
+                        key={target}
+                        account={account}
+                        defaultTo={target}
+                        trigger={
+                          <DropdownMenuItem onSelect={(e) => e.preventDefault()}>
+                            {t('setStatus', { status: statusLabel[target] })}
+                          </DropdownMenuItem>
+                        }
+                      />
+                    ))
+                  : null}
+                {perms.canDelete ? (
+                  <DropdownMenuItem
+                    className='text-destructive'
+                    onClick={() => onDelete(account)}
+                  >
+                    <Trash2 size={14} className='mr-2' />
+                    {t('delete')}
+                  </DropdownMenuItem>
+                ) : null}
               </DropdownMenuContent>
             </DropdownMenu>
+            ) : null}
           </div>
         );
       }

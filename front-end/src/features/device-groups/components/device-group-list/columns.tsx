@@ -1,3 +1,5 @@
+'use client';
+
 import { formatDistanceToNow } from 'date-fns';
 import { vi } from 'date-fns/locale';
 import { Badge } from '@/components/ui/badge';
@@ -7,8 +9,36 @@ import type { ColumnDef } from '@tanstack/react-table';
 import type { DeviceGroupOut } from '../../services/api';
 import { AddDevicesToGroupDialog } from '../add-devices-to-group-dialog';
 import { EditDeviceGroupDialog } from '../edit-device-group-dialog';
+import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
 
 type TFn = (key: string, values?: Record<string, any>) => string;
+
+function DeviceGroupActionsCell({
+  group,
+  onDelete
+}: {
+  group: DeviceGroupOut;
+  onDelete: (group: DeviceGroupOut) => void;
+}) {
+  const perms = useResourcePermissions('device-groups');
+
+  return (
+    <div className='flex items-center gap-1'>
+      {perms.canUpdate ? <AddDevicesToGroupDialog groupId={group.id} /> : null}
+      {perms.canUpdate ? <EditDeviceGroupDialog group={group} /> : null}
+      {perms.canDelete ? (
+        <Button
+          size='icon'
+          variant='ghost'
+          className='size-8 text-destructive hover:text-destructive'
+          onClick={() => onDelete(group)}
+        >
+          <Trash2 size={14} />
+        </Button>
+      ) : null}
+    </div>
+  );
+}
 
 export function getDeviceGroupColumns(
   t: TFn,
@@ -72,23 +102,9 @@ export function getDeviceGroupColumns(
     {
       id: 'actions',
       header: '',
-      cell: ({ row }) => {
-        const group = row.original;
-        return (
-          <div className='flex items-center gap-1'>
-            <AddDevicesToGroupDialog groupId={group.id} />
-            <EditDeviceGroupDialog group={group} />
-            <Button
-              size='icon'
-              variant='ghost'
-              className='size-8 text-destructive hover:text-destructive'
-              onClick={() => onDelete(group)}
-            >
-              <Trash2 size={14} />
-            </Button>
-          </div>
-        );
-      }
+      cell: ({ row }) => (
+        <DeviceGroupActionsCell group={row.original} onDelete={onDelete} />
+      )
     }
   ];
 }

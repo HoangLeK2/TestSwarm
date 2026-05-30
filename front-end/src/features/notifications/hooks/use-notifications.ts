@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useOrganization } from '@/features/organization/hooks/use-organization';
 import {
   notificationsApi,
   type NotificationChannelInput,
@@ -6,31 +7,46 @@ import {
 } from '../services/api';
 
 export const notificationKeys = {
-  list: ['notifications'] as const,
-  unreadCount: ['notifications', 'unread-count'] as const,
-  channels: ['notification-channels'] as const
+  list: (orgId: string | null, limit: number) =>
+    ['notifications', orgId, limit] as const,
+  unreadCount: (orgId: string | null) =>
+    ['notifications', 'unread-count', orgId] as const,
+  channels: (orgId: string | null) =>
+    ['notification-channels', orgId] as const
 };
 
 export function useNotifications(limit = 12) {
+  const { currentOrg } = useOrganization();
+  const orgId = currentOrg?.id ?? null;
+
   return useQuery({
-    queryKey: [...notificationKeys.list, limit],
+    queryKey: notificationKeys.list(orgId, limit),
     queryFn: () => notificationsApi.list({ limit }),
+    enabled: Boolean(orgId),
     staleTime: 5_000
   });
 }
 
 export function useUnreadNotificationCount() {
+  const { currentOrg } = useOrganization();
+  const orgId = currentOrg?.id ?? null;
+
   return useQuery({
-    queryKey: notificationKeys.unreadCount,
+    queryKey: notificationKeys.unreadCount(orgId),
     queryFn: () => notificationsApi.unreadCount(),
+    enabled: Boolean(orgId),
     staleTime: 5_000
   });
 }
 
 export function useNotificationChannels() {
+  const { currentOrg } = useOrganization();
+  const orgId = currentOrg?.id ?? null;
+
   return useQuery({
-    queryKey: notificationKeys.channels,
+    queryKey: notificationKeys.channels(orgId),
     queryFn: () => notificationsApi.listChannels(),
+    enabled: Boolean(orgId),
     staleTime: 5_000
   });
 }
@@ -41,8 +57,7 @@ export function useMarkNotificationRead() {
     mutationFn: (notificationId: string) =>
       notificationsApi.markRead(notificationId),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: notificationKeys.list });
-      qc.invalidateQueries({ queryKey: notificationKeys.unreadCount });
+      qc.invalidateQueries({ queryKey: ['notifications'] });
     }
   });
 }
@@ -52,8 +67,7 @@ export function useMarkAllNotificationsRead() {
   return useMutation({
     mutationFn: () => notificationsApi.markAllRead(),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: notificationKeys.list });
-      qc.invalidateQueries({ queryKey: notificationKeys.unreadCount });
+      qc.invalidateQueries({ queryKey: ['notifications'] });
     }
   });
 }
@@ -64,7 +78,7 @@ export function useCreateNotificationChannel() {
     mutationFn: (data: NotificationChannelInput) =>
       notificationsApi.createChannel(data),
     onSuccess: () =>
-      qc.invalidateQueries({ queryKey: notificationKeys.channels })
+      qc.invalidateQueries({ queryKey: ['notification-channels'] })
   });
 }
 
@@ -79,7 +93,7 @@ export function useUpdateNotificationChannel() {
       data: Partial<NotificationChannelInput>;
     }) => notificationsApi.updateChannel(id, data),
     onSuccess: () =>
-      qc.invalidateQueries({ queryKey: notificationKeys.channels })
+      qc.invalidateQueries({ queryKey: ['notification-channels'] })
   });
 }
 
@@ -88,7 +102,7 @@ export function useDeleteNotificationChannel() {
   return useMutation({
     mutationFn: (id: string) => notificationsApi.deleteChannel(id),
     onSuccess: () =>
-      qc.invalidateQueries({ queryKey: notificationKeys.channels })
+      qc.invalidateQueries({ queryKey: ['notification-channels'] })
   });
 }
 

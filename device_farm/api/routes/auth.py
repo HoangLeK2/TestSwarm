@@ -7,19 +7,22 @@ GET  /api/auth/me        — thông tin user hiện tại
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from jose import jwt
 from passlib.context import CryptContext
 
-from api.deps import CurrentUser, DB
+from api.deps import CurrentUser, DB, require_permission
 from core.env import access_expire_hours, refresh_expire_days
 from core.security import jwt_algorithm, jwt_secret_key
 from api.schemas.auth import LoginRequest, RefreshRequest, RegisterRequest, TokenResponse, UserOut
 from db import crud as repo
+from services.organization_invite import accept_organization_invitation
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+log = logging.getLogger(__name__)
 
 _pwd = CryptContext(schemes=["bcrypt_sha256"], deprecated="auto")
 ACCESS_EXPIRE_HOURS = access_expire_hours()
@@ -49,13 +52,26 @@ async def register(body: RegisterRequest, db: DB):
     existing = await repo.get_user_by_email(db, body.email)
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
-    user = await repo.create_user(
-        db, body.email, body.name, _pwd.hash(body.password), body.role
+    user = await repo.create_user_with_default_org(
+        db, body.email, body.name, _pwd.hash(body.password), "operator"
     )
-    await repo.create_personal_org_for_user(db, user)
+    invite_token = (body.inviteToken or "").strip()
+    if invite_token:
+        try:
+            await accept_organization_invitation(db, token=invite_token, user=user)
+        except ValueError as exc:
+            log.warning(
+                "register invite accept failed email=%s code=%s",
+                body.email,
+                exc,
+            )
+
+    org_role = await repo.get_organization_role_for_user(
+        db, user.id, getattr(user, "org_id", None)
+    )
     return UserOut(
         id=user.id, email=user.email, name=user.name,
-        role=user.role, api_key=user.api_key,
+        role=user.role, api_key=user.api_key, orgRole=org_role,
     )
 
 
@@ -66,6 +82,16 @@ async def login(body: LoginRequest, db: DB):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Account disabled")
+    # Block login when the current org is disabled.
+    try:
+        org = await repo.get_current_org_for_user(db, user.id)
+        if org is not None and getattr(org, "status", "active") == "disabled":
+            raise HTTPException(status_code=403, detail={"code": "ORG_DISABLED"})
+    except HTTPException:
+        raise
+    except Exception:
+        # If org lookup fails, do not block login (keeps legacy behavior).
+        pass
     return TokenResponse(
         access_token=_make_access_token(user.id),
         refresh_token=_make_refresh_token(user.id),
@@ -91,9 +117,16 @@ async def refresh(body: RefreshRequest, db: DB):
     )
 
 
-@router.get("/me", response_model=UserOut)
-async def me(user: CurrentUser):
+@router.get(
+    "/me",
+    response_model=UserOut,
+    dependencies=[Depends(require_permission("me", "read"))],
+)
+async def me(db: DB, user: CurrentUser):
+    org_role = await repo.get_organization_role_for_user(
+        db, user.id, getattr(user, "org_id", None)
+    )
     return UserOut(
         id=user.id, email=user.email, name=user.name,
-        role=user.role, api_key=user.api_key,
+        role=user.role, api_key=user.api_key, orgRole=org_role,
     )

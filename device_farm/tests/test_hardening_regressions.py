@@ -14,8 +14,8 @@ async def test_create_execution_rejects_cross_tenant_device():
 
     body = ExecutionCreate(run_type="campaign_run", device_ids=["dev-1"])
     db = AsyncMock()
-    user = SimpleNamespace(id="user-1")
-    foreign_device = SimpleNamespace(id="dev-1", user_id="other-user")
+    user = SimpleNamespace(id="user-1", org_id="org-1")
+    foreign_device = SimpleNamespace(id="dev-1", user_id="other-user", org_id="org-2")
 
     with patch.object(route, "get_device", AsyncMock(return_value=foreign_device)):
         with pytest.raises(HTTPException) as exc:
@@ -31,8 +31,8 @@ async def test_create_execution_rejects_cross_tenant_campaign():
 
     body = ExecutionCreate(run_type="campaign_run", campaign_id="camp-1")
     db = AsyncMock()
-    user = SimpleNamespace(id="user-1")
-    foreign_campaign = SimpleNamespace(id="camp-1", user_id="other-user")
+    user = SimpleNamespace(id="user-1", org_id="org-1")
+    foreign_campaign = SimpleNamespace(id="camp-1", user_id="other-user", org_id="org-2")
 
     with patch.object(route, "get_campaign", AsyncMock(return_value=foreign_campaign)):
         with pytest.raises(HTTPException) as exc:
@@ -48,9 +48,9 @@ async def test_create_execution_rejects_cross_tenant_scenario():
 
     body = ExecutionCreate(run_type="campaign_run", scenario_id="sc-1")
     db = AsyncMock()
-    user = SimpleNamespace(id="user-1")
+    user = SimpleNamespace(id="user-1", org_id="org-1")
     scenario = SimpleNamespace(id="sc-1", campaign_id="camp-2")
-    foreign_campaign = SimpleNamespace(id="camp-2", user_id="other-user")
+    foreign_campaign = SimpleNamespace(id="camp-2", user_id="other-user", org_id="org-2")
 
     with (
         patch.object(route, "get_scenario", AsyncMock(return_value=scenario)),
@@ -68,9 +68,9 @@ async def test_add_device_rejects_cross_tenant_device():
     from api.schemas.execution import AddDeviceBody
 
     db = AsyncMock()
-    user = SimpleNamespace(id="user-1")
+    user = SimpleNamespace(id="user-1", org_id="org-1")
     execution = SimpleNamespace(id="exec-1", user_id="user-1")
-    foreign_device = SimpleNamespace(id="dev-1", user_id="other-user")
+    foreign_device = SimpleNamespace(id="dev-1", user_id="other-user", org_id="org-2")
 
     with (
         patch.object(route, "_get_or_404", AsyncMock(return_value=execution)),

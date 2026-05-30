@@ -7,6 +7,8 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { farmApi } from '@/lib/farm-api';
 import { useQueryClient } from '@tanstack/react-query';
+import { invalidateDeviceFleetQueries } from '../../hooks/use-devices';
+import { usePermission } from '@/features/auth/hooks/use-permission';
 
 export function TagsCell({
   deviceId,
@@ -19,12 +21,13 @@ export function TagsCell({
   const [value, setValue] = useState(tags ?? '');
   const [saving, setSaving] = useState(false);
   const qc = useQueryClient();
+  const canUpdate = usePermission('devices', 'update');
 
   const save = async () => {
     setSaving(true);
     try {
       await farmApi.patch(`/devices/${deviceId}/tags`, { tags: value });
-      qc.invalidateQueries({ queryKey: ['devices'] });
+      invalidateDeviceFleetQueries(qc);
       setEditing(false);
     } finally {
       setSaving(false);
@@ -70,17 +73,19 @@ export function TagsCell({
       ) : (
         <span className='text-[11px] text-muted-foreground'>—</span>
       )}
-      <Button
-        size='icon'
-        variant='ghost'
-        className='size-5 shrink-0 opacity-0 group-hover/row:opacity-100'
-        onClick={() => {
-          setValue(tags ?? '');
-          setEditing(true);
-        }}
-      >
-        <Pencil size={10} />
-      </Button>
+      {canUpdate ? (
+        <Button
+          size='icon'
+          variant='ghost'
+          className='size-5 shrink-0 opacity-0 group-hover/row:opacity-100'
+          onClick={() => {
+            setValue(tags ?? '');
+            setEditing(true);
+          }}
+        >
+          <Pencil size={10} />
+        </Button>
+      ) : null}
     </div>
   );
 }

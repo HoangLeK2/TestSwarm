@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, field_validator
 
-_VALID_STATUSES = {"active", "banned", "cooldown", "disabled"}
+_VALID_STATUSES = {"active", "banned", "cooldown", "suspended", "retired", "disabled"}
 _VALID_PLATFORMS = {"facebook", "tiktok", "google", "instagram", "twitter", "youtube"}
 
 
@@ -43,14 +43,20 @@ class AccountUpdate(BaseModel):
 
 
 class AccountStatusUpdate(BaseModel):
+    """Legacy status update — routed through FSM (maps ``disabled`` → ``suspended``)."""
+
     status: str
+    reason: str = "legacy PATCH /status"
+    ttl_seconds: Optional[int] = None
 
     @field_validator("status")
     @classmethod
     def _valid_status(cls, v: str) -> str:
         if v not in _VALID_STATUSES:
-            raise ValueError(f"status must be one of: {', '.join(sorted(_VALID_STATUSES))}")
-        return v
+            raise ValueError(
+                f"status must be one of: {', '.join(sorted(_VALID_STATUSES - {'disabled'}))}"
+            )
+        return "suspended" if v == "disabled" else v
 
 
 class AccountOut(BaseModel):
@@ -59,6 +65,9 @@ class AccountOut(BaseModel):
     username: str
     display_name: str
     status: str
+    state: str
+    state_reason: Optional[str] = None
+    state_changed_at: Optional[datetime] = None
     cooldown_until: Optional[datetime]
     proxy_id: Optional[str]
     notes: str

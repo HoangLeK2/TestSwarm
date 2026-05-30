@@ -7,10 +7,11 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.database import Base
+from tenancy.models import TenantScopedModel
 from .utils import _now, _uuid, _api_key
 
 
-class Device(Base):
+class Device(TenantScopedModel, Base):
     __tablename__ = "devices"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)

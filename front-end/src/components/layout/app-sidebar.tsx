@@ -270,8 +270,7 @@ export default function AppSidebar() {
   const pathname = usePathname();
   const SETTINGS_PATH_PREFIXES = [
     '/dashboard/settings',
-    ROUTES.RELAY_AGENTS.ROOT,
-    ROUTES.NOTIFICATIONS.ROOT
+    ROUTES.RELAY_AGENTS.ROOT
   ];
   const isSettingsPage = SETTINGS_PATH_PREFIXES.some(
     (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)

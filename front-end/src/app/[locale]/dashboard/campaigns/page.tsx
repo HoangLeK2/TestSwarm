@@ -1,5 +1,6 @@
 'use client';
 import { CampaignList } from '@/features/campaigns/components/campaign-list';
+import { CampaignDeepLink } from '@/features/campaigns/components/campaign-deep-link';
 import { useTranslations } from 'next-intl';
 
 export default function CampaignsPage() {
@@ -14,6 +15,7 @@ export default function CampaignsPage() {
           <p className='text-sm text-muted-foreground'>{t('subtitle')}</p>
         </div>
       </div>
+      <CampaignDeepLink />
       <CampaignList />
     </div>
   );

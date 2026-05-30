@@ -7,10 +7,11 @@ from sqlalchemy import DateTime, ForeignKey, Index, String, Text, UniqueConstrai
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.database import Base
+from tenancy.models import TenantScopedModel
 from .utils import _now, _uuid
 
 
-class DeviceGroup(Base):
+class DeviceGroup(TenantScopedModel, Base):
     """
     A logical grouping of devices (e.g. "FB Farm", "TikTok Farm").
 
@@ -43,7 +44,7 @@ class DeviceGroup(Base):
         return f"<DeviceGroup {self.name!r}>"
 
 
-class DeviceGroupMember(Base):
+class DeviceGroupMember(TenantScopedModel, Base):
     """
     Maps a device to a group (many-to-many with extra metadata).
 

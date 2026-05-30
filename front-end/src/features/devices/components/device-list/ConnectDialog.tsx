@@ -18,6 +18,11 @@ import {
 import { Separator } from '@/components/ui/separator';
 import { getDeviceAgentWsUrl } from '@/lib/farm-api';
 import { ROUTES } from '@/config/routes';
+import { invalidateDeviceFleetQueries } from '../../hooks/use-devices';
+import {
+  getRelayConnectionState,
+  isRelayOperational
+} from '../../lib/relay-agent-status';
 import {
   devicesApi,
   isPendingDevice,
@@ -57,7 +62,8 @@ function relayPushCandidates(
   const taken = registeredSerials ?? new Set<string>();
   const out: { relayId: string; serial: string }[] = [];
   for (const agent of relayAgents) {
-    if (agent.status !== 'online') continue;
+    if (agent.live_connected === false) continue;
+    if (!isRelayOperational(getRelayConnectionState(agent))) continue;
     for (const s of agent.serials) {
       if (!s || s.startsWith(PENDING_SERIAL_PREFIX)) continue;
       if (taken.has(s)) continue;
@@ -151,7 +157,7 @@ export function ConnectDialog({
           stopPolling();
           setConnectedDevice(found);
           toast.success(t('successToast'));
-          qc.invalidateQueries({ queryKey: ['devices'] });
+          invalidateDeviceFleetQueries(qc);
         }
       } catch {
         // ignore transient errors — try again next tick

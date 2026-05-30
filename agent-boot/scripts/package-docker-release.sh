@@ -54,15 +54,18 @@ if [[ -f "$DEST/.env" ]]; then
   exit 1
 fi
 
+BUNDLE_TAR_PLAIN="$OUT_DIR/${NAME}.tar"
 tar -czf "$BUNDLE_TAR" -C "$STAGING" "$NAME"
+tar -cf "$BUNDLE_TAR_PLAIN" -C "$STAGING" "$NAME"
 
 echo "Created: $BUNDLE_TAR"
-ls -lh "$BUNDLE_TAR"
+echo "Created: $BUNDLE_TAR_PLAIN  (uncompressed, for scp/rsync)"
+ls -lh "$BUNDLE_TAR" "$BUNDLE_TAR_PLAIN"
 echo ""
 echo "Ship to customer:"
 echo "  1) tar -xzf $(basename "$BUNDLE_TAR") && cd $NAME"
 echo "  2) ./scripts/docker-load.sh"
 echo "  3) cp .env.example .env && edit secrets"
-echo "  4) ./scripts/docker-up.sh --abort-on-container-exit"
+echo "  4) ./scripts/docker-up.sh up -d"
 echo ""
 echo "Image tar (standalone): $IMAGE_TAR"

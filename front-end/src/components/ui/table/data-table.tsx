@@ -78,7 +78,10 @@ export function DataTable<TData>({
                   <TableRow key={headerGroup.id} className='w-full !bg-muted'>
                     {headerGroup.headers.map((header) => (
                       <TableHead
-                        className='!bg-muted'
+                        className={cn(
+                          '!bg-muted',
+                          header.column.columnDef.meta?.headerClassName
+                        )}
                         key={header.id}
                         colSpan={header.colSpan}
                         style={{

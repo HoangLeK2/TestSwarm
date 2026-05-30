@@ -8,7 +8,9 @@ import type { CampaignOut, CampaignStatus } from '../../types';
 import { DataTable } from '@/components/ui/table/data-table';
 import { useDataTable } from '@/hooks/use-data-table';
 import { CreateCampaignDialog } from '../create-campaign-dialog';
+import { Can } from '@/features/auth';
 import { getCampaignColumns } from './columns';
+import { CampaignMobileList } from './CampaignMobileList';
 
 const STATUS_VARIANT: Record<
   CampaignStatus,
@@ -27,17 +29,20 @@ export function CampaignList() {
 
   const data: CampaignOut[] = campaigns ?? [];
 
-  const columns = useMemo(() => {
-    const statusLabel: Record<CampaignStatus, string> = {
+  const statusLabel = useMemo<Record<CampaignStatus, string>>(
+    () => ({
       idle: t('statusIdle'),
       draft: t('statusDraft'),
       running: t('statusRunning'),
       paused: t('statusPaused'),
       completed: t('statusCompleted')
-    };
+    }),
+    [t]
+  );
 
+  const columns = useMemo(() => {
     return getCampaignColumns(t, statusLabel, STATUS_VARIANT);
-  }, [t]);
+  }, [t, statusLabel]);
 
   const { table } = useDataTable<CampaignOut>({
     data,
@@ -65,7 +70,9 @@ export function CampaignList() {
               </span>{' '}
               {t('campaignCountLabel')}
             </p>
-            <CreateCampaignDialog />
+            <Can object='campaigns' action='create'>
+              <CreateCampaignDialog />
+            </Can>
           </div>
 
           {!campaigns?.length && (
@@ -78,13 +85,24 @@ export function CampaignList() {
                 {t('emptyDescription')}
               </p>
               <div className='mt-4'>
-                <CreateCampaignDialog />
+                <Can object='campaigns' action='create'>
+                  <CreateCampaignDialog />
+                </Can>
               </div>
             </div>
           )}
 
           {campaigns?.length ? (
-            <DataTable table={table} total={campaigns.length} />
+            <>
+              <CampaignMobileList
+                campaigns={campaigns}
+                statusLabel={statusLabel}
+                statusVariant={STATUS_VARIANT}
+              />
+              <div className='hidden lg:block'>
+                <DataTable table={table} total={campaigns.length} />
+              </div>
+            </>
           ) : null}
         </>
       )}

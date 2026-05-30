@@ -9,6 +9,7 @@ from enum import StrEnum
 
 
 class UserRole(StrEnum):
+    SUPERADMIN = "superadmin"
     ADMIN = "admin"
     OPERATOR = "operator"
 
@@ -24,6 +25,7 @@ class CampaignStatus(StrEnum):
 class ExecutionStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
+    PAUSED = "paused"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -37,17 +39,25 @@ class ExecutionResultStatus(StrEnum):
     ERROR = "error"
 
 
-class AccountStatus(StrEnum):
+class AccountState(StrEnum):
+    """Account lifecycle FSM (DF-T-07-005). Canonical field: ``accounts.state``."""
+
     ACTIVE = "active"
     COOLDOWN = "cooldown"
+    SUSPENDED = "suspended"
     BANNED = "banned"
-    DISABLED = "disabled"
+    RETIRED = "retired"
+
+
+# Backward-compatible alias — prefer AccountState for new code.
+AccountStatus = AccountState
 
 
 class AccountEventType(StrEnum):
     CREATED = "account.created"
     UPDATED = "account.updated"
     STATUS_CHANGED = "account.status_changed"
+    STATE_CHANGED = "account.state.changed"
     DELETED = "account.deleted"
     DEVICE_ASSIGNED = "account.device_assigned"
     DEVICE_UNASSIGNED = "account.device_unassigned"
@@ -87,3 +97,37 @@ class McpSessionStatus(StrEnum):
     ENDED = "ended"
 
 
+class DeviceFsmState(StrEnum):
+    """Device lifecycle FSM at control plane (DF-T-02-002)."""
+
+    UNKNOWN = "unknown"
+    CONNECTING = "connecting"
+    ONLINE = "online"
+    BUSY = "busy"
+    RECONNECTING = "reconnecting"
+    DEAD = "dead"
+
+
+class DeviceFsmEvent(StrEnum):
+    """Events that drive device FSM transitions."""
+
+    ATTACHED = "device.attached"
+    ONLINE = "device.online"
+    BUSY = "device.busy"
+    RECONNECTING = "device.reconnecting"
+    DEAD = "device.dead"
+    RELEASED = "device.released"
+    REVIVED = "device.revived"
+    SESSION_CLAIM = "session.claim"
+    SESSION_RELEASED = "session.released"
+    SESSION_LOST = "session.lost_device"
+
+
+class SessionOwnerType(StrEnum):
+    """Owner classification for active control-plane sessions (DF-T-02-013)."""
+
+    USER = "user"
+    EXECUTION = "execution"
+    CAMPAIGN = "campaign"
+    SYSTEM = "system"
+    UNKNOWN = "unknown"

@@ -260,6 +260,8 @@ class AdbRelayManager:
         self._pending_scrcpy: Dict[str, Any] = {}
         # Called with (serial) whenever a new device comes online via relay.
         self._on_device_online: Optional[Any] = None
+        # Called with (serial) when a relay serial is removed.
+        self._on_device_offline: Optional[Any] = None
         # Called with (serial, caps_dict) whenever capabilities are updated from heartbeat.
         self._on_capabilities_update: Optional[Any] = None
         # agent_id → asyncio.Queue  (gRPC ctrl queues, one per connected agent-boot)
@@ -270,6 +272,19 @@ class AdbRelayManager:
     def set_on_device_online(self, callback: Any) -> None:
         """Register a callback fired with (serial) when a new relay device appears."""
         self._on_device_online = callback
+        for serial in list(self._serial_index.keys()):
+            try:
+                callback(serial)
+            except Exception as exc:
+                logger.debug("on_device_online (retroactive) error serial=%s: %s", serial, exc)
+
+    def set_on_device_offline(self, callback: Any) -> None:
+        """Register a callback fired with (serial) when a relay device goes away."""
+        self._on_device_offline = callback
+
+    def list_online_serials(self) -> list[str]:
+        """Current relay serial index (transport-visible devices)."""
+        return list(self._serial_index.keys())
 
     def set_on_capabilities_update(self, callback: Any) -> None:
         """Register a callback fired with (serial, caps) when heartbeat caps arrive."""
@@ -320,7 +335,14 @@ class AdbRelayManager:
             for s in serials:
                 self._serial_index[s] = relay_id
             conn.serials = serials
+            removed = old - serials
             new_serials = serials - old
+            for s in removed:
+                if self._on_device_offline:
+                    try:
+                        self._on_device_offline(s)
+                    except Exception as exc:
+                        logger.debug("on_device_offline error serial=%s: %s", s, exc)
             for s in new_serials:
                 ip = s.rsplit(":", 1)[0] if ":" in s else s
                 cb = self._pending_scrcpy.pop(ip, None)
@@ -340,6 +362,7 @@ class AdbRelayManager:
             conn = self._relays.pop(relay_id, None)
             if not conn:
                 return
+            offline_serials = set(conn.serials)
             for s in conn.serials:
                 self._serial_index.pop(s, None)
                 self._capabilities.pop(s, None)
@@ -347,7 +370,13 @@ class AdbRelayManager:
                 self._scrcpy_running.discard(s)
         if conn:
             conn.fail_all(error)
-            await self._remove_relay_from_redis(relay_id, conn.serials)
+            await self._remove_relay_from_redis(relay_id, offline_serials)
+            if self._on_device_offline:
+                for s in offline_serials:
+                    try:
+                        self._on_device_offline(s)
+                    except Exception as exc:
+                        logger.debug("on_device_offline error serial=%s: %s", s, exc)
         logger.info("relay unregistered: id=%s", relay_id)
 
     def update_capabilities(self, caps_list: list) -> None:
@@ -382,6 +411,7 @@ class AdbRelayManager:
                     "ram_gb":          cap.get("ram_gb", 0),
                     "has_u2":          bool(cap.get("has_u2", False)),
                     "has_stf":         bool(cap.get("has_stf", False)),
+                    "hardware_serial": cap.get("hardware_serial", ""),
                     "tags":            list(cap.get("tags", [])),
                 }
             else:

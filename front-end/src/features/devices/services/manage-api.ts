@@ -19,6 +19,44 @@ export type DeviceOut = {
   adb_port: number;
   tags?: string;
   relay_id?: string | null;
+  state: string;
+};
+
+export type DeviceStateCountsOut = {
+  unknown: number;
+  connecting: number;
+  online: number;
+  busy: number;
+  reconnecting: number;
+  dead: number;
+  total: number;
+};
+
+export type SessionOwnerAnomalyOut = {
+  session_id: string;
+  device_id: string;
+  device_serial: string;
+  owner_type: string;
+  owner_id: string | null;
+  reason: string;
+};
+
+export type FleetStatsOut = {
+  filters: {
+    organization_id: string;
+    group_id: string | null;
+    relay_host: string | null;
+  };
+  devices: DeviceStateCountsOut;
+  active_sessions: {
+    user: number;
+    execution: number;
+    campaign: number;
+    system: number;
+    unknown: number;
+    total: number;
+  };
+  owner_anomalies: SessionOwnerAnomalyOut[] | null;
 };
 
 export type DeviceCreate = { serial: string; name?: string };
@@ -73,7 +111,16 @@ export const devicesApi = {
         ok: boolean;
         serial: string;
       }>('/devices/connect-adb', { ip, port })
-      .then((r) => r.data)
+      .then((r) => r.data),
+  fleetStats: (params?: { group_id?: string; relay_host?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.group_id) qs.set('group_id', params.group_id);
+    if (params?.relay_host) qs.set('relay_host', params.relay_host);
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return farmApi
+      .get<FleetStatsOut>(`/devices/fleet/stats${suffix}`)
+      .then((r) => r.data);
+  }
 };
 
 // ── Relay agent types ─────────────────────────────────────────────────────────
@@ -86,6 +133,7 @@ export type RelayAgentOut = {
   serials: string[];
   device_names?: Record<string, string>;
   status: 'online' | 'offline';
+  live_connected?: boolean;
   connected_at: string;
   last_heartbeat_at: string | null;
   disconnected_at: string | null;
@@ -240,6 +288,13 @@ export const relayAgentsApi = {
 
 // ── Device relay control API ──────────────────────────────────────────────────
 
+export type DeviceReviveOut = {
+  device_id: string;
+  from_state: string;
+  to_state: string;
+  actor: string;
+};
+
 export const deviceControlApi = {
   bootstrap: (deviceId: string) =>
     farmApi
@@ -256,5 +311,10 @@ export const deviceControlApi = {
   restartScrcpy: (deviceId: string) =>
     farmApi
       .post<RelayCommandOut>(`/devices/${deviceId}/restart-scrcpy`)
+      .then((r) => r.data),
+  /** Admin: DEAD → CONNECTING (DF-T-02-005). */
+  revive: (deviceId: string) =>
+    farmApi
+      .post<DeviceReviveOut>(`/devices/${deviceId}/revive`)
       .then((r) => r.data)
 };

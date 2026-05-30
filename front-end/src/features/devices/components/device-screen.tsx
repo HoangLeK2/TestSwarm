@@ -529,20 +529,22 @@ export function DeviceScreen({
     return () => clearInterval(t);
   }, [isActive, hasFrame, device.serial]);
 
-  // H264-primary: if relay sends HEVC or scrcpy is flapping, MJPEG is the fallback picture.
-  // Request IDR once after WS is up; re-arm MJPEG if still black after a few seconds.
+  // When WS connects after mount, (re)assert watch + IDR so the mirror is not
+  // blank until a full page refresh. Also re-arm MJPEG fallback in H264-primary mode.
   useEffect(() => {
-    if (!isActive || !h264PrimaryMode || hasFrame) return;
-    const armMjpeg = setTimeout(() => {
-      setMjpegEnabled(true);
-      setMjpegFailed(false);
-    }, 2500);
-    const idr = setTimeout(() => {
-      if (wsConnected) requestIdr(device.serial);
-    }, 1500);
+    if (!isActive || !wsConnected || hasFrame) return;
+    ensureWatchSerial(device.serial);
+    const idr = setTimeout(() => requestIdr(device.serial), 100);
+    const armMjpeg =
+      h264PrimaryMode
+        ? setTimeout(() => {
+            setMjpegEnabled(true);
+            setMjpegFailed(false);
+          }, 2500)
+        : undefined;
     return () => {
-      clearTimeout(armMjpeg);
       clearTimeout(idr);
+      if (armMjpeg) clearTimeout(armMjpeg);
     };
   }, [isActive, h264PrimaryMode, hasFrame, device.serial, wsConnected]);
 

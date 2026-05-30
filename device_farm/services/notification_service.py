@@ -9,8 +9,10 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.database import AsyncSessionLocal
-from db.models.device import Device
+from db.crud.user import get_user_org_id
 from db.models.notification import Notification, NotificationChannel
+from tenancy.background import DeviceRef, lookup_device_by_serial
+from tenancy.context import get_current_org_id, tenant_context
 
 log = logging.getLogger(__name__)
 
@@ -52,6 +54,36 @@ def notification_to_dict(notification: Notification) -> dict[str, Any]:
         "user_id": notification.user_id,
         "created_at": notification.created_at.isoformat() if notification.created_at else None,
     }
+
+
+def device_event_label(
+    *,
+    serial: str,
+    brand: str = "",
+    model: str = "",
+    name: str = "",
+) -> str:
+    """Stable display label for device connect/disconnect notifications."""
+    brand_model = " ".join(p for p in [brand, model] if p).strip()
+    if brand_model:
+        return brand_model
+    clean_name = name.strip()
+    if clean_name:
+        return clean_name
+    return serial
+
+
+def _enrich_device_event(entry: dict[str, Any], ref: DeviceRef | None) -> dict[str, Any]:
+    if ref is None:
+        return entry
+    out = dict(entry)
+    if not str(out.get("device_brand") or "").strip() and ref.brand:
+        out["device_brand"] = ref.brand
+    if not str(out.get("device_model") or "").strip() and ref.model:
+        out["device_model"] = ref.model
+    if not str(out.get("device_name") or "").strip() and ref.name:
+        out["device_name"] = ref.name
+    return out
 
 
 class NotificationService:
@@ -125,38 +157,55 @@ class NotificationService:
     def _on_device_event(self, entry: dict[str, Any]) -> None:
         if self._loop is None:
             return
-        mapped = self._map_device_event(entry)
-        if mapped is None:
+        if self._map_device_event(entry) is None:
             return
-        event, title, body, data = mapped
         asyncio.run_coroutine_threadsafe(
-            self._notify_for_device_event(entry, event, title, body, data),
+            self._notify_for_device_event(entry),
             self._loop,
         )
 
     async def _notify_for_device_event(
         self,
         entry: dict[str, Any],
-        event: str,
-        title: str,
-        body: str,
-        data: dict[str, Any],
     ) -> None:
-        user_id = await self._resolve_device_user(entry.get("serial") or "")
+        serial = str(entry.get("serial") or "")
+        ref = await self._lookup_device_ref(serial)
+        if not ref or not ref.org_id:
+            log.debug(
+                "device-event notification skipped (no org): serial=%s",
+                serial,
+            )
+            return
+        enriched = _enrich_device_event(entry, ref)
+        mapped = self._map_device_event(enriched)
+        if mapped is None:
+            return
+        event, title, body, data = mapped
         try:
-            await self.notify(event, title, body, data, user_id=user_id)
+            with tenant_context(ref.org_id):
+                await self.notify(event, title, body, data, user_id=ref.user_id)
         except Exception as exc:
-            log.warning("device-event notification failed event=%s serial=%s: %s", event, entry.get("serial"), exc)
+            log.warning(
+                "device-event notification failed event=%s serial=%s: %s",
+                event,
+                serial,
+                exc,
+            )
 
-    async def _resolve_device_user(self, serial: str) -> Optional[str]:
+    async def _lookup_device_ref(self, serial: str) -> DeviceRef | None:
         if not serial:
             return None
         try:
             async with AsyncSessionLocal() as db:
-                result = await db.execute(select(Device.user_id).where(Device.serial == serial))
-                return result.scalar_one_or_none()
+                return await lookup_device_by_serial(db, serial)
         except Exception:
             return None
+
+    async def _resolve_device_owner(self, serial: str) -> tuple[Optional[str], Optional[str]]:
+        ref = await self._lookup_device_ref(serial)
+        if ref is None:
+            return None, None
+        return ref.user_id, ref.org_id
 
     def _map_device_event(
         self,
@@ -166,26 +215,28 @@ class NotificationService:
         serial = str(entry.get("serial") or "")
         brand = entry.get("device_brand") or ""
         model = entry.get("device_model") or ""
-        label = " ".join(p for p in [brand, model] if p).strip() or serial
+        name = entry.get("device_name") or ""
+        label = device_event_label(serial=serial, brand=brand, model=model, name=name)
         reason = entry.get("reason") or ""
         if raw in {"disconnected", "dead"}:
             event = "device.disconnect"
             title = f"Device {label} disconnected"
-            body = reason or f"{serial} lost connection"
+            body = reason or f"{label} lost connection"
         elif raw in {"connected", "reconnected"}:
             event = "device.reconnect"
             title = f"Device {label} reconnected"
-            body = f"{serial} is online"
+            body = f"{label} is online"
         elif raw == "error":
             event = "task.failed"
             title = f"Device {label} reported an error"
-            body = reason or f"{serial} entered error state"
+            body = reason or f"{label} entered error state"
         else:
             return None
         data = {
             "serial": serial,
             "device_brand": brand,
             "device_model": model,
+            "device_name": name,
             "device_event_id": entry.get("id"),
             "raw_event": raw,
             "extra_data": entry.get("extra_data") or {},
@@ -208,12 +259,23 @@ class NotificationService:
         result = await db.execute(stmt)
         return [c for c in result.scalars().all() if event_matches(c.events or [], event)]
 
+    async def _resolve_org_id(self, db: AsyncSession, user_id: str) -> str | None:
+        org_id = get_current_org_id()
+        if org_id:
+            return org_id
+        return await get_user_org_id(db, user_id)
+
     async def _ensure_default_in_app_channel(self, db: AsyncSession, user_id: str) -> None:
+        org_id = await self._resolve_org_id(db, user_id)
+        if not org_id:
+            return
         result = await db.execute(
-            select(NotificationChannel.id).where(
+            select(NotificationChannel.id)
+            .where(
                 NotificationChannel.user_id == user_id,
                 NotificationChannel.type == "in_app",
             )
+            .limit(1)
         )
         if result.scalar_one_or_none():
             return
@@ -225,6 +287,7 @@ class NotificationService:
                 events=DEFAULT_EVENTS,
                 is_enabled=True,
                 user_id=user_id,
+                org_id=org_id,
             )
         )
         await db.flush()
@@ -246,6 +309,7 @@ class NotificationService:
             body=body,
             data=data,
             user_id=user_id or channel.user_id,
+            org_id=channel.org_id,
         )
         db.add(notification)
         await db.flush()

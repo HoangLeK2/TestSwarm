@@ -29,6 +29,7 @@ from sqlalchemy.orm import DeclarativeBase
 
 from core.config import load_config
 from core.env import farm_config_path
+from tenancy.sqlalchemy import init_tenant_scoping
 
 log = logging.getLogger(__name__)
 
@@ -78,6 +79,9 @@ AsyncSessionLocal = async_sessionmaker(
     class_=AsyncSession,
     expire_on_commit=False,
 )
+
+# Install tenant scoping rules once at import time.
+init_tenant_scoping()
 
 
 # ── Per-event-loop engine cache ──────────────────────────────────────────────
@@ -196,8 +200,12 @@ async def init_db() -> None:
 
     # Seed builtin scenario templates (idempotent)
     async with AsyncSessionLocal() as seed_db:
+        from db.superadmin import ensure_superadmin_from_env
         from db.seeds.scenario_templates import seed_builtin_templates
+
+        await ensure_superadmin_from_env(seed_db)
         await seed_builtin_templates(seed_db)
+        await seed_db.commit()
 
 
 def _auto_create_schema_enabled() -> bool:

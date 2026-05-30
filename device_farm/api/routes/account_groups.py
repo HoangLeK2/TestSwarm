@@ -8,10 +8,11 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.exc import IntegrityError
 
-from api.deps import CurrentUser, DB
+from api.deps import CurrentUser, DB, require_permission
+from api.org_scope import data_owner_user_id
 from api.schemas.account_group import (
     AccountGroupCreate,
     AccountGroupMemberBatchAdd,
@@ -50,13 +51,17 @@ def _to_out(group, member_count: int = 0) -> AccountGroupOut:
     )
 
 
-@router.get("", response_model=list[AccountGroupOut])
+@router.get(
+    "",
+    response_model=list[AccountGroupOut],
+    dependencies=[Depends(require_permission("account-groups", "read"))],
+)
 async def list_account_groups(
     db: DB,
     user: CurrentUser,
     platform: Optional[str] = Query(default=None),
 ):
-    rows = await list_groups(db, user_id=user.id, platform=platform)
+    rows = await list_groups(db, user_id=data_owner_user_id(user), platform=platform)
     return [_to_out(g, c) for g, c in rows]
 
 
@@ -64,6 +69,7 @@ async def list_account_groups(
     "",
     response_model=AccountGroupOut,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission("account-groups", "create"))],
 )
 async def create_account_group(
     body: AccountGroupCreate,
@@ -89,9 +95,14 @@ async def create_account_group(
     return _to_out(group, member_count=0)
 
 
-@router.get("/{group_id}", response_model=AccountGroupOut)
+@router.get(
+    "/{group_id}",
+    response_model=AccountGroupOut,
+    dependencies=[Depends(require_permission("account-groups", "read"))],
+)
 async def get_account_group(group_id: str, db: DB, user: CurrentUser):
-    group = await get_group(db, group_id, user_id=user.id)
+    owner_id = data_owner_user_id(user)
+    group = await get_group(db, group_id, user_id=owner_id)
     if group is None:
         raise HTTPException(status_code=404, detail="Account group not found")
     # Cheap exact count via the member list (Phase 2 groups are typically < 500 members).
@@ -99,14 +110,19 @@ async def get_account_group(group_id: str, db: DB, user: CurrentUser):
     return _to_out(group, member_count=len(members))
 
 
-@router.patch("/{group_id}", response_model=AccountGroupOut)
+@router.patch(
+    "/{group_id}",
+    response_model=AccountGroupOut,
+    dependencies=[Depends(require_permission("account-groups", "update"))],
+)
 async def update_account_group(
     group_id: str,
     body: AccountGroupUpdate,
     db: DB,
     user: CurrentUser,
 ):
-    group = await get_group(db, group_id, user_id=user.id)
+    owner_id = data_owner_user_id(user)
+    group = await get_group(db, group_id, user_id=owner_id)
     if group is None:
         raise HTTPException(status_code=404, detail="Account group not found")
     try:
@@ -124,15 +140,21 @@ async def update_account_group(
             status_code=status.HTTP_409_CONFLICT,
             detail="Another group with this name already exists",
         )
-    group = await get_group(db, group_id, user_id=user.id)
+    owner_id = data_owner_user_id(user)
+    group = await get_group(db, group_id, user_id=owner_id)
     assert group is not None
     members = await list_members(db, group_id)
     return _to_out(group, member_count=len(members))
 
 
-@router.delete("/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{group_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission("account-groups", "delete"))],
+)
 async def delete_account_group(group_id: str, db: DB, user: CurrentUser):
-    group = await get_group(db, group_id, user_id=user.id)
+    owner_id = data_owner_user_id(user)
+    group = await get_group(db, group_id, user_id=owner_id)
     if group is None:
         raise HTTPException(status_code=404, detail="Account group not found")
     await delete_group(db, group_id)
@@ -142,13 +164,15 @@ async def delete_account_group(group_id: str, db: DB, user: CurrentUser):
 @router.get(
     "/{group_id}/members",
     response_model=list[AccountGroupMemberOut],
+    dependencies=[Depends(require_permission("account-groups", "read"))],
 )
 async def list_account_group_members(
     group_id: str,
     db: DB,
     user: CurrentUser,
 ):
-    group = await get_group(db, group_id, user_id=user.id)
+    owner_id = data_owner_user_id(user)
+    group = await get_group(db, group_id, user_id=owner_id)
     if group is None:
         raise HTTPException(status_code=404, detail="Account group not found")
     members = await list_members(db, group_id)
@@ -169,6 +193,7 @@ async def list_account_group_members(
 @router.post(
     "/{group_id}/members",
     response_model=AccountGroupMemberBatchResult,
+    dependencies=[Depends(require_permission("account-groups", "update"))],
 )
 async def add_account_group_members(
     group_id: str,
@@ -176,7 +201,8 @@ async def add_account_group_members(
     db: DB,
     user: CurrentUser,
 ):
-    group = await get_group(db, group_id, user_id=user.id)
+    owner_id = data_owner_user_id(user)
+    group = await get_group(db, group_id, user_id=owner_id)
     if group is None:
         raise HTTPException(status_code=404, detail="Account group not found")
     added, skipped = await add_members(db, group=group, account_ids=body.account_ids)
@@ -187,6 +213,7 @@ async def add_account_group_members(
 @router.delete(
     "/{group_id}/members/{account_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission("account-groups", "update"))],
 )
 async def remove_account_group_member(
     group_id: str,
@@ -194,7 +221,8 @@ async def remove_account_group_member(
     db: DB,
     user: CurrentUser,
 ):
-    group = await get_group(db, group_id, user_id=user.id)
+    owner_id = data_owner_user_id(user)
+    group = await get_group(db, group_id, user_id=owner_id)
     if group is None:
         raise HTTPException(status_code=404, detail="Account group not found")
     removed = await remove_member(db, group_id=group_id, account_id=account_id)
@@ -203,7 +231,10 @@ async def remove_account_group_member(
     await db.commit()
 
 
-@router.post("/{group_id}/resolve")
+@router.post(
+    "/{group_id}/resolve",
+    dependencies=[Depends(require_permission("account-groups", "execute"))],
+)
 async def resolve_account_group(
     group_id: str,
     db: DB,
@@ -217,7 +248,8 @@ async def resolve_account_group(
     otherwise be satisfied from two different accounts. Advances the group's
     rotation cursor just like a real dispatch so repeated sessions rotate.
     """
-    group = await get_group(db, group_id, user_id=user.id)
+    owner_id = data_owner_user_id(user)
+    group = await get_group(db, group_id, user_id=owner_id)
     if group is None:
         raise HTTPException(status_code=404, detail="Account group not found")
     from db.crud.account_group import pick_next_batch

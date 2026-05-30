@@ -26,6 +26,15 @@ function screenContentInsetPx(screenWidth: number): number {
   return Math.max(5, Math.round(screenWidth * 0.02));
 }
 
+/** Portrait screen height inside react-device-mockup bezel (matches lib formula). */
+function mockupPortraitScreenHeightPx(screenWidth: number): number {
+  return Math.floor((screenWidth / 9) * 19.5);
+}
+
+function mockupFrameWidthPx(screenWidth: number): number {
+  return Math.max(1, Math.floor((screenWidth * 32) / 1080));
+}
+
 /** Android phone frame for farm tiles — stream fills the mock screen (status/nav hidden). */
 export function DeviceAndroidFrame({
   screenWidth,
@@ -43,10 +52,14 @@ export function DeviceAndroidFrame({
     () => Math.max(2, clipRadius - inset),
     [clipRadius, inset]
   );
+  const frameWidth = useMemo(
+    () => mockupFrameWidthPx(screenWidth),
+    [screenWidth]
+  );
 
-  // Constrain content height to device's real aspect ratio so object-cover never
-  // over-scales and clips the horizontal axis. The mockup lib uses ~9:20 internally;
-  // devices are typically 9:16–9:19.5 — the mismatch causes left/right clipping.
+  // react-device-mockup uses 9:19.5; most devices are 9:16–9:19.5. Clip the mockup
+  // to the device aspect ratio so the stream fills the visible screen without black
+  // bars or horizontal object-cover clipping.
   const contentWidth = screenWidth - 2 * inset;
   const streamHeight = useMemo(
     () =>
@@ -55,8 +68,17 @@ export function DeviceAndroidFrame({
         : undefined,
     [contentWidth, deviceWidth, deviceHeight]
   );
+  const mockupOuterHeight =
+    mockupPortraitScreenHeightPx(screenWidth) + 2 * frameWidth;
+  const clippedOuterHeight =
+    streamHeight !== undefined
+      ? streamHeight + 2 * inset + 2 * frameWidth
+      : undefined;
+  const shouldClipMockup =
+    clippedOuterHeight !== undefined &&
+    clippedOuterHeight < mockupOuterHeight;
 
-  return (
+  const mockup = (
     <AndroidMockup
       screenWidth={screenWidth}
       frameOnly
@@ -71,19 +93,32 @@ export function DeviceAndroidFrame({
       )}
     >
       <div
-        className='relative isolate box-border flex h-full min-h-0 w-full flex-col items-start overflow-hidden bg-black'
+        className='relative isolate box-border flex h-full min-h-0 w-full flex-col overflow-hidden bg-black'
         style={{ borderRadius: clipRadius, padding: inset }}
       >
         <div
-          className='w-full min-w-0 flex-shrink-0 overflow-hidden bg-black'
-          style={{
-            borderRadius: innerRadius,
-            height: streamHeight !== undefined ? `${streamHeight}px` : '100%'
-          }}
+          className='h-full min-h-0 w-full min-w-0 flex-1 overflow-hidden bg-black'
+          style={{ borderRadius: innerRadius }}
         >
           {children}
         </div>
       </div>
     </AndroidMockup>
+  );
+
+  if (!shouldClipMockup || clippedOuterHeight === undefined) {
+    return mockup;
+  }
+
+  return (
+    <div
+      className='overflow-hidden'
+      style={{
+        width: screenWidth + 2 * frameWidth,
+        height: clippedOuterHeight
+      }}
+    >
+      {mockup}
+    </div>
   );
 }

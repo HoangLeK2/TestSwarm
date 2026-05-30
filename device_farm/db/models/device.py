@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.database import Base
@@ -16,7 +16,11 @@ class Device(TenantScopedModel, Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     serial: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
+    device_serial: Mapped[str] = mapped_column(String(128), default="", index=True)
+    relay_serial: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, default=None, index=True)
     name: Mapped[str] = mapped_column(String(255), default="")
+    status: Mapped[str] = mapped_column(String(20), default="paired", index=True)
+    notes: Mapped[str] = mapped_column(Text, default="")
 
     # device_key is embedded in the QR code WebSocket URL so the server
     # can authenticate which user this device belongs to.
@@ -44,7 +48,10 @@ class Device(TenantScopedModel, Base):
     relay_scrcpy_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     last_seen: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    paired_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    unpaired_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     user: Mapped[Optional["User"]] = relationship("User", back_populates="devices")
     sessions: Mapped[list["DeviceSession"]] = relationship(

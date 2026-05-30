@@ -23,6 +23,9 @@ from .organization import Organization, OrganizationMember
 from .organization_invitation import OrganizationInvitation
 from .tenant_settings import TenantSettings
 from .device import Device, DeviceSession
+from .device_reserve_session import DeviceReserveSession
+from .reconnect_policy import ReconnectPolicy
+from .device_key import DeviceKey
 from .device_fsm import DeviceFsmSnapshot, DeviceStateTransition
 from .device_group import DeviceGroup, DeviceGroupMember
 from .campaign import Campaign, CampaignDevice, Scenario
@@ -53,6 +56,9 @@ __all__ = [
     "TenantSettings",
     "Device",
     "DeviceSession",
+    "DeviceReserveSession",
+    "ReconnectPolicy",
+    "DeviceKey",
     "DeviceFsmSnapshot",
     "DeviceStateTransition",
     "DeviceGroup",

@@ -121,6 +121,8 @@ class DeviceFsmEvent(StrEnum):
     SESSION_CLAIM = "session.claim"
     SESSION_RELEASED = "session.released"
     SESSION_LOST = "session.lost_device"
+    ADMIN_RESET = "admin.reset"
+    ADMIN_FORCE_ONLINE = "admin.force_online"
 
 
 class SessionOwnerType(StrEnum):
@@ -131,3 +133,22 @@ class SessionOwnerType(StrEnum):
     CAMPAIGN = "campaign"
     SYSTEM = "system"
     UNKNOWN = "unknown"
+
+
+class DeviceReserveOwnerType(StrEnum):
+    """Reserve session owner (DF-T-02-003)."""
+
+    MANUAL = "manual"
+    SCENARIO = "scenario"
+    MCP = "mcp"
+
+
+class DeviceReserveReleaseReason(StrEnum):
+    MANUAL = "manual"
+    TIMEOUT = "timeout"
+    FORCE = "force"
+
+
+class DeviceRegistryStatus(StrEnum):
+    PAIRED = "paired"
+    UNPAIRED = "unpaired"

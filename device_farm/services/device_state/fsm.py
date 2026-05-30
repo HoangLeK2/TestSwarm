@@ -34,10 +34,14 @@ _TRANSITIONS: Final[dict[tuple[DeviceFsmState, str], TransitionResult]] = {
     (DeviceFsmState.RECONNECTING, _E.ONLINE.value): DeviceFsmState.ONLINE,
     (DeviceFsmState.RECONNECTING, _E.ATTACHED.value): DeviceFsmState.CONNECTING,
     (DeviceFsmState.RECONNECTING, _E.DEAD.value): DeviceFsmState.DEAD,
+    (DeviceFsmState.RECONNECTING, _E.ADMIN_RESET.value): DeviceFsmState.CONNECTING,
+    (DeviceFsmState.RECONNECTING, _E.ADMIN_FORCE_ONLINE.value): DeviceFsmState.ONLINE,
     # DEAD — re-pair via attached or admin revive
     (DeviceFsmState.DEAD, _E.ATTACHED.value): DeviceFsmState.CONNECTING,
     (DeviceFsmState.DEAD, _E.REVIVED.value): DeviceFsmState.CONNECTING,
     (DeviceFsmState.DEAD, _E.DEAD.value): "NO_OP",
+    # BUSY stuck — admin override after session release
+    (DeviceFsmState.BUSY, _E.ADMIN_FORCE_ONLINE.value): DeviceFsmState.ONLINE,
 }
 
 _AGENT_EVENT_VALUES = frozenset(
@@ -58,10 +62,18 @@ _CONTROL_PLANE_EVENT_VALUES = frozenset(
         DeviceFsmEvent.SESSION_CLAIM,
         DeviceFsmEvent.SESSION_RELEASED,
         DeviceFsmEvent.REVIVED,
+        DeviceFsmEvent.ADMIN_RESET,
+        DeviceFsmEvent.ADMIN_FORCE_ONLINE,
     )
 )
 
-_ADMIN_EVENT_VALUES = frozenset({DeviceFsmEvent.REVIVED.value})
+_ADMIN_EVENT_VALUES = frozenset(
+    {
+        DeviceFsmEvent.REVIVED.value,
+        DeviceFsmEvent.ADMIN_RESET.value,
+        DeviceFsmEvent.ADMIN_FORCE_ONLINE.value,
+    }
+)
 
 
 def normalize_state(value: str | DeviceFsmState | None) -> DeviceFsmState:

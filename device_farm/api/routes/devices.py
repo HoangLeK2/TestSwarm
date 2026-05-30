@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 
 from pydantic import BaseModel
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import FileResponse
 
 from api.deps import AdminUser, CurrentUser, DB, require_permission
@@ -19,6 +19,14 @@ from api.schemas.device import (
     DeviceOut,
     SessionOut,
 )
+from api.schemas.device_capacity import (
+    CapacityGroupBreakdownOut,
+    CapacityRelayBreakdownOut,
+    CapacityReportOut,
+    CapacityStateBreakdownOut,
+    DeviceIdBreakdownOut,
+)
+from api.schemas.fleet_query import FleetDeviceItemOut, FleetDeviceListOut
 from api.schemas.fleet_stats import (
     FleetStatsFiltersOut,
     FleetStatsOut,
@@ -28,6 +36,13 @@ from api.schemas.fleet_stats import (
 )
 from api.schemas.device_group import UpdateTagsBody
 from db import crud as repo
+from db.crud.device_capacity import query_capacity_report, CapacityFilters
+from db.crud.fleet_query import (
+    FleetQueryFilters,
+    FleetQueryNotFoundError,
+    FleetQueryValidationError,
+    query_fleet_devices,
+)
 from db.crud.fleet_stats import (
     FleetStatsNotFoundError,
     FleetStatsValidationError,
@@ -237,12 +252,111 @@ async def poll_pairing(pairing_id: str, user: CurrentUser):
 
 @router.get(
     "",
-    response_model=list[DeviceOut],
     dependencies=[Depends(require_permission("devices", "read"))],
 )
-async def list_devices(request: Request, db: DB, user: CurrentUser):
+async def list_devices(
+    request: Request,
+    db: DB,
+    user: CurrentUser,
+    cursor: str | None = Query(default=None),
+    limit: int | None = Query(default=None, ge=1),
+    state: str | None = Query(default=None),
+    group_id: str | None = Query(default=None),
+    owner_type: str | None = Query(default=None),
+    relay_host: str | None = Query(default=None),
+    tag: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    sort: str | None = Query(default=None),
+    device_id: str | None = Query(default=None),
+    device_serial: str | None = Query(default=None),
+    adb_serial: str | None = Query(default=None),
+    relay_serial: str | None = Query(default=None),
+):
+    org_id = getattr(user, "org_id", None)
+    fleet_mode = any(
+        value is not None
+        for value in (
+            cursor,
+            limit,
+            state,
+            group_id,
+            owner_type,
+            relay_host,
+            tag,
+            q,
+            sort,
+            device_id,
+            device_serial,
+            adb_serial,
+            relay_serial,
+        )
+    )
+    if fleet_mode:
+        if not org_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Organization context required")
+        try:
+            page = await query_fleet_devices(
+                db,
+                filters=FleetQueryFilters(
+                    org_id=org_id,
+                    state=state,
+                    group_id=group_id,
+                    owner_type=owner_type,
+                    relay_host=relay_host,
+                    tag=tag,
+                    q=q,
+                    device_id=device_id,
+                    device_serial=device_serial,
+                    adb_serial=adb_serial,
+                    relay_serial=relay_serial,
+                ),
+                limit=limit or 50,
+                cursor=cursor,
+                sort=sort or "-paired_at",
+            )
+        except FleetQueryValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
+        except FleetQueryNotFoundError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+        log.info(
+            "fleet_list org=%s total=%s limit=%s sort=%s state=%s group=%s q=%s",
+            org_id,
+            page.total,
+            limit or 50,
+            sort or "-paired_at",
+            state,
+            group_id,
+            q,
+        )
+        return FleetDeviceListOut(
+            items=[
+                FleetDeviceItemOut(
+                    db_id=row.db_id,
+                    device_serial=row.device_serial,
+                    adb_serial=row.adb_serial,
+                    relay_serial=row.relay_serial,
+                    name=row.name,
+                    state=row.state,
+                    group_ids=row.group_ids,
+                    current_session_id=row.current_session_id,
+                    owner_type=row.owner_type,
+                    owner_id=row.owner_id,
+                    last_seen_at=row.last_seen_at,
+                    model=row.model,
+                    android_version=row.android_version,
+                )
+                for row in page.items
+            ],
+            next_cursor=page.next_cursor,
+            total=page.total,
+        )
+
     devices = await repo.list_devices(
-        db, org_id=getattr(user, "org_id", None), user_id=data_owner_user_id(user)
+        db, org_id=org_id, user_id=data_owner_user_id(user)
     )
     manager: DeviceManager | None = getattr(request.app.state, "manager", None)
     ctrl = _get_ctrl_servicer_optional()
@@ -331,6 +445,93 @@ def _can_view_owner_details(user) -> bool:
     domain = permission_domain(user)
     enforcer = build_enforcer_for_user(user, domain=domain)
     return bool(enforcer.enforce(str(user.id), domain, "devices", "manage"))
+
+
+@router.get(
+    "/capacity",
+    response_model=CapacityReportOut,
+    dependencies=[Depends(require_permission("devices", "read"))],
+)
+async def device_capacity_report(
+    db: DB,
+    user: CurrentUser,
+    group_id: str | None = Query(default=None),
+    tag: str | None = Query(default=None),
+    state: str | None = Query(default=None),
+    relay_host: str | None = Query(default=None),
+):
+    org_id = getattr(user, "org_id", None)
+    if not org_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Organization context required")
+    try:
+        report = await query_capacity_report(
+            db,
+            filters=CapacityFilters(
+                organization_id=org_id,
+                group_id=group_id,
+                tag=tag,
+                state=state,
+                relay_host=relay_host,
+            ),
+        )
+    except FleetStatsValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except FleetStatsNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    summary = report.summary
+    log.info(
+        "capacity_report org=%s scanned=%s latency_ms=%.1f group=%s tag=%s state=%s relay=%s",
+        org_id,
+        report.devices_scanned,
+        report.latency_ms,
+        group_id,
+        tag,
+        state,
+        relay_host,
+    )
+    return CapacityReportOut(
+        filters={
+            "organization_id": org_id,
+            "group_id": group_id,
+            "tag": tag,
+            "state": state,
+            "relay_host": relay_host,
+        },
+        summary=CapacityStateBreakdownOut(**summary),
+        by_state=report.by_state,
+        by_group=[
+            CapacityGroupBreakdownOut(
+                group_id=row.group_id,
+                total=row.total,
+                available=row.available,
+                busy=row.busy,
+                dead=row.dead,
+            )
+            for row in report.by_group
+        ],
+        by_relay=[
+            CapacityRelayBreakdownOut(
+                relay_host=row.relay_host,
+                total=row.total,
+                available=row.available,
+                busy=row.busy,
+                dead=row.dead,
+            )
+            for row in report.by_relay
+        ],
+        sample_devices=[
+            DeviceIdBreakdownOut(
+                db_id=row.db_id,
+                device_serial=row.device_serial,
+                adb_serial=row.adb_serial,
+                relay_serial=row.relay_serial,
+            )
+            for row in report.sample_devices
+        ],
+        devices_scanned=report.devices_scanned,
+        latency_ms=report.latency_ms,
+    )
 
 
 @router.get(
@@ -793,16 +994,30 @@ def _to_out(
     state: str = DeviceFsmState.UNKNOWN.value,
 ) -> DeviceOut:
     return DeviceOut(
-        id=d.id, serial=d.serial, name=d.name,
-        device_key=d.device_key, user_id=d.user_id,
-        brand=d.brand, model=d.model,
-        android_version=d.android_version, sdk_version=d.sdk_version,
-        screen_width=d.screen_width, screen_height=d.screen_height,
-        last_seen=d.last_seen, created_at=d.created_at,
+        id=d.id,
+        db_id=d.id,
+        serial=d.serial,
+        device_serial=getattr(d, "device_serial", None) or d.serial,
+        name=d.name,
+        device_key=d.device_key,
+        user_id=d.user_id,
+        brand=d.brand,
+        model=d.model,
+        android_version=d.android_version,
+        sdk_version=d.sdk_version,
+        screen_width=d.screen_width,
+        screen_height=d.screen_height,
+        last_seen=d.last_seen,
+        created_at=d.created_at,
         adb_serial=adb_serial if adb_serial is not None else getattr(d, "adb_serial", None),
+        relay_serial=getattr(d, "relay_serial", None),
         adb_ip=getattr(d, "adb_ip", None),
         adb_port=getattr(d, "adb_port", 5555),
         tags=getattr(d, "tags", "") or "",
         relay_id=relay_id,
         state=state,
+        status=getattr(d, "status", "paired") or "paired",
+        paired_at=getattr(d, "paired_at", None),
+        unpaired_at=getattr(d, "unpaired_at", None),
+        notes=getattr(d, "notes", "") or "",
     )

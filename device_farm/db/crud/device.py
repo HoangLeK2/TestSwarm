@@ -60,7 +60,7 @@ async def get_or_create_device(
     """Get existing device by serial, or create a new one (auto-register)."""
     device = await get_device_by_serial(db, serial)
     if device is None:
-        device = Device(serial=serial, user_id=user_id, org_id=org_id)  # type: ignore[arg-type]
+        device = Device(serial=serial, device_serial=serial, user_id=user_id, org_id=org_id)  # type: ignore[arg-type]
         db.add(device)
         await db.flush()
         await ensure_device_state(db, device.id)
@@ -74,7 +74,7 @@ async def create_device(
     user_id: Optional[str] = None,
     org_id: Optional[str] = None,
 ) -> Device:
-    device = Device(serial=serial, name=name, user_id=user_id, org_id=org_id)  # type: ignore[arg-type]
+    device = Device(serial=serial, device_serial=serial, name=name, user_id=user_id, org_id=org_id)  # type: ignore[arg-type]
     db.add(device)
     await db.flush()
     await ensure_device_state(db, device.id)
@@ -89,7 +89,7 @@ async def create_pending_device(
 ) -> Device:
     """Tạo bản ghi thiết bị chưa kết nối (đăng ký). Serial = pending-{uuid}."""
     serial = f"{PENDING_SERIAL_PREFIX}{uuid.uuid4().hex}"
-    device = Device(serial=serial, name=name or "Thiết bị mới", user_id=user_id, org_id=org_id)  # type: ignore[arg-type]
+    device = Device(serial=serial, device_serial=serial, name=name or "Thiết bị mới", user_id=user_id, org_id=org_id)  # type: ignore[arg-type]
     db.add(device)
     await db.flush()
     await ensure_device_state(db, device.id)

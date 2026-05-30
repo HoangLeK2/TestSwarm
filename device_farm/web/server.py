@@ -382,6 +382,15 @@ def create_app(
                 ).dead_detection_loop(),
             )
 
+            lifecycle.register_task(
+                LifecyclePhase.BACKGROUND,
+                "device-auto-release",
+                lambda: __import__(
+                    "services.device_state.auto_release_worker",
+                    fromlist=["auto_release_loop"],
+                ).auto_release_loop(),
+            )
+
         # ── Redis shared state ──
         from services import redis_store
         await redis_store.init(config.redis)

@@ -11,7 +11,7 @@
 | **Module** | DF-MOD-04 — Campaign, Scenario & Execution |
 | **Priority** | P2 |
 | **Story Points** | 3 |
-| **Status** | `Backlog` |
+| **Status** | `Done` |
 | **Labels** | `module:campaigns`, `layer:backend`, `layer:contract`, `type:feature`, `persona:automation-builder` |
 | **Truy vết — FR refs** | FR-04-18 |
 | **Truy vết — UC refs** | UC-04-05 |
@@ -115,33 +115,33 @@ Then 400 "ACCOUNT_REQUIRED_FOR_PREVIEW" (cùng FR-04-20 logic, không fallback p
 
 **Backend** (`layer:backend`)
 
-- [ ] Endpoint POST /scenarios/{id}/preview.
-- [ ] Wire dispatcher với kind="preview" flag.
-- [ ] Side-effect step detector (introspect step type).
-- [ ] Auto-purge cron job.
-- [ ] List preview endpoint.
+- [x] Endpoint POST /scenarios/{id}/preview.
+- [x] Wire dispatcher với kind="preview" flag.
+- [x] Side-effect step detector (introspect step type).
+- [x] Auto-purge cron job.
+- [x] List preview endpoint.
 
 **Contract / API** (`layer:contract`)
 
-- [ ] OpenAPI cho 2 endpoint.
-- [ ] Cập nhật schema execution để có field `kind` (campaign|preview|session).
+- [x] OpenAPI cho 2 endpoint.
+- [x] Cập nhật schema execution để có field `kind` (campaign|preview|session).
 
 **Database / Migration** (`layer:db`)
 
-- [ ] Cột `kind` trên execution; default "campaign".
-- [ ] Index trên (kind, organization_id, created_by, created_at).
+- [x] Cột `kind` trên execution; default "campaign".
+- [x] Index trên (kind, organization_id, created_by, created_at).
 
 **Documentation** (`layer:docs`)
 
-- [ ] Doc preview vs campaign.
-- [ ] Best-practice "khi nào preview".
+- [x] Doc preview vs campaign.
+- [x] Best-practice "khi nào preview".
 
 **Test** (`layer:test`)
 
-- [ ] Test preview chạy đầy đủ.
-- [ ] Test warning side-effect.
-- [ ] Test purge cron.
-- [ ] Test isolation từ campaign aggregator.
+- [x] Test preview chạy đầy đủ.
+- [x] Test warning side-effect.
+- [x] Test purge cron.
+- [x] Test isolation từ campaign aggregator.
 
 ## 8. Test case nghiệp vụ
 

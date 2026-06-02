@@ -58,6 +58,7 @@ def handle_tap(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict
         implicit_wait_timeout=iw_timeout, implicit_wait_poll=iw_poll,
         element_image=elem_img_bytes, image_threshold=sc.va_image_threshold,
         screenshot_anchor=ss_anchor, spec=spec,
+        cancel_event=sc.cancel_event,
     )
 
     # Auto-dismiss popup on failure
@@ -75,6 +76,7 @@ def handle_tap(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict
                     implicit_wait_timeout=iw_timeout, implicit_wait_poll=iw_poll,
                     element_image=elem_img_bytes, image_threshold=sc.va_image_threshold,
                     screenshot_anchor=ss_anchor, spec=spec,
+                    cancel_event=sc.cancel_event,
                 )
 
     result["ok"] = ok
@@ -190,6 +192,7 @@ def handle_tap_selector(sc: ScenarioContext, step: Dict[str, Any], idx: int, res
         implicit_wait_timeout=iw_timeout, implicit_wait_poll=iw_poll,
         element_image=elem_img_bytes, image_threshold=sc.va_image_threshold,
         spec=spec,
+        cancel_event=sc.cancel_event,
     )
 
     if not ok:
@@ -206,6 +209,7 @@ def handle_tap_selector(sc: ScenarioContext, step: Dict[str, Any], idx: int, res
                     implicit_wait_timeout=iw_timeout, implicit_wait_poll=iw_poll,
                     element_image=elem_img_bytes, image_threshold=sc.va_image_threshold,
                     spec=spec,
+                    cancel_event=sc.cancel_event,
                 )
     result["ok"] = ok
     if msg:

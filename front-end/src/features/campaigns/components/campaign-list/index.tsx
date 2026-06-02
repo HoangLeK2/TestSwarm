@@ -4,44 +4,41 @@ import { useMemo } from 'react';
 import { useTranslations } from 'next-intl';
 import { FileText } from 'lucide-react';
 import { useCampaigns } from '../../hooks/use-campaigns';
-import type { CampaignOut, CampaignStatus } from '../../types';
+import type { CampaignOut } from '../../types';
 import { DataTable } from '@/components/ui/table/data-table';
 import { useDataTable } from '@/hooks/use-data-table';
 import { CreateCampaignDialog } from '../create-campaign-dialog';
 import { Can } from '@/features/auth';
 import { getCampaignColumns } from './columns';
 import { CampaignMobileList } from './CampaignMobileList';
+import { CampaignExecutionRuntimeBanner } from './CampaignExecutionRuntimeBanner';
+import { buildCampaignStatusLabels } from '../../campaign-status-ui';
+import { CoreEmptyState } from '@/components/core-empty-state';
 
-const STATUS_VARIANT: Record<
-  CampaignStatus,
-  'secondary' | 'default' | 'outline' | 'destructive'
-> = {
-  idle: 'outline',
-  draft: 'outline',
-  running: 'default',
-  paused: 'outline',
-  completed: 'outline'
-};
-
-export function CampaignList() {
+export function CampaignList({
+  attachScenarioId,
+  openCreateCampaign = false
+}: {
+  attachScenarioId?: string | null;
+  openCreateCampaign?: boolean;
+} = {}) {
   const t = useTranslations('campaignsFeature.list');
+  const createDialogProps = {
+    initialOpen: openCreateCampaign && Boolean(attachScenarioId),
+    preselectedScenarioIds: attachScenarioId ? [attachScenarioId] : []
+  };
+  const tEmpty = useTranslations('coreEmptyState');
   const { data: campaigns, isLoading, error } = useCampaigns();
 
   const data: CampaignOut[] = campaigns ?? [];
 
-  const statusLabel = useMemo<Record<CampaignStatus, string>>(
-    () => ({
-      idle: t('statusIdle'),
-      draft: t('statusDraft'),
-      running: t('statusRunning'),
-      paused: t('statusPaused'),
-      completed: t('statusCompleted')
-    }),
+  const statusLabel = useMemo(
+    () => buildCampaignStatusLabels((key) => t(key)),
     [t]
   );
 
   const columns = useMemo(() => {
-    return getCampaignColumns(t, statusLabel, STATUS_VARIANT);
+    return getCampaignColumns(t, statusLabel);
   }, [t, statusLabel]);
 
   const { table } = useDataTable<CampaignOut>({
@@ -52,6 +49,7 @@ export function CampaignList() {
 
   return (
     <div className='space-y-3'>
+      <CampaignExecutionRuntimeBanner />
       {isLoading || error ? (
         <div>
           {isLoading && (
@@ -71,25 +69,36 @@ export function CampaignList() {
               {t('campaignCountLabel')}
             </p>
             <Can object='campaigns' action='create'>
-              <CreateCampaignDialog />
+              <CreateCampaignDialog {...createDialogProps} />
             </Can>
           </div>
 
           {!campaigns?.length && (
-            <div className='rounded-xl border border-dashed border-border bg-muted/20 p-12 text-center'>
-              <FileText className='mx-auto mb-3 size-10 text-muted-foreground/60' />
-              <p className='text-sm font-medium text-foreground'>
-                {t('emptyTitle')}
-              </p>
-              <p className='mt-1 text-xs text-muted-foreground'>
-                {t('emptyDescription')}
-              </p>
-              <div className='mt-4'>
-                <Can object='campaigns' action='create'>
-                  <CreateCampaignDialog />
-                </Can>
+            <Can
+              object='campaigns'
+              action='create'
+              fallback={
+                <CoreEmptyState
+                  icon={FileText}
+                  title={tEmpty('campaigns.title')}
+                  description={tEmpty('campaigns.description')}
+                  readOnlyHint={tEmpty('readOnlyHint')}
+                  trackingKey='campaigns-empty-readonly'
+                />
+              }
+            >
+              <div className='space-y-4'>
+                <CoreEmptyState
+                  icon={FileText}
+                  title={tEmpty('campaigns.title')}
+                  description={tEmpty('campaigns.description')}
+                  trackingKey='campaigns-empty'
+                />
+                <div className='flex justify-center'>
+                  <CreateCampaignDialog {...createDialogProps} />
+                </div>
               </div>
-            </div>
+            </Can>
           )}
 
           {campaigns?.length ? (
@@ -97,7 +106,6 @@ export function CampaignList() {
               <CampaignMobileList
                 campaigns={campaigns}
                 statusLabel={statusLabel}
-                statusVariant={STATUS_VARIANT}
               />
               <div className='hidden lg:block'>
                 <DataTable table={table} total={campaigns.length} />

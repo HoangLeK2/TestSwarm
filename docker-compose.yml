@@ -167,6 +167,8 @@ services:
       DEVICE_FARM_U2_ALWAYS_TUNNEL: ${DEVICE_FARM_U2_ALWAYS_TUNNEL:-1}
       DEVICE_FARM_SCRCPY_JAR: ${DEVICE_FARM_SCRCPY_JAR:-/usr/share/scrcpy/scrcpy-server}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      # Reconcile idempotent migration file drift on local Docker volumes (015 edited after first apply).
+      MIGRATION_RECONCILE_DRIFT: ${MIGRATION_RECONCILE_DRIFT:-1}
     volumes:
       - farm_captures:/app/captures
       - ./device_farm/config.yaml:/app/config.yaml:ro

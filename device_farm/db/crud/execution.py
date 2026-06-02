@@ -31,8 +31,28 @@ async def create_execution(
     error_config: Optional[dict] = None,
     meta: Optional[dict] = None,
     user_id: Optional[str] = None,
+    account_id: Optional[str] = None,
     status: str = "pending",
+    kind: str = "campaign",
+    organization_id: Optional[str] = None,
+    org_id: Optional[str] = None,
 ) -> Execution:
+    resolved_org_id = (org_id or organization_id or "").strip()
+    if not resolved_org_id and campaign_id:
+        from db.crud.campaign_entity import lookup_campaign_org_id
+
+        resolved_org_id = (await lookup_campaign_org_id(db, campaign_id)) or ""
+    if not resolved_org_id and user_id:
+        from db.crud.user import get_user_org_id
+
+        resolved_org_id = (await get_user_org_id(db, user_id)) or ""
+    if not resolved_org_id:
+        from tenancy.context import get_current_org_id
+
+        resolved_org_id = get_current_org_id() or ""
+    if not resolved_org_id:
+        raise ValueError("org_id is required to create an execution")
+
     # Auto-snapshot scenario version when scenario_id is provided
     scenario_version_id = None
     if scenario_id is not None:
@@ -42,15 +62,18 @@ async def create_execution(
 
     execution = Execution(
         run_type=run_type,
+        kind=kind,
         status=status,
         campaign_id=campaign_id,
         scenario_id=scenario_id,
         scenario_version_id=scenario_version_id,
+        org_id=resolved_org_id,
         device_config=device_config or {},
         loop_config=loop_config or {},
         error_config=error_config or {},
         meta=meta or {},
         user_id=user_id,
+        account_id=account_id,
     )
     db.add(execution)
     await db.flush()
@@ -72,12 +95,20 @@ async def list_executions(
     campaign_id: Optional[str] = None,
     scenario_id: Optional[str] = None,
     run_type: Optional[str] = None,
+    kind: Optional[str] = None,
     status: Optional[str] = None,
+    since: Optional[datetime] = None,
     offset: int = 0,
     limit: int = 50,
 ) -> tuple[list[Execution], int]:
     q = select(Execution).order_by(Execution.created_at.desc())
-    if org_id:
+    if kind == "preview":
+        q = q.where(Execution.kind == "preview")
+        if org_id:
+            q = q.where(Execution.org_id == org_id)
+        if user_id is not None:
+            q = q.where(Execution.user_id == user_id)
+    elif org_id:
         q = q.join(Campaign, Execution.campaign_id == Campaign.id).where(
             Campaign.org_id == org_id
         )
@@ -89,8 +120,12 @@ async def list_executions(
         q = q.where(Execution.scenario_id == scenario_id)
     if run_type is not None:
         q = q.where(Execution.run_type == run_type)
+    if kind is not None and kind != "preview":
+        q = q.where(Execution.kind == kind)
     if status is not None:
         q = q.where(Execution.status == status)
+    if since is not None:
+        q = q.where(Execution.created_at >= since)
 
     total_result = await db.execute(select(func.count()).select_from(q.subquery()))
     total = total_result.scalar_one()
@@ -155,6 +190,22 @@ async def list_running_executions_for_campaign(
             Execution.campaign_id == campaign_id,
             Execution.status.in_(("running", "paused")),
         )
+    )
+    return list(result.scalars().all())
+
+
+async def list_running_executions_for_device(
+    db: AsyncSession, device_id: str
+) -> list[Execution]:
+    """Running/paused executions linked to a device (Epic 04 fan-out / preview)."""
+    result = await db.execute(
+        select(Execution)
+        .join(ExecutionDevice, ExecutionDevice.execution_id == Execution.id)
+        .where(
+            ExecutionDevice.device_id == device_id,
+            Execution.status.in_(("running", "paused")),
+        )
+        .order_by(Execution.created_at.desc())
     )
     return list(result.scalars().all())
 
@@ -274,7 +325,11 @@ async def upsert_execution_result(
     er = result.scalar_one_or_none()
 
     if er is None:
+        execution = await get_execution(db, execution_id)
+        if execution is None:
+            raise ValueError(f"execution not found: {execution_id}")
         er = ExecutionResult(
+            org_id=execution.org_id,
             execution_id=execution_id,
             device_id=device_id,
             status=status,
@@ -365,6 +420,7 @@ __all__ = [
     "start_execution",
     "finish_execution",
     "list_running_executions_for_campaign",
+    "list_running_executions_for_device",
     "pause_execution_record",
     "resume_execution_record",
     "cancel_execution_record",

@@ -4,7 +4,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import os
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger("relay.extra_data.collector")
@@ -100,6 +103,26 @@ def _bool_context(context: dict[str, Any], key: str, default: bool = False) -> b
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _open_post_debug_dump_enabled(context: dict[str, Any]) -> bool:
+    if _bool_context(context, "open_post_debug_dump", False):
+        return True
+    return os.environ.get("OPEN_POST_DEBUG_DUMP", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _save_open_post_debug_xml(serial: str, xml: str, tag: str) -> str | None:
+    """Persist hierarchy for offline post-open diagnosis (OPEN_POST_DEBUG_DUMP=1)."""
+    if not xml or not _looks_like_hierarchy_xml(xml):
+        return None
+    out_dir = Path(__file__).resolve().parents[2] / "debug" / "traces"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    safe_serial = "".join(c if c.isalnum() else "_" for c in serial)[:32] or "device"
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    path = out_dir / f"open_post_{safe_serial}_{tag}_{ts}.xml"
+    path.write_text(xml, encoding="utf-8")
+    logger.info("[%s] open_post debug xml saved: %s", serial, path)
+    return str(path)
+
+
 async def _u2_click(executor: Any, serial: str, x: int, y: int) -> bool:
     result = await executor.run_batch(
         serial,
@@ -110,6 +133,289 @@ async def _u2_click(executor: Any, serial: str, x: int, y: int) -> bool:
         return False
     results = result.get("results") or []
     return bool(results and results[0].get("ok"))
+
+
+async def _u2_click_selector(
+    executor: Any,
+    serial: str,
+    selector: dict[str, Any],
+    *,
+    timeout: float = 1.2,
+) -> bool:
+    result = await executor.run_batch(
+        serial,
+        [{"op": "click_selector", "selector": selector, "timeout": timeout}],
+        early_exit=True,
+    )
+    if not result.get("ok"):
+        return False
+    results = result.get("results") or []
+    return bool(results and results[0].get("ok") and results[0].get("value"))
+
+
+async def _u2_click_spec(
+    executor: Any,
+    serial: str,
+    spec: dict[str, Any],
+    *,
+    timeout: float = 1.2,
+) -> bool:
+    result = await executor.run_batch(
+        serial,
+        [{"op": "click_spec", "spec": spec, "timeout": timeout}],
+        early_exit=True,
+    )
+    if not result.get("ok"):
+        return False
+    results = result.get("results") or []
+    return bool(results and results[0].get("ok") and results[0].get("value"))
+
+
+async def _u2_wait_selector(
+    executor: Any,
+    serial: str,
+    selector: dict[str, Any],
+    *,
+    timeout: float = 1.0,
+) -> bool:
+    result = await executor.run_batch(
+        serial,
+        [{"op": "wait_exists", "selector": selector, "timeout": timeout}],
+        early_exit=True,
+    )
+    if not result.get("ok"):
+        return False
+    results = result.get("results") or []
+    return bool(results and results[0].get("ok") and results[0].get("value"))
+
+
+async def _u2_click_comment_target(
+    executor: Any,
+    serial: str,
+    cand: dict[str, Any],
+    context: dict[str, Any],
+) -> tuple[bool, str]:
+    """Prefer U2 node click (xpath/spec/selector); fall back to coordinate tap."""
+    from relay.extra_data.parsers.facebook.comment_pipeline import comment_tap_point
+
+    use_u2 = _bool_context(context, "comment_target_u2_click", True)
+    timeout = _float_context(context, "comment_target_click_timeout_s", 1.2, 0.4, 4.0)
+    u2_click = cand.get("u2_click") if isinstance(cand.get("u2_click"), dict) else {}
+
+    if use_u2:
+        spec = u2_click.get("spec") if isinstance(u2_click.get("spec"), dict) else None
+        if spec and await _u2_click_spec(executor, serial, spec, timeout=timeout):
+            return True, "click_spec"
+        xpath = u2_click.get("xpath")
+        if xpath and await _u2_click_spec(executor, serial, {"xpath": xpath}, timeout=timeout):
+            return True, "click_spec_xpath"
+        selector = u2_click.get("selector") if isinstance(u2_click.get("selector"), dict) else None
+        if selector and await _u2_click_selector(executor, serial, selector, timeout=timeout):
+            return True, "click_selector"
+
+    bounds = cand.get("bounds")
+    if not (isinstance(bounds, list) and len(bounds) == 4):
+        return False, "invalid_bounds"
+    x1, y1, x2, y2 = [int(v) for v in bounds]
+    screen_w = 1080
+    cx, cy = comment_tap_point((x1, y1, x2, y2), screen_w=screen_w)
+    if await _u2_click(executor, serial, cx, cy):
+        return True, "click_coord"
+    return False, "tap_failed"
+
+
+async def _u2_click_post_open_target(
+    executor: Any,
+    serial: str,
+    target: dict[str, Any],
+    context: dict[str, Any],
+) -> tuple[bool, str]:
+    """Tap post header metadata (timestamp / badge row / geometric fallback)."""
+    from relay.extra_data.parsers.facebook.post_open_pipeline import post_header_tap_point
+
+    use_u2 = _bool_context(context, "post_open_u2_click", True)
+    timeout = _float_context(context, "post_open_click_timeout_s", 1.2, 0.4, 4.0)
+    u2_click = target.get("u2_click") if isinstance(target.get("u2_click"), dict) else {}
+
+    if use_u2 and u2_click:
+        spec = u2_click.get("spec") if isinstance(u2_click.get("spec"), dict) else None
+        if spec and await _u2_click_spec(executor, serial, spec, timeout=timeout):
+            return True, "click_spec"
+        xpath = u2_click.get("xpath")
+        if xpath and await _u2_click_spec(executor, serial, {"xpath": xpath}, timeout=timeout):
+            return True, "click_spec_xpath"
+        selector = u2_click.get("selector") if isinstance(u2_click.get("selector"), dict) else None
+        if selector and await _u2_click_selector(executor, serial, selector, timeout=timeout):
+            return True, "click_selector"
+
+    bounds = target.get("bounds")
+    if not (isinstance(bounds, list) and len(bounds) == 4):
+        return False, "invalid_bounds"
+    x1, y1, x2, y2 = [int(v) for v in bounds]
+    tap_kind = str(target.get("tap_kind") or "")
+    cx, cy = post_header_tap_point((x1, y1, x2, y2), tap_kind=tap_kind)
+    if target.get("has_see_more") and tap_kind == "post_body":
+        logger.info(
+            "[%s] open_post tap post_body (see-more present) at (%d,%d) bounds=%s",
+            serial,
+            cx,
+            cy,
+            bounds,
+        )
+    if await _u2_click(executor, serial, cx, cy):
+        return True, "click_coord"
+    return False, "tap_failed"
+
+
+async def _maybe_open_fb_post_detail(
+    executor: Any,
+    serial: str,
+    context: dict[str, Any],
+    feed_xml: str,
+) -> tuple[str | None, dict[str, Any]]:
+    """Open post detail from feed header tap; return detail XML or None to keep feed."""
+    from relay.extra_data.parsers.facebook.post_open_pipeline import (
+        hierarchy_is_fb_post_detail_from_xml,
+        resolve_post_open_targets_from_xml,
+    )
+
+    if not _bool_context(context, "open_post_before_extract", False):
+        return None, {"skipped": True}
+
+    if hierarchy_is_fb_post_detail_from_xml(feed_xml):
+        logger.info("[%s] open_post_before_extract: already on post detail", serial)
+        context["open_post_detail"] = True
+        return feed_xml, {"reason_code": "already_on_post_detail"}
+
+    locked_post_key = str(context.get("post_key") or "").strip() or None
+    primary, alternates = resolve_post_open_targets_from_xml(
+        feed_xml,
+        locked_post_key=locked_post_key,
+        center_y_ratio=float(context.get("post_open_center_y_ratio") or 0.5),
+    )
+    candidates = ([primary] if primary else []) + [
+        t for t in alternates if isinstance(t, dict)
+    ]
+    if not candidates:
+        from relay.extra_data.parsers.facebook.post_open_pipeline import (
+            diagnose_post_open_resolution,
+        )
+
+        diag = diagnose_post_open_resolution(feed_xml)
+        debug_path = None
+        if _open_post_debug_dump_enabled(context):
+            debug_path = _save_open_post_debug_xml(serial, feed_xml, "no_target")
+        logger.info(
+            "[%s] open_post_before_extract: no header tap target on feed diag=%s debug_xml=%s",
+            serial,
+            diag,
+            debug_path,
+        )
+        return None, {"reason_code": "post_open_target_not_found", "diagnostic": diag, "debug_xml": debug_path}
+
+    settle_s = _float_context(context, "post_open_tap_settle_s", 0.65, 0.0, 3.0)
+    verify = _bool_context(context, "post_open_verify", True)
+    max_attempts = _int_context(context, "post_open_max_attempts", 2, 1, 4)
+    back_settle_s = _float_context(context, "post_open_back_settle_s", 0.5, 0.0, 3.0)
+    attempts: list[dict[str, Any]] = []
+
+    for idx, target in enumerate(candidates[:max_attempts]):
+        click_ok, route = await _u2_click_post_open_target(executor, serial, target, context)
+        if not click_ok:
+            attempts.append({"index": idx, "tapped": False, "reason": "tap_failed", "route": route})
+            continue
+        logger.info(
+            "[%s] open_post_before_extract tap #%d kind=%s route=%s label=%r",
+            serial,
+            idx,
+            target.get("tap_kind"),
+            route,
+            (target.get("tap_label") or "")[:60],
+        )
+        if settle_s > 0:
+            await asyncio.sleep(settle_s)
+        detail_xml = await _dump_hierarchy(executor, serial, context)
+        opened = bool(detail_xml and hierarchy_is_fb_post_detail_from_xml(detail_xml))
+        attempts.append(
+            {
+                "index": idx,
+                "tapped": True,
+                "verified": opened if verify else "skipped",
+                "route": route,
+                "tap_kind": target.get("tap_kind"),
+            }
+        )
+        if opened or not verify:
+            context["open_post_detail"] = True
+            context["open_post_detail_tap_kind"] = target.get("tap_kind")
+            return (detail_xml or feed_xml), {
+                "reason_code": "ok" if opened else "unverified",
+                "attempts": attempts,
+                "tap_kind": target.get("tap_kind"),
+            }
+        # Verify heuristic missed detail chrome but tap may still have navigated — keep post-tap XML.
+        if detail_xml and detail_xml != feed_xml:
+            logger.info(
+                "[%s] open_post_before_extract: verify miss but hierarchy changed — using post-tap xml",
+                serial,
+            )
+            context["open_post_detail"] = True
+            context["open_post_detail_tap_kind"] = target.get("tap_kind")
+            return detail_xml, {
+                "reason_code": "unverified_hierarchy_changed",
+                "attempts": attempts,
+                "tap_kind": target.get("tap_kind"),
+            }
+        # Same rule as comment-target retries: never BACK on group feed (exits the
+        # group). Only dismiss transient overlays (profile viewer, photo lightbox).
+        from relay.extra_data.parsers.facebook.comment_pipeline import (
+            should_press_back_after_failed_tap,
+        )
+
+        if detail_xml and should_press_back_after_failed_tap(detail_xml):
+            backed = await _press_back(executor, serial)
+            attempts[-1]["back_pressed"] = backed
+            if back_settle_s > 0:
+                await asyncio.sleep(back_settle_s)
+            logger.info(
+                "[%s] open_post_before_extract tap #%d verify_failed overlay back=%s",
+                serial,
+                idx,
+                backed,
+            )
+        else:
+            attempts[-1]["back_pressed"] = False
+            logger.info(
+                "[%s] open_post_before_extract tap #%d verify_failed no_back — next alternate",
+                serial,
+                idx,
+            )
+
+    logger.info("[%s] open_post_before_extract: verify failed after %d attempt(s)", serial, len(attempts))
+    debug_path = None
+    if _open_post_debug_dump_enabled(context):
+        last_xml = await _dump_hierarchy(executor, serial, context)
+        if last_xml:
+            debug_path = _save_open_post_debug_xml(serial, last_xml, "verify_failed")
+    return None, {"reason_code": "post_open_verify_failed", "attempts": attempts, "debug_xml": debug_path}
+
+
+async def _wait_comment_sheet_opened(
+    executor: Any,
+    serial: str,
+    context: dict[str, Any],
+) -> tuple[bool, str]:
+    """Verify comment sheet via U2 wait on sheet chrome nodes (no full XML dump)."""
+    from relay.extra_data.parsers.facebook.comment_pipeline import FB_COMMENT_SHEET_WAIT_SELECTORS
+
+    if not _bool_context(context, "comment_sheet_u2_wait", True):
+        return False, "skipped"
+    timeout = _float_context(context, "comment_sheet_wait_s", 2.0, 0.5, 6.0)
+    per_sel = max(0.25, timeout / max(1, len(FB_COMMENT_SHEET_WAIT_SELECTORS)))
+    for selector in FB_COMMENT_SHEET_WAIT_SELECTORS:
+        if await _u2_wait_selector(executor, serial, selector, timeout=per_sel):
+            return True, "wait_exists"
+    return False, "wait_miss"
 
 
 async def _u2_swipe_vertical(
@@ -515,29 +821,64 @@ async def _collect_comment_snapshots(
         context, "comment_max_snapshots", max(20, dump_cycles + 1), 1, 50
     )
     max_xml_bytes = _int_context(context, "comment_xml_max_bytes", 6 * 1024 * 1024, 512 * 1024, 7 * 1024 * 1024)
-    distance = _float_context(context, "comment_scroll_distance", 0.70, 0.08, 0.85)
-    duration_ms = _int_context(context, "comment_scroll_duration_ms", 60, 40, 800)
-    swipe_pause_s = _float_context(context, "comment_scroll_pause_s", 0.02, 0.0, 4.0)
+    # Gentle scroll — matches STF extra-data defaults (0.22 / 340ms); avoids fling-off sheet.
+    distance = _float_context(context, "comment_scroll_distance", 0.28, 0.08, 0.85)
+    duration_ms = _int_context(context, "comment_scroll_duration_ms", 320, 100, 800)
+    swipe_pause_s = _float_context(context, "comment_scroll_pause_s", 0.22, 0.0, 4.0)
     recover_chrome = _bool_context(context, "comment_recover_chrome", True)
 
     from relay.extra_data.parsers.facebook.comment_pipeline import (
         detect_comment_sheet_interrupt_from_xml,
+        interrupt_reason_allows_back,
         resolve_comment_scroll_swipe_from_xml,
     )
+    from relay.extra_data.parsers.facebook.comment_filter import _is_sort_bottom_sheet_open
+    from relay.extra_data.parsers.facebook.parser import _parse_xml
 
-    async def _recover_comment_chrome(xml: str) -> str:
-        if not recover_chrome:
+    async def _wait_sort_sheet_closed(xml: str) -> str:
+        wait_s = _float_context(context, "comment_filter_sheet_wait_s", 2.5, 0.0, 8.0)
+        if wait_s <= 0:
             return xml
+        deadline = time.monotonic() + wait_s
+        current = xml
+        while time.monotonic() < deadline:
+            root = _parse_xml(current)
+            if root is None or not _is_sort_bottom_sheet_open(root):
+                return current
+            await asyncio.sleep(0.28)
+            fresh = await _dump_hierarchy(executor, serial, context)
+            if fresh:
+                current = fresh
+        return current
+
+    initial_xml = await _wait_sort_sheet_closed(initial_xml)
+
+    async def _recover_comment_chrome(xml: str) -> tuple[str, bool]:
+        if not recover_chrome:
+            return xml, False
         reason = detect_comment_sheet_interrupt_from_xml(xml)
         if not reason:
-            return xml
+            return xml, False
+        if not interrupt_reason_allows_back(reason):
+            logger.info(
+                "[%s] extra_data comment recovery: %s — skip BACK (stay in group)",
+                serial,
+                reason,
+            )
+            return xml, reason == "left_comment_sheet"
         logger.info("[%s] extra_data comment recovery: %s — press BACK", serial, reason)
         await _press_back(executor, serial)
         await asyncio.sleep(0.22)
         fresh = await _dump_hierarchy(executor, serial, context)
-        return fresh if fresh else xml
+        return (fresh if fresh else xml), False
 
-    initial_xml = await _recover_comment_chrome(initial_xml)
+    initial_xml, abort_scroll = await _recover_comment_chrome(initial_xml)
+    if abort_scroll:
+        logger.warning(
+            "[%s] extra_data comment scroll aborted: not on comment sheet",
+            serial,
+        )
+        return [initial_xml]
     snapshots: list[str] = [initial_xml]
     seen_xml: set[str] = {_sha256_hex(initial_xml)}
     total_xml_bytes = len(initial_xml.encode("utf-8"))
@@ -607,7 +948,13 @@ async def _collect_comment_snapshots(
         next_xml = await _dump_hierarchy(executor, serial, context)
         if not next_xml:
             break
-        next_xml = await _recover_comment_chrome(next_xml)
+        next_xml, abort_scroll = await _recover_comment_chrome(next_xml)
+        if abort_scroll:
+            logger.warning(
+                "[%s] extra_data comment scroll stopped: left comment sheet",
+                serial,
+            )
+            break
 
         next_bytes = len(next_xml.encode("utf-8"))
         if total_xml_bytes + next_bytes > max_xml_bytes:
@@ -717,6 +1064,9 @@ async def collect_fb_comment_target_with_tap(
     default 1, hard-capped at 3).
     """
     from relay.extra_data.ingest import _parse_items
+    from relay.extra_data.parsers.facebook.comment_pipeline import (
+        should_press_back_after_failed_tap,
+    )
 
     async with _collect_lock(serial):
 
@@ -768,21 +1118,25 @@ async def collect_fb_comment_target_with_tap(
                         {"index": attempt_idx, "skipped": True, "reason": "invalid_bounds"}
                     )
                     continue
-                x1, y1, x2, y2 = [int(v) for v in bounds]
-                cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-                click_ok = await _u2_click(executor, serial, cx, cy)
+                click_ok, click_route = await _u2_click_comment_target(
+                    executor, serial, cand, context
+                )
                 if not click_ok:
                     attempts.append(
-                        {"index": attempt_idx, "tapped": False, "reason": "tap_failed"}
+                        {
+                            "index": attempt_idx,
+                            "tapped": False,
+                            "reason": "tap_failed",
+                            "click_route": click_route,
+                        }
                     )
                     continue
                 tapped = True
                 logger.info(
-                    "[%s] extra_data fb_comment_target_tap attempt=%d tap at (%d,%d) post_key=%s",
+                    "[%s] extra_data fb_comment_target_tap attempt=%d route=%s post_key=%s",
                     serial,
                     attempt_idx,
-                    cx,
-                    cy,
+                    click_route,
                     cand.get("post_key"),
                 )
                 if settle_s > 0:
@@ -790,19 +1144,33 @@ async def collect_fb_comment_target_with_tap(
 
                 if not verify_enabled:
                     attempts.append(
-                        {"index": attempt_idx, "tapped": True, "verified": "skipped"}
+                        {
+                            "index": attempt_idx,
+                            "tapped": True,
+                            "verified": "skipped",
+                            "click_route": click_route,
+                        }
                     )
                     chosen = cand
                     chosen_index = attempt_idx
                     break
 
-                post_tap_xml = await _dump_hierarchy(executor, serial, context)
-                opened = _diag_sheet_opened(post_tap_xml)
+                opened, verify_route = await _wait_comment_sheet_opened(
+                    executor, serial, context
+                )
+                post_tap_xml: str | None = None
+                if not opened:
+                    post_tap_xml = await _dump_hierarchy(executor, serial, context)
+                    opened = _diag_sheet_opened(post_tap_xml)
+                    if opened:
+                        verify_route = "xml_dump"
                 attempts.append(
                     {
                         "index": attempt_idx,
                         "tapped": True,
                         "verified": opened,
+                        "click_route": click_route,
+                        "verify_route": verify_route,
                         "post_xml_available": post_tap_xml is not None,
                     }
                 )
@@ -811,26 +1179,38 @@ async def collect_fb_comment_target_with_tap(
                     chosen_index = attempt_idx
                     break
 
-                # Sheet did not open: press BACK to leave whatever popped up
-                # before retrying the next-best candidate.
+                # Sheet did not open: only BACK out of dismissible overlays (profile/photo).
+                # Never BACK from group feed — that exits the group being crawled.
                 is_last = attempt_idx >= max_attempts - 1
                 if not is_last:
-                    backed = await _press_back(executor, serial)
-                    if verify_back_settle_s > 0:
-                        await asyncio.sleep(verify_back_settle_s)
-                    attempts[-1]["back_pressed"] = backed
-                    logger.info(
-                        "[%s] extra_data fb_comment_target_tap attempt=%d verify_failed back=%s — trying next alternate",
-                        serial,
-                        attempt_idx,
-                        backed,
-                    )
+                    if post_tap_xml is None:
+                        post_tap_xml = await _dump_hierarchy(executor, serial, context)
+                    if post_tap_xml and should_press_back_after_failed_tap(post_tap_xml):
+                        backed = await _press_back(executor, serial)
+                        if verify_back_settle_s > 0:
+                            await asyncio.sleep(verify_back_settle_s)
+                        attempts[-1]["back_pressed"] = backed
+                        logger.info(
+                            "[%s] extra_data fb_comment_target_tap attempt=%d overlay verify_failed back=%s — trying next alternate",
+                            serial,
+                            attempt_idx,
+                            backed,
+                        )
+                    else:
+                        attempts[-1]["back_pressed"] = False
+                        logger.info(
+                            "[%s] extra_data fb_comment_target_tap attempt=%d verify_failed no_back — trying next alternate",
+                            serial,
+                            attempt_idx,
+                        )
 
             if primary is None:
+                miss_diag = diagnostic.get("resolution_diagnostic")
                 logger.info(
-                    "[%s] extra_data fb_comment_target_tap: skip tap reason=%s",
+                    "[%s] extra_data fb_comment_target_tap: skip tap reason=%s diag=%s",
                     serial,
                     diagnostic.get("reason_code"),
+                    miss_diag,
                 )
 
             diagnostic["target"] = chosen if chosen is not None else primary
@@ -880,8 +1260,9 @@ async def collect_fb_comment_filter_apply(
         report["reason_code"] = "disabled"
         return report, None
 
-    max_steps = min(3, _int_context(context, "comment_filter_max_steps", 3, 1, 5))
+    max_steps = min(5, _int_context(context, "comment_filter_max_steps", 5, 1, 8))
     step_pause = _float_context(context, "comment_filter_step_pause_s", 0.35, 0.0, 2.0)
+    post_select_s = _float_context(context, "comment_filter_post_select_s", 0.85, 0.0, 3.0)
 
     async with _collect_lock(serial):
 
@@ -936,16 +1317,21 @@ async def collect_fb_comment_filter_apply(
                 )
 
                 if phase in {"select_option", "select_all"}:
-                    report["switched"] = True
-                    report["reason_code"] = reason or "ok"
-                    report["phase"] = "done"
-                    break
+                    if post_select_s > 0:
+                        await asyncio.sleep(post_select_s)
+                    continue
 
                 if step_pause > 0:
                     await asyncio.sleep(step_pause)
             else:
                 if "reason_code" not in report:
                     report["reason_code"] = "max_steps"
+                    report["phase"] = "error"
+
+            if report.get("phase") not in {"done", "error"} and report.get("steps"):
+                last = report["steps"][-1]
+                if last.get("phase") in {"select_option", "select_all"}:
+                    report["reason_code"] = "filter_not_verified"
                     report["phase"] = "error"
 
             logger.info(
@@ -979,7 +1365,7 @@ async def collect_xml_snapshots(
         async def _collect() -> tuple[list[str], str | None]:
             collect_started = time.monotonic()
             logger.info(
-                "[%s] extra_data collect start strategy=%s expand=%s",
+                "[%s] extra_data collect start strategy=%s expand=%s open_post=%s",
                 serial,
                 strategy,
                 _bool_context(
@@ -987,6 +1373,7 @@ async def collect_xml_snapshots(
                     "expand_see_more",
                     strategy in _POST_STRATEGIES or str(strategy).endswith("_posts"),
                 ),
+                _bool_context(context, "open_post_before_extract", False),
             )
             if strategy in _PROBE_ONLY_STRATEGIES:
                 xml = await _dump_hierarchy(executor, serial, context)
@@ -999,8 +1386,22 @@ async def collect_xml_snapshots(
                 )
                 return [xml], None
 
+            feed_xml: str | None = None
+            detail_xml: str | None = None
+            open_diag: dict[str, Any] = {}
+            if strategy == "fb_posts" and _bool_context(context, "open_post_before_extract", False):
+                feed_xml = await _dump_hierarchy(executor, serial, context)
+                if not feed_xml:
+                    return [], "u2_hierarchy_unavailable"
+                context.setdefault("strategy", strategy)
+                detail_xml, open_diag = await _maybe_open_fb_post_detail(
+                    executor, serial, context, feed_xml
+                )
+                if open_diag:
+                    context["open_post_detail_diagnostic"] = open_diag
+
             expand_default = strategy in _POST_STRATEGIES or str(strategy).endswith("_posts")
-            cached_xml: str | None = None
+            cached_xml: str | None = detail_xml
             expand_requested = _bool_context(context, "expand_see_more", expand_default)
             if strategy in _COMMENT_STRATEGIES:
                 if expand_requested:
@@ -1036,6 +1437,14 @@ async def collect_xml_snapshots(
 
             if not snapshots:
                 return [], "u2_hierarchy_unavailable"
+
+            if (
+                context.get("open_post_detail")
+                and _bool_context(context, "open_post_press_back_after_extract", False)
+            ):
+                await _press_back(executor, serial)
+                context["open_post_detail_closed"] = True
+
             logger.info(
                 "[%s] extra_data collect done snapshots=%d total=%.2fs",
                 serial,

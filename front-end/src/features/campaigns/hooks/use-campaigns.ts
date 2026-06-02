@@ -4,20 +4,27 @@ import { useEffect, useRef } from 'react';
 import {
   campaignsApi,
   dlqApi,
+  executionRuntimeApi,
   executionsApi,
   scenariosApi,
   tasksApi,
-  workflowsApi
+  workflowsApi,
+  type CampaignEntityUpdate
 } from '../services/api';
 import type {
-  CampaignCreate,
-  CampaignOut,
-  CampaignRunResponse,
-  CampaignStatus,
-  ScenarioCreate,
-  ScenarioUpdate
+  CampaignAccountBindIn,
+  CampaignDispatchIn
+} from '../../device-farm/services/generated/DeviceFarmApi';
+import {
+  isCampaignActiveExecution,
+  isCampaignTerminal,
+  type CampaignCreate,
+  type CampaignOut,
+  type CampaignRunResponse,
+  type CampaignStatus,
+  type ScenarioCreate,
+  type ScenarioUpdate
 } from '../types';
-import { isCampaignActiveExecution } from '../types';
 import {
   fleetRun,
   fleetStatus,
@@ -29,8 +36,17 @@ const KEYS = {
   detail: (id: string) => ['campaigns', id] as const,
   devices: (id: string) => ['campaigns', id, 'devices'] as const,
   scenarios: (campaignId: string) =>
-    ['campaigns', campaignId, 'scenarios'] as const
+    ['campaigns', campaignId, 'scenarios'] as const,
+  executionRuntime: ['execution-runtime'] as const
 };
+
+export function useExecutionRuntime() {
+  return useQuery({
+    queryKey: KEYS.executionRuntime,
+    queryFn: executionRuntimeApi.get,
+    staleTime: 60_000
+  });
+}
 
 export function useCampaigns() {
   return useQuery({
@@ -46,11 +62,11 @@ export function useCampaigns() {
   });
 }
 
-export function useCampaign(id: string) {
+export function useCampaign(id: string, enabled = true) {
   return useQuery({
     queryKey: KEYS.detail(id),
     queryFn: () => campaignsApi.get(id),
-    enabled: !!id
+    enabled: enabled && !!id
   });
 }
 
@@ -100,7 +116,13 @@ export function useCreateCampaign() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (data: CampaignCreate) => campaignsApi.create(data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.list })
+    onSuccess: (created) => {
+      qc.invalidateQueries({ queryKey: KEYS.list });
+      if (created?.id) {
+        qc.setQueryData(KEYS.detail(created.id), created);
+        qc.invalidateQueries({ queryKey: KEYS.detail(created.id) });
+      }
+    }
   });
 }
 
@@ -147,11 +169,70 @@ export function useUpdateCampaignStatus() {
   });
 }
 
+export function usePatchCampaignEntity() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id,
+      data
+    }: {
+      id: string;
+      data: CampaignEntityUpdate;
+    }) => campaignsApi.patchEntity(id, data),
+    onSuccess: (_data, { id }) => {
+      qc.invalidateQueries({ queryKey: KEYS.list });
+      qc.invalidateQueries({ queryKey: KEYS.detail(id) });
+    }
+  });
+}
+
+export function useBindCampaignAccounts() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id,
+      data
+    }: {
+      id: string;
+      data: CampaignAccountBindIn;
+    }) => campaignsApi.bindAccounts(id, data),
+    onSuccess: (_data, { id }) => {
+      qc.invalidateQueries({ queryKey: KEYS.list });
+      qc.invalidateQueries({ queryKey: KEYS.detail(id) });
+    }
+  });
+}
+
+export function useUnbindCampaignAccounts() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => campaignsApi.unbindAccounts(id),
+    onSuccess: (_data, id) => {
+      qc.invalidateQueries({ queryKey: KEYS.list });
+      qc.invalidateQueries({ queryKey: KEYS.detail(id) });
+    }
+  });
+}
+
 export function useDeleteCampaign() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => campaignsApi.delete(id),
-    onSuccess: () => {
+    onMutate: async (id) => {
+      await qc.cancelQueries({ queryKey: KEYS.list });
+      const previousList = qc.getQueryData<CampaignOut[]>(KEYS.list);
+      qc.setQueryData<CampaignOut[] | undefined>(KEYS.list, (old) =>
+        old?.filter((campaign) => campaign.id !== id)
+      );
+      return { previousList };
+    },
+    onError: (_error, _id, context) => {
+      if (context?.previousList) {
+        qc.setQueryData(KEYS.list, context.previousList);
+      }
+    },
+    onSuccess: (_data, id) => {
+      qc.removeQueries({ queryKey: KEYS.detail(id) });
       qc.invalidateQueries({ queryKey: KEYS.list });
     }
   });
@@ -348,6 +429,18 @@ export function useCampaignWorkflows(campaignId: string, enabled: boolean) {
   });
 }
 
+/** Running/pending executions for workflow → execution_id resolution (DF-T-04-013 SSE). */
+export function useCampaignExecutions(campaignId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['campaign-executions', campaignId],
+    queryFn: () => executionsApi.list({ campaignId, limit: 200 }),
+    enabled: enabled && !!campaignId,
+    select: (data) => data.items,
+    staleTime: 5_000,
+    refetchInterval: enabled ? 8_000 : false
+  });
+}
+
 export function useDeviceRunningWorkflows(serial: string, enabled: boolean) {
   return useQuery({
     queryKey: ['device-running-workflows', serial],
@@ -471,9 +564,21 @@ export function useDlqEntries(
 ) {
   return useQuery({
     queryKey: ['dlq-entries', status ?? 'all', campaignId ?? 'global'],
-    queryFn: () => dlqApi.list({ status, campaignId, limit: 100 }),
+    queryFn: () =>
+      dlqApi.list({ status: status ?? 'open', campaignId, limit: 100 }),
     enabled,
     refetchInterval: enabled ? 5000 : false
+  });
+}
+
+export function useDlqEntryByExecution(
+  executionId: string | undefined,
+  enabled: boolean
+) {
+  return useQuery({
+    queryKey: ['dlq-entry', executionId],
+    queryFn: () => dlqApi.getByExecution(executionId!),
+    enabled: enabled && !!executionId
   });
 }
 
@@ -489,9 +594,46 @@ export function useDlqSummary(enabled: boolean, campaignId?: string) {
 export function useRetryDlqEntry() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (dlqId: string) => dlqApi.retry(dlqId),
+    mutationFn: ({
+      dlqId,
+      fromCheckpoint = true
+    }: {
+      dlqId: string;
+      fromCheckpoint?: boolean;
+    }) => dlqApi.retry(dlqId, { fromCheckpoint }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['dlq-entries'] });
+      qc.invalidateQueries({ queryKey: ['dlq-summary'] });
+      qc.invalidateQueries({ queryKey: ['campaign-workflows'] });
+      qc.invalidateQueries({ queryKey: ['workflow-progress'] });
+    }
+  });
+}
+
+export function useCloseDlqEntry() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ dlqId, reason }: { dlqId: string; reason: string }) =>
+      dlqApi.close(dlqId, reason),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['dlq-entries'] });
+      qc.invalidateQueries({ queryKey: ['dlq-summary'] });
+      qc.invalidateQueries({ queryKey: ['campaign-workflows'] });
+    }
+  });
+}
+
+export function useBulkRetryDlq() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: {
+      executionIds?: string[];
+      dlqIds?: string[];
+      fromCheckpoint?: boolean;
+    }) => dlqApi.bulkRetry(payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['dlq-entries'] });
+      qc.invalidateQueries({ queryKey: ['dlq-summary'] });
       qc.invalidateQueries({ queryKey: ['campaign-workflows'] });
       qc.invalidateQueries({ queryKey: ['workflow-progress'] });
     }
@@ -504,6 +646,7 @@ export function useDismissDlqEntry() {
     mutationFn: (dlqId: string) => dlqApi.dismiss(dlqId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['dlq-entries'] });
+      qc.invalidateQueries({ queryKey: ['dlq-summary'] });
     }
   });
 }
@@ -703,6 +846,58 @@ export function useRunCampaign(
       }
 
       await resetToIdle();
+    }
+  });
+}
+
+/** Epic 04 entity dispatch — FSM drives status; do not reset to idle. */
+export function useDispatchCampaign(onAllDone?: () => void) {
+  const qc = useQueryClient();
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const clearPollTimer = () => {
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+  };
+
+  useEffect(() => clearPollTimer, []);
+
+  return useMutation({
+    mutationFn: ({
+      id,
+      body
+    }: {
+      id: string;
+      body: CampaignDispatchIn;
+    }) => campaignsApi.dispatch(id, body),
+    onSuccess: async (_data, { id }) => {
+      clearPollTimer();
+      qc.invalidateQueries({ queryKey: KEYS.list });
+      qc.invalidateQueries({ queryKey: KEYS.detail(id) });
+      qc.invalidateQueries({ queryKey: ['executions'] });
+      qc.invalidateQueries({ queryKey: KEYS.executionRuntime });
+
+      const deadline = Date.now() + POLL_TIMEOUT_MS;
+      pollTimerRef.current = setInterval(async () => {
+        if (Date.now() > deadline) {
+          clearPollTimer();
+          onAllDone?.();
+          return;
+        }
+        try {
+          const camp = await campaignsApi.get(id);
+          if (isCampaignTerminal(camp.status)) {
+            clearPollTimer();
+            qc.invalidateQueries({ queryKey: KEYS.list });
+            qc.invalidateQueries({ queryKey: KEYS.detail(id) });
+            onAllDone?.();
+          }
+        } catch {
+          /* ignore */
+        }
+      }, POLL_INTERVAL_MS);
     }
   });
 }

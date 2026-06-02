@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import logging
 from typing import AsyncGenerator
 
@@ -244,22 +245,70 @@ async def get_stats(db: DB, user: CurrentUser):
     return await content_crud.content_stats(db, user_id=owner_id)
 
 
+@router.get(
+    "/types",
+    dependencies=[Depends(require_permission("content", "read"))],
+)
+async def list_content_types(db: DB):
+    """Platform-qualified content type registry (DF-T-06-001)."""
+    from services.content.registry import get_registry
+
+    registry = get_registry()
+    await registry.ensure_fresh(db)
+    items = [entry.to_dict() for entry in registry.list()]
+    return Response(
+        content=json.dumps({"items": items, "total": len(items)}),
+        media_type="application/json",
+        headers={"Cache-Control": "max-age=300"},
+    )
+
+
+@router.post("/types/refresh", dependencies=[Depends(require_permission("content", "create"))])
+async def refresh_content_types(db: DB):
+    from services.content.registry import get_registry
+
+    count = await get_registry().refresh(db)
+    return {"refreshed": count}
+
+
 @router.post("/save", dependencies=[Depends(require_permission("content", "create"))])
 async def save_content(body: SaveContentBody, db: DB, user: CurrentUser):
     """Save extracted content with deduplication (used by scenarios and MCP)."""
+    import json
+
+    from services.content.errors import ContentError, ContentTypeError, NormalizationError, RawDataSizeError
     from services.content_store import save_content_item
-    result = await save_content_item(
-        data=body.data,
-        collection=body.collection,
-        platform=body.platform,
-        content_type=body.content_type,
-        dedupe_field=body.dedupe_field,
-        tags=body.tags,
-        device_serial=body.device_serial,
-        campaign_id=body.campaign_id,
-        user_id=user.id,
-    )
-    return result
+    from tenancy.context import set_current_org_id
+
+    if user.org_id:
+        set_current_org_id(user.org_id)
+    try:
+        result = await save_content_item(
+            data=body.data,
+            collection=body.collection,
+            platform=body.platform,
+            content_type=body.content_type,
+            dedupe_field=body.dedupe_field,
+            dedup_action=getattr(body, "dedup_action", "skip") or "skip",
+            tags=body.tags,
+            device_serial=body.device_serial,
+            campaign_id=body.campaign_id,
+            execution_id=getattr(body, "execution_id", None),
+            user_id=user.id,
+            org_id=user.org_id,
+            db=db,
+        )
+        return result
+    except ContentTypeError as exc:
+        raise HTTPException(422, detail={"error_code": exc.code, **exc.details}) from exc
+    except NormalizationError as exc:
+        raise HTTPException(422, detail={"error_code": exc.code, **exc.details}) from exc
+    except RawDataSizeError as exc:
+        raise HTTPException(422, detail={"error_code": exc.code, **exc.details}) from exc
+    except ContentError as exc:
+        if exc.code == "CONTENT_DEDUP_CONFLICT":
+            raise HTTPException(409, detail={"error_code": exc.code, **exc.details}) from exc
+        raise HTTPException(422, detail={"error_code": exc.code, **exc.details}) from exc
 
 
 async def _load_content_item(
@@ -287,24 +336,30 @@ async def _execution_step_artifact_pairs(
 ) -> list[tuple[str, str | None]]:
     if not item.execution_id:
         return []
-    from api.routes.executions import _extract_step_artifacts, _get_or_404
+    from api.routes.executions import (
+        _extract_step_artifacts,
+        _get_or_404,
+        _legacy_step_dicts_for_artifacts,
+    )
     from db.crud.device import get_device
     from db.crud.execution import list_execution_results
 
     try:
-        await _get_or_404(db, item.execution_id, user.id)
+        await _get_or_404(db, item.execution_id, user)
     except HTTPException:
         return []
 
     pairs: list[tuple[str, str | None]] = []
     results = await list_execution_results(db, item.execution_id)
+    step_dicts = await _legacy_step_dicts_for_artifacts(db, item.execution_id)
     for er in results:
         device = await get_device(db, er.device_id)
         serial = device.serial if device else None
+        steps_for_device = step_dicts or ((er.passed_steps or []) + (er.failed_steps or []))
         for step_art in _extract_step_artifacts(
             item.execution_id,
             serial or "unknown",
-            (er.passed_steps or []) + (er.failed_steps or []),
+            steps_for_device,
             er.created_at,
         ):
             pairs.append((step_art.artifact_type, step_art.url))

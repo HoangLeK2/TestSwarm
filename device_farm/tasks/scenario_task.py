@@ -2359,14 +2359,38 @@ def _run_scenario_task_legacy(
                         offsets = ctx.setdefault("__save_extraction_offsets__", {})
                         _parent_id_var = step.get("parent_id_var")
                         _parent_id = ctx.get(_parent_id_var) if _parent_id_var else None
+                        _campaign_vars = scenario.get("_campaign_vars") or {}
+                        _scenario_cfg = {
+                            k: scenario.get(k)
+                            for k in ("capture_steps", "preview_collection")
+                            if scenario.get(k) is not None
+                        }
+                        from services.execution.preview_collection import resolve_content_collection
+
+                        _collection = resolve_content_collection(
+                            step,
+                            campaign_vars=_campaign_vars,
+                            scenario_config=_scenario_cfg,
+                        )
+                        _platform = step.get("platform")
+                        _ctype = step.get("content_type")
+                        if not _ctype:
+                            step_result["ok"] = False
+                            step_result["message"] = (
+                                "save_extraction: content_type is required (platform-qualified, e.g. fb_post)"
+                            )
+                            continue
+                        from services.content.legacy_type_map import qualify_content_type
+
+                        _ctype = qualify_content_type(_ctype, platform=_platform) or _ctype
                         report, updated_offsets = _run_async_coro_sync(
                             persist_data_items(
                                 data=data,
                                 data_var=data_var,
                                 offsets=offsets,
-                                collection=step.get("collection", "default"),
-                                platform=step.get("platform"),
-                                content_type=step.get("content_type", "post"),
+                                collection=_collection,
+                                platform=_platform,
+                                content_type=_ctype,
                                 dedupe_field=step.get("dedupe_field"),
                                 tags=step.get("tags", ""),
                                 device_serial=device.serial,

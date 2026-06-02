@@ -248,8 +248,10 @@ export function ScenarioPlayer({
       cancelPreviewStream(active.serial, active.traceId).catch(() => undefined);
       interruptDevice(active.serial).catch(() => undefined);
       activePreviewRef.current = null;
+    } else if (serial?.trim()) {
+      interruptDevice(serial.trim()).catch(() => undefined);
     }
-  }, []);
+  }, [serial]);
 
   // Unmount cleanup: browser navigation away, Next.js route change, and tab
   // close (pagehide). Scenario stops at next step boundary on the server.

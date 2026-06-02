@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
 import { ROUTES } from '@/config/routes';
 import { DeviceTilePreview } from './device-tile-preview';
 import { ConnectDeviceDialog } from './connect-device-dialog';
@@ -17,8 +16,8 @@ import {
   PaginationPrevious
 } from '@/components/ui/pagination';
 import { cn } from '@/lib/utils';
-import { Can } from '@/features/auth';
-import { Smartphone, Plus } from 'lucide-react';
+import { CoreEmptyState } from '@/components/core-empty-state';
+import { Smartphone } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { farmApi } from '@/lib/farm-api';
 import type { DeviceFarmStreamingConfig } from '../types';
@@ -31,6 +30,7 @@ const GRID_PAGE_SIZE = (() => {
 
 export function DeviceFarm() {
   const t = useTranslations('devicesFarm');
+  const tEmpty = useTranslations('coreEmptyState');
   const tHeader = useTranslations('devicesFarm.header');
   const tTable = useTranslations('components.table');
   const [connectDialogOpen, setConnectDialogOpen] = useState(false);
@@ -150,29 +150,34 @@ export function DeviceFarm() {
       )}
 
       {activeDevices.length === 0 ? (
-        <div className='flex flex-col items-center justify-center rounded-lg border border-dashed border-border py-20 text-center'>
-          <Smartphone className='mb-4 size-12 text-muted-foreground' />
-          <p className='mb-1 text-sm font-medium text-foreground'>
-            {devices.length > 0
-              ? t('allDevicesOffline')
-              : t('noConnectedDevices')}
-          </p>
-          <p className='mb-5 text-xs text-muted-foreground'>
-            {devices.length > 0
+        <CoreEmptyState
+          icon={Smartphone}
+          title={
+            devices.length > 0 ? t('allDevicesOffline') : tEmpty('fleet.title')
+          }
+          description={
+            devices.length > 0
               ? t('allDevicesOfflineHint', { count: devices.length })
-              : t('noConnectedDevicesHint')}
-          </p>
-          <div className='flex flex-wrap items-center justify-center gap-2'>
-            <Can object='devices' action='create'>
-              <Button asChild size='sm' variant='outline'>
-                <Link href={ROUTES.DEVICES.MANAGE}>
-                  <Plus size={14} className='mr-1.5' />
-                  {t('addDevice')}
-                </Link>
-              </Button>
-            </Can>
-          </div>
-        </div>
+              : tEmpty('fleet.description')
+          }
+          trackingKey='fleet-empty'
+          cta={
+            devices.length === 0
+              ? {
+                  label: tEmpty('fleet.ctaPair'),
+                  href: ROUTES.DEVICES.MANAGE
+                }
+              : undefined
+          }
+          secondaryCta={
+            devices.length === 0
+              ? {
+                  label: tEmpty('fleet.ctaRelay'),
+                  href: ROUTES.RELAY_AGENTS.ROOT
+                }
+              : undefined
+          }
+        />
       ) : (
         <>
           <section className='grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4'>

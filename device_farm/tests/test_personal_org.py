@@ -282,16 +282,16 @@ async def test_superadmin_migration_seeds_env_configured_account(engine, monkeyp
                 select(
                     User.name,
                     User.role,
-                    User.org_id,
+                    User.default_org_id,
                     User.hashed_password,
                 ).where(User.email == "root@example.com")
             )
         ).all()
         assert len(users) == 1
-        name, role, org_id, hashed_password = users[0]
+        name, role, default_org_id, hashed_password = users[0]
         assert name == "Root User"
         assert role == "superadmin"
-        assert org_id is None
+        assert default_org_id is None
         assert superadmin_migration.verify_password("secret123", hashed_password)
 
 

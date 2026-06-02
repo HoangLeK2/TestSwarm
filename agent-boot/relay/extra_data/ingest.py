@@ -89,6 +89,9 @@ def _parse_items(strategy: str, xml: str, context: dict[str, Any]) -> tuple[list
         return [], resolve_comment_filter_next_tap(xml, context)
     if strategy in {"fb_comment_target", "fb_comment_target_tap"}:
         from relay.extra_data.parsers.facebook import resolve_comment_targets_from_xml
+        from relay.extra_data.parsers.facebook.comment_pipeline import (
+            diagnose_comment_target_resolution,
+        )
         from relay.extra_data.parsers.facebook.parser import _hierarchy_is_fb_comment_sheet, _parse_xml
 
         root = _parse_xml(xml)
@@ -104,11 +107,13 @@ def _parse_items(strategy: str, xml: str, context: dict[str, Any]) -> tuple[list
         # visible "Bình luận" rows never silently latches onto the wrong post.
         top, ranked = resolve_comment_targets_from_xml(xml)
         if not top:
+            diag = diagnose_comment_target_resolution(xml)
             return [], {
                 "reason_code": "comment_button_not_found",
                 "target": None,
                 "alternates": [],
                 "candidate_count": 0,
+                "resolution_diagnostic": diag,
             }
         dedupe_field = str(context.get("dedupe_field") or "post_key")
         scope = context.get("hash_scope") or context.get("execution_id")
@@ -119,6 +124,7 @@ def _parse_items(strategy: str, xml: str, context: dict[str, Any]) -> tuple[list
             base_hash = compute_content_hash(post, dedupe_field=dedupe_field)
             return {
                 "bounds": list(bnds),
+                "u2_click": cand.get("comment_u2_click"),
                 "parent_post_bounds": (
                     list(cand["parent_post_bounds"])
                     if cand.get("parent_post_bounds")
@@ -423,6 +429,18 @@ class ExtraDataIngestServer:
             }:
                 return {"ok": False, "error": "unsupported_strategy", "strategy": strategy}
 
+            should_persist = bool(context.get("persist", True)) and bool(context.get("collection"))
+            if should_persist:
+                try:
+                    context = await self._writer.prepare_context_for_persist(context)
+                except Exception as exc:
+                    logger.warning(
+                        "extra-data FK preflight failed; continuing without optional FK refs: %s",
+                        exc,
+                    )
+                    for field in ("campaign_id", "execution_id", "user_id", "org_id"):
+                        context.pop(field, None)
+
             content_type = str(context.get("content_type") or ("comment" if strategy.endswith("_comments") or strategy == "fb_comments" else "post"))
             item_level = int(context.get("item_level") if context.get("item_level") is not None else (1 if strategy.endswith("_comments") or strategy == "fb_comments" else 0))
             parent_id = context.get("parent_id") if strategy.endswith("_comments") or strategy == "fb_comments" else None
@@ -438,11 +456,11 @@ class ExtraDataIngestServer:
                 if isinstance(item, dict) and item.get("_type") != "post_stats"
             ]
             db_started = time.perf_counter()
-            should_persist = bool(context.get("persist", True)) and bool(context.get("collection"))
             write = await self._insert_rows_with_retry(rows) if should_persist else {
                 "attempted": 0,
                 "inserted": 0,
                 "duplicates": 0,
+                "inserted_content_hashes": [],
             }
             db_ms = int((time.perf_counter() - db_started) * 1000)
 
@@ -454,6 +472,7 @@ class ExtraDataIngestServer:
             "inserted_attempted": write.get("attempted", 0),
             "inserted_count": write.get("inserted", 0),
             "duplicate_count": write.get("duplicates", 0),
+            "inserted_content_hashes": write.get("inserted_content_hashes") or [],
             "diagnostic": diagnostic,
             "xml_bytes": sum(len(snapshot.encode("utf-8")) for snapshot in snapshots),
             "snapshot_count": len(snapshots),
@@ -479,6 +498,19 @@ class ExtraDataIngestServer:
                 return await self._writer.insert_rows(rows)
             except Exception as exc:
                 last_exc = exc
+                if ContentItemWriter._is_content_items_fk_violation(exc):
+                    stripped = ContentItemWriter._strip_optional_fk_fields(rows)
+                    logger.warning(
+                        "content_items optional FK failed at ingest layer (%s); retrying without %s",
+                        exc,
+                        ", ".join(stripped) or "optional FK refs",
+                    )
+                    try:
+                        return await self._writer.insert_rows(rows)
+                    except Exception as retry_exc:
+                        last_exc = retry_exc
+                        if not ContentItemWriter._is_content_items_fk_violation(retry_exc):
+                            raise
                 if attempt >= attempts - 1:
                     break
                 delay = base_delay * (2 ** attempt) + random.uniform(0, base_delay)

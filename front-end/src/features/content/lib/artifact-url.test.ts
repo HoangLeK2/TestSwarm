@@ -13,3 +13,24 @@ test('isImageArtifact detects by kind and extension', () => {
   assert.equal(isImageArtifact('text', 'https://x.test/a.png'), true);
   assert.equal(isImageArtifact('text', 'https://x.test/a.xml'), false);
 });
+
+test('isImageArtifact detects proxy screenshots without file extension', () => {
+  assert.equal(
+    isImageArtifact('text', '/artifacts/abc/content', {
+      label: 'Post · Screenshot'
+    }),
+    true
+  );
+  assert.equal(
+    isImageArtifact('text', '/artifacts/abc/content', {
+      mimeType: 'image/png'
+    }),
+    true
+  );
+  assert.equal(
+    isImageArtifact('text', '/artifacts/abc/content', {
+      label: 'Post · Hierarchy'
+    }),
+    false
+  );
+});

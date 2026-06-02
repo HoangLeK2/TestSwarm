@@ -48,7 +48,7 @@ async def upgrade(conn) -> None:
         text(
             """
             CREATE INDEX IF NOT EXISTS idx_device_fsm_org_state
-            ON device_fsm_snapshots (device_id);
+            ON device_states (state, device_id);
             """
         )
     )

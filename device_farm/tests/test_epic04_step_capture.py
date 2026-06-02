@@ -1,0 +1,248 @@
+"""Tests for DF-T-04-014 pre/post/fail step capture."""
+from __future__ import annotations
+
+import io
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from services.campaign.dlq_service import _artifact_refs_from_steps
+from services.execution.capture_service import (
+    StepCaptureConfig,
+    compress_jpeg,
+    epic04_capture_default_enabled,
+    flush_pending_captures,
+    is_captured_step,
+    resolve_capture_throttle,
+)
+from services.execution.dsl_runtime import materialize_legacy_step
+from services.execution.step_runner import execute_step_with_retry
+
+
+def _make_sc(**overrides):
+    sc = MagicMock()
+    sc.serial = "SN1"
+    sc.capture_dir = "/tmp/captures/test"
+    sc.capture_enabled = True
+    sc.capture_skip_settle = frozenset()
+    sc.capture_settle_ms = 0
+    sc.capture_stale_wait_s = 0
+    sc.w = 1080
+    sc.h = 1920
+    sc.execution_id = "exec-1"
+    sc.scenario = {"execution_id": "exec-1"}
+    sc.device = MagicMock()
+    sc.device.take_screenshot.return_value = b"\xff\xd8\xff\xe0" + b"x" * 400
+    sc.device.hierarchy_xml.return_value = "<hierarchy/>"
+    sc.device.model = "Pixel"
+    sc.trace_id = "t1"
+    for k, v in overrides.items():
+        setattr(sc, k, v)
+    return sc
+
+
+def test_epic04_capture_default_on_with_execution_id():
+    assert epic04_capture_default_enabled({"execution_id": "e1"}) is True
+    assert epic04_capture_default_enabled({"steps": []}) is False
+
+
+def test_step_capture_config_defaults():
+    cfg = StepCaptureConfig.from_step({"type": "wait"})
+    assert cfg.pre_capture is True
+    assert cfg.post_capture is True
+    assert cfg.require_capture is False
+
+
+def test_materialize_legacy_passes_capture_flags():
+    step = {
+        "id": "s1",
+        "type": "input_wait.wait",
+        "pre_capture": False,
+        "post_capture": True,
+        "require_capture": True,
+        "config": {"seconds": 1},
+    }
+    legacy = materialize_legacy_step(step)
+    assert legacy["pre_capture"] is False
+    assert legacy["require_capture"] is True
+
+
+def test_capture_throttle_skips_steps():
+    sc = _make_sc()
+    sc.scenario = {"capture_throttle": 3}
+    assert is_captured_step(sc, 0) is True
+    assert is_captured_step(sc, 1) is False
+    assert is_captured_step(sc, 3) is True
+    assert resolve_capture_throttle({"capture_throttle": 3}) == 3
+
+
+def test_compress_jpeg_reduces_large_payload():
+    pytest.importorskip("PIL")
+    from PIL import Image
+    import random
+
+    w, h = 800, 1600
+    noise = bytes(random.randint(0, 255) for _ in range(w * h * 3))
+    img = Image.frombytes("RGB", (w, h), noise)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=95)
+    raw = buf.getvalue()
+    out = compress_jpeg(raw, max_kb=50)
+    assert len(out) <= 50 * 1024
+    assert len(out) < len(raw)
+
+
+def test_pre_and_post_capture_default():
+    sc = _make_sc()
+    step = {"type": "wait", "seconds": 0, "id": "w1"}
+    step_result: dict = {"index": 0, "type": "wait", "ok": True}
+
+    with patch(
+        "services.execution.capture_service._capture_payload",
+        side_effect=[
+            {"full": "http://minio/pre.jpg", "hierarchy": "http://minio/pre.xml"},
+            {"full": "http://minio/post.jpg", "hierarchy": "http://minio/post.xml"},
+        ],
+    ):
+        from services.execution.capture_service import capture_before_step, capture_after_step
+
+        capture_before_step(sc, step, 0, step_result)
+        capture_after_step(sc, step, 0, step_result, 0.0, sync=True)
+
+    assert step_result.get("screenshot_pre")
+    assert step_result.get("screenshot")
+    arts = step_result.get("artifacts") or []
+    types = {a.get("type") for a in arts}
+    assert types == {"pre", "post"}
+
+
+def test_pre_capture_disabled_only_post():
+    sc = _make_sc()
+    step = {"type": "wait", "pre_capture": False, "id": "w1"}
+    step_result: dict = {"index": 0, "type": "wait", "ok": True}
+
+    with patch(
+        "services.execution.capture_service._capture_payload",
+        return_value={"full": "http://minio/post.jpg"},
+    ) as cap:
+        from services.execution.capture_service import capture_before_step, capture_after_step
+
+        capture_before_step(sc, step, 0, step_result)
+        capture_after_step(sc, step, 0, step_result, 0.0, sync=True)
+
+    cap.assert_called_once()
+    assert "screenshot_pre" not in step_result
+    assert step_result.get("screenshot")
+
+
+def test_fail_capture_wired_to_dlq_refs():
+    step_results = [
+        {
+            "ok": False,
+            "step_id": "tap1",
+            "artifacts": [
+                {
+                    "type": "fail",
+                    "screenshot_url": "http://minio/fail.jpg",
+                    "hierarchy_url": "http://minio/fail.xml",
+                }
+            ],
+            "screenshot": {"full": "http://minio/fail.jpg"},
+        }
+    ]
+    refs = _artifact_refs_from_steps(step_results)
+    assert refs["screenshot_fail"] == "http://minio/fail.jpg"
+    assert refs["hierarchy_url"] == "http://minio/fail.xml"
+
+
+def test_fail_capture_dlq_refs_from_temporal_details():
+    step_results = [
+        {
+            "index": 1,
+            "type": "tap",
+            "ok": False,
+            "message": "not found",
+            "details": {
+                "artifacts_json": [
+                    {
+                        "type": "fail",
+                        "screenshot_url": "http://minio/fail.jpg",
+                        "hierarchy_url": "http://minio/fail.xml",
+                    }
+                ],
+            },
+        }
+    ]
+    refs = _artifact_refs_from_steps(step_results)
+    assert refs["screenshot_fail"] == "http://minio/fail.jpg"
+    assert refs["hierarchy_url"] == "http://minio/fail.xml"
+
+
+def test_require_capture_failure_fails_step():
+    sc = _make_sc()
+    step = {"type": "wait", "require_capture": True, "id": "w1"}
+    step_result: dict = {"index": 0, "type": "wait", "ok": True}
+
+    with patch("services.execution.capture_service._capture_payload", return_value={}):
+        from services.execution.capture_service import capture_before_step
+
+        capture_before_step(sc, step, 0, step_result)
+
+    assert step_result["ok"] is False
+    assert step_result["reason_code"] == "capture_required_failed"
+
+
+def test_step_runner_fail_capture_on_failed_step():
+    sc = _make_sc()
+    step = {"type": "wait", "seconds": 0}
+
+    with patch("services.execution.step_runner.dispatch_step", return_value={"ok": False, "message": "boom"}), patch(
+        "services.execution.step_runner.capture_pre_step"
+    ), patch("services.execution.step_runner.capture_post_step"), patch(
+        "services.execution.step_runner.capture_fail_step"
+    ) as fail_cap:
+        result, _ = execute_step_with_retry(sc, step, 0)
+
+    assert result["ok"] is False
+    fail_cap.assert_called_once()
+
+
+def test_flush_pending_captures_waits_for_async_post():
+    sc = _make_sc()
+    step = {"type": "wait", "id": "w1"}
+    step_result: dict = {"index": 0, "type": "wait", "ok": True}
+
+    def fake_post(_sc, _step, _idx, result, _start, _attempt):
+        result["screenshot"] = {"full": "http://minio/post.jpg"}
+        return {"full": "http://minio/post.jpg"}
+
+    with patch("services.execution.capture_service._run_post_capture", side_effect=fake_post):
+        from services.execution.capture_service import capture_after_step
+
+        capture_after_step(sc, step, 0, step_result, 0.0, sync=False)
+        flush_pending_captures(timeout_s=5.0)
+
+    assert step_result.get("screenshot")
+
+
+def test_capture_payload_delegates_to_epic06_capture():
+    sc = _make_sc()
+    fake_payload = {
+        "full": "http://minio/step.png",
+        "hierarchy": "http://minio/step.xml",
+        "content_hash": "abc123",
+        "screenshot_artifact_id": "art-1",
+        "hierarchy_artifact_id": "art-2",
+    }
+
+    with patch(
+        "services.execution.epic06_capture_adapter.build_step_capture_payload",
+        return_value=fake_payload,
+    ) as build:
+        from services.execution.capture_service import _capture_payload
+
+        out = _capture_payload(sc, {"type": "wait"}, 0, "wait_pre")
+
+    build.assert_called_once()
+    assert out["full"] == fake_payload["full"]
+    assert out["screenshot_artifact_id"] == "art-1"

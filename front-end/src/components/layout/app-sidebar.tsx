@@ -109,7 +109,7 @@ function SidebarMainMenu({ isSettingsPage }: { isSettingsPage: boolean }) {
           </div>
         )}
       </SidebarHeader>
-      <SidebarContent className='relative overflow-hidden'>
+      <SidebarContent>
         <FadeInSide key={isSettingsPage ? 'settings' : 'main'}>
           {!isSettingsPage && quickActions(t).length > 0 && (
             <SidebarGroup className='bottom-b py-0 shadow-md'>
@@ -142,7 +142,7 @@ function SidebarMainMenu({ isSettingsPage }: { isSettingsPage: boolean }) {
               </div>
             </SidebarGroup>
           )}
-          <SidebarGroup className='!mt-0 h-[calc(100vh-100px-31px-64px)] overflow-y-auto'>
+          <SidebarGroup className='!mt-0'>
             <SidebarMenu className='!z-10 space-y-3'>
               {menuItems.map((item) => {
                 const Icon = item.icon ? Icons[item.icon] : Icons.logo;
@@ -280,7 +280,7 @@ export default function AppSidebar() {
     <Sidebar collapsible='icon'>
       <SidebarMainMenu isSettingsPage={isSettingsPage} />
 
-      <SidebarFooter>
+      <SidebarFooter className='mt-auto shrink-0 border-t border-sidebar-border'>
         {open && (
           <div className='flex !w-full items-center justify-center text-center text-[10px] text-muted-foreground'>
             &copy; {new Date().getFullYear()} Device Farm - 1.0.0

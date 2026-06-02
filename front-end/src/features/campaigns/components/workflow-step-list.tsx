@@ -184,20 +184,38 @@ interface WorkflowStepListProps {
   wf: WorkflowInfo;
   /** Maximum height of the scrollable step list (default: 360px) */
   maxHeight?: string;
+  sseStepLog?: StepLogEntry[];
+  sseConnected?: boolean;
+  /** When SSE is active, progress fields from the event stream (skips poll). */
+  liveProgress?: {
+    current_step: number;
+    total_steps: number;
+    current_step_type: string;
+    message: string;
+    loop_iteration: number | null;
+  };
 }
 
 export function WorkflowStepList({
   wf,
-  maxHeight = '360px'
+  maxHeight = '360px',
+  sseStepLog,
+  sseConnected = false,
+  liveProgress
 }: WorkflowStepListProps) {
   const t = useTranslations('campaignsFeature.list');
   const isActive = wf.status === 'RUNNING' || wf.status === 'PAUSED';
   const { campaignId, scenarioId } = parseWorkflowId(wf.workflow_id);
 
-  const { data: prog } = useWorkflowProgress(wf.workflow_id, isActive);
+  const useSseSteps = sseConnected && (sseStepLog?.length ?? 0) > 0;
+
+  const { data: prog } = useWorkflowProgress(
+    wf.workflow_id,
+    isActive && !useSseSteps
+  );
   const { data: stepLog, isLoading: logLoading } = useWorkflowSteps(
     wf.workflow_id,
-    true
+    !useSseSteps
   );
 
   const { data: scenario, isLoading: scenarioLoading } = useQuery({
@@ -207,7 +225,7 @@ export function WorkflowStepList({
     staleTime: 30_000
   });
 
-  if (logLoading || scenarioLoading) {
+  if (scenarioLoading || (!useSseSteps && logLoading)) {
     return (
       <div className='flex items-center gap-2 py-4 text-xs text-muted-foreground'>
         <Loader2 size={12} className='animate-spin' />{' '}
@@ -217,17 +235,26 @@ export function WorkflowStepList({
   }
 
   const scenarioDefs: FlowStep[] = (scenario?.steps ?? []) as FlowStep[];
-  const executedSteps: StepLogEntry[] = stepLog?.steps ?? [];
+  const executedSteps: StepLogEntry[] = useSseSteps
+    ? (sseStepLog ?? [])
+    : (stepLog?.steps ?? []);
 
-  const current = prog?.current_step ?? 0;
+  const current =
+    liveProgress?.current_step ?? prog?.current_step ?? 0;
   const total =
-    prog?.total_steps ?? scenarioDefs.length ?? executedSteps.length;
-  const stepType = prog?.current_step_type ?? '';
-  const message = prog?.message ?? '';
+    liveProgress?.total_steps ??
+    prog?.total_steps ??
+    scenarioDefs.length ??
+    executedSteps.length;
+  const stepType =
+    liveProgress?.current_step_type ?? prog?.current_step_type ?? '';
+  const message = liveProgress?.message ?? prog?.message ?? '';
   const loopIter =
-    prog?.loop_iteration != null && prog.loop_iteration >= 0
-      ? prog.loop_iteration
-      : null;
+    liveProgress?.loop_iteration != null && liveProgress.loop_iteration >= 0
+      ? liveProgress.loop_iteration
+      : prog?.loop_iteration != null && prog.loop_iteration >= 0
+        ? prog.loop_iteration
+        : null;
   const pct =
     total > 0
       ? Math.round(((isActive ? current : executedSteps.length) / total) * 100)

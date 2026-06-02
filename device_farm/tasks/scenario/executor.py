@@ -6,43 +6,11 @@ import logging
 import random
 import time
 import importlib
+from datetime import datetime, timezone
 from typing import Any, Dict, TYPE_CHECKING
 
-from tasks.scenario.capture import StaleFrameError, capture_pre_step, capture_post_step
-from tasks.scenario.steps import dispatch_step
+from services.execution.step_runner import execute_step_with_retry
 
-
-# F1.5 — reason codes that are considered retryable when a step fails.
-# Extraction empty-parse reasons + capture staleness. Other codes (login_screen,
-# rate_limited, xml_parse_error) are NOT retryable — they indicate session or
-# programming problems that retries won't fix.
-_DEFAULT_RETRY_REASONS = frozenset({
-    "stale_frame",
-    "no_candidates",
-    "no_feed_container",
-    "all_filtered_junk",
-    "empty_cluster",
-    "anchor_not_found",
-    "no_nodes_in_band",
-    "no_text_nodes",
-})
-
-
-def _compute_backoff_s(attempt: int, base_ms: float, cap_ms: float, jitter_ms: float) -> float:
-    """Exponential backoff with jitter. attempt is 1-based."""
-    expo = base_ms * (2 ** (attempt - 1))
-    delay_ms = min(cap_ms, expo) + random.uniform(0, max(0.0, jitter_ms))
-    return max(0.0, delay_ms / 1000.0)
-
-
-def _is_retryable(step_result: Dict[str, Any], retry_on: frozenset) -> bool:
-    """True if step result marks as retryable OR has a reason_code in retry_on."""
-    if step_result.get("ok", True):
-        return False
-    if step_result.get("retryable") is True:
-        return True
-    code = str(step_result.get("reason_code") or "")
-    return code in retry_on
 
 if TYPE_CHECKING:
     from tasks.scenario.context import ScenarioContext
@@ -184,82 +152,13 @@ class ScenarioExecutor:
 
             step_result: Dict[str, Any] = {"index": idx, "type": t, "ok": True}
 
-            # Pre-step capture
-            capture_pre_step(sc, step, idx, step_result)
-
-            # Record timestamp before action
             step_start_t = time.monotonic()
-
-            # F1.5 — per-step retry config (optional per step):
-            #   "retry": {"attempts": 3, "backoff_ms": 500, "jitter_ms": 300,
-            #             "backoff_cap_ms": 5000, "on": ["stale_frame", "no_candidates"]}
-            retry_cfg = step.get("retry") if isinstance(step.get("retry"), dict) else {}
-            max_attempts = max(1, int(retry_cfg.get("attempts") or 1))
-            backoff_ms = float(retry_cfg.get("backoff_ms") or 500)
-            jitter_ms = float(retry_cfg.get("jitter_ms") or 250)
-            backoff_cap_ms = float(retry_cfg.get("backoff_cap_ms") or 5000)
-            retry_on_cfg = retry_cfg.get("on")
-            if retry_on_cfg:
-                retry_on = frozenset(str(r) for r in retry_on_cfg)
-            else:
-                retry_on = _DEFAULT_RETRY_REASONS
-
-            attempts_used = 0
-            handler_result: Dict[str, Any] = {}
-            for attempt in range(1, max_attempts + 1):
-                attempts_used = attempt
-                # Re-dispatch (handler may be called multiple times; handlers
-                # should be idempotent — extract is by virtue of dedupe).
-                try:
-                    handler_result = dispatch_step(sc, step, idx)
-                except Exception as exc:
-                    handler_result = {
-                        "ok": False,
-                        "message": f"{t}: handler raised: {exc}",
-                        "reason_code": "handler_exception",
-                    }
-                    log.exception(f"[{sc.serial}] step#{idx + 1} handler raised")
-
-                merged = {"index": idx, "type": t, "ok": True}
-                merged.update(handler_result)
-
-                # Also catch StaleFrameError from capture_post_step so retry
-                # treats it like any other retryable condition.
-                stale_raised = False
-                try:
-                    capture_post_step(sc, step, idx, merged, step_start_t)
-                except StaleFrameError as sfe:
-                    stale_raised = True
-                    merged["ok"] = False
-                    merged["reason_code"] = "stale_frame"
-                    merged["retryable"] = True
-                    merged["message"] = f"{t}: {sfe}"
-                    log.warning(f"[{sc.serial}] step#{idx + 1}: {sfe}")
-
-                if _is_retryable(merged, retry_on) and attempt < max_attempts:
-                    delay = _compute_backoff_s(attempt, backoff_ms, backoff_cap_ms, jitter_ms)
-                    trace_log.info(
-                        "step_retry",
-                        trace_id=sc.trace_id,
-                        serial=sc.serial,
-                        step_index=idx + 1,
-                        step_type=t,
-                        attempt=attempt,
-                        max_attempts=max_attempts,
-                        reason_code=merged.get("reason_code"),
-                        backoff_ms=round(delay * 1000, 1),
-                        stale_frame=stale_raised,
-                    )
-                    time.sleep(delay)
-                    step_result = {"index": idx, "type": t, "ok": True}
-                    capture_pre_step(sc, step, idx, step_result)
-                    step_start_t = time.monotonic()
-                    continue
-
-                step_result = merged
-                break
-
+            step_started_at = datetime.now(timezone.utc)
+            step_result, attempts_used = execute_step_with_retry(
+                sc, step, idx, trace_log=trace_log,
+            )
             step_dur_ms = (time.monotonic() - step_start_t) * 1000.0
+            step_ended_at = datetime.now(timezone.utc)
             trace_log.info(
                 "step_end",
                 trace_id=sc.trace_id,
@@ -274,6 +173,17 @@ class ScenarioExecutor:
             )
 
             sc.step_results.append(step_result)
+
+            from services.execution.step_store import schedule_persist_step
+
+            schedule_persist_step(
+                sc,
+                step,
+                step_result,
+                started_at=step_started_at,
+                ended_at=step_ended_at,
+                duration_ms=step_dur_ms,
+            )
 
             if step_result.get("ok", True):
                 _persist_checkpoint(sc, idx + 1)
@@ -298,6 +208,11 @@ class ScenarioExecutor:
                 time.sleep(delay_ms / 1000.0)
 
         result = self._build_result()
+        from services.execution.capture_service import flush_pending_captures
+        from services.execution.step_store import schedule_sync_step_artifacts
+
+        flush_pending_captures()
+        schedule_sync_step_artifacts(sc)
         total_dur_ms = (time.monotonic() - scenario_started_at) * 1000.0
         failed_step = next((r for r in sc.step_results if not r.get("ok", True)), None)
         trace_log.info(
@@ -355,6 +270,18 @@ def run_nested_scenario(
     child_scenario: Dict[str, Any] = {"steps": nested_steps, "variables": variables or {}}
     if extra_scenario_keys:
         child_scenario.update(extra_scenario_keys)
+    for key in (
+        "_campaign_id",
+        "_execution_id",
+        "_run_hash_scope",
+        "_campaign_vars",
+        "execution_id",
+        "run_id",
+        "name",
+        "scenario_name",
+    ):
+        if key not in child_scenario and key in sc.scenario:
+            child_scenario[key] = sc.scenario[key]
     child_call_stack = sc.call_stack | ({call_stack_add} if call_stack_add else set())
     child = sc.__class__.from_args(
         sc.device,

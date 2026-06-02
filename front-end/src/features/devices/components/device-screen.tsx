@@ -93,6 +93,8 @@ interface DeviceScreenProps {
   streamCoverAlign?: 'center' | 'bottom';
   /** Read-only preview: disable all interactions with device. */
   interactive?: boolean;
+  /** Hint browser to prioritize MJPEG fetch (control-record mirror). */
+  streamFetchPriority?: 'high' | 'low' | 'auto';
 }
 
 export function DeviceScreen({
@@ -106,7 +108,8 @@ export function DeviceScreen({
   gestureMode,
   captionBelowFrame = false,
   streamCoverAlign = 'bottom',
-  interactive = true
+  interactive = true,
+  streamFetchPriority = 'auto'
 }: DeviceScreenProps) {
   const t = useTranslations('devicesFarm');
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -226,11 +229,11 @@ export function DeviceScreen({
   useLayoutEffect(() => {
     if (!streamingMode) return;
     if (streamingMode !== 'continuous') {
-      setScreenStreamOn(true);
+      setScreenStreamOn((prev) => (prev ? prev : true));
       return;
     }
     if (!SHOW_RELAY_SCRCPY_UI_TOGGLE) {
-      setScreenStreamOn(true);
+      setScreenStreamOn((prev) => (prev ? prev : true));
       return;
     }
     const serverWants =
@@ -238,7 +241,7 @@ export function DeviceScreen({
       device.relay_scrcpy_enabled !== null
         ? Boolean(device.relay_scrcpy_enabled)
         : Boolean(streamingAutoAttach ?? true);
-    setScreenStreamOn(serverWants);
+    setScreenStreamOn((prev) => (prev === serverWants ? prev : serverWants));
   }, [
     streamingMode,
     streamingAutoAttach,
@@ -481,26 +484,27 @@ export function DeviceScreen({
   // MJPEG remains the visible baseline so the user does not see a black canvas.
   useEffect(() => {
     if (h264PrimaryMode) {
-      setMjpegEnabled(!h264Active || h264Stalled);
+      const next = !h264Active || h264Stalled;
+      setMjpegEnabled((prev) => (prev === next ? prev : next));
       return;
     }
     if (!isActive) {
-      setMjpegEnabled(false);
+      setMjpegEnabled((prev) => (prev ? false : prev));
       return;
     }
     if (!relayH264Allowed) {
       if (h264StableTimerRef.current) clearTimeout(h264StableTimerRef.current);
-      setMjpegEnabled(true);
+      setMjpegEnabled((prev) => (prev ? prev : true));
       return;
     }
     if (h264Active) {
       if (h264StableTimerRef.current) clearTimeout(h264StableTimerRef.current);
       h264StableTimerRef.current = setTimeout(() => {
-        setMjpegEnabled(false);
+        setMjpegEnabled((prev) => (prev ? false : prev));
       }, 2000);
     } else {
       if (h264StableTimerRef.current) clearTimeout(h264StableTimerRef.current);
-      setMjpegEnabled(true);
+      setMjpegEnabled((prev) => (prev ? prev : true));
     }
     return () => {
       if (h264StableTimerRef.current) clearTimeout(h264StableTimerRef.current);
@@ -878,6 +882,8 @@ export function DeviceScreen({
             ref={imageRef}
             src={mjpegUrl}
             alt={`${device.brand} ${device.model}`}
+            fetchPriority={streamFetchPriority}
+            decoding='async'
             className={`absolute inset-0 h-full w-full ${streamObjectClass} transition-opacity duration-500 ${h264Active ? 'pointer-events-none opacity-0' : 'opacity-100'}`}
             onLoad={() => {
               setHasFrame(true);
@@ -896,6 +902,14 @@ export function DeviceScreen({
           ref={canvasRef}
           className={`pointer-events-none absolute inset-0 h-full w-full ${streamObjectClass} transition-opacity duration-500 ${h264Active ? 'opacity-100' : 'opacity-0'}`}
         />
+
+        {/* Solid placeholder — contentful paint before stream; avoids tiny text becoming LCP. */}
+        {isActive && !hasFrame && (
+          <div
+            className='absolute inset-0 bg-gradient-to-b from-zinc-700 to-zinc-900'
+            aria-hidden
+          />
+        )}
 
         {/* Highlight bounds overlay for XML tree node selection */}
         {highlightBounds && dw > 0 && dh > 0 && (
@@ -926,24 +940,21 @@ export function DeviceScreen({
 
         {!hasFrame && isActive && (
           <div
-            className='absolute inset-0 flex items-center justify-center text-xs text-muted-foreground'
+            className='absolute inset-0 flex items-center justify-center'
             style={{ pointerEvents: 'none' }}
+            aria-live='polite'
           >
-            <div className='flex flex-col items-center gap-2 rounded-md bg-black/40 px-3 py-2 backdrop-blur-[1px]'>
-              {!isUnresponsive && (
-                <div className='h-4 w-4 animate-spin rounded-full border-2 border-zinc-400 border-t-transparent' />
-              )}
-              <div className='text-[11px] text-zinc-200'>
-                {isUnresponsive
-                  ? t('streamUnresponsive')
-                  : wsConnected
-                    ? t('streamWaitingFirstFrame')
-                    : t('streamConnecting')}
-              </div>
-              <div className='text-[10px] text-zinc-400'>
-                {loadingElapsedSec}s
-              </div>
-            </div>
+            <span className='sr-only'>
+              {isUnresponsive
+                ? t('streamUnresponsive')
+                : wsConnected
+                  ? t('streamWaitingFirstFrame')
+                  : t('streamConnecting')}
+              {loadingElapsedSec > 0 ? ` (${loadingElapsedSec}s)` : ''}
+            </span>
+            {!isUnresponsive && (
+              <div className='h-5 w-5 animate-spin rounded-full border-2 border-zinc-400/80 border-t-transparent' />
+            )}
           </div>
         )}
         {!isActive && (

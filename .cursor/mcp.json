@@ -2,7 +2,14 @@
   "mcpServers": {
     "device-farm": {
       "command": "sh",
-      "args": ["scripts/run_device_farm_mcp.sh"]
+      "args": [
+        "scripts/run_device_farm_mcp.sh"
+      ],
+      "cwd": "/Users/hoangle/farm/device-farm",
+      "env": {
+        "DEVICE_FARM_URL": "http://localhost:8081",
+        "DEVICE_FARM_MCP_TOKEN": "dfmcp_r2Keb_DHDAy9WE-RZf3eJqck28WWvX-O3JqztlPzb9w"
+      }
     }
   }
 }

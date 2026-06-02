@@ -3,6 +3,7 @@
 @tailwind utilities;
 
 :root {
+  --z-floating: 10050;
   --radius: 0.625rem;
   --background: 0 0% 100%;
   --foreground: 0 0% 15%;

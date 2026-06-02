@@ -13,7 +13,9 @@ Run: pytest tests/test_u2_bug_fixes.py -v
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
+import threading
 import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, call, patch
@@ -173,6 +175,77 @@ class TestXpathWaitTimeout:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Hierarchy coalescing: concurrent refresh calls share one u2 dump
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestDeviceClientHierarchyCoalescing:
+    """Concurrent force refreshes should not fan out into repeated u2 XML dumps."""
+
+    def test_concurrent_force_refresh_waits_for_single_u2_dump(self):
+        d = DeviceClient(serial="logical-serial", index=0, config=Config())
+        started = threading.Event()
+        call_count = 0
+        call_lock = threading.Lock()
+
+        class _SlowU2:
+            def page_source(self, timeout=None, compressed=False):
+                nonlocal call_count
+                with call_lock:
+                    call_count += 1
+                started.set()
+                time.sleep(0.2)
+                return SIMPLE_XML
+
+        d.ensure_u2_healthy = lambda: True  # type: ignore[method-assign]
+        d._u2 = _SlowU2()
+        d._HIERARCHY_LOCK_WAIT_S = 0.05
+        start_gate = threading.Event()
+
+        def _call_hierarchy():
+            start_gate.wait(timeout=1.0)
+            return d.hierarchy_xml(force_refresh=True)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+            futures = [pool.submit(_call_hierarchy) for _ in range(5)]
+            start_gate.set()
+            assert started.wait(timeout=1.0)
+            results = [f.result(timeout=2.0) for f in futures]
+
+        assert all(result == results[0] for result in results)
+        assert results[0] and "<hierarchy" in results[0]
+        assert call_count == 1
+
+    def test_failed_coalesced_refresh_does_not_return_expired_cache(self):
+        d = DeviceClient(serial="logical-serial", index=0, config=Config())
+        started = threading.Event()
+        d._hierarchy_cache = (time.time() - d._HIERARCHY_STALE_CACHE_TTL_S - 1.0, SIMPLE_XML)
+
+        class _FailingU2:
+            def page_source(self, timeout=None, compressed=False):
+                started.set()
+                time.sleep(0.2)
+                return "<hierarchy />"
+
+        d.ensure_u2_healthy = lambda: True  # type: ignore[method-assign]
+        d._u2 = _FailingU2()
+        d._HIERARCHY_LOCK_WAIT_S = 0.05
+        d._request_u2_start_services = lambda reason: None  # type: ignore[method-assign]
+        start_gate = threading.Event()
+
+        def _call_hierarchy():
+            start_gate.wait(timeout=1.0)
+            return d.hierarchy_xml(force_refresh=True)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(_call_hierarchy) for _ in range(2)]
+            start_gate.set()
+            assert started.wait(timeout=1.0)
+            results = [f.result(timeout=2.0) for f in futures]
+
+        assert results == [None, None]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # U2 relay selection: current host must beat stale _adb_serial
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -232,6 +305,108 @@ class TestDeviceClientU2RelaySelection:
 
         with patch("runtime.transports.adb_relay_server.get_relay_manager", return_value=relay):
             assert d._should_force_u2_relay() is True
+
+
+class TestRelayU2Bind:
+    """Relay online must bind u2 host when WS hello raced ahead of relay."""
+
+    def _device(self) -> DeviceClient:
+        return DeviceClient(serial="logical-serial", index=0, config=Config())
+
+    def test_u2_host_hint_from_adb_serial(self):
+        d = self._device()
+        d._adb_serial = "172.16.0.83:5555"
+        assert d._u2_host_hint() == "172.16.0.83"
+
+    def test_u2_host_hint_prefers_explicit_host(self):
+        d = self._device()
+        d._u2_host = "10.0.0.5"
+        d._adb_serial = "172.16.0.83:5555"
+        assert d._u2_host_hint() == "10.0.0.5"
+
+    def test_bind_relay_u2_sets_host_and_adb_serial(self):
+        d = self._device()
+        d.config.device.u2_always_tunnel = True
+        relay = _FakeRelay(["172.16.0.83:5555"])
+
+        with patch("runtime.transports.adb_relay_server.get_relay_manager", return_value=relay):
+            with patch.object(d, "_reconnect_u2") as reconnect:
+                def _run_target(**kwargs):
+                    mock = MagicMock()
+                    mock.start = lambda: kwargs["target"]()
+                    return mock
+
+                with patch("runtime.core.device_client.threading.Thread", side_effect=_run_target):
+                    ok = d.bind_relay_u2("172.16.0.83:5555", host="172.16.0.83")
+
+        assert ok is True
+        assert d._adb_serial == "172.16.0.83:5555"
+        assert d._u2_host == "172.16.0.83"
+        assert d._u2_reconnect_failed_at == 0.0
+        reconnect.assert_called_once()
+
+    def test_bind_relay_u2_skips_when_no_relay(self):
+        d = self._device()
+        with patch("runtime.transports.adb_relay_server.get_relay_manager", return_value=None):
+            assert d.bind_relay_u2("172.16.0.83:5555") is False
+
+    def test_ensure_u2_healthy_uses_adb_serial_hint_without_u2_host(self):
+        d = self._device()
+        d.config.device.u2_always_tunnel = True
+        d._adb_serial = "172.16.0.83:5555"
+        relay = _FakeRelay(["172.16.0.83:5555"])
+
+        with patch("runtime.transports.adb_relay_server.get_relay_manager", return_value=relay):
+            with patch.object(d, "_reconnect_u2_atx", return_value=True) as atx:
+                assert d.ensure_u2_healthy() is True
+                atx.assert_called_once()
+
+    def test_attach_preserves_relay_u2_on_ws_reconnect(self):
+        from runtime.transports.u2_jsonrpc import _RelaySession
+
+        d = self._device()
+        fake_u2 = MagicMock()
+        fake_u2._session = _RelaySession("172.16.0.83:5555", MagicMock(), MagicMock())
+        d._u2 = fake_u2
+        d._u2_batch = MagicMock()
+
+        tunnels = MagicMock()
+        tunnels.start_all.return_value = {"u2": 12345, "stfservice": 12346}
+        with patch("runtime.core.device_client.TunnelSet", return_value=tunnels):
+            d.attach_agent_sender(lambda msg: None)
+
+        assert d._u2 is fake_u2
+        assert d._u2_batch is not None
+
+    def test_recover_u2_relay_mode_skips_restart(self):
+        d = self._device()
+        relay = _FakeRelay(["172.16.0.83:5555"])
+        d._adb_serial = "172.16.0.83:5555"
+
+        with patch("runtime.transports.adb_relay_server.get_relay_manager", return_value=relay):
+            with patch.object(d, "_trigger_u2_restart_async") as restart:
+                with patch.object(d, "_reconnect_u2") as reconnect:
+                    def _run_target(**kwargs):
+                        mock = MagicMock()
+                        mock.start = lambda: kwargs["target"]()
+                        return mock
+
+                    with patch("runtime.core.device_client.threading.Thread", side_effect=_run_target):
+                        d._recover_u2_ws_mode()
+
+        restart.assert_not_called()
+        reconnect.assert_called_once()
+
+    def test_reconnect_skips_ws_tunnel_when_relay_active(self):
+        d = DeviceClient(serial="10AE7S00HD002JK", index=0, config=Config())
+        d._tunnel_ports = {"u2": 41511}
+        relay = _FakeRelay(["10AE7S00HD002JK"])
+
+        with patch("runtime.transports.adb_relay_server.get_relay_manager", return_value=relay):
+            with patch.object(d, "_resolve_relay_u2_host", return_value=None):
+                with patch.object(d, "_reconnect_u2_atx", return_value=False) as atx:
+                    assert d._reconnect_u2_impl() is False
+                    atx.assert_not_called()
 
 
 class TestDeviceClientU2Recovery:

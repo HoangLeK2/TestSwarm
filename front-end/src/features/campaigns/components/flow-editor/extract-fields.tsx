@@ -17,6 +17,9 @@ import {
 
 type ExtractStep = FlowStep & {
   strategy?: string;
+  extract_profile?: string;
+  open_post_before_extract?: boolean;
+  open_post_press_back_after_extract?: boolean;
   expand_see_more?: boolean;
   stop_if_no_new?: boolean;
   expand_see_more_max_passes?: number | string;
@@ -39,6 +42,8 @@ type ExtractStep = FlowStep & {
   save_parent_id_var?: string;
   item_level?: number;
 };
+
+const EXTRACT_PROFILES = ['balanced', 'aggressive', 'safe'] as const;
 
 const STRATEGIES = [
   { value: 'fb_posts', titleKey: 'strategyPostsTitle', descKey: 'strategyPostsDesc' },
@@ -153,10 +158,10 @@ function saveDefaultsForStrategy(strategy: string): {
   dedupe_field: string;
 } {
   if (strategy === 'fb_comments') {
-    return { content_type: 'comment', dedupe_field: 'comment_key' };
+    return { content_type: 'fb_comment', dedupe_field: 'comment_key' };
   }
   if (strategy === 'fb_posts') {
-    return { content_type: 'group_post', dedupe_field: 'post_key' };
+    return { content_type: 'fb_post', dedupe_field: 'post_key' };
   }
   return { content_type: 'text', dedupe_field: 'text' };
 }
@@ -173,8 +178,8 @@ function labelContentType(
 ) {
   const ct =
     contentType ?? saveDefaultsForStrategy(strategy).content_type;
-  if (ct === 'comment') return t('saveContentTypeComment');
-  if (ct === 'group_post') return t('saveContentTypeGroupPost');
+  if (ct === 'fb_comment') return t('saveContentTypeComment');
+  if (ct === 'fb_post') return t('saveContentTypeGroupPost');
   if (ct === 'text') return t('saveContentTypeText');
   return ct;
 }
@@ -282,6 +287,11 @@ export function ExtractStepFields({
   const t = useTranslations('campaignsFeature.stepEditor.extract');
   const strategy = step.strategy ?? 'fb_posts';
   const expand = step.expand_see_more ?? true;
+  const openPost =
+    step.open_post_before_extract ??
+    (strategy === 'fb_posts' ? true : false);
+  const autoBackAfterOpenPost =
+    step.open_post_press_back_after_extract ?? false;
   const extractParentMode = step.parent_post_id_var ? 'custom' : 'auto';
   const saveEnabled = !!step.collection;
   const saveParentMode =
@@ -338,6 +348,14 @@ export function ExtractStepFields({
               selectedLabel={t('strategySelected')}
               onSelect={() => {
                 const patch: Partial<FlowStep> = { strategy: s.value };
+                if (s.value === 'fb_posts') {
+                  patch.open_post_before_extract = true;
+                  patch.open_post_press_back_after_extract = false;
+                  patch.extract_profile = step.extract_profile ?? 'balanced';
+                } else {
+                  patch.open_post_before_extract = undefined;
+                  patch.open_post_press_back_after_extract = undefined;
+                }
                 if (saveEnabled) {
                   Object.assign(patch, saveDefaultsForStrategy(s.value));
                   if (s.value !== 'fb_comments') {
@@ -353,6 +371,55 @@ export function ExtractStepFields({
       </StepPanelSection>
 
       <StepPanelSection title={t('behaviorSectionTitle')}>
+        {(strategy === 'fb_posts' || strategy === 'fb_comments') ? (
+          <StepPanelField label={t('extractProfileLabel')}>
+            <select
+              className='h-9 w-full rounded-md border border-input bg-background px-2 text-xs'
+              value={step.extract_profile ?? 'balanced'}
+              onChange={(e) => update({ extract_profile: e.target.value })}
+            >
+              {EXTRACT_PROFILES.map((profile) => (
+                <option key={profile} value={profile}>
+                  {t(`extractProfile_${profile}`)}
+                </option>
+              ))}
+            </select>
+            <p className='mt-1 text-[10px] text-muted-foreground'>
+              {t('extractProfileHint')}
+            </p>
+          </StepPanelField>
+        ) : null}
+        {strategy === 'fb_posts' ? (
+          <>
+            <StepPanelToggle
+              label={t('openPostBeforeExtractLabel')}
+              description={t('openPostBeforeExtractDescription')}
+              checked={openPost}
+              onCheckedChange={(checked) => {
+                const patch: Partial<FlowStep> = {
+                  open_post_before_extract: checked
+                };
+                if (checked && step.open_post_press_back_after_extract === undefined) {
+                  patch.open_post_press_back_after_extract = false;
+                }
+                update(patch);
+              }}
+            />
+            {openPost ? (
+              <StepPanelToggle
+                label={t('openPostPressBackLabel')}
+                description={t('openPostPressBackDescription')}
+                checked={autoBackAfterOpenPost}
+                onCheckedChange={(checked) =>
+                  update({ open_post_press_back_after_extract: checked })
+                }
+              />
+            ) : null}
+            {openPost && !autoBackAfterOpenPost ? (
+              <StepPanelHint>{t('openPostManualBackHint')}</StepPanelHint>
+            ) : null}
+          </>
+        ) : null}
         <StepPanelToggle
           label={t('expandSeeMoreLabel')}
           description={t('expandSeeMoreDescription')}
@@ -689,10 +756,10 @@ export function ExtractStepFields({
                       update({ content_type: e.target.value || undefined })
                     }
                   >
-                    <option value='group_post'>
+                    <option value='fb_post'>
                       {t('saveContentTypeGroupPost')}
                     </option>
-                    <option value='comment'>{t('saveContentTypeComment')}</option>
+                    <option value='fb_comment'>{t('saveContentTypeComment')}</option>
                     <option value='text'>{t('saveContentTypeText')}</option>
                   </select>
                 </F>

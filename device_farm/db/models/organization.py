@@ -57,7 +57,9 @@ class OrganizationMember(Base):
     user_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    role: Mapped[str] = mapped_column(String(20), default="member")  # owner | member | supervisor
+    role: Mapped[str] = mapped_column(String(20), default="member")
+    status: Mapped[str] = mapped_column(String(20), default="active", server_default="active")
+    joined_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     organization: Mapped["Organization"] = relationship("Organization", back_populates="members")

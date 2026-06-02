@@ -53,15 +53,9 @@ def _platform_for_strategy(strategy: str, step: Dict[str, Any]) -> str:
 
 
 def _content_type_for_strategy(strategy: str, step: Dict[str, Any]) -> str:
-    if step.get("content_type"):
-        return str(step["content_type"])
-    if strategy in COMMENT_STRATEGIES:
-        return "comment"
-    if strategy == "text_nodes":
-        return "text"
-    if strategy.startswith("tiktok_"):
-        return "video"
-    return "post"
+    from services.content.legacy_type_map import default_content_type_for_strategy
+
+    return default_content_type_for_strategy(strategy, step)
 
 
 def _data_var_for_edge_strategy(strategy: str, step: Dict[str, Any]) -> str:
@@ -249,6 +243,89 @@ def _resolve_user_id_for_edge(serial: str, scenario: Dict[str, Any]) -> str | No
         return None
 
 
+def _resolve_org_id_for_edge(serial: str, scenario: Dict[str, Any]) -> str | None:
+    raw = scenario.get("_org_id") or scenario.get("org_id")
+    if raw:
+        text = str(raw).strip()
+        if text:
+            return text
+    campaign_vars = scenario.get("_campaign_vars") or {}
+    if isinstance(campaign_vars, dict):
+        cv_org = campaign_vars.get("__ORG_ID__") or campaign_vars.get("org_id")
+        if cv_org:
+            text = str(cv_org).strip()
+            if text:
+                return text
+    user_id = _resolve_user_id_for_edge(serial, scenario)
+    if user_id:
+        try:
+            from db.database import run_activity_coro, activity_session
+            from db.crud.content import resolve_org_id
+
+            async def _resolve_from_user():
+                async with activity_session() as db:
+                    return await resolve_org_id(db, user_id=user_id)
+
+            org = run_activity_coro(_resolve_from_user())
+            if org:
+                return str(org)
+        except Exception:
+            pass
+    return None
+
+
+def _edge_persist_fk_context(scenario: Dict[str, Any], serial: str) -> dict[str, Any]:
+    """FK-safe fields forwarded to agent-boot for direct content_items writes."""
+    execution_id = scenario.get("_execution_id") or scenario.get("execution_id") or scenario.get("run_id")
+    exec_text = str(execution_id).strip() if execution_id else None
+    return {
+        "execution_id": exec_text,
+        "campaign_id": _resolve_campaign_id_for_edge(scenario),
+        "user_id": _resolve_user_id_for_edge(serial, scenario),
+        "org_id": _resolve_org_id_for_edge(serial, scenario),
+    }
+
+
+def _resolve_campaign_id_for_edge(scenario: Dict[str, Any]) -> str | None:
+    execution_id = (
+        scenario.get("_execution_id")
+        or scenario.get("execution_id")
+        or scenario.get("run_id")
+    )
+    exec_id = str(execution_id).strip() if execution_id else None
+
+    # When upstream already resolved FK-safe campaign (e.g. Temporal execute_extract),
+    # honor explicit None — do not fall back to stale workflow campaign_id.
+    if "_campaign_id" in scenario:
+        pre = scenario.get("_campaign_id")
+        if not pre:
+            return None
+        campaign_id = str(pre).strip() or None
+    else:
+        raw = scenario.get("campaign_id")
+        campaign_id = str(raw).strip() if raw else None
+
+    if not campaign_id and not exec_id:
+        return None
+
+    try:
+        from db.database import run_activity_coro, activity_session
+        from services.content.campaign_ref import resolve_persist_campaign_id
+
+        async def _resolve():
+            async with activity_session() as db:
+                return await resolve_persist_campaign_id(
+                    db,
+                    campaign_id=campaign_id,
+                    execution_id=exec_id,
+                )
+
+        return run_activity_coro(_resolve())
+    except Exception as exc:
+        log.warning("edge extra_data: campaign_id resolve failed: %s", exc)
+        return None
+
+
 def request_edge_extra_data(
     *,
     device: Any,
@@ -302,9 +379,7 @@ def request_edge_extra_data(
     context = {
         "schema_version": 1,
         "context_id": scenario.get("_execution_id") or scenario.get("_run_hash_scope") or serial,
-        "execution_id": scenario.get("_execution_id"),
-        "campaign_id": scenario.get("_campaign_id"),
-        "user_id": _resolve_user_id_for_edge(serial, scenario),
+        **_edge_persist_fk_context(scenario, serial),
         "device_serial": serial,
         "collection": collection,
         "platform": _platform_for_strategy(strategy, step),
@@ -353,6 +428,11 @@ def request_edge_extra_data(
         "expand_see_more_xml_fallback",
         "expand_selector_timeout_s",
         "hierarchy_compressed",
+        "open_post_before_extract",
+        "open_post_press_back_after_extract",
+        "open_post_tap_settle_s",
+        "open_post_max_attempts",
+        "open_post_verify",
         "allow_a11y_xml_fallback",
     ):
         if key in step:
@@ -361,20 +441,21 @@ def request_edge_extra_data(
         context["expand_see_more"] = False
     elif "expand_see_more" in step:
         context["expand_see_more"] = step["expand_see_more"]
-    if strategy not in COMMENT_STRATEGIES and "expand_see_more" not in context:
+    if strategy not in COMMENT_STRATEGIES:
         from services.extract_profiles import DEFAULT_EXTRACT_PROFILE, get_profile_defaults
         from services.scenario_step_contract import resolve_extract_profile
 
         profile_name = resolve_extract_profile(step)
-        expand_defaults = get_profile_defaults(profile_name, strategy)
-        if not expand_defaults and strategy.endswith("_posts"):
-            expand_defaults = get_profile_defaults(profile_name, "fb_posts")
-        for ek, ev in expand_defaults.items():
+        profile_defaults = get_profile_defaults(profile_name, strategy)
+        if not profile_defaults and strategy.endswith("_posts"):
+            profile_defaults = get_profile_defaults(profile_name, "fb_posts")
+        for ek, ev in (profile_defaults or {}).items():
             context.setdefault(ek, ev)
-        context.setdefault("expand_see_more", True)
-        context.setdefault("expand_see_more_fast", True)
-        context.setdefault("expand_completion_retries", 1)
-        context.setdefault("expand_see_more_wall_s", 18)
+        if "expand_see_more" not in context:
+            context.setdefault("expand_see_more", True)
+            context.setdefault("expand_see_more_fast", True)
+            context.setdefault("expand_completion_retries", 1)
+            context.setdefault("expand_see_more_wall_s", 18)
     timeout = float(step.get("edge_extra_timeout_s") or os.environ.get("EDGE_EXTRA_TIMEOUT_S", "60"))
     try:
         summary = device.request_extra_data_xml(
@@ -448,9 +529,7 @@ def request_edge_comment_target(
     context = {
         "schema_version": 1,
         "context_id": scenario.get("_execution_id") or scenario.get("_run_hash_scope") or serial,
-        "execution_id": scenario.get("_execution_id"),
-        "campaign_id": scenario.get("_campaign_id"),
-        "user_id": _resolve_user_id_for_edge(serial, scenario),
+        **_edge_persist_fk_context(scenario, serial),
         "device_serial": serial,
         "hash_scope": scenario.get("_run_hash_scope") or scenario.get("_execution_id"),
         "dedupe_field": step.get("dedupe_field") or "post_key",
@@ -458,7 +537,22 @@ def request_edge_comment_target(
         "switch_to_all_comments": bool(step.get("switch_to_all_comments", True)),
         "post_tap_wait_s": float(step.get("post_tap_wait_s", 0.8) or 0.8),
         "comment_filter_step_pause_s": float(step.get("comment_filter_step_pause_s", 0.45) or 0.45),
+        "comment_filter_post_select_s": float(step.get("comment_filter_post_select_s", 0.85) or 0.85),
     }
+    for ctx_key in (
+        "comment_target_verify",
+        "comment_recover_chrome",
+        "comment_target_verify_max_retries",
+        "comment_target_center_y_ratio",
+        "comment_target_band_low",
+        "comment_target_band_high",
+        "comment_target_u2_click",
+        "comment_sheet_u2_wait",
+        "comment_sheet_wait_s",
+        "comment_target_click_timeout_s",
+    ):
+        if ctx_key in step:
+            context[ctx_key] = step[ctx_key]
     timeout = float(
         step.get("edge_extra_timeout_s")
         or os.environ.get("EDGE_COMMENT_TARGET_TIMEOUT_S", "12")
@@ -518,14 +612,13 @@ def run_edge_comment_filter_switch(
     context = {
         "schema_version": 1,
         "context_id": scenario.get("_execution_id") or scenario.get("_run_hash_scope") or serial,
-        "execution_id": scenario.get("_execution_id"),
-        "campaign_id": scenario.get("_campaign_id"),
-        "user_id": _resolve_user_id_for_edge(serial, scenario),
+        **_edge_persist_fk_context(scenario, serial),
         "device_serial": serial,
         "comment_filter": target_filter,
         "switch_to_all_comments": True,
         "post_tap_wait_s": wait_s,
         "comment_filter_step_pause_s": float(step.get("comment_filter_step_pause_s", 0.45) or 0.45),
+        "comment_filter_post_select_s": float(step.get("comment_filter_post_select_s", 0.85) or 0.85),
     }
     timeout = float(
         step.get("edge_extra_timeout_s")
@@ -654,19 +747,47 @@ def handle_extract_text_hierarchy(sc: ScenarioContext, step: Dict[str, Any], idx
         result["message"] = "extract_text_hierarchy: missing save_as"
         return
     try:
-        from runtime.extraction.hierarchy_extractor import HierarchyExtractor
-        xml = sc.device.hierarchy_xml(force_refresh=True)
-        if not xml:
-            result["ok"] = False
-            result["message"] = "No hierarchy XML available"
-            return
+        from services.content.extraction.capture_service import ExtractionCaptureService
+        from services.content.extraction.hierarchy.service import HierarchyService
+        from services.content.extraction.models import CaptureError, StrategyMismatchError
+        from services.content.extraction.scenario_bridge import (
+            execution_capture_ctx,
+            run_extraction_async,
+            should_persist_artifact,
+        )
+
+        exec_ctx = execution_capture_ctx(sc, idx, "hierarchy_snapshot")
+        persist = should_persist_artifact(sc, step) and exec_ctx is not None
+
+        async def _run():
+            svc = HierarchyService(ExtractionCaptureService())
+            return await svc.extract(
+                sc.device,
+                "screen_data",
+                config={
+                    "filter_class": step.get("filter_class"),
+                    "exclude_empty": step.get("exclude_empty", True),
+                },
+                persist=persist,
+                execution_ctx=exec_ctx,
+            )
+
+        hr = run_extraction_async(_run())
+        items = hr.data if isinstance(hr.data, list) else [hr.data]
         fmt = step.get("format", "text")
-        items = HierarchyExtractor.extract_texts(xml, filter_class=step.get("filter_class"), exclude_empty=step.get("exclude_empty", True))
         if fmt == "json":
             sc.var_ctx.set(save_as, items)
         else:
-            sc.var_ctx.set(save_as, "\n".join(i["text"] for i in items if i.get("text")))
+            sc.var_ctx.set(
+                save_as,
+                "\n".join(i["text"] for i in items if isinstance(i, dict) and i.get("text")),
+            )
         result["message"] = f"Extracted {len(items)} text elements"
+        if hr.raw_data.get("artifact_id"):
+            result["artifact_id"] = hr.raw_data["artifact_id"]
+    except (CaptureError, StrategyMismatchError) as exc:
+        result["ok"] = False
+        result["message"] = f"extract_text_hierarchy failed: {exc}"
     except Exception as exc:
         result["ok"] = False
         result["message"] = f"extract_text_hierarchy failed: {exc}"
@@ -680,18 +801,49 @@ def handle_extract_text_ocr(sc: ScenarioContext, step: Dict[str, Any], idx: int,
         result["message"] = "extract_text_ocr: missing save_as"
         return
     try:
-        from runtime.extraction.ocr_engine import OCREngine
-        frame = sc.device.take_screenshot()
-        if not frame:
-            result["ok"] = False
-            result["message"] = "No screenshot available for OCR"
-            return
-        ocr = OCREngine()
-        text = ocr.extract_text(frame, language=step.get("language", "eng"), region=step.get("region"),
-                                psm=int(step.get("psm", 11)), preprocess=step.get("preprocess", True),
-                                scale_factor=float(step.get("scale_factor", 2.0)))
+        from services.content.extraction.capture_service import ExtractionCaptureService
+        from services.content.extraction.models import CaptureError, OCRError
+        from services.content.extraction.ocr_service import OCRService
+        from services.content.extraction.scenario_bridge import (
+            capture_screenshot_async,
+            execution_capture_ctx,
+            map_ocr_languages,
+            run_extraction_async,
+            should_persist_artifact,
+        )
+
+        exec_ctx = execution_capture_ctx(sc, idx, "screenshot_ocr")
+        persist = should_persist_artifact(sc, step) and exec_ctx is not None
+        region = step.get("region")
+
+        async def _run():
+            capture = ExtractionCaptureService()
+            handle = await capture_screenshot_async(
+                capture,
+                sc.device,
+                region=region,
+                persist=persist,
+                execution_ctx=exec_ctx,
+            )
+            ocr = OCRService(confidence_threshold=float(step.get("confidence_threshold", 0.5)))
+            langs = map_ocr_languages(step.get("languages") or step.get("language", "eng"))
+            ocr_result = await ocr.extract(
+                handle.image_bytes,
+                lang=langs,
+                region=region,
+                confidence_threshold=float(step.get("confidence_threshold", 0.5)),
+            )
+            return ocr_result, handle.artifact_id
+
+        ocr_result, artifact_id = run_extraction_async(_run())
+        text = "\n".join(r["text"] for r in ocr_result.results if r.get("text"))
         sc.var_ctx.set(save_as, text)
         result["message"] = f"OCR extracted {len(text)} chars"
+        if artifact_id:
+            result["artifact_id"] = artifact_id
+    except (CaptureError, OCRError) as exc:
+        result["ok"] = False
+        result["message"] = f"extract_text_ocr failed: {exc}"
     except Exception as exc:
         result["ok"] = False
         result["message"] = f"extract_text_ocr failed: {exc}"
@@ -734,24 +886,76 @@ def handle_extract_screen_data(sc: ScenarioContext, step: Dict[str, Any], idx: i
     extracted = None
     source = ""
     try:
+        from services.content.extraction.capture_service import ExtractionCaptureService
+        from services.content.extraction.hierarchy.service import HierarchyService
+        from services.content.extraction.models import CaptureError, OCRError, StrategyMismatchError
+        from services.content.extraction.ocr_service import OCRService
+        from services.content.extraction.scenario_bridge import (
+            capture_screenshot_async,
+            execution_capture_ctx,
+            map_ocr_languages,
+            run_extraction_async,
+            should_persist_artifact,
+        )
+
+        persist = should_persist_artifact(sc, step)
+
         if strategy in ("auto", "hierarchy"):
-            from runtime.extraction.hierarchy_extractor import HierarchyExtractor
-            xml = sc.device.hierarchy_xml(force_refresh=True)
-            if xml:
-                items = HierarchyExtractor.extract_texts(xml, exclude_empty=True)
+            exec_ctx = execution_capture_ctx(sc, idx, "hierarchy_snapshot")
+            hierarchy_persist = persist and exec_ctx is not None
+
+            async def _hierarchy():
+                svc = HierarchyService(ExtractionCaptureService())
+                return await svc.extract(
+                    sc.device,
+                    "screen_data",
+                    config={"exclude_empty": True},
+                    persist=hierarchy_persist,
+                    execution_ctx=exec_ctx,
+                )
+
+            try:
+                hr = run_extraction_async(_hierarchy())
+                items = hr.data if isinstance(hr.data, list) else []
                 if items:
-                    extracted = "\n".join(i["text"] for i in items if i.get("text"))
+                    extracted = "\n".join(
+                        i["text"] for i in items if isinstance(i, dict) and i.get("text")
+                    )
                     source = "hierarchy"
+                    if hr.raw_data.get("artifact_id"):
+                        result["artifact_id"] = hr.raw_data["artifact_id"]
+            except StrategyMismatchError:
+                pass
+
         if extracted is None and strategy in ("auto", "ocr"):
-            from runtime.extraction.ocr_engine import OCREngine
-            frame = sc.device.take_screenshot()
-            if frame:
-                ocr = OCREngine()
-                if ocr.available:
-                    text = ocr.extract_text(frame, language=step.get("language", "eng"), psm=11)
-                    if text and len(text) > 3:
-                        extracted = text
-                        source = "ocr"
+            ocr_ctx = execution_capture_ctx(sc, idx, "screenshot_ocr")
+            ocr_persist = persist and ocr_ctx is not None
+
+            async def _ocr():
+                capture = ExtractionCaptureService()
+                handle = await capture_screenshot_async(
+                    capture,
+                    sc.device,
+                    region=None,
+                    persist=ocr_persist,
+                    execution_ctx=ocr_ctx,
+                )
+                ocr = OCRService()
+                langs = map_ocr_languages(step.get("language", "eng"))
+                ocr_result = await ocr.extract(handle.image_bytes, lang=langs)
+                text = "\n".join(r["text"] for r in ocr_result.results if r.get("text"))
+                return text, handle.artifact_id
+
+            try:
+                text, artifact_id = run_extraction_async(_ocr())
+                if text and len(text) > 3:
+                    extracted = text
+                    source = "ocr"
+                    if artifact_id:
+                        result["artifact_id"] = artifact_id
+            except (CaptureError, OCRError):
+                pass
+
         if extracted is None and strategy in ("auto", "ai"):
             from runtime.extraction.ai_vision import AIVisionExtractor
             frame = sc.device.take_screenshot()

@@ -11,7 +11,9 @@ from typing import Any, Literal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from db.crud import campaign_entity as campaign_entity_repo
 from db.crud.campaign import update_campaign_status
+from db.models.enums import CampaignStatus
 from db.crud.execution import (
     cancel_execution_record,
     get_execution,
@@ -58,7 +60,11 @@ def _workflow_ids_from_meta(meta: dict | None) -> list[str]:
     raw = (meta or {}).get("workflow_ids") or []
     if not isinstance(raw, list):
         return []
-    return [str(wid) for wid in raw if wid]
+    out = [str(wid) for wid in raw if wid]
+    single = (meta or {}).get("workflow_id")
+    if single and str(single) not in out:
+        out.insert(0, str(single))
+    return out
 
 
 def _expected_workflow_ids(campaign_id: str, device_serials: list[str]) -> list[str]:
@@ -313,48 +319,87 @@ async def _release_execution_devices(
     return released_serials
 
 
+async def _resolve_org_id(db: AsyncSession, execution: Execution) -> str | None:
+    from services.execution.event_publisher import resolve_execution_org_id
+
+    org_id = await resolve_execution_org_id(db, execution)
+    return org_id or None
+
+
+_CONTROL_EVENT_TYPES = {
+    "execution.paused": "execution.paused",
+    "execution.resumed": "execution.resumed",
+    "execution.cancelled": "execution.cancelled",
+}
+
+
 async def _emit_execution_event(
     db: AsyncSession,
     execution: Execution,
     event: str,
     *,
     user_id: str | None,
+    before_status: str | None = None,
+    reason: str | None = None,
     details: dict | None = None,
 ) -> None:
-    await log_activity(
-        db,
-        action=event,
-        entity_type="execution",
-        entity_id=execution.id,
-        user_id=user_id,
-        details={
-            "campaign_id": execution.campaign_id,
-            "status": execution.status,
-            **(details or {}),
-        },
-    )
-    org_id = (execution.meta or {}).get("org_id")
-    if not org_id and execution.campaign_id:
-        try:
-            from db.crud.campaign import get_campaign
+    org_id = await _resolve_org_id(db, execution)
+    payload = {
+        "campaign_id": execution.campaign_id,
+        "status": execution.status,
+        **(details or {}),
+    }
+    before_state = {"status": before_status} if before_status else {}
+    after_state = {"status": execution.status, **(details or {})}
 
-            camp = await get_campaign(db, execution.campaign_id)
-            if camp:
-                org_id = camp.org_id
-        except Exception:
-            pass
+    execution_event = None
+    mapped_type = _CONTROL_EVENT_TYPES.get(event)
+    if mapped_type:
+        from services.execution.event_publisher import enqueue_execution_event
+
+        execution_event = await enqueue_execution_event(
+            db,
+            event_type=mapped_type,
+            execution_id=execution.id,
+            payload=payload,
+            organization_id=org_id,
+            execution=execution,
+        )
+
+    if org_id:
+        await log_activity(
+            db,
+            action=event,
+            entity_type="execution",
+            entity_id=execution.id,
+            user_id=user_id,
+            org_id=org_id,
+            before_state=before_state,
+            after_state=after_state,
+            reason=reason,
+            event_id=execution_event.event_id if execution_event else None,
+            details=details or payload,
+        )
+    else:
+        await log_activity(
+            db,
+            action=event,
+            entity_type="execution",
+            entity_id=execution.id,
+            user_id=user_id,
+            details=payload,
+        )
+
     if org_id:
         try:
             from services.webhook_dispatcher import dispatch_webhook
 
             await dispatch_webhook(
-                str(org_id),
+                org_id,
                 event,
                 {
                     "execution_id": execution.id,
-                    "campaign_id": execution.campaign_id,
-                    "status": execution.status,
-                    **(details or {}),
+                    **payload,
                 },
             )
         except Exception as exc:
@@ -405,6 +450,7 @@ async def pause_execution(
     if transitioned:
         await _emit_execution_event(
             db, execution, "execution.paused", user_id=user_id,
+            before_status="running",
             details={"workflows_signalled": wf_count},
         )
 
@@ -464,6 +510,7 @@ async def resume_execution(
     if prev_paused:
         await _emit_execution_event(
             db, execution, "execution.resumed", user_id=user_id,
+            before_status="paused",
             details={"workflows_signalled": wf_count},
         )
 
@@ -507,6 +554,7 @@ async def cancel_execution(
         return result
 
     await _assert_cancel_allowed(execution)
+    before_status = execution.status
     execution, transitioned = await cancel_execution_record(
         db, execution_id, reason=reason,
     )
@@ -531,6 +579,8 @@ async def cancel_execution(
         )
         await _emit_execution_event(
             db, execution, "execution.cancelled", user_id=user_id,
+            before_status=before_status,
+            reason=reason,
             details={
                 "reason": reason,
                 "workflows_signalled": wf_count,
@@ -665,6 +715,30 @@ async def cancel_campaign_executions(
     temporal_client: Any | None = None,
     session_store: Any | None = None,
 ) -> dict[str, Any]:
+    from services.campaign.lifecycle import (
+        CampaignInvalidTransitionError,
+        apply_campaign_transition,
+    )
+    from services.campaign.errors import CampaignNotFoundError
+
+    campaign_row = await campaign_entity_repo.get_campaign_entity(db, campaign_id)
+    if campaign_row is None:
+        raise ExecutionControlError(404, "CAMPAIGN_NOT_FOUND", "Campaign not found")
+
+    try:
+        transition = await apply_campaign_transition(
+            db,
+            campaign_row,
+            CampaignStatus.CANCELLED,
+            org_id=campaign_row.org_id,
+            user_id=user_id,
+            reason=reason,
+        )
+    except CampaignNotFoundError as exc:
+        raise ExecutionControlError(404, "CAMPAIGN_NOT_FOUND", str(exc)) from exc
+    except CampaignInvalidTransitionError as exc:
+        raise ExecutionControlError(409, "INVALID_TRANSITION", str(exc)) from exc
+
     t0 = time.perf_counter()
     executions = await list_running_executions_for_campaign(db, campaign_id)
     all_active = list(executions)
@@ -705,16 +779,15 @@ async def cancel_campaign_executions(
         })
 
     wf_count = await _signal_workflow_ids(temporal_client, wf_ids, "cancel")
-    await update_campaign_status(db, campaign_id, "idle")
 
     _record_control_metrics(
         "cancel",
-        effective=any(r.get("effective_transition") for r in results),
+        effective=transition.changed or any(r.get("effective_transition") for r in results),
         elapsed_sec=time.perf_counter() - t0,
     )
     return {
         "campaign_id": campaign_id,
-        "status": "idle",
+        "status": CampaignStatus.CANCELLED.value,
         "executions": results,
         "executions_affected": len(results),
         "workflows_signalled": wf_count,

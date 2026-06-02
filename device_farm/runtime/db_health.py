@@ -66,6 +66,12 @@ class DbHealthMonitor:
         self._fail_streak = 0
         self._success_streak += 1
         if self.safe_mode and self._success_streak >= self.debounce_count:
+            try:
+                from db.database import schema_init_ok
+            except Exception:
+                schema_init_ok = None
+            if schema_init_ok is not True:
+                return
             self.safe_mode = False
             self.db_connected = True
             log.warning("runtime.safe_mode_exited")

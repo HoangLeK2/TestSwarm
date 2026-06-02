@@ -24,6 +24,7 @@ class ScenarioInput:
     # Legacy: run_id is kept as alias for backward compat with in-flight workflows
     run_id: str | None = None
     execution_id: str | None = None
+    start_step: int = 0
 
 
 @dataclass
@@ -45,6 +46,7 @@ class StepsInput:
     # Accumulates step_results across continue_as_new boundaries so retry/history-reset
     # workflows still return the full result set to the parent ScenarioWorkflow.
     accumulated_results: list[dict[str, Any]] = field(default_factory=list)
+    start_step: int = 0
 
 
 @dataclass
@@ -83,6 +85,8 @@ class DeviceActionInput:
     # Scenario registry for run_scenario sub-step resolution.
     # Contains by_id, by_campaign_name, by_template_name dicts.
     scenario_registry: dict[str, Any] = field(default_factory=dict)
+    execution_id: str | None = None
+    campaign_id: str | None = None
 
 
 @dataclass
@@ -100,6 +104,7 @@ class DeviceActionBatchInput:
     scenario_config: dict[str, Any] = field(default_factory=dict)
     scenario_registry: dict[str, Any] = field(default_factory=dict)
     execution_id: str | None = None
+    campaign_id: str | None = None
 
 
 @dataclass
@@ -208,3 +213,4 @@ class SaveExtractionInput:
     run_id: str | None = None  # Legacy alias for execution_id
     execution_id: str | None = None
     user_id: str | None = None
+    campaign_vars: dict[str, Any] = field(default_factory=dict)

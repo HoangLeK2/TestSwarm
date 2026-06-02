@@ -226,7 +226,7 @@ export const INSERT_MENU_DEF = [
   },
   {
     groupKey: 'facebook' as const,
-    items: ['tap_fb_comment_button', 'extract_fb_comments', 'extract_fb_posts']
+    items: ['fb_tap_comment_button', 'tap_fb_comment_button', 'extract_fb_comments', 'extract_fb_posts']
   }
 ] as const;
 
@@ -405,6 +405,7 @@ export function getStepSummary(step: FlowStep): string {
       return step.scenario_name || step.scenario_id || '';
     case 'loop':
       return `×${step.count ?? '?'}`;
+    case 'fb_tap_comment_button':
     case 'tap_fb_comment_button': {
       const thenN = Array.isArray(step.then) ? step.then.length : 0;
       const elseN = Array.isArray(step.else) ? step.else.length : 0;
@@ -597,6 +598,7 @@ export function getStepDisplay(
       };
     case 'loop':
       return { target: `×${step.count ?? '?'}` };
+    case 'fb_tap_comment_button':
     case 'tap_fb_comment_button': {
       const thenN = Array.isArray(step.then) ? step.then.length : 0;
       const elseN = Array.isArray(step.else) ? step.else.length : 0;

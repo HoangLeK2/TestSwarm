@@ -74,8 +74,9 @@ class SaveContentBody(BaseModel):
     data: dict[str, Any]
     collection: str = "default"
     platform: str | None = None
-    content_type: str = "post"
+    content_type: str = "fb_post"
     dedupe_field: str | None = None
+    dedup_action: str = "skip"
     tags: str = ""
     device_serial: str | None = None
     campaign_id: str | None = None

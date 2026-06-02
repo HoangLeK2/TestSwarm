@@ -13,7 +13,7 @@
 | **Story Points** | 3 |
 | **Status** | Backlog |
 | **Labels** | `module:content`, `layer:backend`, `layer:infra`, `type:feature`, `platform:agnostic`, `persona:platform-engineer`, `coverage:L2`, `risk:auth` |
-| **Truy vết — FR refs** | FR-06-14, FR-06-15 |
+| **Truy vết — FR refs** | FR-06-14 (FR-06-15 partial — metrics only; budget dashboard deferred) |
 | **Truy vết — UC refs** | UC-06-10, UC-06-13 |
 | **Reporter** | (placeholder) |
 | **Assignee** | (placeholder) |
@@ -49,7 +49,6 @@ Persona phụ: Fleet Operator (theo dõi metric latency), Social Data Operator (
 - Hệ thống PHẢI có audit log table `extraction_audit(id, organization_id, user_id, action, target_type, target_id, metadata_json, created_at)` ghi:
   - `extraction_called` mỗi save_extraction step / endpoint trực tiếp.
   - `artifact_accessed` mỗi lần signed URL gen / download.
-  - `budget_exceeded` mỗi block.
   - `cross_tenant_attempt` mỗi denied.
 - Hệ thống PHẢI có healthcheck endpoint `/health/extraction` báo trạng thái 3 engine + MinIO + DB.
 - Hệ thống PHẢI cung cấp script `scripts/audit-secret-scan.py` quét DB content_items, raw_data, log file tìm pattern secret.

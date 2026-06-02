@@ -33,8 +33,15 @@ async def create_dlq_entry(
     execution_id: str,
     device_serial: str,
     error: Optional[str] = None,
+    failed_step_id: Optional[str] = None,
+    failure_reason: Optional[str] = None,
+    failed_at: datetime | None = None,
+    campaign_id: Optional[str] = None,
+    artifact_refs: Optional[dict] = None,
 ) -> ExecutionDLQ:
     """Create a new DLQ entry for a failed execution."""
+    if failed_at is None:
+        failed_at = datetime.now(timezone.utc)
     if db.bind is not None and db.bind.dialect.name == "postgresql":
         payload = {
             "id": _uuid(),
@@ -43,6 +50,11 @@ async def create_dlq_entry(
             "error": error,
             "status": "pending",
             "retry_count": 0,
+            "failed_step_id": failed_step_id,
+            "failure_reason": failure_reason or error,
+            "failed_at": failed_at,
+            "campaign_id": campaign_id,
+            "artifact_refs": artifact_refs or {},
         }
         stmt = (
             pg_insert(ExecutionDLQ)
@@ -51,7 +63,14 @@ async def create_dlq_entry(
                 index_elements=[ExecutionDLQ.execution_id, ExecutionDLQ.device_serial],
                 # Keep this predicate literal so Postgres can match the partial unique index.
                 index_where=text("status IN ('pending','retrying')"),
-                set_={"error": error if error is not None else ExecutionDLQ.error},
+                set_={
+                    "error": error if error is not None else ExecutionDLQ.error,
+                    "failure_reason": (
+                        failure_reason
+                        or error
+                        or ExecutionDLQ.failure_reason
+                    ),
+                },
             )
             .returning(ExecutionDLQ.id)
         )
@@ -82,6 +101,11 @@ async def create_dlq_entry(
         device_serial=device_serial,
         error=error,
         status="pending",
+        failed_step_id=failed_step_id,
+        failure_reason=failure_reason or error,
+        failed_at=failed_at,
+        campaign_id=campaign_id,
+        artifact_refs=artifact_refs or {},
     )
     db.add(entry)
     await db.flush()
@@ -280,6 +304,93 @@ async def set_dlq_status(
     return entry
 
 
+async def get_dlq_entry_for_execution(
+    db: AsyncSession,
+    execution_id: str,
+    *,
+    device_serial: str | None = None,
+) -> Optional[ExecutionDLQ]:
+    q = (
+        select(ExecutionDLQ)
+        .where(ExecutionDLQ.execution_id == execution_id)
+        .order_by(ExecutionDLQ.created_at.desc())
+    )
+    if device_serial:
+        q = q.where(ExecutionDLQ.device_serial == device_serial)
+    result = await db.execute(q.limit(1))
+    return result.scalar_one_or_none()
+
+
+async def get_dlq_entry_for_user(
+    db: AsyncSession,
+    dlq_id: str,
+    user_id: str | None = None,
+    *,
+    org_id: str | None = None,
+) -> Optional[ExecutionDLQ]:
+    stmt = (
+        select(ExecutionDLQ)
+        .join(Execution, Execution.id == ExecutionDLQ.execution_id)
+        .where(ExecutionDLQ.id == dlq_id, _execution_scope_where(org_id, user_id))
+    )
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def get_dlq_by_execution_for_user(
+    db: AsyncSession,
+    execution_id: str,
+    user_id: str | None = None,
+    *,
+    org_id: str | None = None,
+) -> Optional[ExecutionDLQ]:
+    stmt = (
+        select(ExecutionDLQ)
+        .join(Execution, Execution.id == ExecutionDLQ.execution_id)
+        .where(ExecutionDLQ.execution_id == execution_id, _execution_scope_where(org_id, user_id))
+        .order_by(ExecutionDLQ.created_at.desc())
+        .limit(1)
+    )
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def mark_dlq_replayed(
+    db: AsyncSession,
+    dlq_id: str,
+    *,
+    replayed_to_execution_id: str,
+) -> Optional[ExecutionDLQ]:
+    entry = await get_dlq_entry(db, dlq_id)
+    if entry is None:
+        return None
+    entry.status = "replayed"
+    entry.replayed_to_execution_id = replayed_to_execution_id
+    await db.flush()
+    return entry
+
+
+async def close_dlq_entry_for_user(
+    db: AsyncSession,
+    dlq_id: str,
+    *,
+    user_id: str | None = None,
+    org_id: str | None = None,
+    closed_by: str | None = None,
+    close_reason: str | None = None,
+) -> Optional[ExecutionDLQ]:
+    entry = await get_dlq_entry_for_user(db, dlq_id, user_id, org_id=org_id)
+    if entry is None:
+        return None
+    now = datetime.now(timezone.utc)
+    entry.status = "closed"
+    entry.closed_by = closed_by
+    entry.closed_at = now
+    entry.close_reason = close_reason
+    await db.flush()
+    return entry
+
+
 async def mark_dlq_resolved(db: AsyncSession, dlq_id: str) -> Optional[ExecutionDLQ]:
     entry = await get_dlq_entry(db, dlq_id)
     if entry is None:
@@ -324,6 +435,9 @@ __all__ = [
     "create_dlq_entry",
     "count_dlq_entries_for_user",
     "get_dlq_entry",
+    "get_dlq_entry_for_execution",
+    "get_dlq_entry_for_user",
+    "get_dlq_by_execution_for_user",
     "list_dlq_entries",
     "list_dlq_entries_for_user",
     "mark_dlq_retrying",
@@ -331,6 +445,8 @@ __all__ = [
     "begin_dlq_retry_for_user",
     "set_dlq_status",
     "mark_dlq_resolved",
+    "mark_dlq_replayed",
+    "close_dlq_entry_for_user",
     "dismiss_dlq_entry",
     "dismiss_dlq_entry_for_user",
 ]

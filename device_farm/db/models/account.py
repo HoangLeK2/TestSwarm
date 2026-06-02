@@ -35,7 +35,8 @@ class Account(TenantScopedModel, Base):
 
     __tablename__ = "accounts"
     __table_args__ = (
-        UniqueConstraint("platform", "username", name="uq_accounts_platform_username"),
+        UniqueConstraint("org_id", "platform", "username", name="uq_accounts_org_platform_username"),
+        Index("idx_accounts_org_platform_status", "org_id", "platform", "status"),
         Index("idx_accounts_platform", "platform"),
         Index("idx_accounts_status", "status"),
         Index("idx_accounts_state", "state"),

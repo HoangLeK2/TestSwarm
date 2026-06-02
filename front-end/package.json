@@ -17,7 +17,8 @@
     "prepare": "husky",
     "build-and-scan": "./scripts/build-and-scan.sh",
     "gen:api": "swagger-typescript-api generate -p ./generate/openapi.json -o ./src/features/device-farm/services/generated --axios --clean-output --name DeviceFarmApi.ts --api-class-name DeviceFarmHttpClient",
-    "verify:nav": "node scripts/verify-nav-routes.mjs && node --experimental-strip-types --test src/lib/nav-access.test.ts src/lib/rbac/rbac.test.ts src/features/devices/lib/device-online.test.ts src/features/devices/lib/device-fsm.test.ts src/features/devices/lib/session-owner.test.ts src/features/devices/lib/lifecycle-events.test.ts src/features/devices/lib/lifecycle-cache.test.ts src/features/devices/lib/lifecycle-use-cases.test.ts src/features/devices/lib/lifecycle-message-handler.test.ts src/features/devices/lib/relay-agent-status.test.ts src/features/content/lib/artifact-url.test.ts src/features/content/lib/download.test.ts src/features/content/lib/permalink-flow.test.ts",
+    "gen:api:sync": "cp ../device_farm/swagger/openapi.json ./generate/openapi.json && pnpm gen:api",
+    "verify:nav": "node scripts/verify-nav-routes.mjs && node --experimental-strip-types --test src/lib/nav-access.test.ts src/lib/rbac/rbac.test.ts src/features/devices/lib/device-online.test.ts src/features/devices/lib/device-fsm.test.ts src/features/devices/lib/session-owner.test.ts src/features/devices/lib/lifecycle-events.test.ts src/features/devices/lib/lifecycle-cache.test.ts src/features/devices/lib/lifecycle-use-cases.test.ts src/features/devices/lib/lifecycle-message-handler.test.ts src/features/devices/lib/relay-agent-status.test.ts src/features/content/lib/artifact-url.test.ts src/features/content/lib/download.test.ts src/features/content/lib/permalink-flow.test.ts src/features/analytics/lib/activity-deep-link.test.ts",
     "test:content:permalink-e2e": "node --experimental-strip-types --test src/features/content/lib/permalink-flow.test.ts"
   },
   "lint-staged": {
@@ -134,7 +135,6 @@
     "react-resizable-panels": "^2.1.9",
     "react-responsive": "^10.0.1",
     "react-zoom-pan-pinch": "^3.7.0",
-    "recharts": "^2.15.4",
     "sharp": "^0.33.5",
     "sonner": "^1.7.4",
     "sort-by": "^1.2.0",
@@ -171,7 +171,13 @@
   "pnpm": {
     "overrides": {
       "@types/react": "19.2.1",
-      "@types/react-dom": "19.2.1"
+      "@types/react-dom": "19.2.1",
+      "@radix-ui/react-compose-refs": "1.1.2",
+      "@radix-ui/react-slot": "1.2.4"
+    },
+    "patchedDependencies": {
+      "@radix-ui/react-compose-refs@1.1.2": "patches/@radix-ui__react-compose-refs@1.1.2.patch",
+      "@radix-ui/react-slot@1.2.4": "patches/@radix-ui__react-slot@1.2.4.patch"
     }
   },
   "packageManager": "pnpm@8.6.10+sha512.10194f760ac0aa62032ba95f94d9bc33896e79618ce0f2892039e0b7abc9d7e7e6ce1dded38f36b60e769d48e2b86be4cd9dac9e0035f3518baa49d78401e022"

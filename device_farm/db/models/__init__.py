@@ -14,7 +14,13 @@ split into smaller modules for easier maintenance:
 """
 
 from .enums import (  # noqa: F401 — re-export for convenient access
-    UserRole, CampaignStatus, ExecutionStatus, ExecutionResultStatus,
+    UserRole,
+    SystemUserRole,
+    OrgMemberRole,
+    OrgMemberStatus,
+    CampaignStatus,
+    ExecutionStatus,
+    ExecutionResultStatus,
     AccountStatus, AccountEventType, DLQStatus, RunStatus, ScheduleTargetType,
     McpSessionStatus, DeviceFsmState, DeviceFsmEvent,
 )
@@ -28,23 +34,38 @@ from .reconnect_policy import ReconnectPolicy
 from .device_key import DeviceKey
 from .device_fsm import DeviceFsmSnapshot, DeviceStateTransition
 from .device_group import DeviceGroup, DeviceGroupMember
-from .campaign import Campaign, CampaignDevice, Scenario
+from .campaign import Campaign, CampaignDevice, CampaignTag, CampaignTarget, Scenario
+from .org_scenario import CampaignOrgScenarioRef, OrgScenario, OrgScenarioTag
 from .mcp_session import McpSession
 from .scenario_template import ScenarioTemplate
 from .account import Account, DeviceAccount
 from .account_event import AccountEvent
 from .account_group import AccountGroup, AccountGroupMember
-from .content import ContentItem, ContentCollection
+from .content import ContentItem, ContentCollection, ContentType, ExecutionArtifact
 from .schedule import Schedule, ScheduleRun
 from .execution import Execution, ExecutionDevice, ExecutionResult
+from .execution_step import ExecutionStep
 from .scenario_version import ScenarioVersion
 from .execution_dlq import ExecutionDLQ
+from .execution_event import ExecutionEvent
 from .u2_recovery import U2RecoveryEvent
 from .device_event import DeviceEvent
 from .relay_agent import RelayAgent, RelayAgentJob, RelayAgentJobItem, RelayAgentToken
 from .scenario_device_variable import ScenarioDeviceVariable
 from .notification import Notification, NotificationChannel
 from .activity import ActivityLog
+from .analytics import (
+    Alert,
+    AlertDecision,
+    AlertRule,
+    MetricRollupDaily,
+    MetricRollupWeekly,
+    NotificationPreference,
+    NotificationRule,
+    RetentionPolicyModel,
+    WebhookDLQ,
+    WebhookDeliveryLog,
+)
 from .refresh_token import RefreshToken
 from .password_history import PasswordHistory
 
@@ -65,6 +86,7 @@ __all__ = [
     "DeviceGroupMember",
     "Campaign",
     "CampaignDevice",
+    "CampaignTarget",
     "Scenario",
     "McpSession",
     "ScenarioTemplate",
@@ -76,13 +98,17 @@ __all__ = [
     "AccountGroupMember",
     "ContentItem",
     "ContentCollection",
+    "ContentType",
+    "ExecutionArtifact",
     "Schedule",
     "ScheduleRun",
     "Execution",
     "ExecutionDevice",
     "ExecutionResult",
+    "ExecutionStep",
     "ScenarioVersion",
     "ExecutionDLQ",
+    "ExecutionEvent",
     "U2RecoveryEvent",
     "DeviceEvent",
     "RelayAgent",
@@ -93,6 +119,16 @@ __all__ = [
     "Notification",
     "NotificationChannel",
     "ActivityLog",
+    "Alert",
+    "AlertDecision",
+    "AlertRule",
+    "MetricRollupDaily",
+    "MetricRollupWeekly",
+    "NotificationPreference",
+    "NotificationRule",
+    "RetentionPolicyModel",
+    "WebhookDLQ",
+    "WebhookDeliveryLog",
     "RefreshToken",
     "PasswordHistory",
 ]

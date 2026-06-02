@@ -152,6 +152,51 @@ def upload(data: bytes, object_name: str, content_type: str = "image/jpeg") -> O
         return None
 
 
+def presigned_get(object_name: str, *, expires_seconds: int = 3600) -> str | None:
+    """Return presigned GET URL with configurable TTL (Epic 06 artifact preview)."""
+    if not _enabled or _client is None:
+        return None
+    try:
+        from datetime import timedelta
+
+        return _client.presigned_get_object(
+            _bucket,
+            object_name,
+            expires=timedelta(seconds=max(60, min(expires_seconds, 86400))),
+        )
+    except Exception as exc:
+        log.warning("minio_store: presigned_get failed for %s: %s", object_name, exc)
+        return None
+
+
+def get_object_bytes(object_name: str) -> bytes | None:
+    """Fetch object bytes from the configured bucket."""
+    if not _enabled or _client is None:
+        return None
+    try:
+        response = _client.get_object(_bucket, object_name)
+        try:
+            return response.read()
+        finally:
+            response.close()
+            response.release_conn()
+    except Exception as exc:
+        log.warning("minio_store: get_object failed for %s: %s", object_name, exc)
+        return None
+
+
+def delete_object(object_name: str) -> bool:
+    """Delete a single object from the configured bucket."""
+    if not _enabled or _client is None:
+        return False
+    try:
+        _client.remove_object(_bucket, object_name)
+        return True
+    except Exception as exc:
+        log.warning("minio_store: delete_object failed for %s: %s", object_name, exc)
+        return False
+
+
 def delete_prefix(prefix: str) -> None:
     """Delete all objects whose name starts with *prefix* (e.g. on scenario delete)."""
     if not _enabled or _client is None:

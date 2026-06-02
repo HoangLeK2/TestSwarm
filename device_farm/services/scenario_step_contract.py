@@ -55,9 +55,9 @@ def normalize_save_extraction_step(raw_step: dict[str, Any]) -> dict[str, Any]:
     step = deepcopy(raw_step)
     if not step.get("parent_id_var") and step.get("save_parent_id_var"):
         step["parent_id_var"] = step["save_parent_id_var"]
-    step.setdefault("content_type", "post")
+    # Epic 06: no generic default — caller must declare platform-qualified type.
     step.setdefault("collection", "default")
-    step.setdefault("item_level", 0)
+    step.setdefault("dedup_action", "skip")
     return step
 
 

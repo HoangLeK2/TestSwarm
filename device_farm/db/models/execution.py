@@ -51,11 +51,27 @@ class Execution(Base):
         Index("idx_executions_user", "user_id"),
         Index("idx_executions_created", "created_at"),
         Index("idx_executions_sv", "scenario_version_id"),
+        Index("idx_executions_kind_org_user_created", "kind", "org_id", "user_id", "created_at"),
+        Index("idx_executions_org_status_created", "org_id", "status", "created_at"),
+        Index("idx_executions_campaign_created", "campaign_id", "created_at"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     run_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False, default="campaign")
     status: Mapped[str] = mapped_column(String(20), nullable=False, default=ExecutionStatus.PENDING)
+    org_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("organizations.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    trigger_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    trigger_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    retry_of_execution_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    correlation_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
 
     # 1-1 optional FK references
     campaign_id: Mapped[Optional[str]] = mapped_column(
@@ -95,6 +111,10 @@ class Execution(Base):
     )
     cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     cancel_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    pinned_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    pinned_by: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
 
     # Scenario executor resumes from this index on restart (steps must be idempotent).
     checkpoint_step: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -128,9 +148,16 @@ class ExecutionResult(Base):
         Index("idx_exec_results_execution", "execution_id"),
         Index("idx_exec_results_device", "device_id"),
         Index("idx_exec_results_status", "status"),
+        Index("idx_exec_results_org", "org_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("organizations.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
     execution_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("executions.id", ondelete="CASCADE"), nullable=False
     )

@@ -92,6 +92,61 @@ export function parseHierarchyTree(xml: string): HierarchyTreeNode | null {
   }
 }
 
+const SYSTEM_UI_PACKAGES = [
+  'com.android.systemui',
+  'com.android.providers.',
+  'com.android.permissioncontroller'
+] as const;
+
+/** True for status bar, nav bar, and other platform chrome in hierarchy dumps. */
+export function isSystemUiPackage(pkg: string): boolean {
+  const p = (pkg ?? '').trim();
+  if (!p || p === 'android') return true;
+  return SYSTEM_UI_PACKAGES.some(
+    (prefix) => p === prefix || p.startsWith(prefix)
+  );
+}
+
+function redepthTree(node: HierarchyTreeNode, depth: number): HierarchyTreeNode {
+  return {
+    ...node,
+    depth,
+    children: node.children.map((child) => redepthTree(child, depth + 1))
+  };
+}
+
+/** Drop SystemUI nodes from the viewer tree; app windows are kept / promoted. */
+export function filterSystemUiFromTree(
+  root: HierarchyTreeNode | null
+): HierarchyTreeNode | null {
+  if (!root) return null;
+
+  function strip(node: HierarchyTreeNode): HierarchyTreeNode[] {
+    const children = node.children.flatMap(strip);
+    if (isSystemUiPackage(node.pkg)) return children;
+    return [{ ...node, children }];
+  }
+
+  const kept = strip(root);
+  if (kept.length === 0) return null;
+  if (kept.length === 1) return redepthTree(kept[0]!, 0);
+
+  const synthetic: HierarchyTreeNode = {
+    ...root,
+    tag: 'hierarchy',
+    className: `${kept.length} app roots`,
+    resourceId: '',
+    text: '',
+    contentDesc: '',
+    pkg: '',
+    bounds: null,
+    clickable: false,
+    children: kept,
+    depth: 0
+  };
+  return redepthTree(synthetic, 0);
+}
+
 /**
  * Find all node IDs that match a search query (text, resource-id, or content-desc).
  * Also returns ancestor IDs so the tree structure is preserved.

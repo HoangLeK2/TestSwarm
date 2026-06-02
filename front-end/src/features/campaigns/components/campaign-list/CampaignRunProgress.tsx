@@ -2,10 +2,12 @@
 
 import { useTranslations } from 'next-intl';
 import { TrendingUp } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
 import {
   useCampaignProgress,
   useCampaignWorkflows
 } from '../../hooks/use-campaigns';
+import { executionsApi } from '../../services/api';
 import {
   Popover,
   PopoverContent,
@@ -82,6 +84,20 @@ export function CampaignRunProgress({
     shouldUseLegacyFallback
   );
 
+  const { data: latestExecution } = useQuery({
+    queryKey: ['campaign-latest-execution', campaignId],
+    queryFn: () => executionsApi.list({ campaignId, limit: 1, offset: 0 }),
+    enabled: isRunning && workflows.length === 0,
+    refetchInterval: isRunning ? 3000 : false
+  });
+  const latestExecId = latestExecution?.items?.[0]?.id;
+  const { data: execSummary } = useQuery({
+    queryKey: ['execution-summary', latestExecId],
+    queryFn: () => executionsApi.summary(latestExecId!),
+    enabled: isRunning && workflows.length === 0 && !!latestExecId,
+    refetchInterval: isRunning ? 3000 : false
+  });
+
   if (!isRunning) return null;
 
   // Derive a single { pct, content } shape so the popover is uniform.
@@ -106,7 +122,7 @@ export function CampaignRunProgress({
       <div className='flex flex-col gap-3'>
         <div className='flex items-center justify-between gap-2'>
           <span className='text-xs font-semibold uppercase tracking-wide text-muted-foreground'>
-            Tiến độ chạy
+            {t('progressTitle')}
           </span>
           <span className='text-base font-bold tabular-nums text-foreground'>
             {pct}%
@@ -136,7 +152,7 @@ export function CampaignRunProgress({
       <div className='flex flex-col gap-3'>
         <div className='flex items-center justify-between gap-2'>
           <span className='text-xs font-semibold uppercase tracking-wide text-muted-foreground'>
-            Tiến độ chạy
+            {t('progressTitle')}
           </span>
           <span className='text-base font-bold tabular-nums text-foreground'>
             {pct}%
@@ -159,6 +175,46 @@ export function CampaignRunProgress({
         </div>
       </div>
     );
+  } else if (execSummary) {
+    const total =
+      execSummary.total_devices ||
+      execSummary.passed +
+        execSummary.failed +
+        execSummary.running +
+        execSummary.pending +
+        execSummary.error;
+    const finished = execSummary.passed + execSummary.failed;
+    pct = total ? Math.round((finished / total) * 100) : 0;
+    content = (
+      <div className='flex flex-col gap-3'>
+        <div className='flex items-center justify-between gap-2'>
+          <span className='text-xs font-semibold uppercase tracking-wide text-muted-foreground'>
+            {t('progressTitle')}
+          </span>
+          <span className='text-base font-bold tabular-nums text-foreground'>
+            {pct}%
+          </span>
+        </div>
+        <CampaignProgressBar value={pct} />
+        <div className='flex flex-wrap items-center gap-1.5'>
+          <StatPill
+            label={t('progressDone', { done: finished, total })}
+          />
+          {execSummary.running > 0 && (
+            <StatPill
+              label={t('wfRunning', { count: execSummary.running })}
+              tone='running'
+            />
+          )}
+          {execSummary.failed > 0 && (
+            <StatPill
+              label={t('progressFailed', { count: execSummary.failed })}
+              tone='failed'
+            />
+          )}
+        </div>
+      </div>
+    );
   }
 
   // No data yet — render nothing rather than an empty popover.
@@ -169,7 +225,7 @@ export function CampaignRunProgress({
       <PopoverTrigger asChild>
         <button
           type='button'
-          aria-label={`Tiến độ chạy ${pct}%`}
+          aria-label={t('progressAria', { pct })}
           className={cn(
             'group inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-blue-500/30 bg-blue-500/10 px-2.5 text-xs font-semibold text-blue-700 shadow-sm ring-1 ring-transparent transition-all hover:bg-blue-500/15 hover:ring-blue-500/30 dark:text-blue-300'
           )}

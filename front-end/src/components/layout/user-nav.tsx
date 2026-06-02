@@ -36,7 +36,7 @@ export function UserNav() {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent
-          className='w-(--radix-dropdown-menu-trigger-width) z-50 min-w-56 rounded-lg'
+          className='w-(--radix-dropdown-menu-trigger-width) z-[var(--z-floating)] min-w-56 rounded-lg'
           side='bottom'
           align='end'
           sideOffset={10}

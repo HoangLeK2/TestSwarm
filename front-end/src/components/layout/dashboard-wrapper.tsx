@@ -22,9 +22,9 @@ export function DashboardWrapper({
     // <AuthGuard>
     // <OrganizationProvider>
     // <OrganizationStatusGuard>
-    <SidebarProvider defaultOpen={defaultOpen}>
+    <SidebarProvider defaultOpen={defaultOpen} className='h-svh min-h-0 overflow-hidden'>
       <AppSidebar />
-      <SidebarInset className='flex flex-col overflow-hidden'>
+      <SidebarInset className='flex min-h-0 flex-1 flex-col overflow-hidden'>
         <Header />
         <PageContainer
           className='h-[calc(100dvh-64px)] overflow-scroll'

@@ -394,6 +394,7 @@ class TestFinalizeCampaignExecutionResult:
             "success": True,
             "execution_id": "exec-001",
             "device_serial": "SN001",
+            "org_id": "org-test",
             "step_results": [
                 {"index": 0, "type": "tap", "ok": True, "message": ""},
                 {"index": 1, "type": "swipe", "ok": True, "message": ""},
@@ -451,6 +452,7 @@ class TestFinalizeCampaignExecutionResult:
             "success": False,
             "execution_id": "exec-002",
             "device_serial": "SN002",
+            "org_id": "org-test",
             "step_results": [
                 {"index": 0, "type": "tap", "ok": True, "message": ""},
                 {"index": 1, "type": "tap", "ok": False, "message": "Element not found"},
@@ -534,10 +536,12 @@ class TestFinalizeCampaignExecutionResult:
             "success": True,
             "execution_id": "exec-003",
             "device_serial": "UNKNOWN_SERIAL",
+            "org_id": "org-test",
             "step_results": [],
         }
 
         upsert_mock = AsyncMock()
+        get_execution_mock = AsyncMock(return_value=SimpleNamespace(status="running", meta={}))
         get_device_mock = AsyncMock(return_value=None)  # device not found
 
         with ExitStack() as stack:
@@ -547,6 +551,9 @@ class TestFinalizeCampaignExecutionResult:
             ))
             stack.enter_context(patch(
                 "db.crud.device.get_device_by_serial", get_device_mock
+            ))
+            stack.enter_context(patch(
+                "db.crud.execution.get_execution", get_execution_mock
             ))
             stack.enter_context(patch(
                 "db.crud.execution.upsert_execution_result", upsert_mock
@@ -618,6 +625,10 @@ class TestFinalizeCampaignExecutionResult:
             ))
             stack.enter_context(patch(
                 "db.crud.campaign.update_campaign_status", update_status_mock,
+            ))
+            stack.enter_context(patch(
+                "db.crud.campaign_entity.lookup_campaign_org_id",
+                AsyncMock(return_value="org-test"),
             ))
 
             await acts.finalize_campaign({"campaign_id": "c1", "run_id": None, "success": True})
@@ -833,53 +844,54 @@ class TestDlqRetryReenqueue:
         entry.device_serial = "SN001"
         entry.error = None
         entry.retry_count = 1
-        entry.status = "retrying"
+        entry.status = "resolved"
         entry.last_attempt_at = None
         entry.created_at = datetime.now(timezone.utc)
         execution = MagicMock()
         execution.id = "exec-1"
         execution.user_id = "user-1"
         execution.campaign_id = "camp-1"
-        campaign = SimpleNamespace(id="camp-1", org_id="org-1")
+        entry.replayed_to_execution_id = None
+        entry.campaign_id = None
+        entry.failed_step_id = None
+        entry.failure_reason = None
+        entry.closed_by = None
+        entry.closed_at = None
+        entry.close_reason = None
+        entry.artifact_refs = {}
+        execution.meta = {}
         request = MagicMock()
         request.app.state.scheduler = MagicMock()
         request.app.state.scheduler._client = AsyncMock()
         request.app.state.scheduler._cfg = MagicMock()
+        request.app.state.manager = None
 
         with ExitStack() as stack:
-            begin_mock = stack.enter_context(
-                patch("db.crud.execution_dlq.begin_dlq_retry_for_user", AsyncMock(return_value=(entry, True)))
-            )
-            set_status_mock = stack.enter_context(
-                patch("db.crud.execution_dlq.set_dlq_status", AsyncMock(return_value=entry))
-            )
-            stack.enter_context(patch("api.execution_access.get_execution", AsyncMock(return_value=execution)))
-            stack.enter_context(patch("api.execution_access.get_campaign", AsyncMock(return_value=campaign)))
             stack.enter_context(
                 patch(
-                    "db.crud.device.get_device_by_serial",
-                    AsyncMock(return_value=SimpleNamespace(id="dev-1", serial="SN001", user_id="user-1", org_id="org-1")),
+                    "db.crud.execution_dlq.get_dlq_entry_for_user",
+                    AsyncMock(return_value=entry),
                 )
             )
             stack.enter_context(
-                patch("services.device_liveness.is_device_dispatchable", AsyncMock(return_value=True))
+                patch("api.execution_access.get_execution_for_user", AsyncMock(return_value=execution))
             )
-            stack.enter_context(
+            legacy_mock = stack.enter_context(
                 patch(
-                    "services.campaign_dispatch.enqueue_campaign_run_temporal",
-                    AsyncMock(return_value=({"id": "camp-1"}, 200)),
+                    "services.campaign.dlq_service.legacy_retry_dlq_entry",
+                    AsyncMock(return_value=entry),
                 )
             )
 
             out = await executions_route.retry_dlq("dlq-1", request, db, user)
 
-        begin_mock.assert_awaited_once()
-        set_status_mock.assert_awaited_once_with(db, "dlq-1", "resolved")
+        legacy_mock.assert_awaited_once()
         assert out.id == "dlq-1"
 
     @pytest.mark.asyncio
     async def test_retry_dlq_idempotent_when_already_retrying(self):
         from api.routes import executions as executions_route
+        from services.campaign.dlq_errors import DLQRetryInProgressError
 
         db = AsyncMock()
         user = MagicMock()
@@ -898,26 +910,43 @@ class TestDlqRetryReenqueue:
         execution.id = "exec-1"
         execution.user_id = "user-1"
         execution.campaign_id = "camp-1"
-        campaign = SimpleNamespace(id="camp-1", org_id="org-1")
+        entry.replayed_to_execution_id = None
+        entry.campaign_id = None
+        entry.failed_step_id = None
+        entry.failure_reason = None
+        entry.closed_by = None
+        entry.closed_at = None
+        entry.close_reason = None
+        entry.artifact_refs = {}
+        execution.meta = {}
         request = MagicMock()
         request.app.state.scheduler = MagicMock()
         request.app.state.scheduler._client = AsyncMock()
         request.app.state.scheduler._cfg = MagicMock()
+        request.app.state.manager = None
 
         with ExitStack() as stack:
             stack.enter_context(
-                patch("db.crud.execution_dlq.begin_dlq_retry_for_user", AsyncMock(return_value=(entry, False)))
+                patch(
+                    "db.crud.execution_dlq.get_dlq_entry_for_user",
+                    AsyncMock(return_value=entry),
+                )
             )
-            stack.enter_context(patch("api.execution_access.get_execution", AsyncMock(return_value=execution)))
-            stack.enter_context(patch("api.execution_access.get_campaign", AsyncMock(return_value=campaign)))
-            enqueue_mock = stack.enter_context(
-                patch("services.campaign_dispatch.enqueue_campaign_run_temporal", AsyncMock())
+            stack.enter_context(
+                patch("api.execution_access.get_execution_for_user", AsyncMock(return_value=execution))
+            )
+            stack.enter_context(
+                patch(
+                    "services.campaign.dlq_service.legacy_retry_dlq_entry",
+                    AsyncMock(side_effect=DLQRetryInProgressError()),
+                )
             )
 
-            out = await executions_route.retry_dlq("dlq-1", request, db, user)
+            with pytest.raises(HTTPException) as exc:
+                await executions_route.retry_dlq("dlq-1", request, db, user)
 
-        enqueue_mock.assert_not_awaited()
-        assert out.id == "dlq-1"
+        assert exc.value.status_code == 409
+        assert exc.value.detail["code"] == "DLQ_RETRY_IN_PROGRESS"
 
     @pytest.mark.asyncio
     async def test_retry_dlq_not_owned_returns_404_without_mutation(self):
@@ -926,6 +955,7 @@ class TestDlqRetryReenqueue:
         db = AsyncMock()
         user = MagicMock()
         user.id = "user-1"
+        user.org_id = "org-1"
         request = MagicMock()
         request.app.state.scheduler = MagicMock()
         request.app.state.scheduler._client = AsyncMock()
@@ -933,18 +963,17 @@ class TestDlqRetryReenqueue:
 
         with ExitStack() as stack:
             stack.enter_context(
-                patch("db.crud.execution_dlq.begin_dlq_retry_for_user", AsyncMock(return_value=(None, False)))
+                patch(
+                    "db.crud.execution_dlq.get_dlq_entry_for_user",
+                    AsyncMock(return_value=None),
+                )
             )
-            set_status_mock = stack.enter_context(
-                patch("db.crud.execution_dlq.set_dlq_status", AsyncMock())
-            )
-            enqueue_mock = stack.enter_context(
-                patch("services.campaign_dispatch.enqueue_campaign_run_temporal", AsyncMock())
+            legacy_mock = stack.enter_context(
+                patch("services.campaign.dlq_service.legacy_retry_dlq_entry", AsyncMock())
             )
 
             with pytest.raises(HTTPException) as exc:
                 await executions_route.retry_dlq("dlq-not-owned", request, db, user)
         assert exc.value.status_code == 404
 
-        set_status_mock.assert_not_awaited()
-        enqueue_mock.assert_not_awaited()
+        legacy_mock.assert_not_awaited()

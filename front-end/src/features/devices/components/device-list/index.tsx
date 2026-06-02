@@ -24,6 +24,8 @@ import { enUS, vi } from 'date-fns/locale';
 import { Can } from '@/features/auth';
 import { useAuthContext } from '@/features/auth/providers/auth-provider';
 import { useConfirm } from '@/providers/modal-provider';
+import { CoreEmptyState } from '@/components/core-empty-state';
+import { ROUTES } from '@/config/routes';
 import {
   Select,
   SelectContent,
@@ -40,6 +42,7 @@ export function DeviceList() {
   const locale = useLocale();
   const dateLocale = locale.startsWith('vi') ? vi : enUS;
   const t = useTranslations('devicesList');
+  const tEmpty = useTranslations('coreEmptyState');
   const tCommon = useTranslations('common');
   const confirm = useConfirm();
   const { user } = useAuthContext();
@@ -182,14 +185,31 @@ export function DeviceList() {
       ) : null}
 
       {!isLoading && !devices?.length && (
-        <div className='rounded-lg border border-dashed border-border p-12 text-center'>
-          <Smartphone className='mx-auto mb-3 size-10 text-muted-foreground' />
-          <p className='text-sm text-muted-foreground'>
-            {t.rich('emptyDescription', {
-              strong: (chunks) => <strong>{chunks}</strong>
-            })}
-          </p>
-        </div>
+        <Can
+          object='devices'
+          action='create'
+          fallback={
+            <CoreEmptyState
+              icon={Smartphone}
+              title={tEmpty('fleet.title')}
+              description={tEmpty('fleet.description')}
+              readOnlyHint={tEmpty('readOnlyHint')}
+              trackingKey='devices-list-empty-readonly'
+            />
+          }
+        >
+          <CoreEmptyState
+            icon={Smartphone}
+            title={tEmpty('fleet.title')}
+            description={tEmpty('fleet.description')}
+            trackingKey='devices-list-empty'
+            cta={{ label: tEmpty('fleet.ctaPair'), href: ROUTES.DEVICES.MANAGE }}
+            secondaryCta={{
+              label: tEmpty('fleet.ctaRelay'),
+              href: ROUTES.RELAY_AGENTS.ROOT
+            }}
+          />
+        </Can>
       )}
 
       {devices?.length ? (

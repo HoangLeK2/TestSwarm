@@ -11,7 +11,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketDisconnect as StarletteWSDisconnect
 
 from api.auth.context import AuthError, decode_access_token
-from api.auth.rbac import build_enforcer_for_user, permission_domain
+from api.auth.rbac import build_enforcer_for_user_from_db, permission_domain
 from db import crud as repo
 from db.database import AsyncSessionLocal
 from web.metrics import (
@@ -40,7 +40,7 @@ async def authenticate_lifecycle_ws(ws: WebSocket) -> tuple[str, str]:
             raise AuthError("user has no organization")
         user.org_role = await repo.get_organization_role_for_user(db, user.id, org_id)  # type: ignore[attr-defined]
         domain = permission_domain(user)
-        enforcer = build_enforcer_for_user(user, domain=domain)
+        enforcer = await build_enforcer_for_user_from_db(user, db, domain=domain)
         if not enforcer.enforce(str(user.id), domain, "devices", "read"):
             raise AuthError("permission denied")
         return user.id, org_id

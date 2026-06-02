@@ -66,3 +66,22 @@ export function useDeviceSessions(deviceId: string) {
     enabled: !!deviceId
   });
 }
+
+export function useDeviceBySerial(serial: string) {
+  const decoded = decodeURIComponent(serial);
+  return useQuery({
+    queryKey: [...DEVICES_LIST_KEY, 'by-serial', decoded],
+    queryFn: async () => {
+      const list = await devicesApi.list();
+      const match = list.find(
+        (d) =>
+          d.serial === decoded ||
+          d.adb_serial === decoded ||
+          d.id === decoded
+      );
+      if (!match) throw new Error('device_not_found');
+      return match;
+    },
+    enabled: Boolean(decoded)
+  });
+}

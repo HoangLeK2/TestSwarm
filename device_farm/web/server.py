@@ -182,6 +182,34 @@ def create_app(
         )
 
         if config.database.enabled:
+            from runtime.db_health import DbHealthMonitor, db_ping_loop
+
+            db_health = DbHealthMonitor()
+            _app.state.db_health = db_health
+
+            try:
+                await init_db()
+                log.info("PostgreSQL connected and tables ready")
+                db_health.mark_connected()
+                try:
+                    from db.database import AsyncSessionLocal
+                    from services.account_state import refresh_account_state_gauges
+                    from services.content.registry import init_registry
+
+                    async with AsyncSessionLocal() as _gauge_db:
+                        await refresh_account_state_gauges(_gauge_db)
+                        await init_registry(_gauge_db)
+                except Exception as gauge_exc:
+                    log.debug("account_state gauge / content registry init skipped: %s", gauge_exc)
+            except Exception as exc:  # noqa: BLE001
+                log.exception("PostgreSQL init failed; entering DB safe mode")
+                db_health.mark_disconnected()
+                import db.database as _db_mod
+
+                _db_mod.schema_init_ok = False
+                log.warning(
+                    "Continuing startup in DB safe mode — CRUD routes return SERVICE_DEGRADED"
+                )
 
             async def _account_maintenance_loop() -> None:
                 import asyncio as _aio
@@ -219,6 +247,39 @@ def create_app(
                 LifecyclePhase.BACKGROUND,
                 "dlq-maintenance",
                 _dlq_maintenance_loop,
+            )
+
+            async def _execution_event_outbox_loop() -> None:
+                from services.execution.outbox_poller import execution_event_outbox_loop
+
+                await execution_event_outbox_loop()
+
+            lifecycle.register_task(
+                LifecyclePhase.BACKGROUND,
+                "execution-event-outbox",
+                _execution_event_outbox_loop,
+            )
+
+            async def _preview_artifact_purge_loop() -> None:
+                from services.execution.preview_purge import preview_artifact_purge_loop
+
+                await preview_artifact_purge_loop()
+
+            lifecycle.register_task(
+                LifecyclePhase.BACKGROUND,
+                "preview-artifact-purge",
+                _preview_artifact_purge_loop,
+            )
+
+            async def _artifact_retention_loop() -> None:
+                from services.content.extraction.retention import artifact_retention_loop
+
+                await artifact_retention_loop()
+
+            lifecycle.register_task(
+                LifecyclePhase.BACKGROUND,
+                "artifact-retention",
+                _artifact_retention_loop,
             )
 
         # ── Prometheus metrics collector (tạm tắt) ──
@@ -267,10 +328,7 @@ def create_app(
                 _event_cleanup_loop,
             )
         if config.database.enabled:
-            from runtime.db_health import DbHealthMonitor, db_ping_loop
-
-            db_health = DbHealthMonitor()
-            _app.state.db_health = db_health
+            db_health = _app.state.db_health
 
             async def _session_idle_loop() -> None:
                 import asyncio as _aio
@@ -301,47 +359,40 @@ def create_app(
                 lambda: db_ping_loop(db_health),
             )
 
-            try:
-                await init_db()
-                log.info("PostgreSQL connected and tables ready")
-                db_health.mark_connected()
+            # Phase 1/2 — only when migrations succeeded (schema matches ORM).
+            from db.database import schema_init_ok as _schema_init_ok
+
+            if _schema_init_ok is True:
+                # Crash recovery: mark executions stuck in 'running' as failed + DLQ.
                 try:
-                    from db.database import AsyncSessionLocal
-                    from services.account_state import refresh_account_state_gauges
+                    from services.crash_recovery import recover_stuck_executions
 
-                    async with AsyncSessionLocal() as _gauge_db:
-                        await refresh_account_state_gauges(_gauge_db)
-                except Exception as gauge_exc:
-                    log.debug("account_state gauge init skipped: %s", gauge_exc)
-            except Exception as exc:  # noqa: BLE001
-                log.exception("PostgreSQL init failed; entering DB safe mode")
-                db_health.mark_disconnected()
-                log.warning(
-                    "Continuing startup in DB safe mode — CRUD routes return SERVICE_DEGRADED"
+                    await recover_stuck_executions(stale_after_minutes=5)
+                except Exception as rec_exc:
+                    log.warning("crash recovery failed (non-fatal): %s", rec_exc)
+
+                # Relay agent reconciliation: mark stale 'online' rows offline.
+                try:
+                    from db.database import AsyncSessionLocal as _AslRec
+                    from sqlalchemy import text as _text
+
+                    async with _AslRec() as _db:
+                        await _db.execute(
+                            _text(
+                                "UPDATE relay_agents SET status='offline', "
+                                "disconnected_at=NOW(), serials='[]'::json "
+                                "WHERE status='online'"
+                            )
+                        )
+                        await _db.commit()
+                except Exception as _rec_exc:
+                    log.warning("relay agent reconciliation failed (non-fatal): %s", _rec_exc)
+            else:
+                log.debug(
+                    "skipping crash recovery and relay reconciliation "
+                    "(schema_init_ok=%s)",
+                    _schema_init_ok,
                 )
-
-            # Phase 1 — crash recovery: mark executions stuck in 'running' (from a
-            # crashed previous session) as failed + DLQ them so operators can retry.
-            try:
-                from services.crash_recovery import recover_stuck_executions
-                await recover_stuck_executions(stale_after_minutes=5)
-            except Exception as rec_exc:
-                log.warning("crash recovery failed (non-fatal): %s", rec_exc)
-
-            # Phase 2 — relay agent reconciliation: previous crash may have left
-            # relay_agents rows with status='online'. Mark them offline so the UI
-            # shows accurate state until agents reconnect.
-            try:
-                from db.database import AsyncSessionLocal as _AslRec
-                from sqlalchemy import text as _text
-                async with _AslRec() as _db:
-                    await _db.execute(_text(
-                        "UPDATE relay_agents SET status='offline', disconnected_at=NOW(), serials='[]'::json "
-                        "WHERE status='online'"
-                    ))
-                    await _db.commit()
-            except Exception as _rec_exc:
-                log.warning("relay agent reconciliation failed (non-fatal): %s", _rec_exc)
 
             try:
                 from services.device_state import start_agent_state_consumer
@@ -439,6 +490,7 @@ def create_app(
             try:
                 from temporal.worker import start_temporal_worker, get_temporal_client
                 temporal_client = await get_temporal_client(config.temporal)
+                _app.state.temporal_client = temporal_client
                 temporal_threads = start_temporal_worker(manager, config.temporal, queue=queue)
                 try:
                     from services.account_state import ensure_account_cooldown_schedule
@@ -491,6 +543,7 @@ def create_app(
                 # gRPC relay starts after FSM/relay callbacks are wired (see below).
 
                 # ── Persistence callbacks for AgentControlServicer ─────────────
+                _control_callbacks = None
                 if config.database.enabled:
                     try:
                         from runtime.transports.agent_control_servicer import get_control_servicer
@@ -582,11 +635,14 @@ def create_app(
                                     await _db.rollback()
                                     log.warning("relay offline mark failed: %s", _exc)
 
+                        _control_callbacks = (
+                            _on_ctrl_register,
+                            _on_ctrl_heartbeat,
+                            _on_ctrl_offline,
+                        )
                         _ctrl_svc = get_control_servicer()
                         if _ctrl_svc is not None:
-                            _ctrl_svc.set_persistence_callbacks(
-                                _on_ctrl_register, _on_ctrl_heartbeat, _on_ctrl_offline
-                            )
+                            _ctrl_svc.set_persistence_callbacks(*_control_callbacks)
                             log.info("AgentControlServicer persistence callbacks wired")
                     except Exception as _cb_exc:
                         log.warning("Could not wire control servicer callbacks: %s", _cb_exc)
@@ -727,6 +783,77 @@ def create_app(
                         )
                     )
 
+                def _relay_host_hint(serial: str, caps: dict | None = None) -> str | None:
+                    """WLAN IP from capabilities, else IP portion of relay ADB serial."""
+                    wlan = str((caps or {}).get("wlan_ip") or "").strip()
+                    if wlan and not wlan.startswith("127."):
+                        return wlan
+                    if ":" in serial:
+                        ip = serial.rsplit(":", 1)[0].strip()
+                        if ip and not ip.startswith("127."):
+                            return ip
+                    return None
+
+                def _find_device_for_relay_serial(serial: str):
+                    """Resolve DeviceClient for a relay ADB serial (WS logical or relay slot)."""
+                    device_ip = serial.rsplit(":", 1)[0] if ":" in serial else serial
+                    ws_device = next(
+                        (d for d in _manager_ref.all_devices()
+                         if d.serial != serial
+                         and (
+                             getattr(d, "_adb_serial", "").startswith(device_ip + ":")
+                             or getattr(d, "_adb_serial", "") == serial
+                             or getattr(d, "_u2_host", None) == device_ip
+                         )),
+                        None,
+                    )
+                    if ws_device is None:
+                        agents = [
+                            d for d in _manager_ref.all_devices()
+                            if d.serial != serial
+                            and getattr(d, "_agent_send", None) is not None
+                        ]
+                        if len(agents) == 1:
+                            ws_device = agents[0]
+                    if ws_device is not None:
+                        return ws_device
+                    return _manager_ref.get_device(serial)
+
+                def _bind_relay_u2(device, serial: str, *, caps: dict | None = None) -> None:
+                    if device is None:
+                        return
+                    host = _relay_host_hint(serial, caps)
+                    try:
+                        device.bind_relay_u2(serial, host=host)
+                    except Exception as exc:
+                        log.debug("relay u2 bind failed serial=%s: %s", serial, exc)
+
+                async def _bootstrap_relay_device(serial: str, device) -> None:
+                    """Bootstrap atx+u2 on agent-boot, then (re)bind cloud u2 session."""
+                    if _relay_mgr_ref is None or device is None:
+                        return
+                    ok = False
+                    try:
+                        ok = await _relay_mgr_ref.bootstrap(serial)
+                        log.info(
+                            "relay bootstrap %s for %s",
+                            "ok" if ok else "failed",
+                            serial,
+                        )
+                    except Exception as exc:
+                        log.warning("relay bootstrap error serial=%s: %s", serial, exc)
+                    caps = _relay_mgr_ref.get_capabilities(serial) or {}
+                    _bind_relay_u2(device, serial, caps=caps)
+
+                def _schedule_relay_bootstrap(serial: str, device, *, is_new: bool) -> None:
+                    if _relay_mgr_ref is None or device is None:
+                        return
+                    if is_new:
+                        log.info("relay device online → queued bootstrap: %s", serial)
+                    else:
+                        log.info("relay reconnect → queued bootstrap: %s", serial)
+                    _schedule_relay_fsm(_bootstrap_relay_device(serial, device))
+
                 def _on_relay_device_online(serial: str) -> None:
                     _emit_relay_fsm_online(serial)
                     device_ip = serial.rsplit(":", 1)[0] if ":" in serial else serial
@@ -812,6 +939,9 @@ def create_app(
                                 "relay device online %s — skip scrcpy reattach (auto_attach_scrcpy_on_relay_online=false)",
                                 serial,
                             )
+                        caps = (_relay_mgr_ref.get_capabilities(serial) or {}) if _relay_mgr_ref else {}
+                        _bind_relay_u2(ws_device, serial, caps=caps)
+                        _schedule_relay_bootstrap(serial, ws_device, is_new=False)
                         return
 
                     is_new = _manager_ref.get_device(serial) is None
@@ -823,16 +953,11 @@ def create_app(
                     from runtime.core.device_client import DeviceState
                     if device.state in (DeviceState.DISCONNECTED, DeviceState.CONNECTING):
                         device.on_agent_status({"state": "READY"})
+                    caps = (_relay_mgr_ref.get_capabilities(serial) or {}) if _relay_mgr_ref else {}
+                    _bind_relay_u2(device, serial, caps=caps)
+                    _schedule_relay_bootstrap(serial, device, is_new=is_new)
                     if is_new:
                         ws_manager.subscribe_device(device)
-                        # Bootstrap atx-agent + u2 on first connect so tap/swipe work
-                        # without requiring a manual POST /api/devices/adb-register.
-                        if _relay_mgr_ref is not None:
-                            loop = asyncio.get_event_loop()
-                            asyncio.run_coroutine_threadsafe(
-                                _relay_mgr_ref.bootstrap(serial), loop
-                            )
-                            log.info("relay device online → queued bootstrap: %s", serial)
                     _st2 = getattr(_config_ref, "streaming", None)
                     _relay_auto2 = bool(getattr(_st2, "auto_attach_scrcpy_on_relay_online", True))
                     if _relay_auto2 and _relay_db_allows_scrcpy(serial):
@@ -860,7 +985,7 @@ def create_app(
 
                 def _on_relay_capabilities_update(serial: str, caps: dict) -> None:
                     """Propagate relay heartbeat capabilities to DeviceClient metadata."""
-                    device = _manager_ref.get_device(serial)
+                    device = _find_device_for_relay_serial(serial)
                     if device is None:
                         return
                     device.on_agent_status({
@@ -871,6 +996,11 @@ def create_app(
                         "screen_height":caps.get("screen_height", 0),
                         "state":        "READY",
                     })
+                    host = _relay_host_hint(serial, caps)
+                    if device.u2 is None and (caps.get("has_u2") or host):
+                        _bind_relay_u2(device, serial, caps=caps)
+                    elif host and str(getattr(device, "_u2_host", "") or "") != host:
+                        _bind_relay_u2(device, serial, caps=caps)
                     hw = str(caps.get("hardware_serial") or "").strip()
                     if hw and (":" in serial or serial != hw):
                         _emit_relay_fsm_online(serial, hardware_serial=hw)
@@ -890,6 +1020,7 @@ def create_app(
                         tls_cert_file=getattr(config.relay, "tls_cert_file", ""),
                         tls_key_file=getattr(config.relay, "tls_key_file", ""),
                         allow_insecure=bool(getattr(config.relay, "allow_insecure_grpc", True)),
+                        control_callbacks=_control_callbacks,
                     )
                     _app.state.grpc_server = grpc_server
                     log.info("gRPC relay server ready on port %d", grpc_port)
@@ -981,6 +1112,7 @@ def create_app(
     )
     app.state.manager = manager
     app.state.queue = queue
+    app.state.config = config
     app.state.session_store = SessionLockStore()
 
     db_enabled = bool(
@@ -993,13 +1125,6 @@ def create_app(
         ["*"]
         if cors_allow_all
         else [origin.strip() for origin in (config.web.cors_allowed_origins or []) if origin.strip()]
-    )
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=cors_allowed_origins,
-        allow_methods=["*"],
-        allow_headers=["*"],
-        allow_credentials=False if cors_allow_all else bool(cors_allowed_origins),
     )
     if db_enabled:
         from services.user_action_audit import UserActionAuditMiddleware
@@ -1023,6 +1148,15 @@ def create_app(
             "safe_mode active: read_only=%s stream_hierarchy=%s",
             safe_mode.read_only, safe_mode.stream_hierarchy,
         )
+
+    # Outermost: ensure CORS headers on early rejects (503 safe mode, etc.).
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_allowed_origins,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        allow_credentials=False if cors_allow_all else bool(cors_allowed_origins),
+    )
     app.include_router(
         build_safe_mode_router(
             read_only=safe_mode.read_only,
@@ -1231,11 +1365,18 @@ def create_app(
                 return
             user_id = ctx.user_id
             session_id = ctx.session_id
+            effective_org_id = ctx.org_id
             try:
                 from services.security_audit import emit_security_event
                 from db.database import AsyncSessionLocal
+                from api.deps import resolve_effective_org_id_for_user_id
 
                 async with AsyncSessionLocal() as db:
+                    header_org = await resolve_effective_org_id_for_user_id(
+                        ws, db, user_id
+                    )
+                    if header_org:
+                        effective_org_id = header_org
                     await emit_security_event(
                         db,
                         action="ws.connected",
@@ -1248,7 +1389,14 @@ def create_app(
                     await db.commit()
             except Exception:
                 pass
-        await ws_manager.connect(ws, user_id=user_id, session_id=session_id)
+        else:
+            effective_org_id = None
+        await ws_manager.connect(
+            ws,
+            user_id=user_id,
+            org_id=effective_org_id,
+            session_id=session_id,
+        )
 
     @app.websocket("/ws/lifecycle")
     async def lifecycle_websocket_endpoint(ws: WebSocket):

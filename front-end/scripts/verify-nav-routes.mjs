@@ -21,6 +21,7 @@ const NAV_PATHS = [
   '/dashboard/device-farm/account-groups',
   '/dashboard/scenario-templates',
   '/dashboard/content',
+  '/dashboard/analytics',
   '/dashboard/activity-history',
   '/dashboard/notifications',
   '/dashboard/settings/organization',

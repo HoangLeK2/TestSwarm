@@ -11,7 +11,7 @@
 | **Module** | DF-MOD-05 — Lập lịch |
 | **Priority** | P3 |
 | **Story Points** | 3 |
-| **Status** | Backlog |
+| **Status** | `Done` |
 | **Labels** | `module:scheduling`, `layer:backend`, `layer:contract`, `type:feature`, `persona:operator` |
 | **Truy vết — FR refs** | FR-05-07, FR-05-10 |
 | **Truy vết — UC refs** | UC-05-03 |

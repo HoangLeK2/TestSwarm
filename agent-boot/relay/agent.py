@@ -138,6 +138,8 @@ class RelayAgent:
         relay_id: str,
         relay_mode: str = "ws",
         enrollment_token: Optional[str] = None,
+        grpc_tls: bool = False,
+        grpc_root_cert_file: str = "",
         extra_ingest: Any = None,
     ) -> None:
         self._api_key   = api_key
@@ -148,7 +150,8 @@ class RelayAgent:
         if self._relay_mode == "grpc":
             # Accept "host:port" or "grpc://host:port" → strip scheme
             addr = server_url
-            for prefix in ("grpc://", "ws://", "wss://", "http://", "https://"):
+            grpc_scheme_tls = addr.startswith(("grpcs://", "https://"))
+            for prefix in ("grpcs://", "grpc://", "ws://", "wss://", "http://", "https://"):
                 if addr.startswith(prefix):
                     addr = addr[len(prefix):]
                     break
@@ -159,12 +162,22 @@ class RelayAgent:
                 addr = f"{addr}:50051"
             self._grpc_addr  = addr
             self._server_url = addr  # for logging
+            tls_env = os.getenv("RELAY_GRPC_TLS", "").strip().lower() in ("1", "true", "yes", "on")
+            self._grpc_tls_enabled = bool(grpc_tls or grpc_scheme_tls or tls_env)
+            self._grpc_root_cert_file = (
+                grpc_root_cert_file
+                or os.getenv("RELAY_GRPC_ROOT_CERT_FILE", "").strip()
+            )
+            if self._grpc_root_cert_file:
+                self._grpc_tls_enabled = True
         else:
             # WS mode: normalise URL
             if not server_url.startswith("ws://") and not server_url.startswith("wss://"):
                 server_url = f"ws://{server_url}/relay-agent"
             self._server_url = server_url
             self._grpc_addr  = ""
+            self._grpc_tls_enabled = False
+            self._grpc_root_cert_file = ""
 
         self._registry   = DeviceRegistry()
         self._scrcpy_mgr = ScrcpySessionManager(on_session_stopped=self._on_session_stopped)
@@ -438,6 +451,7 @@ class RelayAgent:
                 "version":  "2.0.0",
             }))
             logger.info("register sent: relay_id=%s serials=%s", self._relay_id, serials)
+            await self._send_heartbeat(send_queue)
             if self._scrcpy_auto_resume_enabled:
                 self._ensure_default_scrcpy_desired()
                 await self._resume_desired_scrcpy_sessions(send_queue, loop, source="ws-connected")
@@ -493,8 +507,7 @@ class RelayAgent:
 
     async def _connect_and_stream_grpc(self) -> None:
         """gRPC mode: bidirectional stream with HTTP/2 multiplexing."""
-        from grpc import aio as grpc_aio
-        from relay.grpc_client import GrpcRelayClient
+        from relay.grpc_client import GrpcRelayClient, create_grpc_channel
         from relay.control_client import AgentControlClient
 
         # FairSendQueue: same per-device fairness story as the WS path. The
@@ -512,19 +525,10 @@ class RelayAgent:
 
         # Shared channel — HTTP/2 multiplexes video stream + control stream
         # over a single TCP connection; the two streams are fully independent.
-        async with grpc_aio.insecure_channel(
+        async with create_grpc_channel(
             self._grpc_addr,
-            options=[
-                ("grpc.keepalive_time_ms",               10_000),
-                ("grpc.keepalive_timeout_ms",              5_000),
-                ("grpc.keepalive_permit_without_calls",        1),
-                ("grpc.http2.max_pings_without_data",          0),
-                ("grpc.http2.min_time_between_pings_ms",   5_000),
-                ("grpc.initial_reconnect_backoff_ms",      1_000),
-                ("grpc.max_reconnect_backoff_ms",         30_000),
-                ("grpc.max_send_message_length",    4 * 1024 * 1024),
-                ("grpc.max_receive_message_length", 4 * 1024 * 1024),
-            ],
+            tls_enabled=self._grpc_tls_enabled,
+            root_cert_file=self._grpc_root_cert_file,
         ) as channel:
             client = GrpcRelayClient(
                 server_addr=self._grpc_addr,
@@ -533,6 +537,8 @@ class RelayAgent:
                 send_queue=send_queue,
                 loop=loop,
                 channel=channel,
+                tls_enabled=self._grpc_tls_enabled,
+                root_cert_file=self._grpc_root_cert_file,
             )
 
             # Channel 2: control plane (register/heartbeat/commands) — runs
@@ -550,6 +556,7 @@ class RelayAgent:
                 "version":  "2.0.0",
             })
             await send_queue.put(register_msg)
+            await self._send_heartbeat(send_queue)
             if self._scrcpy_auto_resume_enabled:
                 self._ensure_default_scrcpy_desired()
                 await self._resume_desired_scrcpy_sessions(send_queue, loop, source="grpc-connected")
@@ -685,16 +692,7 @@ class RelayAgent:
 
         if ctx.state == DeviceState.ONLINE:
             loop = asyncio.get_running_loop()
-            if not ctx.capabilities:
-                caps = await loop.run_in_executor(adb_executor(), _probe_capabilities, serial)
-                self._registry.set_capabilities(serial, caps)
-                # Invalidate the cached heartbeat payload — next emit will
-                # re-render to include the freshly probed capabilities.
-                self._hb_caps_version += 1
-                wlan_ip = str((caps or {}).get("wlan_ip") or "").strip()
-                if wlan_ip and ":" not in serial:
-                    self._atx_lan_host_cache[serial] = wlan_ip
-                logger.info("capabilities %s: %s", serial, caps)
+            await self._ensure_capabilities_for_serials([serial], loop)
             pairs = await loop.run_in_executor(
                 adb_executor(),
                 reconcile_usb_preferred_for_duplicate_devices,
@@ -751,8 +749,31 @@ class RelayAgent:
             await asyncio.sleep(30)
             await self._send_heartbeat(send_queue)
 
+    async def _ensure_capabilities_for_serials(
+        self, serials: list[str], loop: asyncio.AbstractEventLoop
+    ) -> None:
+        """Probe capabilities for ONLINE serials missing cached caps (before heartbeat)."""
+        for serial in serials:
+            ctx = self._registry.get(serial)
+            if not ctx or ctx.state != DeviceState.ONLINE or ctx.capabilities:
+                continue
+            caps = await loop.run_in_executor(adb_executor(), _probe_capabilities, serial)
+            self._registry.set_capabilities(serial, caps)
+            self._hb_caps_version += 1
+            wlan_ip = str((caps or {}).get("wlan_ip") or "").strip()
+            if wlan_ip and ":" not in serial:
+                self._atx_lan_host_cache[serial] = wlan_ip
+            logger.info(
+                "capabilities (pre-heartbeat) %s: wlan_ip=%s",
+                serial,
+                wlan_ip or "unset",
+            )
+
     async def _send_heartbeat(self, send_queue: asyncio.Queue) -> None:
         serials = self._registry.online_serials
+        loop = asyncio.get_running_loop()
+        await self._ensure_capabilities_for_serials(serials, loop)
+
         key = (tuple(serials), self._hb_caps_version)
         if key == self._hb_cache_key and self._hb_cache_payload is not None:
             bounded_put_nowait(send_queue, self._hb_cache_payload, label="heartbeat")
@@ -1509,7 +1530,11 @@ class RelayAgent:
             ingest = await self._extra_ingest.process_payload(payload)
             if ingest.get("ok"):
                 reply["ok"] = True
-                reply["ingest"] = ingest
+                reply_ingest = dict(ingest)
+                reply_ingest.pop("evidence_pending", None)
+                if not bool(context.get("return_items")):
+                    reply_ingest.pop("items", None)
+                reply["ingest"] = reply_ingest
             else:
                 reply["error"] = str(ingest.get("error") or "ingest_failed")
                 reply["ingest"] = ingest

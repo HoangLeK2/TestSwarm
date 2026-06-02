@@ -53,6 +53,7 @@ interface DeviceTileProps {
   mockupScreenWidth?: number;
   /** Rail: ẩn pinch zoom + khởi động lại phiên ADB/scrcpy (trang ghi kịch bản). */
   minimalRailControls?: boolean;
+  streamFetchPriority?: 'high' | 'low' | 'auto';
 }
 
 export function DeviceTile({
@@ -73,7 +74,8 @@ export function DeviceTile({
   hideDeviceFunctions = false,
   readOnlyPreview = false,
   mockupScreenWidth: mockupScreenWidthProp,
-  minimalRailControls = false
+  minimalRailControls = false,
+  streamFetchPriority = 'auto'
 }: DeviceTileProps) {
   const t = useTranslations('devicesFarm');
   const id = serialToId(device.serial);
@@ -220,6 +222,7 @@ export function DeviceTile({
                       gestureMode={gestureMode}
                       captionBelowFrame
                       interactive={!readOnlyPreview}
+                      streamFetchPriority={streamFetchPriority}
                     />
                   ) : (
                     <div className='flex h-full w-full items-center justify-center bg-zinc-900 text-[11px] text-muted-foreground'>

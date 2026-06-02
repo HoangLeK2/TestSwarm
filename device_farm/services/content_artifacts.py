@@ -52,6 +52,16 @@ def normalize_artifact_url(url: str | None) -> str | None:
     return value
 
 
+def _kind_for_execution_artifact(art_type: str, url: str) -> str:
+    """Map execution step artifact types to preview kinds (proxy URLs lack extensions)."""
+    lowered = art_type.lower()
+    if "screenshot" in lowered or lowered.endswith(".element") or ".element" in lowered:
+        return "image"
+    if "hierarchy" in lowered or "selector" in lowered:
+        return "xml"
+    return _guess_kind(url)
+
+
 def _guess_kind(value: str, *, mime_hint: str | None = None) -> str:
     if mime_hint:
         if mime_hint.startswith("image/"):
@@ -219,10 +229,10 @@ def merge_execution_artifacts(
         resolved = normalize_artifact_url(url)
         if not resolved or resolved in seen_urls:
             continue
-        kind = _guess_kind(resolved)
-        if kind not in ("image", "xml", "json", "text"):
-            continue
         if "hierarchy" not in art_type and "screenshot" not in art_type:
+            continue
+        kind = _kind_for_execution_artifact(art_type, resolved)
+        if kind not in ("image", "xml", "json", "text"):
             continue
         artifact_id = f"execution:{art_type}"
         if artifact_id in seen_ids:

@@ -1,0 +1,48 @@
+{
+  "title": "Device Farm Scheduling",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "tags": ["device-farm", "scheduling", "epic-05"],
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Fallback Active",
+      "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4},
+      "targets": [{"expr": "device_farm_schedule_fallback_active"}]
+    },
+    {
+      "type": "stat",
+      "title": "Queue Depth",
+      "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4},
+      "targets": [{"expr": "device_farm_schedule_queue_depth"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Tick Lag Seconds",
+      "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8},
+      "targets": [{"expr": "device_farm_schedule_tick_lag_seconds"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Dispatch Success / Failure",
+      "gridPos": {"x": 0, "y": 8, "w": 12, "h": 8},
+      "targets": [
+        {"expr": "rate(device_farm_schedule_dispatch_success_total[5m])"},
+        {"expr": "rate(device_farm_schedule_dispatch_failed_total[5m])"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Missed Ticks",
+      "gridPos": {"x": 12, "y": 8, "w": 6, "h": 8},
+      "targets": [{"expr": "increase(device_farm_schedule_missed_ticks_total[5m])"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Starvation Count",
+      "gridPos": {"x": 18, "y": 8, "w": 6, "h": 8},
+      "targets": [{"expr": "increase(device_farm_schedule_starvation_total[5m])"}]
+    }
+  ]
+}

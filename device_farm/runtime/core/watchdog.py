@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import socket
 import threading
 import time
 import urllib.request

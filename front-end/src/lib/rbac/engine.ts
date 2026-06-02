@@ -74,6 +74,13 @@ const RBAC_POLICIES: readonly RbacPolicyRow[] = [
     actions: ['read', 'create', 'update', 'delete', 'manage']
   },
   { role: 'member', object: 'scenario-templates', actions: READ_ONLY },
+  { role: 'operator', object: 'scenarios', actions: READ_ONLY },
+  {
+    role: 'owner',
+    object: 'scenarios',
+    actions: ['read', 'create', 'update', 'delete', 'manage']
+  },
+  { role: 'member', object: 'scenarios', actions: READ_ONLY },
   { role: 'operator', object: 'accounts', actions: READ_ONLY },
   { role: 'owner', object: 'accounts', actions: MANAGE },
   { role: 'member', object: 'accounts', actions: READ_ONLY },
@@ -106,12 +113,24 @@ const RBAC_POLICIES: readonly RbacPolicyRow[] = [
   { role: 'operator', object: 'analytics', actions: READ_ONLY },
   { role: 'owner', object: 'analytics', actions: READ_ONLY },
   { role: 'member', object: 'analytics', actions: READ_ONLY },
+  { role: 'operator', object: 'mcp', actions: READ_ONLY },
+  { role: 'owner', object: 'mcp', actions: ['read', 'manage'] },
+  { role: 'member', object: 'mcp', actions: READ_ONLY },
   { role: 'supervisor', object: 'organizations', actions: READ_ONLY },
   { role: 'supervisor', object: 'me', actions: READ_ONLY },
   { role: 'supervisor', object: 'devices', actions: [...EXECUTE, 'create'] },
-  { role: 'supervisor', object: 'campaigns', actions: EXECUTE_WITH_CREATE_UPDATE },
+  {
+    role: 'supervisor',
+    object: 'campaigns',
+    actions: EXECUTE_WITH_CREATE_UPDATE
+  },
   { role: 'supervisor', object: 'executions', actions: EXECUTE_WITH_CREATE },
   { role: 'supervisor', object: 'scenario-templates', actions: READ_ONLY },
+  {
+    role: 'supervisor',
+    object: 'scenarios',
+    actions: ['read', 'create', 'update']
+  },
   { role: 'supervisor', object: 'accounts', actions: READ_ONLY },
   { role: 'supervisor', object: 'account-groups', actions: READ_ONLY },
   { role: 'supervisor', object: 'device-groups', actions: READ_ONLY },
@@ -119,7 +138,8 @@ const RBAC_POLICIES: readonly RbacPolicyRow[] = [
   { role: 'supervisor', object: 'relay-agents', actions: READ_ONLY },
   { role: 'supervisor', object: 'notifications', actions: READ_ONLY },
   { role: 'supervisor', object: 'content', actions: READ_ONLY },
-  { role: 'supervisor', object: 'analytics', actions: READ_ONLY }
+  { role: 'supervisor', object: 'analytics', actions: READ_ONLY },
+  { role: 'supervisor', object: 'mcp', actions: ['read', 'manage'] }
 ] as const;
 
 const checkerCache = new Map<string, PermissionChecker>();
@@ -192,7 +212,9 @@ function cacheKey(roles: readonly string[]): string {
 }
 
 /** Memoized checker — O(1) lookups after first build for a role set. */
-export function createPermissionChecker(identity: RbacIdentity): PermissionChecker {
+export function createPermissionChecker(
+  identity: RbacIdentity
+): PermissionChecker {
   const roles = rolesForIdentity(identity);
   const key = cacheKey(roles);
   const cached = checkerCache.get(key);

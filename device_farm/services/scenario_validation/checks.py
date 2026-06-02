@@ -2,20 +2,27 @@
 
 from __future__ import annotations
 
-from collections import defaultdict, deque
 from typing import Any
 
 from common.variable_resolver import _BUILTIN_NAMES, _VAR_PATTERN, normalize_variable_map
 from services.scenario_validation import codes as C
+from services.scenario_validation.graph_reachability import (
+    build_graph_indexes,
+    campaign_start_node_id,
+    is_graph_dead_end,
+    last_root_node_id,
+    reachable_from,
+)
 from services.scenario_validation.models import ValidationIssue, ValidationResult
 from services.scenario_validation.ref_cache import ScenarioRefCache, steps_from_row
 from services.scenario_validation.step_index import StepIndex
 
 _MAX_NESTING_DEPTH = 10
-_TERMINAL_NODE_TYPES = frozenset({"success", "fail", "end", "terminal"})
 _ERROR_POLICIES = frozenset({"pause", "continue", "stop"})
 
 # Skip ${var} scan inside heavy / non-interpolated fields (screenshots, anchors).
+# Nested step containers are walked separately via StepIndex — do not recurse into
+# them from a parent step or set_variable declarations are seen after use.
 _SKIP_VAR_SCAN_KEYS = frozenset({
     "screenshot",
     "element_image",
@@ -23,6 +30,11 @@ _SKIP_VAR_SCAN_KEYS = frozenset({
     "screenshot_anchor",
     "ui_xml",
     "hierarchy_xml",
+    "steps",
+    "then",
+    "else",
+    "else_steps",
+    "branches",
 })
 
 
@@ -61,37 +73,22 @@ def check_graph(nodes: list[dict], edges: list[dict], result: ValidationResult) 
     if not nodes:
         return
 
-    node_by_id = {n["id"]: n for n in nodes if n.get("id")}
+    node_by_id, reach_adj, explicit_adj, scoped_children = build_graph_indexes(nodes, edges)
     if not node_by_id:
         return
 
-    adj: dict[str, list[str]] = defaultdict(list)
-    for edge in edges or []:
-        src = edge.get("source")
-        tgt = edge.get("target")
-        if src in node_by_id and tgt in node_by_id:
-            adj[src].append(tgt)
-
-    root_nodes = [n for n in nodes if not (n.get("scope") or {}).get("parentId")]
-    root_nodes.sort(key=lambda n: n.get("order", ""))
-    if not root_nodes:
+    start_id = campaign_start_node_id(nodes, node_by_id)
+    if not start_id:
         return
 
-    visited: set[str] = set()
-    queue: deque[str] = deque([root_nodes[0]["id"]])
-    while queue:
-        nid = queue.popleft()
-        if nid in visited:
-            continue
-        visited.add(nid)
-        for tgt in adj.get(nid, []):
-            if tgt not in visited:
-                queue.append(tgt)
+    visited = reachable_from(start_id, reach_adj)
+    terminal_root_id = last_root_node_id(nodes)
 
     for node in nodes:
         nid = node.get("id")
         if not nid:
             continue
+        nid = str(nid)
         title = node.get("title") or nid
         if nid not in visited:
             result.add(
@@ -103,7 +100,12 @@ def check_graph(nodes: list[dict], edges: list[dict], result: ValidationResult) 
                 )
             )
             continue
-        if not adj.get(nid) and str(node.get("type") or "") not in _TERMINAL_NODE_TYPES:
+        if is_graph_dead_end(
+            node,
+            explicit_adj=explicit_adj,
+            scoped_children=scoped_children,
+            last_root_id=terminal_root_id,
+        ):
             result.add(
                 ValidationIssue(
                     level="error",
@@ -196,13 +198,65 @@ def check_retry_config(index: StepIndex, result: ValidationResult) -> None:
                 )
             )
             continue
-        if max_attempts < 1 or max_attempts > 10:
+        if max_attempts < 1:
             result.add(
                 ValidationIssue(
                     level="error",
                     code=C.INVALID_RETRY_CONFIG,
-                    message="retry.attempts must be between 1 and 10",
+                    message="retry.attempts must be at least 1",
                     location=f"{loc}.retry.attempts",
+                )
+            )
+        elif max_attempts > 10:
+            result.add(
+                ValidationIssue(
+                    level="error",
+                    code=C.RETRY_MAX_ATTEMPTS_OUT_OF_RANGE,
+                    message="retry.max_attempts must be between 1 and 10",
+                    location=f"{loc}.retry.max_attempts",
+                )
+            )
+        strategy = retry.get("backoff_strategy")
+        if strategy is not None and str(strategy).lower() not in {"fixed", "exponential"}:
+            result.add(
+                ValidationIssue(
+                    level="error",
+                    code=C.RETRY_BACKOFF_INVALID,
+                    message='retry.backoff_strategy must be "fixed" or "exponential"',
+                    location=f"{loc}.retry.backoff_strategy",
+                )
+            )
+        jitter = retry.get("jitter")
+        if jitter is not None:
+            try:
+                jitter_num = float(jitter)
+            except (TypeError, ValueError):
+                result.add(
+                    ValidationIssue(
+                        level="error",
+                        code=C.RETRY_BACKOFF_INVALID,
+                        message="retry.jitter must be a number between 0 and 1",
+                        location=f"{loc}.retry.jitter",
+                    )
+                )
+            else:
+                if jitter_num < 0 or jitter_num > 1:
+                    result.add(
+                        ValidationIssue(
+                            level="error",
+                            code=C.RETRY_BACKOFF_INVALID,
+                            message="retry.jitter must be between 0 and 1",
+                            location=f"{loc}.retry.jitter",
+                        )
+                    )
+        reasons = retry.get("retryable_reasons")
+        if reasons is not None and not isinstance(reasons, list):
+            result.add(
+                ValidationIssue(
+                    level="error",
+                    code=C.INVALID_RETRY_CONFIG,
+                    message="retry.retryable_reasons must be a list of strings",
+                    location=f"{loc}.retry.retryable_reasons",
                 )
             )
         for key in ("backoff_ms", "jitter_ms", "backoff_cap_ms"):
@@ -215,7 +269,7 @@ def check_retry_config(index: StepIndex, result: ValidationResult) -> None:
                 result.add(
                     ValidationIssue(
                         level="error",
-                        code=C.INVALID_RETRY_CONFIG,
+                        code=C.RETRY_BACKOFF_INVALID,
                         message=f"retry.{key} must be a positive number",
                         location=f"{loc}.retry.{key}",
                     )
@@ -225,7 +279,7 @@ def check_retry_config(index: StepIndex, result: ValidationResult) -> None:
                 result.add(
                     ValidationIssue(
                         level="error",
-                        code=C.INVALID_RETRY_CONFIG,
+                        code=C.RETRY_BACKOFF_INVALID,
                         message=f"retry.{key} must be positive",
                         location=f"{loc}.retry.{key}",
                     )

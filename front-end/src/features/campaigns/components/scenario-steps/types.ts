@@ -57,6 +57,7 @@ export type ControlFlowType =
   | 'random_pick'
   | 'run_scenario'
   | 'loop'
+  | 'fb_tap_comment_button'
   | 'tap_fb_comment_button';
 
 export type ActionType =
@@ -118,6 +119,7 @@ export function isControlFlow(type: string): type is ControlFlowType {
     'random_pick',
     'run_scenario',
     'loop',
+    'fb_tap_comment_button',
     'tap_fb_comment_button'
   ].includes(type);
 }
@@ -171,6 +173,7 @@ export function getStepIcon(type: string): LucideIcon {
     case 'tap_selector':
     case 'double_tap':
       return MousePointerClick;
+    case 'fb_tap_comment_button':
     case 'tap_fb_comment_button':
       return GitBranch;
     case 'swipe_ratio':
@@ -270,6 +273,7 @@ export function getStepLabel(step: FlowStep): string {
       return `tap (${step.x}, ${step.y})`;
     case 'tap_selector':
       return `tap [${step.by}="${step.value}"]`;
+    case 'fb_tap_comment_button':
     case 'tap_fb_comment_button': {
       const thenN = Array.isArray(step.then) ? step.then.length : 0;
       const elseN = Array.isArray(step.else) ? step.else.length : 0;
@@ -318,7 +322,7 @@ export const ALL_STEP_TYPES: {
   { value: 'tap_ratio', label: 'tap_ratio', group: 'action' },
   { value: 'tap_selector', label: 'tap_selector', group: 'action' },
   {
-    value: 'tap_fb_comment_button',
+    value: 'fb_tap_comment_button',
     label: 'Bấm nút Bình luận (FB) — có nhánh OK / Không thấy',
     group: 'control'
   },
@@ -490,10 +494,11 @@ export function createDefaultStep(
         fallback_rx: 0.5,
         fallback_ry: 0.5
       };
+    case 'fb_tap_comment_button':
     case 'tap_fb_comment_button':
       return {
         ...base,
-        type: 'tap_fb_comment_button',
+        type,
         timeout: 6,
         poll: 0.4,
         dedupe_field: 'post_key',
@@ -632,12 +637,15 @@ export function createDefaultStep(
         expand_see_more_scroll: true,
         expand_see_more_scroll_distance: 0.25,
         expand_completion_retries: 4,
+        extract_profile: 'balanced',
+        open_post_before_extract: true,
+        open_post_press_back_after_extract: false,
         max_items: 50,
         stop_if_no_new: true,
         no_new_threshold: 30,
         collection: '${SAVE_COLLECTION}',
         platform: 'facebook',
-        content_type: 'group_post',
+        content_type: 'fb_post',
         dedupe_field: 'post_key'
       };
     // Shortcut — creates an `extract` step preset for FB comments. Mirrors what
@@ -652,16 +660,16 @@ export function createDefaultStep(
         max_items: '${MAX_COMMENTS_PER_POST}',
         comment_scroll_passes: '${MAX_COMMENT_SCROLLS}',
         comment_swipes_per_dump: 3,
-        comment_scroll_distance: 0.72,
-        comment_scroll_duration_ms: 60,
-        comment_scroll_pause_s: 0.02,
+        comment_scroll_distance: 0.30,
+        comment_scroll_duration_ms: 300,
+        comment_scroll_pause_s: 0.18,
         comment_no_growth_break: '${COMMENT_NO_NEW_THRESHOLD}',
         min_comment_scan_passes: '${MIN_COMMENT_SCAN_PASSES}',
         stop_if_no_new: false,
         no_new_threshold: 4,
         collection: '${SAVE_COLLECTION}',
         platform: 'facebook',
-        content_type: 'comment',
+        content_type: 'fb_comment',
         dedupe_field: 'comment_key',
         tags: 'group,comment,${GROUP_NAME}',
         save_parent_id_var: '_active_comment_parent_hash',
@@ -678,11 +686,14 @@ export function createDefaultStep(
         expand_see_more_scroll: true,
         expand_see_more_scroll_distance: 0.25,
         expand_completion_retries: 4,
+        extract_profile: 'balanced',
+        open_post_before_extract: true,
+        open_post_press_back_after_extract: false,
         max_items: 50,
         stop_if_no_new: false,
         collection: '${SAVE_COLLECTION}',
         platform: 'facebook',
-        content_type: 'group_post',
+        content_type: 'fb_post',
         dedupe_field: 'post_key',
         tags: 'group,crawl,${GROUP_NAME}'
       };
@@ -693,7 +704,7 @@ export function createDefaultStep(
         data_var: 'posts',
         collection: 'default',
         platform: 'facebook',
-        content_type: 'post',
+        content_type: 'fb_post',
         dedupe_field: 'text',
         tags: '',
         item_level: 0

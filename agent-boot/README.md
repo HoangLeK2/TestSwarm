@@ -92,7 +92,7 @@ Mặc định không cần mở inbound port trên máy agent. Khi bật `AGENT_
 | # | Step | Mô tả |
 |---|------|--------|
 | 1 | adb tcpip | Mở WiFi ADB (chỉ khi kết nối USB) |
-| 2 | Wireless Debugging | Enable Android 11+ mDNS (SDK ≥ 30) |
+| 2 | Wireless Debugging | Optional Android 11+ mDNS discovery when `AGENT_BOOT_MDNS=1` |
 | 3 | uiautomator2 APKs | Install `com.github.uiautomator` + test APK |
 | 4 | atx-agent | Push + start atx-agent trên port 7912 |
 | 5 | STFService | Install APK |
@@ -113,7 +113,7 @@ Mặc định không cần mở inbound port trên máy agent. Khi bật `AGENT_
 │       │           ONLINE → OFFLINE/RECONNECTING      │
 │       │           → DEAD (max retries exceeded)      │
 │       │                                              │
-│       ├── mDNS Listener (Android 11+ auto-connect)  │
+│       ├── Optional mDNS Listener (`AGENT_BOOT_MDNS=1`)│
 │       └── Periodic heartbeat (30s keepalive)         │
 └─────────────────────────────────────────────────────┘
 ```
@@ -151,6 +151,6 @@ uv add grpcio grpcio-tools zeroconf pure-python-adb
 | Package | Dùng cho |
 |---------|---------|
 | `grpcio` | gRPC client stream |
-| `zeroconf` | mDNS discovery (Android 11+) |
+| `zeroconf` | Optional mDNS discovery (Android 11+, enabled by `AGENT_BOOT_MDNS=1`) |
 | `pure-python-adb` | ADB daemon protocol (không cần adb binary) |
 | `rich` | Bootstrap UI |

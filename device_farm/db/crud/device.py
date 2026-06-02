@@ -54,6 +54,16 @@ async def get_device(db: AsyncSession, device_id: str) -> Optional[Device]:
     return result.scalar_one_or_none()
 
 
+async def get_devices_by_ids(
+    db: AsyncSession, device_ids: list[str]
+) -> dict[str, Device]:
+    """Batch load devices by primary key — O(1) round-trip."""
+    if not device_ids:
+        return {}
+    result = await db.execute(select(Device).where(Device.id.in_(device_ids)))
+    return {row.id: row for row in result.scalars().all()}
+
+
 async def get_or_create_device(
     db: AsyncSession, serial: str, user_id: Optional[str] = None, org_id: Optional[str] = None
 ) -> Device:

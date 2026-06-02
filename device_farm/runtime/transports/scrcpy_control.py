@@ -152,8 +152,6 @@ class ScrcpyControl:
             if not self._connected:
                 return
             self._inject_touch(ACTION_MOVE, cx, cy, PRESSURE_MAX)
-        for _ in range(5):
-            self._inject_touch(ACTION_MOVE, x2, y2, PRESSURE_MAX)
         self._inject_touch(ACTION_UP, x2, y2, PRESSURE_NONE)
 
     def long_tap(self, x: int, y: int, duration_ms: int = 800) -> None:

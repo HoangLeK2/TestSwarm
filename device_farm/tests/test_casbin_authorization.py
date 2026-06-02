@@ -10,7 +10,11 @@ from fastapi import Depends, FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from api import deps
-from api.auth.rbac import build_enforcer_for_user
+from api.auth.rbac import (
+    build_enforcer_for_user,
+    build_enforcer_for_user_from_db,
+    clear_rbac_cache,
+)
 from api.deps import require_permission
 from api.routes import campaigns as campaign_routes
 from api.routes import devices as device_routes
@@ -21,6 +25,77 @@ from api.routes import scenario_templates as scenario_template_routes
 
 def _user(role: str, org_id: str | None = "org-1"):
     return SimpleNamespace(id=f"{role}-user", role=role, org_id=org_id, is_active=True)
+
+
+class _PolicyResult:
+    def __init__(self, rows, one=None):
+        self._rows = rows
+        self._one = one
+
+    def fetchall(self):
+        return self._rows
+
+    def fetchone(self):
+        return self._one
+
+
+class _PolicyDb:
+    def __init__(self, rows, revision: int = 1):
+        self.rows = rows
+        self.revision = revision
+        self.queries = 0
+
+    async def execute(self, statement):
+        self.queries += 1
+        sql = str(statement)
+        if "casbin_policy_revision" in sql:
+            return _PolicyResult([], (self.revision,))
+        return _PolicyResult(self.rows)
+
+
+@pytest.mark.asyncio
+async def test_casbin_rbac_loads_policy_from_database_not_csv():
+    clear_rbac_cache()
+    user = _user("operator")
+    user.org_role = "owner"
+    db = _PolicyDb(
+        [
+            ("p", "owner", "*", "devices", "read", None, None),
+            ("p", "member", "*", "devices", "read", None, None),
+        ]
+    )
+
+    enforcer = await build_enforcer_for_user_from_db(user, db, domain="org-1")
+    cached_enforcer = await build_enforcer_for_user_from_db(user, db, domain="org-1")
+
+    assert db.queries == 2
+    assert enforcer.enforce("operator-user", "org-1", "devices", "read")
+    assert not enforcer.enforce("operator-user", "org-1", "devices", "manage")
+    assert cached_enforcer is enforcer
+    clear_rbac_cache()
+
+
+@pytest.mark.asyncio
+async def test_casbin_rbac_cache_refreshes_when_revision_changes(monkeypatch):
+    clear_rbac_cache()
+    monkeypatch.setenv("DEVICE_FARM_RBAC_POLICY_CACHE_TTL_SECONDS", "0")
+    user = _user("operator")
+    user.org_role = "owner"
+    db = _PolicyDb(
+        [("p", "owner", "*", "devices", "read", None, None)],
+        revision=1,
+    )
+
+    first = await build_enforcer_for_user_from_db(user, db, domain="org-1")
+    db.rows = [("p", "owner", "*", "devices", "(read|manage)", None, None)]
+    db.revision = 2
+    second = await build_enforcer_for_user_from_db(user, db, domain="org-1")
+
+    assert first.enforce("operator-user", "org-1", "devices", "read")
+    assert not first.enforce("operator-user", "org-1", "devices", "manage")
+    assert second.enforce("operator-user", "org-1", "devices", "manage")
+    assert second is not first
+    clear_rbac_cache()
 
 
 def test_casbin_rbac_domain_allows_admin_user_permissions():
@@ -333,7 +408,11 @@ async def test_organization_route_denies_role_without_policy(monkeypatch):
     app = FastAPI()
     app.include_router(organization_routes.router)
 
+    async def fake_db():
+        yield object()
+
     app.dependency_overrides[deps._get_current_user] = lambda: _user("viewer")
+    app.dependency_overrides[deps._get_db] = fake_db
     list_orgs = AsyncMock(return_value=([], 0))
     monkeypatch.setattr(
         organization_routes.repo,
@@ -398,7 +477,11 @@ async def test_device_create_route_denies_org_member(monkeypatch):
         created_at="2026-01-01T00:00:00Z",
     ))
 
+    async def fake_db():
+        yield object()
+
     app.dependency_overrides[deps._get_current_user] = lambda: user
+    app.dependency_overrides[deps._get_db] = fake_db
     monkeypatch.setattr(device_routes.repo, "get_device_by_serial", get_by_serial)
     monkeypatch.setattr(device_routes.repo, "create_device", create_device)
 
@@ -426,7 +509,11 @@ async def test_device_control_route_denies_org_member(monkeypatch):
         "error": "",
     })
 
+    async def fake_db():
+        yield object()
+
     app.dependency_overrides[deps._get_current_user] = lambda: user
+    app.dependency_overrides[deps._get_db] = fake_db
     monkeypatch.setattr(device_routes, "_dispatch_relay_command", dispatch)
 
     async with AsyncClient(

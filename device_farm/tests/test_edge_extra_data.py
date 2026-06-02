@@ -39,6 +39,16 @@ def _relay_available(monkeypatch):
     monkeypatch.setattr(extraction_mod, "_relay_extra_data_available", lambda _device: True)
 
 
+def test_resolve_org_id_for_edge_from_user_id(monkeypatch) -> None:
+    monkeypatch.setattr("db.database.run_activity_coro", lambda _coro: "org-from-user")
+
+    org_id = extraction_mod._resolve_org_id_for_edge(
+        "serial-1",
+        {"_campaign_vars": {"__USER_ID__": "user-abc"}},
+    )
+    assert org_id == "org-from-user"
+
+
 def test_try_edge_extra_data_success(monkeypatch) -> None:
     monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
     monkeypatch.setenv("EDGE_EXTRA_RELAY_ENABLED", "1")
@@ -211,7 +221,7 @@ def test_non_fb_content_strategy_routes_to_agent_boot(monkeypatch) -> None:
     assert handled is True
     assert device.calls[0]["strategy"] == "tiktok_posts"
     assert device.calls[0]["context"]["platform"] == "tiktok"
-    assert device.calls[0]["context"]["content_type"] == "video"
+    assert device.calls[0]["context"]["content_type"] == "tiktok_video"
 
 
 def test_edge_extra_endpoint_allowlist_rejects_host_prefix_spoof(monkeypatch) -> None:
@@ -243,6 +253,7 @@ def test_tap_fb_comment_button_resolves_target_via_agent_boot(monkeypatch) -> No
         "ingest": {
             "diagnostic": {
                 "reason_code": "ok",
+                "verified": True,
                 "target": {
                     "bounds": [10, 20, 110, 60],
                     "pid": "pid-1",
@@ -283,6 +294,7 @@ def test_tap_fb_comment_button_skips_server_tap_when_agent_tapped(monkeypatch) -
         "ingest": {
             "diagnostic": {
                 "reason_code": "ok",
+                "verified": True,
                 "target": {
                     "bounds": [10, 20, 110, 60],
                     "pid": "pid-1",
@@ -306,6 +318,47 @@ def test_tap_fb_comment_button_skips_server_tap_when_agent_tapped(monkeypatch) -
     assert result["tapped"] is True
     assert result["agent_tapped"] is True
     assert device.taps == []
+
+
+def test_tap_fb_comment_button_skips_then_when_verify_failed() -> None:
+    device = _FakeDevice({
+        "ok": True,
+        "agent_tapped": True,
+        "ingest": {
+            "diagnostic": {
+                "reason_code": "ok",
+                "verified": False,
+                "target": {
+                    "bounds": [10, 20, 110, 60],
+                    "pid": "pid-1",
+                },
+            },
+        },
+    })
+    sc = _ctx(device)
+    result = {}
+    then_ran = {"value": False}
+    original_run_nested = control_flow._run_nested
+
+    def _run_nested(sc_inner, steps):
+        then_ran["value"] = True
+        return {"success": True}
+
+    control_flow._run_nested = _run_nested
+    try:
+        control_flow.handle_tap_fb_comment_button(
+            sc,
+            {"then": [{"type": "sleep", "seconds": 0.01}]},
+            0,
+            result,
+        )
+    finally:
+        control_flow._run_nested = original_run_nested
+
+    assert result["tapped"] is False
+    assert result["branch"] == "else"
+    assert then_ran["value"] is False
+    assert "_active_comment_parent_hash" not in sc.ctx
 
 
 def test_try_edge_extra_data_uses_base_parent_hash_for_comments(monkeypatch) -> None:
@@ -379,3 +432,69 @@ def test_tap_fb_comment_button_ignore_error_keeps_step_ok(monkeypatch) -> None:
 
     assert result["ok"] is True
     assert result["tapped"] is False
+
+
+def test_resolve_campaign_id_for_edge_honors_explicit_none(monkeypatch) -> None:
+    def _fail_if_called(_coro):
+        raise AssertionError("resolve_persist_campaign_id should not run")
+
+    monkeypatch.setattr("db.database.run_activity_coro", _fail_if_called)
+
+    resolved = extraction_mod._resolve_campaign_id_for_edge(
+        {
+            "_campaign_id": None,
+            "campaign_id": "stale-workflow-id",
+            "_execution_id": "exec-1",
+        }
+    )
+
+    assert resolved is None
+
+
+def test_resolve_campaign_id_for_edge_revalidates_resolved_marker(monkeypatch) -> None:
+    seen: dict[str, str | None] = {}
+
+    async def _resolve(db, *, campaign_id, execution_id=None):
+        seen["campaign_id"] = campaign_id
+        seen["execution_id"] = execution_id
+        return None
+
+    monkeypatch.setattr(
+        "services.content.campaign_ref.resolve_persist_campaign_id",
+        _resolve,
+    )
+
+    def _run(coro):
+        import asyncio
+
+        return asyncio.run(coro)
+
+    monkeypatch.setattr("db.database.run_activity_coro", _run)
+
+    resolved = extraction_mod._resolve_campaign_id_for_edge(
+        {
+            "_campaign_id_resolved": True,
+            "_campaign_id": "camp-validated",
+            "campaign_id": "stale-workflow-id",
+            "_execution_id": "exec-1",
+        }
+    )
+
+    assert resolved is None
+    assert seen == {"campaign_id": "camp-validated", "execution_id": "exec-1"}
+
+
+def test_resolve_campaign_id_for_edge_resolve_failure_returns_none(monkeypatch) -> None:
+    def _boom(_coro):
+        raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr("db.database.run_activity_coro", _boom)
+
+    resolved = extraction_mod._resolve_campaign_id_for_edge(
+        {
+            "campaign_id": "stale-workflow-id",
+            "_execution_id": "exec-1",
+        }
+    )
+
+    assert resolved is None

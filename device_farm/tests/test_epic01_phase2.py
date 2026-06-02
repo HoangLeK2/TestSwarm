@@ -208,7 +208,10 @@ async def test_owner_admin_members_success(session_factory):
     assert len(resp.json()) >= 1
 
 
-def test_db_health_debounce_enter_and_exit():
+def test_db_health_debounce_enter_and_exit(monkeypatch):
+    import db.database as db_mod
+
+    monkeypatch.setattr(db_mod, "schema_init_ok", True)
     monitor = DbHealthMonitor(debounce_count=3)
     monitor.mark_connected()
     for _ in range(2):

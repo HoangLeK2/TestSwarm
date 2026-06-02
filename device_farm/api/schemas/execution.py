@@ -139,3 +139,25 @@ class SummaryOut(BaseModel):
     pending: int
     error: int
     total_content_items: int
+
+
+class ExecutionStepOut(BaseModel):
+    id: str
+    execution_id: str
+    step_index: int
+    step_id: Optional[str] = None
+    step_type: Optional[str] = None
+    status: str
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    duration_ms: Optional[float] = None
+    error_json: dict[str, Any] = Field(default_factory=dict)
+    effective_config_json: dict[str, Any] = Field(default_factory=dict)
+    artifacts_json: list[Any] = Field(default_factory=list)
+    attempts_json: list[Any] = Field(default_factory=list)
+    marked_ignored: bool = False
+    message: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}

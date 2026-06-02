@@ -1,19 +1,60 @@
 import type { FlowNode, FlowEdge } from './components/scenario-steps/types';
+
+/** Epic 04 lifecycle + legacy statuses from backend FSM (DF-T-04-007). */
 export type CampaignStatus =
+  | 'draft'
+  | 'scheduled'
   | 'idle'
   | 'running'
-  | 'draft'
   | 'paused'
-  | 'completed';
+  | 'completed'
+  | 'cancelled'
+  | 'failed'
+  | 'archived';
 
-/** Ready to start a new run (not executing, not user-paused mid-run) */
-export function isIdleStatus(s: string): boolean {
-  return s === 'idle' || s === 'draft' || s === 'completed';
+const DISPATCHABLE = new Set<string>([
+  'draft',
+  'idle',
+  'scheduled',
+  'cancelled'
+]);
+const ACTIVE_EXECUTION = new Set<string>(['running', 'paused']);
+const BODY_EDITABLE = new Set<string>(['draft', 'idle']);
+const TERMINAL = new Set<string>(['completed', 'failed', 'archived']);
+
+/** Campaign may start a new run / dispatch (draft, scheduled, legacy idle). */
+export function isDispatchableStatus(s: string): boolean {
+  return DISPATCHABLE.has(s);
 }
 
-/** Executing or user paused — poll workflows, show pause/resume/stop */
+/** Campaign has an active execution (running or paused). */
+export function isActiveExecutionStatus(s: string): boolean {
+  return ACTIVE_EXECUTION.has(s);
+}
+
+/** @deprecated Use isDispatchableStatus */
+export function isIdleStatus(s: string): boolean {
+  return isDispatchableStatus(s);
+}
+
+/** Executing or user paused — poll workflows, show pause/resume/cancel. */
 export function isCampaignActiveExecution(s: string): boolean {
-  return s === 'running' || s === 'paused';
+  return ACTIVE_EXECUTION.has(s);
+}
+
+/** Metadata (name, description, tags) editable in scheduled. */
+export function isCampaignMetadataEditable(s: string): boolean {
+  return BODY_EDITABLE.has(s) || s === 'scheduled';
+}
+
+/** Body fields (scenario_refs, vars, overrides) editable only in draft/idle. */
+export function isCampaignBodyEditable(s: string): boolean {
+  return BODY_EDITABLE.has(s);
+}
+
+/** Terminal lifecycle — hide run, no active control except archive/delete where allowed. */
+export function isCampaignTerminal(s: string): boolean {
+  return TERMINAL.has(s);
 }
 
 export type ScenarioOut = {
@@ -46,12 +87,17 @@ export type ScenarioCreate = {
 
 export type ScenarioUpdate = Partial<ScenarioCreate>;
 
+export type CampaignScenarioRefOut = {
+  scenario_id: string;
+  scenario_version: number;
+};
+
 export type CampaignOut = {
   id: string;
   name: string;
   description: string | null;
   status: CampaignStatus;
-  user_id: string;
+  user_id?: string | null;
   scenario?: Record<string, any> | null;
   variables?: Record<string, any>;
   scenarios?: ScenarioOut[];
@@ -59,6 +105,11 @@ export type CampaignOut = {
   updated_at: string;
   devices?: CampaignDeviceOut[];
   target_group_id?: string | null;
+  /** Epic 04 org-scoped campaign (present on list/detail when tenant has org). */
+  organization_id?: string;
+  scenario_refs?: CampaignScenarioRefOut[];
+  vars?: Record<string, unknown>;
+  tags?: string[];
 };
 
 export type CampaignDeviceOut = {
@@ -69,11 +120,22 @@ export type CampaignDeviceOut = {
   model?: string;
 };
 
+export type CampaignScenarioRefIn = {
+  scenario_id: string;
+  scenario_version?: number | null;
+};
+
 export type CampaignCreate = {
   name: string;
   description?: string;
   scenario?: Record<string, any>;
   variables?: Record<string, any>;
+  vars?: Record<string, any>;
+  tags?: string[];
+  scenario_refs?: CampaignScenarioRefIn[];
+  account_group_id?: string | null;
+  scenario_account_id?: string | null;
+  per_device_accounts?: Record<string, string>;
   device_ids?: string[];
   target_group_id?: string | null;
 };
@@ -166,6 +228,8 @@ export type DlqStatus =
   | 'pending'
   | 'retrying'
   | 'resolved'
+  | 'replayed'
+  | 'closed'
   | 'failed'
   | 'dismissed'
   | 'unknown';
@@ -179,6 +243,25 @@ export type DlqEntry = {
   status: DlqStatus;
   last_attempt_at: string | null;
   created_at: string;
+  campaign_id?: string | null;
+  failed_step_id?: string | null;
+  failure_reason?: string | null;
+  failed_at?: string | null;
+  closed_by?: string | null;
+  closed_at?: string | null;
+  close_reason?: string | null;
+  replayed_to_execution_id?: string | null;
+  artifact_refs?: Record<string, string>;
+};
+
+export type DlqBulkRetryResult = {
+  dlq_id?: string | null;
+  execution_id?: string | null;
+  status: string;
+  reason?: string | null;
+  message?: string | null;
+  replayed_to_execution_id?: string | null;
+  entry_status?: string | null;
 };
 
 export type DlqSummary = {
@@ -198,7 +281,11 @@ export type ExecutionOut = {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+  device_config?: Record<string, unknown>;
+  meta?: Record<string, unknown>;
 };
+
+export type { ExecutionEventOut } from '../device-farm/services/generated/DeviceFarmApi';
 
 export type ExecutionArtifact = {
   artifact_type: string;

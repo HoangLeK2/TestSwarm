@@ -1,9 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   CheckSquare,
+  ChevronDown,
   Copy,
   KeyRound,
   Loader2,
@@ -44,6 +45,14 @@ import {
   TableHeader,
   TableRow
 } from '@/components/ui/table';
+import { Skeleton } from '@/components/ui/skeleton';
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger
+} from '@/components/ui/collapsible';
+import { TitleTooltip } from '@/components/title-tooltip';
+import { cn } from '@/lib/utils';
 import { RelayAgentStatusBadge } from '@/features/devices/components/relay-agent-status-badge';
 import {
   getRelayConnectionState,
@@ -61,7 +70,77 @@ import {
 } from '@/features/devices/services/manage-api';
 import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
 
-function RelayTokenSection({ tokens }: { tokens: RelayAgentTokenOut[] }) {
+function RelayTokenTableSkeleton() {
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>
+            <Skeleton className='h-3 w-12' />
+          </TableHead>
+          <TableHead>
+            <Skeleton className='h-3 w-14' />
+          </TableHead>
+          <TableHead className='hidden sm:table-cell'>
+            <Skeleton className='h-3 w-16' />
+          </TableHead>
+          <TableHead className='w-[72px]' />
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {[0, 1, 2].map((row) => (
+          <TableRow key={row}>
+            <TableCell>
+              <Skeleton className='h-4 w-20' />
+            </TableCell>
+            <TableCell>
+              <Skeleton className='h-4 w-28' />
+            </TableCell>
+            <TableCell className='hidden sm:table-cell'>
+              <Skeleton className='h-4 w-24' />
+            </TableCell>
+            <TableCell className='text-right'>
+              <Skeleton className='ml-auto size-8 rounded-md' />
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+}
+
+function RelayHostCardSkeleton() {
+  return (
+    <div className='flex flex-col gap-3 rounded-lg border border-border bg-card p-4'>
+      <div className='flex items-start justify-between gap-2'>
+        <div className='min-w-0 flex-1 space-y-2'>
+          <Skeleton className='h-4 w-40' />
+          <Skeleton className='h-5 w-24 rounded-full' />
+          <Skeleton className='h-3 w-28' />
+          <Skeleton className='h-3 w-48' />
+        </div>
+        <Skeleton className='h-6 w-20 rounded-full' />
+      </div>
+      <div className='flex flex-wrap gap-2'>
+        <Skeleton className='h-7 w-24 rounded-md' />
+        <Skeleton className='h-7 w-28 rounded-md' />
+        <Skeleton className='h-7 w-24 rounded-md' />
+      </div>
+      <Skeleton className='h-[88px] w-full rounded-md' />
+      <Skeleton className='h-3 w-44' />
+    </div>
+  );
+}
+
+function RelayTokenSection({
+  tokens,
+  isLoading,
+  hasHosts
+}: {
+  tokens: RelayAgentTokenOut[];
+  isLoading: boolean;
+  hasHosts: boolean;
+}) {
   const qc = useQueryClient();
   const t = useTranslations('relayAgentsFeature');
   const format = useFormatter();
@@ -74,6 +153,11 @@ function RelayTokenSection({ tokens }: { tokens: RelayAgentTokenOut[] }) {
     useState<RelayAgentTokenCreated | null>(null);
 
   const activeTokens = tokens.filter((token) => token.status === 'active');
+  const [sectionOpen, setSectionOpen] = useState(!hasHosts);
+
+  useEffect(() => {
+    if (hasHosts) setSectionOpen(false);
+  }, [hasHosts]);
 
   const { mutate: createToken, isPending: isCreating } = useMutation({
     mutationFn: () => relayAgentsApi.createToken({ name }),
@@ -103,87 +187,158 @@ function RelayTokenSection({ tokens }: { tokens: RelayAgentTokenOut[] }) {
     }
   };
 
+  const tokenHeader = (
+    <div className='flex min-w-0 flex-1 gap-3'>
+      <div className='flex size-9 shrink-0 items-center justify-center rounded-md bg-muted'>
+        <KeyRound className='size-4 text-muted-foreground' />
+      </div>
+      <div className='min-w-0 space-y-1'>
+        <h2 className='text-sm font-semibold'>{t('tokens')}</h2>
+        <div className='text-xs text-muted-foreground'>
+          <span>{t('tokensDescription')} </span>
+          <TitleTooltip
+            content={t('enrollmentEnvVarTooltip')}
+            showIcon
+            side='bottom'
+            align='start'
+            title={
+              <code className='rounded bg-muted px-1 py-0.5 text-[11px] font-medium text-foreground'>
+                {t('enrollmentEnvVar')}
+              </code>
+            }
+            wrapperClassName='inline-flex align-middle'
+            titleClassName='inline'
+          />
+        </div>
+        {hasHosts && !sectionOpen && (
+          <p className='text-xs text-muted-foreground'>
+            {isLoading
+              ? t('loading')
+              : t('tokensCollapsedSummary', { count: activeTokens.length })}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+
+  const tokenBody = (
+    <>
+      {isLoading ? (
+        <RelayTokenTableSkeleton />
+      ) : activeTokens.length === 0 ? (
+        <p className='p-4 text-sm text-muted-foreground'>
+          {t('noActiveTokens')}
+        </p>
+      ) : (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>{t('colTokenName')}</TableHead>
+              <TableHead>{t('colTokenPrefix')}</TableHead>
+              <TableHead className='hidden sm:table-cell'>
+                {t('colTokenCreated')}
+              </TableHead>
+              <TableHead className='w-[72px] text-right' />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {activeTokens.map((token) => (
+              <TableRow key={token.id}>
+                <TableCell className='font-medium'>
+                  {token.name?.trim() || '—'}
+                </TableCell>
+                <TableCell>
+                  <code className='rounded bg-muted px-1.5 py-0.5 text-xs'>
+                    {token.prefix}
+                  </code>
+                </TableCell>
+                <TableCell className='hidden text-muted-foreground sm:table-cell'>
+                  {token.created_at
+                    ? format.dateTime(new Date(token.created_at), {
+                        dateStyle: 'short',
+                        timeStyle: 'short'
+                      })
+                    : '—'}
+                </TableCell>
+                <TableCell className='text-right'>
+                  {perms.canDelete ? (
+                    <Button
+                      type='button'
+                      size='icon'
+                      variant='ghost'
+                      className='size-8 text-destructive hover:text-destructive'
+                      title={t('revokeToken')}
+                      disabled={isRevoking}
+                      onClick={() => setRevokeId(token.id)}
+                    >
+                      <Trash2 className='size-3.5' />
+                    </Button>
+                  ) : null}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+    </>
+  );
+
   return (
     <>
       <div className='rounded-lg border border-border bg-card'>
-        <div className='flex flex-col gap-4 border-b border-border p-4 sm:flex-row sm:items-start sm:justify-between'>
-          <div className='flex min-w-0 gap-3'>
-            <div className='flex size-9 shrink-0 items-center justify-center rounded-md bg-muted'>
-              <KeyRound className='size-4 text-muted-foreground' />
-            </div>
-            <div className='min-w-0 space-y-1'>
-              <h2 className='text-sm font-semibold'>{t('tokens')}</h2>
-              <p className='text-xs text-muted-foreground'>
-                {t('tokensDescription')}
-              </p>
-            </div>
-          </div>
-          {perms.canCreate ? (
-            <Button
-              size='sm'
-              className='shrink-0'
-              onClick={() => setCreateOpen(true)}
+        {hasHosts ? (
+          <Collapsible open={sectionOpen} onOpenChange={setSectionOpen}>
+            <div
+              className={cn(
+                'flex flex-col gap-4 p-4 sm:flex-row sm:items-start sm:justify-between',
+                sectionOpen && 'border-b border-border'
+              )}
             >
-              <Plus className='mr-1.5 size-3.5' />
-              {t('createToken')}
-            </Button>
-          ) : null}
-        </div>
-
-        {activeTokens.length === 0 ? (
-          <p className='p-4 text-sm text-muted-foreground'>
-            {t('noActiveTokens')}
-          </p>
+              <CollapsibleTrigger
+                type='button'
+                className='flex min-w-0 flex-1 items-start gap-2 rounded-md text-left outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring'
+                aria-label={
+                  sectionOpen ? t('hideTokensSection') : t('showTokensSection')
+                }
+              >
+                <ChevronDown
+                  className={cn(
+                    'mt-2 size-4 shrink-0 text-muted-foreground transition-transform',
+                    sectionOpen && 'rotate-180'
+                  )}
+                />
+                {tokenHeader}
+              </CollapsibleTrigger>
+              {perms.canCreate && sectionOpen ? (
+                <Button
+                  size='sm'
+                  className='shrink-0'
+                  onClick={() => setCreateOpen(true)}
+                >
+                  <Plus className='mr-1.5 size-3.5' />
+                  {t('createToken')}
+                </Button>
+              ) : null}
+            </div>
+            <CollapsibleContent>{tokenBody}</CollapsibleContent>
+          </Collapsible>
         ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t('colTokenName')}</TableHead>
-                <TableHead>{t('colTokenPrefix')}</TableHead>
-                <TableHead className='hidden sm:table-cell'>
-                  {t('colTokenCreated')}
-                </TableHead>
-                <TableHead className='w-[72px] text-right' />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {activeTokens.map((token) => (
-                <TableRow key={token.id}>
-                  <TableCell className='font-medium'>
-                    {token.name?.trim() || '—'}
-                  </TableCell>
-                  <TableCell>
-                    <code className='rounded bg-muted px-1.5 py-0.5 text-xs'>
-                      {token.prefix}
-                    </code>
-                  </TableCell>
-                  <TableCell className='hidden text-muted-foreground sm:table-cell'>
-                    {token.created_at
-                      ? format.dateTime(new Date(token.created_at), {
-                          dateStyle: 'short',
-                          timeStyle: 'short'
-                        })
-                      : '—'}
-                  </TableCell>
-                  <TableCell className='text-right'>
-                    {perms.canDelete ? (
-                      <Button
-                        type='button'
-                        size='icon'
-                        variant='ghost'
-                        className='size-8 text-destructive hover:text-destructive'
-                        title={t('revokeToken')}
-                        disabled={isRevoking}
-                        onClick={() => setRevokeId(token.id)}
-                      >
-                        <Trash2 className='size-3.5' />
-                      </Button>
-                    ) : null}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+          <>
+            <div className='flex flex-col gap-4 border-b border-border p-4 sm:flex-row sm:items-start sm:justify-between'>
+              {tokenHeader}
+              {perms.canCreate ? (
+                <Button
+                  size='sm'
+                  className='shrink-0'
+                  onClick={() => setCreateOpen(true)}
+                >
+                  <Plus className='mr-1.5 size-3.5' />
+                  {t('createToken')}
+                </Button>
+              ) : null}
+            </div>
+            {tokenBody}
+          </>
         )}
       </div>
 
@@ -405,9 +560,9 @@ function RelayAgentCard({
         </Badge>
       </div>
 
-      <div className='flex flex-wrap items-center gap-2'>
-        {perms.canExecute ? (
-          <>
+      {perms.canExecute ? (
+        <div className='flex flex-col gap-2'>
+          <div className='flex flex-wrap items-center gap-2'>
             <Button
               type='button'
               size='sm'
@@ -446,6 +601,8 @@ function RelayAgentCard({
             >
               {t('provisionAll')}
             </Button>
+          </div>
+          <div className='flex flex-wrap items-center gap-2'>
             <Button
               type='button'
               size='sm'
@@ -476,15 +633,15 @@ function RelayAgentCard({
                 claimConnectJob({ mode: 'all_visible', connect: true })
               }
             >
-          {t('registerConnectAll')}
-        </Button>
-          </>
-        ) : null}
-      </div>
+              {t('registerConnectAll')}
+            </Button>
+          </div>
+        </div>
+      ) : null}
 
       <div className='divide-y rounded-md border border-border'>
         {realSerials.length === 0 ? (
-          <div className='p-3 text-xs text-muted-foreground'>
+          <div className='flex min-h-[88px] items-center justify-center p-6 text-xs text-muted-foreground'>
             {t('noDevices')}
           </div>
         ) : (
@@ -583,11 +740,15 @@ export default function RelayAgentsPage() {
     queryFn: devicesApi.list,
     staleTime: 15_000
   });
-  const { data: tokens = [] } = useQuery<RelayAgentTokenOut[]>({
+  const { data: tokens = [], isLoading: isLoadingTokens } = useQuery<
+    RelayAgentTokenOut[]
+  >({
     queryKey: ['relay-agent-tokens'],
     queryFn: relayAgentsApi.listTokens,
     staleTime: 30_000
   });
+
+  const hasHosts = agents.length > 0;
 
   const connectedCount = agents.filter(
     (a) => getRelayConnectionState(a) === 'connected'
@@ -604,27 +765,37 @@ export default function RelayAgentsPage() {
 
   return (
     <div className='space-y-6'>
-      <div className='flex items-start gap-3'>
-        <Server className='mt-0.5 size-5 shrink-0 text-muted-foreground' />
-        <div className='min-w-0'>
-          <h1 className='text-xl font-semibold'>{t('title')}</h1>
-          <p className='text-sm text-muted-foreground'>{t('subtitle')}</p>
-          {!isLoading && agents.length > 0 && (
-            <p className='mt-1 text-sm text-muted-foreground'>
-              {t('onlineSummary', {
-                connected: connectedCount,
-                total: agents.length
-              })}
-            </p>
-          )}
+      <div className='flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between'>
+        <div className='flex items-start gap-3'>
+          <Server className='mt-0.5 size-5 shrink-0 text-muted-foreground' />
+          <div className='min-w-0'>
+            <h1 className='text-xl font-semibold'>{t('title')}</h1>
+            <p className='text-sm text-muted-foreground'>{t('subtitle')}</p>
+          </div>
         </div>
+        {!isLoading && agents.length > 0 && (
+          <Badge variant='outline' className='w-fit shrink-0 text-sm font-normal'>
+            {t('onlineSummary', {
+              connected: connectedCount,
+              total: agents.length
+            })}
+          </Badge>
+        )}
       </div>
 
-      {isLoading && (
-        <p className='text-sm text-muted-foreground'>{t('loading')}</p>
-      )}
+      <RelayTokenSection
+        tokens={tokens}
+        isLoading={isLoadingTokens}
+        hasHosts={hasHosts}
+      />
 
-      <RelayTokenSection tokens={tokens} />
+      {isLoading && (
+        <div className='grid gap-4 sm:grid-cols-2 lg:grid-cols-3'>
+          {[0, 1].map((i) => (
+            <RelayHostCardSkeleton key={i} />
+          ))}
+        </div>
+      )}
 
       {!isLoading && agents.length === 0 && (
         <div className='rounded-lg border border-dashed border-border p-12 text-center'>

@@ -11,6 +11,59 @@ export function formatFarmApiError(err: unknown, fallback: string): string {
     if (code === 'INVALID_CREDENTIALS') return 'Sai thông tin đăng nhập';
     if (code === 'ACCOUNT_LOCKED') return 'Tài khoản tạm khóa. Thử lại sau.';
     if (code === 'ORG_DISABLED') return 'Tổ chức đã bị vô hiệu hóa.';
+    if (code === 'ACCOUNT_NOT_BOUND') {
+      const hint = (d as { hint?: string }).hint;
+      return hint
+        ? `Kịch bản cần tài khoản nhưng chiến dịch chưa gắn. ${hint}`
+        : 'Kịch bản cần tài khoản nhưng chiến dịch chưa gắn tài khoản.';
+    }
+    if (code === 'ACCOUNT_NOT_FOUND') {
+      return 'Tài khoản hoặc nhóm tài khoản không thuộc tổ chức này.';
+    }
+    if (code === 'ACCOUNT_UNAVAILABLE') {
+      return 'Tài khoản không khả dụng (bị treo hoặc đang cooldown).';
+    }
+    if (code === 'INVALID_TRANSITION') {
+      const msg = (d as { message?: string }).message;
+      return msg || 'Chuyển trạng thái campaign không hợp lệ.';
+    }
+    if (code === 'CAMPAIGN_LOCKED') {
+      const msg = (d as { message?: string }).message;
+      return msg || 'Campaign không thể sửa nội dung ở trạng thái hiện tại.';
+    }
+    if (code === 'SCENARIO_REQUIRED') {
+      const msg = (d as { message?: string }).message;
+      return msg?.trim() || 'Chiến dịch phải gắn ít nhất một kịch bản từ thư viện.';
+    }
+    if (code === 'NO_ORGANIZATION') {
+      return 'Tài khoản chưa thuộc tổ chức — không thể tạo chiến dịch theo thư viện kịch bản.';
+    }
+    if (code === 'CAMPAIGN_RUNNING') {
+      return 'Campaign đang chạy — hãy hủy trước khi xóa.';
+    }
+    if (code === 'CAMPAIGN_ALREADY_RUNNING') {
+      return 'Campaign đang chạy — không thể dispatch lại.';
+    }
+    if (code === 'EMPTY_DISPATCH_TARGET') {
+      return 'Chưa chọn thiết bị hoặc nhóm thiết bị hợp lệ để chạy.';
+    }
+    if (code === 'DEVICE_OFFLINE') {
+      const ids = (d as { details?: { device_ids?: string[] } }).details
+        ?.device_ids;
+      if (ids?.length) {
+        return `Thiết bị offline: ${ids.length} thiết bị không sẵn sàng.`;
+      }
+      return 'Một hoặc nhiều thiết bị đang offline.';
+    }
+    if (code === 'DEVICE_NOT_FOUND') {
+      return 'Không tìm thấy thiết bị trong tổ chức.';
+    }
+    if (code === 'DISPATCH_TARGET_TOO_LARGE') {
+      return 'Số thiết bị vượt giới hạn cho phép.';
+    }
+    if (code === 'OVERRIDE_PAYLOAD_TOO_LARGE') {
+      return 'Dữ liệu override theo thiết bị vượt giới hạn cho phép.';
+    }
     if (code === 'TOO_MANY_REQUESTS') {
       return 'Bạn đang gửi yêu cầu quá nhanh. Vui lòng đợi vài giây rồi thử lại.';
     }

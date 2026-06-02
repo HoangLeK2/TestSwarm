@@ -80,6 +80,7 @@ const ICON_MAP: Record<string, React.ComponentType<LucideProps>> = {
   extract_screen_data: Search,
   if: GitBranch,
   break_if: GitBranch,
+  fb_tap_comment_button: GitBranch,
   tap_fb_comment_button: GitBranch,
   extract_fb_comments: Search,
   extract_fb_posts: Search
@@ -131,6 +132,7 @@ const COLOR_MAP: Record<string, string> = {
   extract_screen_data: 'text-fuchsia-500',
   if: 'text-amber-500',
   break_if: 'text-amber-500',
+  fb_tap_comment_button: 'text-blue-600',
   tap_fb_comment_button: 'text-blue-600',
   extract_fb_comments: 'text-fuchsia-500',
   extract_fb_posts: 'text-fuchsia-500'

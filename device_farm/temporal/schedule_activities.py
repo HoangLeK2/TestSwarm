@@ -68,11 +68,17 @@ class ScheduleActivities:
                 "max_devices": schedule.max_devices,
                 "cron_expression": schedule.cron_expression,
                 "timezone": schedule.timezone,
+                "schedule_kind": getattr(schedule, "schedule_kind", "cron"),
+                "run_at": getattr(schedule, "run_at", None),
+                "skip_dates": getattr(schedule, "skip_dates", []) or [],
+                "skip_windows": getattr(schedule, "skip_windows", []) or [],
+                "misfire_policy": getattr(schedule, "misfire_policy", "skip"),
                 "random_delay_min": schedule.random_delay_min,
                 "random_delay_max": schedule.random_delay_max,
                 "stagger_devices": schedule.stagger_devices,
                 "stagger_interval_seconds": schedule.stagger_interval_seconds,
                 "is_enabled": schedule.is_enabled,
+                "org_id": getattr(schedule, "org_id", None),
             }
 
     @activity.defn
@@ -83,7 +89,13 @@ class ScheduleActivities:
 
         activity.heartbeat("create_run_record")
         async with AsyncSessionLocal() as db:
-            run = await create_schedule_run(db, schedule_id=schedule_id, status="pending")
+            run = await create_schedule_run(
+                db,
+                schedule_id=schedule_id,
+                status="pending",
+                trigger_source="temporal",
+                scheduled_at=datetime.now(timezone.utc),
+            )
             await db.commit()
             return run.id
 
@@ -292,8 +304,7 @@ class ScheduleActivities:
         Idempotent: safe to call multiple times.
         """
         from db.database import activity_session as AsyncSessionLocal
-        from db.crud.schedule import update_schedule_run, update_schedule_after_run
-        from datetime import timezone as tz
+        from services.scheduler import finalize_schedule_run_record
 
         activity.heartbeat("finalize_run")
         # Capture finalization time once. This is used as finished_at and as the
@@ -313,21 +324,21 @@ class ScheduleActivities:
         status = "failed" if normalized.error else "completed"
 
         async with AsyncSessionLocal() as db:
-            await update_schedule_run(
+            await finalize_schedule_run_record(
                 db,
-                run_id,
+                run_id=run_id,
+                schedule_id=schedule_id,
                 status=status,
                 finished_at=finished_at,
-                devices_dispatched=normalized.devices_dispatched,
-                task_ids=normalized.task_ids,
+                dispatch_result={
+                    "devices_dispatched": normalized.devices_dispatched,
+                    "task_ids": normalized.task_ids,
+                    "workflow_ids": normalized.workflow_ids,
+                },
+                cron_expression=cron_expression,
+                timezone_name=timezone_name,
+                error_code="DISPATCH_FAILED" if normalized.error else None,
                 error_message=normalized.error,
-            )
-            next_run = _compute_next_run(cron_expression, timezone_name, finished_at)
-            await update_schedule_after_run(
-                db,
-                schedule_id,
-                last_run_at=finished_at,
-                next_run_at=next_run,
             )
             await db.commit()
 

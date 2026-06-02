@@ -1,11 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import {
   CheckCircle2,
   XCircle,
   Pause,
+  Play,
+  Square,
   Loader2,
   Clock,
   ChevronDown,
@@ -19,12 +21,23 @@ import {
 import { cn } from '@/lib/utils';
 import { Progress } from '@/components/ui/progress';
 import { Button } from '@/components/ui/button';
+import { toast } from 'sonner';
 import { DeviceControlEmbed } from '@/features/devices/components/device-control-embed';
-import { useWorkflowProgress, useStepAction } from '../../hooks/use-campaigns';
-import type { WorkflowInfo } from '../../types';
+import {
+  useStepAction,
+  useWorkflowCancel,
+  useWorkflowPause,
+  useWorkflowProgress,
+  useWorkflowResume
+} from '../../hooks/use-campaigns';
+import { useExecutionEventStream } from '../../hooks/use-execution-event-stream';
+import { resolveExecutionIdForWorkflow } from '../../lib/execution-event-utils';
+import type { ExecutionOut, WorkflowInfo } from '../../types';
 import { useCampaignFlowI18n } from '../flow-editor/flow-i18n';
 import { WorkflowStepList } from '../workflow-step-list';
 import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
+import { formatFarmApiError } from '@/lib/format-farm-api-error';
+import { useConfirm } from '@/providers/modal-provider';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -137,10 +150,17 @@ function StepDots({ current, total }: { current: number; total: number }) {
 interface Props {
   wf: WorkflowInfo;
   campaignId: string;
+  executions?: ExecutionOut[];
 }
 
-export function WorkflowProgressCard({ wf, campaignId }: Props) {
+export function WorkflowProgressCard({
+  wf,
+  campaignId,
+  executions = []
+}: Props) {
   const t = useTranslations('campaignsFeature.list');
+  const tCommon = useTranslations('common');
+  const confirm = useConfirm();
   const { canExecute } = useResourcePermissions('campaigns');
   const { getStepTypeName } = useCampaignFlowI18n();
   const [expanded, setExpanded] = useState(false);
@@ -150,11 +170,41 @@ export function WorkflowProgressCard({ wf, campaignId }: Props) {
     wf.status === 'RUNNING' ||
     wf.status === 'PAUSED' ||
     wf.status === 'paused_on_error';
-  const { data: prog } = useWorkflowProgress(wf.workflow_id, isActive);
-  const stepAction = useStepAction(campaignId);
 
-  const serial = parseSerial(wf.workflow_id);
+  const executionId = useMemo(
+    () => resolveExecutionIdForWorkflow(wf.workflow_id, executions),
+    [wf.workflow_id, executions]
+  );
+
+  const serial = useMemo(() => {
+    const fromWorkflow = parseSerial(wf.workflow_id);
+    if (!wf.workflow_id.startsWith('exec_')) return fromWorkflow;
+    const ex = executions.find((e) => e.id === executionId);
+    const cfg = (ex?.device_config ?? {}) as Record<string, unknown>;
+    return String(cfg.device_serial ?? fromWorkflow);
+  }, [wf.workflow_id, executions, executionId]);
+
   const scenarioId = parseScenarioId(wf.workflow_id);
+
+  const eventStream = useExecutionEventStream(executionId, {
+    enabled: isActive && !!executionId,
+    workflowId: wf.workflow_id,
+    deviceSerial: serial
+  });
+
+  const pollProgress = useWorkflowProgress(
+    wf.workflow_id,
+    isActive && !eventStream.connected
+  );
+  const prog = eventStream.progress ?? pollProgress.data;
+  const stepAction = useStepAction(campaignId);
+  const workflowPause = useWorkflowPause();
+  const workflowResume = useWorkflowResume();
+  const workflowCancel = useWorkflowCancel();
+  const controlPending =
+    workflowPause.isPending ||
+    workflowResume.isPending ||
+    workflowCancel.isPending;
 
   const current = prog?.current_step ?? 0;
   const total = prog?.total_steps ?? 0;
@@ -177,6 +227,28 @@ export function WorkflowProgressCard({ wf, campaignId }: Props) {
     (prog?.status === 'paused_on_error' || wf.status === 'paused_on_error');
   const errorMessage =
     prog?.error_message || (isPausedOnError ? message : null);
+
+  const showWorkflowPause = wf.status === 'RUNNING';
+  const showWorkflowResume = wf.status === 'PAUSED';
+  const showWorkflowCancel =
+    wf.status === 'RUNNING' || wf.status === 'PAUSED';
+
+  const handleWorkflowCancel = async () => {
+    const ok = await confirm({
+      title: t('monitorWfCancelTitle'),
+      description: `${t('monitorWfCancelConfirm')}\n\n${t('cancelUndoWarning')}`,
+      confirmText: tCommon('confirm'),
+      cancelText: tCommon('cancel'),
+      confirmVariant: 'destructive',
+      zIndex: 10_000
+    });
+    if (!ok) return;
+    workflowCancel.mutate(wf.workflow_id, {
+      onSuccess: () => toast.success(t('monitorWfCancelSuccess')),
+      onError: (err) =>
+        toast.error(formatFarmApiError(err, t('cancelFailed')))
+    });
+  };
 
   // When the status transitions back to running (after retry/skip was acknowledged by
   // the server) reset dismissed so the bar can reappear if the workflow errors again.
@@ -217,6 +289,14 @@ export function WorkflowProgressCard({ wf, campaignId }: Props) {
               title={scenarioId}
             >
               #{scenarioId.slice(0, 8)}
+            </span>
+          )}
+          {eventStream.connected && (
+            <span
+              className='shrink-0 rounded-full bg-green-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-green-600 dark:text-green-400'
+              title={t('monitorEventStreamLive')}
+            >
+              {t('monitorEventStreamLive')}
             </span>
           )}
           <StatusBadge status={wf.status} />
@@ -284,6 +364,63 @@ export function WorkflowProgressCard({ wf, campaignId }: Props) {
           </p>
         )}
       </button>
+
+      {canExecute && !isPausedOnError && (showWorkflowPause || showWorkflowResume || showWorkflowCancel) ? (
+        <div
+          className='flex items-center gap-1.5 border-t bg-muted/20 px-4 py-1.5'
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          {showWorkflowPause ? (
+            <Button
+              size='sm'
+              variant='outline'
+              className='h-6 gap-1 px-2 text-[10px]'
+              disabled={controlPending}
+              onClick={() =>
+                workflowPause.mutate(wf.workflow_id, {
+                  onSuccess: () => toast.info(t('monitorWfPauseSuccess')),
+                  onError: (err) =>
+                    toast.error(formatFarmApiError(err, t('runFailed')))
+                })
+              }
+            >
+              <Pause size={10} />
+              {t('titlePause')}
+            </Button>
+          ) : null}
+          {showWorkflowResume ? (
+            <Button
+              size='sm'
+              variant='outline'
+              className='h-6 gap-1 px-2 text-[10px] text-green-600 hover:text-green-600'
+              disabled={controlPending}
+              onClick={() =>
+                workflowResume.mutate(wf.workflow_id, {
+                  onSuccess: () => toast.info(t('monitorWfResumeSuccess')),
+                  onError: (err) =>
+                    toast.error(formatFarmApiError(err, t('runFailed')))
+                })
+              }
+            >
+              <Play size={10} />
+              {t('titleResume')}
+            </Button>
+          ) : null}
+          {showWorkflowCancel ? (
+            <Button
+              size='sm'
+              variant='ghost'
+              className='h-6 gap-1 px-2 text-[10px] text-destructive hover:text-destructive'
+              disabled={controlPending}
+              onClick={() => void handleWorkflowCancel()}
+            >
+              <Square size={10} />
+              {t('titleCancel')}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
 
       {/* ── Retry / Skip bar (shown when paused on error) ── */}
       {isPausedOnError && canExecute && (
@@ -355,6 +492,19 @@ export function WorkflowProgressCard({ wf, campaignId }: Props) {
               <WorkflowStepList
                 wf={wf}
                 maxHeight='min(560px, calc(90dvh - 320px))'
+                sseStepLog={eventStream.stepLog}
+                sseConnected={eventStream.connected}
+                liveProgress={
+                  eventStream.connected
+                    ? {
+                        current_step: current,
+                        total_steps: total,
+                        current_step_type: stepType,
+                        message,
+                        loop_iteration: loopIter
+                      }
+                    : undefined
+                }
               />
             </div>
           </div>

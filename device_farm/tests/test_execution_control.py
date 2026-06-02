@@ -36,6 +36,43 @@ def _execution(
 
 
 @pytest.mark.asyncio
+async def test_emit_execution_event_enqueues_and_logs_activity():
+    db = AsyncMock()
+    ex = _execution(status="paused", meta={"org_id": "org-1"})
+    event_row = SimpleNamespace(event_id="evt-1")
+
+    with patch(
+        "services.execution.event_publisher.enqueue_execution_event",
+        AsyncMock(return_value=event_row),
+    ) as enqueue:
+        with patch(
+            "services.execution_control.log_activity",
+            AsyncMock(),
+        ) as activity:
+            with patch(
+                "services.execution_control._resolve_org_id",
+                AsyncMock(return_value="org-1"),
+            ):
+                with patch("services.webhook_dispatcher.dispatch_webhook", AsyncMock()):
+                    from services.execution_control import _emit_execution_event
+
+                    await _emit_execution_event(
+                        db,
+                        ex,
+                        "execution.paused",
+                        user_id="user-1",
+                        before_status="running",
+                        details={"workflows_signalled": 1},
+                    )
+
+    enqueue.assert_awaited_once()
+    assert enqueue.await_args.kwargs["event_type"] == "execution.paused"
+    activity.assert_awaited_once()
+    assert activity.await_args.kwargs["before_state"] == {"status": "running"}
+    assert activity.await_args.kwargs["event_id"] == "evt-1"
+
+
+@pytest.mark.asyncio
 async def test_pause_completed_rejected():
     db = AsyncMock()
     ex = _execution(status="completed")

@@ -1,0 +1,35 @@
+diff --git a/dist/index.js b/dist/index.js
+index 5ba7a95bc7a29605f32aa010a14224ad87bf6589..ac7f662d68356b795c06e0b796c7fb5c24366963 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -69,6 +69,11 @@ function composeRefs(...refs) {
+   };
+ }
+ function useComposedRefs(...refs) {
+-  return React.useCallback(composeRefs(...refs), refs);
++  const refsRef = React.useRef(refs);
++  refsRef.current = refs;
++  return React.useCallback(
++    (node) => composeRefs(...refsRef.current)(node),
++    []
++  );
+ }
+ //# sourceMappingURL=index.js.map
+diff --git a/dist/index.mjs b/dist/index.mjs
+index 7dd9172a7228d70a25f708d0fd577cfc69ea15a8..89eaa0eeeb35faf7800cc71e33a6c6e5076eb450 100644
+--- a/dist/index.mjs
++++ b/dist/index.mjs
+@@ -32,7 +32,12 @@ function composeRefs(...refs) {
+   };
+ }
+ function useComposedRefs(...refs) {
+-  return React.useCallback(composeRefs(...refs), refs);
++  const refsRef = React.useRef(refs);
++  refsRef.current = refs;
++  return React.useCallback(
++    (node) => composeRefs(...refsRef.current)(node),
++    []
++  );
+ }
+ export {
+   composeRefs,

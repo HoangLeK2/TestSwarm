@@ -170,8 +170,8 @@ Module này không phụ thuộc platform social — agent chỉ cung cấp kên
 | Helper STF cho thao tác mức thấp | Active |
 | Trang `/dashboard/relay-agents` cho theo dõi | Active |
 | Bulk bootstrap thiết bị mới | Active |
-| TLS bắt buộc cho gRPC relay | Roadmap (xem mục 8) |
-| Per-agent identity và rotation cho relay key | Roadmap (xem mục 8) |
+| TLS cho gRPC relay | Active khi cấu hình `RELAY_TLS_CERT_FILE` / `RELAY_TLS_KEY_FILE`; agent bật bằng `grpcs://`, `RELAY_GRPC_TLS` hoặc `RELAY_GRPC_ROOT_CERT_FILE` |
+| Per-agent identity và token revoke | Active cho enrollment token, owner scope và reject token revoke khi đăng ký lại |
 | Hot standby / leader election cho agent trên cùng host | Roadmap |
 | Cảnh báo proactive khi tỷ lệ DEAD vượt ngưỡng | Đang phát triển |
 
@@ -179,9 +179,9 @@ Module này không phụ thuộc platform social — agent chỉ cung cấp kên
 
 Module này là biên giữa cloud và thiết bị vật lý nên các giới hạn và rủi ro tại đây có ảnh hưởng vận hành đáng kể. Phần này minh bạch để có cơ sở lập kế hoạch triển khai phù hợp.
 
-**Quan trọng — Kênh gRPC relay hiện chưa bật TLS.** Hôm nay kênh gRPC relay đang chạy ở chế độ không mã hóa (insecure). Đây là một hạn chế bảo mật đã được team ghi nhận và đặt ưu tiên cao trong roadmap hardening. Với use case yêu cầu bảo mật cao, khuyến cáo đặt kênh gRPC sau một lớp VPN hoặc network overlay (ví dụ Tailscale, như đã liệt kê tại Capability Matrix), hoặc chuyển sang transport WebSocket có TLS qua reverse proxy. Bật TLS cho gRPC là hạng mục P0 trong roadmap.
+**Quan trọng — gRPC relay mặc định vẫn cho phép insecure ở môi trường local/dev.** Backend đã hỗ trợ TLS bằng `RELAY_TLS_CERT_FILE` và `RELAY_TLS_KEY_FILE`, đồng thời có thể chặn insecure gRPC ở production/staging bằng `RELAY_ALLOW_INSECURE_GRPC=false`. Agent bật TLS bằng `grpcs://`, `RELAY_GRPC_TLS=true` hoặc `RELAY_GRPC_ROOT_CERT_FILE`. Với use case yêu cầu bảo mật cao, vẫn khuyến cáo chạy qua VPN/network overlay khi chưa có PKI vận hành đầy đủ.
 
-**Quan trọng — Sử dụng API key tĩnh dùng chung cho mọi relay agent.** Hiện nay tất cả các relay agent xác thực với backend bằng cùng một API key (RELAY_API_KEY). Chưa có cơ chế cấp key riêng cho từng agent và chưa có rotation định kỳ. Khi một key bị lộ, cách xử lý duy nhất là đổi key chung và khởi động lại toàn bộ agent — không thể thu hồi key của riêng một agent. Team đang thiết kế mô hình per-agent identity với revocation list lưu trong database; hạng mục này nằm trong roadmap hardening P0.
+**Quan trọng — RELAY_API_KEY vẫn là shared transport key, nhưng relay identity đã có enrollment token riêng.** Relay agent gửi enrollment token trên control channel để backend resolve owner, organization và token version. Token bị revoke sẽ bị reject khi đăng ký lại và các API relay được scope theo owner/org. Hạn chế còn lại: revoke token chưa cưỡng bức ngắt control stream đang active; cần restart hoặc reconnect để áp dụng ngay.
 
 **Quan trọng — Mỗi máy host chạy một agent-boot duy nhất; mất agent kéo theo toàn bộ thiết bị trên host offline.** Mô hình hiện tại là một host vận hành đúng một tiến trình agent-boot, đa hợp lệnh và kết quả của tất cả thiết bị gắn vào host đó qua kênh truyền duy nhất. Nếu tiến trình agent crash hoặc treo, toàn bộ thiết bị trên host đó cùng lúc offline khỏi fleet. Hệ thống tự khởi động lại agent theo cấu hình supervisor, nhưng mọi phiên đang chạy giữa chừng đều bị gián đoạn. Mô hình hot standby hoặc leader election chưa có; đây là hạn chế đã biết về single-point-of-failure ở cấp host. Khi vận hành ở quy mô lớn, nên phân bổ thiết bị quan trọng trên nhiều host để giảm rủi ro.
 

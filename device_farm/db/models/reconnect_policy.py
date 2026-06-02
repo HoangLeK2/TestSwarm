@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, Float, Integer, String
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from db.database import Base
@@ -14,7 +14,11 @@ from .utils import _now
 class ReconnectPolicy(Base):
     __tablename__ = "reconnect_policies"
 
-    org_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    org_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("organizations.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
     interval_base_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=1000)
     max_interval_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=60000)
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=20)

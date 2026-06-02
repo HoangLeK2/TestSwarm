@@ -149,3 +149,22 @@ def test_capture_comments_when_sheet_or_inline(capture_path: Path) -> None:
         return
 
     assert reason == "not_comment_sheet", capture_path
+
+
+@pytest.mark.skipif(
+    not (
+        _CAPTURES_ROOT / "10AE7S00HD002JK_2026-05-28_231945" / "step_000_tap_fb_comment_button_pre_hierarchy.xml"
+    ).is_file(),
+    reason="local capture fixture missing",
+)
+def test_low_action_bar_comment_button_resolves() -> None:
+    """Regression: action bar at y≈2650 on 2800px Vivo must not be band-filtered away."""
+    path = (
+        _CAPTURES_ROOT
+        / "10AE7S00HD002JK_2026-05-28_231945"
+        / "step_000_tap_fb_comment_button_pre_hierarchy.xml"
+    )
+    _, diag = _parse_items("fb_comment_target", path.read_text(encoding="utf-8"), {})
+    assert diag["reason_code"] == "ok"
+    _top, ranked = resolve_comment_targets_from_xml(path.read_text(encoding="utf-8"))
+    assert any(c["comment_bounds"][1] >= 2600 for c in ranked)

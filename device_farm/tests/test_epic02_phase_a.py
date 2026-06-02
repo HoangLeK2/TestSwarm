@@ -20,7 +20,7 @@ from db.models.enums import DeviceFsmEvent
 from db.models.tenant_settings import TenantSettings
 from services.device_reserve.service import auto_release_expired_sessions, claim_device_session
 from services.device_state.service import DeviceStateService
-from tenancy.context import set_current_org_id
+from tenancy.context import clear_current_org_id, set_current_org_id
 
 
 ORG_ID = "org-epic02-a"
@@ -245,6 +245,38 @@ async def test_auto_release_after_idle(session_factory):
         await db.commit()
 
     set_current_org_id(ORG_ID)
+    async with session_factory() as db:
+        released = await auto_release_expired_sessions(db)
+        await db.commit()
+        assert released == 1
+
+    async with session_factory() as db:
+        row = await get_active_session(db, device_id)
+        assert row is None
+
+
+@pytest.mark.asyncio
+async def test_auto_release_without_request_tenant_context(session_factory):
+    """Background worker must set tenant scope from session.org_id."""
+    await _seed_org(session_factory)
+    device_id = await _online_device(session_factory)
+    set_current_org_id(ORG_ID)
+    async with session_factory() as db:
+        await claim_device_session(
+            db,
+            device_id=device_id,
+            org_id=ORG_ID,
+            actor_user_id=USER_A,
+            owner_type="manual",
+            owner_id=USER_A,
+            ttl_sec=600,
+        )
+        row = await get_active_session(db, device_id)
+        assert row is not None
+        row.last_heartbeat = NOW - timedelta(seconds=310)
+        await db.commit()
+
+    clear_current_org_id()
     async with session_factory() as db:
         released = await auto_release_expired_sessions(db)
         await db.commit()

@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from api.schemas.scenario import FlowNodeModel, FlowEdgeModel
 from api.schemas.scenario_validation import ScenarioValidationSummaryOut
+from api.schemas.campaign_entity import CampaignScenarioRefIn
 
 
 class ScenarioCreate(BaseModel):
@@ -79,6 +80,13 @@ class CampaignCreate(BaseModel):
     description: str = ""
     scenario: dict = {}
     variables: dict = {}
+    vars: dict | None = None
+    per_device_overrides: dict[str, dict] | None = None
+    account_group_id: Optional[str] = None
+    scenario_account_id: Optional[str] = None
+    per_device_accounts: dict[str, str] = Field(default_factory=dict)
+    tags: list[str] | None = None
+    scenario_refs: list[CampaignScenarioRefIn] | None = None
     device_ids: list[str] = []
     target_group_id: Optional[str] = None  # DF-004
 

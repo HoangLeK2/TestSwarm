@@ -1,6 +1,5 @@
 import { farmApi, deviceFarmBackendBase } from '@/lib/farm-api';
 import { filenameFromContentDisposition } from '@/features/content/lib/download';
-import { tokenStorage } from '@/lib/token-storage';
 
 export interface ContentItem {
   id: string;
@@ -88,42 +87,63 @@ export interface ContentStats {
 
 export type ExportFormat = 'csv' | 'xlsx';
 
+function artifactApiPath(resolvedUrl: string): string {
+  const base = deviceFarmBackendBase;
+  if (resolvedUrl.startsWith(base)) {
+    const rest = resolvedUrl.slice(base.length);
+    if (rest.startsWith('/api/')) return rest.slice(4);
+    if (rest.startsWith('/api')) return rest.slice(4) || '/';
+    return rest.startsWith('/') ? rest : `/${rest}`;
+  }
+  if (resolvedUrl.startsWith('/api/')) return resolvedUrl.slice(4);
+  if (resolvedUrl.startsWith('/')) return resolvedUrl;
+  return resolvedUrl;
+}
+
 export const contentApi = {
   /**
-   * Trigger a streaming download of the current filtered content.
-   * Opens the URL directly so the browser handles the file download.
+   * Stream export via backend `/api/content/export/stream`.
+   * Returns blob for caller to download (service layer — no fetch in components).
    */
   exportStream: async (
     filters: ContentFilters,
     format: ExportFormat
-  ): Promise<void> => {
-    const params = new URLSearchParams({ format });
-    if (filters.collection) params.set('collection', filters.collection);
-    if (filters.platform) params.set('platform', filters.platform);
-    if (filters.content_type) params.set('content_type', filters.content_type);
-    if (filters.search) params.set('search', filters.search);
-    if (filters.device_serial)
-      params.set('device_serial', filters.device_serial);
-    if (filters.campaign_id) params.set('campaign_id', filters.campaign_id);
-    if (filters.run_id) params.set('execution_id', filters.run_id);
-    const url = `${deviceFarmBackendBase}/api/content/export/stream?${params.toString()}`;
-    const token = tokenStorage.getAuthToken();
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined
+  ): Promise<{ blob: Blob; filename: string }> => {
+    const params: Record<string, string> = { format };
+    if (filters.collection) params.collection = filters.collection;
+    if (filters.platform) params.platform = filters.platform;
+    if (filters.content_type) params.content_type = filters.content_type;
+    if (filters.search) params.search = filters.search;
+    if (filters.device_serial) params.device_serial = filters.device_serial;
+    if (filters.campaign_id) params.campaign_id = filters.campaign_id;
+    if (filters.run_id) params.execution_id = filters.run_id;
+
+    const response = await farmApi.get<Blob>('/content/export/stream', {
+      params,
+      responseType: 'blob'
     });
+    const disposition = response.headers['content-disposition'] as
+      | string
+      | undefined;
+    const filename =
+      filenameFromContentDisposition(disposition) ??
+      `content-export.${format}`;
+    return { blob: response.data as Blob, filename };
+  },
 
-    if (!response.ok) {
-      throw new Error(`Export failed with status ${response.status}`);
-    }
+  fetchArtifactText: async (resolvedUrl: string): Promise<string> => {
+    const path = artifactApiPath(resolvedUrl);
+    const response = await farmApi.get<string>(path, {
+      responseType: 'text' as 'json',
+      transformResponse: [(data: string) => data]
+    });
+    return String(response.data ?? '');
+  },
 
-    const blob = await response.blob();
-    const objectUrl = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = objectUrl;
-    a.download = `content-export.${format}`;
-    a.click();
-    URL.revokeObjectURL(objectUrl);
+  fetchArtifactBlob: async (resolvedUrl: string): Promise<Blob> => {
+    const path = artifactApiPath(resolvedUrl);
+    const response = await farmApi.get<Blob>(path, { responseType: 'blob' });
+    return response.data as Blob;
   },
 
   list: async (filters?: ContentFilters): Promise<ContentListResponse> => {

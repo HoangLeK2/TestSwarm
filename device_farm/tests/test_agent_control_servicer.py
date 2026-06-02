@@ -118,3 +118,57 @@ async def test_restart_scrcpy_no_conn_returns_error():
     svc = AgentControlServicer()
     result = await svc.restart_scrcpy("nonexistent", timeout=1.0)
     assert result["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_start_grpc_server_wires_control_persistence_callbacks(monkeypatch):
+    from runtime.transports import grpc_relay_server
+    from runtime.transports.agent_control_servicer import get_control_servicer
+
+    class _FakeServer:
+        def __init__(self) -> None:
+            self.started = False
+
+        def add_insecure_port(self, _addr: str) -> int:
+            return 1
+
+        async def start(self) -> None:
+            self.started = True
+
+    fake_server = _FakeServer()
+
+    monkeypatch.setattr(grpc_relay_server.aio, "server", lambda **_kwargs: fake_server)
+    monkeypatch.setattr(
+        grpc_relay_server.relay_pb2_grpc,
+        "add_RelayServiceServicer_to_server",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        grpc_relay_server.relay_pb2_grpc,
+        "add_AgentControlServiceServicer_to_server",
+        lambda *_args, **_kwargs: None,
+    )
+
+    async def on_register(_payload: dict) -> bool:
+        return True
+
+    async def on_heartbeat(_payload: dict) -> None:
+        return None
+
+    async def on_offline(_relay_id: str) -> None:
+        return None
+
+    server = await grpc_relay_server.start_grpc_server(
+        relay_manager=object(),
+        api_key="relay-key",
+        port=0,
+        control_callbacks=(on_register, on_heartbeat, on_offline),
+    )
+
+    svc = get_control_servicer()
+    assert server is fake_server
+    assert fake_server.started is True
+    assert svc is not None
+    assert svc._on_register is on_register
+    assert svc._on_heartbeat is on_heartbeat
+    assert svc._on_offline is on_offline

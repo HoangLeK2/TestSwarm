@@ -25,6 +25,7 @@ from services.device_reserve.exceptions import (
 from services.device_state.exceptions import DeviceNotAvailableError, IllegalDeviceTransitionError
 from services.device_state.service import ApplyOutcome, DeviceStateService
 from services.security_audit import emit_security_event
+from tenancy.context import use_tenant_scope
 
 log = logging.getLogger(__name__)
 
@@ -283,20 +284,21 @@ async def session_is_expired(
     return expired_idle or expired_ttl, int(idle_seconds)
 
 
-async def auto_release_expired_sessions(
+async def try_auto_release_session(
     db: AsyncSession,
+    session_id: str,
     *,
-    limit: int = 200,
     now: datetime | None = None,
-) -> int:
-    """Release timed-out sessions; returns count released."""
+) -> bool:
+    """Release one session if expired. Returns True when released."""
     ts = now or datetime.now(timezone.utc)
-    candidates = await reserve_repo.list_expired_active_sessions(db, limit=limit, now=ts)
-    released = 0
-    for session in candidates:
+    session = await reserve_repo.get_session_by_id(db, session_id)
+    if session is None or session.released_at is not None:
+        return False
+    with use_tenant_scope(session.org_id):
         expired, idle_seconds = await session_is_expired(db, session, now=ts)
         if not expired:
-            continue
+            return False
         try:
             await release_device_session(
                 db,
@@ -308,12 +310,33 @@ async def auto_release_expired_sessions(
                 reason=DeviceReserveReleaseReason.TIMEOUT.value,
                 audit_action="session.auto_released",
             )
-            released += 1
         except Exception:
             log.warning(
-                "auto_release failed session=%s device=%s",
+                "auto_release failed session=%s device=%s idle_seconds=%s",
                 session.id,
                 session.device_id,
+                idle_seconds,
                 exc_info=True,
             )
+            raise
+    return True
+
+
+async def auto_release_expired_sessions(
+    db: AsyncSession,
+    *,
+    limit: int = 200,
+    now: datetime | None = None,
+) -> int:
+    """Release timed-out sessions; returns count released."""
+    ts = now or datetime.now(timezone.utc)
+    candidates = await reserve_repo.list_expired_active_sessions(db, limit=limit, now=ts)
+    released = 0
+    for session in candidates:
+        try:
+            if await try_auto_release_session(db, session.id, now=ts):
+                released += 1
+        except Exception:
+            # DB errors abort the transaction; stop the batch so the caller can rollback.
+            break
     return released

@@ -1,5 +1,13 @@
 import { farmApi } from '@/lib/farm-api';
 import type {
+  CampaignDispatchIn,
+  CampaignDispatchOut,
+  CampaignEntityOut,
+  CampaignEntityUpdate,
+  CampaignScenarioRefIn,
+  CampaignAccountBindIn
+} from '../../device-farm/services/generated/DeviceFarmApi';
+import type {
   CampaignCreate,
   CampaignDeviceOut,
   CampaignOut,
@@ -12,9 +20,11 @@ import type {
   TaskOut,
   WorkflowProgress,
   DlqEntry,
+  DlqBulkRetryResult,
   DlqSummary,
   ExecutionOut,
-  ExecutionArtifact
+  ExecutionArtifact,
+  ExecutionEventOut
 } from '../types';
 
 export type {
@@ -30,10 +40,72 @@ export type {
   TaskOut,
   WorkflowProgress,
   DlqEntry,
+  DlqBulkRetryResult,
   DlqSummary,
   ExecutionOut,
   ExecutionArtifact
 } from '../types';
+
+export type {
+  CampaignDispatchIn,
+  CampaignDispatchOut,
+  CampaignEntityOut,
+  CampaignEntityUpdate,
+  CampaignScenarioRefIn,
+  CampaignAccountBindIn
+};
+
+/** Extended dispatch execution row (DF-T-04-010 runtime fields). */
+export type CampaignDispatchExecutionOut = {
+  execution_id: string;
+  device_id: string;
+  status: string;
+  effective_vars?: Record<string, unknown>;
+  account_id?: string | null;
+  failure_reason?: string | null;
+  claim_session_id?: string | null;
+  dispatch_source?: string | null;
+  workflow_id?: string | null;
+};
+
+export type CampaignDispatchResponse = Omit<
+  import('../../device-farm/services/generated/DeviceFarmApi').CampaignDispatchOut,
+  'executions'
+> & {
+  executions?: CampaignDispatchExecutionOut[];
+};
+
+export type ExecutionRuntimeOut = {
+  temporal: {
+    enabled: boolean;
+    server_url: string;
+    namespace: string;
+    task_queue: string;
+  };
+  campaign_run: {
+    engine: string;
+    dispatch_source: string;
+    fallback_mode_active: boolean;
+    note?: string;
+  };
+};
+
+export function isCampaignEntityOut(
+  value: CampaignOut | CampaignEntityOut
+): value is CampaignEntityOut {
+  return (
+    'organization_id' in value &&
+    Array.isArray((value as CampaignEntityOut).scenario_refs)
+  );
+}
+
+export function campaignVariables(
+  value: CampaignOut | CampaignEntityOut | null | undefined
+): Record<string, unknown> {
+  if (!value) return {};
+  if (isCampaignEntityOut(value)) return (value.vars ?? {}) as Record<string, unknown>;
+  return (value.variables ?? {}) as Record<string, unknown>;
+}
 
 export type StepActionResponse = {
   action: string;
@@ -67,13 +139,28 @@ export type ScenarioDeviceVariablesBody = {
 };
 
 export const campaignsApi = {
-  list: () => farmApi.get<CampaignOut[]>('/campaigns').then((r) => r.data),
+  list: () =>
+    farmApi
+      .get<(CampaignOut | CampaignEntityOut)[]>('/campaigns')
+      .then((r) => r.data as CampaignOut[]),
   create: (data: CampaignCreate) =>
-    farmApi.post<CampaignOut>('/campaigns', data).then((r) => r.data),
+    farmApi.post<CampaignOut | CampaignEntityOut>('/campaigns', data).then((r) => r.data),
   get: (id: string) =>
-    farmApi.get<CampaignOut>(`/campaigns/${id}`).then((r) => r.data),
+    farmApi.get<CampaignOut | CampaignEntityOut>(`/campaigns/${id}`).then((r) => r.data),
+  patchEntity: (id: string, data: CampaignEntityUpdate) =>
+    farmApi
+      .patch<CampaignEntityOut>(`/campaigns/${id}`, data)
+      .then((r) => r.data),
+  bindAccounts: (id: string, data: CampaignAccountBindIn) =>
+    farmApi
+      .post<CampaignEntityOut>(`/campaigns/${id}/accounts`, data)
+      .then((r) => r.data),
+  unbindAccounts: (id: string) =>
+    farmApi
+      .delete<CampaignEntityOut>(`/campaigns/${id}/accounts`)
+      .then((r) => r.data),
   delete: (id: string) =>
-    farmApi.delete(`/campaigns/${id}`).then((r) => r.data),
+    farmApi.delete<CampaignEntityOut>(`/campaigns/${id}`).then((r) => r.data),
   updateStatus: (id: string, status: CampaignStatus) =>
     farmApi
       .patch<CampaignOut>(`/campaigns/${id}/status`, { status })
@@ -91,6 +178,10 @@ export const campaignsApi = {
       .post<CampaignControlResponse>(`/campaigns/${id}/cancel`, {
         reason: reason ?? ''
       })
+      .then((r) => r.data),
+  dispatch: (id: string, body: CampaignDispatchIn) =>
+    farmApi
+      .post<CampaignDispatchResponse>(`/campaigns/${id}/dispatch`, body)
       .then((r) => r.data),
   run: (id: string, deviceSerials?: string[]) =>
     farmApi
@@ -194,6 +285,11 @@ export const campaignsApi = {
         body
       )
       .then((r) => r.data)
+};
+
+export const executionRuntimeApi = {
+  get: () =>
+    farmApi.get<ExecutionRuntimeOut>('/execution/runtime').then((r) => r.data)
 };
 
 export const scenariosApi = {
@@ -322,6 +418,10 @@ export const dlqApi = {
         }
       })
       .then((r) => r.data),
+  getByExecution: (executionId: string) =>
+    farmApi
+      .get<DlqEntry>(`/executions/dlq/executions/${encodeURIComponent(executionId)}`)
+      .then((r) => r.data),
   summary: (params?: { campaignId?: string }) =>
     farmApi
       .get<DlqSummary>('/executions/dlq/summary', {
@@ -330,14 +430,43 @@ export const dlqApi = {
         }
       })
       .then((r) => r.data),
-  retry: (dlqId: string) =>
+  retry: (dlqId: string, options?: { fromCheckpoint?: boolean }) =>
     farmApi
-      .post<DlqEntry>(`/executions/dlq/${encodeURIComponent(dlqId)}/retry`)
+      .post<DlqEntry>(`/executions/dlq/${encodeURIComponent(dlqId)}/retry`, {
+        from_checkpoint: options?.fromCheckpoint ?? true
+      })
       .then((r) => r.data),
+  close: (dlqId: string, reason: string) =>
+    farmApi
+      .post<DlqEntry>(`/executions/dlq/${encodeURIComponent(dlqId)}/close`, {
+        reason
+      })
+      .then((r) => r.data),
+  bulkRetry: (payload: {
+    executionIds?: string[];
+    dlqIds?: string[];
+    fromCheckpoint?: boolean;
+  }) =>
+    farmApi
+      .post<{ results: DlqBulkRetryResult[] }>('/executions/dlq/bulk-retry', {
+        execution_ids: payload.executionIds ?? [],
+        dlq_ids: payload.dlqIds ?? [],
+        from_checkpoint: payload.fromCheckpoint ?? true
+      })
+      .then((r) => r.data.results),
   dismiss: (dlqId: string) =>
     farmApi
       .delete(`/executions/dlq/${encodeURIComponent(dlqId)}`)
       .then((r) => r.data)
+};
+
+export type ExecutionControlOut = {
+  execution_id: string;
+  status: string;
+  action: string;
+  effective_transition: boolean;
+  workflows_signalled?: number;
+  warning?: string | null;
 };
 
 export const executionsApi = {
@@ -368,5 +497,39 @@ export const executionsApi = {
       .get<
         ExecutionArtifact[]
       >(`/executions/${encodeURIComponent(executionId)}/artifacts`)
+      .then((r) => r.data),
+  listEvents: (
+    executionId: string,
+    params?: { since?: string | null; limit?: number }
+  ) =>
+    farmApi
+      .get<{ items: ExecutionEventOut[]; has_more?: boolean }>(
+        `/executions/${encodeURIComponent(executionId)}/events`,
+        {
+          params: {
+            ...(params?.since ? { since: params.since } : {}),
+            ...(params?.limit != null ? { limit: params.limit } : {})
+          }
+        }
+      )
+      .then((r) => r.data),
+  pause: (executionId: string) =>
+    farmApi
+      .post<ExecutionControlOut>(
+        `/executions/${encodeURIComponent(executionId)}/pause`
+      )
+      .then((r) => r.data),
+  resume: (executionId: string) =>
+    farmApi
+      .post<ExecutionControlOut>(
+        `/executions/${encodeURIComponent(executionId)}/resume`
+      )
+      .then((r) => r.data),
+  cancel: (executionId: string, reason?: string) =>
+    farmApi
+      .post<ExecutionControlOut>(
+        `/executions/${encodeURIComponent(executionId)}/cancel`,
+        reason ? { reason } : {}
+      )
       .then((r) => r.data)
 };

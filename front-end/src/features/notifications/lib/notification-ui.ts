@@ -9,6 +9,7 @@ import {
   WifiOff,
   type LucideIcon
 } from 'lucide-react';
+import { ROUTES } from '@/config/routes';
 import type { NotificationItem } from '../services/api';
 
 export type NotificationTone = 'danger' | 'success' | 'warning' | 'info';
@@ -155,6 +156,70 @@ export function isToday(iso: string) {
     date.getMonth() === now.getMonth() &&
     date.getDate() === now.getDate()
   );
+}
+
+function pathFromDeepLink(raw: string): string | null {
+  try {
+    const pathname = raw.startsWith('http')
+      ? new URL(raw).pathname
+      : raw.startsWith('/')
+        ? raw
+        : `/${raw}`;
+    if (pathname.startsWith('/dashboard')) return pathname;
+
+    const [resource, id, ...rest] = pathname.split('/').filter(Boolean);
+    if (resource === 'campaigns' && id) {
+      return ROUTES.CAMPAIGNS.DETAIL(id);
+    }
+    if (resource === 'content' && id) {
+      return ROUTES.CONTENT.DETAIL(id);
+    }
+    if (resource === 'schedules') {
+      return ROUTES.SCHEDULES.ROOT;
+    }
+    if (resource === 'accounts' && id) {
+      return ROUTES.ACCOUNTS.ROOT;
+    }
+    if (resource === 'devices' && id) {
+      return ROUTES.DEVICES.CONTROL_RECORD_WITH_SERIAL(id);
+    }
+    if (resource === 'executions' && id) {
+      const campaignId = String(rest[0] ?? '').trim();
+      if (campaignId) return ROUTES.CAMPAIGNS.DETAIL(campaignId);
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+export function resolveNotificationHref(item: NotificationItem): string | null {
+  const data = item.data ?? {};
+  const deepLink = String(data.deep_link ?? '').trim();
+  if (deepLink) {
+    const mapped = pathFromDeepLink(deepLink);
+    if (mapped) return mapped;
+  }
+
+  const campaignId = String(data.campaign_id ?? '').trim();
+  if (campaignId) return ROUTES.CAMPAIGNS.DETAIL(campaignId);
+
+  const scheduleId = String(data.schedule_id ?? '').trim();
+  if (scheduleId) return ROUTES.SCHEDULES.ROOT;
+
+  const contentId = String(data.content_id ?? '').trim();
+  if (contentId) return ROUTES.CONTENT.DETAIL(contentId);
+
+  const serial = String(data.serial ?? data.device_serial ?? '').trim();
+  if (serial && item.event.startsWith('device.')) {
+    return ROUTES.DEVICES.MANAGE;
+  }
+
+  if (item.event.startsWith('campaign.')) return ROUTES.CAMPAIGNS.ROOT;
+  if (item.event.startsWith('schedule.')) return ROUTES.SCHEDULES.ROOT;
+  if (item.event.startsWith('account.')) return ROUTES.ACCOUNTS.ROOT;
+
+  return null;
 }
 
 export function groupNotificationsByDay<T extends { created_at: string }>(

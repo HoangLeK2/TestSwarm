@@ -4,8 +4,10 @@ from typing import Optional
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from db.models import Campaign, CampaignDevice, Device, Scenario
+from db.models.enums import CampaignStatus
 
 
 async def create_campaign(
@@ -19,7 +21,9 @@ async def create_campaign(
 ) -> Campaign:
     campaign = Campaign(
         name=name,
+        name_lower=name.strip().lower(),
         user_id=user_id,
+        created_by=user_id,
         org_id=org_id,  # type: ignore[arg-type]
         description=description,
         variables=variables or {},
@@ -36,30 +40,61 @@ async def get_campaign_by_name(
     org_id: str,
     name: str,
 ) -> Optional[Campaign]:
-    result = await db.execute(
-        select(Campaign)
-        .where(Campaign.org_id == org_id, Campaign.name == name)
-        .order_by(Campaign.created_at.desc())
-        .limit(1)
-    )
-    return result.scalars().first()
+    from tenancy.context import use_tenant_scope
+
+    with use_tenant_scope(org_id):
+        result = await db.execute(
+            select(Campaign)
+            .where(Campaign.org_id == org_id, Campaign.name == name)
+            .order_by(Campaign.created_at.desc())
+            .limit(1)
+        )
+        return result.scalars().first()
 
 
 async def get_campaign(db: AsyncSession, campaign_id: str) -> Optional[Campaign]:
-    result = await db.execute(select(Campaign).where(Campaign.id == campaign_id))
-    return result.scalar_one_or_none()
+    from db.crud.campaign_entity import lookup_campaign_org_id
+    from tenancy.context import get_current_org_id, use_tenant_scope
+
+    scope_org = get_current_org_id()
+    if not scope_org:
+        scope_org = await lookup_campaign_org_id(db, campaign_id)
+    with use_tenant_scope(scope_org):
+        result = await db.execute(
+            select(Campaign)
+            .where(Campaign.id == campaign_id)
+            .options(selectinload(Campaign.org_scenario_refs))
+        )
+        return result.scalar_one_or_none()
 
 
 async def list_campaigns(
-    db: AsyncSession, *, org_id: Optional[str] = None, user_id: Optional[str] = None
+    db: AsyncSession,
+    *,
+    org_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    include_archived: bool = False,
 ) -> list[Campaign]:
-    q = select(Campaign).order_by(Campaign.created_at.desc())
-    if org_id:
-        q = q.where(Campaign.org_id == org_id)
-    elif user_id:
-        q = q.where(Campaign.user_id == user_id)
-    result = await db.execute(q)
-    return list(result.scalars().all())
+    from tenancy.context import use_tenant_scope
+
+    with use_tenant_scope(org_id):
+        q = select(Campaign).order_by(Campaign.created_at.desc())
+        if org_id:
+            q = q.where(Campaign.org_id == org_id)
+        elif user_id:
+            q = q.where(Campaign.user_id == user_id)
+        if include_archived:
+            q = q.where(
+                (Campaign.deleted_at.is_(None))
+                | (Campaign.status == CampaignStatus.ARCHIVED.value)
+            )
+        else:
+            q = q.where(
+                Campaign.deleted_at.is_(None),
+                Campaign.status != CampaignStatus.ARCHIVED.value,
+            )
+        result = await db.execute(q)
+        return list(result.scalars().all())
 
 
 async def update_campaign_status(db: AsyncSession, campaign_id: str, status: str) -> None:

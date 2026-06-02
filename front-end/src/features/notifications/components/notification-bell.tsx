@@ -35,10 +35,11 @@ import {
   getNotificationToneClasses,
   getNotificationVisual,
   groupNotificationsByDay,
-  resolveDeviceLabel,
+  resolveNotificationHref,
   sanitizeNotificationBody,
   timeAgo
 } from '../lib/notification-ui';
+import { translateNotificationItem } from '../lib/translate-notification-text';
 import {
   mergeNotification,
   notificationKeys,
@@ -67,18 +68,22 @@ function NotificationRow({
   const toneClasses = getNotificationToneClasses(visual.tone);
   const { Icon } = visual;
   const detail = sanitizeNotificationBody(body);
+  const href = resolveNotificationHref(item);
 
   return (
-    <button
+    <div
       className={cn(
-        'group flex w-full items-start gap-3 rounded-md px-2 py-2.5 text-left transition-colors hover:bg-muted/50',
+        'group flex w-full items-start gap-2 rounded-md px-2 py-2.5 transition-colors hover:bg-muted/50',
         !item.is_read && 'bg-muted/25 hover:bg-muted/45'
       )}
-      onClick={() => {
-        if (!item.is_read) onRead(item.id);
-      }}
-      type='button'
     >
+      <button
+        className='flex min-w-0 flex-1 items-start gap-3 text-left'
+        onClick={() => {
+          if (!item.is_read) onRead(item.id);
+        }}
+        type='button'
+      >
       <span className='relative mt-0.5 shrink-0'>
         <span
           className={cn(
@@ -114,7 +119,15 @@ function NotificationRow({
           </span>
         ) : null}
       </span>
-    </button>
+      </button>
+      {href ? (
+        <Button variant='ghost' size='icon' className='size-7 shrink-0' asChild>
+          <Link href={href}>
+            <ExternalLink className='size-3.5' />
+          </Link>
+        </Button>
+      ) : null}
+    </div>
   );
 }
 
@@ -140,7 +153,8 @@ export function NotificationBell() {
   const qc = useQueryClient();
   const { currentOrg } = useOrganization();
   const orgId = currentOrg?.id ?? null;
-  const { data, isLoading } = useNotifications(12);
+  const bellQuery = { limit: 12 } as const;
+  const { data, isLoading } = useNotifications(bellQuery);
   const { data: unread = 0 } = useUnreadNotificationCount();
   const markRead = useMarkNotificationRead();
   const markAllRead = useMarkAllNotificationsRead();
@@ -148,44 +162,7 @@ export function NotificationBell() {
   const { today, earlier } = groupNotificationsByDay(notifications);
 
   const getNotificationText = useCallback(
-    (item: NotificationItem) => {
-      const data = item.data ?? {};
-      const label = resolveDeviceLabel(item, t('unknownDevice'));
-      if (data.test) {
-        return {
-          title: t('testTitle'),
-          body: t('testBody')
-        };
-      }
-      if (item.event === 'device.disconnect') {
-        return {
-          title: t('eventTitles.deviceDisconnect', { label }),
-          body:
-            sanitizeNotificationBody(item.body) ??
-            t('eventBodies.deviceDisconnect')
-        };
-      }
-      if (item.event === 'device.reconnect') {
-        return {
-          title: t('eventTitles.deviceReconnect', { label }),
-          body:
-            sanitizeNotificationBody(item.body) ??
-            t('eventBodies.deviceReconnect', { serial: label })
-        };
-      }
-      if (item.event === 'task.failed' && data.raw_event === 'error') {
-        return {
-          title: t('eventTitles.deviceError', { label }),
-          body:
-            sanitizeNotificationBody(item.body) ??
-            t('eventBodies.deviceError')
-        };
-      }
-      return {
-        title: item.title,
-        body: sanitizeNotificationBody(item.body)
-      };
-    },
+    (item: NotificationItem) => translateNotificationItem(item, t),
     [t]
   );
 
@@ -196,7 +173,7 @@ export function NotificationBell() {
       const incoming = msg.data;
       const translated = getNotificationText(incoming);
       qc.setQueryData<NotificationListResponse>(
-        notificationKeys.list(orgId, 12),
+        notificationKeys.list(orgId, bellQuery),
         (current) => ({
           total: Math.max(
             current?.total ?? 0,
@@ -220,7 +197,7 @@ export function NotificationBell() {
       });
     });
     return unsubscribe;
-  }, [getNotificationText, orgId, qc]);
+  }, [bellQuery, getNotificationText, orgId, qc]);
 
   const renderItems = (items: NotificationItem[]) =>
     items.map((item) => {
@@ -286,7 +263,7 @@ export function NotificationBell() {
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button variant='ghost' size='icon' className='size-7' asChild>
-                  <Link href={ROUTES.NOTIFICATIONS.ROOT}>
+                  <Link href={ROUTES.NOTIFICATIONS.CHANNELS}>
                     <Settings size={14} />
                   </Link>
                 </Button>
@@ -335,8 +312,8 @@ export function NotificationBell() {
             className='w-full justify-center gap-1.5 text-muted-foreground hover:text-foreground'
             asChild
           >
-            <Link href={ROUTES.NOTIFICATIONS.ROOT}>
-              {t('manageChannels')}
+            <Link href={ROUTES.NOTIFICATIONS.INBOX}>
+              {t('viewAll')}
               <ExternalLink size={13} />
             </Link>
           </Button>

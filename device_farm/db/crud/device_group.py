@@ -137,6 +137,54 @@ async def get_group_device_ids(
     return [row[0] for row in result.all()]
 
 
+async def snapshot_group_device_ids(
+    db: AsyncSession,
+    group_id: str,
+    *,
+    for_update: bool = False,
+) -> list[str]:
+    """Atomically read group membership for dispatch snapshot."""
+    stmt = select(DeviceGroupMember.device_id).where(
+        DeviceGroupMember.group_id == group_id
+    )
+    if for_update:
+        stmt = stmt.with_for_update()
+    result = await db.execute(stmt)
+    return [row[0] for row in result.all()]
+
+
+async def snapshot_groups_device_ids(
+    db: AsyncSession,
+    group_ids: list[str],
+    *,
+    for_update: bool = False,
+) -> dict[str, list[str]]:
+    """Batch snapshot membership for multiple groups in one query."""
+    if not group_ids:
+        return {}
+    stmt = select(DeviceGroupMember.group_id, DeviceGroupMember.device_id).where(
+        DeviceGroupMember.group_id.in_(group_ids)
+    )
+    if for_update:
+        stmt = stmt.with_for_update()
+    result = await db.execute(stmt)
+    out: dict[str, list[str]] = {gid: [] for gid in group_ids}
+    for group_id, device_id in result.all():
+        out.setdefault(group_id, []).append(device_id)
+    return out
+
+
+async def get_groups_by_ids(
+    db: AsyncSession, group_ids: list[str]
+) -> dict[str, DeviceGroup]:
+    if not group_ids:
+        return {}
+    result = await db.execute(
+        select(DeviceGroup).where(DeviceGroup.id.in_(group_ids))
+    )
+    return {row.id: row for row in result.scalars().all()}
+
+
 async def get_group_device_serials(
     db: AsyncSession, group_id: str
 ) -> frozenset[str]:

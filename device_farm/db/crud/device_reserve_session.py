@@ -100,17 +100,19 @@ async def list_expired_active_sessions(
     limit: int = 200,
     now: datetime | None = None,
 ) -> list[DeviceReserveSession]:
-    """Return active sessions that may be expired (caller applies thresholds)."""
-    ts = now or datetime.now(timezone.utc)
+    """Return active sessions that may be expired (caller applies thresholds).
+
+    Intentionally does not take row locks: release_device_session locks
+    device then session (same order as claim). Holding session locks here
+    caused deadlocks with concurrent manual release/claim paths.
+    HA idempotency is handled inside release_device_session.
+    """
+    _ = now  # reserved for future SQL-side filtering
     stmt = (
         select(DeviceReserveSession)
         .where(DeviceReserveSession.released_at.is_(None))
         .order_by(DeviceReserveSession.last_heartbeat.asc())
         .limit(limit)
     )
-    if db.get_bind().dialect.name == "postgresql":
-        stmt = stmt.with_for_update(skip_locked=True)
-    else:
-        stmt = stmt.with_for_update()
     result = await db.execute(stmt)
     return list(result.scalars().all())

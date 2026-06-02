@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://device-farm.local/contracts/scenario-body.schema.json",
+  "title": "OrgScenarioBody",
+  "description": "Scenario DSL body contract (DF-T-04-002)",
+  "type": "object",
+  "oneOf": [
+    { "$ref": "#/$defs/sequenceBody" },
+    { "$ref": "#/$defs/graphBody" }
+  ],
+  "$defs": {
+    "step": {
+      "type": "object",
+      "required": ["id", "type"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "type": { "type": "string", "minLength": 1 },
+        "config": { "type": "object", "default": {} },
+        "error_policy": {
+          "type": "string",
+          "enum": ["stop", "ignore", "on_error"],
+          "default": "stop"
+        },
+        "on_error": { "type": "string" },
+        "retry": {
+          "oneOf": [{ "type": "null" }, { "type": "object" }]
+        },
+        "pre_capture": { "type": "boolean", "default": true },
+        "post_capture": { "type": "boolean", "default": true }
+      },
+      "additionalProperties": true
+    },
+    "edge": {
+      "type": "object",
+      "required": ["source", "target"],
+      "properties": {
+        "source": { "type": "string", "minLength": 1 },
+        "target": { "type": "string", "minLength": 1 },
+        "condition": {
+          "type": "object",
+          "properties": {
+            "if_element": { "type": "string" },
+            "if_variable": { "type": "object" },
+            "else": { "type": "boolean" }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "sequenceBody": {
+      "type": "object",
+      "required": ["steps"],
+      "properties": {
+        "steps": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/step" },
+          "minItems": 1
+        },
+        "variables": { "type": "object" }
+      },
+      "additionalProperties": true
+    },
+    "graphBody": {
+      "type": "object",
+      "required": ["nodes", "edges"],
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/step" },
+          "minItems": 1
+        },
+        "edges": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/edge" }
+        },
+        "variables": { "type": "object" }
+      },
+      "additionalProperties": true
+    }
+  }
+}

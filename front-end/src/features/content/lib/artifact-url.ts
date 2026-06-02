@@ -20,8 +20,24 @@ export function resolveArtifactUrl(
   return `${base}/${value}`;
 }
 
-export function isImageArtifact(kind: string, url: string | null): boolean {
+export type ImageArtifactHints = {
+  label?: string | null;
+  mimeType?: string | null;
+  source?: string | null;
+};
+
+export function isImageArtifact(
+  kind: string,
+  url: string | null,
+  hints?: ImageArtifactHints
+): boolean {
   if (kind === 'image') return true;
+  const mime = hints?.mimeType?.trim();
+  if (mime?.startsWith('image/')) return true;
+  const label = (hints?.label ?? '').toLowerCase();
+  const source = (hints?.source ?? '').toLowerCase();
+  if (/\bscreenshot\b/.test(label) || /\bscreenshot\b/.test(source)) return true;
+  if (/\belement\b/.test(label) || /\belement\b/.test(source)) return true;
   if (!url) return false;
   return /\.(png|jpe?g|webp|gif)(\?|$)/i.test(url);
 }

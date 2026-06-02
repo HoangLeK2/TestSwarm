@@ -7,6 +7,7 @@ We listen and run `adb connect ip:port` automatically — no manual IP entry nee
 from __future__ import annotations
 
 import logging
+import os
 from typing import Optional
 
 from relay.adb import _adb_connect
@@ -20,6 +21,10 @@ except ImportError:
     _ZEROCONF_OK = False
 
 _ADB_MDNS_SERVICE = "_adb-tls-connect._tcp.local."
+
+
+def _mdns_enabled() -> bool:
+    return os.getenv("AGENT_BOOT_MDNS", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 class _AdbMdnsListener:
@@ -49,7 +54,10 @@ class _AdbMdnsListener:
 
 
 def start_mdns_discovery() -> Optional["Zeroconf"]:
-    """Start mDNS listener in background thread. Returns Zeroconf instance or None."""
+    """Start mDNS listener when AGENT_BOOT_MDNS=1. Returns Zeroconf or None."""
+    if not _mdns_enabled():
+        logger.debug("mDNS discovery disabled (set AGENT_BOOT_MDNS=1 to enable)")
+        return None
     if not _ZEROCONF_OK:
         logger.debug("zeroconf not installed — mDNS discovery disabled (uv add zeroconf)")
         return None

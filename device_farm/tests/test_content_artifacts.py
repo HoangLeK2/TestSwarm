@@ -5,7 +5,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from services.content_artifacts import collect_content_artifacts, read_artifact_bytes
+from services.content_artifacts import (
+    collect_content_artifacts,
+    merge_execution_artifacts,
+    read_artifact_bytes,
+)
 
 
 def _item(**overrides):
@@ -39,6 +43,18 @@ async def test_read_inline_artifact_bytes():
     assert b"<hierarchy>" in payload
     assert "content_item-1" in filename
     assert mime == "application/xml"
+
+
+def test_merge_execution_artifacts_marks_screenshot_proxy_as_image():
+    item = _item()
+    merged = merge_execution_artifacts(
+        item,
+        [],
+        [("post.screenshot", "/artifacts/art-1/content")],
+    )
+    assert len(merged) == 1
+    assert merged[0]["kind"] == "image"
+    assert merged[0]["mime_type"] == "image/png"
 
 
 @pytest.mark.asyncio

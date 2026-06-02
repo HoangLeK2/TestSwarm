@@ -1,9 +1,17 @@
 'use client';
 
-import { useMemo, type ReactNode } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+  type ReactNode
+} from 'react';
 import { useTranslations } from 'next-intl';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
+import { useDebouncedCallback } from '@/hooks/use-debounced-callback';
 import { Switch } from '@/components/ui/switch';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Badge } from '@/components/ui/badge';
@@ -32,6 +40,105 @@ export function StepPanelField({
 
 /** @deprecated Use StepPanelField — kept for minimal churn in step-detail-panel. */
 export const F = StepPanelField;
+
+type StepPanelInputProps = Omit<ComponentProps<typeof Input>, 'onChange'> & {
+  onValueCommit: (value: string) => void;
+  commitDelayMs?: number;
+};
+
+/** Text input with local draft — keystrokes do not re-render the parent step panel. */
+export function StepPanelInput({
+  value,
+  onValueCommit,
+  commitDelayMs = 250,
+  onBlur,
+  ...props
+}: StepPanelInputProps) {
+  const [draft, setDraft] = useState(String(value ?? ''));
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+
+  useEffect(() => {
+    setDraft(String(value ?? ''));
+  }, [value]);
+
+  const debouncedCommit = useDebouncedCallback(onValueCommit, commitDelayMs);
+
+  useEffect(
+    () => () => {
+      debouncedCommit(draftRef.current);
+    },
+    [debouncedCommit]
+  );
+
+  return (
+    <Input
+      {...props}
+      value={draft}
+      onChange={(e) => {
+        const next = e.target.value;
+        setDraft(next);
+        debouncedCommit(next);
+      }}
+      onBlur={(e) => {
+        onValueCommit(draftRef.current);
+        onBlur?.(e);
+      }}
+    />
+  );
+}
+
+type StepPanelTextareaProps = Omit<
+  ComponentProps<'textarea'>,
+  'onChange' | 'value'
+> & {
+  value: string;
+  onValueCommit: (value: string) => void;
+  commitDelayMs?: number;
+};
+
+export function StepPanelTextarea({
+  value,
+  onValueCommit,
+  commitDelayMs = 250,
+  className,
+  onBlur,
+  ...props
+}: StepPanelTextareaProps) {
+  const [draft, setDraft] = useState(value ?? '');
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+
+  useEffect(() => {
+    setDraft(value ?? '');
+  }, [value]);
+
+  const debouncedCommit = useDebouncedCallback(onValueCommit, commitDelayMs);
+
+  useEffect(
+    () => () => {
+      debouncedCommit(draftRef.current);
+    },
+    [debouncedCommit]
+  );
+
+  return (
+    <textarea
+      {...props}
+      className={className}
+      value={draft}
+      onChange={(e) => {
+        const next = e.target.value;
+        setDraft(next);
+        debouncedCommit(next);
+      }}
+      onBlur={(e) => {
+        onValueCommit(draftRef.current);
+        onBlur?.(e);
+      }}
+    />
+  );
+}
 
 export function StepPanelSection({
   title,
@@ -153,11 +260,11 @@ export function StepPanelHeader({ step }: { step: FlowStep }) {
 
 export function StepPanelMetaFields({
   step,
-  update,
+  commitStep,
   t
 }: {
   step: FlowStep;
-  update: (fields: Partial<FlowStep>) => void;
+  commitStep: (next: FlowStep) => void;
   t: ReturnType<typeof useTranslations<'campaignsFeature.stepEditor'>>;
 }) {
   const tSec = useTranslations('campaignsFeature.stepEditor.sections');
@@ -165,24 +272,25 @@ export function StepPanelMetaFields({
   return (
     <StepPanelSection title={tSec('general')}>
       <StepPanelField label={t('common.titleOptional')}>
-        <Input
+        <StepPanelInput
           className='h-9 text-sm'
           placeholder={t('common.titlePlaceholder')}
           value={(step as { title?: string }).title ?? ''}
-          onChange={(e) =>
-            update({ title: e.target.value || undefined } as Partial<FlowStep>)
+          onValueCommit={(title) =>
+            commitStep({ ...step, title: title || undefined } as FlowStep)
           }
         />
       </StepPanelField>
       <StepPanelField label={t('common.descriptionOptional')}>
-        <Input
+        <StepPanelInput
           className='h-9 text-sm'
           placeholder={t('common.descriptionPlaceholder')}
           value={(step as { description?: string }).description ?? ''}
-          onChange={(e) =>
-            update({
-              description: e.target.value || undefined
-            } as Partial<FlowStep>)
+          onValueCommit={(description) =>
+            commitStep({
+              ...step,
+              description: description || undefined
+            } as FlowStep)
           }
         />
       </StepPanelField>

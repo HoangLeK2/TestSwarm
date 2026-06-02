@@ -1,0 +1,43 @@
+"""Execution domain event type constants (DF-T-04-013)."""
+from __future__ import annotations
+
+SCHEMA_VERSION = "1"
+BROKER_TOPIC = "df.execution.events.v1"
+
+EXECUTION_CREATED = "execution.created"
+EXECUTION_STARTED = "execution.started"
+EXECUTION_COMPLETED = "execution.completed"
+EXECUTION_FAILED = "execution.failed"
+EXECUTION_CANCELLED = "execution.cancelled"
+EXECUTION_PAUSED = "execution.paused"
+EXECUTION_RESUMED = "execution.resumed"
+EXECUTION_DLQ_OPENED = "execution.dlq.opened"
+EXECUTION_DLQ_REPLAYED = "execution.dlq.replayed"
+EXECUTION_DLQ_CLOSED = "execution.dlq.closed"
+
+STEP_STARTED = "step.started"
+STEP_COMPLETED = "step.completed"
+STEP_FAILED = "step.failed"
+STEP_RETRIED = "step.retried"
+
+EXECUTION_LIFECYCLE_EVENTS = frozenset({
+    EXECUTION_CREATED,
+    EXECUTION_STARTED,
+    EXECUTION_COMPLETED,
+    EXECUTION_FAILED,
+    EXECUTION_CANCELLED,
+    EXECUTION_PAUSED,
+    EXECUTION_RESUMED,
+    EXECUTION_DLQ_OPENED,
+    EXECUTION_DLQ_REPLAYED,
+    EXECUTION_DLQ_CLOSED,
+})
+
+STEP_EVENTS = frozenset({
+    STEP_STARTED,
+    STEP_COMPLETED,
+    STEP_FAILED,
+    STEP_RETRIED,
+})
+
+ALL_EXECUTION_EVENT_TYPES = EXECUTION_LIFECYCLE_EVENTS | STEP_EVENTS

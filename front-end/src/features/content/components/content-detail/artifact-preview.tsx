@@ -94,7 +94,11 @@ export function ArtifactPreview({ detail, artifact, shareToken }: Props) {
     [artifact.url]
   );
 
-  const isImage = isImageArtifact(artifact.kind, resolvedUrl);
+  const isImage = isImageArtifact(artifact.kind, resolvedUrl, {
+    label: artifact.label,
+    mimeType: artifact.mime_type,
+    source: artifact.source
+  });
   const isExpired =
     artifact.status === 'expired' || imageError || previewError;
 
@@ -104,14 +108,8 @@ export function ArtifactPreview({ detail, artifact, shareToken }: Props) {
 
     let cancelled = false;
     let objectUrl: string | null = null;
-    const token = tokenStorage.getAuthToken();
-    fetch(resolvedUrl, {
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error(String(res.status));
-        return res.blob();
-      })
+    contentApi
+      .fetchArtifactBlob(resolvedUrl)
       .then((blob) => {
         if (cancelled) return;
         objectUrl = URL.createObjectURL(blob);
@@ -151,14 +149,8 @@ export function ArtifactPreview({ detail, artifact, shareToken }: Props) {
 
     let cancelled = false;
     setLoadingText(true);
-    const token = tokenStorage.getAuthToken();
-    fetch(resolvedUrl, {
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined
-    })
-      .then(async (res) => {
-        if (!res.ok) throw new Error(String(res.status));
-        return res.text();
-      })
+    contentApi
+      .fetchArtifactText(resolvedUrl)
       .then((text) => {
         if (cancelled) return;
         if (!showFullText && text.length > LARGE_INLINE_BYTES) {

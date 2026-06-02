@@ -1,7 +1,9 @@
 'use client';
 
 import { useState } from 'react';
+import { useTranslations } from 'next-intl';
 import { useRouter } from '@/i18n/navigation';
+import Link from 'next/link';
 import { ROUTES } from '@/config/routes';
 import {
   Search,
@@ -39,9 +41,10 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
+import { CoreEmptyState } from '@/components/core-empty-state';
+import { ContentExportDialog } from './content-export-panel';
 import { useContent, useContentStats } from '../hooks/use-content';
 import {
-  contentApi,
   type ContentItem,
   type ExportFormat
 } from '../services/api';
@@ -185,12 +188,12 @@ function StatCard({
 const CONTENT_TYPE_TABS = [
   { value: '', label: 'Tất cả', icon: <Database className='size-3.5' /> },
   {
-    value: 'group_post',
+    value: 'fb_post',
     label: 'Bài đăng',
     icon: <Newspaper className='size-3.5' />
   },
   {
-    value: 'comment',
+    value: 'fb_comment',
     label: 'Bình luận',
     icon: <MessageCircle className='size-3.5' />
   }
@@ -451,39 +454,41 @@ function PlatformBadge({ name }: { name: string }) {
 
 function EmptyState({
   hasFilters,
-  onClear
+  onClear,
+  executionId
 }: {
   hasFilters?: boolean;
   onClear?: () => void;
+  executionId?: string;
 }) {
+  const t = useTranslations('coreEmptyState');
+
   return (
-    <div className='flex flex-col items-center justify-center rounded-xl border border-dashed border-border/60 py-20 text-center'>
-      <div className='mb-3 flex size-14 items-center justify-center rounded-full bg-muted/60'>
-        <Database
-          className='size-7 text-muted-foreground/60'
-          strokeWidth={1.5}
-        />
-      </div>
-      <p className='text-sm font-semibold text-foreground'>
-        {hasFilters ? 'Không có kết quả phù hợp' : 'Chưa có dữ liệu'}
-      </p>
-      <p className='mt-1 max-w-xs text-xs text-muted-foreground/80'>
-        {hasFilters
-          ? 'Thử thay đổi từ khoá hoặc xoá bộ lọc để xem tất cả.'
-          : 'Chạy kịch bản có bước extract để thu thập dữ liệu từ các nền tảng.'}
-      </p>
-      {hasFilters && onClear && (
-        <Button
-          size='sm'
-          variant='outline'
-          className='mt-4 gap-1.5'
-          onClick={onClear}
-        >
-          <X className='size-3.5' />
-          Xoá bộ lọc
-        </Button>
-      )}
-    </div>
+    <CoreEmptyState
+      icon={Database}
+      variant={hasFilters ? 'no-results' : 'no-data'}
+      title={hasFilters ? t('content.titleFiltered') : t('content.titleNoData')}
+      description={
+        hasFilters
+          ? t('content.descriptionFiltered')
+          : t('content.descriptionNoData')
+      }
+      readOnlyHint={t('readOnlyHint')}
+      trackingKey={hasFilters ? 'content-empty-filtered' : 'content-empty'}
+      cta={
+        hasFilters
+          ? { label: t('content.ctaClearFilters'), onClick: onClear }
+          : { label: t('content.ctaCampaigns'), href: ROUTES.CAMPAIGNS.ROOT }
+      }
+      secondaryCta={
+        executionId
+          ? {
+              label: t('content.ctaExecution'),
+              href: ROUTES.CONTENT.BY_EXECUTION(executionId)
+            }
+          : undefined
+      }
+    />
   );
 }
 
@@ -515,7 +520,8 @@ function ContentTable({
   onViewParent,
   hasFilters,
   onClear,
-  canDelete = false
+  canDelete = false,
+  executionId
 }: {
   items: ContentItem[];
   onViewItem: (item: ContentItem) => void;
@@ -524,9 +530,16 @@ function ContentTable({
   hasFilters: boolean;
   onClear: () => void;
   canDelete?: boolean;
+  executionId?: string;
 }) {
   if (items.length === 0)
-    return <EmptyState hasFilters={hasFilters} onClear={onClear} />;
+    return (
+      <EmptyState
+        hasFilters={hasFilters}
+        onClear={onClear}
+        executionId={executionId}
+      />
+    );
   return (
     <div className='overflow-hidden rounded-xl border border-border/60 bg-card shadow-sm'>
       <div className='overflow-x-auto'>
@@ -667,7 +680,8 @@ function ContentFeed({
   onViewParent,
   hasFilters,
   onClear,
-  canDelete = false
+  canDelete = false,
+  executionId
 }: {
   items: ContentItem[];
   onViewItem: (item: ContentItem) => void;
@@ -676,9 +690,16 @@ function ContentFeed({
   hasFilters: boolean;
   onClear: () => void;
   canDelete?: boolean;
+  executionId?: string;
 }) {
   if (items.length === 0)
-    return <EmptyState hasFilters={hasFilters} onClear={onClear} />;
+    return (
+      <EmptyState
+        hasFilters={hasFilters}
+        onClear={onClear}
+        executionId={executionId}
+      />
+    );
 
   return (
     <div className='space-y-3'>
@@ -992,8 +1013,9 @@ export function ContentViewer({
   const [collection, setCollection] = useState('');
   const [platform, setPlatform] = useState('');
   const [contentType, setContentType] = useState('');
-  const [exporting, setExporting] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   const [pageSize, setPageSize] = useState(50);
+  const tExport = useTranslations('contentFeature.export');
   const { canDelete } = useResourcePermissions('content');
 
   const openContentDetail = (item: ContentItem) => {
@@ -1020,13 +1042,8 @@ export function ContentViewer({
     { pageSize }
   );
 
-  const handleExport = (format: ExportFormat) => {
-    setExporting(true);
-    try {
-      contentApi.exportStream(filters, format);
-    } finally {
-      setTimeout(() => setExporting(false), 1200);
-    }
+  const handleExport = (_format: ExportFormat) => {
+    setExportOpen(true);
   };
 
   const handleApply = (overrides?: { contentType?: string }) => {
@@ -1139,20 +1156,19 @@ export function ContentViewer({
               <Database className='size-3.5' />
               {total.toLocaleString()} bản ghi
             </Badge>
+            <Button asChild size='sm' variant='ghost' className='h-9 text-xs'>
+              <Link href={ROUTES.CONTENT.EXPORTS}>{tExport('historyLink')}</Link>
+            </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
                   size='sm'
                   variant='outline'
                   className='h-9 gap-1.5 text-xs'
-                  disabled={exporting || total === 0}
+                  disabled={total === 0}
                 >
-                  {exporting ? (
-                    <RefreshCw className='size-3.5 animate-spin' />
-                  ) : (
-                    <Download className='size-3.5' />
-                  )}
-                  Export
+                  <Download className='size-3.5' />
+                  {tExport('exportButton')}
                   <ChevronDown className='size-3' />
                 </Button>
               </DropdownMenuTrigger>
@@ -1162,14 +1178,14 @@ export function ContentViewer({
                   className='cursor-pointer'
                 >
                   <FileText className='mr-2 size-3.5' />
-                  CSV (streaming)
+                  {tExport('formatCsv')}
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={() => handleExport('xlsx')}
                   className='cursor-pointer'
                 >
                   <Database className='mr-2 size-3.5' />
-                  Excel (.xlsx)
+                  {tExport('formatXlsx')}
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -1220,6 +1236,7 @@ export function ContentViewer({
               hasFilters={hasFilters}
               onClear={handleClear}
               canDelete={canDelete}
+              executionId={executionId || undefined}
             />
           ) : (
             <ContentTable
@@ -1230,6 +1247,7 @@ export function ContentViewer({
               hasFilters={hasFilters}
               onClear={handleClear}
               canDelete={canDelete}
+              executionId={executionId || undefined}
             />
           )}
         </div>
@@ -1252,6 +1270,12 @@ export function ContentViewer({
         )}
       </div>
 
+      <ContentExportDialog
+        open={exportOpen}
+        onOpenChange={setExportOpen}
+        filters={filters}
+        itemCount={total}
+      />
     </div>
   );
 }

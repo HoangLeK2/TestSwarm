@@ -1,19 +1,14 @@
 'use client';
 
-import type { CampaignOut, CampaignStatus } from '../../types';
+import type { CampaignOut } from '../../types';
 import { CampaignMobileCard } from './CampaignMobileCard';
 
 export function CampaignMobileList({
   campaigns,
-  statusLabel,
-  statusVariant
+  statusLabel
 }: {
   campaigns: CampaignOut[];
-  statusLabel: Record<CampaignStatus, string>;
-  statusVariant: Record<
-    CampaignStatus,
-    'secondary' | 'default' | 'outline' | 'destructive'
-  >;
+  statusLabel: Record<string, string>;
 }) {
   return (
     <div className='flex flex-col gap-3 lg:hidden'>
@@ -22,7 +17,6 @@ export function CampaignMobileList({
           key={campaign.id}
           campaign={campaign}
           statusLabel={statusLabel}
-          statusVariant={statusVariant}
         />
       ))}
     </div>

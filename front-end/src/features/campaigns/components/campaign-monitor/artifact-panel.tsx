@@ -2,18 +2,36 @@
 
 import { ImageIcon, Loader2 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { deviceFarmBackendBase } from '@/lib/farm-api';
+import {
+  isImageArtifact,
+  resolveArtifactUrl
+} from '@/features/content/lib/artifact-url';
+import type { ExecutionArtifact } from '../../types';
 import { useLatestExecutionArtifacts } from '../../hooks/use-campaigns';
 import { MonitorSectionHeader } from './monitor-section-header';
+import { ArtifactMonitorTile } from './artifact-tile';
 
 interface Props {
   campaignId: string;
+}
+
+function resolvedArtifactHref(artifact: ExecutionArtifact): string | null {
+  return resolveArtifactUrl(artifact.url, deviceFarmBackendBase);
+}
+
+function artifactIsImage(artifact: ExecutionArtifact, href: string | null): boolean {
+  const kind = String(artifact.metadata?.content_type || '');
+  if (kind.startsWith('image/')) return true;
+  if (artifact.artifact_type.includes('screenshot')) return true;
+  return isImageArtifact(kind, href);
 }
 
 export function ArtifactPanel({ campaignId }: Props) {
   const t = useTranslations('campaignsFeature.list');
   const { data, isLoading } = useLatestExecutionArtifacts(campaignId, true);
   const artifacts = data?.artifacts ?? [];
-  const withUrl = artifacts.filter((a) => !!a.url);
+  const withUrl = artifacts.filter((a) => !!resolvedArtifactHref(a));
 
   return (
     <section className='px-6 py-5'>
@@ -40,30 +58,21 @@ export function ArtifactPanel({ campaignId }: Props) {
 
       {!isLoading && withUrl.length > 0 ? (
         <div className='mt-4 grid max-h-[min(50vh,420px)] grid-cols-2 gap-3 overflow-y-auto sm:grid-cols-3 lg:grid-cols-4'>
-          {withUrl.slice(0, 24).map((artifact, idx) => (
-            <a
-              key={`${artifact.execution_id}-${artifact.artifact_type}-${idx}`}
-              href={artifact.url || '#'}
-              target='_blank'
-              rel='noreferrer'
-              className='overflow-hidden rounded-lg border bg-muted/30 shadow-sm transition hover:ring-2 hover:ring-primary/30'
-              title={`${artifact.artifact_type} · ${artifact.device_serial || t('monitorArtifactDeviceUnknown')}`}
-            >
-              <div className='aspect-video bg-muted'>
-                {artifact.url?.match(/\.(jpg|jpeg|png|webp)$/i) ? (
-                  <img
-                    src={artifact.url}
-                    alt={artifact.artifact_type}
-                    className='h-full w-full object-cover'
-                  />
-                ) : (
-                  <div className='flex h-full items-center justify-center px-2 text-center text-xs text-muted-foreground'>
-                    {artifact.artifact_type}
-                  </div>
-                )}
-              </div>
-            </a>
-          ))}
+          {withUrl.slice(0, 24).map((artifact, idx) => {
+            const href = resolvedArtifactHref(artifact);
+            if (!href) return null;
+            const showImage = artifactIsImage(artifact, href);
+            const label = `${artifact.artifact_type} · ${artifact.device_serial || t('monitorArtifactDeviceUnknown')}`;
+            return (
+              <ArtifactMonitorTile
+                key={`${artifact.execution_id}-${artifact.artifact_type}-${idx}`}
+                artifact={artifact}
+                href={href}
+                showImage={showImage}
+                label={label}
+              />
+            );
+          })}
         </div>
       ) : null}
     </section>

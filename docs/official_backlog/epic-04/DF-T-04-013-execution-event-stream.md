@@ -11,14 +11,14 @@
 | **Module** | DF-MOD-04 — Campaign, Scenario & Execution |
 | **Priority** | P1 |
 | **Story Points** | 5 |
-| **Status** | `Backlog` |
+| **Status** | `Done` |
 | **Labels** | `module:campaigns`, `layer:backend`, `layer:contract`, `layer:infra`, `type:feature` |
 | **Truy vết — FR refs** | FR-04-08 (event-driven downstream), FR-04-19 (chi tiết fail) |
 | **Truy vết — UC refs** | UC-04-08, UC-04-12 |
 | **Reporter** | (placeholder) |
 | **Assignee** | (placeholder) |
 | **Created** | 2026-05-26 |
-| **Last updated** | 2026-05-26 |
+| **Last updated** | 2026-05-31 |
 
 ## 2. Bối cảnh nghiệp vụ
 
@@ -131,38 +131,38 @@ Then 403 hoặc 404 (không leak), không event leak qua broker filter
 
 **Backend** (`layer:backend`)
 
-- [ ] Event schema constants (typed).
-- [ ] EventPublisher service với outbox pattern.
-- [ ] Outbox poller (cron 1s).
-- [ ] SSE endpoint.
-- [ ] Catch-up endpoint với pagination by event_id.
+- [x] Event schema constants (typed).
+- [x] EventPublisher service với outbox pattern.
+- [x] Outbox poller (cron 1s).
+- [x] SSE endpoint.
+- [x] Catch-up endpoint với pagination by event_id.
 
 **Contract / API** (`layer:contract`)
 
-- [ ] OpenAPI/AsyncAPI cho event schema (JSON Schema each event type).
-- [ ] Document at-least-once contract.
+- [x] OpenAPI/AsyncAPI cho event schema (JSON Schema each event type).
+- [x] Document at-least-once contract.
 
 **Database / Migration** (`layer:db`)
 
-- [ ] Bảng `event_outbox` (id, event_id, event_type, payload, published_at, attempts).
-- [ ] Bảng `events_archive` cho 30-day retention.
+- [x] Bảng `event_outbox` (id, event_id, event_type, payload, published_at, attempts).
+- [x] Bảng `events_archive` cho 30-day retention.
 
 **Infra / DevOps** (`layer:infra`)
 
-- [ ] Kafka topic / NATS subject naming: `df.execution.events.v1`.
+- [x] Kafka topic / NATS subject naming: `df.execution.events.v1`.
 - [ ] Consumer group cho DF-E-09 và DF-E-11.
-- [ ] Monitoring: lag metric.
+- [x] Monitoring: lag metric.
 
 **Documentation** (`layer:docs`)
 
-- [ ] Event catalogue: liệt kê mọi event type + payload schema + example.
-- [ ] Consumer guide.
+- [x] Event catalogue: liệt kê mọi event type + payload schema + example.
+- [x] Consumer guide.
 
 **Test** (`layer:test`)
 
-- [ ] Unit test outbox atomicity.
-- [ ] Integration test publish + subscribe.
-- [ ] Test catch-up + re-delivery.
+- [x] Unit test outbox atomicity.
+- [x] Integration test publish + subscribe.
+- [x] Test catch-up + re-delivery.
 - [ ] Load test: 1000 event/s sustained.
 
 ## 8. Test case nghiệp vụ

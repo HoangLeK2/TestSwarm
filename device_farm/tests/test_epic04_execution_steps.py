@@ -1,0 +1,377 @@
+"""Tests for execution_steps subtable and artifacts_json (DF-T-04-010 / DF-T-04-014)."""
+from __future__ import annotations
+
+import pytest
+
+pytest_plugins = ["tests.test_epic04_scenario_entity"]
+
+from services.execution.step_store import (
+    build_execution_step_payload,
+    execution_step_to_legacy_dict,
+    extract_artifacts_json,
+    slim_step_result,
+)
+from services.campaign.dlq_service import _artifact_refs_from_steps
+
+
+def test_extract_artifacts_json_from_workflow_details():
+    workflow_entry = {
+        "index": 1,
+        "type": "tap",
+        "ok": False,
+        "message": "element not found",
+        "details": {
+            "artifacts_json": [{"type": "fail", "screenshot_url": "/captures/fail.png"}],
+            "reason_code": "element_not_found",
+        },
+    }
+    arts = extract_artifacts_json(workflow_entry)
+    assert len(arts) == 1
+    assert arts[0]["type"] == "fail"
+
+
+def test_slim_step_result_strips_nested_details_artifacts():
+    slim = slim_step_result(
+        {
+            "index": 1,
+            "type": "tap",
+            "ok": False,
+            "message": "fail",
+            "details": {
+                "artifacts_json": [{"type": "fail"}],
+                "reason_code": "timeout",
+            },
+        }
+    )
+    assert "artifacts_json" not in slim.get("details", {})
+    assert slim["details"]["reason_code"] == "timeout"
+
+
+def test_build_execution_step_payload_omits_empty_artifacts_key():
+    payload = build_execution_step_payload(
+        "exec-1",
+        {"type": "wait"},
+        {"index": 0, "type": "wait", "ok": True, "details": {"message": "ok"}},
+    )
+    assert "artifacts_json" not in payload
+
+
+def test_dlq_refs_from_workflow_details_shape():
+    step_results = [
+        {
+            "index": 2,
+            "type": "tap_selector",
+            "ok": False,
+            "message": "not found",
+            "details": {
+                "artifacts": [
+                    {
+                        "type": "fail",
+                        "screenshot_url": "http://minio/fail.jpg",
+                        "hierarchy_url": "http://minio/fail.xml",
+                    }
+                ],
+            },
+        }
+    ]
+    refs = _artifact_refs_from_steps(step_results)
+    assert refs["screenshot_fail"] == "http://minio/fail.jpg"
+    assert refs["hierarchy_url"] == "http://minio/fail.xml"
+
+
+@pytest.mark.asyncio
+async def test_finalize_bulk_upsert_does_not_wipe_existing_artifacts(session_factory):
+    from datetime import datetime, timezone
+
+    from db.crud.execution import create_execution
+    from db.crud.execution_steps import get_execution_step, upsert_execution_step
+    from db.models import Organization, User
+    from services.execution.step_store import persist_execution_steps_from_results
+    from tenancy.context import set_current_org_id
+
+    NOW = datetime.now(timezone.utc)
+    async with session_factory() as db:
+        db.add(
+            Organization(
+                id="org-steps-guard",
+                business_name="Guard Org",
+                business_email="guard@org.local",
+                status="active",
+                plan="standard",
+                created_at=NOW,
+            )
+        )
+        db.add(
+            User(
+                id="user-steps-guard",
+                email="guard@test.com",
+                name="Guard User",
+                hashed_password="x",
+                org_id="org-steps-guard",
+            )
+        )
+        await db.flush()
+        set_current_org_id("org-steps-guard")
+        execution = await create_execution(db, run_type="campaign_run", user_id="user-steps-guard")
+        await upsert_execution_step(
+            db,
+            execution_id=execution.id,
+            step_index=0,
+            status="passed",
+            artifacts_json=[{"type": "post", "screenshot_url": "/captures/post.png"}],
+        )
+        exec_id = execution.id
+        await db.commit()
+
+    async with session_factory() as db:
+        await persist_execution_steps_from_results(
+            db,
+            execution_id=exec_id,
+            step_results=[
+                {
+                    "index": 0,
+                    "type": "wait",
+                    "ok": True,
+                    "message": "ok",
+                    "details": {},
+                }
+            ],
+            default_ended_at=NOW,
+        )
+        await db.commit()
+
+    async with session_factory() as db:
+        row = await get_execution_step(db, exec_id, 0)
+        assert row is not None
+        assert row.artifacts_json[0]["screenshot_url"] == "/captures/post.png"
+
+
+def test_extract_artifacts_json_prefers_artifacts_json():
+    arts = [{"type": "pre", "screenshot_url": "/captures/a.png"}]
+    result = {"artifacts_json": arts, "artifacts": [{"type": "post"}]}
+    assert extract_artifacts_json(result) == arts
+
+
+def test_slim_step_result_strips_artifact_blobs():
+    slim = slim_step_result(
+        {
+            "index": 0,
+            "type": "wait",
+            "ok": True,
+            "artifacts_json": [{"type": "pre"}],
+            "screenshot_pre": {"full": "/x.png"},
+            "message": "ok",
+        }
+    )
+    assert "artifacts_json" not in slim
+    assert "screenshot_pre" not in slim
+    assert slim["message"] == "ok"
+
+
+def test_build_execution_step_payload_maps_fields():
+    step = {"id": "s1", "type": "wait", "seconds": 1}
+    result = {
+        "index": 2,
+        "type": "wait",
+        "ok": False,
+        "message": "timeout",
+        "reason_code": "timeout",
+        "retry_attempts": [{"attempt": 1, "error_reason": "timeout", "wait_ms_before_next": 500}],
+        "artifacts_json": [{"type": "fail", "screenshot_url": "/captures/f.png"}],
+    }
+    payload = build_execution_step_payload("exec-1", step, result)
+    assert payload["execution_id"] == "exec-1"
+    assert payload["step_index"] == 2
+    assert payload["step_id"] == "s1"
+    assert payload["status"] == "failed"
+    assert payload["artifacts_json"][0]["type"] == "fail"
+    assert payload["attempts_json"][0]["attempt"] == 1
+    assert payload["error_json"]["reason_code"] == "timeout"
+    assert payload["effective_config_json"]["step_id"] == "s1"
+
+
+def test_extract_artifacts_json_from_temporal_details():
+    arts = [{"type": "post", "screenshot_url": "/captures/post.png"}]
+    result = {
+        "index": 1,
+        "type": "tap",
+        "ok": True,
+        "details": {"artifacts_json": arts},
+    }
+    assert extract_artifacts_json(result) == arts
+
+
+@pytest.mark.asyncio
+async def test_upsert_preserves_artifacts_on_empty_finalize(session_factory):
+    from datetime import datetime, timezone
+
+    from db.crud.execution import create_execution
+    from db.crud.execution_steps import get_execution_step, upsert_execution_step
+    from db.models import Organization, User
+    from tenancy.context import set_current_org_id
+
+    NOW = datetime.now(timezone.utc)
+    async with session_factory() as db:
+        db.add(
+            Organization(
+                id="org-steps-preserve",
+                business_name="Preserve Org",
+                business_email="preserve@org.local",
+                status="active",
+                plan="standard",
+                created_at=NOW,
+            )
+        )
+        db.add(
+            User(
+                id="user-steps-preserve",
+                email="preserve@test.com",
+                name="Preserve User",
+                hashed_password="x",
+                org_id="org-steps-preserve",
+            )
+        )
+        await db.flush()
+        set_current_org_id("org-steps-preserve")
+        execution = await create_execution(db, run_type="campaign_run", user_id="user-steps-preserve")
+        arts = [{"type": "pre", "screenshot_url": "/captures/pre.png"}]
+        await upsert_execution_step(
+            db,
+            execution_id=execution.id,
+            step_index=0,
+            status="passed",
+            step_type="wait",
+            artifacts_json=arts,
+        )
+        await upsert_execution_step(
+            db,
+            execution_id=execution.id,
+            step_index=0,
+            status="passed",
+            step_type="wait",
+            artifacts_json=[],
+        )
+        exec_id = execution.id
+        await db.commit()
+
+    async with session_factory() as db:
+        row = await get_execution_step(db, exec_id, 0)
+        assert row is not None
+        assert row.artifacts_json == arts
+
+
+@pytest.mark.asyncio
+async def test_upsert_execution_step_roundtrip(session_factory):
+    from datetime import datetime, timezone
+
+    from db.crud.execution import create_execution
+    from db.crud.execution_steps import get_execution_step, list_execution_steps, upsert_execution_step
+    from db.models import Organization, User
+    from tenancy.context import set_current_org_id
+
+    NOW = datetime.now(timezone.utc)
+    async with session_factory() as db:
+        db.add(
+            Organization(
+                id="org-steps",
+                business_name="Steps Org",
+                business_email="steps@org.local",
+                status="active",
+                plan="standard",
+                created_at=NOW,
+            )
+        )
+        db.add(
+            User(
+                id="user-steps",
+                email="steps@test.com",
+                name="Steps User",
+                hashed_password="x",
+                org_id="org-steps",
+            )
+        )
+        await db.flush()
+
+        set_current_org_id("org-steps")
+        execution = await create_execution(db, run_type="campaign_run", user_id="user-steps")
+        now = datetime.now(timezone.utc)
+        await upsert_execution_step(
+            db,
+            execution_id=execution.id,
+            step_index=0,
+            status="passed",
+            step_id="step-a",
+            step_type="wait",
+            started_at=now,
+            ended_at=now,
+            duration_ms=12.5,
+            artifacts_json=[{"type": "pre", "screenshot_url": "/captures/pre.png"}],
+            effective_config_json={"step_id": "step-a", "seconds": 1},
+        )
+        exec_id = execution.id
+        await db.commit()
+
+    async with session_factory() as db:
+        row = await get_execution_step(db, exec_id, 0)
+        assert row is not None
+        assert row.artifacts_json[0]["type"] == "pre"
+        rows = await list_execution_steps(db, exec_id)
+        assert len(rows) == 1
+        legacy = execution_step_to_legacy_dict(row)
+        assert legacy["artifacts_json"][0]["screenshot_url"] == "/captures/pre.png"
+
+
+@pytest.mark.asyncio
+async def test_persist_execution_steps_from_results(session_factory):
+    from datetime import datetime, timezone
+
+    from db.crud.execution import create_execution
+    from db.crud.execution_steps import list_execution_steps
+    from db.models import Organization, User
+    from services.execution.step_store import persist_execution_steps_from_results
+    from tenancy.context import set_current_org_id
+
+    NOW = datetime.now(timezone.utc)
+    async with session_factory() as db:
+        db.add(
+            Organization(
+                id="org-steps-bulk",
+                business_name="Bulk Org",
+                business_email="bulk@org.local",
+                status="active",
+                plan="standard",
+                created_at=NOW,
+            )
+        )
+        db.add(
+            User(
+                id="user-steps-bulk",
+                email="bulk@test.com",
+                name="Bulk User",
+                hashed_password="x",
+                org_id="org-steps-bulk",
+            )
+        )
+        await db.flush()
+        set_current_org_id("org-steps-bulk")
+        execution = await create_execution(db, run_type="campaign_run", user_id="user-steps-bulk")
+        await persist_execution_steps_from_results(
+            db,
+            execution_id=execution.id,
+            step_results=[
+                {
+                    "index": 0,
+                    "type": "wait",
+                    "ok": True,
+                    "artifacts_json": [{"type": "post", "screenshot_url": "/captures/post.png"}],
+                }
+            ],
+            default_ended_at=NOW,
+        )
+        exec_id = execution.id
+        await db.commit()
+
+    async with session_factory() as db:
+        rows = await list_execution_steps(db, exec_id)
+        assert len(rows) == 1
+        assert rows[0].artifacts_json[0]["type"] == "post"

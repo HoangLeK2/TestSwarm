@@ -3,22 +3,22 @@
 import { formatDistanceToNow } from 'date-fns';
 import { vi } from 'date-fns/locale';
 import { Badge } from '@/components/ui/badge';
-import type { CampaignOut, CampaignStatus } from '../../types';
+import type { CampaignOut } from '../../types';
+import {
+  campaignStatusLabel,
+  campaignStatusVariant
+} from '../../campaign-status-ui';
 import { CampaignSetupCell } from './CampaignSetupCell';
 import { CampaignRowActions } from './CampaignRowActions';
 import { CampaignRunStats } from './CampaignRunStats';
+import { CampaignEngineBadge } from './CampaignEngineBadge';
 
 export function CampaignMobileCard({
   campaign,
-  statusLabel,
-  statusVariant
+  statusLabel
 }: {
   campaign: CampaignOut;
-  statusLabel: Record<CampaignStatus, string>;
-  statusVariant: Record<
-    CampaignStatus,
-    'secondary' | 'default' | 'outline' | 'destructive'
-  >;
+  statusLabel: Record<string, string>;
 }) {
   const description = (campaign.description ?? '').trim();
 
@@ -36,11 +36,15 @@ export function CampaignMobileCard({
           ) : null}
         </div>
         <Badge
-          variant={statusVariant[campaign.status]}
+          variant={campaignStatusVariant(campaign.status)}
           className='shrink-0 text-[10px]'
         >
-          {statusLabel[campaign.status]}
+          {campaignStatusLabel(campaign.status, statusLabel)}
         </Badge>
+      </div>
+
+      <div className='mt-1'>
+        <CampaignEngineBadge campaignId={campaign.id} status={campaign.status} />
       </div>
 
       <div className='mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground'>

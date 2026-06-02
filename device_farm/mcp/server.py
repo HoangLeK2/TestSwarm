@@ -2,15 +2,16 @@ from __future__ import annotations
 
 
 import base64
+import contextvars
+import hashlib
 import json
 import os
 import sys
 import time
-import traceback
 import threading
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 try:
@@ -31,23 +32,312 @@ from urllib.error import HTTPError, URLError
 
 
 DEVICE_FARM_URL = os.environ.get("DEVICE_FARM_URL", "http://localhost:8081").rstrip("/")
-SERVER_VERSION = "2.1.0"
+SERVER_VERSION = "2.2.0"
+CONTRACT_VERSION = "df-mcp-preview-2026-06-01"
+PREVIEW_WARNING = (
+    "Preview / Experimental: Device Farm MCP Agent Tools contract may change "
+    "between releases and has no GA SLA."
+)
 
 _TIMEOUT_FAST     = 10    # list, status reads
 _TIMEOUT_CONTROL  = 30    # tap, swipe, key, open_url, shell
 _TIMEOUT_SCENARIO = 300   # scenario/run (up to 5 min)
 _TIMEOUT_CAMPAIGN = 600   # campaign/run (up to 10 min)
 
-_MCP_TOKEN = (os.environ.get("DEVICE_FARM_MCP_TOKEN") or os.environ.get("MCP_AUTH_TOKEN") or "").strip() or None
-
 _httpx_clients: Dict[int, Any] = {}  # keyed by timeout value
 _httpx_lock = threading.Lock()
+_rate_lock = threading.Lock()
+_rate_windows: Dict[Tuple[str, str], List[float]] = {}
+
+
+ERROR_CATALOG: Dict[str, Dict[str, Any]] = {
+    "df.invalid_argument": {"retryable": False, "http_status": 400},
+    "df.unauthorized": {"retryable": False, "http_status": 401},
+    "df.permission_denied": {"retryable": False, "http_status": 403},
+    "df.not_found": {"retryable": False, "http_status": 404},
+    "df.conflict": {"retryable": False, "http_status": 409},
+    "df.precondition_failed": {"retryable": False, "http_status": 412},
+    "df.rate_limited": {"retryable": True, "http_status": 429},
+    "df.quota_exceeded": {"retryable": False, "http_status": 429},
+    "df.token_suspended": {"retryable": False, "http_status": 403},
+    "df.timeout": {"retryable": True, "http_status": 504},
+    "df.internal": {"retryable": True, "http_status": 500},
+    "df.evidence_required": {"retryable": False, "http_status": 428},
+    "df.session_not_owned": {"retryable": False, "http_status": 403},
+}
+
+
+class McpToolError(Exception):
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.details = details or {}
+
+
+@dataclass(frozen=True)
+class TokenContext:
+    token: Optional[str]
+    token_id_hash: Optional[str]
+    scope: Optional[str]
+    owner_user_id: Optional[str] = None
+    org_id: Optional[str] = None
+
+
+_active_auth_token: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "device_farm_mcp_active_auth_token",
+    default=None,
+)
+
+
+def _hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:24]
+
+
+def _runtime_token_context(required_scope: str = "any") -> TokenContext:
+    device_token = (os.environ.get("DEVICE_FARM_MCP_TOKEN") or "").strip()
+    user_token = (os.environ.get("MCP_AUTH_TOKEN") or "").strip()
+
+    if required_scope == "device":
+        return _token_context_from_value(device_token, fallback_scope="device")
+    elif required_scope == "user":
+        return _token_context_from_value(user_token, fallback_scope="user")
+    return _token_context_from_value(user_token or device_token, fallback_scope="any")
+
+
+def _token_context_from_value(token: str, *, fallback_scope: str) -> TokenContext:
+    if not token:
+        raise McpToolError(
+            "df.unauthorized",
+            f"Tool requires {fallback_scope} MCP token",
+            details={"required_scope": fallback_scope},
+        )
+    if token.startswith("dfmcp_"):
+        from mcp.token_store import lookup_token
+
+        record = lookup_token(token)
+        if record is None:
+            raise McpToolError("df.unauthorized", "MCP token is invalid or revoked")
+        if fallback_scope in {"device", "user"} and record.scope_type != fallback_scope:
+            raise McpToolError(
+                "df.permission_denied",
+                "MCP token scope does not allow this tool",
+                details={"required_scope": fallback_scope, "token_scope": record.scope_type},
+            )
+        return TokenContext(
+            token=token,
+            token_id_hash=record.id,
+            scope=record.scope_type,
+            owner_user_id=record.owner_user_id,
+            org_id=record.org_id,
+        )
+
+    org_id = None
+    owner_user_id = None
+    try:
+        from api.auth.context import try_decode_access_token
+
+        ctx = try_decode_access_token(token)
+        if ctx is not None:
+            org_id = ctx.org_id
+            owner_user_id = ctx.user_id
+    except Exception:
+        pass
+    scope = fallback_scope if fallback_scope in {"device", "user"} else None
+    return TokenContext(
+        token=token,
+        token_id_hash=_hash_token(token),
+        scope=scope,
+        owner_user_id=owner_user_id,
+        org_id=org_id,
+    )
+
+
+def _mcp_token() -> Optional[str]:
+    return (
+        (os.environ.get("MCP_AUTH_TOKEN") or "").strip()
+        or (os.environ.get("DEVICE_FARM_MCP_TOKEN") or "").strip()
+        or None
+    )
 
 
 def _auth_headers() -> Dict[str, str]:
-    if _MCP_TOKEN:
-        return {"Authorization": f"Bearer {_MCP_TOKEN}"}
+    token = _active_auth_token.get() or _mcp_token()
+    if token:
+        return {"Authorization": f"Bearer {token}"}
     return {}
+
+
+def _parse_rate_limit(raw: str) -> Tuple[int, float]:
+    value = (raw or "120/minute").strip().lower()
+    if "/" not in value:
+        return max(1, int(value)), 60.0
+    count_s, unit = value.split("/", 1)
+    count = max(1, int(count_s))
+    seconds = {
+        "second": 1.0,
+        "sec": 1.0,
+        "s": 1.0,
+        "minute": 60.0,
+        "min": 60.0,
+        "m": 60.0,
+        "hour": 3600.0,
+        "h": 3600.0,
+    }.get(unit.strip(), 60.0)
+    return count, seconds
+
+
+def _check_rate_limit(token_id_hash: str, tool_name: str) -> None:
+    raw = os.environ.get("DEVICE_FARM_MCP_RATE_LIMIT", "120/minute")
+    limit, window_s = _parse_rate_limit(raw)
+    key = (token_id_hash, raw)
+    now = time.monotonic()
+    with _rate_lock:
+        calls = [ts for ts in _rate_windows.get(key, []) if now - ts < window_s]
+        if len(calls) >= limit:
+            retry_after = max(0.001, window_s - (now - calls[0]))
+            _rate_windows[key] = calls
+            raise McpToolError(
+                "df.rate_limited",
+                f"MCP token exceeded {raw} rate limit",
+                details={
+                    "tool_name": tool_name,
+                    "limit": limit,
+                    "window_seconds": window_s,
+                    "retry_after_ms": int(retry_after * 1000),
+                },
+            )
+        calls.append(now)
+        _rate_windows[key] = calls
+
+
+def _redact(value: Any) -> Any:
+    if isinstance(value, dict):
+        out: Dict[str, Any] = {}
+        for key, item in value.items():
+            lowered = str(key).lower()
+            if any(part in lowered for part in ("token", "password", "secret", "cookie")):
+                out[key] = "[REDACTED]"
+            else:
+                out[key] = _redact(item)
+        return out
+    if isinstance(value, list):
+        return [_redact(item) for item in value]
+    return value
+
+
+def _summarize_output(result: Any) -> Dict[str, Any]:
+    if isinstance(result, dict):
+        return {
+            "keys": sorted(str(key) for key in result.keys())[:20],
+            "size_bytes": len(json.dumps(result, ensure_ascii=False, default=str)),
+        }
+    if isinstance(result, list):
+        return {"items": len(result)}
+    return {"type": type(result).__name__}
+
+
+def _audit_log_path() -> Path:
+    configured = (os.environ.get("DEVICE_FARM_MCP_AUDIT_LOG_PATH") or "").strip()
+    if configured:
+        return Path(configured)
+    return Path(__file__).resolve().parent / "mcp_audit_log.jsonl"
+
+
+def _record_audit(
+    *,
+    session_id: Optional[str],
+    agent_id: Optional[str],
+    token_id_hash: Optional[str],
+    org_id: Optional[str],
+    tool_name: str,
+    input_args: Dict[str, Any],
+    output_summary: Dict[str, Any],
+    result_code: str,
+    started_at: float,
+    artifact_refs: Optional[List[str]] = None,
+) -> None:
+    entry = {
+        "session_id": session_id,
+        "agent_id": agent_id,
+        "token_id_hash": token_id_hash,
+        "org_id": org_id,
+        "tool_name": tool_name,
+        "input": _redact(input_args),
+        "output_summary": output_summary,
+        "result_code": result_code,
+        "started_at": started_at,
+        "ended_at": time.time(),
+        "latency_ms": int((time.time() - started_at) * 1000),
+        "artifact_refs": artifact_refs or [],
+        "contract_version": CONTRACT_VERSION,
+    }
+    try:
+        path = _audit_log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+    except Exception:
+        pass
+
+
+def _error_payload(code: str, message: str, details: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    meta = ERROR_CATALOG.get(code, ERROR_CATALOG["df.internal"])
+    return {
+        "error": {
+            "code": code if code in ERROR_CATALOG else "df.internal",
+            "message": message,
+            "retryable": bool(meta["retryable"]),
+            "details": details or {},
+        },
+        "contract_version": CONTRACT_VERSION,
+        "preview": True,
+    }
+
+
+def _exception_to_mcp_error(exc: Exception) -> McpToolError:
+    if isinstance(exc, McpToolError):
+        return exc
+    if isinstance(exc, (KeyError, TypeError, ValueError)):
+        return McpToolError("df.invalid_argument", str(exc))
+    text = str(exc)
+    if text.startswith("HTTP 401"):
+        return McpToolError("df.unauthorized", "Downstream API rejected MCP token")
+    if text.startswith("HTTP 403"):
+        return McpToolError("df.permission_denied", "Downstream API denied this tool call")
+    if text.startswith("HTTP 404"):
+        return McpToolError("df.not_found", "Downstream resource not found")
+    if text.startswith("HTTP 409"):
+        return McpToolError("df.conflict", "Downstream resource conflict")
+    if "timed out" in text.lower() or "timeout" in text.lower():
+        return McpToolError("df.timeout", "Downstream API timed out")
+    if text.startswith("HTTP error"):
+        return McpToolError("df.timeout", "Downstream API unavailable")
+    return McpToolError("df.internal", "MCP tool failed")
+
+
+def validate_startup_config() -> None:
+    if (os.environ.get("DEVICE_FARM_MCP_ALLOW_UNAUTH") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return
+    if _mcp_token():
+        return
+    print(
+        "Device Farm MCP server requires DEVICE_FARM_MCP_TOKEN or MCP_AUTH_TOKEN. "
+        "Set DEVICE_FARM_MCP_ALLOW_UNAUTH=1 only for local contract tests.",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
 
 
 def _get_client(timeout: int) -> Any:
@@ -55,12 +345,10 @@ def _get_client(timeout: int) -> Any:
         return None
     with _httpx_lock:
         if timeout not in _httpx_clients:
-            headers = _auth_headers()
             _httpx_clients[timeout] = httpx.Client(
                 base_url=DEVICE_FARM_URL,
                 timeout=timeout,
                 limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
-                headers=headers if headers else None,
             )
         return _httpx_clients[timeout]
 
@@ -69,7 +357,7 @@ def _http_get(path: str, timeout: int = _TIMEOUT_FAST) -> bytes:
     client = _get_client(timeout)
     if client is not None:
         try:
-            r = client.get(path)
+            r = client.get(path, headers=_auth_headers())
             r.raise_for_status()
             return r.content
         except httpx.HTTPStatusError as e:
@@ -92,7 +380,7 @@ def _http_patch_json(path: str, body: Dict[str, Any], timeout: int = _TIMEOUT_CO
     client = _get_client(timeout)
     if client is not None:
         try:
-            r = client.patch(path, json=body)
+            r = client.patch(path, json=body, headers=_auth_headers())
             r.raise_for_status()
             if not r.content:
                 return {}
@@ -124,7 +412,7 @@ def _http_post_json(path: str, body: Dict[str, Any], timeout: int = _TIMEOUT_CON
     client = _get_client(timeout)
     if client is not None:
         try:
-            r = client.post(path, json=body)
+            r = client.post(path, json=body, headers=_auth_headers())
             r.raise_for_status()
             if not r.content:
                 return {}
@@ -164,7 +452,7 @@ def _http_delete(path: str, timeout: int = _TIMEOUT_CONTROL) -> None:
     client = _get_client(timeout)
     if client is not None:
         try:
-            r = client.delete(path)
+            r = client.delete(path, headers=_auth_headers())
             if r.status_code not in (200, 204):
                 r.raise_for_status()
         except httpx.HTTPStatusError as e:
@@ -214,6 +502,18 @@ def _df_start_session(args: Dict[str, Any]) -> Dict[str, Any]:
 def _df_end_session(args: Dict[str, Any]) -> Dict[str, Any]:
     session_id = str(args["session_id"])
     return _http_post_json("/api/sessions/end", {"session_id": session_id}, timeout=_TIMEOUT_FAST)
+
+
+def _df_get_session_info(args: Dict[str, Any]) -> Dict[str, Any]:
+    session_id = str(args["session_id"])
+    raw = _http_get(f"/api/sessions/{quote(session_id)}", timeout=_TIMEOUT_FAST)
+    return json.loads(raw.decode("utf-8"))
+
+
+def _df_device_claim(args: Dict[str, Any]) -> Dict[str, Any]:
+    if args.get("device") and not args.get("device_id"):
+        args = {**args, "device_id": args["device"]}
+    return _df_start_session(args)
 
 
 def _df_reserve_device(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -601,7 +901,114 @@ def _df_run_campaign(args: Dict[str, Any]) -> Dict[str, Any]:
     Use df_poll_tasks(task_ids=[...]) to wait for completion.
     """
     campaign_id = str(args["campaign_id"])
+    body: Dict[str, Any] = {}
+    if isinstance(args.get("target"), dict):
+        body["target"] = args["target"]
+    elif args.get("device_ids") or args.get("device_group_ids"):
+        body["target"] = {
+            "device_ids": list(args.get("device_ids") or []),
+            "device_group_ids": list(args.get("device_group_ids") or []),
+        }
+    if args.get("dispatch_strategy"):
+        body["dispatch_strategy"] = str(args["dispatch_strategy"])
+    if args.get("allow_partial") is not None:
+        body["allow_partial"] = bool(args["allow_partial"])
+    if args.get("require_online") is not None:
+        body["require_online"] = bool(args["require_online"])
+    if body:
+        return _http_post_json(f"/api/campaigns/{campaign_id}/dispatch", body, timeout=_TIMEOUT_CAMPAIGN)
     return _http_post_json(f"/api/campaigns/{campaign_id}/run", {}, timeout=_TIMEOUT_CAMPAIGN)
+
+
+def _df_campaign_create(args: Dict[str, Any]) -> Dict[str, Any]:
+    return _df_create_campaign(args)
+
+
+def _df_campaign_run(args: Dict[str, Any]) -> Dict[str, Any]:
+    return _df_run_campaign(args)
+
+
+def _df_content_query(args: Dict[str, Any]) -> Dict[str, Any]:
+    params: List[str] = []
+    for name in (
+        "collection",
+        "platform",
+        "content_type",
+        "search",
+        "device_serial",
+        "campaign_id",
+        "execution_id",
+        "content_hash",
+        "parent_id",
+    ):
+        if args.get(name) is not None:
+            params.append(f"{name}={quote(str(args[name]))}")
+    if args.get("limit") is not None:
+        params.append(f"limit={int(args['limit'])}")
+    if args.get("offset") is not None:
+        params.append(f"offset={int(args['offset'])}")
+    qs = ("?" + "&".join(params)) if params else ""
+    raw = _http_get(f"/api/content{qs}", timeout=_TIMEOUT_FAST)
+    return json.loads(raw.decode("utf-8"))
+
+
+def _df_save_extraction(args: Dict[str, Any]) -> Dict[str, Any]:
+    data = args.get("data") or args.get("extraction")
+    if not isinstance(data, dict):
+        raise ValueError("data must be a JSON object")
+    body: Dict[str, Any] = {
+        "data": data,
+        "collection": str(args.get("collection") or "default"),
+        "content_type": str(args.get("content_type") or "fb_post"),
+    }
+    for name in (
+        "platform",
+        "dedupe_field",
+        "dedup_action",
+        "tags",
+        "device_serial",
+        "campaign_id",
+        "execution_id",
+    ):
+        if args.get(name) is not None:
+            body[name] = args[name]
+    return _http_post_json("/api/content/save", body, timeout=_TIMEOUT_FAST)
+
+
+def _df_account_list(args: Dict[str, Any]) -> Dict[str, Any]:
+    params: List[str] = []
+    for name in ("platform", "status", "state", "tags"):
+        if args.get(name) is not None:
+            params.append(f"{name}={quote(str(args[name]))}")
+    include_states = args.get("include_states")
+    if isinstance(include_states, list):
+        params.extend(f"include_states={quote(str(state))}" for state in include_states)
+    if args.get("limit") is not None:
+        params.append(f"limit={int(args['limit'])}")
+    if args.get("offset") is not None:
+        params.append(f"offset={int(args['offset'])}")
+    qs = ("?" + "&".join(params)) if params else ""
+    raw = _http_get(f"/api/accounts{qs}", timeout=_TIMEOUT_FAST)
+    accounts = json.loads(raw.decode("utf-8"))
+    return {"accounts": accounts, "total": len(accounts) if isinstance(accounts, list) else None}
+
+
+def _df_mcp_registry(args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    args = args or {}
+    channel = str(args.get("channel") or "preview")
+    tools = [
+        _tool_descriptor(name, meta)
+        for name, meta in TOOL_DEFS.items()
+        if channel == "all" or meta.get("metadata", {}).get("channel") == channel
+    ]
+    return {
+        "preview": True,
+        "channel": channel,
+        "contract_version": CONTRACT_VERSION,
+        "warning": PREVIEW_WARNING,
+        "tools": tools,
+        "error_catalog": ERROR_CATALOG,
+    }
 
 
 # ── Scenario Template tools (DF-003) ──────────────────────────────────────────
@@ -1338,6 +1745,279 @@ TOOL_DEFS: Dict[str, Dict[str, Any]] = {
     },
 }
 
+
+_GENERIC_OUTPUT_SCHEMA = {
+    "type": "object",
+    "additionalProperties": True,
+}
+
+
+TOOL_DEFS.update(
+    {
+        "df_device_list": {
+            "description": "Canonical Epic 10 alias for df_list_devices. Enumerate fleet devices for an AI agent.",
+            "inputSchema": TOOL_DEFS["df_list_devices"]["inputSchema"],
+            "outputSchema": _GENERIC_OUTPUT_SCHEMA,
+            "metadata": {
+                "route": "/api/devices/live",
+                "token_scope": "any",
+                "channel": "preview",
+                "stability": "preview",
+            },
+            "fn": _df_list_devices,
+        },
+        "df_device_claim": {
+            "description": "Reserve a device for an MCP agent session. Alias of df_start_session.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "device_id": {"type": "string", "description": "Device serial"},
+                    "device": {"type": "string", "description": "Legacy alias for device_id"},
+                    "user_id": {"type": "string", "description": "Optional user id for audit"},
+                    "agent_id": {"type": "string", "description": "Optional agent runtime identifier"},
+                },
+                "required": [],
+            },
+            "outputSchema": _GENERIC_OUTPUT_SCHEMA,
+            "metadata": {
+                "route": "/api/sessions/start",
+                "token_scope": "device",
+                "channel": "preview",
+                "stability": "preview",
+            },
+            "fn": _df_device_claim,
+        },
+        "df_get_session_info": {
+            "description": "Get session ownership and device binding for an MCP session.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"session_id": {"type": "string"}},
+                "required": ["session_id"],
+            },
+            "outputSchema": _GENERIC_OUTPUT_SCHEMA,
+            "metadata": {
+                "route": "/api/sessions/{session_id}",
+                "token_scope": "device",
+                "channel": "preview",
+                "stability": "preview",
+            },
+            "fn": _df_get_session_info,
+        },
+        "df_campaign_create": {
+            "description": "Canonical Epic 10 alias for df_create_campaign.",
+            "inputSchema": TOOL_DEFS["df_create_campaign"]["inputSchema"],
+            "outputSchema": _GENERIC_OUTPUT_SCHEMA,
+            "metadata": {
+                "route": "/api/campaigns",
+                "token_scope": "user",
+                "channel": "preview",
+                "stability": "preview",
+            },
+            "fn": _df_campaign_create,
+        },
+        "df_campaign_run": {
+            "description": "Canonical Epic 10 campaign dispatch tool. Wraps campaign run/dispatch HTTP route.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "campaign_id": {"type": "string"},
+                    "target": {"type": "object"},
+                    "device_ids": {"type": "array", "items": {"type": "string"}},
+                    "device_group_ids": {"type": "array", "items": {"type": "string"}},
+                    "dispatch_strategy": {"type": "string", "enum": ["parallel", "sequential"]},
+                    "allow_partial": {"type": "boolean"},
+                    "require_online": {"type": "boolean"},
+                },
+                "required": ["campaign_id"],
+            },
+            "outputSchema": _GENERIC_OUTPUT_SCHEMA,
+            "metadata": {
+                "route": "/api/campaigns/{campaign_id}/dispatch",
+                "token_scope": "user",
+                "channel": "preview",
+                "stability": "preview",
+            },
+            "fn": _df_campaign_run,
+        },
+        "df_content_query": {
+            "description": "Query extracted content through the Device Farm content HTTP API.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "collection": {"type": "string"},
+                    "platform": {"type": "string"},
+                    "content_type": {"type": "string"},
+                    "search": {"type": "string"},
+                    "device_serial": {"type": "string"},
+                    "campaign_id": {"type": "string"},
+                    "execution_id": {"type": "string"},
+                    "content_hash": {"type": "string"},
+                    "parent_id": {"type": "string"},
+                    "limit": {"type": "integer", "default": 50},
+                    "offset": {"type": "integer", "default": 0},
+                },
+                "required": [],
+            },
+            "outputSchema": _GENERIC_OUTPUT_SCHEMA,
+            "metadata": {
+                "route": "/api/content",
+                "token_scope": "user",
+                "channel": "preview",
+                "stability": "preview",
+            },
+            "fn": _df_content_query,
+        },
+        "df_save_extraction": {
+            "description": "Persist extracted content and evidence through the content save HTTP route.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "data": {"type": "object"},
+                    "extraction": {"type": "object"},
+                    "collection": {"type": "string", "default": "default"},
+                    "platform": {"type": "string"},
+                    "content_type": {"type": "string", "default": "fb_post"},
+                    "dedupe_field": {"type": "string"},
+                    "dedup_action": {"type": "string", "default": "skip"},
+                    "tags": {"type": "string"},
+                    "device_serial": {"type": "string"},
+                    "campaign_id": {"type": "string"},
+                    "execution_id": {"type": "string"},
+                    "artifact_refs": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["data"],
+            },
+            "outputSchema": _GENERIC_OUTPUT_SCHEMA,
+            "metadata": {
+                "route": "/api/content/save",
+                "token_scope": "user",
+                "channel": "preview",
+                "stability": "preview",
+                "require_evidence": True,
+            },
+            "fn": _df_save_extraction,
+        },
+        "df_account_list": {
+            "description": "List accounts available to bind into MCP-authored scenarios.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "platform": {"type": "string"},
+                    "status": {"type": "string"},
+                    "state": {"type": "string"},
+                    "include_states": {"type": "array", "items": {"type": "string"}},
+                    "tags": {"type": "string"},
+                    "limit": {"type": "integer", "default": 50},
+                    "offset": {"type": "integer", "default": 0},
+                },
+                "required": [],
+            },
+            "outputSchema": _GENERIC_OUTPUT_SCHEMA,
+            "metadata": {
+                "route": "/api/accounts",
+                "token_scope": "user",
+                "channel": "preview",
+                "stability": "preview",
+            },
+            "fn": _df_account_list,
+        },
+        "df_mcp_registry": {
+            "description": "Return the MCP Preview registry, tool metadata, route parity references, and error catalog.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "channel": {"type": "string", "enum": ["preview", "all"], "default": "preview"},
+                },
+                "required": [],
+            },
+            "outputSchema": _GENERIC_OUTPUT_SCHEMA,
+            "metadata": {
+                "route": "/mcp/tools/list",
+                "token_scope": "any",
+                "channel": "preview",
+                "stability": "preview",
+            },
+            "fn": _df_mcp_registry,
+        },
+    }
+)
+
+
+_TOOL_METADATA_DEFAULTS: Dict[str, Dict[str, Any]] = {
+    "df_list_devices": {"route": "/api/devices/live", "token_scope": "any"},
+    "df_start_session": {"route": "/api/sessions/start", "token_scope": "device"},
+    "df_end_session": {"route": "/api/sessions/end", "token_scope": "device"},
+    "df_reserve_device": {"route": "/api/devices/{device_id}/reserve", "token_scope": "device"},
+    "df_release_device": {"route": "/api/devices/{device_id}/release", "token_scope": "device"},
+    "df_tap": {"route": "/api/tap/{serial}", "token_scope": "device"},
+    "df_long_tap": {"route": "/api/devices/{serial}/long_tap", "token_scope": "device"},
+    "df_swipe": {"route": "/api/swipe/{serial}", "token_scope": "device"},
+    "df_scroll": {"route": "/api/devices/{serial}/scroll", "token_scope": "device"},
+    "df_input_text": {"route": "/api/devices/{serial}/input_text", "token_scope": "device"},
+    "df_key": {"route": "/api/key/{serial}", "token_scope": "device"},
+    "df_shell": {"route": "/api/agent/{serial}/shell", "token_scope": "device"},
+    "df_screenshot": {"route": "/screenshot/{serial}", "token_scope": "device"},
+    "df_hierarchy": {"route": "/api/devices/{serial}/hierarchy", "token_scope": "device"},
+    "df_get_ui_elements": {"route": "/api/devices/{serial}/ui_elements", "token_scope": "device"},
+    "df_tap_selector": {"route": "/api/tap_selector/{serial}", "token_scope": "device"},
+    "df_hit_test": {"route": "/api/devices/{serial}/hit_test", "token_scope": "device"},
+    "df_open_url": {"route": "/api/open_url/{serial}", "token_scope": "device"},
+    "df_run_scenario": {"route": "/api/devices/{serial}/scenario/run", "token_scope": "user"},
+    "df_fleet_run": {"route": "/api/fleet/run", "token_scope": "user"},
+    "df_fleet_status": {"route": "/api/fleet/status", "token_scope": "user"},
+    "df_fleet_poll": {"route": "/api/fleet/status", "token_scope": "user"},
+    "df_enqueue_task": {"route": "/api/task", "token_scope": "device"},
+    "df_list_tasks": {"route": "/api/tasks", "token_scope": "device"},
+    "df_get_task": {"route": "/api/tasks/{task_id}", "token_scope": "device"},
+    "df_poll_tasks": {"route": "/api/tasks", "token_scope": "device"},
+    "df_get_config": {"route": "/api/config", "token_scope": "any"},
+    "df_connect_info": {"route": "/api/connect/info", "token_scope": "any"},
+    "df_connect_register": {"route": "/api/connect/register", "token_scope": "device"},
+    "df_list_campaigns": {"route": "/api/campaigns", "token_scope": "user"},
+    "df_get_campaign": {"route": "/api/campaigns/{campaign_id}", "token_scope": "user"},
+    "df_create_campaign": {"route": "/api/campaigns", "token_scope": "user"},
+    "df_update_campaign_scenario": {"route": "/api/campaigns/{campaign_id}/scenario", "token_scope": "user"},
+    "df_compile_campaign_scenario": {"route": "/api/campaigns/{campaign_id}/compile-scenario", "token_scope": "user"},
+    "df_add_devices_to_campaign": {"route": "/api/campaigns/{campaign_id}/devices", "token_scope": "user"},
+    "df_remove_device_from_campaign": {"route": "/api/campaigns/{campaign_id}/devices/{device_id}", "token_scope": "user"},
+    "df_get_campaign_devices": {"route": "/api/campaigns/{campaign_id}/devices", "token_scope": "user"},
+    "df_update_campaign_status": {"route": "/api/campaigns/{campaign_id}/status", "token_scope": "user"},
+    "df_delete_campaign": {"route": "/api/campaigns/{campaign_id}", "token_scope": "user"},
+    "df_run_campaign": {"route": "/api/campaigns/{campaign_id}/run", "token_scope": "user"},
+    "df_list_scenario_templates": {"route": "/api/scenario-templates", "token_scope": "user"},
+    "df_get_scenario_template": {"route": "/api/scenario-templates/{template_id}", "token_scope": "user"},
+    "df_create_scenario_template": {"route": "/api/scenario-templates", "token_scope": "user"},
+    "df_update_scenario_template": {"route": "/api/scenario-templates/{template_id}", "token_scope": "user"},
+    "df_delete_scenario_template": {"route": "/api/scenario-templates/{template_id}", "token_scope": "user"},
+}
+
+
+def _normalize_tool_definitions() -> None:
+    for name, meta in TOOL_DEFS.items():
+        meta.setdefault("outputSchema", _GENERIC_OUTPUT_SCHEMA)
+        metadata = dict(_TOOL_METADATA_DEFAULTS.get(name, {}))
+        metadata.update(meta.get("metadata") or {})
+        metadata.setdefault("route", "/api/unknown")
+        metadata.setdefault("token_scope", "any")
+        metadata.setdefault("channel", "preview")
+        metadata.setdefault("stability", "preview")
+        metadata["preview"] = True
+        metadata["contract_version"] = CONTRACT_VERSION
+        meta["metadata"] = metadata
+
+
+def _tool_descriptor(name: str, meta: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "name": name,
+        "description": meta["description"],
+        "inputSchema": meta["inputSchema"],
+        "outputSchema": meta["outputSchema"],
+        "metadata": meta["metadata"],
+    }
+
+
+_normalize_tool_definitions()
+
 # Pre-compute which tool functions accept arguments (avoids inspect on every call)
 import inspect as _inspect
 _TOOL_TAKES_ARGS: Dict[str, bool] = {
@@ -1372,10 +2052,11 @@ def handle_tools_list(_ctx: McpContext, msg: Dict[str, Any]) -> Dict[str, Any]:
         "id": msg.get("id"),
         "jsonrpc": "2.0",
         "result": {
-            "tools": [
-                {"name": name, "description": meta["description"], "inputSchema": meta["inputSchema"]}
-                for name, meta in TOOL_DEFS.items()
-            ],
+            "preview": True,
+            "contract_version": CONTRACT_VERSION,
+            "server_status": "preview",
+            "warning": PREVIEW_WARNING,
+            "tools": [_tool_descriptor(name, meta) for name, meta in TOOL_DEFS.items()],
         },
     }
 
@@ -1396,34 +2077,85 @@ def handle_tools_call(ctx: McpContext, msg: Dict[str, Any]) -> Dict[str, Any]:
             "jsonrpc": "2.0",
             "error": {"code": -32601, "message": f"Unknown tool: {name}"},
         }
-    fn = TOOL_DEFS[name]["fn"]
+    meta = TOOL_DEFS[name]
+    fn = meta["fn"]
+    started_at = time.time()
+    session_id = str(args["session_id"]) if args.get("session_id") else None
+    agent_id = str(args["agent_id"]) if args.get("agent_id") else None
+    token_ctx: TokenContext | None = None
+    active_token_reset: contextvars.Token[str | None] | None = None
     try:
+        token_ctx = _runtime_token_context(str(meta["metadata"].get("token_scope", "any")))
+        active_token_reset = _active_auth_token.set(token_ctx.token)
+        if token_ctx.token_id_hash:
+            _check_rate_limit(token_ctx.token_id_hash, name)
+        if meta["metadata"].get("require_evidence") and not args.get("artifact_refs"):
+            raise McpToolError(
+                "df.evidence_required",
+                "This MCP tool requires artifact_refs evidence before persisting output",
+                details={"tool_name": name},
+            )
         result = fn(args) if _TOOL_TAKES_ARGS[name] else fn()  # type: ignore[arg-type]
+        _record_audit(
+            session_id=session_id,
+            agent_id=agent_id,
+            token_id_hash=token_ctx.token_id_hash,
+            org_id=token_ctx.org_id,
+            tool_name=name,
+            input_args=args,
+            output_summary=_summarize_output(result),
+            result_code="success",
+            started_at=started_at,
+            artifact_refs=args.get("artifact_refs") if isinstance(args.get("artifact_refs"), list) else None,
+        )
         content: List[Dict[str, Any]] = []
         if name == "df_screenshot":
             img = result["image"]
             content.append({"type": "image", "data": img["data"], "mimeType": img["mimeType"]})
         else:
-            content.append({"type": "text", "text": json.dumps(result, ensure_ascii=False)})
+            payload = {
+                "preview": True,
+                "contract_version": CONTRACT_VERSION,
+                "tool_name": name,
+                "result": result,
+            }
+            content.append({"type": "text", "text": json.dumps(payload, ensure_ascii=False)})
         return {
             "id": msg.get("id"),
             "jsonrpc": "2.0",
             "result": {"content": content},
         }
     except Exception as e:
-        tb = traceback.format_exc()
+        err = _exception_to_mcp_error(e)
+        payload = _error_payload(err.code, err.message, err.details)
+        _record_audit(
+            session_id=session_id,
+            agent_id=agent_id,
+            token_id_hash=token_ctx.token_id_hash if token_ctx else None,
+            tool_name=str(name),
+            input_args=args,
+            output_summary={"error": payload["error"]["code"]},
+            result_code=payload["error"]["code"],
+            started_at=started_at,
+            org_id=token_ctx.org_id if token_ctx else None,
+        )
         return {
             "id": msg.get("id"),
             "jsonrpc": "2.0",
-            "error": {
-                "code": -32000,
-                "message": f"{type(e).__name__}: {e}",
-                "data": tb,
+            "result": {
+                "isError": True,
+                "content": [
+                    {"type": "text", "text": json.dumps(payload, ensure_ascii=False)}
+                ],
             },
         }
+    finally:
+        if active_token_reset is not None:
+            _active_auth_token.reset(active_token_reset)
 
 
 def run_stdio_server() -> None:
+    validate_startup_config()
     ctx = McpContext()
     handlers = {
         "initialize": handle_initialize,

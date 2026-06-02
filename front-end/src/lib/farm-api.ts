@@ -16,9 +16,35 @@ function newRequestId(): string {
 const CURRENT_ORG_STORAGE_KEY = 'device-farm:current-organization-id';
 
 /** Origin of the Device Farm HTTP API (no `/api` suffix). */
-export const deviceFarmBackendBase = (
-  process.env.NEXT_PUBLIC_PRODUCT_API_URL || 'http://localhost:8081'
-).replace(/\/+$/, '');
+function resolveDeviceFarmBackendBase(): string {
+  const configured = (
+    process.env.NEXT_PUBLIC_PRODUCT_API_URL || 'http://localhost:8081'
+  ).replace(/\/+$/, '');
+
+  if (typeof window === 'undefined') {
+    return configured;
+  }
+
+  const isDev =
+    (process.env.NEXT_PUBLIC_ENVIRONMENT || '').trim().toLowerCase() === 'dev';
+  if (!isDev) {
+    return configured;
+  }
+
+  try {
+    const apiHost = new URL(configured).host;
+    const pageHost = window.location.host;
+    if (apiHost && pageHost && apiHost !== pageHost) {
+      // `next.config` rewrites `/api/*` → DEVICE_FARM_BACKEND_URL (same-origin, no CORS).
+      return window.location.origin.replace(/\/+$/, '');
+    }
+  } catch {
+    // keep configured
+  }
+  return configured;
+}
+
+export const deviceFarmBackendBase = resolveDeviceFarmBackendBase();
 const backendBase = deviceFarmBackendBase;
 const API_BASE_URL = `${backendBase}/api`;
 

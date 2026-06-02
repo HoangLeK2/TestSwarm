@@ -1,19 +1,16 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { MousePointerClick, Move } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { RepeatUntilFields } from '../scenario-steps/control-flow-editors';
 import {
   RunScenarioFields,
   type RunScenarioCampaignOption
 } from '../scenario-steps/run-scenario-editor';
 import type { FlowStep } from '../scenario-steps/types';
-import { StepIcon } from './step-icon';
 import { ExtractStepFields } from './extract-fields';
 import { ScrollDownStepFields } from './scroll-down-fields';
 import {
@@ -29,7 +26,8 @@ import {
   StepPanelHint,
   StepPanelMetaFields,
   StepPanelSection,
-  StepPanelToggle
+  StepPanelToggle,
+  StepPanelInput
 } from './step-panel-primitives';
 
 interface Props {
@@ -166,7 +164,7 @@ function VariableInsertSelect({
 }
 
 export function StepDetailPanel({
-  step,
+  step: stepProp,
   onChange,
   onClose: _onClose,
   availableVariables = [],
@@ -179,8 +177,41 @@ export function StepDetailPanel({
   const tApp = useTranslations('campaignsFeature.stepEditor.appLifecycle');
   const tSec = useTranslations('campaignsFeature.stepEditor.sections');
   const tSel = useTranslations('campaignsFeature.stepEditor.selector');
-  const update = (fields: Partial<FlowStep>) =>
-    onChange({ ...step, ...fields });
+  const [step, setStep] = useState(stepProp);
+  const pendingCommitRef = useRef<FlowStep | null>(null);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+
+  useEffect(() => {
+    setStep(stepProp);
+  }, [stepProp]);
+
+  useEffect(() => {
+    return () => {
+      if (pendingCommitRef.current) onChangeRef.current(pendingCommitRef.current);
+    };
+  }, []);
+
+  /** Persist edits without re-rendering this panel (text fields use StepPanelInput). */
+  const commitStep = useCallback(
+    (next: FlowStep) => {
+      pendingCommitRef.current = next;
+      onChange(next);
+    },
+    [onChange]
+  );
+
+  const update = useCallback(
+    (fields: Partial<FlowStep>) => {
+      setStep((prev) => {
+        const next = { ...prev, ...fields } as FlowStep;
+        pendingCommitRef.current = next;
+        onChange(next);
+        return next;
+      });
+    },
+    [onChange]
+  );
   const isVarRef = (v: string) => /^\$\{[^}]+\}$/.test(v);
   const parseNumOrVar = (raw: string, fallback: number): number | string => {
     const v = raw.trim();
@@ -209,7 +240,7 @@ export function StepDetailPanel({
       <StepPanelHeader step={step} />
 
       <div className='max-h-[70vh] space-y-4 overflow-y-auto p-3 sm:p-4'>
-        <StepPanelMetaFields step={step} update={update} t={t} />
+        <StepPanelMetaFields step={step} commitStep={commitStep} t={t} />
 
         <StepPanelSection title={tSec('stepConfig')}>
         {step.type === 'tap' && (
@@ -217,7 +248,7 @@ export function StepDetailPanel({
             <StepPanelHint>{tSel('autoFillHint')}</StepPanelHint>
             <SelectorFields
               step={step}
-              onChange={onChange}
+              onChange={commitStep}
               onRequestPickSelector={onRequestPickSelector}
               availableVariables={availableVariables}
               t={t}
@@ -408,7 +439,7 @@ export function StepDetailPanel({
           <>
             <SelectorFields
               step={step}
-              onChange={onChange}
+              onChange={commitStep}
               onRequestPickSelector={onRequestPickSelector}
               availableVariables={availableVariables}
               t={t}
@@ -661,7 +692,7 @@ export function StepDetailPanel({
           <>
             <SelectorFields
               step={step}
-              onChange={onChange}
+              onChange={commitStep}
               onRequestPickSelector={onRequestPickSelector}
               availableVariables={availableVariables}
               t={t}
@@ -810,7 +841,7 @@ export function StepDetailPanel({
           </F>
         )}
 
-        {step.type === 'tap_fb_comment_button' && (
+        {(step.type === 'fb_tap_comment_button' || step.type === 'tap_fb_comment_button') && (
           <>
             {/* ── Mô tả ── */}
             <div className='rounded-md border border-blue-400/40 bg-blue-50/60 px-3 py-2.5 text-[11px] leading-relaxed text-blue-950 dark:border-blue-500/30 dark:bg-blue-950/30 dark:text-blue-100'>
@@ -1093,7 +1124,7 @@ export function StepDetailPanel({
           <>
             <SelectorFields
               step={step}
-              onChange={onChange}
+              onChange={commitStep}
               onRequestPickSelector={onRequestPickSelector}
               availableVariables={availableVariables}
               t={t}
@@ -1755,7 +1786,7 @@ export function StepDetailPanel({
         )}
 
         {step.type === 'extract' && (
-          <ExtractStepFields step={step} update={update} onChange={onChange} />
+          <ExtractStepFields step={step} update={update} onChange={commitStep} />
         )}
 
         {step.type === 'extract_text_hierarchy' && (
@@ -1975,7 +2006,7 @@ export function StepDetailPanel({
               <F label={t('saveExtraction.contentTypeLabel')}>
                 <Input
                   className='h-8 text-xs'
-                  placeholder='group_post'
+                  placeholder='fb_post'
                   value={step.content_type ?? ''}
                   onChange={(e) =>
                     update({ content_type: e.target.value || undefined })

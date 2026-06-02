@@ -2,7 +2,7 @@
 
 > **Mã module:** DF-MOD-10
 > **Phiên bản:** 1.0
-> **Cập nhật lần cuối:** 2026-05-25
+> **Cập nhật lần cuối:** 2026-06-01
 > **Trạng thái:** Preview / Experimental — phần mở rộng đang được nghiên cứu, không thuộc nhóm năng lực cốt lõi của sản phẩm
 > **Đối tượng đọc:** Team Device Farm
 > **Tài liệu liên quan:** [Product Overview](../01-product-overview.md), [Glossary](../00-glossary.md), [Personas & Journeys](../02-personas-and-journeys.md), [Devices & Control Plane](02-devices-and-control-plane.md), [Campaign, Scenario & Execution](04-campaigns-scenarios-executions.md), [Content/Extraction/Artifacts](06-content-extraction-artifacts.md), [Accounts & Groups](07-accounts-and-groups.md), [Social Platform Extensions](08-social-platform-extensions.md)
@@ -11,7 +11,19 @@
 
 > **Lưu ý định vị:** Module này là **phần mở rộng đang được nghiên cứu, không thuộc nhóm năng lực cốt lõi của sản phẩm Device Farm**. Trục cốt lõi của Device Farm là tự động hóa thiết bị Android ở quy mô cho nghiệp vụ social media qua Campaign/Scenario/Fleet (xem các module 02, 04, 06, 07, 08). MCP Agent Tools là forward-looking surface dành cho hướng nghiên cứu AI agent điều khiển device — use case đánh giá Device Farm cho phần core không cần dựa vào module này.
 
-Module Công cụ AI Agent qua MCP (MCP — Model Context Protocol — giao thức chuẩn để AI agent gọi tool) là mặt phẳng điều khiển preview dành cho AI agent (Claude, GPT, Gemini, ...) khi thao tác Device Farm ở mức L3 (cấp coverage experimental). Device Farm vận hành một MCP server stdio (giao tiếp qua đầu vào/đầu ra chuẩn của tiến trình) expose các thao tác device, session, scenario, campaign, và content thành các tool có tiền tố df_ (ví dụ df_start_session, df_tap, df_get_hierarchy, df_run_scenario). Mọi MCP tool đều wrap (bọc) một HTTP route đã có của Device Farm — tức là không có "API bí mật" chỉ dành cho agent; agent thao tác qua cùng các route mà người vận hành dùng, chỉ khác ở giao thức gọi. Mô hình ownership tuân thủ L3: một agent ↔ một device hoặc một session. Auth qua DEVICE_FARM_MCP_TOKEN (token device-scoped, dùng cho thao tác cụ thể trên device đã pair) hoặc MCP_AUTH_TOKEN (token user-scoped, cho phép tool có ngữ cảnh tổ chức như campaign, content). Mọi MCP action được ghi vào activity log để người giám sát review về sau, và mỗi phiên agent được persist vào bảng mcp_sessions.
+Module Công cụ AI Agent qua MCP (MCP — Model Context Protocol — giao thức chuẩn để AI agent gọi tool) là mặt phẳng điều khiển preview dành cho AI agent (Claude, GPT, Gemini, ...) khi thao tác Device Farm ở mức L3 (cấp coverage experimental). Device Farm vận hành một MCP server stdio (giao tiếp qua đầu vào/đầu ra chuẩn của tiến trình) expose các thao tác device, session, scenario, campaign, content, account, audit, registry thành các tool có tiền tố df_ (ví dụ df_start_session, df_device_list, df_get_session_info, df_campaign_run, df_content_query). Mọi MCP tool đều wrap (bọc) một HTTP route đã có của Device Farm — tức là không có "API bí mật" chỉ dành cho agent; agent thao tác qua cùng các route mà người vận hành dùng, chỉ khác ở giao thức gọi. Mô hình ownership tuân thủ L3: một agent ↔ một device hoặc một session. Auth qua DEVICE_FARM_MCP_TOKEN (token device-scoped, dùng cho thao tác cụ thể trên device đã pair) hoặc MCP_AUTH_TOKEN (token user-scoped, cho phép tool có ngữ cảnh tổ chức như campaign, content). Mọi MCP action được ghi vào MCP audit log để người giám sát review về sau, mỗi phiên agent được persist vào bảng mcp_sessions, và dashboard hiển thị disclosure Preview ở các entry point MCP.
+
+### 1.1 Snapshot triển khai 2026-06-01
+
+| Capability | Trạng thái |
+|---|---|
+| MCP stdio server | Active Preview; khởi động fail-fast nếu thiếu token, trừ local override `DEVICE_FARM_MCP_ALLOW_UNAUTH=1`. |
+| Tool registry | `tools/list` và `df_mcp_registry` trả `preview`, `contract_version`, warning, input/output schema, route parity, token scope, stability. |
+| Canonical Epic 10 tools | `df_device_list`, `df_device_claim`, `df_start_session`, `df_end_session`, `df_get_session_info`, `df_campaign_create`, `df_campaign_run`, `df_run_scenario`, `df_content_query`, `df_save_extraction`, `df_account_list`. |
+| Error contract | Tool failures trả content `isError=true` với mã `df.*`, `retryable`, `details`; traceback chỉ ở internal log, không trả cho agent. |
+| Audit / rate-limit | MCP stdio ghi JSONL audit cho success/fail, redact field nhạy cảm, hash token id, và áp dụng baseline per-token rate limit. |
+| Token management API | `/api/mcp/tokens` tạo token Preview dạng hash-at-rest, yêu cầu consent, list/revoke theo tenant; `dfmcp_*` token dùng được qua auth chung và env token vẫn được hỗ trợ cho runtime stdio. |
+| Dashboard | `/dashboard/mcp`, `/dashboard/mcp/tools`, `/dashboard/mcp/tokens`, `/dashboard/mcp/audit-log`, `/dashboard/mcp/sandbox` có Preview banner và contract version. |
 
 ## 2. Bối cảnh & Vấn đề giải quyết
 
@@ -224,11 +236,11 @@ Phần này minh bạch các điểm cần biết trước khi đưa AI agent v�
 
 **Handoff workflow agent–người chưa có UX rõ ràng.** Khái niệm handoff đã có trong khung guardrail, nhưng UX cụ thể (agent gửi yêu cầu, supervisor nhận notification và takeover session, lưu lại điểm bàn giao) chưa được triển khai trong dashboard. Hiện tại agent có thể "raise" qua tool hoặc qua log, nhưng việc supervisor phản hồi cần đi qua kênh ngoài (Slack, email, kênh nội bộ). Roadmap có hạng mục handoff workflow trên dashboard. Trong giai đoạn này, nên có quy trình vận hành riêng cho tình huống cần handoff.
 
-**Activity log có thể rất lớn nếu agent gọi tool dày đặc.** Mỗi tool call được ghi vào activity log — một agent vận hành nhiều giờ có thể tạo hàng nghìn bản ghi. Dung lượng activity log và chi phí truy vấn cần được giám sát. Chính sách retention activity log có thể được cấu hình ở triển khai; nên cân nhắc giữ chi tiết bao lâu trước khi archive.
+**MCP audit log có thể rất lớn nếu agent gọi tool dày đặc.** Mỗi tool call được ghi vào MCP audit log — một agent vận hành nhiều giờ có thể tạo hàng nghìn bản ghi. API audit-log chỉ trả dữ liệu cùng tenant cho non-superadmin; record thiếu org_id được ẩn khỏi tenant user. Dung lượng log và chi phí truy vấn cần được giám sát. Ở Preview, audit log mặc định là JSONL để bootstrap nhanh; triển khai production nên cấu hình retention/archive hoặc chuyển sang backend lưu trữ tập trung.
 
 **Provider AI có rate limit và outage riêng.** MCP server không kiểm soát rate limit của Claude, GPT, Gemini — đây là vấn đề ở phía provider mà người tích hợp cấu hình. Khi provider bị outage hoặc rate limit, agent có thể fail giữa chừng phiên. Khuyến nghị: thiết kế supervisor để phát hiện tình huống agent dừng đột ngột và đưa session vào pending-handoff thay vì để session "lơ lửng".
 
-**Tool campaign và content qua MCP_AUTH_TOKEN dùng quyền user.** Khi agent dùng MCP_AUTH_TOKEN, mọi tool campaign và content được thực hiện với quyền của user gắn với token đó. Hệ quả: agent có thể tạo, sửa, xóa tài nguyên trong phạm vi user. Nên cấp MCP_AUTH_TOKEN cho user "service account" có scope hẹp (chỉ những resource agent cần), không dùng token của user thật có quyền admin tổ chức.
+**Tool campaign và content qua MCP_AUTH_TOKEN dùng quyền user.** Khi agent dùng MCP_AUTH_TOKEN hoặc token `dfmcp_*` user-scoped, mọi tool campaign và content được thực hiện với quyền của user gắn với token đó. Hệ quả: agent có thể tạo, sửa, xóa tài nguyên trong phạm vi user. Nên cấp token cho user "service account" có scope hẹp (chỉ những resource agent cần), không dùng token của user thật có quyền admin tổ chức. Token tạo từ dashboard MCP chỉ lưu hash, plaintext chỉ hiển thị một lần.
 
 **Không có hỗ trợ multi-agent cooperation ở tầng MCP.** Mô hình L3 hiện là một agent ↔ một device/session. Mọi cooperation giữa các agent (ví dụ một agent điều phối nhiều agent con) phải được orchestrate ở tầng trên — Device Farm không có tool df_orchestrate hay tương tự. Đây là chủ ý: giữ ranh giới ownership rõ ràng để audit và handoff đơn giản.
 

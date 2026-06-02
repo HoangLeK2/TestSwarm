@@ -6,7 +6,6 @@ import logging
 import os
 
 from db.database import AsyncSessionLocal
-from services.device_reserve.service import auto_release_expired_sessions
 
 log = logging.getLogger(__name__)
 
@@ -15,16 +14,28 @@ AUTO_RELEASE_BATCH_LIMIT = int(os.environ.get("DEVICE_AUTO_RELEASE_BATCH_LIMIT",
 
 
 async def auto_release_once() -> int:
+    from db.database import schema_init_ok
+    from db.crud import device_reserve_session as reserve_repo
+    from services.device_reserve.service import try_auto_release_session
+
+    if schema_init_ok is not True:
+        return 0
+
     async with AsyncSessionLocal() as db:
-        try:
-            count = await auto_release_expired_sessions(
-                db, limit=AUTO_RELEASE_BATCH_LIMIT
-            )
-            await db.commit()
-            return count
-        except Exception:
-            await db.rollback()
-            raise
+        candidates = await reserve_repo.list_expired_active_sessions(
+            db, limit=AUTO_RELEASE_BATCH_LIMIT
+        )
+
+    released = 0
+    for row in candidates:
+        async with AsyncSessionLocal() as db:
+            try:
+                if await try_auto_release_session(db, row.id):
+                    await db.commit()
+                    released += 1
+            except Exception:
+                await db.rollback()
+    return released
 
 
 async def auto_release_loop() -> None:

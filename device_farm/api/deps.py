@@ -10,12 +10,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import AuthContext, policy
-from api.auth.rbac import build_enforcer_for_user, is_superadmin, permission_domain
+from api.auth.rbac import build_enforcer_for_user_from_db, is_superadmin, permission_domain
 from api.auth.context import AuthError, TokenExpiredError, decode_access_token, extract_bearer
 from db.database import AsyncSessionLocal
 from db.models import Organization, User
 from db import crud as repo
 from tenancy.context import set_current_org_id
+from tenancy.resolve import get_user_default_org_id
 
 _ORG_HEADER = "x-organization-id"
 
@@ -77,10 +78,10 @@ async def _resolve_effective_org_id(
     """Org used for tenancy scoping on this request.
 
     The UI org switcher stores selection in localStorage and sends
-    ``X-Organization-Id``. Without it, we fall back to ``users.org_id``.
+    ``X-Organization-Id``. Without it, we fall back to ``users.default_org_id``.
     Superadmin may scope to any existing org; others only orgs they belong to.
     """
-    base_org = getattr(user, "org_id", None)
+    base_org = get_user_default_org_id(user)
     if request is None:
         return base_org
 
@@ -89,7 +90,10 @@ async def _resolve_effective_org_id(
         return base_org
 
     if not await _organization_exists(db, header_org):
-        return base_org
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "UNKNOWN_ORGANIZATION", "organization_id": header_org},
+        )
 
     if is_superadmin(user):
         return header_org
@@ -98,12 +102,16 @@ async def _resolve_effective_org_id(
     if role:
         return header_org
 
-    return base_org
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={"code": "ORG_MEMBERSHIP_REQUIRED", "organization_id": header_org},
+    )
 
 
 def _apply_user_org_context(user: User, org_id: str | None) -> None:
-    set_current_org_id(org_id)
-    user.org_id = org_id  # type: ignore[assignment]
+    """Align ORM tenant filter with ``User.org_id`` (context var or default workspace)."""
+    effective = org_id if org_id is not None else get_user_default_org_id(user)
+    set_current_org_id(effective)
 
 
 async def resolve_effective_org_id_for_user_id(
@@ -116,8 +124,7 @@ async def resolve_effective_org_id_for_user_id(
     if not user:
         return None
     org_id = await _resolve_effective_org_id(request, db, user)
-    if org_id:
-        set_current_org_id(org_id)
+    _apply_user_org_context(user, org_id)
     return org_id
 
 
@@ -137,13 +144,16 @@ async def _get_current_user(
         user.org_role = await repo.get_organization_role_for_user(  # type: ignore[attr-defined]
             db, user.id, org_id
         )
+    except HTTPException:
+        raise
     except Exception:
         pass
     return user
 
 
 async def _get_current_admin(user: User = Depends(_get_current_user)) -> User:
-    if user.role != "admin" and not is_superadmin(user):
+    org_role = str(getattr(user, "org_role", "") or "").strip().lower()
+    if not is_superadmin(user) and org_role not in ("owner", "admin"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin only")
     return user
 
@@ -156,7 +166,7 @@ AdminUser = Annotated[User, Depends(_get_current_admin)]
 def require_permission(obj: str, act: str):
     async def _require_permission(request: Request, user: CurrentUser, db: DB) -> None:
         domain = permission_domain(user)
-        enforcer = build_enforcer_for_user(user, domain=domain)
+        enforcer = await build_enforcer_for_user_from_db(user, db, domain=domain)
         if not enforcer.enforce(str(user.id), domain, obj, act):
             try:
                 from services.security_audit import emit_security_event
@@ -231,6 +241,8 @@ async def _current_user_from_request(request: Request, db: AsyncSession) -> User
         user.org_role = await repo.get_organization_role_for_user(  # type: ignore[attr-defined]
             db, user.id, org_id
         )
+    except HTTPException:
+        raise
     except Exception:
         pass
     return user
@@ -251,7 +263,7 @@ def require_request_permission(db_enabled: bool, obj: str, act: str):
     async def _require_request_permission(request: Request, db: DB) -> None:
         user = await _current_user_from_request(request, db)
         domain = permission_domain(user)
-        enforcer = build_enforcer_for_user(user, domain=domain)
+        enforcer = await build_enforcer_for_user_from_db(user, db, domain=domain)
         if not enforcer.enforce(str(user.id), domain, obj, act):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

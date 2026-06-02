@@ -1,0 +1,212 @@
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[0,0][1260,2800]" drawing-order="0" hint="" display-id="0">
+    <node index="0" class="android.widget.LinearLayout" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[0,0][1260,2800]" drawing-order="1" hint="" display-id="0">
+      <node index="0" resource-id="android:id/content" class="android.widget.FrameLayout" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[0,0][1260,2800]" drawing-order="1" hint="" display-id="0">
+        <node index="0" class="android.widget.FrameLayout" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[0,0][1260,2800]" drawing-order="1" hint="" display-id="0">
+          <node index="0" resource-id="com.facebook.katana:id/(name removed)" class="android.widget.FrameLayout" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[0,133][1260,2800]" drawing-order="1" hint="" display-id="0">
+            <node index="0" resource-id="com.facebook.katana:id/(name removed)" class="android.widget.LinearLayout" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[0,133][1260,2800]" drawing-order="1" hint="" display-id="0">
+              <node index="0" resource-id="com.facebook.katana:id/(name removed)" class="android.widget.FrameLayout" package="com.facebook.katana" clickable="true" enabled="true" visible-to-user="true" bounds="[0,133][1260,287]" drawing-order="2" hint="" display-id="0">
+                <node index="0" class="android.widget.Button" package="com.facebook.katana" content-desc="Đóng" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[35,147][161,273]" drawing-order="1" hint="" display-id="0"/>
+                <node index="1" class="android.view.ViewGroup" package="com.facebook.katana" content-desc="Bài viết của Khuất Văn Long" enabled="true" visible-to-user="true" bounds="[168,133][1106,287]" drawing-order="2" hint="" display-id="0">
+                  <node index="0" text="Bài viết" class="android.view.ViewGroup" package="com.facebook.katana" content-desc="Bài viết" enabled="true" visible-to-user="true" bounds="[525,177][735,248]" drawing-order="1" hint="" display-id="0"/>
+                </node>
+                <node index="2" class="android.widget.Button" package="com.facebook.katana" content-desc="Tìm kiếm" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[1113,147][1239,273]" drawing-order="3" hint="" display-id="0"/>
+              </node>
+              <node index="1" resource-id="com.facebook.katana:id/(name removed)" class="android.widget.FrameLayout" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[0,287][1260,2800]" drawing-order="3" hint="" display-id="0">
+                <node index="0" resource-id="com.facebook.katana:id/(name removed)" class="android.widget.LinearLayout" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[0,287][1260,2800]" drawing-order="1" hint="" display-id="0">
+                  <node index="0" class="android.widget.FrameLayout" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[0,287][1260,2624]" drawing-order="1" hint="" display-id="0">
+                    <node index="0" resource-id="com.facebook.katana:id/(name removed)" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[0,287][1260,2624]" drawing-order="2" hint="" display-id="0"/>
+                    <node index="1" resource-id="com.facebook.katana:id/(name removed)" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[0,287][1260,2624]" drawing-order="1" hint="" display-id="0">
+                      <node index="0" resource-id="com.facebook.katana:id/(name removed)" class="android.widget.FrameLayout" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[0,287][1260,2624]" drawing-order="1" hint="" display-id="0">
+                        <node index="0" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[0,287][1260,2624]" drawing-order="1" hint="" display-id="0">
+                          <node index="0" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[0,287][1260,2624]" drawing-order="1" hint="" display-id="0">
+                            <node index="0" resource-id="com.facebook.katana:id/(name removed)" class="android.view.ViewGroup" package="com.facebook.katana" visible-to-user="true" bounds="[0,287][1260,2624]" drawing-order="1" hint="" display-id="0">
+                              <node index="0" class="androidx.recyclerview.widget.RecyclerView" package="com.facebook.katana" enabled="true" focusable="true" scrollable="true" visible-to-user="true" bounds="[0,287][1260,2624]" drawing-order="1" hint="" display-id="0">
+                                <node index="0" class="android.view.ViewGroup" package="com.facebook.katana" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[0,287][1260,820]" drawing-order="4" hint="" display-id="0">
+                                  <node index="0" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" long-clickable="true" visible-to-user="true" bounds="[0,287][1260,820]" drawing-order="1" hint="" display-id="0">
+                                    <node index="0" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[175,694][415,820]" drawing-order="2" hint="" display-id="0">
+                                      <node index="0" text="Trả lời bình luận của Dũngg, nút. Nhấn đúp để trả lời bình luận." class="android.view.ViewGroup" package="com.facebook.katana" content-desc="Trả lời bình luận của Dũngg, nút. Nhấn đúp để trả lời bình luận." enabled="true" focusable="true" visible-to-user="true" bounds="[182,715][359,820]" drawing-order="1" hint="" display-id="0">
+                                        <node index="0" text="Trả lời" class="android.widget.Button" package="com.facebook.katana" content-desc="Trả lời bình luận của Dũngg, nút. Nhấn đúp để trả lời bình luận." clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[210,743][330,792]" drawing-order="0" hint="" display-id="0"/>
+                                      </node>
+                                    </node>
+                                    <node index="1" class="android.view.ViewGroup" package="com.facebook.katana" clickable="true" enabled="true" focusable="true" long-clickable="true" visible-to-user="true" bounds="[210,287][1218,701]" drawing-order="1" hint="" display-id="0">
+                                      <node index="0" class="android.widget.ImageView" package="com.facebook.katana" content-desc="Có thể là hình ảnh về điện thoại và văn bản cho biết 'Code Continue Resend Resendtextmessage text message'" clickable="true" enabled="true" focusable="true" long-clickable="true" visible-to-user="true" bounds="[210,287][1218,701]" drawing-order="1" hint="" display-id="0"/>
+                                    </node>
+                                    <node index="2" text="Nút Thích bình luận của Dũngg. Nhấn đúp và giữ để hiển thị khay cảm xúc." class="android.view.ViewGroup" package="com.facebook.katana" content-desc="Nút Thích bình luận của Dũngg. Nhấn đúp và giữ để hiển thị khay cảm xúc." enabled="true" focusable="true" visible-to-user="true" bounds="[966,715][1078,820]" drawing-order="3" hint="" display-id="0">
+                                      <node index="0" text="Thích" class="android.widget.Button" package="com.facebook.katana" content-desc="Nút Thích bình luận của Dũngg. Nhấn đúp và giữ để hiển thị khay cảm xúc." clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[994,743][1050,799]" drawing-order="0" hint="" display-id="0"/>
+                                    </node>
+                                    <node index="3" class="android.widget.Button" package="com.facebook.katana" content-desc="Giảm bậc cho bình luận của Dũngg" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[1120,715][1232,820]" drawing-order="4" hint="" display-id="0"/>
+                                  </node>
+                                </node>
+                                <node index="1" class="android.view.ViewGroup" package="com.facebook.katana" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[0,820][1260,1345]" drawing-order="3" hint="" display-id="0">
+                                  <node index="0" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" long-clickable="true" visible-to-user="true" bounds="[0,820][1260,1345]" drawing-order="1" hint="" display-id="0">
+                                    <node index="0" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[0,862][1218,1254]" drawing-order="1" hint="" display-id="0">
+                                      <node index="0" class="android.widget.ImageView" package="com.facebook.katana" content-desc="Ảnh đại diện của Tomy Tran" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[42,862][182,1002]" drawing-order="1" hint="" display-id="0"/>
+                                      <node index="1" text="Tomy Tran" class="android.view.ViewGroup" package="com.facebook.katana" content-desc="Tomy Tran" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[196,862][433,927]" drawing-order="2" hint="" display-id="0"/>
+                                      <node index="2" text="2 giờ" class="android.view.ViewGroup" package="com.facebook.katana" content-desc="2 giờ" enabled="true" focusable="true" visible-to-user="true" bounds="[423,864][565,913]" drawing-order="3" hint="" display-id="0"/>
+                                      <node index="3" class="android.view.ViewGroup" package="com.facebook.katana" clickable="true" enabled="true" focusable="true" long-clickable="true" visible-to-user="true" bounds="[210,915][1218,1254]" drawing-order="4" hint="" display-id="0">
+                                        <node index="0" text="Trước thấy có team hò nhau bỏ Claude sang ChatGPT vì giá rẻ bất ngờ, giờ có nên tập hợp lại team hơm .." class="android.widget.Button" package="com.facebook.katana" content-desc="Trước thấy có team hò nhau bỏ Claude sang ChatGPT vì giá rẻ bất ngờ, giờ có nên tập hợp lại team hơm .." enabled="true" visible-to-user="true" bounds="[210,936][1218,1233]" drawing-order="1" hint="" display-id="0"/>
+                                      </node>
+                                    </node>
+                                    <node index="1" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[175,1219][415,1345]" drawing-order="2" hint="" display-id="0">
+                                      <node index="0" text="Trả lời bình luận của Tomy, nút. Nhấn đúp để trả lời bình luận." class="android.view.ViewGroup" package="com.facebook.katana" content-desc="Trả lời bình luận của Tomy, nút. Nhấn đúp để trả lời bình luận." enabled="true" focusable="true" visible-to-user="true" bounds="[182,1240][359,1345]" drawing-order="1" hint="" display-id="0">
+                                        <node index="0" text="Trả lời" class="android.widget.Button" package="com.facebook.katana" content-desc="Trả lời bình luận của Tomy, nút. Nhấn đúp để trả lời bình luận." clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[210,1268][330,1317]" drawing-order="0" hint="" display-id="0"/>
+                                      </node>
+                                    </node>
+                                    <node index="2" text="Nút Thích bình luận của Tomy. Nhấn đúp và giữ để hiển thị khay cảm xúc." class="android.view.ViewGroup" package="com.facebook.katana" content-desc="Nút Thích bình luận của Tomy. Nhấn đúp và giữ để hiển thị khay cảm xúc." enabled="true" focusable="true" visible-to-user="true" bounds="[966,1240][1078,1345]" drawing-order="3" hint="" display-id="0">
+                                      <node index="0" text="Thích" class="android.widget.Button" package="com.facebook.katana" content-desc="Nút Thích bình luận của Tomy. Nhấn đúp và giữ để hiển thị khay cảm xúc." clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[994,1268][1050,1324]" drawing-order="0" hint="" display-id="0"/>
+                                    </node>
+                                    <node index="3" class="android.widget.Button" package="com.facebook.katana" content-desc="Giảm bậc cho bình luận của Tomy" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[1120,1240][1232,1345]" drawing-order="4" hint="" display-id="0"/>
+                                  </node>
+                                </node>
+                                <node index="2" class="android.view.ViewGroup" package="com.facebook.katana" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[0,1345][1260,1716]" drawing-order="2" hint="" display-id="0">
+                                  <node index="0" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" long-clickable="true" visible-to-user="true" bounds="[0,1345][1260,1716]" drawing-order="1" hint="" display-id="0">
+                                    <node index="0" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[0,1387][1218,1625]" drawing-order="1" hint="" display-id="0">
+                                      <node index="0" class="android.widget.ImageView" package="com.facebook.katana" content-desc="Ảnh đại diện của Hue Lan Phan" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[42,1390][182,1530]" drawing-order="1" hint="" display-id="0"/>
+                                      <node index="1" text="Hue Lan Phan" class="android.view.ViewGroup" package="com.facebook.katana" content-desc="Hue Lan Phan" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[196,1402][503,1467]" drawing-order="2" hint="" display-id="0"/>
+                                      <node index="2" text="3 giờ" class="android.view.ViewGroup" package="com.facebook.katana" content-desc="3 giờ" enabled="true" focusable="true" visible-to-user="true" bounds="[493,1407][635,1456]" drawing-order="3" hint="" display-id="0"/>
+                                      <node index="3" class="android.view.ViewGroup" package="com.facebook.katana" clickable="true" enabled="true" focusable="true" long-clickable="true" visible-to-user="true" bounds="[210,1458][1218,1643]" drawing-order="4" hint="" display-id="0">
+                                        <node index="0" text="Vóc dáng mơ ước WGWE - CÓ SẴN một cách nhẹ nhàng và an toàn nhé!" class="android.widget.Button" package="com.facebook.katana" content-desc="Vóc dáng mơ ước WGWE - CÓ SẴN một cách nhẹ nhàng và an toàn nhé!" enabled="true" focusable="true" visible-to-user="true" bounds="[210,1483][1218,1626]" drawing-order="1" hint="" display-id="0">
+                                          <node index="0" text="WGWE - CÓ SẴN" class="android.widget.Button" package="com.facebook.katana" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[686,1483][1141,1549]" drawing-order="0" hint="" display-id="0"/>
+                                        </node>
+                                      </node>
+                                    </node>
+                                    <node index="1" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[175,1612][415,1738]" drawing-order="2" hint="" display-id="0">
+                                      <node index="0" text="Trả lời bình luận của Hue Lan, nút. Nhấn đúp để trả lời bình luận." class="android.view.ViewGroup" package="com.facebook.katana" content-desc="Trả lời bình luận của Hue Lan, nút. Nhấn đúp để trả lời bình luận." enabled="true" focusable="true" visible-to-user="true" bounds="[182,1633][359,1738]" drawing-order="1" hint="" display-id="0">
+                                        <node index="0" text="Trả lời" class="android.widget.Button" package="com.facebook.katana" content-desc="Trả lời bình luận của Hue Lan, nút. Nhấn đúp để trả lời bình luận." clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[210,1661][330,1710]" drawing-order="0" hint="" display-id="0"/>
+                                      </node>
+                                    </node>
+                                    <node index="2" text="Nút Thích bình luận của Hue Lan. Nhấn đúp và giữ để hiển thị khay cảm xúc." class="android.view.ViewGroup" package="com.facebook.katana" content-desc="Nút Thích bình luận của Hue Lan. Nhấn đúp và giữ để hiển thị khay cảm xúc." enabled="true" focusable="true" visible-to-user="true" bounds="[966,1633][1078,1738]" drawing-order="3" hint="" display-id="0">
+                                      <node index="0" text="Thích" class="android.widget.Button" package="com.facebook.katana" content-desc="Nút Thích bình luận của Hue Lan. Nhấn đúp và giữ để hiển thị khay cảm xúc." clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[994,1661][1050,1717]" drawing-order="0" hint="" display-id="0"/>
+                                    </node>
+                                    <node index="3" class="android.widget.Button" package="com.facebook.katana" content-desc="Giảm bậc cho bình luận của Hue Lan" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[1120,1633][1232,1738]" drawing-order="4" hint="" display-id="0"/>
+                                  </node>
+                                </node>
+                                <node index="3" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[0,1738][1260,2624]" drawing-order="1" hint="" display-id="0">
+                                  <node index="0" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[0,1738][1260,2624]" drawing-order="1" hint="" display-id="0">
+                                    <node index="0" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[0,1738][1260,2624]" drawing-order="1" hint="" display-id="0">
+                                      <node index="0" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[0,1738][1260,2624]" drawing-order="1" hint="" display-id="0">
+                                        <node index="0" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[0,1738][1260,2624]" drawing-order="1" hint="" display-id="0">
+                                          <node index="0" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[0,1738][1260,2624]" drawing-order="1" hint="" display-id="0">
+                                            <node index="0" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[0,1738][1260,2624]" drawing-order="1" hint="" display-id="0">
+                                              <node index="0" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[14,1738][1232,1868]" drawing-order="1" hint="" display-id="0">
+                                                <node index="0" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[14,1738][1232,1868]" drawing-order="1" hint="" display-id="0">
+                                                  <node index="0" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[56,1738][1190,1868]" drawing-order="1" hint="" display-id="0">
+                                                    <node index="0" text="Nhóm liên quan" class="android.view.View" package="com.facebook.katana" content-desc="Nhóm liên quan" enabled="true" visible-to-user="true" bounds="[56,1794][514,1867]" drawing-order="1" hint="" display-id="0"/>
+                                                    <node index="1" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[1120,1794][1190,1868]" drawing-order="2" hint="" display-id="0">
+                                                      <node index="0" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[1120,1794][1190,1868]" drawing-order="1" hint="" display-id="0">
+                                                        <node index="0" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[1120,1794][1190,1868]" drawing-order="1" hint="" display-id="0">
+                                                          <node index="0" class="android.widget.Button" package="com.facebook.katana" content-desc="Remove" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[1120,1794][1190,1868]" drawing-order="1" hint="" display-id="0"/>
+                                                        </node>
+                                                      </node>
+                                                    </node>
+                                                  </node>
+                                                </node>
+                                              </node>
+                                              <node index="1" class="androidx.recyclerview.widget.RecyclerView" package="com.facebook.katana" enabled="true" focusable="true" visible-to-user="true" bounds="[0,1868][1260,2596]" drawing-order="2" hint="" display-id="0">
+                                                <node index="0" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[0,1868][1260,2596]" drawing-order="1" hint="" display-id="0">
+                                                  <node index="0" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[0,1868][1260,2050]" drawing-order="1" hint="" display-id="0">
+                                                    <node index="0" class="android.view.ViewGroup" package="com.facebook.katana" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[0,1868][1260,2050]" drawing-order="1" hint="" display-id="0">
+                                                      <node index="0" class="android.widget.ImageView" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[56,1896][196,2036]" drawing-order="1" hint="" display-id="0"/>
+                                                      <node index="1" class="android.view.ViewGroup" package="com.facebook.katana" content-desc="Nghiên AI (một phiên bản mới của cộng đồng Nghiện AI), 641K thành viên • 10+ bài viết/ngày" enabled="true" visible-to-user="true" bounds="[231,1896][855,2044]" drawing-order="2" hint="" display-id="0">
+                                                        <node index="0" text="Nghiên AI (một phi…" class="android.view.View" package="com.facebook.katana" content-desc="Nghiên AI (một phiên bản mới của cộng đồng Nghiện AI)" enabled="true" visible-to-user="true" bounds="[231,1896][855,1973]" drawing-order="1" hint="" display-id="0"/>
+                                                        <node index="1" text="641K thành viên • 10+…" class="android.view.View" package="com.facebook.katana" content-desc="641K thành viên • 10+ bài viết/ngày" enabled="true" visible-to-user="true" bounds="[231,1973][855,2044]" drawing-order="2" hint="" display-id="0"/>
+                                                      </node>
+                                                      <node index="2" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[897,1896][1204,2050]" drawing-order="3" hint="" display-id="0">
+                                                        <node index="0" class="android.view.ViewGroup" package="com.facebook.katana" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[897,1896][1204,2050]" drawing-order="1" hint="" display-id="0">
+                                                          <node index="0" class="android.widget.Button" package="com.facebook.katana" content-desc="Tham gia" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[911,1910][1190,2036]" drawing-order="1" hint="" display-id="0">
+                                                            <node index="0" text="Tham gia" class="android.view.ViewGroup" package="com.facebook.katana" content-desc="Tham gia" enabled="true" visible-to-user="true" bounds="[953,1944][1148,2006]" drawing-order="1" hint="" display-id="0"/>
+                                                          </node>
+                                                        </node>
+                                                      </node>
+                                                    </node>
+                                                  </node>
+                                                  <node index="1" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[0,2050][1260,2232]" drawing-order="2" hint="" display-id="0">
+                                                    <node index="0" class="android.view.ViewGroup" package="com.facebook.katana" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[0,2050][1260,2232]" drawing-order="1" hint="" display-id="0">
+                                                      <node index="0" class="android.widget.ImageView" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[56,2078][196,2218]" drawing-order="1" hint="" display-id="0"/>
+                                                      <node index="1" class="android.view.ViewGroup" package="com.facebook.katana" content-desc="Cộng Đồng Claude &amp; OpenClaw &amp; AI Agent Việt Nam, 75K thành viên • 8 bài viết/ngày" enabled="true" visible-to-user="true" bounds="[231,2078][855,2226]" drawing-order="2" hint="" display-id="0">
+                                                        <node index="0" text="Cộng Đồng Claude…" class="android.view.View" package="com.facebook.katana" content-desc="Cộng Đồng Claude &amp; OpenClaw &amp; AI Agent Việt Nam" enabled="true" visible-to-user="true" bounds="[231,2078][855,2155]" drawing-order="1" hint="" display-id="0"/>
+                                                        <node index="1" text="75K thành viên • 8 bài …" class="android.view.View" package="com.facebook.katana" content-desc="75K thành viên • 8 bài viết/ngày" enabled="true" visible-to-user="true" bounds="[231,2155][855,2226]" drawing-order="2" hint="" display-id="0"/>
+                                                      </node>
+                                                      <node index="2" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[897,2078][1204,2232]" drawing-order="3" hint="" display-id="0">
+                                                        <node index="0" class="android.view.ViewGroup" package="com.facebook.katana" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[897,2078][1204,2232]" drawing-order="1" hint="" display-id="0">
+                                                          <node index="0" class="android.widget.Button" package="com.facebook.katana" content-desc="Tham gia" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[911,2092][1190,2218]" drawing-order="1" hint="" display-id="0">
+                                                            <node index="0" text="Tham gia" class="android.widget.ImageView" package="com.facebook.katana" content-desc="Tham gia" enabled="true" visible-to-user="true" bounds="[953,2126][1148,2188]" drawing-order="1" hint="" display-id="0"/>
+                                                          </node>
+                                                        </node>
+                                                      </node>
+                                                    </node>
+                                                  </node>
+                                                  <node index="2" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[0,2232][1260,2414]" drawing-order="3" hint="" display-id="0">
+                                                    <node index="0" class="android.view.ViewGroup" package="com.facebook.katana" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[0,2232][1260,2414]" drawing-order="1" hint="" display-id="0">
+                                                      <node index="0" class="android.widget.ImageView" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[56,2260][196,2400]" drawing-order="1" hint="" display-id="0"/>
+                                                      <node index="1" class="android.view.ViewGroup" package="com.facebook.katana" content-desc="Cộng đồng Claude AI &amp; AI Agents Việt Nam, 289K thành viên • 10 bài viết/ngày" enabled="true" visible-to-user="true" bounds="[231,2260][855,2408]" drawing-order="2" hint="" display-id="0">
+                                                        <node index="0" text="Cộng đồng Claude …" class="android.view.View" package="com.facebook.katana" content-desc="Cộng đồng Claude AI &amp; AI Agents Việt Nam" enabled="true" visible-to-user="true" bounds="[231,2260][855,2337]" drawing-order="1" hint="" display-id="0"/>
+                                                        <node index="1" text="289K thành viên • 10 …" class="android.view.View" package="com.facebook.katana" content-desc="289K thành viên • 10 bài viết/ngày" enabled="true" visible-to-user="true" bounds="[231,2337][855,2408]" drawing-order="2" hint="" display-id="0"/>
+                                                      </node>
+                                                      <node index="2" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[897,2260][1204,2414]" drawing-order="3" hint="" display-id="0">
+                                                        <node index="0" class="android.view.ViewGroup" package="com.facebook.katana" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[897,2260][1204,2414]" drawing-order="1" hint="" display-id="0">
+                                                          <node index="0" class="android.widget.Button" package="com.facebook.katana" content-desc="Tham gia" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[911,2274][1190,2400]" drawing-order="1" hint="" display-id="0">
+                                                            <node index="0" text="Tham gia" class="android.view.ViewGroup" package="com.facebook.katana" content-desc="Tham gia" enabled="true" visible-to-user="true" bounds="[953,2308][1148,2370]" drawing-order="1" hint="" display-id="0"/>
+                                                          </node>
+                                                        </node>
+                                                      </node>
+                                                    </node>
+                                                  </node>
+                                                  <node index="3" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[0,2414][1260,2596]" drawing-order="4" hint="" display-id="0">
+                                                    <node index="0" class="android.view.ViewGroup" package="com.facebook.katana" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[0,2414][1260,2596]" drawing-order="1" hint="" display-id="0">
+                                                      <node index="0" class="android.widget.ImageView" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[56,2442][196,2582]" drawing-order="1" hint="" display-id="0"/>
+                                                      <node index="1" class="android.view.ViewGroup" package="com.facebook.katana" content-desc="Vibe Code kiếm cơm, 53K thành viên • 10+ bài viết/ngày" enabled="true" visible-to-user="true" bounds="[231,2442][855,2590]" drawing-order="2" hint="" display-id="0">
+                                                        <node index="0" text="Vibe Code kiếm cơm" class="android.view.View" package="com.facebook.katana" content-desc="Vibe Code kiếm cơm" enabled="true" visible-to-user="true" bounds="[231,2442][800,2519]" drawing-order="1" hint="" display-id="0"/>
+                                                        <node index="1" text="53K thành viên • 10+ …" class="android.view.View" package="com.facebook.katana" content-desc="53K thành viên • 10+ bài viết/ngày" enabled="true" visible-to-user="true" bounds="[231,2519][855,2590]" drawing-order="2" hint="" display-id="0"/>
+                                                      </node>
+                                                      <node index="2" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[897,2442][1204,2596]" drawing-order="3" hint="" display-id="0">
+                                                        <node index="0" class="android.view.ViewGroup" package="com.facebook.katana" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[897,2442][1204,2596]" drawing-order="1" hint="" display-id="0">
+                                                          <node index="0" class="android.widget.Button" package="com.facebook.katana" content-desc="Tham gia" clickable="true" enabled="true" focusable="true" visible-to-user="true" bounds="[911,2456][1190,2582]" drawing-order="1" hint="" display-id="0">
+                                                            <node index="0" text="Tham gia" class="android.view.ViewGroup" package="com.facebook.katana" content-desc="Tham gia" enabled="true" visible-to-user="true" bounds="[953,2490][1148,2552]" drawing-order="1" hint="" display-id="0"/>
+                                                          </node>
+                                                        </node>
+                                                      </node>
+                                                    </node>
+                                                  </node>
+                                                </node>
+                                              </node>
+                                            </node>
+                                          </node>
+                                        </node>
+                                      </node>
+                                    </node>
+                                  </node>
+                                </node>
+                              </node>
+                            </node>
+                          </node>
+                        </node>
+                      </node>
+                    </node>
+                  </node>
+                  <node index="1" resource-id="com.facebook.katana:id/(name removed)" class="android.view.ViewGroup" package="com.facebook.katana" enabled="true" visible-to-user="true" bounds="[0,2625][1260,2799]" drawing-order="2" hint="" display-id="0">
+                    <node index="0" text="Viết bình luận công khai..." class="android.widget.AutoCompleteTextView" package="com.facebook.katana" content-desc="Viết bình luận công khai..." clickable="true" enabled="true" focusable="true" long-clickable="true" visible-to-user="true" bounds="[42,2646][1218,2778]" drawing-order="1" hint="Viết bình luận công khai..." display-id="0"/>
+                  </node>
+                </node>
+              </node>
+            </node>
+          </node>
+        </node>
+      </node>
+    </node>
+  </node>
+  <node index="0" class="android.widget.FrameLayout" package="com.vivo.upslide" enabled="true" visible-to-user="true" bounds="[0,2737][1260,2800]" drawing-order="0" hint="" display-id="0"/>
+  <node index="0" class="android.widget.FrameLayout" package="com.android.systemui" enabled="true" visible-to-user="true" bounds="[0,0][1260,133]" drawing-order="0" hint="" display-id="0">
+    <node index="0" resource-id="com.android.systemui:id/status_bar" class="android.widget.FrameLayout" package="com.android.systemui" enabled="true" visible-to-user="true" bounds="[0,0][1260,133]" drawing-order="1" hint="" display-id="0">
+      <node index="0" resource-id="com.android.systemui:id/status_bar_start_side_content" class="android.widget.FrameLayout" package="com.android.systemui" enabled="true" visible-to-user="true" bounds="[70,3][584,133]" drawing-order="1" hint="" display-id="0">
+        <node index="0" text="00:54" resource-id="com.android.systemui:id/clock" class="android.widget.TextView" package="com.android.systemui" content-desc="00:54" enabled="true" visible-to-user="true" bounds="[70,41][219,95]" drawing-order="2" hint="" display-id="0"/>
+        <node index="1" class="" package="com.android.systemui" content-desc="Android System notification: " enabled="true" visible-to-user="true" bounds="[219,38][260,98]" drawing-order="11" hint="" display-id="0"/>
+      </node>
+      <node index="1" class="" package="com.android.systemui" content-desc="Ringer silent." enabled="true" visible-to-user="true" bounds="[910,22][949,113]" drawing-order="5" hint="" display-id="0"/>
+      <node index="2" resource-id="com.android.systemui:id/mobile_combo" class="android.widget.FrameLayout" package="com.android.systemui" content-desc="Emergency calls only, , No signal." enabled="true" visible-to-user="true" bounds="[960,22][1012,113]" drawing-order="11" hint="" display-id="0"/>
+      <node index="3" resource-id="com.android.systemui:id/wifi_signal" class="" package="com.android.systemui" content-desc="Wi-FiSignal strength: 4 bars of 4 bars" enabled="true" visible-to-user="true" bounds="[1023,47][1076,89]" drawing-order="13" hint="" display-id="0"/>
+      <node index="4" resource-id="com.android.systemui:id/battery" class="android.widget.LinearLayout" package="com.android.systemui" content-desc="Battery charging, 14 percent." enabled="true" visible-to-user="true" bounds="[1087,3][1190,133]" drawing-order="15" hint="" display-id="0"/>
+    </node>
+  </node>
+</hierarchy>

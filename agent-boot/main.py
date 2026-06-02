@@ -115,6 +115,12 @@ def _build_parser() -> argparse.ArgumentParser:
                         default=_env("RELAY_MODE", "ws"),
                         choices=["ws", "grpc"],
                         help="Transport mode: 'ws' (WebSocket, default) or 'grpc' (HTTP/2 multiplexed)")
+    parser.add_argument("--relay-grpc-tls", action="store_true",
+                        default=_env("RELAY_GRPC_TLS", "").strip().lower() in {"1", "true", "yes", "on"},
+                        help="Use TLS for gRPC relay (also enabled by grpcs:// or https:// relay server)")
+    parser.add_argument("--relay-grpc-root-cert-file", metavar="PATH",
+                        default=_env("RELAY_GRPC_ROOT_CERT_FILE", ""),
+                        help="Optional CA/root certificate PEM for gRPC relay TLS")
     parser.add_argument("--ws-url", metavar="URL",
                         default=_env("DEVICE_FARM_WS", ""),
                         help="WebSocket URL for STFService auto-connect (default: $DEVICE_FARM_WS)")
@@ -128,8 +134,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _wait_for_devices(timeout: int = 120) -> bool:
     """
-    Start mDNS discovery then poll `adb devices` until at least one device
-    appears or timeout is reached. Returns True if device found.
+    Poll `adb devices` until at least one device appears or timeout is reached.
+    mDNS wireless-debugging discovery is opt-in via AGENT_BOOT_MDNS=1.
     """
     from relay import start_mdns_discovery, _list_serials
     from rich.console import Console
@@ -146,7 +152,8 @@ def _wait_for_devices(timeout: int = 120) -> bool:
         transient=True,
     ) as progress:
         task = progress.add_task(
-            "Waiting for device (USB or Wireless Debugging mDNS)…", total=None
+            "Waiting for device (USB or pre-connected ADB; mDNS if AGENT_BOOT_MDNS=1)…",
+            total=None,
         )
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -251,6 +258,8 @@ def _run_relay(args: argparse.Namespace) -> None:
             enrollment_token=args.relay_enrollment_token or None,
             relay_id=args.relay_id,
             relay_mode=relay_mode,
+            grpc_tls=bool(args.relay_grpc_tls),
+            grpc_root_cert_file=args.relay_grpc_root_cert_file or "",
             extra_ingest=ingest,
         )
         try:

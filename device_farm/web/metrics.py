@@ -128,3 +128,201 @@ execution_control_duration_seconds = Histogram(
     ["action"],
     buckets=[0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60],
 )
+
+# ── Org scenario library (DF-T-04-001) ──
+scenario_created_total = Counter(
+    "scenario_created_count",
+    "Org-scoped scenarios created",
+)
+scenario_archived_total = Counter(
+    "scenario_archived_count",
+    "Org-scoped scenarios archived",
+)
+
+# ── Org-scoped campaigns (DF-T-04-006) ──
+campaign_created_total = Counter(
+    "campaign_created_count",
+    "Org-scoped campaigns created",
+)
+campaign_archived_total = Counter(
+    "campaign_archived_count",
+    "Org-scoped campaigns archived",
+)
+campaign_status_transition_total = Counter(
+    "campaign_status_transition_count",
+    "Campaign lifecycle FSM transitions",
+    ["from_status", "to_status"],
+)
+
+# ── Campaign dispatch fan-out (DF-T-04-008) ──
+campaign_dispatch_targets_count = Counter(
+    "campaign_dispatch_targets_count",
+    "Devices snapshotted per campaign dispatch",
+)
+campaign_dispatch_claim_fail_count = Counter(
+    "campaign_dispatch_claim_fail_count",
+    "Device claim failures during campaign dispatch",
+)
+campaign_dispatch_duration_seconds = Histogram(
+    "campaign_dispatch_duration_seconds",
+    "Wall time for campaign fan-out dispatch handler",
+    buckets=[0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60],
+)
+
+# ── Campaign account binding (DF-T-04-009) ──
+campaign_account_fallback_triggered_count = Counter(
+    "campaign_account_fallback_triggered_count",
+    "Legacy implicit primary-account fallback triggers (should stay 0 on Epic 04 path)",
+)
+campaign_account_resolve_batch_size = Histogram(
+    "campaign_account_resolve_batch_size",
+    "Distinct accounts loaded per campaign dispatch fan-out",
+    buckets=[0, 1, 2, 5, 10, 25, 50, 100, 250, 500],
+)
+
+# ── Step retry (DF-T-04-011) ──
+step_retry_attempt_count = Counter(
+    "step_retry_attempt_count",
+    "Step retry attempts before success or exhaustion",
+    ["step_type", "reason"],
+)
+step_retry_backoff_capped_count = Counter(
+    "step_retry_backoff_capped_count",
+    "Step retry waits capped at MAX_BACKOFF_MS",
+)
+
+# ── DLQ lifecycle (DF-T-04-012) ──
+dlq_opened_total = Counter(
+    "dlq_opened_total",
+    "Executions moved to DLQ after terminal failure",
+)
+dlq_replayed_total = Counter(
+    "dlq_replayed_total",
+    "DLQ entries replayed into a new execution",
+)
+dlq_closed_total = Counter(
+    "dlq_closed_total",
+    "DLQ entries closed by an operator",
+)
+
+# ── Execution event stream (DF-T-04-013) ──
+execution_events_published_total = Counter(
+    "execution_events_published_total",
+    "Execution domain events published to bus/broker",
+    ["event_type"],
+)
+execution_event_outbox_lag_seconds = Gauge(
+    "execution_event_outbox_lag_seconds",
+    "Age of oldest unpublished execution event in outbox (seconds)",
+)
+execution_event_bus_backpressure_total = Counter(
+    "execution_event_bus_backpressure_total",
+    "SSE subscriber queues full — event dropped from live fan-out",
+)
+
+# ── Scheduling (DF-E-05) ──
+schedule_fallback_active = Gauge(
+    "device_farm_schedule_fallback_active",
+    "Whether scheduling fallback mode is active",
+)
+schedule_queue_depth = Gauge(
+    "device_farm_schedule_queue_depth",
+    "Scheduler-visible dispatch queue depth",
+)
+schedule_tick_lag_seconds = Gauge(
+    "device_farm_schedule_tick_lag_seconds",
+    "Observed scheduling tick lag in seconds",
+)
+schedule_missed_ticks_total = Counter(
+    "device_farm_schedule_missed_ticks_total",
+    "Schedule ticks missed by scheduler",
+)
+schedule_dispatch_success_total = Counter(
+    "device_farm_schedule_dispatch_success_total",
+    "Schedule dispatches finalized successfully",
+)
+schedule_dispatch_failed_total = Counter(
+    "device_farm_schedule_dispatch_failed_total",
+    "Schedule dispatches finalized with failure",
+)
+schedule_starvation_total = Counter(
+    "device_farm_schedule_starvation_total",
+    "Schedule fairness starvation decisions",
+)
+
+# ── Step capture (DF-T-04-014) ──
+capture_success_total = Counter(
+    "capture_success_total",
+    "Successful pre/post/fail step captures",
+    ["phase"],
+)
+capture_failure_total = Counter(
+    "capture_failure_total",
+    "Failed step captures (fail-soft unless require_capture)",
+    ["phase"],
+)
+capture_skipped_throttle_total = Counter(
+    "capture_skipped_throttle_total",
+    "Steps skipped by org capture_throttle policy",
+)
+
+# ── Epic 06 content extraction (DF-E-06) ──
+content_type_validate_total = Counter(
+    "content_type_validate_total",
+    "Content type registry validation outcomes",
+    ["result"],
+)
+content_dedup_hit_total = Counter(
+    "content_dedup_hit_total",
+    "External-id dedup hits in collection scope",
+    ["collection", "platform", "action"],
+)
+content_item_insert_total = Counter(
+    "content_item_insert_total",
+    "Content items persisted",
+    ["platform", "content_type"],
+)
+extraction_latency_ms = Histogram(
+    "extraction_latency_ms",
+    "Extraction engine latency in milliseconds",
+    ["engine"],
+    buckets=[100, 250, 500, 1000, 2000, 3000, 5000, 8000, 15000],
+)
+capture_latency_ms = Histogram(
+    "capture_latency_ms",
+    "Extraction capture latency in milliseconds",
+    ["kind", "persist"],
+    buckets=[50, 100, 250, 500, 1000, 1500, 3000, 5000],
+)
+ocr_latency_ms = Histogram(
+    "ocr_latency_ms",
+    "OCR extraction latency in milliseconds",
+    buckets=[100, 500, 1000, 2000, 5000, 10000, 30000],
+)
+hierarchy_latency_ms = Histogram(
+    "hierarchy_latency_ms",
+    "Hierarchy extraction latency in milliseconds",
+    buckets=[50, 100, 250, 500, 1000, 2000, 3000, 10000],
+)
+hierarchy_node_count = Histogram(
+    "hierarchy_node_count",
+    "Parsed hierarchy node count",
+    buckets=[10, 50, 100, 250, 500, 1000, 2500, 5000],
+)
+artifact_cleanup_deleted_total = Counter(
+    "artifact_cleanup_deleted_total",
+    "Artifacts soft-deleted by retention job",
+)
+artifact_cleanup_bytes_freed = Counter(
+    "artifact_cleanup_bytes_freed",
+    "Artifact bytes removed by retention job",
+)
+artifact_cleanup_duration_seconds = Histogram(
+    "artifact_cleanup_duration_seconds",
+    "Artifact retention cleanup duration",
+    buckets=[1, 5, 10, 30, 60, 120, 300, 600],
+)
+artifact_pinned_total = Counter(
+    "artifact_pinned_total",
+    "Executions pinned to skip artifact retention",
+)

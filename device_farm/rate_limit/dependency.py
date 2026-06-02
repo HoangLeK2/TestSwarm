@@ -1,5 +1,4 @@
 """FastAPI dependency factory for per-route rate limits (DF-T-01-013)."""
-from __future__ import annotations
 
 import hashlib
 import logging
@@ -134,12 +133,17 @@ def rate_limit(budget: str, *, key: str = "ip", enabled: bool | None = None):
             )
 
     if needs_user:
-        from api.deps import CurrentUser
+        from typing import Annotated
+
+        from fastapi import Depends
+
+        from api.deps import _get_current_user
+        from db.models import User
 
         async def _dependency(
             request: Request,
             response: Response,
-            user: CurrentUser,
+            user: Annotated[User, Depends(_get_current_user)],
         ) -> None:
             await _enforce(request, response, user)
 

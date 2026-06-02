@@ -220,14 +220,22 @@ async def save_content_item(
     campaign_id: str | None = None,
     execution_id: str | None = None,
     scenario_name: str | None = None,
+    scenario_id: str | None = None,
+    device_id: str | None = None,
+    account_id: str | None = None,
     dedupe_field: str | None = None,
+    dedup_action: str = "skip",
     screenshot_bytes: bytes | None = None,
     tags: str = "",
     parent_id: str | None = None,
-    item_level: int = 0,
+    item_level: int | None = None,
     user_id: str | None = None,
+    org_id: str | None = None,
     hash_scope: str | None = None,
     db: AsyncSession | None = None,
+    *,
+    skip_normalization: bool = False,
+    skip_type_validation: bool = False,
 ) -> dict[str, Any]:
     """
     Save extracted content to database with deduplication.
@@ -237,16 +245,42 @@ async def save_content_item(
 
     Returns {"saved": True, "id": ...} or {"saved": False, "reason": "duplicate", "id": ...}
     """
-    from db.database import activity_session
+    from services.content.errors import ContentTypeError
+    from services.content.registry import get_registry, require_valid_content_type
+
+    if not skip_type_validation:
+        from services.content.legacy_type_map import qualify_content_type
+
+        qualified = qualify_content_type(content_type, platform=platform) or content_type
+        type_entry = require_valid_content_type(qualified, caller_id=user_id)
+        content_type = qualified
+        if not platform:
+            platform = type_entry.platform
+
+    payload = dict(data or {})
+    if not skip_normalization and not skip_type_validation:
+        from services.content.normalizer import normalize
+
+        normalized = normalize(payload, content_type)
+        payload = normalized.to_content_store_dict()
+        platform = platform or normalized.platform
+
+    from services.content.secret_scrub import scrub_secrets
+
+    payload = scrub_secrets(payload)
+    from tenancy.context import get_current_org_id
     from db.crud.content import (
         create_content_item, get_content_by_hash,
         get_or_create_collection, increment_collection_count,
     )
 
     scope = hash_scope or execution_id
-    base_hash = compute_content_hash(data, dedupe_field)
+    base_hash = compute_content_hash(payload, dedupe_field)
     content_hash = scope_content_hash(base_hash, scope)
     scoped_parent_id = scope_content_hash(parent_id, scope) if parent_id else None
+    external_id = payload.get("external_id")
+    if external_id is not None:
+        external_id = str(external_id)[:255]
 
     # Phase 5 — Bloom filter fast path. Skips DB when probably duplicate.
     # Graceful no-op when Redis/RedisBloom unavailable. False positives
@@ -268,6 +302,37 @@ async def save_content_item(
     owns_session = db is None
 
     async def _save_with_session(db_session: AsyncSession, *, owns_session: bool) -> dict[str, Any]:
+        from db.crud.content import compute_item_level, resolve_org_id
+        from services.content.campaign_ref import resolve_persist_campaign_id
+        from services.content.dedup import apply_external_id_dedup
+
+        nonlocal campaign_id
+        campaign_id = await resolve_persist_campaign_id(
+            db_session,
+            campaign_id=campaign_id,
+            execution_id=execution_id or scope,
+        )
+
+        effective_org = org_id or get_current_org_id() or await resolve_org_id(db_session, user_id=user_id)
+        if effective_org and external_id:
+            dedup_result = await apply_external_id_dedup(
+                db_session,
+                org_id=effective_org,
+                collection=collection,
+                platform=platform,
+                external_id=external_id,
+                normalized_data=payload,
+                dedup_action=dedup_action,  # type: ignore[arg-type]
+            )
+            if dedup_result is not None:
+                if owns_session:
+                    await db_session.commit()
+                return dedup_result
+
+        resolved_level = item_level
+        if resolved_level is None:
+            resolved_level = await compute_item_level(db_session, scoped_parent_id)
+
         # Dedup check
         existing = await get_content_by_hash(
             db_session,
@@ -288,37 +353,41 @@ async def save_content_item(
             user_id=user_id,
         )
 
-        # Save screenshot if provided
-        screenshot_path = None
-        if screenshot_bytes:
-            screenshot_path = _save_screenshot(screenshot_bytes, content_hash)
+        # Screenshot: bytes → object storage; else URL from payload or linked execution.
+        screenshot_path = await _resolve_content_screenshot_path(
+            db_session,
+            payload=payload,
+            execution_id=execution_id,
+            screenshot_bytes=screenshot_bytes,
+            content_hash=content_hash,
+        )
 
         # Map known fields from data dict
         _body = clean_text(
-            data.get("content")
-            or data.get("body")
-            or data.get("text")
-            or data.get("message")
-            or data.get("caption")
-            or data.get("description")
+            payload.get("content")
+            or payload.get("body")
+            or payload.get("text")
+            or payload.get("message")
+            or payload.get("caption")
+            or payload.get("description")
         )
         _author = clean_text(
-            data.get("author")
-            or data.get("name")
-            or data.get("username")
-            or data.get("full_name")
+            payload.get("author")
+            or payload.get("name")
+            or payload.get("username")
+            or payload.get("full_name")
         )
         _url = (
-            data.get("url")
-            or data.get("permalink")
-            or data.get("link")
+            payload.get("url")
+            or payload.get("permalink")
+            or payload.get("link")
         )
         _media_urls = _normalize_media_urls(
-            _first_present(data, "media_urls", "media_artifacts", "permalink_candidates")
+            _first_present(payload, "media_urls", "media_artifacts", "permalink_candidates")
         )
         _content_date = _parse_content_date(
             _first_present(
-                data,
+                payload,
                 "content_date",
                 "posted_at",
                 "published_at",
@@ -328,34 +397,41 @@ async def save_content_item(
             )
         )
 
-        item = await create_content_item(
-            db_session,
+        create_kwargs = dict(
             collection=collection,
             platform=platform,
             content_type=content_type,
-            title=str(data.get("title") or "")[:500] or None,
+            title=str(payload.get("title") or "")[:500] or None,
             body=_body,
             author=str(_author or "")[:255] or None,
-            author_id=str(data.get("author_id") or "")[:255] or None,
+            author_id=str(payload.get("author_id") or "")[:255] or None,
             url=str(_url or "")[:1000] or None,
-            likes_count=_safe_int(_first_present(data, "likes_count", "likes", "reactions", "like")),
-            comments_count=_safe_int(_first_present(data, "comments_count", "comments", "comment")),
-            shares_count=_safe_int(_first_present(data, "shares_count", "shares", "share")),
-            views_count=_safe_int(_first_present(data, "views_count", "views", "view")),
+            likes_count=_safe_int(_first_present(payload, "likes_count", "likes", "reactions", "like")),
+            comments_count=_safe_int(_first_present(payload, "comments_count", "comments", "comment")),
+            shares_count=_safe_int(_first_present(payload, "shares_count", "shares", "share")),
+            views_count=_safe_int(_first_present(payload, "views_count", "views", "view")),
             media_urls=_media_urls,
-            raw_data=data,
+            raw_data=payload,
             tags=tags,
             content_hash=content_hash,
             device_serial=device_serial,
             campaign_id=campaign_id,
             execution_id=execution_id,
             scenario_name=scenario_name,
+            scenario_id=scenario_id,
+            device_id=device_id,
+            account_id=account_id,
+            external_id=external_id,
             screenshot_path=screenshot_path,
             content_date=_content_date,
             parent_id=scoped_parent_id,
-            item_level=item_level,
+            item_level=resolved_level,
             user_id=user_id,
         )
+        if effective_org:
+            create_kwargs["org_id"] = effective_org
+
+        item = await create_content_item(db_session, **create_kwargs)
 
         await increment_collection_count(db_session, collection, user_id=user_id)
         if owns_session:
@@ -375,6 +451,46 @@ async def save_content_item(
         async with activity_session() as db_session:
             return await _save_with_session(db_session, owns_session=True)
     return await _save_with_session(db, owns_session=False)
+
+
+async def _resolve_content_screenshot_path(
+    db,
+    *,
+    payload: dict[str, Any],
+    execution_id: str | None,
+    screenshot_bytes: bytes | None,
+    content_hash: str,
+) -> str | None:
+    """Resolve screenshot_path for content_items (URL only — binary lives in object storage)."""
+    if screenshot_bytes:
+        path = _save_screenshot(screenshot_bytes, content_hash)
+        return path or None
+
+    for key in ("screenshot_path", "_screenshot_path", "screenshot_url"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()[:1000]
+
+    if not execution_id:
+        return None
+
+    from db.crud.execution_steps import list_execution_steps
+    from services.content_artifacts import normalize_artifact_url
+
+    steps = await list_execution_steps(db, execution_id)
+    for step in reversed(steps):
+        arts = step.artifacts_json if isinstance(step.artifacts_json, list) else []
+        for art in reversed(arts):
+            if not isinstance(art, dict):
+                continue
+            artifact_id = str(art.get("screenshot_artifact_id") or "").strip()
+            if artifact_id:
+                return f"/artifacts/{artifact_id}/content"
+            inner = art.get("payload") if isinstance(art.get("payload"), dict) else {}
+            url = art.get("screenshot_url") or inner.get("full")
+            if url:
+                return normalize_artifact_url(str(url))
+    return None
 
 
 def _save_screenshot(data: bytes, content_hash: str) -> str:

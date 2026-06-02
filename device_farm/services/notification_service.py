@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any, Optional
 
 import httpx
@@ -10,7 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.database import AsyncSessionLocal
 from db.crud.user import get_user_org_id
+from db.models.analytics import WebhookDLQ, WebhookDeliveryLog
 from db.models.notification import Notification, NotificationChannel
+from services.activity_logger import log_activity
+from services.notification_events import parse_domain_event, render_notification
+from services.webhook_dispatcher import _is_safe_webhook_url
 from tenancy.background import DeviceRef, lookup_device_by_serial
 from tenancy.context import get_current_org_id, tenant_context
 
@@ -19,14 +24,23 @@ log = logging.getLogger(__name__)
 DEFAULT_EVENTS = [
     "device.disconnect",
     "device.reconnect",
+    "device.offline",
+    "device.online",
     "task.failed",
     "dlq.threshold",
     "campaign.complete",
+    "campaign.completed",
+    "campaign.dispatched",
     "campaign.failed",
+    "campaign.dlq_opened",
     "schedule.triggered",
     "schedule.failed",
+    "schedule.run_failed",
     "account.banned",
+    "account.rotated",
+    "account.locked",
     "content.milestone",
+    "mcp.action_sensitive",
 ]
 
 
@@ -118,6 +132,10 @@ class NotificationService:
                             saved.append(notification)
                         elif channel.type == "telegram":
                             await self._send_telegram(channel, title, body)
+                        elif channel.type == "email":
+                            await self._send_email(channel, title, body, data or {})
+                        elif channel.type == "slack":
+                            await self._send_slack(channel, event, title, body, data or {})
                         elif channel.type == "webhook":
                             await self._send_webhook(channel, event, title, body, data or {})
                     except Exception as exc:
@@ -135,6 +153,50 @@ class NotificationService:
             except Exception:
                 await db.rollback()
                 raise
+
+    async def emit(self, payload: dict[str, Any]) -> list[Notification]:
+        """Ingest a normalized domain event and fan out audit + notification.
+
+        This is the Module 09 boundary intended for domain modules. It validates
+        the event, appends activity_log, renders a stable notification template,
+        then routes through the existing channel/subscription path.
+        """
+        event = parse_domain_event(payload)
+        rendered = render_notification(
+            event,
+            locale=str(payload.get("locale") or "en"),
+            app_base_url=str(payload.get("app_base_url") or "").strip(),
+        )
+        async with AsyncSessionLocal() as db:
+            await log_activity(
+                db,
+                action=event.event_type,
+                entity_type=event.resource_type,
+                entity_id=event.resource_id,
+                user_id=event.actor_user_id,
+                org_id=event.org_id,
+                details={
+                    **(event.payload or {}),
+                    "summary": event.summary,
+                    "deep_link": rendered.deep_link,
+                    "template_version": rendered.template_version,
+                },
+            )
+            await db.commit()
+        with tenant_context(event.org_id):
+            return await self.notify(
+                event.event_type,
+                rendered.title,
+                rendered.body,
+                {
+                    **(event.payload or {}),
+                    "resource_type": event.resource_type,
+                    "resource_id": event.resource_id,
+                    "deep_link": rendered.deep_link,
+                    "template_version": rendered.template_version,
+                },
+                user_id=event.recipient_user_id,
+            )
 
     async def send_test(self, db: AsyncSession, channel: NotificationChannel, user_id: str) -> None:
         event = "task.failed"
@@ -347,15 +409,181 @@ class NotificationService:
         url = str(config.get("url") or "").strip()
         if not url:
             raise ValueError("webhook channel requires url")
-        headers = config.get("headers") if isinstance(config.get("headers"), dict) else {}
+        if not _is_safe_webhook_url(url):
+            raise ValueError("unsafe webhook url")
+        headers = config.get("headers") or config.get("custom_headers")
+        if not isinstance(headers, dict):
+            headers = {}
+        timeout = min(max(int(config.get("timeout_seconds") or 10), 1), 30)
+        payload = self._standard_payload(channel, event, title, body, data)
+        started = time.monotonic()
+        attempt = 1
         async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                url,
-                json={"event": event, "title": title, "body": body, "data": data},
-                headers=headers,
-                timeout=10,
+            try:
+                resp = await client.post(url, json=payload, headers=headers, timeout=timeout)
+                await self._record_delivery(
+                    channel,
+                    event,
+                    attempt=attempt,
+                    status="success" if resp.is_success else "failed",
+                    status_code=resp.status_code,
+                    latency_ms=int((time.monotonic() - started) * 1000),
+                    error=None if resp.is_success else resp.text[:500],
+                )
+                resp.raise_for_status()
+            except Exception as exc:
+                await self._record_delivery(
+                    channel,
+                    event,
+                    attempt=attempt,
+                    status="failed",
+                    status_code=None,
+                    latency_ms=int((time.monotonic() - started) * 1000),
+                    error=str(exc)[:500],
+                )
+                await self._record_webhook_dlq(channel, payload, str(exc)[:500])
+                raise
+
+    async def _send_slack(
+        self,
+        channel: NotificationChannel,
+        event: str,
+        title: str,
+        body: Optional[str],
+        data: dict[str, Any],
+    ) -> None:
+        config = channel.config or {}
+        url = str(config.get("webhook_url") or config.get("url") or "").strip()
+        if not url:
+            raise ValueError("slack channel requires webhook_url")
+        payload = self._standard_payload(channel, event, title, body, data)
+        slack_payload = {
+            "text": title,
+            "blocks": [
+                {"type": "header", "text": {"type": "plain_text", "text": title[:150]}},
+                {"type": "section", "text": {"type": "mrkdwn", "text": body or title}},
+            ],
+        }
+        deep_link = payload.get("deep_link")
+        if deep_link:
+            slack_payload["blocks"].append(
+                {
+                    "type": "actions",
+                    "elements": [
+                        {
+                            "type": "button",
+                            "text": {"type": "plain_text", "text": "Open in Device Farm"},
+                            "url": deep_link,
+                        }
+                    ],
+                }
+            )
+        await self._send_webhook_like(channel, event, url, slack_payload)
+
+    async def _send_email(
+        self,
+        channel: NotificationChannel,
+        title: str,
+        body: Optional[str],
+        data: dict[str, Any],
+    ) -> None:
+        config = channel.config or {}
+        to_address = str(config.get("to") or config.get("recipient") or data.get("email") or "").strip()
+        if "@" not in to_address:
+            raise ValueError("email channel requires a valid recipient")
+        # Real SMTP/SES adapters can be configured by deployment. In local tests
+        # and default installs this records the channel as accepted without
+        # opening a network connection.
+        if not config.get("smtp_host") and not config.get("ses_region"):
+            log.info("email notification accepted without transport recipient=%s title=%s", to_address, title)
+            return
+        raise ValueError("email transport adapter is not configured in this environment")
+
+    async def _send_webhook_like(
+        self,
+        channel: NotificationChannel,
+        event: str,
+        url: str,
+        payload: dict[str, Any],
+    ) -> None:
+        if not _is_safe_webhook_url(url):
+            raise ValueError("unsafe webhook url")
+        started = time.monotonic()
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(url, json=payload, timeout=10)
+            await self._record_delivery(
+                channel,
+                event,
+                attempt=1,
+                status="success" if resp.is_success else "failed",
+                status_code=resp.status_code,
+                latency_ms=int((time.monotonic() - started) * 1000),
+                error=None if resp.is_success else resp.text[:500],
             )
             resp.raise_for_status()
+
+    def _standard_payload(
+        self,
+        channel: NotificationChannel,
+        event: str,
+        title: str,
+        body: Optional[str],
+        data: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "event_type": event,
+            "organization_id": channel.org_id,
+            "resource_type": data.get("resource_type"),
+            "resource_id": data.get("resource_id") or data.get("campaign_id") or data.get("execution_id"),
+            "summary": body or title,
+            "timestamp": data.get("timestamp"),
+            "deep_link": data.get("deep_link"),
+            "data": data,
+        }
+
+    async def _record_delivery(
+        self,
+        channel: NotificationChannel,
+        event: str,
+        *,
+        attempt: int,
+        status: str,
+        status_code: int | None,
+        latency_ms: int,
+        error: str | None,
+    ) -> None:
+        async with AsyncSessionLocal() as db:
+            db.add(
+                WebhookDeliveryLog(
+                    org_id=channel.org_id,
+                    channel_id=channel.id,
+                    event_type=event,
+                    attempt=attempt,
+                    status=status,
+                    status_code=status_code,
+                    latency_ms=latency_ms,
+                    error=error,
+                )
+            )
+            await db.commit()
+
+    async def _record_webhook_dlq(
+        self,
+        channel: NotificationChannel,
+        payload: dict[str, Any],
+        error: str,
+    ) -> None:
+        async with AsyncSessionLocal() as db:
+            db.add(
+                WebhookDLQ(
+                    org_id=channel.org_id,
+                    channel_id=channel.id,
+                    event_payload=payload,
+                    final_status="failed",
+                    last_error=error,
+                )
+            )
+            await db.commit()
 
     async def _push_in_app(self, notification: Notification) -> None:
         if self._ws_manager is None or not notification.user_id:

@@ -1021,9 +1021,23 @@ export function useControlRecord(
       }
     };
 
-    void bootstrap();
+    const startBootstrap = () => {
+      void bootstrap();
+    };
+    let idleId: number | undefined;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    if (typeof requestIdleCallback !== 'undefined') {
+      idleId = requestIdleCallback(startBootstrap, { timeout: 2500 });
+    } else {
+      timeoutId = setTimeout(startBootstrap, 150);
+    }
+
     return () => {
       cancelled = true;
+      if (idleId !== undefined && typeof cancelIdleCallback !== 'undefined') {
+        cancelIdleCallback(idleId);
+      }
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
     };
   }, [
     autoRefreshHierarchy,

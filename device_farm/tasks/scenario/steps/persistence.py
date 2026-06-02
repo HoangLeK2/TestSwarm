@@ -87,8 +87,13 @@ def handle_save_extraction(sc: ScenarioContext, step: Dict[str, Any], idx: int, 
 
         coll = step.get("collection", "default")
         plat = step.get("platform")
-        ctype = step.get("content_type", "post")
+        ctype = step.get("content_type")
+        if not ctype:
+            result["ok"] = False
+            result["message"] = "save_extraction: content_type is required (platform-qualified, e.g. fb_post)"
+            return
         dedup_f = step.get("dedupe_field")
+        dedup_action = step.get("dedup_action", "skip")
         tags = step.get("tags", "")
         dserial = sc.device.serial
         items_snap = list(items)
@@ -136,9 +141,10 @@ def handle_save_extraction(sc: ScenarioContext, step: Dict[str, Any], idx: int, 
                         try:
                             r = await save_content_item(
                                 data=it, collection=coll, platform=plat, content_type=ctype,
-                                dedupe_field=dedup_f, tags=tags, device_serial=dserial,
+                                dedupe_field=dedup_f, dedup_action=dedup_action, tags=tags, device_serial=dserial,
                                 parent_id=parent_id, item_level=item_level, user_id=resolved_uid,
                                 campaign_id=campaign_id, execution_id=execution_id,
+                                scenario_id=sc.scenario.get("_scenario_id"),
                                 hash_scope=run_hash_scope, db=db,
                             )
                             last = r

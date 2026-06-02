@@ -6,6 +6,7 @@ import { useTranslations } from 'next-intl';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { StepPanelInput } from './step-panel-primitives';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import type { FlowStep } from '../scenario-steps/types';
@@ -663,11 +664,11 @@ export function SelectorFields({
 
       <StepPanelField label={tSel('valueLabel')}>
         <div className={valueInsertRowClassName()}>
-          <Input
+          <StepPanelInput
             className='h-9 min-w-0 flex-1 text-xs'
             value={value}
-            onChange={(e) =>
-              onChange(patchSelector(step, { value: e.target.value }))
+            onValueCommit={(nextValue) =>
+              onChange(patchSelector(step, { value: nextValue }))
             }
             placeholder={tSel('valuePlaceholder')}
           />

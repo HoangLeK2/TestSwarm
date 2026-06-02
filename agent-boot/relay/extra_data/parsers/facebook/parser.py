@@ -96,6 +96,10 @@ def _collect_text_nodes(element, toolbar_cutoff_y: int = 200) -> List[Dict[str, 
 
         is_author_hint = False
         desc_lower = desc.lower()
+        if any(m in desc_lower for m in ("lựa chọn khác cho bài viết", "other options for post")):
+            continue
+        if "•theo dõi" in desc_lower or "•follow" in desc_lower:
+            continue
         matched_prefix = _author_prefix_match(desc_lower)
         if matched_prefix is not None:
             remainder = desc[len(matched_prefix):].strip().lstrip(",").strip()

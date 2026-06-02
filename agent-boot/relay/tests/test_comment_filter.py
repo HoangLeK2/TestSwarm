@@ -78,7 +78,7 @@ def test_select_all_tap_targets_title_row_not_description() -> None:
     )
     assert plan["phase"] == "select_option"
     assert plan["tap"]["bounds"][1] >= 1180
-    assert plan["tap"]["bounds"][3] <= 1280
+    assert plan["tap"]["bounds"][3] <= 1210
 
 
 def test_select_newest_tap_targets_title_row() -> None:
@@ -89,6 +89,7 @@ def test_select_newest_tap_targets_title_row() -> None:
     assert plan["phase"] == "select_option"
     assert plan["target_filter"] == "newest"
     assert 1040 <= plan["tap"]["bounds"][1] <= 1120
+    assert plan["tap"]["bounds"][3] <= 1070
 
 
 def test_already_on_filter_skips_tap() -> None:

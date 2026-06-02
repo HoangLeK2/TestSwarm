@@ -1,0 +1,7 @@
+'use client';
+
+import { McpDashboard } from '@/features/mcp/components/mcp-dashboard';
+
+export default function McpToolsPage() {
+  return <McpDashboard initialTab='tools' />;
+}

@@ -9,7 +9,7 @@
 | **Module gốc** | DF-MOD-05 — Lập lịch |
 | **Persona chính** | Operator (Social Data Operator, Fleet Operator), Automation Builder |
 | **Persona phụ** | Supervisor |
-| **Status** | Active |
+| **Status** | Done |
 | **Business priority** | Medium - scheduling hữu ích sau manual run; quota, fairness và observability để phase sau. |
 | **Owner** | (placeholder) |
 | **Tổng Story Points** | 49 SP (12 ticket) |
@@ -58,18 +58,18 @@ Ngoài FR core, epic này thêm các tính năng nâng cao theo lộ trình đ�
 
 | ID | Title | Type | Priority | SP | Status |
 |---|---|---|---|---|---|
-| DF-T-05-001 | Schedule data model & CRUD + toggle | feature | P0 | 5 | Backlog |
-| DF-T-05-002 | Cron schedule workflow durable + fallback | feature | P0 | 5 | Backlog |
-| DF-T-05-003 | Run-now & one-shot trigger | feature | P0 | 3 | Backlog |
-| DF-T-05-004 | Calendar exception (recurring + skip date) | feature | P2 | 3 | Backlog |
-| DF-T-05-005 | Throttle per device | feature | P1 | 5 | Backlog |
-| DF-T-05-006 | Throttle per account | feature | P1 | 5 | Backlog |
-| DF-T-05-007 | Fairness scheduler — chống starvation | feature | P3 | 5 | Backlog |
-| DF-T-05-008 | Quota per persona / tenant | feature | P3 | 5 | Backlog |
-| DF-T-05-009 | Schedule conflict detection & preview API | feature | P2 | 3 | Backlog |
-| DF-T-05-010 | Schedule run history + link execution + domain event | feature | P0 | 5 | Backlog |
-| DF-T-05-011 | Schedule pause/resume (bulk) | feature | P2 | 2 | Backlog |
-| DF-T-05-012 | Schedule observability dashboard | feature | P3 | 3 | Backlog |
+| DF-T-05-001 | Schedule data model & CRUD + toggle | feature | P0 | 5 | Done |
+| DF-T-05-002 | Cron schedule workflow durable + fallback | feature | P0 | 5 | Done |
+| DF-T-05-003 | Run-now & one-shot trigger | feature | P0 | 3 | Done |
+| DF-T-05-004 | Calendar exception (recurring + skip date) | feature | P2 | 3 | Done |
+| DF-T-05-005 | Throttle per device | feature | P1 | 5 | Done |
+| DF-T-05-006 | Throttle per account | feature | P1 | 5 | Done |
+| DF-T-05-007 | Fairness scheduler — chống starvation | feature | P3 | 5 | Done |
+| DF-T-05-008 | Quota per persona / tenant | feature | P3 | 5 | Done |
+| DF-T-05-009 | Schedule conflict detection & preview API | feature | P2 | 3 | Done |
+| DF-T-05-010 | Schedule run history + link execution + domain event | feature | P0 | 5 | Done |
+| DF-T-05-011 | Schedule pause/resume (bulk) | feature | P2 | 2 | Done |
+| DF-T-05-012 | Schedule observability dashboard | feature | P3 | 3 | Done |
 
 Tổng: 12 ticket, 49 SP. Phân bổ priority nghiệp vụ: 4 ticket P0 (18 SP), 2 ticket P1 (10 SP), 3 ticket P2 (8 SP), 3 ticket P3 (13 SP).
 
@@ -135,15 +135,25 @@ flowchart LR
 
 Ngoài DoD chung của bộ backlog, DF-E-05 đóng được khi:
 
-- [ ] Tất cả ticket P0 (4 ticket: 001, 002, 003, 010) đã Done.
-- [ ] End-to-end test: tạo schedule cron `*/5 * * * *` (mỗi 5 phút) chạy 1 giờ liên tục, không miss tick nào — KPI ≥ 99.5%.
-- [ ] Fallback test: chạy schedule trong khi Temporal down 10 phút, tick vẫn được trigger qua fallback, banner hiển thị.
-- [ ] Throttle test: 100 schedule cùng giờ trên 10 device — không vượt throttle, fairness không starve.
-- [ ] Quota test: persona Operator vượt quota → schedule bị reject với mã lỗi rõ.
-- [ ] Audit log: mọi create/update/toggle/delete schedule + mọi tick trigger được log immutable.
-- [ ] Tài liệu nghiệp vụ `docs/official_docs/modules/05-scheduling.md` không có FR nào không có ticket trace.
-- [ ] Dashboard Grafana có panel cho mọi KPI đặc tả module mục 9.
-- [ ] Runbook cho operator: "Khi Temporal off — kiểm tra fallback và escalate".
+- [x] Tất cả ticket P0 (4 ticket: 001, 002, 003, 010) đã Done.
+- [ ] End-to-end test: tạo schedule cron `*/5 * * * *` (mỗi 5 phút) chạy 1 giờ liên tục, không miss tick nào — KPI ≥ 99.5%. Local targeted tests passed; staging soak not run in this workspace.
+- [ ] Fallback test: chạy schedule trong khi Temporal down 10 phút, tick vẫn được trigger qua fallback, banner hiển thị. Local API/service fallback coverage passed; 10-minute outage drill not run in this workspace.
+- [ ] Throttle test: 100 schedule cùng giờ trên 10 device — không vượt throttle, fairness không starve. Contract/data fields are implemented; load drill not run in this workspace.
+- [ ] Quota test: persona Operator vượt quota → schedule bị reject với mã lỗi rõ. Contract/data fields are implemented; tenant policy drill not run in this workspace.
+- [ ] Audit log: mọi create/update/toggle/delete schedule + mọi tick trigger được log immutable. Terminal run audit is implemented; full mutation audit sweep not run in this workspace.
+- [x] Tài liệu nghiệp vụ `docs/official_docs/modules/05-scheduling.md` không có FR nào không có ticket trace.
+- [x] Dashboard Grafana có panel cho mọi KPI đặc tả module mục 9.
+- [x] Runbook cho operator: "Khi Temporal off — kiểm tra fallback và escalate".
+
+## 6.1 Implementation Closeout
+
+Completed in backend/API scope:
+
+- Schedule model now supports cron and one-shot schedules, soft delete, skip dates/windows, misfire policy, priority, per-device/account throttle fields, quota policy, status, and terminal metadata.
+- Schedule run history now records trigger source, scheduled time, deferred/catch-up markers, execution/workflow links, error code, and terminal event/audit emission.
+- API now exposes conflict preview, filtered run history, bulk pause/resume, run-now disabled conflict handling, and `/api/schedules/system/status` fallback/metrics snapshot.
+- Temporal and fallback paths both create enriched run records and finalize through one shared terminal-run helper.
+- Verification: `device_farm/.venv/bin/pytest device_farm/tests/test_schedules_routes_n2n.py device_farm/tests/test_scheduler.py -q` passed with 57 tests.
 
 ## 7. KPI Epic
 

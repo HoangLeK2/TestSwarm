@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/tooltip';
 import { useTranslations } from 'next-intl';
 import { MonitorContent } from './monitor-content';
+import { MonitorControlBar } from './monitor-control-bar';
 import type { CampaignOut } from '../../types';
 import { isCampaignActiveExecution } from '../../types';
 
@@ -83,6 +84,8 @@ export function CampaignMonitorDialog({
             </span>
           </div>
         </DialogHeader>
+
+        <MonitorControlBar campaign={campaign} />
 
         <div className='min-h-0 flex-1 overflow-y-auto overflow-x-hidden'>
           <MonitorContent campaignId={campaign.id} isRunning={isRunning} />

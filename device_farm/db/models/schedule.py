@@ -47,8 +47,13 @@ class Schedule(TenantScopedModel, Base):
     max_devices: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     # ── Cron config ───────────────────────────────────────────────────────────
-    cron_expression: Mapped[str] = mapped_column(String(100), nullable=False)
+    cron_expression: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     timezone: Mapped[str] = mapped_column(String(50), default="Asia/Ho_Chi_Minh")
+    schedule_kind: Mapped[str] = mapped_column(String(20), default="cron")
+    run_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    skip_dates: Mapped[list] = mapped_column(JSON, default=list)
+    skip_windows: Mapped[list] = mapped_column(JSON, default=list)
+    misfire_policy: Mapped[str] = mapped_column(String(20), default="skip")
 
     # ── Randomization ─────────────────────────────────────────────────────────
     random_delay_min: Mapped[int] = mapped_column(Integer, default=0)
@@ -58,6 +63,11 @@ class Schedule(TenantScopedModel, Base):
 
     # ── Status ────────────────────────────────────────────────────────────────
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    status: Mapped[str] = mapped_column(String(20), default="enabled")
+    priority: Mapped[str] = mapped_column(String(20), default="normal")
+    max_concurrent_per_device: Mapped[int] = mapped_column(Integer, default=1)
+    account_rate_limit_per_hour: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    quota_policy: Mapped[dict] = mapped_column(JSON, default=dict)
     last_run_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -74,6 +84,9 @@ class Schedule(TenantScopedModel, Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
     )
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # ── Relationships ─────────────────────────────────────────────────────────
     runs: Mapped[list["ScheduleRun"]] = relationship(
@@ -82,6 +95,7 @@ class Schedule(TenantScopedModel, Base):
 
     __table_args__ = (
         Index("idx_schedules_enabled", "is_enabled"),
+        Index("idx_schedules_status", "status"),
         Index("idx_schedules_next_run", "next_run_at"),
         Index("idx_schedules_user", "user_id"),
     )
@@ -103,14 +117,30 @@ class ScheduleRun(TenantScopedModel, Base):
         index=True,
     )
     status: Mapped[str] = mapped_column(String(20), default=RunStatus.PENDING)
+    trigger_source: Mapped[str] = mapped_column(String(20), default="cron")
+    scheduled_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     finished_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    deferred_until: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    was_catch_up: Mapped[bool] = mapped_column(Boolean, default=False)
+    execution_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("executions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     devices_dispatched: Mapped[int] = mapped_column(Integer, default=0)
     devices_succeeded: Mapped[int] = mapped_column(Integer, default=0)
     devices_failed: Mapped[int] = mapped_column(Integer, default=0)
     task_ids: Mapped[list] = mapped_column(JSON, default=list)
+    workflow_ids: Mapped[list] = mapped_column(JSON, default=list)
+    error_code: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
@@ -120,6 +150,7 @@ class ScheduleRun(TenantScopedModel, Base):
     __table_args__ = (
         Index("idx_schedule_runs_schedule", "schedule_id"),
         Index("idx_schedule_runs_status", "status"),
+        Index("idx_schedule_runs_execution", "execution_id"),
     )
 
     def __repr__(self) -> str:  # pragma: no cover

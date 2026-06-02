@@ -82,16 +82,23 @@ const LIBRARY_GROUP: NavGroupDef = {
       permission: { object: 'account-groups', action: 'read' }
     },
     {
-      titleKey: 'scenario_templates',
-      url: ROUTES.SCENARIO_TEMPLATES.ROOT,
-      icon: 'template',
-      permission: { object: 'scenario-templates', action: 'read' }
+      titleKey: 'org_scenarios',
+      url: ROUTES.ORG_SCENARIOS.ROOT,
+      icon: 'flow',
+      permission: { object: 'scenarios', action: 'read' }
     },
     {
       titleKey: 'content',
       url: ROUTES.CONTENT.ROOT,
       icon: 'stats',
       permission: { object: 'content', action: 'read' }
+    },
+    {
+      // Temporary: analytics rollout — superadmin platform accounts only.
+      titleKey: 'analytics',
+      url: ROUTES.ANALYTICS.ROOT,
+      icon: 'stats',
+      roles: ['superadmin']
     },
     {
       titleKey: 'activity_history',
@@ -110,6 +117,13 @@ const OPERATIONS_GROUP: NavGroupDef = {
       url: ROUTES.NOTIFICATIONS.ROOT,
       icon: 'bell',
       permission: { object: 'notifications', action: 'read' }
+    },
+    {
+      // Temporary: MCP tools — superadmin platform accounts only.
+      titleKey: 'mcp_agent_tools',
+      url: ROUTES.MCP.ROOT,
+      icon: 'server',
+      roles: ['superadmin']
     }
   ]
 };
@@ -167,10 +181,7 @@ export const DASHBOARD_NAV_PATHS: string[] = [
   ...DASHBOARD_SETTINGS_NAV_GROUPS.flatMap((g) => g.items.map((i) => i.url))
 ];
 
-function leafFromDef(
-  def: NavLeafDef,
-  t: (key: string) => string
-): NavItem {
+function leafFromDef(def: NavLeafDef, t: (key: string) => string): NavItem {
   return {
     title: t(def.titleKey),
     url: def.url,
@@ -180,10 +191,7 @@ function leafFromDef(
   };
 }
 
-function groupFromDef(
-  def: NavGroupDef,
-  t: (key: string) => string
-): NavItem {
+function groupFromDef(def: NavGroupDef, t: (key: string) => string): NavItem {
   return {
     title: t(def.titleKey),
     type: 'group',
@@ -191,9 +199,10 @@ function groupFromDef(
   };
 }
 
-export function buildDashboardNavItems(
-  t: (key: string) => string
-): { baseItems: NavItem[]; settingItems: NavItem[] } {
+export function buildDashboardNavItems(t: (key: string) => string): {
+  baseItems: NavItem[];
+  settingItems: NavItem[];
+} {
   return {
     baseItems: DASHBOARD_MAIN_NAV_GROUPS.map((g) => groupFromDef(g, t)),
     settingItems: DASHBOARD_SETTINGS_NAV_GROUPS.map((g) => groupFromDef(g, t))

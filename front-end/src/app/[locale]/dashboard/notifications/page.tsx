@@ -1,7 +1,7 @@
 'use client';
 
-import { NotificationChannelSettings } from '@/features/notifications/components/notification-channel-settings';
+import { NotificationsHub } from '@/features/notifications/components/notifications-hub';
 
 export default function NotificationsPage() {
-  return <NotificationChannelSettings />;
+  return <NotificationsHub />;
 }

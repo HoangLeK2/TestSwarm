@@ -28,7 +28,8 @@ async def get_user(db: AsyncSession, user_id: str) -> Optional[User]:
 
 
 async def get_user_org_id(db: AsyncSession, user_id: str) -> str | None:
-    result = await db.execute(select(User.org_id).where(User.id == user_id).limit(1))
+    """Default workspace org for a user (``users.default_org_id``)."""
+    result = await db.execute(select(User.default_org_id).where(User.id == user_id).limit(1))
     return result.scalar_one_or_none()
 
 
@@ -37,17 +38,18 @@ async def create_user(
     email: str,
     name: str,
     hashed_password: str,
-    role: str = "operator",
+    role: str = "system",
     *,
+    default_org_id: str | None = None,
     org_id: str | None = None,
 ) -> User:
-    """Insert user row. Prefer ``create_user_with_default_org`` when ``users.org_id`` is NOT NULL."""
+    """Insert user row. Prefer ``create_user_with_default_org`` when ``default_org_id`` is NOT NULL."""
     user = User(
         email=email,
         name=name,
         hashed_password=hashed_password,
         role=role,
-        org_id=org_id,
+        default_org_id=default_org_id or org_id,
     )
     db.add(user)
     await db.flush()
@@ -59,9 +61,9 @@ async def create_user_with_default_org(
     email: str,
     name: str,
     hashed_password: str,
-    role: str = "operator",
+    role: str = "system",
 ) -> User:
-    """Create personal workspace + owner membership before user insert (org_id NOT NULL)."""
+    """Create personal workspace + owner membership before user insert (default_org_id NOT NULL)."""
     normalized_email = (email or "").strip().lower()
     org = Organization(
         business_name=make_personal_org_name(name, normalized_email),
@@ -75,7 +77,7 @@ async def create_user_with_default_org(
         name=name,
         hashed_password=hashed_password,
         role=role,
-        org_id=org.id,
+        default_org_id=org.id,
     )
     db.add(user)
     await db.flush()

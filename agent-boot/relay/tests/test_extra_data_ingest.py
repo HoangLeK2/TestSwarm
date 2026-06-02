@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from typing import Any
 
 import pytest
 
@@ -180,6 +181,43 @@ async def test_insert_rows_retries_transient_db_error(monkeypatch) -> None:
 
     assert result == {"attempted": 1, "inserted": 1, "duplicates": 0}
     assert server._writer.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_process_payload_strips_stale_campaign_before_insert(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeWriter:
+        async def prepare_context_for_persist(self, context):
+            captured["before"] = dict(context)
+            context["campaign_id"] = None
+            context["execution_id"] = None
+            return context
+
+        async def insert_rows(self, rows):
+            captured["rows"] = rows
+            return {"attempted": len(rows), "inserted": len(rows), "duplicates": 0}
+
+    server = ExtraDataIngestServer()
+    server._writer = FakeWriter()
+    xml = '<hierarchy><node text="Hello" /></hierarchy>'
+
+    result = await server.process_payload({
+        "serial": "serial-1",
+        "strategy": "text_nodes",
+        "xml": xml,
+        "context": {
+            "persist": True,
+            "collection": "fb_posts",
+            "campaign_id": "missing-campaign",
+            "execution_id": "missing-exec",
+        },
+    })
+
+    assert result["ok"] is True
+    assert result["inserted_count"] == 1
+    assert captured["before"]["campaign_id"] == "missing-campaign"
+    assert captured["rows"][0]["campaign_id"] is None
 
 
 @pytest.mark.asyncio

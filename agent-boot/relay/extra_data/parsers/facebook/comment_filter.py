@@ -130,6 +130,12 @@ def _is_already_on_filter(root, target: str) -> bool:
             return True
         if target == "all_comments" and "đang hiển thị" in desc and ("tất cả bình luận" in desc or "all comments" in desc):
             return True
+        if target == "newest" and "đang hiển thị" in desc and ("mới nhất" in desc or "newest" in desc):
+            return True
+        if target == "most_relevant" and "đang hiển thị" in desc and (
+            "phù hợp nhất" in desc or "most relevant" in desc
+        ):
+            return True
     return False
 
 
@@ -169,7 +175,10 @@ def _find_filter_option_bounds(root, target: str) -> Optional[Bounds]:
         bounds = _resolve_expand_clickable_bounds(node)
         if not bounds:
             continue
-        candidates.append((bounds[1], bounds[2] - bounds[0], bounds))
+        x1, y1, x2, y2 = bounds
+        row_h = max(1, y2 - y1)
+        tap_bounds = (x1, y1, x2, y1 + max(28, row_h // 3))
+        candidates.append((tap_bounds[1], tap_bounds[2] - tap_bounds[0], tap_bounds))
     if not candidates:
         for node in root.iter("node"):
             desc = _norm(node.get("content-desc") or "")

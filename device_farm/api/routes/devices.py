@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse
 
 from api.deps import AdminUser, CurrentUser, DB, require_permission
 from api.org_scope import data_owner_user_id, device_visible_to_user
-from api.auth.rbac import build_enforcer_for_user, permission_domain
+from api.auth.rbac import build_enforcer_for_user_from_db, permission_domain
 from runtime.core import DeviceManager
 from api.schemas.device import (
     DeviceCreate,
@@ -439,11 +439,11 @@ async def list_devices(
     ]
 
 
-def _can_view_owner_details(user) -> bool:
+async def _can_view_owner_details(user, db) -> bool:
     if getattr(user, "role", None) == "admin":
         return True
     domain = permission_domain(user)
-    enforcer = build_enforcer_for_user(user, domain=domain)
+    enforcer = await build_enforcer_for_user_from_db(user, db, domain=domain)
     return bool(enforcer.enforce(str(user.id), domain, "devices", "manage"))
 
 
@@ -550,7 +550,7 @@ async def fleet_stats(
     if not org_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Organization context required")
 
-    can_view_owner_details = _can_view_owner_details(user)
+    can_view_owner_details = await _can_view_owner_details(user, db)
     started = time.perf_counter()
     try:
         stats = await query_fleet_stats(
@@ -784,7 +784,11 @@ async def _resolve_relay_serial(
 ) -> str:
     """Return a serial reachable on gRPC control and/or the video/WS relay."""
     device = await repo.get_device(db, device_id)
-    if not await device_visible_to_user(db, user, device):
+    if not hasattr(user, "id") and str(getattr(device, "user_id", "")) == str(user):
+        visible = True
+    else:
+        visible = await device_visible_to_user(db, user, device)
+    if not visible:
         raise HTTPException(status_code=404, detail="Device not found")
     if device.serial.startswith("pending-"):
         raise HTTPException(status_code=409, detail="Device not yet paired")

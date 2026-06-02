@@ -337,6 +337,8 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "no_new_threshold",
             "expand_see_more",
             "extract_profile",
+            "open_post_before_extract",
+            "open_post_press_back_after_extract",
             "strategy_version",
             "collection",
             "platform",
@@ -355,11 +357,13 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "'text_nodes' — thu thập text node vào context['text_nodes']; "
             "'fb_comments' — parse comment rows + stats trong comment view/feed preview; "
             "ig/tiktok/linkedin/auto posts/comments — parse content tương ứng trong agent-boot. "
-            "extract_profile: balanced|aggressive|safe (áp defaults scan params). "
+            "extract_profile: balanced|aggressive|safe hoặc ${VAR} (áp defaults scan params). "
             "strategy_version: lock behavior parser/runtime (vd: fb_comments:v1). "
             "stop_if_no_new (bool, default False): set ctx['_break']=True khi không có bài mới "
             "trong no_new_threshold (default 3) lần scroll liên tiếp — dùng bên trong step 'loop'. "
             "expand_see_more (bool, default True): tự tap nút 'See more'/'Xem thêm' trước khi parse. "
+            "open_post_before_extract (fb_posts): mở màn chi tiết bài trước extract. "
+            "open_post_press_back_after_extract: tự Back sau extract; mặc định False — template có bước Back riêng. "
             "Nếu set collection/platform/content_type/dedupe_field thì agent-boot sẽ ghi trực tiếp "
             "vào content DB. "
             "⚠ Dùng với step 'loop' (không phải 'repeat') để stop_if_no_new hoạt động."

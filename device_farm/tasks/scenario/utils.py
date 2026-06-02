@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple, TYPE_CHECKING
 
@@ -487,6 +488,7 @@ def _execute_tap(
     image_threshold: float = 0.7,
     screenshot_anchor: Optional[Dict[str, Any]] = None,
     spec: Optional[Any] = None,
+    cancel_event: Optional[threading.Event] = None,
 ) -> Tuple[bool, str, Optional[Dict[str, int]]]:
     """
     Full tap pipeline: selector → image match (ROI→full) → position fallback.
@@ -508,6 +510,9 @@ def _execute_tap(
     w = device.screen_width or 1080
     h = device.screen_height or 1920
     u2 = device.u2
+
+    if cancel_event is not None and cancel_event.is_set():
+        return False, "cancelled", None
 
     if spec is None and by and value:
         spec = ScenarioSelectorSpec(by=str(by), value=str(value))
@@ -556,8 +561,8 @@ def _execute_tap(
                 fallback_rx, fallback_ry,
                 implicit_wait_timeout, implicit_wait_poll,
                 w, h,
-                find_fn=lambda u, b, v, timeout=10.0, poll=0.5, cancel_event=None, **kw: _retry_find_element(
-                    u, timeout=timeout, poll=poll, cancel_event=cancel_event, spec=spec, device=device,
+                find_fn=lambda u, b, v, timeout=10.0, poll=0.5, cancel_event=None, _ce=cancel_event, **kw: _retry_find_element(
+                    u, timeout=timeout, poll=poll, cancel_event=cancel_event or _ce, spec=spec, device=device,
                 ),
             )
         phases.append(_phase_spec)
@@ -567,8 +572,8 @@ def _execute_tap(
             fallback_rx, fallback_ry,
             implicit_wait_timeout, implicit_wait_poll,
             w, h,
-            find_fn=lambda u, b, v, timeout=10.0, poll=0.5, cancel_event=None, **kw: _retry_find_element(
-                u, b, v, timeout=timeout, poll=poll, cancel_event=cancel_event, device=device,
+            find_fn=lambda u, b, v, timeout=10.0, poll=0.5, cancel_event=None, _ce=cancel_event, **kw: _retry_find_element(
+                u, b, v, timeout=timeout, poll=poll, cancel_event=cancel_event or _ce, device=device,
             ),
         ))
 
@@ -592,6 +597,8 @@ def _execute_tap(
         ))
 
     resolver = ElementResolver(phases=phases)
+    if cancel_event is not None and cancel_event.is_set():
+        return False, "cancelled", None
     result = resolver.resolve()
 
     # F1.6 — if resolver missed AND the selector was real, force a fresh
@@ -599,22 +606,29 @@ def _execute_tap(
     # between capture and tap, so the previous cached tree no longer has the
     # target. Cheap (~200ms per retry), only fires on miss.
     if not result.hit and has_selector:
+        if cancel_event is not None and cancel_event.is_set():
+            return False, "cancelled", None
         try:
             device.hierarchy_xml(force_refresh=True)
         except Exception as exc:
             log.debug(f"[{serial}] tap-retry force_refresh failed: {exc}")
+        if cancel_event is not None and cancel_event.is_set():
+            return False, "cancelled", None
         result = resolver.resolve()
         if result.hit:
             log.info(f"[{serial}] tap: recovered after hierarchy refresh")
 
     if not result.hit:
+        if cancel_event is not None and cancel_event.is_set():
+            return False, "cancelled", None
         lbl = selector_summary(spec) if spec else f"{by}={value!r}"
         return False, f"selector {lbl} not found, no fallback position", None
 
     if result.x == -1 and result.y == -1:
         try:
             eid_result = _retry_find_element(
-                u2, effective_by, effective_value, timeout=1.0, poll=0.3, spec=spec, device=device,
+                u2, effective_by, effective_value, timeout=1.0, poll=0.3,
+                cancel_event=cancel_event, spec=spec, device=device,
             )
             if eid_result is not None:
                 from services.scenario_selector import spec_eid

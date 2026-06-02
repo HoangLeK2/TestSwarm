@@ -79,13 +79,9 @@ async def create_personal_org_for_user(
         business_name=make_personal_org_name(user.name, user.email),
         business_email=user.email,
     )
-    # Set user's current org if unset (tenant scoping).
-    if not getattr(user, "org_id", None):
-        try:
-            user.org_id = org.id  # type: ignore[attr-defined]
-            await db.flush()
-        except Exception:
-            pass
+    if not user.default_org_id:
+        user.default_org_id = org.id
+        await db.flush()
     return org
 
 
@@ -270,10 +266,10 @@ async def update_organization_member_role(
 async def get_current_org_for_user(db: AsyncSession, user_id: str) -> Organization | None:
     """Current organization for auth scoping.
 
-    Today this is `users.org_id` (primary org) if set, else first membership.
+    Today this is ``users.default_org_id`` if set, else first membership.
     """
     row = (
-        await db.execute(select(User.org_id).where(User.id == user_id).limit(1))
+        await db.execute(select(User.default_org_id).where(User.id == user_id).limit(1))
     ).scalar_one_or_none()
     if row:
         return (

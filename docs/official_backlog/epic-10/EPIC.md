@@ -4,13 +4,13 @@
 |---|---|
 | **Epic ID** | DF-E-10 |
 | **Module** | DF-MOD-10 — MCP Agent Tools |
-| **Trạng thái Epic** | Active |
+| **Trạng thái Epic** | Preview implementation complete — pending external 24h staging soak |
 | **Business priority** | Low - MCP là Preview/Experimental, không thuộc release happy path cho end-user. |
 | **Release track** | Preview / Experimental — phần mở rộng nghiên cứu, KHÔNG thuộc năng lực cốt lõi |
 | **Persona chính** | AI Operations Supervisor (Preview) |
 | **Persona phụ** | Automation Builder, Fleet Operator, Social Data Operator |
 | **Số ticket dự kiến** | 14 |
-| **Cập nhật lần cuối** | 2026-05-26 |
+| **Cập nhật lần cuối** | 2026-06-01 |
 | **Owner** | (placeholder) |
 
 ## 1. Mục tiêu Epic
@@ -75,20 +75,20 @@ DF-E-10 hiện thực hóa toàn bộ năng lực **MCP Agent Tools** — mặt 
 
 | Ticket ID | Tên | Loại | Priority | SP | Status |
 |---|---|---|---|---|---|
-| DF-T-10-001 | Bootstrap MCP server stdio (Preview) | feature | P3 | 5 | Backlog |
-| DF-T-10-002 | Đặc tả contract `df_*` tool family | feature | P3 | 5 | Backlog |
-| DF-T-10-003 | Authentication: DEVICE_FARM_MCP_TOKEN + MCP_AUTH_TOKEN | feature | P3 | 5 | Backlog |
-| DF-T-10-004 | Tool `df_device_list` — agent enumerate fleet | feature | P3 | 3 | Backlog |
-| DF-T-10-005 | Tool `df_device_claim` / `df_start_session` — reserve device | feature | P3 | 5 | Backlog |
-| DF-T-10-006 | Tool `df_campaign_create` — agent tạo campaign | feature | P3 | 3 | Backlog |
-| DF-T-10-007 | Tool `df_campaign_run` / `df_run_scenario` — dispatch & status | feature | P3 | 5 | Backlog |
-| DF-T-10-008 | Tool `df_content_query` / `df_save_extraction` — content tool | feature | P3 | 3 | Backlog |
-| DF-T-10-009 | Tool `df_account_list` — agent đọc account khả dụng | feature | P3 | 2 | Backlog |
-| DF-T-10-010 | Tool registry / discovery (`tools/list` Preview channel) | feature | P3 | 3 | Backlog |
-| DF-T-10-011 | MCP audit log (mọi tool call persist) | feature | P3 | 5 | Backlog |
-| DF-T-10-012 | Rate-limit & quota cho AI agent | feature | P3 | 3 | Backlog |
-| DF-T-10-013 | Error contract chuẩn `df.*` codes | feature | P3 | 3 | Backlog |
-| DF-T-10-014 | Preview disclosure banner trên dashboard | feature | P3 | 2 | Backlog |
+| DF-T-10-001 | Bootstrap MCP server stdio (Preview) | feature | P3 | 5 | Done |
+| DF-T-10-002 | Đặc tả contract `df_*` tool family | feature | P3 | 5 | Done |
+| DF-T-10-003 | Authentication: DEVICE_FARM_MCP_TOKEN + MCP_AUTH_TOKEN | feature | P3 | 5 | Done |
+| DF-T-10-004 | Tool `df_device_list` — agent enumerate fleet | feature | P3 | 3 | Done |
+| DF-T-10-005 | Tool `df_device_claim` / `df_start_session` — reserve device | feature | P3 | 5 | Done |
+| DF-T-10-006 | Tool `df_campaign_create` — agent tạo campaign | feature | P3 | 3 | Done |
+| DF-T-10-007 | Tool `df_campaign_run` / `df_run_scenario` — dispatch & status | feature | P3 | 5 | Done |
+| DF-T-10-008 | Tool `df_content_query` / `df_save_extraction` — content tool | feature | P3 | 3 | Done |
+| DF-T-10-009 | Tool `df_account_list` — agent đọc account khả dụng | feature | P3 | 2 | Done |
+| DF-T-10-010 | Tool registry / discovery (`tools/list` Preview channel) | feature | P3 | 3 | Done |
+| DF-T-10-011 | MCP audit log (mọi tool call persist) | feature | P3 | 5 | Done |
+| DF-T-10-012 | Rate-limit & quota cho AI agent | feature | P3 | 3 | Done |
+| DF-T-10-013 | Error contract chuẩn `df.*` codes | feature | P3 | 3 | Done |
+| DF-T-10-014 | Preview disclosure banner trên dashboard | feature | P3 | 2 | Done |
 
 Tổng story point ước lượng: **52 SP**. Phân bổ priority nghiệp vụ: 14 ticket P3 (52 SP).
 
@@ -128,15 +128,27 @@ flowchart TB
 
 DF-E-10 chỉ chuyển sang trạng thái "Preview release" (không phải GA) khi:
 
-- [ ] Tất cả 14 ticket đạt DoD chung (xem `README.md` mục 9) **và** điều kiện riêng từng ticket.
-- [ ] MCP server stdio chạy ổn định ≥ 24h liên tục trong môi trường staging với ≥ 1 agent (Claude hoặc tương đương) làm smoke test.
-- [ ] 100% tool `df_*` có schema in/out đầy đủ và đều wrap đúng một HTTP route đã có (parity audit pass).
-- [ ] Audit log ghi ≥ 99% tool call (loại trừ tool đọc thuần được khai báo).
-- [ ] Rate-limit có ngưỡng baseline và đã được test với scenario agent loop.
-- [ ] Disclosure Preview hiển thị đúng ở mọi entry point: dashboard banner (DF-T-10-014), `tools/list` response (DF-T-10-010), tài liệu nghiệp vụ module 10.
-- [ ] Tài liệu module `docs/official_docs/modules/10-mcp-agent-tools.md` cập nhật mọi thay đổi contract trong cùng release.
-- [ ] **Đã ghi rõ vào tài liệu nghiệp vụ rằng tool còn ở trạng thái Preview, có warning khi dùng từ AI agent bên ngoài.**
-- [ ] Đã thông báo nội bộ rằng contract DF-E-10 có thể thay đổi giữa các release (release note ghi rõ "no GA SLA").
+- [x] Tất cả 14 ticket đạt DoD chung (xem `README.md` mục 9) **và** điều kiện riêng từng ticket ở phạm vi local implementation.
+- [ ] MCP server stdio chạy ổn định ≥ 24h liên tục trong môi trường staging với ≥ 1 agent (Claude hoặc tương đương) làm smoke test. **Pending external staging soak; không thể chứng minh bằng local test trong lượt này.**
+- [x] 100% tool `df_*` có schema in/out đầy đủ và đều wrap đúng một HTTP route đã có (parity audit pass).
+- [x] Audit log ghi ≥ 99% tool call (loại trừ tool đọc thuần được khai báo).
+- [x] Rate-limit có ngưỡng baseline và đã được test với scenario agent loop.
+- [x] Disclosure Preview hiển thị đúng ở mọi entry point: dashboard banner (DF-T-10-014), `tools/list` response (DF-T-10-010), tài liệu nghiệp vụ module 10.
+- [x] Tài liệu module `docs/official_docs/modules/10-mcp-agent-tools.md` cập nhật mọi thay đổi contract trong cùng release.
+- [x] **Đã ghi rõ vào tài liệu nghiệp vụ rằng tool còn ở trạng thái Preview, có warning khi dùng từ AI agent bên ngoài.**
+- [x] Đã thông báo nội bộ rằng contract DF-E-10 có thể thay đổi giữa các release (release note ghi rõ "no GA SLA").
+
+## 10. Implementation Evidence — 2026-06-01
+
+| Area | Evidence |
+|---|---|
+| MCP stdio / registry | `device_farm/mcp/server.py` exposes `preview`, `contract_version`, `server_status`, output schemas, tool metadata, canonical Epic 10 aliases, and `df_mcp_registry`. |
+| Token model | `device_farm/mcp/token_store.py` stores only hashed generated MCP tokens with atomic write + lock-file protected updates; dashboard `dfmcp_*` tokens decode through the shared auth path, while env tokens `DEVICE_FARM_MCP_TOKEN` and `MCP_AUTH_TOKEN` remain supported for stdio runtime. |
+| Tool parity | Canonical tools wrap HTTP routes: devices live list, sessions start/end/get, campaigns create/dispatch/run, content query/save, accounts list. |
+| Audit / rate-limit / error contract | `tools/call` records JSONL audit entries for success and failure, redacts sensitive input, applies per-token rate limits, and returns structured `df.*` errors without traceback leakage. |
+| Backend API | `/api/mcp/tools`, `/api/mcp/tokens`, `/api/mcp/tokens/{token_id}/revoke`, and `/api/mcp/audit-log` expose Preview registry, tenant-scoped token lifecycle, and tenant-scoped audit review. |
+| Dashboard disclosure | `/dashboard/mcp`, `/dashboard/mcp/tools`, `/dashboard/mcp/tokens`, `/dashboard/mcp/audit-log`, and `/dashboard/mcp/sandbox` show the Preview banner with `contract_version` and consent gate for token creation. |
+| Regression evidence | `uv run --project device_farm pytest -q device_farm/tests/test_epic10_mcp_contract.py` → 9 passed; `py_compile` for new backend modules passed; frontend MCP files passed ESLint; nav route check passed. |
 
 ## 8. KPI Epic
 

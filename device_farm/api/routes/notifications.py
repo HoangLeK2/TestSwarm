@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import func, select
+from datetime import datetime, timezone
+
+from sqlalchemy import func, or_, select
 
 from api.deps import CurrentUser, DB, require_permission
 from api.org_scope import data_owner_user_id
@@ -58,9 +60,16 @@ async def _get_notification_or_404(
     db: DB, notification_id: str, user: CurrentUser
 ) -> Notification:
     stmt = select(Notification).where(Notification.id == notification_id)
-    owner_id = data_owner_user_id(user)
-    if owner_id:
-        stmt = stmt.where(Notification.user_id == owner_id)
+    org_id = getattr(user, "org_id", None)
+    if org_id:
+        stmt = stmt.where(
+            Notification.org_id == org_id,
+            or_(Notification.user_id == user.id, Notification.user_id.is_(None)),
+        )
+    else:
+        owner_id = data_owner_user_id(user)
+        if owner_id:
+            stmt = stmt.where(Notification.user_id == owner_id)
     result = await db.execute(stmt)
     notification = result.scalar_one_or_none()
     if notification is None:
@@ -69,10 +78,22 @@ async def _get_notification_or_404(
 
 
 def _apply_notification_user_filter(stmt, user: CurrentUser):
+    org_id = getattr(user, "org_id", None)
+    if org_id:
+        return stmt.where(
+            Notification.org_id == org_id,
+            or_(Notification.user_id == user.id, Notification.user_id.is_(None)),
+        )
     owner_id = data_owner_user_id(user)
     if owner_id:
         return stmt.where(Notification.user_id == owner_id)
     return stmt
+
+
+async def _unread_count_for_user(db: DB, user: CurrentUser) -> int:
+    stmt = _apply_notification_user_filter(select(func.count(Notification.id)), user)
+    stmt = stmt.where(Notification.is_read.is_(False))
+    return (await db.execute(stmt)).scalar() or 0
 
 
 async def _ensure_default_channel(db: DB, user: CurrentUser) -> None:
@@ -229,10 +250,7 @@ async def list_notifications(
     dependencies=[Depends(require_permission("notifications", "read"))],
 )
 async def unread_count(db: DB, user: CurrentUser):
-    stmt = _apply_notification_user_filter(select(func.count(Notification.id)), user)
-    stmt = stmt.where(Notification.is_read.is_(False))
-    count = (await db.execute(stmt)).scalar() or 0
-    return UnreadCountOut(count=count)
+    return UnreadCountOut(count=await _unread_count_for_user(db, user))
 
 
 @router.patch(
@@ -242,9 +260,16 @@ async def unread_count(db: DB, user: CurrentUser):
 )
 async def mark_read(notification_id: str, db: DB, user: CurrentUser):
     notification = await _get_notification_or_404(db, notification_id, user)
-    notification.is_read = True
+    if not notification.is_read:
+        notification.is_read = True
+        notification.read_at = datetime.now(timezone.utc)
+    elif notification.read_at is None:
+        notification.read_at = datetime.now(timezone.utc)
     await db.flush()
-    return notification
+    return {
+        **NotificationOut.model_validate(notification).model_dump(),
+        "unread_count": await _unread_count_for_user(db, user),
+    }
 
 
 @router.post(
@@ -257,7 +282,10 @@ async def mark_all_read(db: DB, user: CurrentUser):
     stmt = stmt.where(Notification.is_read.is_(False))
     result = await db.execute(stmt)
     rows = list(result.scalars().all())
+    now = datetime.now(timezone.utc)
     for notification in rows:
         notification.is_read = True
+        if notification.read_at is None:
+            notification.read_at = now
     await db.flush()
     return UnreadCountOut(count=0)

@@ -44,13 +44,13 @@ def _client_meta(request: Request) -> tuple[str | None, str | None]:
     return ip, ua
 
 
-def _is_device_admin(user) -> bool:
-    from api.auth.rbac import build_enforcer_for_user, permission_domain
+async def _is_device_admin(user, db) -> bool:
+    from api.auth.rbac import build_enforcer_for_user_from_db, permission_domain
 
     if getattr(user, "org_role", None) == "owner":
         return True
     domain = permission_domain(user)
-    enforcer = build_enforcer_for_user(user, domain=domain)
+    enforcer = await build_enforcer_for_user_from_db(user, db, domain=domain)
     return bool(enforcer.enforce(str(user.id), domain, "devices", "manage"))
 
 
@@ -234,7 +234,7 @@ async def release_device(
             session_id=body.session_id,
             org_id=getattr(user, "org_id", None),
             actor_user_id=user.id,
-            is_admin=_is_device_admin(user),
+            is_admin=await _is_device_admin(user, db),
             ip_address=ip,
             user_agent=ua,
         )
@@ -277,7 +277,7 @@ async def heartbeat_session(session_id: str, db: DB, user: CurrentUser):
             session_id=session_id,
             org_id=getattr(user, "org_id", None),
             actor_user_id=user.id,
-            is_admin=_is_device_admin(user),
+            is_admin=await _is_device_admin(user, db),
         )
         await db.commit()
     except Exception as exc:

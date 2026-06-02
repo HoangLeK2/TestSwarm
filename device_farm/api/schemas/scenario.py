@@ -519,6 +519,9 @@ class TapFbCommentButtonStep(StepBase):
     then: List[StepModel] = []
     else_steps: List[StepModel] = Field(default_factory=list, alias="else")
 
+class FbTapCommentButtonStep(TapFbCommentButtonStep):
+    type: Literal["fb_tap_comment_button"]
+
 class RandomPickStep(StepBase):
     type: Literal["random_pick"]
     branches: List[RandomBranch] = Field(min_length=1)
@@ -566,6 +569,10 @@ class ExtractStep(StepBase):
     ]
     stop_if_no_new: bool = False
     no_new_threshold: int = Field(3, ge=1, le=1000)
+    # Literal profile or "${VAR}" resolved from scenario variables at runtime.
+    extract_profile: Optional[str] = None
+    open_post_before_extract: Optional[bool] = None
+    open_post_press_back_after_extract: Optional[bool] = None
     expand_see_more: bool = True
     # Progressive expansion (long post/comment hydration)
     # support int/float or "${VAR}" strings resolved at runtime
@@ -587,6 +594,20 @@ class ExtractStep(StepBase):
     tags: Optional[TagsOrStr] = None
     save_parent_id_var: Optional[str] = None
     item_level: int = Field(0, ge=0, le=2)
+
+    @field_validator("extract_profile")
+    @classmethod
+    def extract_profile_literal_or_var(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        s = str(v).strip()
+        if s in ("balanced", "aggressive", "safe"):
+            return s
+        if s.startswith("${") and s.endswith("}"):
+            return s
+        raise ValueError(
+            "extract_profile must be 'balanced', 'aggressive', 'safe', or a ${VAR} reference"
+        )
 
 class ExtractTextHierarchyStep(StepBase):
     type: Literal["extract_text_hierarchy"]
@@ -681,6 +702,7 @@ StepModel = Annotated[
         Annotated[IfElementStep, Tag("if_element")],
         Annotated[IfVariableStep, Tag("if_variable")],
         Annotated[TapFbCommentButtonStep, Tag("tap_fb_comment_button")],
+        Annotated[FbTapCommentButtonStep, Tag("fb_tap_comment_button")],
         Annotated[RandomPickStep, Tag("random_pick")],
         Annotated[LoopStep, Tag("loop")],
         Annotated[BreakIfStep, Tag("break_if")],

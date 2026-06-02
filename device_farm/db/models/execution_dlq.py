@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, text
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, JSON, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.database import Base
@@ -28,6 +28,7 @@ class ExecutionDLQ(Base):
         Index("idx_dlq_device", "device_serial"),
         Index("idx_dlq_status", "status"),
         Index("idx_dlq_created", "created_at"),
+        Index("idx_dlq_campaign_status", "campaign_id", "status"),
         Index(
             "uq_dlq_open_execution_device",
             "execution_id",
@@ -38,6 +39,12 @@ class ExecutionDLQ(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("organizations.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
 
     execution_id: Mapped[str] = mapped_column(
         String(36),
@@ -49,6 +56,16 @@ class ExecutionDLQ(Base):
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     status: Mapped[str] = mapped_column(String(20), nullable=False, default=DLQStatus.PENDING)
+
+    failed_step_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    failure_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    failed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    closed_by: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    close_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    replayed_to_execution_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    artifact_refs: Mapped[dict] = mapped_column(JSON, default=dict)
+    campaign_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
 
     last_attempt_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True

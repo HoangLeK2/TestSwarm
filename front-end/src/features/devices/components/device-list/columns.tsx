@@ -3,6 +3,7 @@
 import { formatDistanceToNow } from 'date-fns';
 import { enUS, vi } from 'date-fns/locale';
 import type { Locale } from 'date-fns';
+import Link from 'next/link';
 import { QrCode, Trash2, Wifi, WifiOff } from 'lucide-react';
 import type { ColumnDef } from '@tanstack/react-table';
 import { useQueryClient } from '@tanstack/react-query';
@@ -37,6 +38,7 @@ import {
 import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
 import { normalizeNavUserRole } from '@/lib/nav-access';
 import { useAuthContext } from '@/features/auth/providers/auth-provider';
+import { ROUTES } from '@/config/routes';
 
 function DeviceActionsCell({
   device,
@@ -167,7 +169,12 @@ export function getDeviceColumns({
 
         return (
           <div className='flex flex-col'>
-            <span className='truncate text-sm font-medium'>{label}</span>
+            <Link
+              href={ROUTES.DEVICES.DETAIL(d.serial)}
+              className='truncate text-sm font-medium hover:underline'
+            >
+              {label}
+            </Link>
             <span className='font-mono text-[11px] text-muted-foreground'>
               {pending ? t('notConnected') : d.serial}
             </span>

@@ -18,8 +18,8 @@
 | **Module** | DF-MOD-06 — Content Extraction & Artifact |
 | **Status** | Active |
 | **Business priority** | High - content extraction, collection, artifact và export là output nghiệp vụ chính sau execution. |
-| **Ước lượng tickets** | 16 |
-| **Tổng story points (ước lượng)** | 69 SP |
+| **Ước lượng tickets** | 15 |
+| **Tổng story points (ước lượng)** | 64 SP |
 | **Cửa sổ lộ trình** | Quý hiện tại + 1 quý tiếp theo (song hành DF-E-04 Campaign và DF-E-08 Social Platform Extensions) |
 | **Phụ thuộc giữa Epic** | Phụ thuộc DF-E-02 (Devices & Control Plane) cho screenshot/hierarchy capture; cung cấp content type & artifact contract cho DF-E-08 (Social Platform Extensions) và DF-E-04 (Campaign Execution) |
 | **KPI chính (xem mục 6)** | 100% content item có content type platform-qualified; ≥ 99% truy vết đầy đủ; ≥ 99% artifact đính kèm execution; latency p50 hierarchy < 3 s, AI vision < 8 s |
@@ -34,7 +34,7 @@ Epic này hiện thực hóa toàn bộ module DF-MOD-06: biến quan sát màn 
 |---|---|---|---|---|
 | FR-06-01 | Hierarchy extraction engine | Must | DF-T-06-006 | DF-T-06-004, DF-T-06-014 |
 | FR-06-02 | OCR engine | Must | DF-T-06-004 | DF-T-06-006, DF-T-06-014 |
-| FR-06-03 | AI vision engine | Should | DF-T-06-005 | DF-T-06-013, DF-T-06-014 |
+| FR-06-03 | AI vision engine | Should | DF-T-06-005 | DF-T-06-014 |
 | FR-06-04 | Normalizer thống nhất | Must | DF-T-06-007 | DF-T-06-001, DF-T-06-006 |
 | FR-06-05 | Content type platform-qualified | Must | DF-T-06-001 | DF-T-06-007, DF-T-06-008 |
 | FR-06-06 | raw_data field | Must | DF-T-06-002 | DF-T-06-007 |
@@ -45,8 +45,8 @@ Epic này hiện thực hóa toàn bộ module DF-MOD-06: biến quan sát màn 
 | FR-06-11 | Truy vấn và lọc content | Must | DF-T-06-008 | DF-T-06-010, DF-T-06-012 |
 | FR-06-12 | Artifact lưu trên MinIO/S3 | Must | DF-T-06-002 (data model), DF-T-06-011 (retention), DF-T-06-012 (preview API) | DF-T-06-009 |
 | FR-06-13 | Truy vết content tới ngữ cảnh nguồn | Must | DF-T-06-002 | DF-T-06-007, DF-T-06-009 |
-| FR-06-14 | Không persist provider secret | Must | DF-T-06-005, DF-T-06-014 | DF-T-06-013 |
-| FR-06-15 | Báo cáo chi phí AI vision | Should | DF-T-06-013 | DF-T-06-015 |
+| FR-06-14 | Không persist provider secret | Must | DF-T-06-005, DF-T-06-014 | DF-T-06-015 |
+| FR-06-15 | Báo cáo chi phí AI vision | Should | *(Deferred — ngoài phạm vi Epic)* | DF-T-06-015 (metrics cơ bản) |
 | Lộ trình | Export content refactor sau migration export cũ | P1 ngắn hạn | DF-T-06-016 | DF-T-11-009 |
 
 ## 4. Danh sách Ticket
@@ -65,12 +65,13 @@ Epic này hiện thực hóa toàn bộ module DF-MOD-06: biến quan sát màn 
 | DF-T-06-010 | Content deduplication theo external_id (collection-scoped) | P2 | 3 | feature | FR-06-11 (Lộ trình dedup) |
 | DF-T-06-011 | Artifact retention policy & lifecycle (MinIO/S3) | P3 | 3 | feature | FR-06-12 |
 | DF-T-06-012 | Artifact preview API (signed URL theo execution/step) | P0 | 3 | feature | FR-06-12 |
-| DF-T-06-013 | AI vision cost tracking & budget guardrail | P3 | 5 | feature | FR-06-15, FR-06-03 |
 | DF-T-06-014 | Extraction error handling & retry policy | P1 | 3 | feature | FR-06-01, FR-06-02, FR-06-03 |
 | DF-T-06-015 | Extraction observability (metric, log, audit, secret scrub) | P3 | 3 | feature | FR-06-14, FR-06-15 |
 | DF-T-06-016 | Content export refactor sau migration drop export cũ | P1 | 5 | feature | FR-06-10, FR-06-11, FR-06-12, Lộ trình |
 
-**Tổng:** 16 ticket, 69 SP. Phân bổ priority nghiệp vụ: 8 ticket P0 (36 SP), 2 ticket P1 (8 SP), 2 ticket P2 (6 SP), 4 ticket P3 (19 SP).
+**Tổng:** 15 ticket, 64 SP. Phân bổ priority nghiệp vụ: 8 ticket P0 (36 SP), 2 ticket P1 (8 SP), 2 ticket P2 (6 SP), 3 ticket P3 (14 SP).
+
+> **Ghi chú:** DF-T-06-013 (AI vision cost tracking & budget guardrail) đã **Cancelled** — FR-06-15 deferred; chi phí AI vision theo dõi thủ công qua provider dashboard cho đến khi có epic riêng.
 
 ## 5. Dependency Graph
 
@@ -95,7 +96,6 @@ flowchart TB
     T010[DF-T-06-010 Dedup external_id]
     T011[DF-T-06-011 Artifact retention]
     T012[DF-T-06-012 Artifact preview API]
-    T013[DF-T-06-013 AI cost tracking]
     T014[DF-T-06-014 Error handling]
     T015[DF-T-06-015 Observability + secret scrub]
     T016[DF-T-06-016 Content export refactor]
@@ -115,7 +115,6 @@ flowchart TB
     T008 --> T009
     T008 --> T010
     T009 --> T014
-    T005 --> T013
     T009 --> T015
     T008 --> T016
     T011 --> T016
@@ -134,7 +133,7 @@ flowchart TB
     classDef ext fill:#eee,stroke:#888,stroke-dasharray: 5 5
 ```
 
-**Đọc graph này như thế nào.** T001 (registry) và T002 (data model) là chân đế bắt buộc trước mọi ticket khác. T003 cung cấp nguồn ảnh và hierarchy cho cả ba engine T004/T005/T006. T007 (normalizer) hợp nhất output của ba engine về schema chuẩn — là phụ thuộc cứng của T009 (`save_extraction`). T008 (collection + query) cũng là phụ thuộc của T009 vì step lưu content phải gắn vào collection. Ba ticket "quality / ops" T011/T012/T013 không chặn pipeline core nhưng phải xong trước khi Epic được coi là Done. DF-E-02 cung cấp transport screenshot cho T003; DF-E-08 sẽ tiêu thụ content type registry (T001) và normalizer (T007); DF-E-04 phụ thuộc `save_extraction` (T009) để scenario crawl chạy được.
+**Đọc graph này như thế nào.** T001 (registry) và T002 (data model) là chân đế bắt buộc trước mọi ticket khác. T003 cung cấp nguồn ảnh và hierarchy cho cả ba engine T004/T005/T006. T007 (normalizer) hợp nhất output của ba engine về schema chuẩn — là phụ thuộc cứng của T009 (`save_extraction`). T008 (collection + query) cũng là phụ thuộc của T009 vì step lưu content phải gắn vào collection. Các ticket "quality / ops" T011/T012/T015 không chặn pipeline core nhưng phải xong trước khi Epic được coi là Done. DF-E-02 cung cấp transport screenshot cho T003; DF-E-08 sẽ tiêu thụ content type registry (T001) và normalizer (T007); DF-E-04 phụ thuộc `save_extraction` (T009) để scenario crawl chạy được.
 
 ## 6. KPI Epic-specific (đo trong vận hành thật)
 
@@ -155,7 +154,7 @@ flowchart TB
 
 Epic chỉ được coi là Done khi đáp ứng đủ DoD chung (xem [README §9](../README.md#9-definition-of-done-dod--mặc-định)) cộng các điều kiện riêng:
 
-- [ ] Tất cả 16 ticket trong Epic ở trạng thái Done hoặc Cancelled với lý do ghi nhận.
+- [ ] Tất cả 15 ticket trong Epic ở trạng thái Done hoặc Cancelled với lý do ghi nhận (DF-T-06-013 Cancelled — budget guardrail deferred).
 - [ ] Content type registry có sẵn 9 content type chuẩn (`fb_post`, `fb_comment`, `tiktok_video`, `tiktok_comment`, `threads_post`, `threads_comment`, `ig_media`, `ig_comment`, `ig_profile`) và validation từ chối tên generic (`post`, `comment`, `thread`, `video`).
 - [ ] Cùng một bài Facebook đi qua hierarchy engine và AI vision engine cho ra content item có cùng tập cột chuẩn, chỉ khác `raw_data`.
 - [ ] `save_extraction` step idempotent với dedup key khai báo: chạy lại 3 lần trên cùng input không tạo bản ghi trùng.
@@ -163,14 +162,14 @@ Epic chỉ được coi là Done khi đáp ứng đủ DoD chung (xem [README §
 - [ ] Đã chạy thử pipeline trên 50 device thực, 24 giờ liên tục, đạt KPI artifact đính kèm ≥ 99%.
 - [ ] Đã audit không có chuỗi giống pattern provider API key (OpenAI `sk-*`, Gemini `AIzaSy*`) trong bảng content_items và raw_data.
 - [ ] Tài liệu nghiệp vụ `docs/official_docs/modules/06-content-extraction-artifacts.md` cập nhật trạng thái Active các capability đã ship.
-- [ ] Tài liệu vận hành "How to configure AI vision budget" và "Artifact retention runbook" đã viết.
+- [ ] Tài liệu vận hành "Artifact retention runbook" đã viết.
 - [ ] Export content server-side đã thay thế scope export cũ sau migration `031_drop_content_exports`; DF-T-11-009 chỉ consume API.
 
 ## 8. Risks & Open questions của Epic
 
 **Rủi ro chính.**
 
-- **Chi phí AI vision không kiểm soát được:** một campaign 1000 device × 20 step × AI vision có thể đốt budget rất nhanh — mitigation tại DF-T-06-013 (budget guardrail) và khuyến nghị fallback engine.
+- **Chi phí AI vision không kiểm soát được:** một campaign 1000 device × 20 step × AI vision có thể đốt budget rất nhanh — mitigation: khuyến nghị fallback sang hierarchy/OCR; theo dõi chi phí qua provider dashboard (DF-T-06-013 đã Cancelled, FR-06-15 deferred).
 - **Dung lượng artifact phình to:** pre/post capture cho mỗi step trên fleet lớn — mitigation tại DF-T-06-011 (retention policy) và default sample rate có thể tinh chỉnh per scenario.
 - **Provider rate limit / outage:** OpenAI và Gemini có rate limit — mitigation tại DF-T-06-014 (retry policy) và DF-T-06-015 (alert).
 - **Server-side dedup chưa có ở phiên bản 1:** mitigation tại DF-T-06-010 (collection-scoped dedup theo external_id) đưa ra ở mức MVP.

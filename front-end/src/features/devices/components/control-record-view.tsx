@@ -14,7 +14,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle
 } from '@/components/ui/alert-dialog';
-import { DeviceTile } from './device-tile';
+import { ControlRecordMirror } from './control-record/control-record-mirror';
+import { MirrorPhonePlaceholder } from './control-record/mirror-phone-placeholder';
 import { SafeModeBanner } from '@/features/core/components/safe-mode-banner';
 import { useSafeMode } from '@/features/core/services/use-safe-mode';
 import { Button } from '@/components/ui/button';
@@ -75,7 +76,33 @@ const FlowgramCanvas = dynamic(
     )
   }
 );
-import { VariableEditor } from '@/components/variable-editor';
+
+const FlowEditor = dynamic(
+  () =>
+    import('@/features/campaigns/components/flow-editor').then(
+      (m) => m.FlowEditor
+    ),
+  {
+    ssr: false,
+    loading: () => (
+      <div className='flex flex-1 items-center justify-center text-xs text-muted-foreground'>
+        Đang tải editor…
+      </div>
+    )
+  }
+);
+
+const ScenarioPlayer = dynamic(
+  () =>
+    import('./control-record/scenario-player').then((m) => m.ScenarioPlayer),
+  { ssr: false }
+);
+
+const VariableEditor = dynamic(
+  () =>
+    import('@/components/variable-editor').then((m) => m.VariableEditor),
+  { ssr: false }
+);
 import {
   Dialog,
   DialogContent,
@@ -92,14 +119,12 @@ import {
   TooltipTrigger
 } from '@/components/ui/tooltip';
 import { useControlRecord } from '../hooks/use-control-record';
-import { campaignsApi } from '@/features/campaigns/services/api';
+import { campaignVariables, campaignsApi } from '@/features/campaigns/services/api';
 import { useScenarioTemplates } from '@/features/scenario-templates/hooks/use-scenario-templates';
 import type { ScenarioTemplateOut } from '@/features/scenario-templates/services/api';
 import { useAccountGroups } from '@/features/account-groups/hooks/use-account-groups';
 import { EmptyNodePicker } from './control-record/empty-node-picker';
 import { XmlTreeViewer } from './control-record/xml-tree-viewer';
-import { ScenarioPlayer } from './control-record/scenario-player';
-import { FlowEditor } from '@/features/campaigns/components/flow-editor';
 import {
   applySelectorToSteps,
   applyTapPointToSteps,
@@ -164,6 +189,17 @@ function flattenVarDefs(vars: Record<string, any>): Record<string, any> {
   return out;
 }
 
+function mergeTemplateVariablesIntoEditor(
+  prev: Record<string, any>,
+  templateVars: Record<string, any> | undefined
+): Record<string, any> {
+  if (!templateVars || Object.keys(templateVars).length === 0) return prev;
+  return flattenVarDefs({
+    ...prev,
+    ...flattenVarDefs(templateVars)
+  });
+}
+
 /** Bounded label for device Select (long model/serial otherwise breaks the top bar). */
 function formatDeviceSelectLabel(d: {
   brand: string;
@@ -216,6 +252,17 @@ export function ControlRecordView({
       initialScenarioId,
       initialTemplateId
     );
+  const hierarchyXml = hierarchy.xml;
+  const handleScreenTapRef = useRef<(rx: number, ry: number) => void>(() => {});
+  const handleScreenSwipeRef = useRef<
+    (
+      rx1: number,
+      ry1: number,
+      rx2: number,
+      ry2: number,
+      durationMs: number
+    ) => void
+  >(() => {});
   const { read_only: safeReadOnly, stream_hierarchy: safeHierarchy } =
     useSafeMode();
   const devicePerms = useResourcePermissions('devices');
@@ -432,6 +479,52 @@ export function ControlRecordView({
   );
   const previewBlocking = playerPlaying || inlinePreviewRunning;
 
+  const deviceSelectValue = useMemo(() => {
+    const serial = device.selectedSerial;
+    if (!serial) return undefined;
+    return device.connectedDevices.some((d) => d.serial === serial)
+      ? serial
+      : undefined;
+  }, [device.selectedSerial, device.connectedDevices]);
+
+  const handleFlowStepsChange = useCallback(
+    (newSteps: FlowStep[]) => {
+      steps.setItems(
+        newSteps.map((s: FlowStep, i: number) => ({
+          ...s,
+          _id: (s as { _id?: string })._id || `step-${Date.now()}-${i}`
+        })) as typeof steps.items
+      );
+    },
+    [steps]
+  );
+
+  const handlePlayerPlayingChange = useCallback(
+    (playing: boolean) => {
+      hierarchy.setPaused(playing);
+      setPlayerPlaying(playing);
+    },
+    [hierarchy.setPaused]
+  );
+
+  const registerPlayerStop = useCallback((fn: (() => void) | null) => {
+    stopPlayerRef.current = fn;
+  }, []);
+
+  const mirrorBusyBanner = useMemo(() => {
+    const d = device.selectedDevice;
+    if (!d) return null;
+    const blocked =
+      (d.state || '').replace('DeviceState.', '') === 'BUSY' ||
+      (d.scenario_active ?? 0) > 0;
+    if (!blocked) return null;
+    return (
+      <div className='flex w-full shrink-0 items-center gap-2 border-b border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300'>
+        <span>{t('takeover.manualControlBlocked')}</span>
+      </div>
+    );
+  }, [device.selectedDevice, t]);
+
   // Farm back button, device switch, player close — confirm before leaving while preview runs.
   const guardWhilePreviewActive = useCallback(
     (action: () => void) => {
@@ -594,10 +687,10 @@ export function ControlRecordView({
   const deviceVarGlobalPreview = useMemo(
     () =>
       mergeCampaignScenarioVariables(
-        campaignForGlobalVarsQuery.data?.variables,
+        campaignVariables(campaignForGlobalVarsQuery.data),
         scenarioVariables
       ),
-    [campaignForGlobalVarsQuery.data?.variables, scenarioVariables]
+    [campaignForGlobalVarsQuery.data, scenarioVariables]
   );
   const setCurrentDeviceVarsEnabled = useCallback(
     (enabled: boolean) => {
@@ -822,13 +915,14 @@ export function ControlRecordView({
   }, [flowSelectedFgId]);
 
   useEffect(() => {
-    if (!showFlowUi) {
-      setFlowSelectedFgId(null);
-      setFlowDetailStep(null);
-      setFlowCoordPick(null);
-      setFlowSelectorPickFgId(null);
-      setFlowRunStates({});
-    }
+    if (showFlowUi) return;
+    setFlowSelectedFgId(null);
+    setFlowDetailStep(null);
+    setFlowCoordPick(null);
+    setFlowSelectorPickFgId(null);
+    setFlowRunStates((prev) =>
+      Object.keys(prev).length === 0 ? prev : {}
+    );
   }, [showFlowUi]);
 
   useEffect(() => {
@@ -1222,16 +1316,14 @@ export function ControlRecordView({
       coordinatePickTarget,
       showFlowUi,
       flowCoordPick,
-      steps,
-      device.selectedDevice,
-      hierarchy
+      steps
     ]
   );
 
   // When user taps the phone screen → hierarchy highlight + optional selector pick
   const handleScreenTap = useCallback(
     (rx: number, ry: number) => {
-      const tree = parseHierarchyTree(hierarchy.xml);
+      const tree = parseHierarchyTree(hierarchyXml);
       if (tree) {
         const nodeId = findNodeIdAtRatio(tree, rx, ry);
         setSelectedNodeId(nodeId);
@@ -1283,7 +1375,7 @@ export function ControlRecordView({
       }
 
       if (showFlowUi && flowSelectorPickFgId && flowCtxRef.current) {
-        const sel = findSelectorInXml(hierarchy.xml, rx, ry);
+        const sel = findSelectorInXml(hierarchyXml, rx, ry);
         if (!sel?.value?.trim()) {
           toast.warning(t('pickSelectorNoElement'));
           return;
@@ -1344,7 +1436,7 @@ export function ControlRecordView({
       }
 
       if (selectorPickTarget) {
-        const sel = findSelectorInXml(hierarchy.xml, rx, ry);
+        const sel = findSelectorInXml(hierarchyXml, rx, ry);
         if (sel?.value) {
           applySelectorPick(sel.selector, { rx: rx3, ry: ry3 });
         } else {
@@ -1354,7 +1446,7 @@ export function ControlRecordView({
       }
     },
     [
-      hierarchy,
+      hierarchyXml,
       selectorPickTarget,
       coordinatePickTarget,
       applySelectorPick,
@@ -1367,6 +1459,45 @@ export function ControlRecordView({
       selector
     ]
   );
+
+  handleScreenTapRef.current = handleScreenTap;
+  handleScreenSwipeRef.current = handleScreenSwipe;
+
+  const mirrorOnTap = useCallback((rx: number, ry: number) => {
+    handleScreenTapRef.current(rx, ry);
+  }, []);
+
+  const mirrorSwipeEnabled =
+    coordinatePickTarget?.mode === 'swipe_segment' ||
+    (showFlowUi && flowCoordPick?.kind === 'swipe');
+
+  const mirrorOnSwipe = useMemo(
+    () =>
+      mirrorSwipeEnabled
+        ? (
+            rx1: number,
+            ry1: number,
+            rx2: number,
+            ry2: number,
+            durationMs: number
+          ) =>
+            handleScreenSwipeRef.current(rx1, ry1, rx2, ry2, durationMs)
+        : undefined,
+    [mirrorSwipeEnabled]
+  );
+
+  const mirrorInputLocked = useMemo(() => {
+    const d = device.selectedDevice;
+    if (!d) return { hideControls: true, readOnlyPreview: true };
+    const blocked =
+      (d.state || '').replace('DeviceState.', '') === 'BUSY' ||
+      (d.scenario_active ?? 0) > 0;
+    return { hideControls: blocked, readOnlyPreview: blocked };
+  }, [
+    device.selectedDevice?.serial,
+    device.selectedDevice?.state,
+    device.selectedDevice?.scenario_active
+  ]);
 
   // ── Error / empty states ─────────────────────────────────────────────────
   if (error) {
@@ -1455,7 +1586,7 @@ export function ControlRecordView({
         {/* Device selector */}
         <div className='min-w-0 max-w-[min(280px,calc(100vw-14rem))] shrink'>
           <Select
-            value={device.selectedSerial ?? ''}
+            value={deviceSelectValue}
             onValueChange={(v) =>
               guardWhilePreviewActive(() => device.setSelectedSerial(v || null))
             }
@@ -1741,57 +1872,29 @@ export function ControlRecordView({
         {/* ── COL 2: Phone screen (centered) ───────────────────────────── */}
         <div
           ref={mirrorColRef}
-          className='flex min-h-0 w-[clamp(300px,28vw,440px)] shrink-0 flex-col overflow-y-auto overflow-x-hidden border-r border-border/60 bg-muted/20'
+          className='flex min-h-[520px] w-[clamp(300px,28vw,440px)] shrink-0 flex-col overflow-y-auto overflow-x-hidden border-r border-border/60 bg-muted/20'
         >
           {selectedDevice ? (
             <>
-              {((selectedDevice.state || '').replace('DeviceState.', '') ===
-                'BUSY' ||
-                (selectedDevice.scenario_active ?? 0) > 0) && (
-                <div className='flex w-full shrink-0 items-center gap-2 border-b border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300'>
-                  <span>{t('takeover.manualControlBlocked')}</span>
-                </div>
-              )}
-              <div className='flex w-full justify-center p-3'>
-                <DeviceTile
-                  device={selectedDevice}
-                  logLines={device.logs[selectedDevice.serial] ?? []}
-                  mode={device.mode}
-                  wsSend={record.sendAndRecord}
-                  onToggleMode={record.handleToggleMode}
-                  onRestart={record.handleRestart}
-                  onTap={handleScreenTap}
-                  hideHeader
-                  hideStepMonitor
-                  minimalRailControls
-                  onSwipe={
-                    coordinatePickTarget?.mode === 'swipe_segment' ||
-                    (showFlowUi && flowCoordPick?.kind === 'swipe')
-                      ? handleScreenSwipe
-                      : undefined
-                  }
-                  highlightBounds={highlightBounds}
-                  hideControls={
-                    (selectedDevice.state || '').replace('DeviceState.', '') ===
-                      'BUSY' || (selectedDevice.scenario_active ?? 0) > 0
-                  }
-                  hideDeviceFunctions={
-                    (selectedDevice.state || '').replace('DeviceState.', '') ===
-                      'BUSY' || (selectedDevice.scenario_active ?? 0) > 0
-                  }
-                  readOnlyPreview={
-                    (selectedDevice.state || '').replace('DeviceState.', '') ===
-                      'BUSY' || (selectedDevice.scenario_active ?? 0) > 0
-                  }
-                />
-              </div>
+              <ControlRecordMirror
+                device={selectedDevice}
+                logLines={device.logs[selectedDevice.serial] ?? []}
+                mode={device.mode}
+                wsSend={record.sendAndRecord}
+                onToggleMode={record.handleToggleMode}
+                onRestart={record.handleRestart}
+                onTap={mirrorOnTap}
+                onSwipe={mirrorOnSwipe}
+                highlightBounds={highlightBounds}
+                hideControls={mirrorInputLocked.hideControls}
+                hideDeviceFunctions={mirrorInputLocked.hideControls}
+                readOnlyPreview={mirrorInputLocked.readOnlyPreview}
+                busyBanner={mirrorBusyBanner}
+              />
             </>
           ) : (
-            <div className='flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center'>
-              <Video
-                className='size-8 text-muted-foreground/30'
-                strokeWidth={1.25}
-              />
+            <div className='flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center'>
+              <MirrorPhonePlaceholder />
               <p className='text-xs text-muted-foreground'>
                 Chọn thiết bị từ thanh trên
               </p>
@@ -1809,13 +1912,8 @@ export function ControlRecordView({
                 onClose={() =>
                   guardWhilePreviewActive(() => setPlayerMode(false))
                 }
-                onPlayingChange={(p) => {
-                  hierarchy.setPaused(p);
-                  setPlayerPlaying(p);
-                }}
-                registerStop={(fn) => {
-                  stopPlayerRef.current = fn;
-                }}
+                onPlayingChange={handlePlayerPlayingChange}
+                registerStop={registerPlayerStop}
                 preloadedSteps={
                   steps.items.length > 0 ? (steps.items as any[]) : undefined
                 }
@@ -2097,7 +2195,12 @@ export function ControlRecordView({
                   <EmptyNodePicker
                     templates={templatesQuery.data}
                     templatesLoading={templatesQuery.isLoading}
-                    onPreviewTemplate={setPreviewTemplate}
+                    onPreviewTemplate={(tpl) => {
+                      setScenarioVariables((prev) =>
+                        mergeTemplateVariablesIntoEditor(prev, tpl.variables)
+                      );
+                      setPreviewTemplate(tpl);
+                    }}
                     onAddFlow={steps.addFlow}
                     onAddWait={steps.addWait}
                   />
@@ -2211,14 +2314,7 @@ export function ControlRecordView({
                     <div className='min-h-0 flex-1 overflow-hidden'>
                       <FlowEditor
                         steps={steps.items as FlowStep[]}
-                        onChange={(newSteps) =>
-                          steps.setItems(
-                            newSteps.map((s: FlowStep, i: number) => ({
-                              ...s,
-                              _id: (s as any)._id || `step-${Date.now()}-${i}`
-                            })) as any
-                          )
-                        }
+                        onChange={handleFlowStepsChange}
                         maxHeight='calc(100vh - 170px)'
                         selectorPickTarget={selectorPickTarget}
                         onSelectorPickTargetChange={setSelectorPickTarget}
@@ -2764,6 +2860,9 @@ export function ControlRecordView({
                   onClick={() => {
                     const tpl = previewTemplate;
                     if (!tpl) return;
+                    setScenarioVariables((prev) =>
+                      mergeTemplateVariablesIntoEditor(prev, tpl.variables)
+                    );
                     const n = steps.appendSteps(
                       Array.isArray(tpl.steps) ? tpl.steps : []
                     );

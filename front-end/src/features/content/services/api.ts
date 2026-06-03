@@ -30,6 +30,11 @@ export interface ContentItem {
   created_at: string;
   content_hash: string;
   parent_id: string | null;
+  parent_item_id?: string | null;
+  parent_item_hash?: string | null;
+  parent_item_author?: string | null;
+  parent_item_body?: string | null;
+  parent_item_content_type?: string | null;
   item_level: number;
 }
 

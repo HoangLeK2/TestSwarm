@@ -514,6 +514,44 @@ def test_tap_fb_comment_button_resolves_target_via_agent_boot(monkeypatch) -> No
     assert sc.ctx["_active_comment_parent_hash"] == "scoped-hash"
 
 
+def test_tap_fb_comment_button_preserves_post_detail_parent_hash(monkeypatch) -> None:
+    device = _FakeDevice({
+        "ok": True,
+        "ingest": {
+            "diagnostic": {
+                "reason_code": "ok",
+                "verified": True,
+                "target": {
+                    "bounds": [10, 20, 110, 60],
+                    "pid": "pid-1",
+                    "parent_base_hash": "target-base-hash",
+                    "parent_id": "target-scoped-hash",
+                    "post_key": "post-1",
+                    "text_prefix": "target parent text",
+                },
+            },
+        },
+    })
+    device.taps = []
+    device.tap = lambda x, y: device.taps.append((x, y))
+    sc = _ctx(device)
+    sc.ctx["_active_comment_parent_hash"] = "detail-parent-hash"
+    sc.ctx["_first_new_post_hash"] = "detail-parent-hash"
+    sc.ctx["_active_comment_parent_source"] = "post_detail"
+    result = {}
+
+    control_flow.handle_tap_fb_comment_button(sc, {}, 0, result)
+
+    assert result["tapped"] is True
+    assert result["parent_context_preserved"] is True
+    assert result["parent_id"] == "detail-parent-hash"
+    assert sc.ctx["_active_comment_parent_hash"] == "detail-parent-hash"
+    assert sc.ctx["_first_new_post_hash"] == "detail-parent-hash"
+    assert sc.ctx["_active_comment_parent_source"] == "post_detail"
+    assert "_edge_comment_parent_base_hash" not in sc.ctx
+    assert sc.ctx["_fb_comment_parent_pid"] == "pid-1"
+
+
 def test_tap_fb_comment_button_uses_persisted_post_dedupe_field(monkeypatch) -> None:
     device = _FakeDevice({
         "ok": True,

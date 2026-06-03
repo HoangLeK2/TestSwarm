@@ -416,10 +416,14 @@ def handle_tap_fb_comment_button(
                     )
                 if verified:
                     tapped = True
+                    keep_post_detail_parent = bool(
+                        sc.ctx.get("_active_comment_parent_hash")
+                        and sc.ctx.get("_active_comment_parent_source") == "post_detail"
+                    )
                     parent_base_hash = target.get("parent_base_hash")
-                    if parent_base_hash:
+                    if parent_base_hash and not keep_post_detail_parent:
                         sc.ctx["_edge_comment_parent_base_hash"] = parent_base_hash
-                    if target.get("parent_id"):
+                    if target.get("parent_id") and not keep_post_detail_parent:
                         sc.ctx["_active_comment_parent_hash"] = target.get("parent_id")
                         sc.ctx["_first_new_post_hash"] = target.get("parent_id")
                     if target.get("pid"):
@@ -438,7 +442,8 @@ def handle_tap_fb_comment_button(
                     result["agent_tapped"] = agent_tapped
                     result["_bounds"] = bounds
                     result["_pid"] = target.get("pid")
-                    result["parent_id"] = target.get("parent_id")
+                    result["parent_id"] = sc.ctx.get("_active_comment_parent_hash") or target.get("parent_id")
+                    result["parent_context_preserved"] = keep_post_detail_parent
                     result["target_score"] = target.get("score")
                     result["target_chosen_index"] = diag.get("chosen_index") if diag else None
                     result["target_verified"] = True

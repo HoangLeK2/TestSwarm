@@ -45,6 +45,7 @@ import { CoreEmptyState } from '@/components/core-empty-state';
 import { ContentExportDialog } from './content-export-panel';
 import { useContent, useContentStats } from '../hooks/use-content';
 import {
+  contentApi,
   type ContentItem,
   type ExportFormat
 } from '../services/api';
@@ -427,22 +428,69 @@ function Filters({
 
 // ── Table (Tất cả / Post) ─────────────────────────────────────────────────────
 
-function CommentParentLine({ item }: { item: ContentItem }) {
+function CommentParentLine({
+  item,
+  onViewParent
+}: {
+  item: ContentItem;
+  onViewParent?: (parentId: string) => void;
+}) {
   if (item.content_type !== 'fb_comment' && item.item_level <= 0) return null;
   const summary = commentParentSummary(item);
   if (!summary) return null;
-  return (
-    <div className='mt-1.5 flex max-w-full items-start gap-1.5 text-[11px] leading-snug text-muted-foreground'>
-      <CornerDownRight size={12} className='mt-0.5 shrink-0 text-blue-500' />
-      <div className='min-w-0'>
-        <span className='font-medium text-foreground/75'>Bài gốc: </span>
-        <span>{summary.primary}</span>
-        {summary.secondary ? (
-          <span className='block max-w-full truncate text-foreground/70'>
-            {summary.secondary}
+  const content = (
+    <>
+      <div className='flex min-w-0 flex-wrap items-center gap-1.5'>
+        <span className='font-semibold text-blue-700 dark:text-blue-300'>
+          Bình luận thuộc bài:
+        </span>
+        <span className='min-w-0 truncate font-medium text-foreground'>
+          {summary.primary}
+        </span>
+        {summary.source ? (
+          <span className='rounded bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:text-blue-300'>
+            {summary.source === 'post_detail' ? 'đã xác minh' : summary.source}
           </span>
         ) : null}
       </div>
+      {summary.secondary ? (
+        <span className='block max-w-full truncate text-foreground/70'>
+          {summary.secondary}
+        </span>
+      ) : null}
+      {summary.postId ? (
+        <span className='block max-w-full truncate font-mono text-[10px] text-muted-foreground'>
+          {summary.postId}
+        </span>
+      ) : null}
+    </>
+  );
+  const className =
+    'mt-2 flex max-w-full items-start gap-2 rounded-md border border-blue-500/20 bg-blue-500/[0.04] px-2.5 py-2 text-[11px] leading-snug transition-colors';
+
+  if (summary.linkedParentId && onViewParent) {
+    return (
+      <button
+        type='button'
+        onClick={(e) => {
+          e.stopPropagation();
+          onViewParent(summary.linkedParentId!);
+        }}
+        className={cn(
+          className,
+          'w-full cursor-pointer text-left hover:border-blue-500/35 hover:bg-blue-500/[0.08]'
+        )}
+      >
+        <CornerDownRight size={13} className='mt-0.5 shrink-0 text-blue-500' />
+        <div className='min-w-0'>{content}</div>
+      </button>
+    );
+  }
+
+  return (
+    <div className={cn(className, 'text-muted-foreground')}>
+      <CornerDownRight size={13} className='mt-0.5 shrink-0 text-blue-500' />
+      <div className='min-w-0'>{content}</div>
     </div>
   );
 }
@@ -644,7 +692,7 @@ function ContentTable({
                       <span className='max-w-[260px] truncate'>{item.url}</span>
                     </a>
                   )}
-                  <CommentParentLine item={item} />
+                  <CommentParentLine item={item} onViewParent={onViewParent} />
                 </td>
                 <td className='px-4 py-3.5 align-top text-foreground/90'>
                   {item.author || (
@@ -898,7 +946,10 @@ function ContentCard({
           </div>
         )}
 
-        <CommentParentLine item={item} />
+        <CommentParentLine
+          item={item}
+          onViewParent={onViewParent ? () => onViewParent() : undefined}
+        />
 
         {item.url && (
           <a
@@ -1033,11 +1084,14 @@ interface Props {
   defaultCampaignId?: string;
   /** Pre-filter by execution / run ID. */
   defaultExecutionId?: string;
+  /** Pre-filter by a content hash, e.g. parent post opened from a comment. */
+  defaultContentHash?: string;
 }
 
 export function ContentViewer({
   defaultCampaignId,
-  defaultExecutionId
+  defaultExecutionId,
+  defaultContentHash
 }: Props) {
   const router = useRouter();
   const [search, setSearch] = useState('');
@@ -1070,7 +1124,8 @@ export function ContentViewer({
   } = useContent(
     {
       campaign_id: defaultCampaignId || undefined,
-      run_id: defaultExecutionId || undefined
+      run_id: defaultExecutionId || undefined,
+      content_hash: defaultContentHash || undefined
     },
     { pageSize }
   );
@@ -1133,7 +1188,21 @@ export function ContentViewer({
     applyWithNext({ platform: v });
   };
 
-  const handleViewParent = (parentId: string) => {
+  const handleViewParent = async (parentId: string) => {
+    try {
+      const res = await contentApi.list({
+        content_hash: parentId,
+        limit: 1,
+        offset: 0
+      });
+      const parent = res.items[0];
+      if (parent) {
+        router.push(ROUTES.CONTENT.DETAIL(parent.id));
+        return;
+      }
+    } catch {
+      // Fallback to the filtered list below.
+    }
     applyFilters({ content_hash: parentId });
     setSearch('');
     setCampaignId('');
@@ -1163,7 +1232,8 @@ export function ContentViewer({
     executionId ||
     collection ||
     platform ||
-    contentType
+    contentType ||
+    filters.content_hash
   );
 
   return (
@@ -1224,6 +1294,30 @@ export function ContentViewer({
             </DropdownMenu>
           </div>
         </div>
+
+        {filters.content_hash ? (
+          <div className='border-b border-blue-500/20 bg-blue-500/[0.04] px-5 py-2.5'>
+            <div className='flex flex-wrap items-center justify-between gap-2 text-xs'>
+              <div className='flex min-w-0 items-center gap-2 text-blue-800 dark:text-blue-200'>
+                <FileText className='size-3.5 shrink-0' />
+                <span className='font-medium'>Đang mở bài viết cha</span>
+                <span className='min-w-0 truncate rounded bg-background px-2 py-0.5 font-mono text-[11px] text-muted-foreground'>
+                  {filters.content_hash}
+                </span>
+              </div>
+              <Button
+                type='button'
+                size='sm'
+                variant='ghost'
+                className='h-7 gap-1 px-2 text-xs'
+                onClick={handleClear}
+              >
+                <X className='size-3' />
+                Bỏ lọc
+              </Button>
+            </div>
+          </div>
+        ) : null}
 
         {/* Filters */}
         <div className='border-b border-border/60 bg-muted/10 px-5 py-4'>

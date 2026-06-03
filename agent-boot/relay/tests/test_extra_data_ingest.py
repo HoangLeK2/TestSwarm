@@ -906,6 +906,7 @@ async def test_process_payload_keeps_post_detail_parent_when_comment_parser_pid_
     assert inserted[0]["raw_data"]["parent_post_id"] == "detail-pid"
     assert inserted[0]["raw_data"]["parser_parent_post_id"] == "sheet-generated-pid"
     assert inserted[0]["raw_data"]["parent_content_hash"] == "detail-parent-hash"
+    assert inserted[0]["raw_data"]["parent_context_source"] == "post_detail"
 
 
 @pytest.mark.asyncio

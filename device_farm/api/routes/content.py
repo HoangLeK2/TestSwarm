@@ -9,6 +9,7 @@ from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
+from sqlalchemy import or_, select
 
 from api.auth.content_share import create_content_share_token, verify_content_share_token
 from api.deps import CurrentUser, DB, require_permission
@@ -24,6 +25,7 @@ from api.schemas.content import (
     SaveContentBody,
 )
 from db.crud import content as content_crud
+from db.models.content import ContentItem
 from services.content_artifacts import (
     collect_primary_content_artifacts,
     read_artifact_bytes,
@@ -226,8 +228,12 @@ async def list_content(
         limit=limit,
         offset=offset,
     )
+    out_items = []
+    for item in items:
+        parent_item = await _resolve_parent_item(db, item)
+        out_items.append(_item_to_out_with_parent(item, parent_item=parent_item))
     return {
-        "items": [_item_to_out(i) for i in items],
+        "items": out_items,
         "total": total,
         "limit": limit,
         "offset": offset,
@@ -489,6 +495,10 @@ async def delete_collection(name: str, db: DB, user: CurrentUser):
 
 
 def _item_to_out(item, *, include_raw: bool = False) -> dict:
+    return _item_to_out_with_parent(item, include_raw=include_raw, parent_item=None)
+
+
+def _item_to_out_with_parent(item, *, include_raw: bool = False, parent_item=None) -> dict:
     raw = item.raw_data if isinstance(item.raw_data, dict) else {}
     return ContentItemOut(
         id=item.id,
@@ -517,8 +527,111 @@ def _item_to_out(item, *, include_raw: bool = False) -> dict:
         created_at=item.created_at,
         content_hash=item.content_hash,
         parent_id=item.parent_id,
+        parent_item_id=parent_item.id if parent_item is not None else None,
+        parent_item_hash=parent_item.content_hash if parent_item is not None else None,
+        parent_item_author=parent_item.author if parent_item is not None else None,
+        parent_item_body=parent_item.body if parent_item is not None else None,
+        parent_item_content_type=parent_item.content_type if parent_item is not None else None,
         item_level=int(item.item_level or 0),
     ).model_dump(mode="json", exclude_none=include_raw is False)
+
+
+def _raw_dict(item) -> dict:
+    raw = item.raw_data
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _parent_post_identifiers(item) -> list[tuple[str, str]]:
+    raw = _raw_dict(item)
+    anchor = raw.get("parent_post_anchor") if isinstance(raw.get("parent_post_anchor"), dict) else {}
+    pairs = [
+        ("post_key", anchor.get("post_key") or raw.get("parent_post_key")),
+        ("_pid", anchor.get("pid") or raw.get("parent_post_id")),
+        ("stable_post_id", anchor.get("stable_post_id") or raw.get("parent_stable_post_id")),
+        ("fb_post_id", anchor.get("fb_post_id") or raw.get("parent_fb_post_id")),
+    ]
+    seen: set[tuple[str, str]] = set()
+    out: list[tuple[str, str]] = []
+    for key, value in pairs:
+        text = str(value or "").strip()
+        pair = (key, text)
+        if not text or pair in seen:
+            continue
+        seen.add(pair)
+        out.append(pair)
+    return out
+
+
+async def _resolve_parent_item(db, item):
+    if not (item.parent_id or int(item.item_level or 0) > 0):
+        return None
+
+    base_filters = [ContentItem.deleted_at.is_(None)]
+    if item.user_id:
+        base_filters.append(ContentItem.user_id == item.user_id)
+    if item.org_id:
+        base_filters.append(ContentItem.org_id == item.org_id)
+
+    async def _fetch(stmt):
+        row = await db.execute(stmt.limit(1))
+        return row.scalar_one_or_none()
+
+    if item.parent_id:
+        same_execution = list(base_filters)
+        same_execution.append(ContentItem.content_hash == item.parent_id)
+        if item.execution_id:
+            same_execution.append(ContentItem.execution_id == item.execution_id)
+        parent = await _fetch(select(ContentItem).where(*same_execution))
+        if parent is not None:
+            return parent
+        parent = await _fetch(
+            select(ContentItem).where(
+                *base_filters,
+                ContentItem.content_hash == item.parent_id,
+            )
+        )
+        if parent is not None:
+            return parent
+
+    identifiers = _parent_post_identifiers(item)
+    if not identifiers:
+        return None
+
+    identifier_filters = []
+    for key, value in identifiers:
+        identifier_filters.append(ContentItem.raw_data[key].as_string() == value)
+    post_filters = [
+        *base_filters,
+        ContentItem.collection == item.collection,
+        or_(
+            ContentItem.content_type == "fb_post",
+            ContentItem.content_type == "post",
+            ContentItem.content_type == "group_post",
+            ContentItem.content_type.like("%post"),
+        ),
+        or_(*identifier_filters),
+    ]
+    if item.execution_id:
+        parent = await _fetch(
+            select(ContentItem)
+            .where(*post_filters, ContentItem.execution_id == item.execution_id)
+            .order_by(ContentItem.extracted_at.desc().nullslast(), ContentItem.created_at.desc())
+        )
+        if parent is not None:
+            return parent
+    return await _fetch(
+        select(ContentItem)
+        .where(*post_filters)
+        .order_by(ContentItem.extracted_at.desc().nullslast(), ContentItem.created_at.desc())
+    )
 
 
 def _build_payload(item) -> dict:
@@ -565,7 +678,8 @@ async def _collect_all_artifacts(db, item, user: CurrentUser) -> list[dict]:
 
 
 async def _item_detail_out(db, item, user: CurrentUser) -> dict:
-    base = _item_to_out(item, include_raw=True)
+    parent_item = await _resolve_parent_item(db, item)
+    base = _item_to_out_with_parent(item, include_raw=True, parent_item=parent_item)
     artifacts = [
         ContentArtifactOut(**a) for a in await _collect_all_artifacts(db, item, user)
     ]

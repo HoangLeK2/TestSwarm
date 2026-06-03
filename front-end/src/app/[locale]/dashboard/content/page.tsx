@@ -7,12 +7,14 @@ export default function ContentPage() {
   const params = useSearchParams();
   const campaignId = params.get('campaign_id') ?? undefined;
   const executionId = params.get('execution_id') ?? undefined;
+  const contentHash = params.get('content_hash') ?? undefined;
 
   return (
     <div className=''>
       <ContentViewer
         defaultCampaignId={campaignId}
         defaultExecutionId={executionId}
+        defaultContentHash={contentHash}
       />
     </div>
   );

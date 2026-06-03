@@ -1,7 +1,16 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, Check, ExternalLink, Link2, Loader2 } from 'lucide-react';
+import {
+  ArrowLeft,
+  Check,
+  CornerDownRight,
+  ExternalLink,
+  FileText,
+  Hash,
+  Link2,
+  Loader2
+} from 'lucide-react';
 import { useLocale, useTranslations } from 'next-intl';
 import { Link, useRouter } from '@/i18n/navigation';
 import { Badge } from '@/components/ui/badge';
@@ -24,6 +33,7 @@ import {
   type ContentDetail
 } from '../../services/api';
 import { buildContentPermalink } from '../../lib/permalink';
+import { commentParentSummary } from '../../lib/comment-parent';
 import { ArtifactPreview } from './artifact-preview';
 import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
 import { isImageArtifact } from '../../lib/artifact-url';
@@ -46,6 +56,10 @@ function contentArtifactIsImage(artifact: ContentArtifact): boolean {
     mimeType: artifact.mime_type,
     source: artifact.source
   });
+}
+
+function parentContentHref(parentId: string): string {
+  return ROUTES.CONTENT.BY_HASH(parentId);
 }
 
 export function ContentDetailView({ contentId, shareToken }: Props) {
@@ -90,6 +104,24 @@ export function ContentDetailView({ contentId, shareToken }: Props) {
     } finally {
       setPermalinkBusy(false);
     }
+  };
+
+  const handleOpenParentPost = async (parentId: string) => {
+    try {
+      const res = await contentApi.list({
+        content_hash: parentId,
+        limit: 1,
+        offset: 0
+      });
+      const parent = res.items[0];
+      if (parent) {
+        router.push(ROUTES.CONTENT.DETAIL(parent.id));
+        return;
+      }
+    } catch {
+      // Fall back to the hash-filtered content page below.
+    }
+    router.push(parentContentHref(parentId));
   };
 
   useEffect(() => {
@@ -202,6 +234,11 @@ export function ContentDetailView({ contentId, shareToken }: Props) {
 
       <div className='grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]'>
         <section className='space-y-4'>
+          <ParentPostCard
+            detail={detail}
+            t={t}
+            onOpenParent={(parentId) => void handleOpenParentPost(parentId)}
+          />
           <MetadataCard detail={detail} executionId={executionId} t={t} />
           <div className='rounded-lg border bg-card'>
             <div className='border-b px-4 py-3'>
@@ -262,6 +299,73 @@ export function ContentDetailView({ contentId, shareToken }: Props) {
   );
 }
 
+function ParentPostCard({
+  detail,
+  t,
+  onOpenParent
+}: {
+  detail: ContentDetail;
+  t: ReturnType<typeof useTranslations>;
+  onOpenParent: (parentId: string) => void;
+}) {
+  if (detail.content_type !== 'fb_comment' && detail.item_level <= 0) {
+    return null;
+  }
+  const summary = commentParentSummary(detail);
+  if (!summary) return null;
+
+  return (
+    <div className='rounded-lg border border-blue-500/25 bg-blue-500/[0.04]'>
+      <div className='flex items-start gap-3 px-4 py-3'>
+        <div className='mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md bg-blue-500/10 text-blue-600 dark:text-blue-300'>
+          <CornerDownRight className='size-4' />
+        </div>
+        <div className='min-w-0 flex-1'>
+          <div className='flex flex-wrap items-center gap-2'>
+            <h2 className='text-sm font-semibold'>{t('parentPostTitle')}</h2>
+            {summary.source ? (
+              <Badge
+                variant='secondary'
+                className='h-5 bg-blue-500/10 px-1.5 text-[10px] text-blue-700 dark:text-blue-300'
+              >
+                {summary.source === 'post_detail'
+                  ? t('parentPostVerified')
+                  : summary.source}
+              </Badge>
+            ) : null}
+          </div>
+          <p className='mt-1 truncate text-sm font-medium text-foreground'>
+            {summary.primary}
+          </p>
+          {summary.secondary ? (
+            <p className='mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground'>
+              {summary.secondary}
+            </p>
+          ) : null}
+          <div className='mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground'>
+            {summary.linkedParentId ? (
+              <button
+                type='button'
+                onClick={() => onOpenParent(summary.linkedParentId!)}
+                className='inline-flex items-center gap-1 rounded-md border border-blue-500/20 bg-background px-2 py-1 font-medium text-blue-700 hover:bg-blue-500/10 dark:text-blue-300'
+              >
+                <FileText className='size-3' />
+                {t('openParentPost')}
+              </button>
+            ) : null}
+            {summary.postId ? (
+              <span className='inline-flex min-w-0 max-w-full items-center gap-1 rounded-md border border-border/60 bg-background px-2 py-1 font-mono'>
+                <Hash className='size-3 shrink-0' />
+                <span className='truncate'>{summary.postId}</span>
+              </span>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function MetadataCard({
   detail,
   executionId,
@@ -308,6 +412,22 @@ function MetadataCard({
     { label: t('metaScenario'), value: detail.scenario_name ?? '–' },
     { label: t('metaAuthor'), value: detail.author ?? '–' }
   ];
+
+  const linkedParentHash = detail.parent_item_hash || detail.parent_id;
+  if (linkedParentHash) {
+    rows.push({
+      label: t('metaParent'),
+      value: (
+        <Link
+          href={parentContentHref(linkedParentHash)}
+          className='inline-flex items-center gap-1 break-all text-primary hover:underline'
+        >
+          <FileText className='size-3 shrink-0' />
+          {linkedParentHash}
+        </Link>
+      )
+    });
+  }
 
   if (detail.url) {
     rows.push({

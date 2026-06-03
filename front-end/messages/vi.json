@@ -296,12 +296,16 @@
       "loadFullArtifact": "Tải toàn bộ nội dung",
       "copyPermalink": "Sao chép permalink",
       "permalinkCopied": "Đã sao chép permalink",
+      "parentPostTitle": "Bình luận thuộc bài viết",
+      "parentPostVerified": "đã xác minh từ bài đang mở",
+      "openParentPost": "Mở bài viết cha",
       "metaExtractedAt": "Thời gian cào",
       "metaDevice": "Thiết bị",
       "metaCampaign": "Chiến dịch",
       "metaExecution": "Lần chạy",
       "metaScenario": "Kịch bản",
       "metaAuthor": "Tác giả",
+      "metaParent": "Bài viết cha",
       "metaUrl": "URL nguồn"
     },
     "export": {

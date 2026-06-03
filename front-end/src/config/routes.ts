@@ -96,7 +96,9 @@ export const ROUTES = {
     BY_CAMPAIGN: (campaignId: string) =>
       `/dashboard/content?campaign_id=${encodeURIComponent(campaignId)}`,
     BY_EXECUTION: (executionId: string) =>
-      `/dashboard/content?execution_id=${encodeURIComponent(executionId)}`
+      `/dashboard/content?execution_id=${encodeURIComponent(executionId)}`,
+    BY_HASH: (contentHash: string) =>
+      `/dashboard/content?content_hash=${encodeURIComponent(contentHash)}`
   },
   NOTIFICATIONS: {
     ROOT: '/dashboard/notifications',

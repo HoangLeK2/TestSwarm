@@ -296,12 +296,16 @@
       "loadFullArtifact": "Load full content",
       "copyPermalink": "Copy permalink",
       "permalinkCopied": "Permalink copied",
+      "parentPostTitle": "Comment belongs to post",
+      "parentPostVerified": "verified from opened post",
+      "openParentPost": "Open parent post",
       "metaExtractedAt": "Extracted at",
       "metaDevice": "Device",
       "metaCampaign": "Campaign",
       "metaExecution": "Execution",
       "metaScenario": "Scenario",
       "metaAuthor": "Author",
+      "metaParent": "Parent post",
       "metaUrl": "Source URL"
     },
     "export": {

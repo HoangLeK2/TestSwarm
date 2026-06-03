@@ -46,6 +46,11 @@ class ContentItemOut(BaseModel):
     created_at: datetime | None = None
     content_hash: str | None = None
     parent_id: str | None = None
+    parent_item_id: str | None = None
+    parent_item_hash: str | None = None
+    parent_item_author: str | None = None
+    parent_item_body: str | None = None
+    parent_item_content_type: str | None = None
     item_level: int = 0
 
 

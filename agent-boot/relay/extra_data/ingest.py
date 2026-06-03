@@ -413,7 +413,8 @@ def _with_comment_parent_context(
         or ""
     ).strip()
     anchor = _comment_parent_anchor(context)
-    force_context_parent = _comment_parent_source(context) == "post_detail"
+    parent_source = _comment_parent_source(context)
+    force_context_parent = parent_source == "post_detail"
     if not parent_post_id and not parent_hash and not anchor:
         return items
 
@@ -432,6 +433,8 @@ def _with_comment_parent_context(
             row["parent_content_hash"] = parent_hash
         if anchor and (force_context_parent or not row.get("parent_post_anchor")):
             row["parent_post_anchor"] = anchor
+        if parent_source and not row.get("parent_context_source"):
+            row["parent_context_source"] = parent_source
         enriched.append(row)
     return enriched
 

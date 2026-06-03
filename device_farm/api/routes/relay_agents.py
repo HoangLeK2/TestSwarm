@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import logging
 import os
 import secrets
 import shlex
@@ -24,6 +25,7 @@ from api.schemas.relay_agent import (
     RelayAgentTokenOut,
     RelayCommandOut,
 )
+from core.env import device_farm_ws_public_base
 from db import crud as repo
 from services import pairing as _pairing_mod
 from services.device_registration import (
@@ -35,6 +37,7 @@ from services import relay_onboarding
 from services.relay_onboarding import RELAY_SAME_WIFI_FILTER_ENABLED
 
 router = APIRouter(prefix="/relay-agents", tags=["relay-agents"])
+log = logging.getLogger(__name__)
 
 
 def _check_relay_key(request: Request) -> None:
@@ -350,6 +353,9 @@ def _job_to_out(job, items: list | None = None) -> RelayBatchJobOut:
 
 
 def _ws_base_url_from_request(request: Request) -> str:
+    configured = device_farm_ws_public_base()
+    if configured:
+        return configured
     scheme = "wss" if request.url.scheme == "https" else "ws"
     host = request.headers.get("host", request.url.netloc)
     return f"{scheme}://{host}"
@@ -752,9 +758,11 @@ async def push_connect_url_to_device(
             detail="relay serial does not belong to the selected device",
         )
 
-    scheme = "wss" if request.url.scheme == "https" else "ws"
-    host = request.headers.get("host", request.url.netloc)
-    ws_url = f"{scheme}://{host}/device-agent?key={device.device_key}"
+    ws_url = relay_onboarding.build_device_agent_url(
+        _ws_base_url_from_request(request),
+        device,
+    )
+    log.info("push-connect-url relay=%s serial=%s ws_url=%s", relay_id, serial, ws_url)
 
     cmd = (
         "am start "

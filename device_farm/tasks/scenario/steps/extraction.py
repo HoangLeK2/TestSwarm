@@ -98,6 +98,13 @@ _COMMENT_PARENT_ANCHOR_KEYS = (
     "timestamp",
     "text_prefix",
 )
+_ACTIVE_COMMENT_PARENT_CTX_KEYS = (
+    "_active_comment_parent_hash",
+    "_first_new_post_hash",
+    "_fb_comment_parent_pid",
+    "_active_comment_parent_anchor",
+    "_active_comment_anchor_verified",
+)
 
 
 def _clean_comment_parent_anchor(source: Dict[str, Any]) -> Dict[str, Any]:
@@ -109,11 +116,17 @@ def _clean_comment_parent_anchor(source: Dict[str, Any]) -> Dict[str, Any]:
     return anchor
 
 
+def _clear_active_comment_parent(ctx: Dict[str, Any]) -> None:
+    for key in _ACTIVE_COMMENT_PARENT_CTX_KEYS:
+        ctx.pop(key, None)
+
+
 def _remember_active_comment_parent(ctx: Dict[str, Any], ingest: Dict[str, Any]) -> None:
     active_parent = ingest.get("active_parent_post")
     pid_map = ingest.get("post_id_map") if isinstance(ingest.get("post_id_map"), dict) else None
     if not isinstance(active_parent, dict):
         if not pid_map or len(pid_map) != 1:
+            _clear_active_comment_parent(ctx)
             return
         pid, parent_hash = next(iter(pid_map.items()))
         active_parent = {"pid": pid, "parent_id": parent_hash}

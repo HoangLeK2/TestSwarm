@@ -389,6 +389,96 @@ def _active_parent_post_payload(item: dict[str, Any], row: dict[str, Any]) -> di
     return {key: value for key, value in payload.items() if value is not None and str(value).strip()}
 
 
+def _opened_post_from_context(context: dict[str, Any]) -> dict[str, Any] | None:
+    diagnostic = context.get("open_post_detail_diagnostic")
+    if not isinstance(diagnostic, dict):
+        return None
+    opened = diagnostic.get("opened_post")
+    if not isinstance(opened, dict):
+        return None
+    return opened
+
+
+def _post_matches_opened(item: dict[str, Any], opened: dict[str, Any]) -> bool:
+    comparisons = (
+        ("_pid", "pid"),
+        ("post_key", "post_key"),
+        ("stable_post_id", "stable_post_id"),
+        ("fb_post_id", "fb_post_id"),
+    )
+    for item_key, opened_key in comparisons:
+        item_value = str(item.get(item_key) or "").strip()
+        opened_value = str(opened.get(opened_key) or "").strip()
+        if item_value and opened_value and item_value == opened_value:
+            return True
+    if _post_metadata_matches_opened(item, opened):
+        return True
+    return False
+
+
+def _norm_match_text(value: Any) -> str:
+    return " ".join(str(value or "").casefold().split())
+
+
+def _post_match_text(item: dict[str, Any]) -> str:
+    return _norm_match_text(
+        item.get("text")
+        or item.get("body")
+        or item.get("content")
+        or item.get("message")
+        or item.get("caption")
+        or item.get("description")
+        or item.get("image_desc")
+        or ""
+    )
+
+
+def _post_metadata_matches_opened(item: dict[str, Any], opened: dict[str, Any]) -> bool:
+    opened_prefix = _norm_match_text(
+        opened.get("text_prefix")
+        or opened.get("text")
+        or opened.get("body")
+        or ""
+    )
+    item_text = _post_match_text(item)
+    if len(opened_prefix) < 16 or len(item_text) < 16:
+        return False
+    if opened_prefix not in item_text and item_text not in opened_prefix:
+        return False
+
+    opened_author = _norm_match_text(opened.get("author"))
+    item_author = _norm_match_text(item.get("author"))
+    if opened_author and item_author and opened_author != item_author:
+        return False
+
+    opened_timestamp = _norm_match_text(opened.get("timestamp"))
+    item_timestamp = _norm_match_text(item.get("timestamp"))
+    if opened_timestamp and item_timestamp and opened_timestamp != item_timestamp:
+        return False
+    return True
+
+
+def _active_parent_from_opened_post(
+    context: dict[str, Any],
+    row_items: list[dict[str, Any]],
+    rows: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    opened = _opened_post_from_context(context)
+    if not opened:
+        return None
+    for item, row in zip(row_items, rows):
+        if _post_matches_opened(item, opened):
+            payload = _active_parent_post_payload(item, row)
+            if payload is None:
+                return None
+            for key in ("pid", "post_key", "stable_post_id", "fb_post_id", "author", "timestamp"):
+                value = opened.get(key)
+                if key not in payload and value is not None and str(value).strip():
+                    payload[key] = value
+            return payload
+    return None
+
+
 class ExtraDataIngestServer:
     def __init__(self) -> None:
         self._host = os.getenv("AGENT_BOOT_EXTRA_HOST", "0.0.0.0")
@@ -654,10 +744,11 @@ class ExtraDataIngestServer:
             post_id_map = _build_post_id_map(items, context)
             if post_id_map:
                 result["post_id_map"] = post_id_map
-            if len(row_items) == 1 and len(rows) == 1:
+            active_parent = _active_parent_from_opened_post(context, row_items, rows)
+            if active_parent is None and len(row_items) == 1 and len(rows) == 1:
                 active_parent = _active_parent_post_payload(row_items[0], rows[0])
-                if active_parent:
-                    result["active_parent_post"] = active_parent
+            if active_parent:
+                result["active_parent_post"] = active_parent
         if rows and should_persist:
             targets: list[dict[str, Any]] = []
             for row in rows:

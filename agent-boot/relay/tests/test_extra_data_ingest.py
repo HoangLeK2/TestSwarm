@@ -391,6 +391,141 @@ async def test_process_payload_does_not_return_active_parent_for_multiple_fb_pos
 
 
 @pytest.mark.asyncio
+async def test_process_payload_uses_opened_post_diagnostic_to_pick_active_parent(monkeypatch) -> None:
+    server = ExtraDataIngestServer()
+    inserted: list[dict[str, Any]] = []
+
+    async def fake_prepare(ctx):
+        return ctx
+
+    async def fake_insert(rows):
+        inserted.extend(rows)
+        return {"attempted": len(rows), "inserted": len(rows), "duplicates": 0}
+
+    server._writer.prepare_context_for_persist = fake_prepare  # type: ignore[method-assign]
+    server._writer.insert_rows = fake_insert  # type: ignore[method-assign]
+
+    monkeypatch.setattr(
+        extra_data_ingest,
+        "_parse_payload_items",
+        lambda strategy, xml_in, context, payload: (
+            [
+                {"_pid": "pid-1", "post_key": "post-1", "text": "wrong nearby post"},
+                {"_pid": "pid-2", "post_key": "post-2", "text": "opened post body"},
+            ],
+            {"reason_code": "ok"},
+            [xml_in],
+        ),
+    )
+
+    result = await server.process_payload(
+        {
+            "serial": "serial-1",
+            "strategy": "fb_posts",
+            "xml": '<hierarchy><node text="posts" /></hierarchy>',
+            "context": {
+                "persist": True,
+                "collection": "fb_posts",
+                "content_type": "fb_post",
+                "dedupe_field": "post_key",
+                "hash_scope": "exec-1",
+                "open_post_detail": True,
+                "open_post_detail_diagnostic": {
+                    "reason_code": "ok",
+                    "opened_post": {
+                        "pid": "pid-2",
+                        "post_key": "post-2",
+                        "author": "Alice",
+                        "text_prefix": "opened post body from feed",
+                    },
+                },
+            },
+        }
+    )
+
+    assert result["ok"] is True
+    assert len(inserted) == 2
+    assert result["active_parent_post"] == {
+        "pid": "pid-2",
+        "parent_id": inserted[1]["content_hash"],
+        "post_key": "post-2",
+        "author": "Alice",
+        "text_prefix": "opened post body",
+    }
+
+
+@pytest.mark.asyncio
+async def test_process_payload_matches_opened_post_by_text_when_ids_differ(monkeypatch) -> None:
+    server = ExtraDataIngestServer()
+    inserted: list[dict[str, Any]] = []
+
+    async def fake_prepare(ctx):
+        return ctx
+
+    async def fake_insert(rows):
+        inserted.extend(rows)
+        return {"attempted": len(rows), "inserted": len(rows), "duplicates": 0}
+
+    server._writer.prepare_context_for_persist = fake_prepare  # type: ignore[method-assign]
+    server._writer.insert_rows = fake_insert  # type: ignore[method-assign]
+
+    monkeypatch.setattr(
+        extra_data_ingest,
+        "_parse_payload_items",
+        lambda strategy, xml_in, context, payload: (
+            [
+                {
+                    "_pid": "detail-generated-1",
+                    "post_key": "detail-post-1",
+                    "author": "Bob",
+                    "text": "wrong nearby post body",
+                },
+                {
+                    "_pid": "detail-generated-2",
+                    "post_key": "detail-post-2",
+                    "author": "Alice",
+                    "timestamp": "5 ngày",
+                    "text": "opened post body after detail parser recomputed id",
+                },
+            ],
+            {"reason_code": "ok"},
+            [xml_in],
+        ),
+    )
+
+    result = await server.process_payload(
+        {
+            "serial": "serial-1",
+            "strategy": "fb_posts",
+            "xml": '<hierarchy><node text="posts" /></hierarchy>',
+            "context": {
+                "persist": True,
+                "collection": "fb_posts",
+                "content_type": "fb_post",
+                "dedupe_field": "post_key",
+                "hash_scope": "exec-1",
+                "open_post_detail": True,
+                "open_post_detail_diagnostic": {
+                    "reason_code": "ok",
+                    "opened_post": {
+                        "pid": "feed-pid",
+                        "post_key": "feed-post-key",
+                        "author": "Alice",
+                        "timestamp": "5 ngày",
+                        "text_prefix": "opened post body after detail parser",
+                    },
+                },
+            },
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["active_parent_post"]["parent_id"] == inserted[1]["content_hash"]
+    assert result["active_parent_post"]["pid"] == "detail-generated-2"
+    assert result["active_parent_post"]["author"] == "Alice"
+
+
+@pytest.mark.asyncio
 async def test_process_payload_active_parent_uses_image_desc_text_fallback(monkeypatch) -> None:
     server = ExtraDataIngestServer()
     inserted: list[dict[str, Any]] = []

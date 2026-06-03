@@ -276,6 +276,30 @@ async def test_expand_xml_probe_first_no_see_more_reuses_probe_xml() -> None:
 
 
 @pytest.mark.asyncio
+async def test_expand_xml_probe_first_default_skips_selector_on_no_see_more() -> None:
+    exec_ = _FakeExecutor(xml=_SAMPLE_XML)
+
+    async def _selector_misses(serial: str, actions: list[dict], early_exit: bool = True) -> dict:
+        return await _FakeExecutor.run_batch(exec_, serial, actions, early_exit)
+
+    exec_.run_batch = _selector_misses  # type: ignore[method-assign]
+    taps, cached = await expand_see_more_via_u2(
+        exec_,
+        "dev1",
+        {"expand_see_more": True, "expand_see_more_xml_probe_first": True},
+    )
+
+    assert taps == 0
+    assert cached == _SAMPLE_XML
+    assert not any(
+        action.get("op") == "click_selector"
+        for batch in exec_.batches
+        for action in batch
+    )
+    assert len(_batches_with_dump(exec_.batches)) == 1
+
+
+@pytest.mark.asyncio
 async def test_collect_fb_posts_no_see_more_single_dump() -> None:
     exec_ = _FakeExecutor(xml=_SAMPLE_XML)
     snapshots, err = await collect_xml_snapshots(
@@ -287,6 +311,43 @@ async def test_collect_fb_posts_no_see_more_single_dump() -> None:
     assert err is None
     assert snapshots == [_SAMPLE_XML]
     assert len(_batches_with_dump(exec_.batches)) == 1
+
+
+@pytest.mark.asyncio
+async def test_collect_fb_comments_honors_explicit_deep_scroll_context() -> None:
+    from relay.tests.test_comment_filter import _sheet_xml
+
+    exec_ = _FakeExecutor(xml=_sheet_xml())
+    snapshots, err = await collect_xml_snapshots(
+        exec_,
+        "dev1",
+        "fb_comments",
+        {
+            "comment_scroll_passes": 48,
+            "comment_swipes_per_dump": 3,
+            "comment_no_growth_break": 3,
+            "min_comment_scan_passes": 2,
+            "comment_scroll_pause_s": 0,
+            "comment_recover_chrome": False,
+        },
+    )
+
+    assert err is None
+    assert snapshots
+    swipes = [
+        action
+        for batch in exec_.batches
+        for action in batch
+        if action.get("op") == "swipe"
+    ]
+    dumps = [
+        action
+        for batch in exec_.batches
+        for action in batch
+        if action.get("op") == "dump_hierarchy"
+    ]
+    assert len(swipes) == 9
+    assert len(dumps) == 4
 
 
 @pytest.mark.asyncio
@@ -644,6 +705,82 @@ async def test_open_post_verify_failed_on_group_feed_no_back() -> None:
     assert diag.get("reason_code") == "post_open_verify_failed"
     assert exec_.press_back_calls == 0
     assert diag.get("attempts") and diag["attempts"][0].get("back_pressed") is False
+
+
+@pytest.mark.asyncio
+async def test_open_post_success_returns_opened_post_metadata() -> None:
+    exec_ = _SessionFakeExecutor()
+    feed_xml = """<?xml version="1.0"?>
+<hierarchy>
+  <node class="androidx.recyclerview.widget.RecyclerView" bounds="[0,200][1080,2200]">
+    <node bounds="[0,400][1080,1100]">
+      <node text="Author" bounds="[132,420][420,464]"/>
+      <node text="5 ngày" bounds="[132,468][280,504]" clickable="true"/>
+      <node content-desc="Post body" bounds="[36,520][1044,700]" clickable="true"/>
+    </node>
+  </node>
+</hierarchy>"""
+    exec_._dump_xml = feed_xml
+    target = {
+        "bounds": [132, 468, 280, 504],
+        "tap_kind": "timestamp",
+        "tap_label": "5 ngày",
+        "post": {
+            "_pid": "pid-2",
+            "post_key": "post-2",
+            "stable_post_id": "stable-2",
+            "fb_post_id": "fb-2",
+            "author": "Alice",
+            "timestamp": "5 ngày",
+            "text": "opened post body",
+        },
+    }
+    ctx: dict = {"open_post_before_extract": True, "post_open_verify": True}
+    with patch(
+        "relay.extra_data.parsers.facebook.post_open_pipeline.resolve_post_open_targets_from_xml",
+        return_value=(target, []),
+    ), patch(
+        "relay.extra_data.parsers.facebook.post_open_pipeline.hierarchy_is_fb_post_detail_from_xml",
+        side_effect=[False, True],
+    ):
+        detail_xml, diag = await _maybe_open_fb_post_detail(
+            exec_, "dev1", ctx, feed_xml
+        )
+
+    assert detail_xml == feed_xml
+    assert diag["reason_code"] == "ok"
+    assert diag["opened_post"] == {
+        "pid": "pid-2",
+        "post_key": "post-2",
+        "stable_post_id": "stable-2",
+        "fb_post_id": "fb-2",
+        "author": "Alice",
+        "timestamp": "5 ngày",
+        "text_prefix": "opened post body",
+    }
+
+
+@pytest.mark.asyncio
+async def test_open_post_already_on_detail_avoids_extra_post_parse() -> None:
+    exec_ = _SessionFakeExecutor()
+    detail_xml = '<hierarchy><node text="detail"/></hierarchy>'
+    ctx: dict = {"open_post_before_extract": True}
+
+    with patch(
+        "relay.extra_data.parsers.facebook.post_open_pipeline.hierarchy_is_fb_post_detail_from_xml",
+        return_value=True,
+    ), patch(
+        "relay.extra_data.parsers.facebook.parse_fb_posts_from_xml_with_diagnostic",
+        return_value=([], {"reason_code": "empty"}),
+    ) as parser_mock:
+        opened_xml, diag = await _maybe_open_fb_post_detail(
+            exec_, "dev1", ctx, detail_xml
+        )
+
+    assert opened_xml == detail_xml
+    assert diag["reason_code"] == "already_on_post_detail"
+    assert "opened_post" not in diag
+    parser_mock.assert_not_called()
 
 
 @pytest.mark.asyncio

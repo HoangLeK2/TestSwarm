@@ -220,6 +220,10 @@ def test_fb_posts_multi_post_map_does_not_guess_active_comment_parent(monkeypatc
         },
     })
     sc = _ctx(device)
+    sc.ctx["_active_comment_parent_hash"] = "stale-parent"
+    sc.ctx["_fb_comment_parent_pid"] = "stale-pid"
+    sc.ctx["_active_comment_parent_anchor"] = {"pid": "stale-pid"}
+    sc.ctx["_active_comment_anchor_verified"] = True
 
     handled = extraction_mod._try_edge_extra_data(
         sc,
@@ -236,6 +240,7 @@ def test_fb_posts_multi_post_map_does_not_guess_active_comment_parent(monkeypatc
     assert "_active_comment_parent_hash" not in sc.ctx
     assert "_fb_comment_parent_pid" not in sc.ctx
     assert "_active_comment_parent_anchor" not in sc.ctx
+    assert "_active_comment_anchor_verified" not in sc.ctx
 
 
 def test_fb_posts_active_parent_metadata_wins_over_multi_post_map(monkeypatch) -> None:

@@ -13,6 +13,15 @@ from typing import Any
 logger = logging.getLogger("relay.extra_data.collector")
 
 _collect_locks: dict[str, asyncio.Lock] = {}
+_COMMENT_SCROLL_MAX_SWIPES = 4
+_COMMENT_SWIPES_PER_DUMP = 1
+_COMMENT_NO_GROWTH_BREAK = 1
+_COMMENT_MIN_SCAN_PASSES = 1
+_COMMENT_SCROLL_DURATION_MS = 180
+_COMMENT_SCROLL_PAUSE_S = 0.05
+_COMMENT_DEEP_SCROLL_MAX_SWIPES = 80
+_COMMENT_DEEP_SWIPES_PER_DUMP = 6
+_COMMENT_DEEP_NO_GROWTH_BREAK = 24
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -282,6 +291,36 @@ async def _u2_click_post_open_target(
     return False, "tap_failed"
 
 
+def _opened_post_payload_from_post(post: dict[str, Any]) -> dict[str, Any] | None:
+    if not post:
+        return None
+    text_prefix = (
+        post.get("text")
+        or post.get("body")
+        or post.get("content")
+        or post.get("message")
+        or post.get("caption")
+        or post.get("description")
+        or post.get("image_desc")
+        or ""
+    )
+    payload = {
+        "pid": post.get("_pid"),
+        "post_key": post.get("post_key"),
+        "stable_post_id": post.get("stable_post_id"),
+        "fb_post_id": post.get("fb_post_id"),
+        "author": post.get("author"),
+        "timestamp": post.get("timestamp"),
+        "text_prefix": str(text_prefix)[:220],
+    }
+    return {key: value for key, value in payload.items() if value is not None and str(value).strip()}
+
+
+def _opened_post_payload_from_target(target: dict[str, Any]) -> dict[str, Any] | None:
+    post = target.get("post") if isinstance(target.get("post"), dict) else {}
+    return _opened_post_payload_from_post(post)
+
+
 async def _maybe_open_fb_post_detail(
     executor: Any,
     serial: str,
@@ -363,11 +402,15 @@ async def _maybe_open_fb_post_detail(
         if opened or not verify:
             context["open_post_detail"] = True
             context["open_post_detail_tap_kind"] = target.get("tap_kind")
-            return (detail_xml or feed_xml), {
+            diagnostic = {
                 "reason_code": "ok" if opened else "unverified",
                 "attempts": attempts,
                 "tap_kind": target.get("tap_kind"),
             }
+            opened_post = _opened_post_payload_from_target(target)
+            if opened_post:
+                diagnostic["opened_post"] = opened_post
+            return (detail_xml or feed_xml), diagnostic
         # Verify heuristic missed detail chrome but tap may still have navigated — keep post-tap XML.
         if detail_xml and detail_xml != feed_xml:
             logger.info(
@@ -376,11 +419,15 @@ async def _maybe_open_fb_post_detail(
             )
             context["open_post_detail"] = True
             context["open_post_detail_tap_kind"] = target.get("tap_kind")
-            return detail_xml, {
+            diagnostic = {
                 "reason_code": "unverified_hierarchy_changed",
                 "attempts": attempts,
                 "tap_kind": target.get("tap_kind"),
             }
+            opened_post = _opened_post_payload_from_target(target)
+            if opened_post:
+                diagnostic["opened_post"] = opened_post
+            return detail_xml, diagnostic
         # Same rule as comment-target retries: never BACK on group feed (exits the
         # group). Only dismiss transient overlays (profile viewer, photo lightbox).
         from relay.extra_data.parsers.facebook.comment_pipeline import (
@@ -725,7 +772,8 @@ async def expand_see_more_via_u2(
 
     if probe_first:
         logger.info("[%s] expand_see_more: xml_probe_first (Facebook-friendly)", serial)
-        total_taps, cached = await _expand_see_more_xml_probe_tap(executor, serial, context)
+        probe_context = {**context, "expand_see_more_fast": False}
+        total_taps, cached = await _expand_see_more_xml_probe_tap(executor, serial, probe_context)
         if total_taps:
             logger.info(
                 "[%s] extra_data expand_see_more done taps=%d route=xml_probe_first",
@@ -848,23 +896,63 @@ async def _collect_comment_snapshots(
     initial_xml: str,
 ) -> list[str]:
     """Swipe through the comment list, dumping hierarchy every N swipes (not every swipe)."""
-    swipe_budget = _int_context(context, "comment_scroll_passes", 6, 0, 80)
+    explicit_scroll_budget = "comment_scroll_passes" in context
+    swipe_budget = _int_context(
+        context,
+        "comment_scroll_passes",
+        _COMMENT_SCROLL_MAX_SWIPES,
+        0,
+        _COMMENT_DEEP_SCROLL_MAX_SWIPES if explicit_scroll_budget else _COMMENT_SCROLL_MAX_SWIPES,
+    )
     if swipe_budget <= 0:
         return [initial_xml]
 
-    swipes_per_dump = _int_context(context, "comment_swipes_per_dump", 3, 1, 6)
+    explicit_swipes_per_dump = "comment_swipes_per_dump" in context
+    swipes_per_dump = _int_context(
+        context,
+        "comment_swipes_per_dump",
+        _COMMENT_SWIPES_PER_DUMP,
+        1,
+        _COMMENT_DEEP_SWIPES_PER_DUMP if explicit_swipes_per_dump else _COMMENT_SWIPES_PER_DUMP,
+    )
     dump_cycles = max(1, (swipe_budget + swipes_per_dump - 1) // swipes_per_dump)
-    min_dumps = _int_context(context, "min_comment_scan_passes", 1, 0, dump_cycles)
-    no_growth_break = _int_context(context, "comment_no_growth_break", 1, 0, 24)
+    min_dumps = _int_context(
+        context,
+        "min_comment_scan_passes",
+        _COMMENT_MIN_SCAN_PASSES,
+        0,
+        dump_cycles,
+    )
+    explicit_no_growth = "comment_no_growth_break" in context
+    no_growth_break = _int_context(
+        context,
+        "comment_no_growth_break",
+        _COMMENT_NO_GROWTH_BREAK,
+        0,
+        _COMMENT_DEEP_NO_GROWTH_BREAK if explicit_no_growth else _COMMENT_NO_GROWTH_BREAK,
+    )
     max_snapshots = _int_context(
         context, "comment_max_snapshots", max(20, dump_cycles + 1), 1, 50
     )
     max_xml_bytes = _int_context(context, "comment_xml_max_bytes", 6 * 1024 * 1024, 512 * 1024, 7 * 1024 * 1024)
-    # Gentle scroll — matches STF extra-data defaults (0.22 / 340ms); avoids fling-off sheet.
+    # Fast by default, but explicit crawl profiles keep their requested scroll tuning.
     distance = _float_context(context, "comment_scroll_distance", 0.28, 0.08, 0.85)
-    duration_ms = _int_context(context, "comment_scroll_duration_ms", 320, 100, 800)
-    swipe_pause_s = _float_context(context, "comment_scroll_pause_s", 0.22, 0.0, 4.0)
+    duration_ms = _int_context(
+        context,
+        "comment_scroll_duration_ms",
+        _COMMENT_SCROLL_DURATION_MS,
+        100,
+        800 if "comment_scroll_duration_ms" in context else _COMMENT_SCROLL_DURATION_MS,
+    )
+    swipe_pause_s = _float_context(
+        context,
+        "comment_scroll_pause_s",
+        _COMMENT_SCROLL_PAUSE_S,
+        0.0,
+        4.0 if "comment_scroll_pause_s" in context else _COMMENT_SCROLL_PAUSE_S,
+    )
     recover_chrome = _bool_context(context, "comment_recover_chrome", True)
+    retry_screen_swipe_on_stuck = _bool_context(context, "comment_screen_swipe_retry_on_stuck", False)
 
     from relay.extra_data.parsers.facebook.comment_pipeline import (
         detect_comment_sheet_interrupt_from_xml,
@@ -1019,7 +1107,7 @@ async def _collect_comment_snapshots(
             continue
 
         unchanged_dumps += 1
-        if not use_screen_swipe and unchanged_dumps <= 2:
+        if retry_screen_swipe_on_stuck and not use_screen_swipe and unchanged_dumps <= 2:
             logger.info(
                 "[%s] extra_data comment scroll unchanged XML — retry with screen swipe "
                 "(dump cycle %d)",

@@ -325,6 +325,76 @@ def _comment_parent_anchor(context: dict[str, Any]) -> dict[str, Any] | None:
     return clean or None
 
 
+def _comment_parent_source(context: dict[str, Any]) -> str:
+    anchor = context.get("_active_comment_parent_anchor")
+    anchor_source = anchor.get("source") if isinstance(anchor, dict) else ""
+    return str(
+        context.get("parent_context_source")
+        or context.get("_active_comment_parent_source")
+        or anchor_source
+        or ""
+    ).strip()
+
+
+def _parsed_comment_parent_post_ids(items: list[dict[str, Any]]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in items:
+        if not isinstance(item, dict) or item.get("_type") == "post_stats":
+            continue
+        pid = str(item.get("parent_post_id") or "").strip()
+        if not pid or pid in seen:
+            continue
+        seen.add(pid)
+        out.append(pid)
+    return out
+
+
+def _drop_stale_comment_parent_context(
+    context: dict[str, Any],
+    items: list[dict[str, Any]],
+    diagnostic: dict[str, Any],
+) -> dict[str, Any]:
+    """Prefer parser-observed parent PID over stale tap context for comment rows."""
+    context_pid = str(
+        context.get("parent_post_id")
+        or context.get("_fb_comment_parent_pid")
+        or ""
+    ).strip()
+    parsed_pids = _parsed_comment_parent_post_ids(items)
+    if not context_pid or not parsed_pids or context_pid in parsed_pids:
+        return context
+    if _comment_parent_source(context) == "post_detail" and context.get("parent_id"):
+        diagnostic["parent_context_locked"] = True
+        diagnostic["context_parent_post_id"] = context_pid
+        diagnostic["parsed_parent_post_ids"] = parsed_pids
+        return context
+
+    corrected = dict(context)
+    corrected.pop("parent_id", None)
+    corrected.pop("parent_content_hash", None)
+    corrected.pop("_active_comment_parent_hash", None)
+    corrected.pop("_active_comment_parent_anchor", None)
+    corrected.pop("_edge_comment_parent_base_hash", None)
+    corrected["parent_id_already_scoped"] = False
+    if len(parsed_pids) == 1:
+        corrected["parent_post_id"] = parsed_pids[0]
+        corrected["_fb_comment_parent_pid"] = parsed_pids[0]
+    else:
+        corrected.pop("parent_post_id", None)
+        corrected.pop("_fb_comment_parent_pid", None)
+
+    diagnostic["parent_context_corrected"] = True
+    diagnostic["context_parent_post_id"] = context_pid
+    diagnostic["parsed_parent_post_ids"] = parsed_pids
+    logger.warning(
+        "extra-data fb_comments parent context corrected: context_pid=%s parsed_pids=%s",
+        context_pid,
+        parsed_pids,
+    )
+    return corrected
+
+
 def _with_comment_parent_context(
     items: list[dict[str, Any]],
     context: dict[str, Any],
@@ -343,6 +413,7 @@ def _with_comment_parent_context(
         or ""
     ).strip()
     anchor = _comment_parent_anchor(context)
+    force_context_parent = _comment_parent_source(context) == "post_detail"
     if not parent_post_id and not parent_hash and not anchor:
         return items
 
@@ -352,11 +423,14 @@ def _with_comment_parent_context(
             enriched.append(item)
             continue
         row = dict(item)
-        if parent_post_id and not row.get("parent_post_id"):
+        if parent_post_id and (force_context_parent or not row.get("parent_post_id")):
+            existing_pid = str(row.get("parent_post_id") or "").strip()
+            if force_context_parent and existing_pid and existing_pid != parent_post_id:
+                row["parser_parent_post_id"] = existing_pid
             row["parent_post_id"] = parent_post_id
-        if parent_hash and not row.get("parent_content_hash"):
+        if parent_hash and (force_context_parent or not row.get("parent_content_hash")):
             row["parent_content_hash"] = parent_hash
-        if anchor and not row.get("parent_post_anchor"):
+        if anchor and (force_context_parent or not row.get("parent_post_anchor")):
             row["parent_post_anchor"] = anchor
         enriched.append(row)
     return enriched
@@ -656,6 +730,8 @@ class ExtraDataIngestServer:
             content_type = str(context.get("content_type") or ("comment" if strategy.endswith("_comments") or strategy == "fb_comments" else "post"))
             item_level = int(context.get("item_level") if context.get("item_level") is not None else (1 if strategy.endswith("_comments") or strategy == "fb_comments" else 0))
             is_comment_strategy = strategy.endswith("_comments") or strategy == "fb_comments"
+            if is_comment_strategy:
+                context = _drop_stale_comment_parent_context(context, items, diagnostic)
             parent_id = context.get("parent_id") if is_comment_strategy else None
             parent_id_scoped = bool(context.get("parent_id_already_scoped"))
             if is_comment_strategy and not parent_id:
@@ -748,6 +824,8 @@ class ExtraDataIngestServer:
             if active_parent is None and len(row_items) == 1 and len(rows) == 1:
                 active_parent = _active_parent_post_payload(row_items[0], rows[0])
             if active_parent:
+                if context.get("open_post_detail"):
+                    active_parent["source"] = "post_detail"
                 result["active_parent_post"] = active_parent
         if rows and should_persist:
             targets: list[dict[str, Any]] = []

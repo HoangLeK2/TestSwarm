@@ -104,6 +104,7 @@ _ACTIVE_COMMENT_PARENT_CTX_KEYS = (
     "_fb_comment_parent_pid",
     "_active_comment_parent_anchor",
     "_active_comment_anchor_verified",
+    "_active_comment_parent_source",
 )
 
 
@@ -142,6 +143,9 @@ def _remember_active_comment_parent(ctx: Dict[str, Any], ingest: Dict[str, Any])
         ctx["_first_new_post_hash"] = parent_id
     if pid:
         ctx["_fb_comment_parent_pid"] = pid
+    source = str(active_parent.get("source") or "").strip()
+    if source:
+        ctx["_active_comment_parent_source"] = source
     anchor = _clean_comment_parent_anchor(active_parent)
     if anchor:
         ctx["_active_comment_parent_anchor"] = anchor
@@ -550,6 +554,7 @@ def request_edge_extra_data(
         "parent_id": parent_id,
         "parent_id_already_scoped": parent_id_already_scoped,
         "parent_post_id": parent_post_id,
+        "parent_context_source": ctx.get("_active_comment_parent_source"),
         "post_key": step.get("post_key") or ctx.get("last_post_key"),
         "_post_id_map": ctx.get("_post_id_map"),
         "_fb_posts_dedupe_field": ctx.get("_fb_posts_dedupe_field"),

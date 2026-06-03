@@ -347,7 +347,10 @@ def handle_tap_fb_comment_button(
     sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any],
 ) -> None:
     """Resolve the visible FB comment button via agent-boot, then tap locally."""
-    from tasks.scenario.steps.extraction import request_edge_comment_target
+    from tasks.scenario.steps.extraction import (
+        _clear_active_comment_parent,
+        request_edge_comment_target,
+    )
 
     if step.get("pre_scroll"):
         try:
@@ -387,7 +390,8 @@ def handle_tap_fb_comment_button(
     tapped = False
     if result.get("reason_code") == "already_on_comment_sheet":
         tapped = True
-        sc.ctx["_active_comment_anchor_verified"] = True
+        _clear_active_comment_parent(sc.ctx)
+        result["parent_context_cleared"] = True
         result["message"] = "tap_fb_comment_button: comment sheet already open"
     elif target:
         bounds = target.get("bounds")

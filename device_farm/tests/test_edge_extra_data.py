@@ -204,6 +204,59 @@ def test_fb_posts_batch_sets_active_parent_for_later_comments(monkeypatch) -> No
     assert comment_context["_active_comment_parent_anchor"]["text_prefix"] == "parent post body"
 
 
+def test_fb_post_detail_parent_source_is_forwarded_to_comment_extract(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    device = _FakeDevice({
+        "ok": True,
+        "ingest": {
+            "parsed_count": 1,
+            "inserted_count": 1,
+            "duplicate_count": 0,
+            "diagnostic": {"reason_code": "ok"},
+            "active_parent_post": {
+                "pid": "pid-detail",
+                "parent_id": "detail-parent-hash",
+                "post_key": "post-detail",
+                "text_prefix": "opened detail post",
+                "source": "post_detail",
+            },
+        },
+    })
+    sc = _ctx(device)
+
+    handled_posts = extraction_mod._try_edge_extra_data(
+        sc,
+        {"collection": "fb", "edge_extra_data": True, "dedupe_field": "post_key"},
+        "fb_posts",
+        {},
+    )
+
+    assert handled_posts is True
+    assert sc.ctx["_active_comment_parent_source"] == "post_detail"
+
+    device.response = {
+        "ok": True,
+        "ingest": {
+            "parsed_count": 1,
+            "inserted_count": 1,
+            "duplicate_count": 0,
+            "diagnostic": {"reason_code": "ok"},
+        },
+    }
+    handled_comments = extraction_mod._try_edge_extra_data(
+        sc,
+        {"collection": "fb", "edge_extra_data": True},
+        "fb_comments",
+        {},
+    )
+
+    assert handled_comments is True
+    comment_context = device.calls[-1]["context"]
+    assert comment_context["parent_id"] == "detail-parent-hash"
+    assert comment_context["parent_post_id"] == "pid-detail"
+    assert comment_context["parent_context_source"] == "post_detail"
+
+
 def test_fb_posts_multi_post_map_does_not_guess_active_comment_parent(monkeypatch) -> None:
     monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
     device = _FakeDevice({
@@ -525,7 +578,7 @@ def test_tap_fb_comment_button_stores_parent_pid_in_anchor(monkeypatch) -> None:
     }
 
 
-def test_tap_fb_comment_button_already_on_sheet_preserves_existing_anchor() -> None:
+def test_tap_fb_comment_button_already_on_sheet_clears_existing_anchor() -> None:
     device = _FakeDevice({
         "ok": True,
         "ingest": {
@@ -549,8 +602,10 @@ def test_tap_fb_comment_button_already_on_sheet_preserves_existing_anchor() -> N
     control_flow.handle_tap_fb_comment_button(sc, {}, 0, result)
 
     assert result["tapped"] is True
-    assert sc.ctx["_fb_comment_parent_pid"] == "pid-existing"
-    assert sc.ctx["_active_comment_parent_anchor"]["text_prefix"] == "existing parent post"
+    assert "_fb_comment_parent_pid" not in sc.ctx
+    assert "_active_comment_parent_hash" not in sc.ctx
+    assert "_active_comment_parent_anchor" not in sc.ctx
+    assert "_active_comment_anchor_verified" not in sc.ctx
 
 
 def test_tap_fb_comment_button_skips_server_tap_when_agent_tapped(monkeypatch) -> None:

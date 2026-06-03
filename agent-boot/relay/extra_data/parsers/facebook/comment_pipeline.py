@@ -575,6 +575,67 @@ def is_group_feed_from_xml(xml: str) -> bool:
     return is_group_feed_hierarchy(root)
 
 
+_GROUP_NAV_CONTEXT_KEYS = (
+    "collection",
+    "scenario_name",
+    "SAVE_COLLECTION",
+    "content_strategy",
+)
+
+
+def context_implies_fb_group_navigation(context: dict[str, Any] | None) -> bool:
+    """True when scenario/collection metadata indicates a FB group crawl."""
+    if not context:
+        return False
+    if context.get("_fb_group_navigation"):
+        return True
+    if context.get("fb_group_id"):
+        return True
+    for key in _GROUP_NAV_CONTEXT_KEYS:
+        blob = str(context.get(key) or "").lower()
+        if not blob:
+            continue
+        if "fb_group" in blob or blob.startswith("fb_group"):
+            return True
+        if "group" in blob and ("fb" in blob or "facebook" in blob):
+            return True
+    return False
+
+
+def note_fb_group_navigation(
+    context: dict[str, Any],
+    xml: str | None = None,
+) -> bool:
+    """Sticky lock: while crawling a FB group, never send system BACK (exits the group)."""
+    if context.get("_fb_group_navigation"):
+        return True
+    if context_implies_fb_group_navigation(context):
+        context["_fb_group_navigation"] = True
+        return True
+    if xml and is_group_feed_from_xml(xml):
+        context["_fb_group_navigation"] = True
+        return True
+    return False
+
+
+def fb_group_navigation_locked(context: dict[str, Any] | None) -> bool:
+    return bool(context and context.get("_fb_group_navigation"))
+
+
+def should_allow_system_back(
+    xml: str | None,
+    context: dict[str, Any] | None = None,
+) -> bool:
+    """Whether a system BACK is safe (dismiss overlay only, not group/comment sheet)."""
+    if fb_group_navigation_locked(context):
+        return False
+    if xml and is_group_feed_from_xml(xml):
+        return False
+    if not xml:
+        return False
+    return detect_transient_overlay_from_xml(xml) is not None
+
+
 def _avatar_desc_is_profile_overlay_context(root) -> bool:
     """Avatars on feed cards and comment threads are not full-screen profile viewer."""
     from .parser import _hierarchy_is_fb_comment_sheet
@@ -646,8 +707,13 @@ def detect_transient_overlay_from_xml(xml: str) -> Optional[str]:
     return detect_transient_overlay_reason(root)
 
 
-def should_press_back_after_failed_tap(xml: str) -> bool:
-    """Only BACK when we opened a dismissible overlay — never from group feed."""
+def should_press_back_after_failed_tap(
+    xml: str,
+    context: dict[str, Any] | None = None,
+) -> bool:
+    """Only BACK when we opened a dismissible overlay — never during group crawls."""
+    if fb_group_navigation_locked(context):
+        return False
     if not xml:
         return False
     if is_group_feed_from_xml(xml):
@@ -672,8 +738,13 @@ def comment_tap_point(
     return cx, cy
 
 
-def interrupt_reason_allows_back(reason: Optional[str]) -> bool:
-    """Only keyboard blocks comment scroll; leaving sheet must not trigger BACK."""
+def interrupt_reason_allows_back(
+    reason: Optional[str],
+    context: dict[str, Any] | None = None,
+) -> bool:
+    """Dismiss IME with BACK only outside FB group navigation (BACK pops the whole group)."""
+    if fb_group_navigation_locked(context):
+        return False
     return reason == "keyboard_open"
 
 
@@ -1598,6 +1669,10 @@ __all__ = [
     "detect_comment_sheet_interrupt_reason",
     "is_group_feed_hierarchy",
     "is_group_feed_from_xml",
+    "context_implies_fb_group_navigation",
+    "note_fb_group_navigation",
+    "fb_group_navigation_locked",
+    "should_allow_system_back",
     "detect_transient_overlay_reason",
     "detect_transient_overlay_from_xml",
     "should_press_back_after_failed_tap",

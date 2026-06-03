@@ -86,26 +86,28 @@ export const ControlRecordMirror = memo(function ControlRecordMirror({
     <>
       {busyBanner}
       <div className='flex w-full justify-center p-3'>
-        <div className='w-full max-w-[320px]'>
-          <DeviceTile
-            device={device}
-            logLines={logLines}
-            mode={mode}
-            wsSend={wsSend}
-            onToggleMode={onToggleMode}
-            onRestart={onRestart}
-            onTap={onTap}
-            onSwipe={onSwipe}
-            highlightBounds={highlightBounds}
-            hideHeader
-            hideStepMonitor
-            minimalRailControls
-            hideControls={hideControls}
-            hideDeviceFunctions={hideDeviceFunctions}
-            readOnlyPreview={readOnlyPreview}
-            mockupScreenWidth={262}
-            streamFetchPriority='high'
-          />
+        <div className='w-full max-w-full overflow-x-auto'>
+          <div className='mx-auto w-fit'>
+            <DeviceTile
+              device={device}
+              logLines={logLines}
+              mode={mode}
+              wsSend={wsSend}
+              onToggleMode={onToggleMode}
+              onRestart={onRestart}
+              onTap={onTap}
+              onSwipe={onSwipe}
+              highlightBounds={highlightBounds}
+              hideHeader
+              hideStepMonitor
+              minimalRailControls
+              hideControls={hideControls}
+              hideDeviceFunctions={hideDeviceFunctions}
+              readOnlyPreview={readOnlyPreview}
+              mockupScreenWidth={262}
+              streamFetchPriority='high'
+            />
+          </div>
         </div>
       </div>
     </>

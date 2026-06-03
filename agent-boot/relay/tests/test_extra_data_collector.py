@@ -12,6 +12,8 @@ from relay.extra_data.collector import (
     expand_see_more_via_u2,
     _looks_like_hierarchy_xml,
     _maybe_open_fb_post_detail,
+    _u2_click_comment_target,
+    _u2_click_post_open_target,
 )
 
 _SAMPLE_XML = '<?xml version="1.0"?><hierarchy><node text="hi"/></hierarchy>'
@@ -81,8 +83,9 @@ def test_looks_like_hierarchy_xml() -> None:
 
 @pytest.mark.asyncio
 async def test_collect_single_snapshot() -> None:
+    exec_ = _FakeExecutor()
     snapshots, err = await collect_xml_snapshots(
-        _FakeExecutor(),
+        exec_,
         "dev1",
         "ig_posts",
         {},
@@ -90,6 +93,40 @@ async def test_collect_single_snapshot() -> None:
     assert err is None
     assert len(snapshots) == 1
     assert snapshots[0] == _SAMPLE_XML
+    assert not any(
+        action.get("op") == "screenshot"
+        for batch in exec_.batches
+        for action in batch
+    )
+
+
+@pytest.mark.asyncio
+async def test_collect_fb_comments_default_scan_is_bounded() -> None:
+    from relay.tests.test_comment_filter import _sheet_xml
+
+    exec_ = _FakeExecutor(xml=_sheet_xml())
+    snapshots, err = await collect_xml_snapshots(
+        exec_,
+        "dev1",
+        "fb_comments",
+        {"comment_scroll_pause_s": 0},
+    )
+    assert err is None
+    assert snapshots
+    swipes = [
+        action
+        for batch in exec_.batches
+        for action in batch
+        if action.get("op") == "swipe"
+    ]
+    dumps = [
+        action
+        for batch in exec_.batches
+        for action in batch
+        if action.get("op") == "dump_hierarchy"
+    ]
+    assert len(swipes) <= 6
+    assert len(dumps) <= 3
 
 
 @pytest.mark.asyncio
@@ -348,6 +385,44 @@ async def test_collect_fb_comment_target_prefers_click_spec() -> None:
     assert tapped is True
     assert exec_.clicks[0][1] == "click_spec"
     assert diag["verify_attempts"][0]["click_route"] == "click_spec"
+    click_spec = next(
+        action
+        for batch in exec_.batches
+        for action in batch
+        if action.get("op") == "click_spec"
+    )
+    assert click_spec["timeout"] == 0.35
+
+
+@pytest.mark.asyncio
+async def test_comment_target_default_u2_click_timeout_is_fast() -> None:
+    exec_ = _FakeExecutor()
+    cand = {
+        "bounds": [100, 200, 300, 250],
+        "u2_click": {"spec": {"text": "Bình luận"}},
+    }
+
+    ok, route = await _u2_click_comment_target(exec_, "dev1", cand, {})
+
+    assert ok is True
+    assert route == "click_spec"
+    assert exec_.batches[0][0]["timeout"] == 0.35
+
+
+@pytest.mark.asyncio
+async def test_post_open_default_u2_click_timeout_is_fast() -> None:
+    exec_ = _FakeExecutor()
+    target = {
+        "bounds": [100, 200, 500, 260],
+        "tap_kind": "timestamp",
+        "u2_click": {"spec": {"text": "5 giờ"}},
+    }
+
+    ok, route = await _u2_click_post_open_target(exec_, "dev1", target, {})
+
+    assert ok is True
+    assert route == "click_spec"
+    assert exec_.batches[0][0]["timeout"] == 0.35
 
 
 @pytest.mark.asyncio
@@ -569,6 +644,35 @@ async def test_open_post_verify_failed_on_group_feed_no_back() -> None:
     assert diag.get("reason_code") == "post_open_verify_failed"
     assert exec_.press_back_calls == 0
     assert diag.get("attempts") and diag["attempts"][0].get("back_pressed") is False
+
+
+@pytest.mark.asyncio
+async def test_comment_scroll_suppresses_back_on_group_collection() -> None:
+    """IME recovery used to press BACK each dump and pop out of the FB group."""
+    keyboard_sheet_xml = """<?xml version="1.0"?>
+<hierarchy bounds="[0,0][1080,2400]">
+  <node package="com.facebook.katana" class="android.widget.Button"
+        content-desc="Quay lại" bounds="[0,80][120,160]" />
+  <node package="com.facebook.katana" text="Phù hợp nhất" bounds="[40,450][400,500]" />
+  <node package="com.facebook.katana" class="androidx.recyclerview.widget.RecyclerView"
+        scrollable="true" bounds="[0,400][1080,2200]" />
+  <node package="com.facebook.katana" class="android.widget.EditText"
+        focused="true" text="Viết bình luận…" bounds="[40,2280][1040,2340]" />
+</hierarchy>"""
+    exec_ = _FakeExecutor(xml=keyboard_sheet_xml)
+    snapshots, err = await collect_xml_snapshots(
+        exec_,
+        "dev1",
+        "fb_comments",
+        {
+            "collection": "fb_group_posts",
+            "comment_scroll_passes": 0,
+            "comment_recover_chrome": True,
+        },
+    )
+    assert err is None
+    assert snapshots
+    assert exec_.press_back_calls == 0
 
 
 def test_build_ingest_payload_includes_snapshots() -> None:

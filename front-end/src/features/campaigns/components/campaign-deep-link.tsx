@@ -1,55 +1,58 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  type ReactNode
+} from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useRouter } from '@/i18n/navigation';
 import { ROUTES } from '@/config/routes';
-import { useCampaigns } from '../hooks/use-campaigns';
-import { CampaignMonitorDialog } from './campaign-monitor';
+
+type CampaignFocusContextValue = {
+  focusCampaignId: string | null;
+  onFocusCampaignHandled: () => void;
+};
+
+const CampaignFocusContext = createContext<CampaignFocusContextValue | null>(
+  null
+);
+
+export function useCampaignFocusFromDeepLink(): CampaignFocusContextValue {
+  const ctx = useContext(CampaignFocusContext);
+  return (
+    ctx ?? {
+      focusCampaignId: null,
+      onFocusCampaignHandled: () => {}
+    }
+  );
+}
 
 /**
- * When URL contains ?campaign_id=, auto-open the campaign monitor dialog once.
+ * Reads `?campaign_id=` for list scroll/highlight (does not open the monitor modal).
  */
-export function CampaignDeepLink() {
+export function CampaignDeepLink({ children }: { children: ReactNode }) {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const campaignId = searchParams.get('campaign_id');
-  const { data: campaigns } = useCampaigns();
-  const [open, setOpen] = useState(false);
-  const [handled, setHandled] = useState(false);
+  const focusCampaignId = useMemo(() => {
+    const id = (searchParams.get('campaign_id') ?? '').trim();
+    return id || null;
+  }, [searchParams]);
 
-  const campaign = useMemo(
-    () => campaigns?.find((c) => c.id === campaignId) ?? null,
-    [campaigns, campaignId]
+  const onFocusCampaignHandled = useCallback(() => {
+    if (focusCampaignId) router.replace(ROUTES.CAMPAIGNS.ROOT);
+  }, [focusCampaignId, router]);
+
+  const value = useMemo(
+    () => ({ focusCampaignId, onFocusCampaignHandled }),
+    [focusCampaignId, onFocusCampaignHandled]
   );
 
-  useEffect(() => {
-    if (!campaignId || handled) return;
-    if (campaigns && !campaign) {
-      setHandled(true);
-      router.replace(ROUTES.CAMPAIGNS.ROOT);
-      return;
-    }
-    if (campaign) {
-      setOpen(true);
-      setHandled(true);
-    }
-  }, [campaign, campaignId, campaigns, handled, router]);
-
-  const handleOpenChange = (next: boolean) => {
-    setOpen(next);
-    if (!next && campaignId) {
-      router.replace(ROUTES.CAMPAIGNS.ROOT);
-    }
-  };
-
-  if (!campaign) return null;
-
   return (
-    <CampaignMonitorDialog
-      campaign={campaign}
-      open={open}
-      onOpenChange={handleOpenChange}
-    />
+    <CampaignFocusContext.Provider value={value}>
+      {children}
+    </CampaignFocusContext.Provider>
   );
 }

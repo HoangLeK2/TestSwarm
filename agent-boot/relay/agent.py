@@ -1520,6 +1520,20 @@ class RelayAgent:
                 await bounded_put(send_queue, await dumps_maybe_offload(reply), serial=serial, label="extra_data_result")
                 return
 
+            from relay.extra_data.collector import (
+                _capture_screenshot_b64,
+                should_capture_screenshot,
+            )
+
+            evidence: dict[str, Any] = {}
+            if snapshots:
+                evidence["hierarchy_xml"] = snapshots[-1]
+            screenshot_b64 = str(context.pop("_ingest_screenshot_b64", "") or "").strip()
+            if not screenshot_b64 and should_capture_screenshot(context):
+                screenshot_b64 = await _capture_screenshot_b64(self._u2_executor, serial) or ""
+            if screenshot_b64:
+                evidence["screenshot_b64"] = screenshot_b64
+
             payload = build_ingest_payload(
                 serial=serial,
                 strategy=strategy,
@@ -1527,11 +1541,15 @@ class RelayAgent:
                 snapshots=snapshots,
                 request_id=req_id,
             )
+            if evidence:
+                payload["evidence"] = evidence
             ingest = await self._extra_ingest.process_payload(payload)
             if ingest.get("ok"):
                 reply["ok"] = True
                 reply_ingest = dict(ingest)
                 reply_ingest.pop("evidence_pending", None)
+                if screenshot_b64:
+                    reply_ingest["screenshot_b64"] = screenshot_b64
                 if not bool(context.get("return_items")):
                     reply_ingest.pop("items", None)
                 reply["ingest"] = reply_ingest

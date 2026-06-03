@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -246,3 +247,44 @@ def test_capture_payload_delegates_to_epic06_capture():
     build.assert_called_once()
     assert out["full"] == fake_payload["full"]
     assert out["screenshot_artifact_id"] == "art-1"
+
+
+def test_epic06_capture_payload_uses_db_safe_artifact_kinds(monkeypatch):
+    from services.execution import epic06_capture_adapter
+
+    sc = _make_sc()
+    captured_kinds: list[tuple[str, str | None]] = []
+
+    class FakeCaptureService:
+        def capture_screenshot(self, _device, *, persist, execution_ctx):
+            captured_kinds.append(("screenshot", execution_ctx.kind if execution_ctx else None))
+            return SimpleNamespace(
+                image_bytes=b"\x89PNG\r\n\x1a\n",
+                object_key="captures/step.png",
+                sha256="abc123",
+                artifact_id="art-screenshot",
+            )
+
+        def capture_hierarchy(self, _device, *, persist, execution_ctx):
+            captured_kinds.append(("hierarchy", execution_ctx.kind if execution_ctx else None))
+            return SimpleNamespace(
+                xml_bytes=b"<hierarchy/>",
+                object_key="captures/step.xml",
+                artifact_id="art-hierarchy",
+            )
+
+    monkeypatch.setattr(epic06_capture_adapter, "_get_capture_service", lambda: FakeCaptureService())
+    monkeypatch.setattr(epic06_capture_adapter, "_store_bytes", lambda *args, **kwargs: "http://minio/artifact")
+
+    payload = epic06_capture_adapter.build_step_capture_payload(
+        sc,
+        0,
+        "tap_fb_comment_button_pre",
+    )
+
+    assert payload["full"] == "http://minio/artifact"
+    assert captured_kinds == [
+        ("screenshot", "screenshot_pre"),
+        ("hierarchy", "hierarchy_pre"),
+    ]
+    assert all(kind is None or len(kind) <= 32 for _, kind in captured_kinds)

@@ -773,6 +773,111 @@ BUILTIN_TEMPLATES: List[Dict[str, Any]] = (
     _FACEBOOK_TEMPLATES
 )
 
+BUILTIN_TEMPLATE_BY_NAME: Dict[str, Dict[str, Any]] = {
+    spec["name"]: spec for spec in BUILTIN_TEMPLATES
+}
+
+
+def _spec_for_template_row(tmpl) -> Dict[str, Any] | None:
+    """Match DB row to code-managed builtin spec (by technical name)."""
+    if tmpl.name in BUILTIN_TEMPLATE_BY_NAME:
+        return BUILTIN_TEMPLATE_BY_NAME[tmpl.name]
+    key = str(tmpl.name or "").strip().lower()
+    for spec in BUILTIN_TEMPLATES:
+        if str(spec.get("name", "")).strip().lower() == key:
+            return spec
+    return None
+
+
+def _graph_mirror_from_steps(steps: list) -> tuple[list, list]:
+    """
+    Derive nodes/edges from steps for a future flow editor (not used at runtime today).
+    Canonical execution format remains flat steps[] (sequence).
+    """
+    if not steps:
+        return [], []
+    from common.graph_compiler import steps_to_graph
+
+    nodes, edges = steps_to_graph(steps)
+    return nodes, edges
+
+
+async def repair_builtin_templates_to_sequence(db) -> int:
+    """
+    Sync builtin templates: steps are canonical; nodes/edges are a derived graph mirror.
+
+    - Code specs win when the row name matches BUILTIN_TEMPLATES.
+    - If only graph exists, compile → steps then refresh the graph mirror from steps.
+    - Never wipe nodes/edges without regenerating them from steps.
+    """
+    import logging
+
+    from sqlalchemy import select
+
+    from common.graph_compiler import compile_graph_to_steps
+    from db.crud.scenario_template import update_template
+    from db.models.scenario_template import ScenarioTemplate
+
+    log = logging.getLogger(__name__)
+    changed = 0
+    result = await db.execute(
+        select(ScenarioTemplate).where(ScenarioTemplate.is_builtin.is_(True))
+    )
+    for tmpl in result.scalars().all():
+        spec = _spec_for_template_row(tmpl)
+        steps = list(tmpl.steps) if isinstance(tmpl.steps, list) else []
+        nodes = list(tmpl.nodes) if isinstance(tmpl.nodes, list) else []
+        edges = list(tmpl.edges) if isinstance(tmpl.edges, list) else []
+
+        new_steps: list = []
+        if spec and spec.get("steps"):
+            new_steps = list(spec["steps"])
+        elif steps:
+            new_steps = steps
+        elif nodes or edges:
+            try:
+                new_steps = compile_graph_to_steps(nodes, edges)
+            except Exception as exc:
+                log.warning(
+                    "Could not compile graph for builtin template %r: %s",
+                    tmpl.name,
+                    exc,
+                )
+                new_steps = []
+
+        if not new_steps:
+            if nodes or edges:
+                log.warning(
+                    "Builtin template %r still graph-only with no steps — "
+                    "add to BUILTIN_TEMPLATES or restore from code spec",
+                    tmpl.name,
+                )
+            continue
+
+        graph_nodes, graph_edges = _graph_mirror_from_steps(new_steps)
+        updates: Dict[str, Any] = {
+            "steps": new_steps,
+            "nodes": graph_nodes,
+            "edges": graph_edges,
+        }
+        if spec:
+            if spec.get("display_name") is not None:
+                updates["display_name"] = spec.get("display_name", "")
+            if spec.get("description") is not None:
+                updates["description"] = spec.get("description", "")
+            if spec.get("category") is not None:
+                updates["category"] = spec.get("category", "general")
+            if spec.get("variables") is not None:
+                updates["variables"] = spec.get("variables", {})
+            if spec.get("tags") is not None:
+                updates["tags"] = spec.get("tags", "")
+            updates["is_builtin"] = spec.get("is_builtin", True)
+
+        await update_template(db, tmpl.id, **updates)
+        changed += 1
+
+    return changed
+
 
 async def seed_builtin_templates(db) -> int:
     """
@@ -782,13 +887,14 @@ async def seed_builtin_templates(db) -> int:
     Returns the number of templates inserted or updated.
     """
     from db.crud.scenario_template import create_template, get_template_by_name, update_template
-    from common.graph_compiler import steps_to_graph
 
     changed = 0
     for spec in BUILTIN_TEMPLATES:
         spec_is_builtin = spec.get("is_builtin", True)
         raw_steps = spec.get("steps", [])
-        nodes, edges = steps_to_graph(raw_steps)
+        if not raw_steps:
+            continue
+        graph_nodes, graph_edges = _graph_mirror_from_steps(raw_steps)
         existing = await get_template_by_name(db, spec["name"])
         if existing is None:
             await create_template(
@@ -802,13 +908,12 @@ async def seed_builtin_templates(db) -> int:
                 tags=spec.get("tags", ""),
                 is_builtin=spec_is_builtin,
                 user_id=None,
-                nodes=nodes,
-                edges=edges,
+                nodes=graph_nodes,
+                edges=graph_edges,
             )
             changed += 1
         else:
-            # Always sync ALL code-managed templates from BUILTIN_TEMPLATES so step/variable
-            # changes in code are reflected in DB on every restart.
+            # Sync steps from code; refresh graph mirror from steps (future flow editor).
             await update_template(
                 db,
                 existing.id,
@@ -819,10 +924,12 @@ async def seed_builtin_templates(db) -> int:
                 variables=spec.get("variables", {}),
                 tags=spec.get("tags", ""),
                 is_builtin=spec_is_builtin,
-                nodes=nodes,
-                edges=edges,
+                nodes=graph_nodes,
+                edges=graph_edges,
             )
             changed += 1
+
+    changed += await repair_builtin_templates_to_sequence(db)
 
     if changed:
         await db.commit()

@@ -61,6 +61,28 @@ function getObjectCoverRect(
   };
 }
 
+function getObjectContainRect(
+  sourceW: number,
+  sourceH: number,
+  displayW: number,
+  displayH: number,
+  align: 'center' | 'bottom'
+): ObjectFitRect {
+  if (sourceW <= 0 || sourceH <= 0 || displayW <= 0 || displayH <= 0) {
+    return { left: 0, top: 0, width: displayW, height: displayH, scale: 1 };
+  }
+  const scale = Math.min(displayW / sourceW, displayH / sourceH);
+  const width = sourceW * scale;
+  const height = sourceH * scale;
+  return {
+    left: (displayW - width) / 2,
+    top: align === 'bottom' ? displayH - height : (displayH - height) / 2,
+    width,
+    height,
+    scale
+  };
+}
+
 interface DeviceScreenProps {
   device: Device;
   wsSend: (obj: object) => void;
@@ -91,6 +113,8 @@ interface DeviceScreenProps {
   captionBelowFrame?: boolean;
   /** Must match Tailwind object-* on img/canvas so taps map to the visible crop. */
   streamCoverAlign?: 'center' | 'bottom';
+  /** Stream fit strategy. `contain` avoids crop on odd aspect-ratio devices. */
+  streamFit?: 'cover' | 'contain';
   /** Read-only preview: disable all interactions with device. */
   interactive?: boolean;
   /** Hint browser to prioritize MJPEG fetch (control-record mirror). */
@@ -108,6 +132,7 @@ export function DeviceScreen({
   gestureMode,
   captionBelowFrame = false,
   streamCoverAlign = 'bottom',
+  streamFit,
   interactive = true,
   streamFetchPriority = 'auto'
 }: DeviceScreenProps) {
@@ -587,7 +612,25 @@ export function DeviceScreen({
     };
   }, [dh, dw, h264Active, streamSize]);
 
-  /** Mirror CSS object-cover exactly, then convert stream ratio to device pixels. */
+  const resolvedStreamFit = React.useMemo<'cover' | 'contain'>(() => {
+    if (streamFit) return streamFit;
+    // Auto: if aspect ratio differs a lot, prefer contain to avoid aggressive crop.
+    const { sourceW, sourceH } = getCoordinateSpace();
+    if (wrapSize.width <= 0 || wrapSize.height <= 0) return 'cover';
+    if (sourceW <= 0 || sourceH <= 0) return 'cover';
+    const r1 = wrapSize.width / wrapSize.height;
+    const r2 = sourceW / sourceH;
+    const diff = Math.abs(Math.log(r1 / r2));
+    return diff > 0.16 ? 'contain' : 'cover';
+  }, [getCoordinateSpace, streamFit, wrapSize.height, wrapSize.width]);
+
+  // When we choose `contain`, align center to avoid a "pushed down" look
+  // (black bars should be symmetric for best UX).
+  const resolvedAlign = React.useMemo<'center' | 'bottom'>(() => {
+    return resolvedStreamFit === 'contain' ? 'center' : streamCoverAlign;
+  }, [resolvedStreamFit, streamCoverAlign]);
+
+  /** Mirror CSS object-fit exactly, then convert stream ratio to device pixels. */
   const clientToDevice = useCallback(
     (
       displayX: number,
@@ -609,13 +652,22 @@ export function DeviceScreen({
         };
       }
 
-      const fit = getObjectCoverRect(
-        sourceW,
-        sourceH,
-        displayW,
-        displayH,
-        streamCoverAlign
-      );
+      const fit =
+        resolvedStreamFit === 'contain'
+          ? getObjectContainRect(
+              sourceW,
+              sourceH,
+              displayW,
+              displayH,
+              resolvedAlign
+            )
+          : getObjectCoverRect(
+              sourceW,
+              sourceH,
+              displayW,
+              displayH,
+              resolvedAlign
+            );
       const sourceX = clamp((displayX - fit.left) / fit.scale, 0, sourceW);
       const sourceY = clamp((displayY - fit.top) / fit.scale, 0, sourceH);
       const rx = clamp(sourceX / sourceW, 0, 1);
@@ -631,20 +683,29 @@ export function DeviceScreen({
         srcH: sourceH
       };
     },
-    [getCoordinateSpace, streamCoverAlign]
+    [getCoordinateSpace, resolvedAlign, resolvedStreamFit]
   );
 
   const highlightStyle = React.useMemo<React.CSSProperties | undefined>(() => {
     if (!highlightBounds || wrapSize.width <= 0 || wrapSize.height <= 0)
       return undefined;
     const { sourceW, sourceH, targetW, targetH } = getCoordinateSpace();
-    const fit = getObjectCoverRect(
-      sourceW,
-      sourceH,
-      wrapSize.width,
-      wrapSize.height,
-      streamCoverAlign
-    );
+    const fit =
+      resolvedStreamFit === 'contain'
+        ? getObjectContainRect(
+            sourceW,
+            sourceH,
+            wrapSize.width,
+            wrapSize.height,
+            resolvedAlign
+          )
+        : getObjectCoverRect(
+            sourceW,
+            sourceH,
+            wrapSize.width,
+            wrapSize.height,
+            resolvedAlign
+          );
     const [x1, y1, x2, y2] = highlightBounds;
     return {
       left: `${fit.left + (x1 / targetW) * fit.width}px`,
@@ -655,15 +716,23 @@ export function DeviceScreen({
   }, [
     getCoordinateSpace,
     highlightBounds,
-    streamCoverAlign,
+    resolvedStreamFit,
+    resolvedAlign,
     wrapSize.height,
     wrapSize.width
   ]);
 
-  const streamObjectClass =
-    streamCoverAlign === 'bottom'
+  const streamObjectClass = React.useMemo(() => {
+    const pos = resolvedAlign === 'bottom' ? 'bottom' : 'center';
+    if (resolvedStreamFit === 'contain') {
+      return pos === 'bottom'
+        ? 'object-contain object-bottom'
+        : 'object-contain object-center';
+    }
+    return pos === 'bottom'
       ? 'object-cover object-bottom'
       : 'object-cover object-center';
+  }, [resolvedAlign, resolvedStreamFit]);
 
   const requestStreamRefreshAfterInput = useCallback(() => {
     if (!isActive || !relayH264Allowed) return;

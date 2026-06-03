@@ -1,6 +1,7 @@
 """Epic 04 step capture via Epic 06 ExtractionCaptureService (DF-T-04-014 + DF-T-06-003)."""
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import logging
@@ -13,6 +14,8 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 _capture_svc: Any | None = None
+_ARTIFACT_KIND_MAX_LEN = 32
+_STEP_CAPTURE_PHASES = {"pre", "post", "fail"}
 
 
 def _get_capture_service() -> Any:
@@ -40,6 +43,18 @@ def _paths(sc: "ScenarioContext", step_idx: int, tag: str) -> tuple[str, str, st
     session_name = os.path.basename(capture_dir) if capture_dir else "execution"
     minio_prefix = f"captures/{session_name}"
     return prefix, capture_dir, minio_prefix
+
+
+def _artifact_kind(prefix: str, tag: str) -> str:
+    raw_tag = str(tag or "").strip("_")
+    phase = raw_tag.rsplit("_", 1)[-1] if raw_tag else ""
+    kind = f"{prefix}_{phase}" if phase in _STEP_CAPTURE_PHASES else f"{prefix}_{raw_tag}".strip("_")
+    if len(kind) <= _ARTIFACT_KIND_MAX_LEN:
+        return kind
+
+    digest = hashlib.sha1(kind.encode("utf-8")).hexdigest()[:8]
+    head_len = _ARTIFACT_KIND_MAX_LEN - len(digest) - 1
+    return f"{kind[:head_len].rstrip('_')}_{digest}"
 
 
 def _object_url(object_key: str, data: bytes, content_type: str) -> str | None:
@@ -90,8 +105,8 @@ def build_step_capture_payload(
     capture = _get_capture_service()
     prefix, capture_dir, minio_prefix = _paths(sc, step_idx, tag)
 
-    screenshot_kind = f"screenshot_{tag}"
-    hierarchy_kind = f"hierarchy_{tag}"
+    screenshot_kind = _artifact_kind("screenshot", tag)
+    hierarchy_kind = _artifact_kind("hierarchy", tag)
     screenshot_ctx = execution_capture_ctx(sc, step_idx, screenshot_kind)
     hierarchy_ctx = execution_capture_ctx(sc, step_idx, hierarchy_kind)
     persist = screenshot_ctx is not None

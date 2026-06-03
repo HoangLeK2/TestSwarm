@@ -69,15 +69,21 @@ def _template_body_json(template) -> dict[str, Any]:
     edges = template.edges if isinstance(template.edges, list) else []
     variables = template.variables if isinstance(template.variables, dict) else {}
     body: dict[str, Any] = {"variables": variables}
+    # Runtime / org library: sequence only. Template graph mirror (nodes/edges) is
+    # stored on scenario_templates for a future flow editor — not cloned to org.
+    if steps:
+        body["steps"] = steps
+        return body
     if nodes or edges:
         body["nodes"] = nodes
         body["edges"] = edges
-    if steps:
-        body["steps"] = steps
     return body
 
 
 def _template_kind(template) -> str:
+    steps = template.steps if isinstance(template.steps, list) else []
+    if steps:
+        return ScenarioKind.SEQUENCE.value
     nodes = template.nodes if isinstance(template.nodes, list) else []
     edges = template.edges if isinstance(template.edges, list) else []
     if nodes or edges:

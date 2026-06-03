@@ -1,9 +1,10 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { FileText } from 'lucide-react';
 import { useCampaigns } from '../../hooks/use-campaigns';
+import { useCampaignListFocus } from '../../hooks/use-campaign-list-focus';
 import type { CampaignOut } from '../../types';
 import { DataTable } from '@/components/ui/table/data-table';
 import { useDataTable } from '@/hooks/use-data-table';
@@ -14,6 +15,24 @@ import { CampaignMobileList } from './CampaignMobileList';
 import { CampaignExecutionRuntimeBanner } from './CampaignExecutionRuntimeBanner';
 import { buildCampaignStatusLabels } from '../../campaign-status-ui';
 import { CoreEmptyState } from '@/components/core-empty-state';
+import { useCampaignFocusFromDeepLink } from '../campaign-deep-link';
+import {
+  campaignRowAnchorId,
+  campaignRowHighlightClass
+} from '../../lib/campaign-row-anchor';
+import { cn } from '@/lib/utils';
+
+function useIsLgUp() {
+  const [isLgUp, setIsLgUp] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 1024px)');
+    setIsLgUp(mq.matches);
+    const onChange = () => setIsLgUp(mq.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+  return isLgUp;
+}
 
 export function CampaignList({
   attachScenarioId,
@@ -29,8 +48,26 @@ export function CampaignList({
   };
   const tEmpty = useTranslations('coreEmptyState');
   const { data: campaigns, isLoading, error } = useCampaigns();
+  const { focusCampaignId, onFocusCampaignHandled } =
+    useCampaignFocusFromDeepLink();
+  const isLgUp = useIsLgUp();
+  const highlightCampaignId = useCampaignListFocus(
+    focusCampaignId,
+    campaigns,
+    onFocusCampaignHandled
+  );
 
   const data: CampaignOut[] = campaigns ?? [];
+
+  const getRowProps = useCallback(
+    (row: { original: CampaignOut }) => ({
+      ...(isLgUp ? { id: campaignRowAnchorId(row.original.id) } : {}),
+      className: cn(
+        highlightCampaignId === row.original.id && campaignRowHighlightClass
+      )
+    }),
+    [highlightCampaignId, isLgUp]
+  );
 
   const statusLabel = useMemo(
     () => buildCampaignStatusLabels((key) => t(key)),
@@ -106,9 +143,15 @@ export function CampaignList({
               <CampaignMobileList
                 campaigns={campaigns}
                 statusLabel={statusLabel}
+                highlightCampaignId={highlightCampaignId}
+                withRowAnchor={!isLgUp}
               />
               <div className='hidden lg:block'>
-                <DataTable table={table} total={campaigns.length} />
+                <DataTable
+                  table={table}
+                  total={campaigns.length}
+                  getRowProps={getRowProps}
+                />
               </div>
             </>
           ) : null}

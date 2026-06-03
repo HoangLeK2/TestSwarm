@@ -9,6 +9,8 @@ export default function DeviceControlRecordPage() {
   const campaignId = searchParams.get('campaignId') ?? undefined;
   const scenarioId = searchParams.get('scenarioId') ?? undefined;
   const templateId = searchParams.get('templateId') ?? undefined;
+  const orgScenarioId = searchParams.get('orgScenarioId') ?? undefined;
+  const returnTo = searchParams.get('returnTo') ?? undefined;
 
   return (
     <div>
@@ -18,6 +20,8 @@ export default function DeviceControlRecordPage() {
         initialCampaignId={campaignId}
         initialScenarioId={scenarioId}
         initialTemplateId={templateId}
+        initialOrgScenarioId={orgScenarioId}
+        returnTo={returnTo}
       />
     </div>
   );

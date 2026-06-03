@@ -89,6 +89,53 @@ def _store_returned_items(ctx: Dict[str, Any], strategy: str, step: Dict[str, An
         ctx[data_var] = values
 
 
+_COMMENT_PARENT_ANCHOR_KEYS = (
+    "pid",
+    "post_key",
+    "stable_post_id",
+    "fb_post_id",
+    "author",
+    "timestamp",
+    "text_prefix",
+)
+
+
+def _clean_comment_parent_anchor(source: Dict[str, Any]) -> Dict[str, Any]:
+    anchor: Dict[str, Any] = {}
+    for key in _COMMENT_PARENT_ANCHOR_KEYS:
+        value = source.get(key)
+        if value is not None and str(value).strip():
+            anchor[key] = value
+    return anchor
+
+
+def _remember_active_comment_parent(ctx: Dict[str, Any], ingest: Dict[str, Any]) -> None:
+    active_parent = ingest.get("active_parent_post")
+    pid_map = ingest.get("post_id_map") if isinstance(ingest.get("post_id_map"), dict) else None
+    if not isinstance(active_parent, dict):
+        if not pid_map or len(pid_map) != 1:
+            return
+        pid, parent_hash = next(iter(pid_map.items()))
+        active_parent = {"pid": pid, "parent_id": parent_hash}
+
+    parent_id = (
+        active_parent.get("parent_id")
+        or active_parent.get("content_hash")
+        or active_parent.get("parent_content_hash")
+    )
+    pid = active_parent.get("pid") or active_parent.get("parent_post_id")
+    if parent_id:
+        ctx["_active_comment_parent_hash"] = parent_id
+        ctx["_first_new_post_hash"] = parent_id
+    if pid:
+        ctx["_fb_comment_parent_pid"] = pid
+    anchor = _clean_comment_parent_anchor(active_parent)
+    if anchor:
+        ctx["_active_comment_parent_anchor"] = anchor
+    if parent_id or pid or anchor:
+        ctx["_active_comment_anchor_verified"] = True
+
+
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = os.environ.get(name)
     if raw is None or str(raw).strip() == "":
@@ -119,6 +166,92 @@ def _relay_extra_data_available(device: Any) -> bool:
         return bool(relay.relay_for_serial(str(relay_serial or "")))
     except Exception:
         return False
+
+
+def _attach_edge_content_screenshots(
+    *,
+    device: Any,
+    ingest: dict[str, Any],
+    collection: str,
+    execution_id: str | None,
+    user_id: str | None,
+) -> None:
+    """Attach screenshot to rows from this extract batch (inserted + duplicates missing path).
+
+    Prefer framebuffer captured on agent-boot immediately after the last XML dump.
+    When ``screenshot_targets`` include card bounds, crop one JPEG per post on the feed.
+    """
+    if not _env_bool("DEVICE_FARM_CONTENT_IMAGES_ENABLED", False):
+        return
+
+    import base64
+
+    hashes = ingest.get("batch_content_hashes") or ingest.get("inserted_content_hashes") or []
+    hashes = [str(h) for h in hashes if h]
+    if not hashes or not collection:
+        return
+    jpeg: bytes | None = None
+    b64 = ingest.get("screenshot_b64")
+    if isinstance(b64, str) and b64.strip():
+        try:
+            jpeg = base64.b64decode(b64, validate=False)
+        except Exception as exc:
+            log.debug("edge extra_data screenshot b64 decode failed: %s", exc)
+    if not jpeg:
+        capture = getattr(device, "capture_screenshot", None)
+        if callable(capture):
+            try:
+                jpeg = capture(skip_cache=True)
+            except TypeError:
+                jpeg = capture()
+            except Exception as exc:
+                log.debug("edge extra_data fresh screencap failed: %s", exc)
+    if not jpeg:
+        try:
+            jpeg = device.take_screenshot()
+        except Exception as exc:
+            log.debug("edge extra_data screenshot attach skipped: %s", exc)
+            return
+    if not jpeg:
+        return
+    per_hash_bytes: dict[str, bytes] = {}
+    targets = ingest.get("screenshot_targets")
+    if isinstance(targets, list) and jpeg:
+        from services.content_store import crop_jpeg_screenshot
+
+        for entry in targets:
+            if not isinstance(entry, dict):
+                continue
+            ch = str(entry.get("content_hash") or "").strip()
+            bounds = entry.get("bounds")
+            if not ch or not isinstance(bounds, (list, tuple)):
+                continue
+            cropped = crop_jpeg_screenshot(jpeg, bounds)
+            if cropped:
+                per_hash_bytes[ch] = cropped
+    try:
+        from db.database import run_activity_coro
+        from services.content_store import attach_screenshot_to_content_hashes
+
+        updated = run_activity_coro(
+            attach_screenshot_to_content_hashes(
+                content_hashes=hashes,
+                collection=collection,
+                execution_id=execution_id,
+                screenshot_bytes=jpeg,
+                user_id=user_id,
+                only_if_missing=True,
+                per_hash_bytes=per_hash_bytes or None,
+            )
+        )
+        if updated:
+            log.info(
+                "edge extra_data: attached screenshot to %d content item(s) (cropped=%d)",
+                updated,
+                len(per_hash_bytes),
+            )
+    except Exception as exc:
+        log.warning("edge extra_data screenshot attach failed: %s", exc)
 
 
 def _edge_extra_should_return_items(step: Dict[str, Any], collection: Any) -> bool:
@@ -366,9 +499,21 @@ def request_edge_extra_data(
     parent_post_id_var = step.get("parent_post_id_var")
     parent_post_id = ctx.get(parent_post_id_var) if parent_post_id_var else ctx.get("_fb_comment_parent_pid")
     parent_var = step.get("save_parent_id_var") or step.get("parent_id_var")
-    parent_id = ctx.get("_edge_comment_parent_base_hash") if strategy == "fb_comments" else None
-    if parent_id is None and parent_var:
-        parent_id = ctx.get(parent_var)
+    parent_id_already_scoped = False
+    parent_id = None
+    if strategy == "fb_comments":
+        # Prefer tap-scoped hash (matches persisted fb_post row). Base hash uses
+        # comment-target dedupe and must not override the scoped parent_id.
+        parent_id = ctx.get("_active_comment_parent_hash")
+        parent_id_already_scoped = bool(parent_id)
+        if parent_id is None:
+            parent_id = ctx.get("_edge_comment_parent_base_hash")
+            parent_id_already_scoped = False
+        if parent_id is None and parent_var:
+            parent_id = ctx.get(parent_var)
+            parent_id_already_scoped = bool(parent_id)
+    if strategy == "fb_posts" and step.get("dedupe_field"):
+        ctx["_fb_posts_dedupe_field"] = step.get("dedupe_field")
     return_items = _edge_extra_should_return_items(step, collection)
     comment_defaults: dict[str, Any] = {}
     if strategy in COMMENT_STRATEGIES:
@@ -390,8 +535,15 @@ def request_edge_extra_data(
         "tags": step.get("tags", ""),
         "item_level": int(step.get("item_level") or (1 if strategy in COMMENT_STRATEGIES else 0)),
         "parent_id": parent_id,
+        "parent_id_already_scoped": parent_id_already_scoped,
         "parent_post_id": parent_post_id,
         "post_key": step.get("post_key") or ctx.get("last_post_key"),
+        "_post_id_map": ctx.get("_post_id_map"),
+        "_fb_posts_dedupe_field": ctx.get("_fb_posts_dedupe_field"),
+        "posts_dedupe_field": ctx.get("_fb_posts_dedupe_field")
+        or step.get("posts_dedupe_field"),
+        "posts": ctx.get("posts"),
+        "_active_comment_parent_anchor": ctx.get("_active_comment_parent_anchor"),
         "max_items": int(
             step.get("max_items")
             or comment_defaults.get("max_items")
@@ -476,14 +628,39 @@ def request_edge_extra_data(
     parsed_count = int(ingest.get("parsed_count", 0) or 0)
     inserted_count = int(ingest.get("inserted_count", 0) or 0)
     duplicate_count = int(ingest.get("duplicate_count", 0) or 0)
+    if collection and parsed_count > 0 and (
+        ingest.get("screenshot_b64") or ingest.get("batch_content_hashes")
+    ):
+        _attach_edge_content_screenshots(
+            device=device,
+            ingest=ingest,
+            collection=str(collection),
+            execution_id=scenario.get("_execution_id") or scenario.get("_run_hash_scope"),
+            user_id=(scenario.get("_campaign_vars") or {}).get("__USER_ID__") or scenario.get("user_id"),
+        )
     result["extracted"] = inserted_count if collection else parsed_count
     result["duplicate_count"] = duplicate_count
     edge_extra_summary = ingest
     if not return_items and isinstance(ingest.get("items"), list):
-        edge_extra_summary = {k: v for k, v in ingest.items() if k != "items"}
+        edge_extra_summary = {
+            k: v
+            for k, v in ingest.items()
+            if k not in ("items", "screenshot_b64")
+        }
         edge_extra_summary["items_omitted"] = len(ingest["items"])
+    elif isinstance(edge_extra_summary, dict):
+        edge_extra_summary = {
+            k: v for k, v in edge_extra_summary.items() if k != "screenshot_b64"
+        }
     result["edge_extra_summary"] = edge_extra_summary
     result["reason_code"] = ((ingest.get("diagnostic") or {}) if isinstance(ingest.get("diagnostic"), dict) else {}).get("reason_code", "ok")
+    if strategy == "fb_posts":
+        pid_map = ingest.get("post_id_map") if isinstance(ingest.get("post_id_map"), dict) else None
+        if pid_map:
+            merged = ctx.setdefault("_post_id_map", {})
+            if isinstance(merged, dict):
+                merged.update(pid_map)
+        _remember_active_comment_parent(ctx, ingest)
     items = ingest.get("items") if return_items and isinstance(ingest.get("items"), list) else []
     if items:
         _store_returned_items(ctx, strategy, step, items)
@@ -533,6 +710,9 @@ def request_edge_comment_target(
         "device_serial": serial,
         "hash_scope": scenario.get("_run_hash_scope") or scenario.get("_execution_id"),
         "dedupe_field": step.get("dedupe_field") or "post_key",
+        "posts_dedupe_field": ctx.get("_fb_posts_dedupe_field")
+        or step.get("posts_dedupe_field")
+        or "text",
         "source_index": int(ctx.get("_loop_iter", 0) or 0),
         "switch_to_all_comments": bool(step.get("switch_to_all_comments", True)),
         "post_tap_wait_s": float(step.get("post_tap_wait_s", 0.8) or 0.8),

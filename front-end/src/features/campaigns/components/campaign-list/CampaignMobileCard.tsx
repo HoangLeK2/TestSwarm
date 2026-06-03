@@ -3,6 +3,7 @@
 import { formatDistanceToNow } from 'date-fns';
 import { vi } from 'date-fns/locale';
 import { Badge } from '@/components/ui/badge';
+import { cn } from '@/lib/utils';
 import type { CampaignOut } from '../../types';
 import {
   campaignStatusLabel,
@@ -15,15 +16,25 @@ import { CampaignEngineBadge } from './CampaignEngineBadge';
 
 export function CampaignMobileCard({
   campaign,
-  statusLabel
+  statusLabel,
+  id,
+  className
 }: {
   campaign: CampaignOut;
   statusLabel: Record<string, string>;
+  id?: string;
+  className?: string;
 }) {
   const description = (campaign.description ?? '').trim();
 
   return (
-    <article className='rounded-xl border border-border bg-card p-3 shadow-sm'>
+    <article
+      id={id}
+      className={cn(
+        'rounded-xl border border-border bg-card p-3 shadow-sm',
+        className
+      )}
+    >
       <div className='flex items-start justify-between gap-2'>
         <div className='min-w-0 flex-1'>
           <h3 className='truncate text-sm font-semibold leading-snug'>

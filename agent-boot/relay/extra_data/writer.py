@@ -219,7 +219,10 @@ def build_content_item_row(
     scope = context.get("hash_scope") or context.get("execution_id")
     base_hash = compute_content_hash(data, context.get("dedupe_field"))
     content_hash = scope_content_hash(base_hash, scope)
-    scoped_parent_id = scope_content_hash(parent_id, scope) if parent_id else None
+    if parent_id and context.get("parent_id_already_scoped"):
+        scoped_parent_id = str(parent_id)
+    else:
+        scoped_parent_id = scope_content_hash(parent_id, scope) if parent_id else None
     body = clean_text(
         data.get("content")
         or data.get("body")
@@ -227,6 +230,7 @@ def build_content_item_row(
         or data.get("message")
         or data.get("caption")
         or data.get("description")
+        or data.get("image_desc")
     )
     author = clean_text(
         data.get("author")
@@ -419,6 +423,67 @@ class ContentItemWriter:
     def _is_campaign_fk_violation(exc: Exception) -> bool:
         msg = str(exc).lower()
         return ContentItemWriter._is_content_items_fk_violation(exc) and "campaign_id" in msg
+
+    async def lookup_parent_hash_for_post_pid(
+        self,
+        *,
+        collection: str,
+        execution_id: str | None,
+        parent_post_id: str,
+        items: list[dict[str, Any]],
+    ) -> str | None:
+        """Find parent post content_hash in DB by Facebook post id (_pid / fb_post_id)."""
+        pid = str(parent_post_id or "").strip()
+        if not pid:
+            for item in items:
+                if isinstance(item, dict) and item.get("_type") != "post_stats":
+                    pid = str(item.get("parent_post_id") or "").strip()
+                    if pid:
+                        break
+        if not pid or not collection:
+            return None
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            base_where = """
+                collection = $1
+                  AND item_level <= 1
+                  AND (content_type = 'fb_post' OR content_type IS NULL OR content_type = 'post')
+                  AND (
+                    raw_data->>'_pid' = $2
+                    OR raw_data->>'fb_post_id' = $2
+                    OR raw_data->>'stable_post_id' = $2
+                  )
+            """
+            if execution_id:
+                row = await conn.fetchrow(
+                    f"""
+                    SELECT content_hash
+                    FROM content_items
+                    WHERE {base_where}
+                      AND execution_id = $3
+                    ORDER BY extracted_at DESC NULLS LAST
+                    LIMIT 1
+                    """,
+                    collection,
+                    pid,
+                    str(execution_id),
+                )
+                if row and row.get("content_hash"):
+                    return str(row["content_hash"])
+            row = await conn.fetchrow(
+                f"""
+                SELECT content_hash
+                FROM content_items
+                WHERE {base_where}
+                ORDER BY extracted_at DESC NULLS LAST
+                LIMIT 1
+                """,
+                collection,
+                pid,
+            )
+            if row and row.get("content_hash"):
+                return str(row["content_hash"])
+        return None
 
     async def _insert_rows_once(self, conn, rows: list[dict[str, Any]]) -> dict[str, Any]:
         payload = json.dumps(rows, ensure_ascii=False, default=str)

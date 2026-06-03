@@ -28,6 +28,7 @@ export function CreateCampaignFromScenarioButton({
   className?: string;
 }) {
   const t = useTranslations('orgScenariosFeature.detail');
+  const disabled = !isRunnable;
 
   const trigger = (
     <Button
@@ -35,7 +36,7 @@ export function CreateCampaignFromScenarioButton({
       size={size}
       variant={variant}
       className={className}
-      disabled={!isRunnable}
+      disabled={disabled}
     >
       <Megaphone className='size-4' />
       {t('createCampaign')}
@@ -44,7 +45,7 @@ export function CreateCampaignFromScenarioButton({
 
   return (
     <Can object='campaigns' action='create'>
-      {!isRunnable ? (
+      {disabled ? (
         <TooltipProvider>
           <Tooltip>
             <TooltipTrigger asChild>

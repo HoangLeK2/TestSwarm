@@ -59,8 +59,8 @@ _VOLATILE_ATTRS = re.compile(
     r'\s+(?:index|bounds|focused|selected|drawing-order|rotation)="[^"]*"'
 )
 
-_IW_DEFAULT_TIMEOUT = 10.0
-_IW_DEFAULT_POLL = 0.5
+_IW_DEFAULT_TIMEOUT = 3.0
+_IW_DEFAULT_POLL = 0.25
 _IW_MAX_TIMEOUT = 60.0
 
 
@@ -291,7 +291,7 @@ def _get_implicit_wait_config(
     """
     Resolve implicit_wait timeout and poll interval.
 
-    Priority: step.implicit_wait > scenario.implicit_wait > defaults (10s / 0.5s).
+    Priority: step.implicit_wait > scenario.implicit_wait > defaults (3s / 0.25s).
     Accepts either a number (timeout only) or a dict {timeout, poll}.
     """
     for source in (step, scenario_config):
@@ -482,8 +482,8 @@ def _execute_tap(
     fallback_ry: Optional[float],
     timeout: float = 4.0,
     retries: int = 2,
-    implicit_wait_timeout: float = 10.0,
-    implicit_wait_poll: float = 0.5,
+    implicit_wait_timeout: float = _IW_DEFAULT_TIMEOUT,
+    implicit_wait_poll: float = _IW_DEFAULT_POLL,
     element_image: Optional[bytes] = None,
     image_threshold: float = 0.7,
     screenshot_anchor: Optional[Dict[str, Any]] = None,

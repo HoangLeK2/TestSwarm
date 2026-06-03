@@ -253,6 +253,14 @@ export function ScenarioDetailSheet({
     }
   };
 
+  const handleRecordInControl = () => {
+    if (!scenarioId) return;
+    const returnTo = `${ROUTES.ORG_SCENARIOS.ROOT}?scenario_id=${encodeURIComponent(scenarioId)}`;
+    router.push(
+      ROUTES.DEVICES.CONTROL_RECORD_EDIT_ORG_SCENARIO(scenarioId, { returnTo })
+    );
+  };
+
   const readOnly = isTemplate && !isSuperadmin;
   const displayName = item?.name ?? scenario?.name ?? template?.name ?? t('title');
   const detailLoaded = isTemplate ? Boolean(template) : Boolean(scenario);
@@ -436,6 +444,7 @@ export function ScenarioDetailSheet({
                   }
                   readOnly={readOnly || isTemplate}
                   showOrgActions={!isTemplate}
+                  onRecord={handleRecordInControl}
                   onRunPreview={() => setPreviewOpen(true)}
                   onValidate={handleValidate}
                   onExport={handleExport}
@@ -538,6 +547,7 @@ function ScenarioBodyActions({
   isRunnable,
   readOnly,
   showOrgActions,
+  onRecord,
   onRunPreview,
   onValidate,
   onExport,
@@ -549,6 +559,7 @@ function ScenarioBodyActions({
   isRunnable: boolean;
   readOnly: boolean;
   showOrgActions: boolean;
+  onRecord: () => void;
   onRunPreview: () => void;
   onValidate: () => void;
   onExport: (format: 'yaml' | 'json') => void;
@@ -558,6 +569,13 @@ function ScenarioBodyActions({
 }) {
   return (
     <div className='flex flex-wrap items-center gap-2'>
+      {showOrgActions && !readOnly ? (
+        <Can object='scenarios' action='update'>
+          <Button type='button' size='sm' variant='outline' onClick={onRecord}>
+            {t('recordInControl')}
+          </Button>
+        </Can>
+      ) : null}
       {!readOnly ? (
         <Can object='scenarios' action='update'>
           <Button

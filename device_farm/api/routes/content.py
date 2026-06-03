@@ -25,8 +25,7 @@ from api.schemas.content import (
 )
 from db.crud import content as content_crud
 from services.content_artifacts import (
-    collect_content_artifacts,
-    merge_execution_artifacts,
+    collect_primary_content_artifacts,
     read_artifact_bytes,
 )
 
@@ -554,10 +553,15 @@ def _build_payload(item) -> dict:
     return payload
 
 
+def _is_comment_content_item(item) -> bool:
+    ct = str(item.content_type or "").lower()
+    return int(item.item_level or 0) > 0 or ct.endswith("comment")
+
+
 async def _collect_all_artifacts(db, item, user: CurrentUser) -> list[dict]:
-    artifacts = collect_content_artifacts(item)
-    steps = await _execution_step_artifact_pairs(db, item, user)
-    return merge_execution_artifacts(item, artifacts, steps)
+    """Content detail: only crawl-time screenshot + hierarchy_xml (no execution/parent dupes)."""
+    del db, user  # kept for call-site stability
+    return collect_primary_content_artifacts(item)
 
 
 async def _item_detail_out(db, item, user: CurrentUser) -> dict:

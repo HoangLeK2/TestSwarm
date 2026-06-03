@@ -27,11 +27,14 @@ def loaded_org_scenario_refs(campaign: Campaign) -> list[CampaignOrgScenarioRef]
 
 async def lookup_campaign_org_id(db: AsyncSession, campaign_id: str) -> str | None:
     """Resolve campaign org without tenant context (Temporal/background paths)."""
-    table = Campaign.__table__
+    from sqlalchemy import text
+
     result = await db.execute(
-        select(table.c.org_id).where(table.c.id == campaign_id).limit(1)
+        text("SELECT org_id FROM campaigns WHERE id = :campaign_id LIMIT 1"),
+        {"campaign_id": campaign_id},
     )
-    return result.scalar_one_or_none()
+    row = result.first()
+    return str(row[0]) if row and row[0] else None
 
 
 async def get_campaign_entity(

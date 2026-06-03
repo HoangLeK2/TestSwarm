@@ -21,11 +21,12 @@ export default function CampaignsPage() {
           <p className='text-sm text-muted-foreground'>{t('subtitle')}</p>
         </div>
       </div>
-      <CampaignDeepLink />
-      <CampaignList
-        attachScenarioId={attachScenarioId}
-        openCreateCampaign={openCreateCampaign}
-      />
+      <CampaignDeepLink>
+        <CampaignList
+          attachScenarioId={attachScenarioId}
+          openCreateCampaign={openCreateCampaign}
+        />
+      </CampaignDeepLink>
     </div>
   );
 }

@@ -30,6 +30,10 @@ function parseTemplateTags(tags: string | undefined): string[] {
 }
 
 function templateKind(template: ScenarioTemplateOut): string {
+  const steps = template.steps ?? [];
+  if (Array.isArray(steps) && steps.length > 0) {
+    return 'sequence';
+  }
   const nodes = template.nodes ?? [];
   const edges = template.edges ?? [];
   if (

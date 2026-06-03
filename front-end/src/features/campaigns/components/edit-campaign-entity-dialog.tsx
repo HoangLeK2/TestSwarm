@@ -70,7 +70,7 @@ export function EditCampaignEntityDialog({
     setName(entity.name);
     setDescription(entity.description ?? '');
     setTags((entity.tags ?? []).join(', '));
-    setVariables(entity.vars ?? {});
+    setVariables(entity.vars ?? entity.variables ?? {});
     setSelectedIds((entity.scenario_refs ?? []).map((ref) => ref.scenario_id));
     setAccountBinding(campaignBindingFromEntity(entity));
   }, [entity]);

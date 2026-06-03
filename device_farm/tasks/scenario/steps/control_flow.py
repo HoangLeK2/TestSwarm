@@ -421,6 +421,7 @@ def handle_tap_fb_comment_button(
                     if target.get("pid"):
                         sc.ctx["_fb_comment_parent_pid"] = target.get("pid")
                     sc.ctx["_active_comment_parent_anchor"] = {
+                        "pid": target.get("pid"),
                         "post_key": target.get("post_key"),
                         "stable_post_id": target.get("stable_post_id"),
                         "fb_post_id": target.get("fb_post_id"),

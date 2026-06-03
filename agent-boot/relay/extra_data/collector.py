@@ -15,6 +15,13 @@ logger = logging.getLogger("relay.extra_data.collector")
 _collect_locks: dict[str, asyncio.Lock] = {}
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _collect_lock(serial: str) -> asyncio.Lock:
     lock = _collect_locks.get(serial)
     if lock is None:
@@ -101,6 +108,14 @@ def _bool_context(context: dict[str, Any], key: str, default: bool = False) -> b
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def should_capture_screenshot(context: dict[str, Any]) -> bool:
+    return _bool_context(
+        context,
+        "capture_screenshot",
+        _env_bool("AGENT_BOOT_CAPTURE_SCREENSHOT", False),
+    )
 
 
 def _open_post_debug_dump_enabled(context: dict[str, Any]) -> bool:
@@ -199,7 +214,7 @@ async def _u2_click_comment_target(
     from relay.extra_data.parsers.facebook.comment_pipeline import comment_tap_point
 
     use_u2 = _bool_context(context, "comment_target_u2_click", True)
-    timeout = _float_context(context, "comment_target_click_timeout_s", 1.2, 0.4, 4.0)
+    timeout = _float_context(context, "comment_target_click_timeout_s", 0.35, 0.1, 4.0)
     u2_click = cand.get("u2_click") if isinstance(cand.get("u2_click"), dict) else {}
 
     if use_u2:
@@ -234,7 +249,7 @@ async def _u2_click_post_open_target(
     from relay.extra_data.parsers.facebook.post_open_pipeline import post_header_tap_point
 
     use_u2 = _bool_context(context, "post_open_u2_click", True)
-    timeout = _float_context(context, "post_open_click_timeout_s", 1.2, 0.4, 4.0)
+    timeout = _float_context(context, "post_open_click_timeout_s", 0.35, 0.1, 4.0)
     u2_click = target.get("u2_click") if isinstance(target.get("u2_click"), dict) else {}
 
     if use_u2 and u2_click:
@@ -372,8 +387,10 @@ async def _maybe_open_fb_post_detail(
             should_press_back_after_failed_tap,
         )
 
-        if detail_xml and should_press_back_after_failed_tap(detail_xml):
-            backed = await _press_back(executor, serial)
+        if detail_xml and should_press_back_after_failed_tap(detail_xml, context):
+            backed = await _press_back_unless_group_locked(
+                executor, serial, context, xml=detail_xml, reason="post_open_verify_overlay"
+            )
             attempts[-1]["back_pressed"] = backed
             if back_settle_s > 0:
                 await asyncio.sleep(back_settle_s)
@@ -753,6 +770,28 @@ async def expand_see_more_via_u2(
     return total_taps, cached
 
 
+async def _capture_screenshot_b64(
+    executor: Any,
+    serial: str,
+) -> str | None:
+    """Capture device framebuffer as base64 PNG/JPEG via u2 (for ingest evidence)."""
+    if not hasattr(executor, "run_batch"):
+        return None
+    try:
+        batch = await executor.run_batch(serial, [{"op": "screenshot"}], early_exit=True)
+    except Exception:
+        return None
+    if not batch.get("ok"):
+        return None
+    results = batch.get("results") or []
+    if not results or not results[0].get("ok"):
+        return None
+    value = results[0].get("value")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
 async def _dump_hierarchy(
     executor: Any,
     serial: str,
@@ -809,14 +848,14 @@ async def _collect_comment_snapshots(
     initial_xml: str,
 ) -> list[str]:
     """Swipe through the comment list, dumping hierarchy every N swipes (not every swipe)."""
-    swipe_budget = _int_context(context, "comment_scroll_passes", 36, 0, 80)
+    swipe_budget = _int_context(context, "comment_scroll_passes", 6, 0, 80)
     if swipe_budget <= 0:
         return [initial_xml]
 
     swipes_per_dump = _int_context(context, "comment_swipes_per_dump", 3, 1, 6)
     dump_cycles = max(1, (swipe_budget + swipes_per_dump - 1) // swipes_per_dump)
-    min_dumps = _int_context(context, "min_comment_scan_passes", 2, 0, dump_cycles)
-    no_growth_break = _int_context(context, "comment_no_growth_break", 8, 0, 24)
+    min_dumps = _int_context(context, "min_comment_scan_passes", 1, 0, dump_cycles)
+    no_growth_break = _int_context(context, "comment_no_growth_break", 1, 0, 24)
     max_snapshots = _int_context(
         context, "comment_max_snapshots", max(20, dump_cycles + 1), 1, 50
     )
@@ -830,8 +869,11 @@ async def _collect_comment_snapshots(
     from relay.extra_data.parsers.facebook.comment_pipeline import (
         detect_comment_sheet_interrupt_from_xml,
         interrupt_reason_allows_back,
+        note_fb_group_navigation,
         resolve_comment_scroll_swipe_from_xml,
     )
+
+    note_fb_group_navigation(context, initial_xml)
     from relay.extra_data.parsers.facebook.comment_filter import _is_sort_bottom_sheet_open
     from relay.extra_data.parsers.facebook.parser import _parse_xml
 
@@ -859,15 +901,17 @@ async def _collect_comment_snapshots(
         reason = detect_comment_sheet_interrupt_from_xml(xml)
         if not reason:
             return xml, False
-        if not interrupt_reason_allows_back(reason):
+        if not interrupt_reason_allows_back(reason, context):
             logger.info(
-                "[%s] extra_data comment recovery: %s — skip BACK (stay in group)",
+                "[%s] extra_data comment recovery: %s — skip BACK (group/sheet safe)",
                 serial,
                 reason,
             )
             return xml, reason == "left_comment_sheet"
         logger.info("[%s] extra_data comment recovery: %s — press BACK", serial, reason)
-        await _press_back(executor, serial)
+        await _press_back_unless_group_locked(
+            executor, serial, context, xml=xml, reason=f"comment_recovery:{reason}"
+        )
         await asyncio.sleep(0.22)
         fresh = await _dump_hierarchy(executor, serial, context)
         return (fresh if fresh else xml), False
@@ -1029,6 +1073,31 @@ async def _press_back(executor: Any, serial: str) -> bool:
     return bool(results and results[0].get("ok"))
 
 
+async def _press_back_unless_group_locked(
+    executor: Any,
+    serial: str,
+    context: dict[str, Any],
+    *,
+    xml: str | None = None,
+    reason: str = "",
+) -> bool:
+    """Press BACK only when caller already decided it is safe (overlay / IME)."""
+    from relay.extra_data.parsers.facebook.comment_pipeline import (
+        fb_group_navigation_locked,
+        note_fb_group_navigation,
+    )
+
+    note_fb_group_navigation(context, xml)
+    if fb_group_navigation_locked(context):
+        logger.info(
+            "[%s] suppress system BACK (%s) fb_group_navigation=1",
+            serial,
+            reason or "unspecified",
+        )
+        return False
+    return await _press_back(executor, serial)
+
+
 def _diag_sheet_opened(xml: str | None) -> bool:
     """Return True iff the post-tap hierarchy looks like an FB comment sheet."""
     if not xml:
@@ -1065,6 +1134,7 @@ async def collect_fb_comment_target_with_tap(
     """
     from relay.extra_data.ingest import _parse_items
     from relay.extra_data.parsers.facebook.comment_pipeline import (
+        note_fb_group_navigation,
         should_press_back_after_failed_tap,
     )
 
@@ -1077,6 +1147,7 @@ async def collect_fb_comment_target_with_tap(
                 serial,
             )
             xml = await _dump_hierarchy(executor, serial, context)
+            note_fb_group_navigation(context, xml)
             if not xml:
                 return [], "u2_hierarchy_unavailable", False, {"reason_code": "u2_hierarchy_unavailable"}
 
@@ -1185,8 +1256,16 @@ async def collect_fb_comment_target_with_tap(
                 if not is_last:
                     if post_tap_xml is None:
                         post_tap_xml = await _dump_hierarchy(executor, serial, context)
-                    if post_tap_xml and should_press_back_after_failed_tap(post_tap_xml):
-                        backed = await _press_back(executor, serial)
+                    if post_tap_xml and should_press_back_after_failed_tap(
+                        post_tap_xml, context
+                    ):
+                        backed = await _press_back_unless_group_locked(
+                            executor,
+                            serial,
+                            context,
+                            xml=post_tap_xml,
+                            reason="comment_target_verify_overlay",
+                        )
                         if verify_back_settle_s > 0:
                             await asyncio.sleep(verify_back_settle_s)
                         attempts[-1]["back_pressed"] = backed
@@ -1430,6 +1509,12 @@ async def collect_xml_snapshots(
             if not xml:
                 return [], "u2_hierarchy_unavailable"
 
+            from relay.extra_data.parsers.facebook.comment_pipeline import (
+                note_fb_group_navigation,
+            )
+
+            note_fb_group_navigation(context, feed_xml or xml)
+
             if strategy in _COMMENT_STRATEGIES:
                 snapshots = await _collect_comment_snapshots(executor, serial, context, xml)
             else:
@@ -1442,8 +1527,25 @@ async def collect_xml_snapshots(
                 context.get("open_post_detail")
                 and _bool_context(context, "open_post_press_back_after_extract", False)
             ):
-                await _press_back(executor, serial)
+                await _press_back_unless_group_locked(
+                    executor,
+                    serial,
+                    context,
+                    xml=snapshots[-1] if snapshots else xml,
+                    reason="open_post_after_extract",
+                )
                 context["open_post_detail_closed"] = True
+
+            # Fresh framebuffer right after the last hierarchy dump (same UI state as parsed XML).
+            if should_capture_screenshot(context):
+                screenshot_b64 = await _capture_screenshot_b64(executor, serial)
+                if screenshot_b64:
+                    context["_ingest_screenshot_b64"] = screenshot_b64
+                    logger.info(
+                        "[%s] extra_data screenshot captured bytes~%d",
+                        serial,
+                        int(len(screenshot_b64) * 3 / 4),
+                    )
 
             logger.info(
                 "[%s] extra_data collect done snapshots=%d total=%.2fs",

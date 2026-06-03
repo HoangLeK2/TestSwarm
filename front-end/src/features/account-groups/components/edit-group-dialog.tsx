@@ -79,13 +79,14 @@ export function EditGroupDialog({
   }, [open, group, reset]);
 
   const onSubmit = (data: FormData) => {
+    const description = data.description?.trim() || undefined;
     mutate(
       {
         groupId: group.id,
         data: {
           name: data.name,
           rotation_strategy: data.rotation_strategy,
-          description: data.description ? data.description : null
+          description
         }
       },
       {

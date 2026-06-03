@@ -32,13 +32,11 @@ type CreateOrgScenarioDialogProps = {
   onCreated?: (scenario: OrgScenarioSummaryOut) => void;
   /** Custom trigger; defaults to primary “New scenario” button. */
   trigger?: ReactNode;
-  kind?: 'sequence' | 'graph';
 };
 
 export function CreateOrgScenarioDialog({
   onCreated,
-  trigger,
-  kind = 'sequence'
+  trigger
 }: CreateOrgScenarioDialogProps = {}) {
   const t = useTranslations('orgScenariosFeature.createDialog');
   const [open, setOpen] = useState(false);
@@ -67,7 +65,7 @@ export function CreateOrgScenarioDialog({
       {
         name: data.name.trim(),
         description: data.description?.trim() ?? '',
-        kind,
+        kind: 'sequence',
         tags
       },
       {

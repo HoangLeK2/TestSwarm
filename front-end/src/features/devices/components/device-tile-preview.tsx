@@ -447,7 +447,11 @@ function DeviceTilePreviewInner({
               />
             ) : null}
             {isActive ? (
-              <Button asChild size='sm' className='shrink-0'>
+              <Button
+                asChild
+                size='sm'
+                className='h-7 shrink-0 px-2.5 text-[11px]'
+              >
                 <Link
                   href={ROUTES.DEVICES.CONTROL_RECORD_WITH_SERIAL(
                     device.serial
@@ -457,7 +461,11 @@ function DeviceTilePreviewInner({
                 </Link>
               </Button>
             ) : (
-              <Button size='sm' className='shrink-0' disabled>
+              <Button
+                size='sm'
+                className='h-7 shrink-0 px-2.5 text-[11px]'
+                disabled
+              >
                 {t('controlDevice')}
               </Button>
             )}
@@ -466,7 +474,7 @@ function DeviceTilePreviewInner({
       </CardHeader>
       <CardContent className='flex flex-1 flex-col gap-2 px-3 pb-3 pt-3'>
         <div className='flex flex-col items-center gap-2'>
-          <div className='mx-auto'>
+          <div className='flex w-full justify-center'>
             <DeviceAndroidFrame
               screenWidth={previewMockupScreenWidth}
               deviceWidth={device.screen_width}
@@ -489,7 +497,7 @@ function DeviceTilePreviewInner({
                     alt=''
                     role='presentation'
                     decoding='async'
-                    className={`pointer-events-none absolute inset-0 h-full w-full object-cover object-bottom transition-opacity duration-300 ${h264Active ? 'opacity-0' : 'opacity-100'}`}
+                    className={`pointer-events-none absolute inset-0 h-full w-full object-contain object-center transition-opacity duration-300 ${h264Active ? 'opacity-0' : 'opacity-100'}`}
                     onLoad={() => setHasFrame(true)}
                     onError={() => setMjpegFailed(true)}
                     draggable={false}
@@ -498,7 +506,7 @@ function DeviceTilePreviewInner({
                 {allowH264 && (
                   <canvas
                     ref={canvasRef}
-                    className={`pointer-events-none absolute inset-0 h-full w-full object-cover object-bottom transition-opacity duration-300 ${h264Active ? 'opacity-100' : 'opacity-0'}`}
+                    className={`pointer-events-none absolute inset-0 h-full w-full object-contain object-center transition-opacity duration-300 ${h264Active ? 'opacity-100' : 'opacity-0'}`}
                   />
                 )}
                 {!isActive ? (

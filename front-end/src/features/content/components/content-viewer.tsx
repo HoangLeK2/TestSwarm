@@ -48,6 +48,7 @@ import {
   type ContentItem,
   type ExportFormat
 } from '../services/api';
+import { commentParentSummary } from '../lib/comment-parent';
 import {
   Select,
   SelectContent,
@@ -426,6 +427,26 @@ function Filters({
 
 // ── Table (Tất cả / Post) ─────────────────────────────────────────────────────
 
+function CommentParentLine({ item }: { item: ContentItem }) {
+  if (item.content_type !== 'fb_comment' && item.item_level <= 0) return null;
+  const summary = commentParentSummary(item);
+  if (!summary) return null;
+  return (
+    <div className='mt-1.5 flex max-w-full items-start gap-1.5 text-[11px] leading-snug text-muted-foreground'>
+      <CornerDownRight size={12} className='mt-0.5 shrink-0 text-blue-500' />
+      <div className='min-w-0'>
+        <span className='font-medium text-foreground/75'>Bài gốc: </span>
+        <span>{summary.primary}</span>
+        {summary.secondary ? (
+          <span className='block max-w-full truncate text-foreground/70'>
+            {summary.secondary}
+          </span>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 const PLATFORM_STYLES: Record<string, string> = {
   facebook: 'bg-blue-500/10 text-blue-700 ring-blue-500/20 dark:text-blue-300',
   instagram: 'bg-pink-500/10 text-pink-700 ring-pink-500/20 dark:text-pink-300',
@@ -462,6 +483,7 @@ function EmptyState({
   executionId?: string;
 }) {
   const t = useTranslations('coreEmptyState');
+  const { canCreate: canCreateCampaigns } = useResourcePermissions('campaigns');
 
   return (
     <CoreEmptyState
@@ -473,8 +495,16 @@ function EmptyState({
           ? t('content.descriptionFiltered')
           : t('content.descriptionNoData')
       }
-      readOnlyHint={t('readOnlyHint')}
-      trackingKey={hasFilters ? 'content-empty-filtered' : 'content-empty'}
+      readOnlyHint={
+        canCreateCampaigns ? undefined : t('readOnlyHint')
+      }
+      trackingKey={
+        hasFilters
+          ? 'content-empty-filtered'
+          : canCreateCampaigns
+            ? 'content-empty'
+            : 'content-empty-readonly'
+      }
       cta={
         hasFilters
           ? { label: t('content.ctaClearFilters'), onClick: onClear }
@@ -580,7 +610,7 @@ function ContentTable({
                     <span className='text-[11px] font-medium text-muted-foreground'>
                       {item.content_type}
                     </span>
-                    {item.parent_id && (
+                    {item.parent_id ? (
                       <button
                         type='button'
                         onClick={(e) => {
@@ -591,7 +621,7 @@ function ContentTable({
                       >
                         <FileText size={10} /> Bài gốc
                       </button>
-                    )}
+                    ) : null}
                   </div>
                 </td>
                 <td className='max-w-[380px] px-4 py-3.5 align-top'>
@@ -614,6 +644,7 @@ function ContentTable({
                       <span className='max-w-[260px] truncate'>{item.url}</span>
                     </a>
                   )}
+                  <CommentParentLine item={item} />
                 </td>
                 <td className='px-4 py-3.5 align-top text-foreground/90'>
                   {item.author || (
@@ -866,6 +897,8 @@ function ContentCard({
             )}
           </div>
         )}
+
+        <CommentParentLine item={item} />
 
         {item.url && (
           <a

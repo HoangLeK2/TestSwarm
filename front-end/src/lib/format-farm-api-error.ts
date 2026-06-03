@@ -35,6 +35,9 @@ export function formatFarmApiError(err: unknown, fallback: string): string {
       const msg = (d as { message?: string }).message;
       return msg?.trim() || 'Chiến dịch phải gắn ít nhất một kịch bản từ thư viện.';
     }
+    if (code === 'SCENARIO_NAME_DUPLICATE') {
+      return 'Tên kịch bản đã tồn tại trong thư viện — hãy chọn tên khác.';
+    }
     if (code === 'NO_ORGANIZATION') {
       return 'Tài khoản chưa thuộc tổ chức — không thể tạo chiến dịch theo thư viện kịch bản.';
     }
@@ -70,6 +73,16 @@ export function formatFarmApiError(err: unknown, fallback: string): string {
     if (code === 'SERVICE_DEGRADED') {
       return 'Hệ thống đang ở chế độ giới hạn. Vui lòng thử lại sau.';
     }
+    const issues = (d as { errors?: Array<{ message?: string }> }).errors;
+    if (Array.isArray(issues) && issues.length > 0) {
+      const joined = issues
+        .map((issue) => issue.message?.trim())
+        .filter(Boolean)
+        .join(' · ');
+      if (joined) return joined;
+    }
+    const message = (d as { message?: string }).message;
+    if (typeof message === 'string' && message.trim()) return message.trim();
     try {
       return JSON.stringify(d);
     } catch {

@@ -300,6 +300,43 @@ async def test_ac5_suspended_account_partial_fail(session_factory):
 
 
 @pytest.mark.asyncio
+async def test_fb_extract_without_bind_dispatches(session_factory):
+    """Read-only FB extract/crawl must not require campaign account binding."""
+    await _seed_orgs(session_factory)
+    d1 = await _online_device(session_factory, serial="EXT-D1")
+    steps = [
+        _sequence_step("x1", "extract", strategy="fb_posts"),
+        _sequence_step("x2", "tap_fb_comment_button"),
+    ]
+    assert not scenario_requires_account(steps)
+
+    app = _build_app(session_factory)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        scenario_id = await _create_org_scenario(
+            client,
+            name="FbExtractOnly",
+            steps=steps,
+        )
+        campaign_id = (
+            await client.post(
+                "/api/campaigns",
+                json={
+                    "name": "FbExtractCampaign",
+                    "scenario_refs": [{"scenario_id": scenario_id}],
+                },
+            )
+        ).json()["id"]
+        resp = await client.post(
+            f"/api/campaigns/{campaign_id}/dispatch",
+            json={"target": {"device_ids": [d1]}},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["executions"][0]["account_id"] is None
+
+
+@pytest.mark.asyncio
 async def test_ac6_ocr_scenario_no_bind_ok(session_factory):
     await _seed_orgs(session_factory)
     d1 = await _online_device(session_factory, serial="OCR-D1")

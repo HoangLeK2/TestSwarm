@@ -2,14 +2,13 @@
 from __future__ import annotations
 
 from fastapi import HTTPException, status
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import ColumnElement
 
 from api.auth.rbac import is_superadmin
 from db import crud as repo
 from db.models.activity import ActivityLog
-from db.models.device import Device
 from db.models.user import User
 
 
@@ -112,8 +111,18 @@ async def activity_log_scope(
     member_rows = await repo.list_organization_members(db, org_id)
     member_ids = [member.user_id for member, _ in member_rows]
 
+    # Raw SQL: ``user.org_id`` may come from ``default_org_id`` while ``current_org_id``
+    # is unset (e.g. partial failure in ``CurrentUser`` deps). ORM ``select(Device)``
+    # would trip TENANCY_STRICT_MODE in that case.
     serial_rows = await db.execute(
-        select(Device.serial).where(Device.org_id == org_id, Device.serial.is_not(None))
+        text(
+            """
+            SELECT serial
+            FROM devices
+            WHERE org_id = :org_id AND serial IS NOT NULL
+            """
+        ),
+        {"org_id": org_id},
     )
     serials = [row[0] for row in serial_rows.all() if row[0]]
 

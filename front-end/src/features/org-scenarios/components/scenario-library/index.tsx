@@ -1,9 +1,10 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { FileCode, Search } from 'lucide-react';
 import { toast } from 'sonner';
+import { useSearchParams } from 'next/navigation';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -33,12 +34,14 @@ import { ImportOrgScenarioDialog } from '../import-scenario-dialog';
 import { ScenarioDetailSheet } from '../scenario-detail-sheet';
 import { getOrgScenarioColumns } from './columns';
 import { CampaignHintBanner } from './campaign-hint-banner';
+import { isOrgScenarioVisibleInLibrary } from '../../lib/campaign-scenario-eligibility';
 
 type LibraryTab = 'org' | 'system';
 
 export function ScenarioLibrary() {
   const t = useTranslations('orgScenariosFeature.list');
   const tCommon = useTranslations('common');
+  const searchParams = useSearchParams();
   const { user } = useUser();
   const isSuperadmin = isSuperadminRole(user?.role);
   const confirm = useConfirm();
@@ -62,7 +65,9 @@ export function ScenarioLibrary() {
   const error = activeTab === 'org' ? orgError : templatesError;
 
   const counts = useMemo(() => {
-    const orgItems = (orgScenarios ?? []).map(orgScenarioToLibraryItem);
+    const orgItems = (orgScenarios ?? [])
+      .filter((s) => isOrgScenarioVisibleInLibrary(s))
+      .map(orgScenarioToLibraryItem);
     const visibleOrg = orgItems.filter((s) => s.status !== 'archived').length;
     const hiddenOrg = orgItems.filter((s) => s.status === 'archived').length;
     const system = (templates ?? []).length;
@@ -73,7 +78,9 @@ export function ScenarioLibrary() {
     let items: ScenarioLibraryItem[] =
       activeTab === 'system'
         ? (templates ?? []).map(templateToLibraryItem)
-        : (orgScenarios ?? []).map(orgScenarioToLibraryItem);
+        : (orgScenarios ?? [])
+            .filter((s) => isOrgScenarioVisibleInLibrary(s))
+            .map(orgScenarioToLibraryItem);
 
     if (activeTab === 'org' && !showHidden) {
       items = items.filter((item) => item.status !== 'archived');
@@ -88,6 +95,25 @@ export function ScenarioLibrary() {
         (item.tags ?? []).some((tag: string) => tag.toLowerCase().includes(q))
     );
   }, [orgScenarios, templates, search, activeTab, showHidden]);
+
+  // Deep-link: when returning from control-record page, reopen the scenario sheet.
+  // URL: /dashboard/org-scenarios?scenario_id=...
+  const deepLinkScenarioId = (searchParams.get('scenario_id') ?? '').trim();
+  useEffect(() => {
+    if (!deepLinkScenarioId) return;
+    if (detailOpen) return;
+    const candidates =
+      activeTab === 'system'
+        ? (templates ?? []).map(templateToLibraryItem)
+        : (orgScenarios ?? [])
+            .filter((s) => isOrgScenarioVisibleInLibrary(s))
+            .map(orgScenarioToLibraryItem);
+    const found = candidates.find((s) => s.id === deepLinkScenarioId);
+    if (found) {
+      setSelected(found);
+      setDetailOpen(true);
+    }
+  }, [deepLinkScenarioId, detailOpen, activeTab, orgScenarios, templates]);
 
   const openScenario = (scenario: ScenarioLibraryItem) => {
     setSelected(scenario);

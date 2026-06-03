@@ -82,6 +82,7 @@ def _extract_posts_from_recycler(root, source_index: int) -> Optional[List[Dict[
     from .parser import (
         _collect_text_nodes,
         _hierarchy_is_fb_comment_sheet,
+        _parse_bounds,
         _pick_feed_container,
         _recycler_item_top_y_sort_key,
     )
@@ -131,6 +132,14 @@ def _extract_posts_from_recycler(root, source_index: int) -> Optional[List[Dict[
             feed_item_index=feed_item_index,
         )
         if post:
+            card_bounds = _parse_bounds(candidate)
+            if card_bounds:
+                post["card_bounds"] = [
+                    int(card_bounds[0]),
+                    int(card_bounds[1]),
+                    int(card_bounds[2]),
+                    int(card_bounds[3]),
+                ]
             _merge_action_bar_stats(post, candidate)
             _maybe_fix_merged_feed_caption(post)
             _refresh_post_derived_hashes(post)

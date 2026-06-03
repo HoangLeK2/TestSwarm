@@ -172,3 +172,43 @@ async def test_apply_relay_offline_marks_reconnecting(
     svc = DeviceStateService()
     async with tenancy_session_factory() as db:
         assert await svc.get_state(db, dev.id) == DeviceFsmState.RECONNECTING
+
+
+@pytest.mark.asyncio
+async def test_apply_relay_online_heals_usb_reconnecting(
+    tenancy_session_factory, relay_bridge_seed
+):
+    """USB serials (relay serial == hardware_serial) must heal RECONNECTING on heartbeat."""
+    async with tenancy_session_factory() as db:
+        with tenant_context(ORG_ID):
+            dev = await create_device(
+                db,
+                serial="10AE7S00HD002JK",
+                user_id=USER_ID,
+                org_id=ORG_ID,
+            )
+            dev.adb_serial = "10AE7S00HD002JK"
+            await db.commit()
+
+    async with tenancy_session_factory() as db:
+        with tenant_context(ORG_ID):
+            await apply_relay_online("10AE7S00HD002JK", db=db)
+            await apply_relay_offline("10AE7S00HD002JK", db=db)
+            await db.commit()
+
+    svc = DeviceStateService()
+    async with tenancy_session_factory() as db:
+        assert await svc.get_state(db, dev.id) == DeviceFsmState.RECONNECTING
+
+    async with tenancy_session_factory() as db:
+        with tenant_context(ORG_ID):
+            ok = await apply_relay_online(
+                "10AE7S00HD002JK",
+                hardware_serial="10AE7S00HD002JK",
+                db=db,
+            )
+            await db.commit()
+    assert ok is True
+
+    async with tenancy_session_factory() as db:
+        assert await svc.get_state(db, dev.id) == DeviceFsmState.ONLINE

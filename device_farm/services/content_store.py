@@ -14,6 +14,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 log = logging.getLogger(__name__)
 
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _content_images_enabled() -> bool:
+    return _env_bool("DEVICE_FARM_CONTENT_IMAGES_ENABLED", False)
+
+
 try:
     import ftfy as _ftfy  # type: ignore
 except Exception:
@@ -462,6 +474,9 @@ async def _resolve_content_screenshot_path(
     content_hash: str,
 ) -> str | None:
     """Resolve screenshot_path for content_items (URL only — binary lives in object storage)."""
+    if not _content_images_enabled():
+        return None
+
     if screenshot_bytes:
         path = _save_screenshot(screenshot_bytes, content_hash)
         return path or None
@@ -493,6 +508,78 @@ async def _resolve_content_screenshot_path(
     return None
 
 
+def crop_jpeg_screenshot(jpeg: bytes, bounds: list[int] | tuple[int, ...]) -> bytes | None:
+    """Crop a full-screen JPEG to a post card region (feed evidence per item)."""
+    if len(bounds) != 4:
+        return None
+    try:
+        import io
+
+        from PIL import Image
+    except Exception:
+        return None
+    try:
+        x1, y1, x2, y2 = (int(bounds[0]), int(bounds[1]), int(bounds[2]), int(bounds[3]))
+        if x2 <= x1 or y2 <= y1:
+            return None
+        img = Image.open(io.BytesIO(jpeg))
+        pad = 6
+        crop = img.crop(
+            (
+                max(0, x1 - pad),
+                max(0, y1 - pad),
+                min(img.width, x2 + pad),
+                min(img.height, y2 + pad),
+            )
+        )
+        buf = io.BytesIO()
+        crop.convert("RGB").save(buf, format="JPEG", quality=88, optimize=True)
+        return buf.getvalue()
+    except Exception as exc:
+        log.debug("crop_jpeg_screenshot failed: %s", exc)
+        return None
+
+
+async def attach_screenshot_to_content_hashes(
+    *,
+    content_hashes: list[str],
+    collection: str,
+    screenshot_bytes: bytes,
+    execution_id: str | None = None,
+    user_id: str | None = None,
+    only_if_missing: bool = False,
+    per_hash_bytes: dict[str, bytes] | None = None,
+) -> int:
+    """Upload screenshot(s) and set screenshot_path on matching content rows."""
+    from db.crud.content import update_content_screenshot_path
+    from db.database import activity_session
+
+    if not _content_images_enabled() or not content_hashes:
+        return 0
+    updated = 0
+    async with activity_session() as db:
+        for content_hash in content_hashes:
+            payload = (per_hash_bytes or {}).get(str(content_hash)) or screenshot_bytes
+            if not payload:
+                continue
+            path = _save_screenshot(payload, str(content_hash))
+            if not path:
+                continue
+            if await update_content_screenshot_path(
+                db,
+                content_hash=str(content_hash),
+                collection=collection,
+                screenshot_path=path,
+                execution_id=execution_id,
+                user_id=user_id,
+                only_if_missing=only_if_missing,
+            ):
+                updated += 1
+        if updated:
+            await db.commit()
+    return updated
+
+
 def _save_screenshot(data: bytes, content_hash: str) -> str:
     """
     Save screenshot bytes. Returns URL/path string stored in DB.
@@ -500,6 +587,9 @@ def _save_screenshot(data: bytes, content_hash: str) -> str:
     Tries MinIO first; falls back to local filesystem.
     Skips blank/black frames (quality gate in object storage / minio_store).
     """
+    if not _content_images_enabled():
+        return ""
+
     from services import minio_store
 
     if not minio_store.is_quality_ok(data):

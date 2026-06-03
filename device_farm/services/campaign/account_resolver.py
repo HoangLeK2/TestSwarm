@@ -22,6 +22,17 @@ _ACCOUNT_VAR_KEYS = frozenset(
     {"__ACCOUNT_ID__", "__ACCOUNT_USERNAME__", "__ACCOUNT_DISPLAY_NAME__", "__ACCOUNT_PLATFORM__"}
 )
 
+# Social steps that mutate state or need credentials (FR-04-20). Read-only crawl/UI
+# (extract, tap_fb_comment_button, generic tap/wait) is intentionally excluded.
+_ACCOUNT_BINDING_TYPE_HINTS = (
+    "login",
+    ".auth",
+    ".create",
+    ".follow",
+    ".send",
+    ".share",
+)
+
 
 class AccountBindingError(Exception):
     def __init__(self, message: str, *, code: str, details: dict | None = None) -> None:
@@ -57,6 +68,14 @@ def campaign_has_account_binding(campaign: Campaign) -> bool:
     return bool(per_device)
 
 
+def _social_write_requires_account_binding(step_type: str) -> bool:
+    """True when step type implies login or a mutating social action."""
+    t = (step_type or "").lower()
+    if not t:
+        return False
+    return any(hint in t for hint in _ACCOUNT_BINDING_TYPE_HINTS)
+
+
 def _step_requires_account(step: dict) -> bool:
     stype = str(step.get("type") or "")
     if not stype:
@@ -68,26 +87,31 @@ def _step_requires_account(step: dict) -> bool:
         schema = reg.schema or {}
         if schema.get("requires_account"):
             return True
-    stype_lower = stype.lower()
-    if "login" in stype_lower:
+    if _social_write_requires_account_binding(stype):
         return True
     return _step_references_account_vars(step)
 
 
 def scenario_requires_account(steps: list[dict]) -> bool:
+    """Whether campaign must bind account_group / scenario_account before dispatch.
+
+    Aligns with preview account guard: login, explicit __ACCOUNT_* refs, and
+    mutating social steps — not read-only Facebook crawl/UI.
+    """
     if not steps:
         return False
     idx = OrgStepIndex.build(steps)
-    if idx.has_social:
-        return True
     return any(_step_requires_account(step) for step, _, _ in idx.entries)
 
 
 def _step_references_account_vars(step: dict) -> bool:
     config = step.get("config")
-    if not isinstance(config, dict):
-        return False
-    blob = str(config)
+    if isinstance(config, dict):
+        blob = str(config)
+    else:
+        skip = frozenset({"steps", "then", "else", "branches"})
+        flat = {k: v for k, v in step.items() if k not in skip}
+        blob = str(flat)
     return any(key in blob for key in _ACCOUNT_VAR_KEYS)
 
 

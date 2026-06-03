@@ -19,7 +19,20 @@ class _FakeIngest:
 
 
 class _FakeExecutor:
+    def __init__(self) -> None:
+        self.ops: list[str] = []
+
     async def run_batch(self, serial: str, actions: list[dict], early_exit: bool = True) -> dict:
+        self.ops.extend(str(action.get("op")) for action in actions)
+        if actions and actions[0].get("op") == "screenshot":
+            return {
+                "ok": True,
+                "results": [{
+                    "op": "screenshot",
+                    "ok": True,
+                    "value": "shot-b64",
+                }],
+            }
         return {
             "ok": True,
             "results": [{
@@ -68,6 +81,9 @@ async def test_handle_extra_data_success() -> None:
     assert msg["route"] == "relay_u2"
     assert msg["ingest"]["parsed_count"] == 2
     assert len(agent._extra_ingest.payloads) == 1
+    assert "screenshot" not in agent._u2_executor.ops
+    assert "screenshot_b64" not in agent._extra_ingest.payloads[0].get("evidence", {})
+    assert "screenshot_b64" not in msg["ingest"]
 
 
 @pytest.mark.asyncio

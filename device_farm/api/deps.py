@@ -147,7 +147,8 @@ async def _get_current_user(
     except HTTPException:
         raise
     except Exception:
-        pass
+        # Still scope ORM to default workspace when role resolution fails.
+        _apply_user_org_context(user, get_user_default_org_id(user))
     return user
 
 

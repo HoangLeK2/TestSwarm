@@ -11,6 +11,7 @@ import type {
   CampaignCreate,
   CampaignDeviceOut,
   CampaignOut,
+  CampaignScenarioRefOut,
   CampaignRunResponse,
   CampaignStatus,
   CampaignWorkflowsResponse,
@@ -91,8 +92,9 @@ export type ExecutionRuntimeOut = {
 };
 
 export function isCampaignEntityOut(
-  value: CampaignOut | CampaignEntityOut
+  value: CampaignOut | CampaignEntityOut | null | undefined
 ): value is CampaignEntityOut {
+  if (value == null) return false;
   return (
     'organization_id' in value &&
     Array.isArray((value as CampaignEntityOut).scenario_refs)
@@ -105,6 +107,42 @@ export function campaignVariables(
   if (!value) return {};
   if (isCampaignEntityOut(value)) return (value.vars ?? {}) as Record<string, unknown>;
   return (value.variables ?? {}) as Record<string, unknown>;
+}
+
+/** Map Epic-04 entity payloads to the shape list/detail UI expects (`scenario_refs`, `variables`, …). */
+export function normalizeCampaignOut(
+  raw: CampaignOut | CampaignEntityOut | Record<string, unknown> | null | undefined
+): CampaignOut | null {
+  if (raw == null) return null;
+  const row = raw as CampaignEntityOut & CampaignOut;
+  const vars = (row.vars ?? row.variables ?? {}) as Record<string, unknown>;
+  const scenarioRefs = (row.scenario_refs ?? []) as CampaignScenarioRefOut[];
+
+  if (row.organization_id) {
+    return {
+      id: row.id,
+      name: row.name,
+      description: row.description ?? null,
+      status: row.status as CampaignOut['status'],
+      organization_id: row.organization_id,
+      scenario_refs: scenarioRefs,
+      vars,
+      variables: vars,
+      tags: row.tags ?? [],
+      created_at: String(row.created_at),
+      updated_at: String(row.updated_at),
+      user_id: row.created_by ?? row.user_id ?? null,
+      devices: row.devices,
+      target_group_id: row.target_group_id,
+      scenario: row.scenario
+    };
+  }
+
+  return {
+    ...row,
+    variables: row.variables ?? vars,
+    scenario_refs: row.scenario_refs ?? scenarioRefs
+  };
 }
 
 export type StepActionResponse = {
@@ -141,12 +179,50 @@ export type ScenarioDeviceVariablesBody = {
 export const campaignsApi = {
   list: () =>
     farmApi
-      .get<(CampaignOut | CampaignEntityOut)[]>('/campaigns')
-      .then((r) => r.data as CampaignOut[]),
-  create: (data: CampaignCreate) =>
-    farmApi.post<CampaignOut | CampaignEntityOut>('/campaigns', data).then((r) => r.data),
+      .get<unknown>('/campaigns')
+      .then((r) => {
+        if (!Array.isArray(r.data)) {
+          const raw =
+            r.data === null
+              ? 'null'
+              : typeof r.data === 'string'
+                ? r.data.slice(0, 200)
+                : JSON.stringify(r.data).slice(0, 200);
+          throw new Error(`Unexpected /campaigns response (non-array): ${raw}`);
+        }
+        return r.data
+          .map((item) =>
+            normalizeCampaignOut(item as CampaignOut | CampaignEntityOut)
+          )
+          .filter((item): item is CampaignOut => item != null);
+      }),
+  create: async (data: CampaignCreate) => {
+    const r = await farmApi.post<CampaignOut | CampaignEntityOut>(
+      '/campaigns',
+      data
+    );
+    const row = normalizeCampaignOut(r.data);
+    if (row) return row;
+    if (r.status >= 200 && r.status < 300) {
+      const nameKey = data.name.trim().toLowerCase();
+      const listed = await campaignsApi.list();
+      const match = listed.find(
+        (c) => c.name.trim().toLowerCase() === nameKey
+      );
+      if (match) return match;
+    }
+    throw new Error('Campaign create returned an empty response body');
+  },
   get: (id: string) =>
-    farmApi.get<CampaignOut | CampaignEntityOut>(`/campaigns/${id}`).then((r) => r.data),
+    farmApi
+      .get<CampaignOut | CampaignEntityOut>(`/campaigns/${id}`)
+      .then((r) => {
+        const row = normalizeCampaignOut(r.data);
+        if (!row) {
+          throw new Error('Campaign not found');
+        }
+        return row;
+      }),
   patchEntity: (id: string, data: CampaignEntityUpdate) =>
     farmApi
       .patch<CampaignEntityOut>(`/campaigns/${id}`, data)

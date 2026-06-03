@@ -6,6 +6,7 @@ import {
   dlqApi,
   executionRuntimeApi,
   executionsApi,
+  normalizeCampaignOut,
   scenariosApi,
   tasksApi,
   workflowsApi,
@@ -49,9 +50,23 @@ export function useExecutionRuntime() {
 }
 
 export function useCampaigns() {
+  const qc = useQueryClient();
   return useQuery({
     queryKey: KEYS.list,
-    queryFn: campaignsApi.list,
+    queryFn: async () => {
+      const fetched = await campaignsApi.list();
+      const cached = qc.getQueryData<CampaignOut[]>(KEYS.list) ?? [];
+      if (!cached.length) return fetched;
+      const byId = new Map(fetched.map((c) => [c.id, c]));
+      for (const row of cached) {
+        if (!row?.id) continue;
+        if (!byId.has(row.id)) byId.set(row.id, row);
+      }
+      return Array.from(byId.values()).sort(
+        (a, b) =>
+          new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+      );
+    },
     refetchInterval: (query) => {
       const data = query.state.data as CampaignOut[] | undefined;
       return data &&
@@ -117,11 +132,19 @@ export function useCreateCampaign() {
   return useMutation({
     mutationFn: (data: CampaignCreate) => campaignsApi.create(data),
     onSuccess: (created) => {
-      qc.invalidateQueries({ queryKey: KEYS.list });
-      if (created?.id) {
-        qc.setQueryData(KEYS.detail(created.id), created);
-        qc.invalidateQueries({ queryKey: KEYS.detail(created.id) });
-      }
+      const row =
+        created && typeof created === 'object' && 'id' in created
+          ? normalizeCampaignOut(created)
+          : null;
+      if (!row?.id) return;
+      qc.setQueryData(KEYS.detail(row.id), row);
+      qc.setQueryData<CampaignOut[]>(KEYS.list, (prev) => {
+        const list = prev ?? [];
+        if (list.some((c) => c.id === row.id)) {
+          return list.map((c) => (c.id === row.id ? row : c));
+        }
+        return [row, ...list];
+      });
     }
   });
 }

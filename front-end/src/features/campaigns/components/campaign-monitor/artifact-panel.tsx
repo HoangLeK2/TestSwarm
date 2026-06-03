@@ -31,7 +31,10 @@ export function ArtifactPanel({ campaignId }: Props) {
   const t = useTranslations('campaignsFeature.list');
   const { data, isLoading } = useLatestExecutionArtifacts(campaignId, true);
   const artifacts = data?.artifacts ?? [];
-  const withUrl = artifacts.filter((a) => !!resolvedArtifactHref(a));
+  const withUrl = artifacts.filter((artifact) => {
+    const href = resolvedArtifactHref(artifact);
+    return Boolean(href) && !artifactIsImage(artifact, href);
+  });
 
   return (
     <section className='px-6 py-5'>
@@ -61,14 +64,12 @@ export function ArtifactPanel({ campaignId }: Props) {
           {withUrl.slice(0, 24).map((artifact, idx) => {
             const href = resolvedArtifactHref(artifact);
             if (!href) return null;
-            const showImage = artifactIsImage(artifact, href);
             const label = `${artifact.artifact_type} · ${artifact.device_serial || t('monitorArtifactDeviceUnknown')}`;
             return (
               <ArtifactMonitorTile
                 key={`${artifact.execution_id}-${artifact.artifact_type}-${idx}`}
                 artifact={artifact}
                 href={href}
-                showImage={showImage}
                 label={label}
               />
             );

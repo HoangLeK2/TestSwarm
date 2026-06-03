@@ -314,11 +314,6 @@ async def list_campaigns(
     return result
 
 
-@router.post(
-    "",
-    status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_permission("campaigns", "create"))],
-)
 def _inline_scenario_steps(scenario: dict | None) -> list | None:
     if not isinstance(scenario, dict):
         return None
@@ -326,6 +321,12 @@ def _inline_scenario_steps(scenario: dict | None) -> list | None:
     return steps if isinstance(steps, list) else None
 
 
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    response_model=Union[CampaignEntityOut, CampaignOut],
+    dependencies=[Depends(require_permission("campaigns", "create"))],
+)
 async def create_campaign(body: CampaignCreate, db: DB, user: CurrentUser):
     org_id = getattr(user, "org_id", None)
     inline_steps = _inline_scenario_steps(body.scenario)
@@ -504,7 +505,9 @@ async def dispatch_campaign_route(
     from db.crud import campaign_entity as campaign_entity_repo
     from services.campaign.execution_runtime import start_execution_runtime
 
-    campaign = await campaign_entity_repo.get_campaign_entity(db, campaign_id)
+    campaign = await campaign_entity_repo.get_campaign_entity(
+        db, campaign_id, org_id=org_id
+    )
     if campaign is None:
         raise HTTPException(status_code=404, detail={"code": "CAMPAIGN_NOT_FOUND"})
     config = getattr(request.app.state, "config", None)

@@ -34,10 +34,21 @@ export const ROUTES = {
       if (serial) params.set('serial', serial);
       return `/dashboard/device-farm/control?${params.toString()}`;
     }
+    ,
+    /** Mở trang điều khiển để ghi và lưu vào kịch bản tổ chức. */
+    CONTROL_RECORD_EDIT_ORG_SCENARIO: (
+      orgScenarioId: string,
+      opts?: { serial?: string; returnTo?: string }
+    ) => {
+      const params = new URLSearchParams({ orgScenarioId });
+      if (opts?.serial) params.set('serial', opts.serial);
+      if (opts?.returnTo) params.set('returnTo', opts.returnTo);
+      return `/dashboard/device-farm/control?${params.toString()}`;
+    }
   },
   CAMPAIGNS: {
     ROOT: '/dashboard/campaigns',
-    /** Opens campaigns list and auto-opens monitor for the campaign (modal). */
+    /** Campaign list with row scroll/highlight (monitor opens manually). */
     DETAIL: (id: string) =>
       `/dashboard/campaigns?campaign_id=${encodeURIComponent(id)}`,
     MONITOR: (id: string) =>
@@ -57,7 +68,19 @@ export const ROUTES = {
     FLOW: (id: string) => `/scenario-flow/${id}`
   },
   ORG_SCENARIOS: {
-    ROOT: '/dashboard/org-scenarios'
+    ROOT: '/dashboard/org-scenarios',
+    /** Opens org scenario library with detail sheet for this scenario. */
+    DETAIL: (scenarioId: string) =>
+      `/dashboard/org-scenarios?scenario_id=${encodeURIComponent(scenarioId)}`,
+    /** Flowgram editor for graph-kind org scenarios. */
+    FLOW_EDIT: (scenarioId: string, opts?: { returnTo?: string }) => {
+      const base = `/scenario-flow/org/${encodeURIComponent(scenarioId)}`;
+      if (!opts?.returnTo?.trim()) return base;
+      const params = new URLSearchParams({
+        returnTo: opts.returnTo.trim()
+      });
+      return `${base}?${params.toString()}`;
+    }
   },
   SCHEDULES: {
     ROOT: '/dashboard/schedules'

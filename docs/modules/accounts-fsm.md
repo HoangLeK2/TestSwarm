@@ -31,8 +31,8 @@ Errors: `INVALID_STATE_TRANSITION` (422), `INVALID_TTL` (422), `STATE_CONFLICT` 
 
 ## Operations
 
-- Cooldown expiry: background loop every 60s + Temporal activity `process_expired_account_cooldowns`.
+- Cooldown expiry: background loop every 5 min + Temporal activity `process_expired_account_cooldowns`.
 - Round-robin / `pick_next_batch`: only `state=active` accounts.
 - Audit: `account_events` with `event_type=account.state.changed`.
 - Metrics: `account_state_total` (Gauge, current counts), `state_transition_total` (Counter, `reason_code` label).
-- Cooldown cron: asyncio loop 60s + Temporal schedule `df-account-cooldown-tick` (`*/1 * * * *`).
+- Cooldown cron: asyncio loop 5 min + Temporal schedule `df-account-cooldown-tick` (`*/5 * * * *`).

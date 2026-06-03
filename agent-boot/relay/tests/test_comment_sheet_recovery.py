@@ -53,6 +53,25 @@ def test_interrupt_reason_allows_back_only_for_keyboard() -> None:
     assert interrupt_reason_allows_back(None) is False
 
 
+def test_interrupt_reason_never_back_when_group_navigation_locked() -> None:
+    from relay.extra_data.parsers.facebook.comment_pipeline import interrupt_reason_allows_back
+
+    ctx = {"_fb_group_navigation": True}
+    assert interrupt_reason_allows_back("keyboard_open", ctx) is False
+
+
+def test_context_implies_fb_group_from_collection() -> None:
+    from relay.extra_data.parsers.facebook.comment_pipeline import (
+        context_implies_fb_group_navigation,
+        note_fb_group_navigation,
+    )
+
+    ctx = {"collection": "fb_group_posts"}
+    assert context_implies_fb_group_navigation(ctx) is True
+    note_fb_group_navigation(ctx)
+    assert ctx["_fb_group_navigation"] is True
+
+
 def test_should_not_back_from_group_feed_after_failed_tap() -> None:
     from relay.extra_data.parsers.facebook.comment_pipeline import (
         is_group_feed_from_xml,

@@ -23,12 +23,13 @@ import {
 import { parseHierarchySelectorNodes } from '../utils/hierarchy-selectors';
 import { createDefaultStep } from '@/features/campaigns/components/scenario-steps/types';
 import { validateScenarioStepsForApi } from '@/features/campaigns/utils/validate-scenario-steps-for-api';
-import {
-  buildRecordedTapStep,
-  normalizeSelectorStepFields
-} from '../lib/scenario-selector-step';
+import { buildRecordedTapStep } from '../lib/scenario-selector-step';
+import { sanitizeScenarioStepsForApi } from '../lib/sanitize-scenario-steps-for-api';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import { useTranslations } from 'next-intl';
+import { orgScenariosApi } from '@/features/org-scenarios/services/api';
+import { extractPreviewSteps } from '@/features/org-scenarios/lib/parse-scenario-body';
+import { normalizeScenarioVariables } from '@/lib/scenario-variables';
 
 let _stepIdCounter = 0;
 function nextStepId() {
@@ -37,25 +38,6 @@ function nextStepId() {
 
 export type StepWithId = ScenarioStep & { _id: string };
 
-type SelectorBy =
-  | 'resource-id'
-  | 'text'
-  | 'xpath'
-  | 'class name'
-  | 'description'
-  | 'descriptionContains'
-  | 'descriptionStartsWith';
-
-const ALLOWED_SELECTOR_BY: readonly SelectorBy[] = [
-  'resource-id',
-  'text',
-  'xpath',
-  'class name',
-  'description',
-  'descriptionContains',
-  'descriptionStartsWith'
-];
-
 const HIERARCHY_INTERACTION_PULSE_THROTTLE_MS = 3500;
 const HIERARCHY_INTERACTION_FETCH_COOLDOWN_MS = 3500;
 const HIERARCHY_BOOTSTRAP_RETRY_MS = 1500;
@@ -63,106 +45,12 @@ const HIERARCHY_BOOTSTRAP_MAX_ATTEMPTS = 20;
 const RECORD_XML_POLL_INTERVAL_MS = 1200;
 const RECORD_XML_POLL_TIMEOUT_MS = 4800;
 
-function normalizeSelectorBy(
-  by: unknown,
-  fallback: SelectorBy = 'text'
-): SelectorBy {
-  const raw = String(by ?? '').trim();
-  if (!raw) return fallback;
-  if (ALLOWED_SELECTOR_BY.includes(raw as SelectorBy)) return raw as SelectorBy;
-  const lower = raw.toLowerCase().replace(/\s+/g, '');
-  if (
-    lower === 'content-desc' ||
-    lower === 'contentdesc' ||
-    lower === 'description' ||
-    lower === 'accessibilityid'
-  )
-    return 'description';
-  if (lower === 'content-desccontains' || lower === 'descriptioncontains')
-    return 'descriptionContains';
-  if (lower === 'content-descstartswith' || lower === 'descriptionstartswith')
-    return 'descriptionStartsWith';
-  if (lower === 'classname' || lower === 'class-name') return 'class name';
-  return fallback;
-}
-
-function sanitizeScenarioStep(step: any): any {
-  if (!step || typeof step !== 'object') return step;
-  const next: any = { ...step };
-  delete next._id;
-  if (next.by != null) next.by = normalizeSelectorBy(next.by);
-  // Auto-fix repeat.count: if missing or < 1, default to 3
-  if (next.type === 'repeat') {
-    const c = Number(next.count);
-    if (!Number.isFinite(c) || c < 1) next.count = 3;
-  }
-  // Auto-fix random_pick: drop branches with no steps
-  if (next.type === 'random_pick' && Array.isArray(next.branches)) {
-    next.branches = next.branches.filter(
-      (br: any) => Array.isArray(br?.steps) && br.steps.length > 0
-    );
-  }
-  if (next.selector && typeof next.selector === 'object') {
-    next.selector = {
-      ...next.selector,
-      ...(next.selector.by != null
-        ? { by: normalizeSelectorBy(next.selector.by) }
-        : {})
-    };
-  }
-  if (next.condition && typeof next.condition === 'object') {
-    const cond = { ...(next.condition as Record<string, any>) };
-    if (
-      cond.element_exists &&
-      typeof cond.element_exists === 'object' &&
-      cond.element_exists.by != null
-    ) {
-      cond.element_exists = {
-        ...cond.element_exists,
-        by: normalizeSelectorBy(cond.element_exists.by)
-      };
-    }
-    if (
-      cond.element_not_exists &&
-      typeof cond.element_not_exists === 'object' &&
-      cond.element_not_exists.by != null
-    ) {
-      cond.element_not_exists = {
-        ...cond.element_not_exists,
-        by: normalizeSelectorBy(cond.element_not_exists.by)
-      };
-    }
-    next.condition = cond;
-  }
-  if (Array.isArray(next.then)) next.then = next.then.map(sanitizeScenarioStep);
-  if (Array.isArray(next.else)) next.else = next.else.map(sanitizeScenarioStep);
-  if (Array.isArray(next.steps))
-    next.steps = next.steps.map(sanitizeScenarioStep);
-  if (Array.isArray(next.branches)) {
-    next.branches = next.branches.map((br: any) =>
-      br && typeof br === 'object'
-        ? {
-            ...br,
-            ...(Array.isArray(br.steps)
-              ? { steps: br.steps.map(sanitizeScenarioStep) }
-              : {})
-          }
-        : br
-    );
-  }
-  return normalizeSelectorStepFields(next);
-}
-
-function sanitizeScenarioStepsForApi(input: unknown): any[] {
-  if (!Array.isArray(input)) return [];
-  return input.map(sanitizeScenarioStep);
-}
-
 export function useControlRecord(
   initialSerial?: string | null,
   initialCampaignId?: string | null,
   initialScenarioId?: string | null,
-  initialTemplateId?: string | null
+  initialTemplateId?: string | null,
+  initialOrgScenarioId?: string | null
 ) {
   const t = useTranslations('devicesControlRecord');
   const errorPrefix = t('errorPrefix');
@@ -644,6 +532,13 @@ export function useControlRecord(
   } | null>(null);
   const [savingTemplate, setSavingTemplate] = useState(false);
 
+  const [orgScenarioContext, setOrgScenarioContext] = useState<{
+    scenarioId: string;
+    name: string;
+    kind: string;
+    variables?: Record<string, any>;
+  } | null>(null);
+
   useEffect(() => {
     if (!initialCampaignId || !initialScenarioId) return;
     Promise.all([
@@ -713,6 +608,41 @@ export function useControlRecord(
           );
       })
       .catch(() => toast.error(t('toast.loadTemplateFailed')));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!initialOrgScenarioId) return;
+    if (initialCampaignId || initialScenarioId || initialTemplateId) return;
+    Promise.all([
+      orgScenariosApi.get(initialOrgScenarioId),
+      orgScenariosApi.getBody(initialOrgScenarioId)
+    ])
+      .then(([meta, bodyOut]) => {
+        const bodyJson = (bodyOut.body_json ?? {}) as Record<string, unknown>;
+        const previewSteps = extractPreviewSteps(bodyJson);
+        const loaded = previewSteps.map(
+          (s) => ({ ...s, _id: nextStepId() }) as StepWithId
+        );
+        setSteps(loaded);
+        setOrgScenarioContext({
+          scenarioId: initialOrgScenarioId,
+          name: meta.name,
+          kind: meta.kind,
+          variables: normalizeScenarioVariables(
+            bodyJson.variables as Record<string, unknown> | undefined
+          )
+        });
+        if (loaded.length > 0) {
+          toast.info(
+            t('toast.loadedOrgScenario', {
+              name: meta.name,
+              count: loaded.length
+            })
+          );
+        }
+      })
+      .catch(() => toast.error(t('toast.loadOrgScenarioFailed')));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1208,6 +1138,7 @@ export function useControlRecord(
       saveAsNew: saveAsNewScenario,
       editingContext,
       templateContext,
+      orgScenarioContext,
       savingTemplate,
       saveToTemplate
     },

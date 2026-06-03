@@ -74,8 +74,10 @@ class TestXmlHasElement:
 class TestGetImplicitWaitConfig:
     def test_defaults_when_no_config(self):
         t, p = _get_implicit_wait_config({}, {})
-        assert t == _IW_DEFAULT_TIMEOUT
-        assert p == _IW_DEFAULT_POLL
+        assert t == 3.0
+        assert p == 0.25
+        assert _IW_DEFAULT_TIMEOUT == 3.0
+        assert _IW_DEFAULT_POLL == 0.25
 
     def test_step_overrides_scenario(self):
         t, p = _get_implicit_wait_config({"implicit_wait": 5.0}, {"implicit_wait": 20.0})

@@ -1,4 +1,8 @@
-import { type Table as TanstackTable, flexRender } from '@tanstack/react-table';
+import {
+  type Row,
+  type Table as TanstackTable,
+  flexRender
+} from '@tanstack/react-table';
 import * as React from 'react';
 
 import {
@@ -29,6 +33,7 @@ interface DataTableProps<TData> extends React.ComponentProps<'div'> {
   skeletonRowCount?: number;
   loading?: LoadingProps;
   total?: number;
+  getRowProps?: (row: Row<TData>) => React.ComponentProps<'tr'>;
 }
 
 export function DataTable<TData>({
@@ -39,6 +44,7 @@ export function DataTable<TData>({
   showPagination = true,
   loading,
   total = 0,
+  getRowProps,
   ...props
 }: DataTableProps<TData>) {
   const tableTranslations = useTranslations('components.table');
@@ -108,6 +114,7 @@ export function DataTable<TData>({
                     <TableRow
                       key={row.id}
                       data-state={row.getIsSelected() && 'selected'}
+                      {...getRowProps?.(row)}
                     >
                       {row.getVisibleCells().map((cell) => (
                         <TableCell

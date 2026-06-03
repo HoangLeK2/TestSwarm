@@ -217,15 +217,19 @@ def create_app(
                     check_and_reset_cooldowns,
                     reset_daily_usage,
                 )
+                from services.account_state.temporal_schedule import (
+                    COOLDOWN_TICK_INTERVAL_SECONDS,
+                )
 
                 tick = 0
                 while True:
-                    await _aio.sleep(60)
+                    await _aio.sleep(COOLDOWN_TICK_INTERVAL_SECONDS)
                     tick += 1
                     try:
                         await check_and_reset_cooldowns()
                     except Exception as exc:
                         log.warning("account cooldown reset failed: %s", exc)
+                    # 288 × 5 min ≈ 24 h — midnight-style daily usage reset
                     if tick % 288 == 0:
                         try:
                             await reset_daily_usage()
@@ -985,6 +989,12 @@ def create_app(
 
                 def _on_relay_capabilities_update(serial: str, caps: dict) -> None:
                     """Propagate relay heartbeat capabilities to DeviceClient metadata."""
+                    # Keep DB FSM in sync while relay transport is live. USB devices
+                    # use the same serial for relay + hardware_serial, so we must not
+                    # gate this on NAT-style aliases (previously stuck RECONNECTING).
+                    hw = str(caps.get("hardware_serial") or "").strip() or None
+                    _emit_relay_fsm_online(serial, hardware_serial=hw)
+
                     device = _find_device_for_relay_serial(serial)
                     if device is None:
                         return
@@ -1001,9 +1011,6 @@ def create_app(
                         _bind_relay_u2(device, serial, caps=caps)
                     elif host and str(getattr(device, "_u2_host", "") or "") != host:
                         _bind_relay_u2(device, serial, caps=caps)
-                    hw = str(caps.get("hardware_serial") or "").strip()
-                    if hw and (":" in serial or serial != hw):
-                        _emit_relay_fsm_online(serial, hardware_serial=hw)
 
                 relay_manager.set_on_device_online(_on_relay_device_online)
                 relay_manager.set_on_device_offline(_on_relay_device_offline)

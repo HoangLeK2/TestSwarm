@@ -26,6 +26,7 @@ import {
 import { buildContentPermalink } from '../../lib/permalink';
 import { ArtifactPreview } from './artifact-preview';
 import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
+import { isImageArtifact } from '../../lib/artifact-url';
 
 type Props = {
   contentId: string;
@@ -37,6 +38,14 @@ function contentTypeBadge(platform: string | null, contentType: string) {
     return `${platform}:${contentType}`;
   }
   return contentType;
+}
+
+function contentArtifactIsImage(artifact: ContentArtifact): boolean {
+  return isImageArtifact(artifact.kind, artifact.url, {
+    label: artifact.label,
+    mimeType: artifact.mime_type,
+    source: artifact.source
+  });
 }
 
 export function ContentDetailView({ contentId, shareToken }: Props) {
@@ -52,7 +61,10 @@ export function ContentDetailView({ contentId, shareToken }: Props) {
   const [permalinkBusy, setPermalinkBusy] = useState(false);
   const [permalinkCopied, setPermalinkCopied] = useState(false);
 
-  const artifacts = detail?.artifacts ?? [];
+  const artifacts = useMemo(
+    () => (detail?.artifacts ?? []).filter((artifact) => !contentArtifactIsImage(artifact)),
+    [detail?.artifacts]
+  );
   const selected: ContentArtifact | null =
     artifacts.find((a) => a.id === selectedId) ?? artifacts[0] ?? null;
 

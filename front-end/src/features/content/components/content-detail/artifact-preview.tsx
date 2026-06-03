@@ -5,7 +5,6 @@ import { AlertTriangle, Download, Loader2 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { tokenStorage } from '@/lib/token-storage';
 import {
   contentApi,
   type ContentArtifact,
@@ -13,12 +12,18 @@ import {
 } from '../../services/api';
 import { deviceFarmBackendBase } from '@/lib/farm-api';
 import { triggerBlobDownload } from '../../lib/download';
-import { isImageArtifact, resolveArtifactUrl } from '../../lib/artifact-url';
+import {
+  directObjectStorageUrl,
+  isImageArtifact,
+  resolveArtifactUrl,
+  shouldProxyArtifactFetch
+} from '../../lib/artifact-url';
 
 const PREVIEW_LINE_LIMIT = 400;
 const LARGE_INLINE_BYTES = 256_000;
 const VIRTUAL_LINE_HEIGHT_PX = 16;
 const VIRTUAL_VIEWPORT_LINES = 32;
+const CONTENT_IMAGE_PREVIEW_ENABLED = false;
 
 type Props = {
   detail: ContentDetail;
@@ -88,10 +93,17 @@ export function ArtifactPreview({ detail, artifact, shareToken }: Props) {
   const [showFullText, setShowFullText] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [imageSrc, setImageSrc] = useState<string | null>(null);
+  const [imageLoadViaProxy, setImageLoadViaProxy] = useState(false);
 
   const resolvedUrl = useMemo(
     () => resolveArtifactUrl(artifact.url, deviceFarmBackendBase),
     [artifact.url]
+  );
+
+  const directImageUrl = useMemo(
+    () =>
+      directObjectStorageUrl(artifact.url, resolvedUrl),
+    [artifact.url, resolvedUrl]
   );
 
   const isImage = isImageArtifact(artifact.kind, resolvedUrl, {
@@ -99,18 +111,38 @@ export function ArtifactPreview({ detail, artifact, shareToken }: Props) {
     mimeType: artifact.mime_type,
     source: artifact.source
   });
+  const shouldShowImagePreview = CONTENT_IMAGE_PREVIEW_ENABLED && isImage;
+  const canOpenStorageLink =
+    Boolean(directImageUrl) && (!isImage || CONTENT_IMAGE_PREVIEW_ENABLED);
   const isExpired =
     artifact.status === 'expired' || imageError || previewError;
 
   useEffect(() => {
     setImageSrc(null);
-    if (!isImage || !resolvedUrl || isExpired) return undefined;
+    setImageLoadViaProxy(false);
+    if (!shouldShowImagePreview || isExpired) return undefined;
+
+    if (directImageUrl && !imageLoadViaProxy) {
+      setImageSrc(directImageUrl);
+      return undefined;
+    }
 
     let cancelled = false;
     let objectUrl: string | null = null;
-    contentApi
-      .fetchArtifactBlob(resolvedUrl)
-      .then((blob) => {
+    const useFarmDownload =
+      imageLoadViaProxy || shouldProxyArtifactFetch(artifact.url, resolvedUrl);
+
+    const loadPromise = useFarmDownload
+      ? contentApi.downloadArtifact(detail.id, artifact.id, shareToken)
+      : resolvedUrl
+        ? contentApi.fetchArtifactBlob(resolvedUrl).then((blob) => ({
+            blob,
+            filename: null
+          }))
+        : Promise.reject(new Error('no artifact url'));
+
+    loadPromise
+      .then(({ blob }) => {
         if (cancelled) return;
         objectUrl = URL.createObjectURL(blob);
         setImageSrc(objectUrl);
@@ -123,13 +155,25 @@ export function ArtifactPreview({ detail, artifact, shareToken }: Props) {
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [isExpired, isImage, resolvedUrl]);
+  }, [
+    artifact.id,
+    artifact.source,
+    artifact.url,
+    detail.id,
+    directImageUrl,
+    imageLoadViaProxy,
+    isExpired,
+    resolvedUrl,
+    shareToken,
+    shouldShowImagePreview
+  ]);
 
   useEffect(() => {
     setImageError(false);
     setPreviewError(false);
     setShowFullText(false);
     setTextPreview(null);
+    setImageLoadViaProxy(false);
 
     if (isImage || isExpired) return;
 
@@ -222,25 +266,34 @@ export function ArtifactPreview({ detail, artifact, shareToken }: Props) {
               : ''}
           </p>
         </div>
-        <Button
-          type='button'
-          size='sm'
-          variant='outline'
-          className='h-8 shrink-0 gap-1'
-          disabled={downloading}
-          onClick={() => void handleDownload()}
-        >
-          {downloading ? (
-            <Loader2 className='size-3.5 animate-spin' />
-          ) : (
-            <Download className='size-3.5' />
-          )}
-          {t('download')}
-        </Button>
+        <div className='flex shrink-0 items-center gap-1'>
+          {canOpenStorageLink ? (
+            <Button type='button' size='sm' variant='ghost' className='h-8 text-xs' asChild>
+              <a href={directImageUrl} target='_blank' rel='noopener noreferrer'>
+                {t('openStorageLink', { default: 'Mở link storage' })}
+              </a>
+            </Button>
+          ) : null}
+          <Button
+            type='button'
+            size='sm'
+            variant='outline'
+            className='h-8 gap-1'
+            disabled={downloading}
+            onClick={() => void handleDownload()}
+          >
+            {downloading ? (
+              <Loader2 className='size-3.5 animate-spin' />
+            ) : (
+              <Download className='size-3.5' />
+            )}
+            {t('download')}
+          </Button>
+        </div>
       </div>
 
       <div className='min-h-0 flex-1 p-3'>
-        {isImage ? (
+        {shouldShowImagePreview ? (
           <div className='flex max-h-[min(60vh,520px)] items-center justify-center overflow-hidden rounded-md bg-muted/40'>
             {imageSrc ? (
               // eslint-disable-next-line @next/next/no-img-element
@@ -248,7 +301,13 @@ export function ArtifactPreview({ detail, artifact, shareToken }: Props) {
                 src={imageSrc}
                 alt={artifact.label}
                 className='max-h-[min(60vh,520px)] w-full object-contain'
-                onError={() => setImageError(true)}
+                onError={() => {
+                  if (directImageUrl && !imageLoadViaProxy) {
+                    setImageLoadViaProxy(true);
+                    return;
+                  }
+                  setImageError(true);
+                }}
               />
             ) : (
               <p className='flex items-center gap-2 p-4 text-sm text-muted-foreground'>

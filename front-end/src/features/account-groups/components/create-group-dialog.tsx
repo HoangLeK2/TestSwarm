@@ -77,12 +77,13 @@ export function CreateGroupDialog() {
   });
 
   const onSubmit = (data: FormData) => {
+    const description = data.description?.trim() || undefined;
     mutate(
       {
         name: data.name,
         platform: data.platform,
         rotation_strategy: data.rotation_strategy,
-        description: data.description || null
+        description
       },
       {
         onSuccess: () => {
@@ -205,10 +206,17 @@ export function CreateGroupDialog() {
           </div>
           <div className='space-y-1'>
             <Label>{t('descriptionLabel')}</Label>
-            <Textarea
-              placeholder={t('descriptionPlaceholder')}
-              rows={2}
-              {...register('description')}
+            <Controller
+              control={control}
+              name='description'
+              render={({ field }) => (
+                <Textarea
+                  placeholder={t('descriptionPlaceholder')}
+                  rows={2}
+                  value={field.value ?? ''}
+                  onChange={(e) => field.onChange(e.target.value)}
+                />
+              )}
             />
           </div>
           {error && (

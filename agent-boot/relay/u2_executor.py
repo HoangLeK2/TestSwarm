@@ -23,6 +23,11 @@ T = TypeVar("T")
 
 MAX_BATCH_ACTIONS = 100
 MAX_FLOW_TIMEOUT = 60.0
+DEFAULT_CLICK_TIMEOUT = 0.35
+DEFAULT_FLOW_WAIT_TIMEOUT = 3.0
+DEFAULT_FLOW_GONE_TIMEOUT = 1.0
+DEFAULT_SWIPE_DURATION = 0.12
+DEFAULT_SCROLL_MAX_SWIPES = 5
 
 # Error substrings that signal a dead session — these should trigger evict+retry.
 # Kept as string patterns (not classes) because uiautomator2 exception hierarchy
@@ -223,7 +228,7 @@ def _op_swipe(dev: Any, act: dict) -> None:
     dev.swipe(
         int(act["fx"]), int(act["fy"]),
         int(act["tx"]), int(act["ty"]),
-        duration=float(act.get("duration", 0.2)),
+        duration=float(act.get("duration", DEFAULT_SWIPE_DURATION)),
     )
 
 
@@ -258,7 +263,7 @@ def _op_wait_gone(dev: Any, act: dict) -> bool:
 def _op_click_selector(dev: Any, act: dict) -> bool:
     """Tap when selector exists; returns False if not found (no exception)."""
     sel = _resolve(dev, act.get("selector", {}))
-    timeout = float(act.get("timeout", 1.0))
+    timeout = float(act.get("timeout", DEFAULT_CLICK_TIMEOUT))
     if hasattr(sel, "click_exists"):
         return bool(sel.click_exists(timeout=timeout))
     if sel.wait(timeout=timeout):
@@ -269,7 +274,7 @@ def _op_click_selector(dev: Any, act: dict) -> bool:
 
 def _op_click_spec(dev: Any, act: dict) -> bool:
     spec = act.get("spec") or {}
-    timeout = float(act.get("timeout", 1.0))
+    timeout = float(act.get("timeout", DEFAULT_CLICK_TIMEOUT))
     sel = _resolve_spec(dev, spec)
     if hasattr(sel, "click_exists"):
         return bool(sel.click_exists(timeout=timeout))
@@ -281,7 +286,7 @@ def _op_click_spec(dev: Any, act: dict) -> bool:
 
 def _op_exists_spec(dev: Any, act: dict) -> bool:
     spec = act.get("spec") or {}
-    timeout = float(act.get("timeout", 1.0))
+    timeout = float(act.get("timeout", DEFAULT_CLICK_TIMEOUT))
     sel = _resolve_spec(dev, spec)
     if hasattr(sel, "exists"):
         return bool(sel.exists(timeout=timeout))
@@ -393,18 +398,18 @@ _OP_TABLE: dict[str, Any] = {
 def _flow_find_click_wait(dev: Any, p: dict) -> dict:
     """Find element, click, wait for it to disappear."""
     sel = _resolve(dev, p["selector"])
-    found = bool(sel.wait(timeout=min(float(p.get("click_timeout", 10.0)), MAX_FLOW_TIMEOUT)))
+    found = bool(sel.wait(timeout=min(float(p.get("click_timeout", DEFAULT_FLOW_WAIT_TIMEOUT)), MAX_FLOW_TIMEOUT)))
     if not found:
         return {"found": False, "clicked": False, "gone": False}
     sel.click()
-    gone = bool(sel.wait_gone(timeout=min(float(p.get("gone_timeout", 3.0)), MAX_FLOW_TIMEOUT)))
+    gone = bool(sel.wait_gone(timeout=min(float(p.get("gone_timeout", DEFAULT_FLOW_GONE_TIMEOUT)), MAX_FLOW_TIMEOUT)))
     return {"found": True, "clicked": True, "gone": gone}
 
 
 def _flow_wait_and_click(dev: Any, p: dict) -> dict:
     """Wait for element to appear, then click."""
     sel = _resolve(dev, p["selector"])
-    found = bool(sel.wait(timeout=min(float(p.get("wait_timeout", 10.0)), MAX_FLOW_TIMEOUT)))
+    found = bool(sel.wait(timeout=min(float(p.get("wait_timeout", DEFAULT_FLOW_WAIT_TIMEOUT)), MAX_FLOW_TIMEOUT)))
     if not found:
         return {"found": False, "clicked": False}
     sel.click()
@@ -414,7 +419,7 @@ def _flow_wait_and_click(dev: Any, p: dict) -> dict:
 def _flow_wait_and_click_spec(dev: Any, p: dict) -> dict:
     """Wait for scenario selector spec (incl. chain), then click."""
     spec = p.get("spec") or {}
-    wt = min(float(p.get("wait_timeout", 10.0)), MAX_FLOW_TIMEOUT)
+    wt = min(float(p.get("wait_timeout", DEFAULT_FLOW_WAIT_TIMEOUT)), MAX_FLOW_TIMEOUT)
     sel = _resolve_spec(dev, spec)
     found = bool(sel.wait(timeout=wt))
     if not found:
@@ -441,7 +446,7 @@ def _flow_find_get_text(dev: Any, p: dict) -> dict:
 def _flow_swipe_until_found(dev: Any, p: dict) -> dict:
     """Swipe in direction until element appears (scroll search)."""
     direction = p.get("direction", "up")
-    max_swipes = max(0, int(p.get("max_swipes", 10)))
+    max_swipes = max(0, int(p.get("max_swipes", DEFAULT_SCROLL_MAX_SWIPES)))
     step_ratio = float(p.get("step_ratio", 0.6))
     w, h = dev.window_size()
     cx, cy = w // 2, h // 2
@@ -458,7 +463,7 @@ def _flow_swipe_until_found(dev: Any, p: dict) -> dict:
     for i in range(max_swipes):
         if sel.exists:
             return {"found": True, "swipes": i}
-        dev.swipe(fx, fy, tx, ty, duration=0.2)
+        dev.swipe(fx, fy, tx, ty, duration=float(p.get("duration", DEFAULT_SWIPE_DURATION)))
     return {"found": bool(sel.exists), "swipes": max_swipes}
 
 

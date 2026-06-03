@@ -1,7 +1,6 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import {
@@ -113,6 +112,12 @@ import {
 import { ROUTES } from '@/config/routes';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import { useSaveOrgScenarioBody } from '@/features/org-scenarios/hooks/use-org-scenarios';
+import { buildOrgScenarioBodyPayload } from '@/features/org-scenarios/lib/build-org-scenario-body';
+import { isGraphOrgScenario } from '@/features/org-scenarios/lib/campaign-scenario-eligibility';
+import { validateScenarioStepsForApi } from '@/features/campaigns/utils/validate-scenario-steps-for-api';
+import { formatFarmApiError } from '@/lib/format-farm-api-error';
+import { useRouter } from '@/i18n/navigation';
 import {
   Tooltip,
   TooltipContent,
@@ -230,6 +235,9 @@ type Props = {
   initialCampaignId?: string | null;
   initialScenarioId?: string | null;
   initialTemplateId?: string | null;
+  initialOrgScenarioId?: string | null;
+  /** Optional redirect target after saving (used when launched from org-scenario). */
+  returnTo?: string | null;
 };
 
 const ENABLE_FLOWGRAM_CONTROL_UI = false; // UI flowgram disabled
@@ -238,19 +246,24 @@ export function ControlRecordView({
   initialSerial,
   initialCampaignId,
   initialScenarioId,
-  initialTemplateId
+  initialTemplateId,
+  initialOrgScenarioId,
+  returnTo
 }: Props = {}) {
   const t = useTranslations('devicesControlRecord.view');
+  const tOrg = useTranslations('orgScenariosFeature.detail');
   const tDv = useTranslations('components.deviceVarsJson');
   const tDvDlg = useTranslations('devicesControlRecord.deviceVarsDialog');
   const tModal = useTranslations('components.modal');
   const tVar = useTranslations('components.variableEditor');
+  const router = useRouter();
   const { error, device, record, steps, save, hierarchy, selector } =
     useControlRecord(
       initialSerial,
       initialCampaignId,
       initialScenarioId,
-      initialTemplateId
+      initialTemplateId,
+      initialOrgScenarioId
     );
   const hierarchyXml = hierarchy.xml;
   const handleScreenTapRef = useRef<(rx: number, ry: number) => void>(() => {});
@@ -268,11 +281,65 @@ export function ControlRecordView({
   const devicePerms = useResourcePermissions('devices');
   const campaignPerms = useResourcePermissions('campaigns');
   const templatePerms = useResourcePermissions('scenario-templates');
+  const orgScenarioPerms = useResourcePermissions('scenarios');
   const canExecuteDevice = devicePerms.canExecute && !safeReadOnly;
+  const savingOrgScenario = Boolean(initialOrgScenarioId);
   const canSaveWork =
     !safeReadOnly &&
-    (save.templateContext ? templatePerms.canUpdate : campaignPerms.canUpdate);
+    (save.templateContext
+      ? templatePerms.canUpdate
+      : savingOrgScenario
+        ? orgScenarioPerms.canUpdate
+        : campaignPerms.canUpdate);
   const { setSkipTapRecordingWhilePick } = record;
+
+  const saveOrgBodyMutation = useSaveOrgScenarioBody();
+
+  useEffect(() => {
+    if (!isGraphOrgScenario(save.orgScenarioContext)) return;
+    const back = (returnTo ?? '').trim() || ROUTES.ORG_SCENARIOS.ROOT;
+    toast.error(tOrg('sequenceOnlyNoGraph'));
+    router.replace(back);
+  }, [save.orgScenarioContext?.kind, returnTo, router, tOrg]);
+
+  const handleSaveOrgScenario = async () => {
+    const scenarioId = (initialOrgScenarioId ?? '').trim();
+    if (!scenarioId) return;
+    if (isGraphOrgScenario(save.orgScenarioContext)) {
+      toast.error(tOrg('sequenceOnlyNoGraph'));
+      return;
+    }
+    if (steps.items.length === 0) {
+      toast.warning(tOrg('saveOrgNoSteps'));
+      return;
+    }
+    const body = buildOrgScenarioBodyPayload(steps.items, scenarioVariables);
+    const check = validateScenarioStepsForApi(body.steps ?? []);
+    if (!check.ok) {
+      toast.error(check.message);
+      return;
+    }
+    saveOrgBodyMutation.mutate(
+      {
+        scenarioId,
+        body
+      },
+      {
+        onSuccess: () => {
+          toast.success(tOrg('saveOrgSuccess'));
+          const next = (returnTo ?? '').trim();
+          if (next) {
+            router.push(next);
+          } else {
+            router.push(ROUTES.ORG_SCENARIOS.ROOT);
+          }
+        },
+        onError: (err) => {
+          toast.error(formatFarmApiError(err, tOrg('saveOrgFailed')));
+        }
+      }
+    );
+  };
 
   const [highlightBounds, setHighlightBounds] = useState<
     [number, number, number, number] | null
@@ -347,7 +414,6 @@ export function ControlRecordView({
 
   // Scenario-player running state + stop handle. Used by the Farm back button
   // and device-switch guard to confirm+abort before leaving.
-  const router = useRouter();
   const [playerPlaying, setPlayerPlaying] = useState(false);
   const stopPlayerRef = useRef<(() => void) | null>(null);
   const [exitConfirm, setExitConfirm] = useState<null | (() => void)>(null);
@@ -905,6 +971,12 @@ export function ControlRecordView({
       setScenarioVariables(flattenVarDefs(save.editingContext.variables));
     }
   }, [save.editingContext]);
+
+  useEffect(() => {
+    if (save.orgScenarioContext?.variables) {
+      setScenarioVariables(flattenVarDefs(save.orgScenarioContext.variables));
+    }
+  }, [save.orgScenarioContext]);
 
   useEffect(() => {
     stepsItemsRef.current = steps.items;
@@ -2095,12 +2167,17 @@ export function ControlRecordView({
                         save.saveToTemplate(scenarioVariables);
                         return;
                       }
+                      if (savingOrgScenario) {
+                        void handleSaveOrgScenario();
+                        return;
+                      }
                       steps.openSave();
                     }}
                     disabled={
                       steps.items.length === 0 ||
                       !canSaveWork ||
-                      save.savingTemplate
+                      save.savingTemplate ||
+                      saveOrgBodyMutation.isPending
                     }
                     title={
                       !canSaveWork
@@ -2115,7 +2192,11 @@ export function ControlRecordView({
                       ? save.savingTemplate
                         ? t('templateSaving')
                         : t('templateSave')
-                      : 'Lưu'}
+                      : savingOrgScenario
+                        ? saveOrgBodyMutation.isPending
+                          ? 'Đang lưu…'
+                          : 'Lưu'
+                        : 'Lưu'}
                   </Button>
                   <Tooltip delayDuration={400}>
                     <TooltipTrigger asChild>

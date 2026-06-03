@@ -171,6 +171,92 @@ async def test_screenshot_returns_base64(executor):
     assert base64.b64decode(b64_val) == b"\x89PNG\r\n"
 
 
+@pytest.mark.asyncio
+async def test_click_selector_default_timeout_is_fast(executor):
+    exc, dev, pool = executor
+    ui_obj = MagicMock()
+    ui_obj.click_exists.return_value = False
+    dev.return_value = ui_obj
+
+    result = await exc.run_batch("serial", [
+        {"op": "click_selector", "selector": {"text": "missing"}},
+    ])
+
+    assert result["ok"] is True
+    ui_obj.click_exists.assert_called_once_with(timeout=0.35)
+
+
+@pytest.mark.asyncio
+async def test_click_spec_default_timeout_is_fast(executor):
+    exc, dev, pool = executor
+    ui_obj = MagicMock()
+    ui_obj.click_exists.return_value = False
+    dev.return_value = ui_obj
+
+    result = await exc.run_batch("serial", [
+        {"op": "click_spec", "spec": {"by": "text", "value": "missing"}},
+    ])
+
+    assert result["ok"] is True
+    ui_obj.click_exists.assert_called_once_with(timeout=0.35)
+
+
+@pytest.mark.asyncio
+async def test_swipe_default_duration_is_fast(executor):
+    exc, dev, pool = executor
+
+    result = await exc.run_batch("serial", [
+        {"op": "swipe", "fx": 100, "fy": 1000, "tx": 100, "ty": 300},
+    ])
+
+    assert result["ok"] is True
+    dev.swipe.assert_called_once_with(100, 1000, 100, 300, duration=0.12)
+
+
+@pytest.mark.asyncio
+async def test_wait_and_click_default_timeout_is_bounded(executor):
+    exc, dev, pool = executor
+    ui_obj = MagicMock()
+    ui_obj.wait.return_value = False
+    dev.return_value = ui_obj
+
+    result = await exc.execute_flow("serial", "wait_and_click", {"selector": {"text": "missing"}})
+
+    assert result["ok"] is True
+    ui_obj.wait.assert_called_once_with(timeout=3.0)
+
+
+@pytest.mark.asyncio
+async def test_find_click_wait_default_timeouts_are_bounded(executor):
+    exc, dev, pool = executor
+    ui_obj = MagicMock()
+    ui_obj.wait.return_value = True
+    ui_obj.wait_gone.return_value = False
+    dev.return_value = ui_obj
+
+    result = await exc.execute_flow("serial", "find_click_wait", {"selector": {"text": "OK"}})
+
+    assert result["ok"] is True
+    ui_obj.wait.assert_called_once_with(timeout=3.0)
+    ui_obj.wait_gone.assert_called_once_with(timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_swipe_until_found_default_budget_is_bounded(executor):
+    exc, dev, pool = executor
+    ui_obj = MagicMock()
+    ui_obj.exists = False
+    dev.return_value = ui_obj
+    dev.window_size.return_value = (1080, 2340)
+
+    result = await exc.execute_flow("serial", "swipe_until_found", {"selector": {"text": "missing"}})
+
+    assert result["ok"] is True
+    assert result["value"]["swipes"] == 5
+    assert dev.swipe.call_count == 5
+    assert dev.swipe.call_args.kwargs == {"duration": 0.12}
+
+
 # ── Selector resolution ──────────────────────────────────────────────────────
 
 

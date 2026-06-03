@@ -52,31 +52,6 @@ export function DeviceAndroidFrame({
     () => Math.max(2, clipRadius - inset),
     [clipRadius, inset]
   );
-  const frameWidth = useMemo(
-    () => mockupFrameWidthPx(screenWidth),
-    [screenWidth]
-  );
-
-  // react-device-mockup uses 9:19.5; most devices are 9:16–9:19.5. Clip the mockup
-  // to the device aspect ratio so the stream fills the visible screen without black
-  // bars or horizontal object-cover clipping.
-  const contentWidth = screenWidth - 2 * inset;
-  const streamHeight = useMemo(
-    () =>
-      deviceWidth && deviceHeight && deviceWidth > 0
-        ? Math.round(contentWidth * (deviceHeight / deviceWidth))
-        : undefined,
-    [contentWidth, deviceWidth, deviceHeight]
-  );
-  const mockupOuterHeight =
-    mockupPortraitScreenHeightPx(screenWidth) + 2 * frameWidth;
-  const clippedOuterHeight =
-    streamHeight !== undefined
-      ? streamHeight + 2 * inset + 2 * frameWidth
-      : undefined;
-  const shouldClipMockup =
-    clippedOuterHeight !== undefined &&
-    clippedOuterHeight < mockupOuterHeight;
 
   const mockup = (
     <AndroidMockup
@@ -106,19 +81,10 @@ export function DeviceAndroidFrame({
     </AndroidMockup>
   );
 
-  if (!shouldClipMockup || clippedOuterHeight === undefined) {
-    return mockup;
-  }
-
-  return (
-    <div
-      className='overflow-hidden'
-      style={{
-        width: screenWidth + 2 * frameWidth,
-        height: clippedOuterHeight
-      }}
-    >
-      {mockup}
-    </div>
-  );
+  // Note: We intentionally do NOT clip the mockup height to match device aspect ratio.
+  // Shorter devices (e.g. 16:9) should appear with consistent bezel; stream should
+  // use `object-contain` to avoid cropping instead.
+  void deviceWidth;
+  void deviceHeight;
+  return mockup;
 }

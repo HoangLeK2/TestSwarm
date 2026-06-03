@@ -16,7 +16,7 @@ function item(partial: Partial<ActivityLogItem>): ActivityLogItem {
   } as ActivityLogItem;
 }
 
-test('activityLogDeepLink returns campaign monitor for campaign entity', () => {
+test('activityLogDeepLink returns campaign list deep link for campaign entity', () => {
   const link = activityLogDeepLink(
     item({ entity_type: 'campaign', entity_id: 'camp-42', action: 'campaign.complete' })
   );

@@ -129,7 +129,7 @@ export function RunCampaignDialog({
 
   useEffect(() => {
     if (!pairKey || !variableQuery.data) return;
-    const savedVars = variableQuery.data.vars ?? {};
+    const savedVars = variableQuery.data?.vars ?? {};
     setDrafts((prev) => {
       if (prev[pairKey] !== undefined) return prev;
       return {

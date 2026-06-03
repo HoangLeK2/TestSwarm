@@ -136,6 +136,175 @@ def test_try_edge_extra_data_can_return_items_when_requested(monkeypatch) -> Non
     assert sc.ctx["posts"] == [{"post_key": "p1", "text": "hello"}]
 
 
+def test_fb_posts_batch_sets_active_parent_for_later_comments(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    device = _FakeDevice({
+        "ok": True,
+        "ingest": {
+            "parsed_count": 1,
+            "inserted_count": 1,
+            "duplicate_count": 0,
+            "diagnostic": {"reason_code": "ok"},
+            "post_id_map": {"pid-1": "scoped-parent-hash"},
+            "active_parent_post": {
+                "pid": "pid-1",
+                "parent_id": "scoped-parent-hash",
+                "post_key": "post-1",
+                "stable_post_id": "stable-1",
+                "fb_post_id": "fb-1",
+                "author": "Alice",
+                "timestamp": "1 giờ",
+                "text_prefix": "parent post body",
+            },
+        },
+    })
+    sc = _ctx(device)
+
+    handled_posts = extraction_mod._try_edge_extra_data(
+        sc,
+        {"collection": "fb", "edge_extra_data": True, "dedupe_field": "post_key"},
+        "fb_posts",
+        {},
+    )
+
+    assert handled_posts is True
+    assert sc.ctx["_active_comment_parent_hash"] == "scoped-parent-hash"
+    assert sc.ctx["_fb_comment_parent_pid"] == "pid-1"
+    assert sc.ctx["_active_comment_parent_anchor"] == {
+        "pid": "pid-1",
+        "post_key": "post-1",
+        "stable_post_id": "stable-1",
+        "fb_post_id": "fb-1",
+        "author": "Alice",
+        "timestamp": "1 giờ",
+        "text_prefix": "parent post body",
+    }
+
+    device.response = {
+        "ok": True,
+        "ingest": {
+            "parsed_count": 1,
+            "inserted_count": 1,
+            "duplicate_count": 0,
+            "diagnostic": {"reason_code": "ok"},
+        },
+    }
+    handled_comments = extraction_mod._try_edge_extra_data(
+        sc,
+        {"collection": "fb", "edge_extra_data": True},
+        "fb_comments",
+        {},
+    )
+
+    assert handled_comments is True
+    comment_context = device.calls[-1]["context"]
+    assert comment_context["parent_id"] == "scoped-parent-hash"
+    assert comment_context["parent_id_already_scoped"] is True
+    assert comment_context["parent_post_id"] == "pid-1"
+    assert comment_context["_active_comment_parent_anchor"]["text_prefix"] == "parent post body"
+
+
+def test_fb_posts_multi_post_map_does_not_guess_active_comment_parent(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    device = _FakeDevice({
+        "ok": True,
+        "ingest": {
+            "parsed_count": 2,
+            "inserted_count": 2,
+            "duplicate_count": 0,
+            "diagnostic": {"reason_code": "ok"},
+            "post_id_map": {
+                "pid-1": "scoped-parent-1",
+                "pid-2": "scoped-parent-2",
+            },
+        },
+    })
+    sc = _ctx(device)
+
+    handled = extraction_mod._try_edge_extra_data(
+        sc,
+        {"collection": "fb", "edge_extra_data": True, "dedupe_field": "post_key"},
+        "fb_posts",
+        {},
+    )
+
+    assert handled is True
+    assert sc.ctx["_post_id_map"] == {
+        "pid-1": "scoped-parent-1",
+        "pid-2": "scoped-parent-2",
+    }
+    assert "_active_comment_parent_hash" not in sc.ctx
+    assert "_fb_comment_parent_pid" not in sc.ctx
+    assert "_active_comment_parent_anchor" not in sc.ctx
+
+
+def test_fb_posts_active_parent_metadata_wins_over_multi_post_map(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    device = _FakeDevice({
+        "ok": True,
+        "ingest": {
+            "parsed_count": 2,
+            "inserted_count": 2,
+            "duplicate_count": 0,
+            "diagnostic": {"reason_code": "ok"},
+            "post_id_map": {
+                "pid-1": "scoped-parent-1",
+                "pid-2": "scoped-parent-2",
+            },
+            "active_parent_post": {
+                "pid": "pid-2",
+                "parent_id": "scoped-parent-2",
+                "author": "Bob",
+                "text_prefix": "opened post body",
+            },
+        },
+    })
+    sc = _ctx(device)
+
+    handled = extraction_mod._try_edge_extra_data(
+        sc,
+        {"collection": "fb", "edge_extra_data": True, "dedupe_field": "post_key"},
+        "fb_posts",
+        {},
+    )
+
+    assert handled is True
+    assert sc.ctx["_active_comment_parent_hash"] == "scoped-parent-2"
+    assert sc.ctx["_fb_comment_parent_pid"] == "pid-2"
+    assert sc.ctx["_active_comment_parent_anchor"] == {
+        "pid": "pid-2",
+        "author": "Bob",
+        "text_prefix": "opened post body",
+    }
+
+
+def test_fb_comments_without_active_parent_does_not_forward_stale_parent_context(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    device = _FakeDevice({
+        "ok": True,
+        "ingest": {
+            "parsed_count": 1,
+            "inserted_count": 1,
+            "duplicate_count": 0,
+            "diagnostic": {"reason_code": "ok"},
+        },
+    })
+
+    handled = extraction_mod._try_edge_extra_data(
+        _ctx(device),
+        {"collection": "fb", "edge_extra_data": True},
+        "fb_comments",
+        {},
+    )
+
+    assert handled is True
+    context = device.calls[0]["context"]
+    assert context["parent_id"] is None
+    assert context["parent_id_already_scoped"] is False
+    assert context["parent_post_id"] is None
+    assert context["_active_comment_parent_anchor"] is None
+
+
 def test_try_edge_extra_data_reports_failure_without_server_fallback(monkeypatch) -> None:
     monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
     device = _FakeDevice({"ok": False, "error": "no_relay"})
@@ -287,6 +456,98 @@ def test_tap_fb_comment_button_resolves_target_via_agent_boot(monkeypatch) -> No
     assert sc.ctx["_active_comment_parent_hash"] == "scoped-hash"
 
 
+def test_tap_fb_comment_button_uses_persisted_post_dedupe_field(monkeypatch) -> None:
+    device = _FakeDevice({
+        "ok": True,
+        "agent_tapped": True,
+        "ingest": {
+            "diagnostic": {
+                "reason_code": "ok",
+                "verified": True,
+                "target": {
+                    "bounds": [10, 20, 110, 60],
+                    "pid": "pid-1",
+                    "parent_base_hash": "base-hash",
+                    "parent_id": "scoped-hash",
+                    "post_key": "post-1",
+                },
+            },
+        },
+    })
+    sc = _ctx(device)
+    sc.ctx["_fb_posts_dedupe_field"] = "post_key"
+    result = {}
+
+    control_flow.handle_tap_fb_comment_button(sc, {}, 0, result)
+
+    assert result["tapped"] is True
+    assert device.calls[0]["context"]["posts_dedupe_field"] == "post_key"
+
+
+def test_tap_fb_comment_button_stores_parent_pid_in_anchor(monkeypatch) -> None:
+    device = _FakeDevice({
+        "ok": True,
+        "agent_tapped": True,
+        "ingest": {
+            "diagnostic": {
+                "reason_code": "ok",
+                "verified": True,
+                "target": {
+                    "bounds": [10, 20, 110, 60],
+                    "pid": "pid-1",
+                    "parent_id": "scoped-hash",
+                    "post_key": "post-1",
+                    "author": "Alice",
+                    "timestamp": "1 giờ",
+                    "text_prefix": "parent post text",
+                },
+            },
+        },
+    })
+    sc = _ctx(device)
+    result = {}
+
+    control_flow.handle_tap_fb_comment_button(sc, {}, 0, result)
+
+    assert sc.ctx["_active_comment_parent_anchor"] == {
+        "pid": "pid-1",
+        "post_key": "post-1",
+        "stable_post_id": None,
+        "fb_post_id": None,
+        "author": "Alice",
+        "timestamp": "1 giờ",
+        "text_prefix": "parent post text",
+    }
+
+
+def test_tap_fb_comment_button_already_on_sheet_preserves_existing_anchor() -> None:
+    device = _FakeDevice({
+        "ok": True,
+        "ingest": {
+            "diagnostic": {
+                "reason_code": "already_on_comment_sheet",
+                "verified": True,
+                "target": None,
+            },
+        },
+    })
+    sc = _ctx(device)
+    sc.ctx["_fb_comment_parent_pid"] = "pid-existing"
+    sc.ctx["_active_comment_parent_anchor"] = {
+        "pid": "pid-existing",
+        "author": "Alice",
+        "timestamp": "1 giờ",
+        "text_prefix": "existing parent post",
+    }
+    result = {}
+
+    control_flow.handle_tap_fb_comment_button(sc, {}, 0, result)
+
+    assert result["tapped"] is True
+    assert sc.ctx["_fb_comment_parent_pid"] == "pid-existing"
+    assert sc.ctx["_active_comment_parent_anchor"]["text_prefix"] == "existing parent post"
+
+
 def test_tap_fb_comment_button_skips_server_tap_when_agent_tapped(monkeypatch) -> None:
     device = _FakeDevice({
         "ok": True,
@@ -361,7 +622,7 @@ def test_tap_fb_comment_button_skips_then_when_verify_failed() -> None:
     assert "_active_comment_parent_hash" not in sc.ctx
 
 
-def test_try_edge_extra_data_uses_base_parent_hash_for_comments(monkeypatch) -> None:
+def test_try_edge_extra_data_prefers_scoped_parent_hash_for_comments(monkeypatch) -> None:
     monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
     device = _FakeDevice({
         "ok": True,
@@ -389,7 +650,8 @@ def test_try_edge_extra_data_uses_base_parent_hash_for_comments(monkeypatch) -> 
     )
 
     assert handled is True
-    assert device.calls[0]["context"]["parent_id"] == "base-hash"
+    assert device.calls[0]["context"]["parent_id"] == "scoped-hash"
+    assert device.calls[0]["context"]["parent_id_already_scoped"] is True
     assert device.calls[0]["context"]["parent_post_id"] == "pid-1"
 
 

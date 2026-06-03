@@ -12,6 +12,9 @@ _LEGACY_AS_DRAFT: Final[frozenset[CampaignStatus]] = frozenset(
 _LEGACY_AS_RUNNING: Final[frozenset[CampaignStatus]] = frozenset(
     {CampaignStatus.RUNNING, CampaignStatus.PAUSED}
 )
+_BODY_MUTABLE: Final[frozenset[CampaignStatus]] = frozenset(
+    {CampaignStatus.DRAFT, CampaignStatus.IDLE, CampaignStatus.CANCELLED}
+)
 
 _TRANSITIONS: Final[dict[CampaignStatus, frozenset[CampaignStatus]]] = {
     CampaignStatus.DRAFT: frozenset(
@@ -106,9 +109,9 @@ def transition_error_message(
 
 
 def is_body_locked(status: str | CampaignStatus) -> bool:
-    """Body fields (scenario_refs, vars, overrides) immutable outside draft/idle."""
+    """Body fields mutable in draft/idle/cancelled (re-run prep after cancel)."""
     state = normalize_status(status)
-    return state not in _LEGACY_AS_DRAFT
+    return state not in _BODY_MUTABLE
 
 
 def allows_scheduled_metadata_only(status: str | CampaignStatus) -> bool:

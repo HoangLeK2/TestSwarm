@@ -54,6 +54,8 @@ interface DeviceTileProps {
   /** Rail: ẩn pinch zoom + khởi động lại phiên ADB/scrcpy (trang ghi kịch bản). */
   minimalRailControls?: boolean;
   streamFetchPriority?: 'high' | 'low' | 'auto';
+  /** Hide current-app label under the mockup (filmstrip tiles). */
+  hideAppCaption?: boolean;
 }
 
 export function DeviceTile({
@@ -75,7 +77,8 @@ export function DeviceTile({
   readOnlyPreview = false,
   mockupScreenWidth: mockupScreenWidthProp,
   minimalRailControls = false,
-  streamFetchPriority = 'auto'
+  streamFetchPriority = 'auto',
+  hideAppCaption = false
 }: DeviceTileProps) {
   const t = useTranslations('devicesFarm');
   const id = serialToId(device.serial);
@@ -254,7 +257,7 @@ export function DeviceTile({
                 />
               ) : null}
             </div>
-            {isActive && (
+            {isActive && !hideAppCaption && (
               <p
                 className='mx-auto max-w-[min(320px,90vw)] truncate px-1 text-center font-mono text-[10px] text-muted-foreground'
                 id={`app-${id}`}

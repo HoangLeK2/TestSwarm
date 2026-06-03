@@ -89,6 +89,15 @@ async def create_schedule(
     return schedule
 
 
+async def lookup_schedule_org_id(db: AsyncSession, schedule_id: str) -> str | None:
+    """Resolve schedule org without tenant context (Temporal/background paths)."""
+    table = Schedule.__table__
+    result = await db.execute(
+        select(table.c.org_id).where(table.c.id == schedule_id).limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
 async def get_schedule(
     db: AsyncSession, schedule_id: str
 ) -> Optional[Schedule]:

@@ -228,10 +228,11 @@ async def list_content(
         limit=limit,
         offset=offset,
     )
-    out_items = []
-    for item in items:
-        parent_item = await _resolve_parent_item(db, item)
-        out_items.append(_item_to_out_with_parent(item, parent_item=parent_item))
+    parent_items = await _resolve_parent_items_for_list(db, items)
+    out_items = [
+        _item_to_out_with_parent(item, parent_item=parent_items.get(item.id))
+        for item in items
+    ]
     return {
         "items": out_items,
         "total": total,
@@ -571,7 +572,11 @@ def _parent_post_identifiers(item) -> list[tuple[str, str]]:
 
 
 async def _resolve_parent_item(db, item):
-    if not (item.parent_id or int(item.item_level or 0) > 0):
+    if not (
+        item.parent_id
+        or int(item.item_level or 0) > 0
+        or str(item.content_type or "").endswith("comment")
+    ):
         return None
 
     base_filters = [ContentItem.deleted_at.is_(None)]
@@ -602,12 +607,6 @@ async def _resolve_parent_item(db, item):
             return parent
 
     identifiers = _parent_post_identifiers(item)
-    if not identifiers:
-        return None
-
-    identifier_filters = []
-    for key, value in identifiers:
-        identifier_filters.append(ContentItem.raw_data[key].as_string() == value)
     post_filters = [
         *base_filters,
         ContentItem.collection == item.collection,
@@ -617,21 +616,144 @@ async def _resolve_parent_item(db, item):
             ContentItem.content_type == "group_post",
             ContentItem.content_type.like("%post"),
         ),
-        or_(*identifier_filters),
     ]
-    if item.execution_id:
+    if identifiers:
+        identifier_filters = []
+        for key, value in identifiers:
+            identifier_filters.append(ContentItem.raw_data[key].as_string() == value)
+        anchored_filters = [*post_filters, or_(*identifier_filters)]
+        if item.execution_id:
+            parent = await _fetch(
+                select(ContentItem)
+                .where(*anchored_filters, ContentItem.execution_id == item.execution_id)
+                .order_by(ContentItem.extracted_at.desc().nullslast(), ContentItem.created_at.desc())
+            )
+            if parent is not None:
+                return parent
         parent = await _fetch(
             select(ContentItem)
-            .where(*post_filters, ContentItem.execution_id == item.execution_id)
+            .where(*anchored_filters)
             .order_by(ContentItem.extracted_at.desc().nullslast(), ContentItem.created_at.desc())
         )
         if parent is not None:
             return parent
+
+    if not item.execution_id:
+        return None
+
+    timeline_filters = [
+        *post_filters,
+        ContentItem.execution_id == item.execution_id,
+    ]
+    if item.extracted_at:
+        timeline_filters.append(ContentItem.extracted_at <= item.extracted_at)
+    elif item.created_at:
+        timeline_filters.append(ContentItem.created_at <= item.created_at)
+
     return await _fetch(
         select(ContentItem)
-        .where(*post_filters)
+        .where(*timeline_filters)
         .order_by(ContentItem.extracted_at.desc().nullslast(), ContentItem.created_at.desc())
     )
+
+
+async def _resolve_parent_items_for_list(db, items: list[ContentItem]) -> dict[str, ContentItem]:
+    comments = [item for item in items if _is_comment_content_item(item)]
+    if not comments:
+        return {}
+
+    resolved: dict[str, ContentItem] = {}
+
+    parent_hashes = {item.parent_id for item in comments if item.parent_id}
+    if parent_hashes:
+        direct_rows = (
+            await db.execute(
+                select(ContentItem).where(
+                    ContentItem.deleted_at.is_(None),
+                    ContentItem.content_hash.in_(parent_hashes),
+                )
+            )
+        ).scalars().all()
+        by_hash: dict[str, list[ContentItem]] = {}
+        for parent in direct_rows:
+            by_hash.setdefault(parent.content_hash, []).append(parent)
+
+        for item in comments:
+            if not item.parent_id:
+                continue
+            parent = _best_parent_candidate(item, by_hash.get(item.parent_id, []))
+            if parent is not None:
+                resolved[item.id] = parent
+
+    unresolved = [item for item in comments if item.id not in resolved and item.execution_id]
+    if not unresolved:
+        return resolved
+
+    executions = {item.execution_id for item in unresolved if item.execution_id}
+    collections = {item.collection for item in unresolved if item.collection}
+    org_ids = {item.org_id for item in unresolved if item.org_id}
+    user_ids = {item.user_id for item in unresolved if item.user_id}
+
+    post_filters = [
+        ContentItem.deleted_at.is_(None),
+        ContentItem.execution_id.in_(executions),
+        ContentItem.collection.in_(collections),
+        or_(
+            ContentItem.content_type == "fb_post",
+            ContentItem.content_type == "post",
+            ContentItem.content_type == "group_post",
+            ContentItem.content_type.like("%post"),
+        ),
+    ]
+    if org_ids:
+        post_filters.append(ContentItem.org_id.in_(org_ids))
+    if user_ids:
+        post_filters.append(ContentItem.user_id.in_(user_ids))
+
+    posts = (
+        await db.execute(
+            select(ContentItem)
+            .where(*post_filters)
+            .order_by(ContentItem.extracted_at.desc().nullslast(), ContentItem.created_at.desc())
+        )
+    ).scalars().all()
+
+    by_scope: dict[tuple[str | None, str, str | None, str | None], list[ContentItem]] = {}
+    for post in posts:
+        key = (post.execution_id, post.collection, post.org_id, post.user_id)
+        by_scope.setdefault(key, []).append(post)
+
+    for item in unresolved:
+        key = (item.execution_id, item.collection, item.org_id, item.user_id)
+        parent = _nearest_previous_parent(item, by_scope.get(key, []))
+        if parent is not None:
+            resolved[item.id] = parent
+
+    return resolved
+
+
+def _best_parent_candidate(item, candidates: list[ContentItem]) -> ContentItem | None:
+    if not candidates:
+        return None
+    same_execution = [p for p in candidates if item.execution_id and p.execution_id == item.execution_id]
+    scoped = same_execution or candidates
+    for parent in scoped:
+        if item.org_id and parent.org_id != item.org_id:
+            continue
+        if item.user_id and parent.user_id != item.user_id:
+            continue
+        return parent
+    return None
+
+
+def _nearest_previous_parent(item, posts: list[ContentItem]) -> ContentItem | None:
+    item_time = item.extracted_at or item.created_at
+    for post in posts:
+        post_time = post.extracted_at or post.created_at
+        if item_time and post_time and post_time > item_time:
+            continue
+        return post
+    return None
 
 
 def _build_payload(item) -> dict:

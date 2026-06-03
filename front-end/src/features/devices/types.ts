@@ -70,6 +70,20 @@ export type WsMessage =
       scenario_active: boolean;
     }
   | {
+      type: 'multi_action_result';
+      request_id: string;
+      ok: boolean;
+      count: number;
+      error?: string;
+      results: Array<{
+        serial: string;
+        ok: boolean;
+        error?: string;
+        message?: string;
+        latency_ms?: number;
+      }>;
+    }
+  | {
       type: 'notification';
       data: import('@/features/notifications/services/api').NotificationItem;
     }

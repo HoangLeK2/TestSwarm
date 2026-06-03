@@ -24,6 +24,8 @@ type Props = {
   hideDeviceFunctions?: boolean;
   readOnlyPreview?: boolean;
   busyBanner?: ReactNode;
+  /** Mirror scale in multi-phone layouts. */
+  mirrorSize?: 'default' | 'multiCompact' | 'multiFocus';
 };
 
 function deviceMirrorPropsEqual(prev: Props, next: Props) {
@@ -37,6 +39,7 @@ function deviceMirrorPropsEqual(prev: Props, next: Props) {
   if (prev.hideDeviceFunctions !== next.hideDeviceFunctions) return false;
   if (prev.readOnlyPreview !== next.readOnlyPreview) return false;
   if (prev.busyBanner !== next.busyBanner) return false;
+  if (prev.mirrorSize !== next.mirrorSize) return false;
   if (prev.highlightBounds !== next.highlightBounds) {
     const pb = prev.highlightBounds;
     const nb = next.highlightBounds;
@@ -80,13 +83,24 @@ export const ControlRecordMirror = memo(function ControlRecordMirror({
   hideControls,
   hideDeviceFunctions,
   readOnlyPreview,
-  busyBanner
+  busyBanner,
+  mirrorSize = 'default'
 }: Props) {
+  const mockupScreenWidth =
+    mirrorSize === 'multiFocus' ? 236 : mirrorSize === 'multiCompact' ? 252 : 262;
+  const compactPadding = mirrorSize !== 'default';
+
   return (
     <>
       {busyBanner}
-      <div className='flex w-full justify-center p-3'>
-        <div className='w-full max-w-full overflow-x-auto'>
+      <div
+        className={
+          compactPadding
+            ? 'flex w-full min-w-0 justify-center px-2 py-2'
+            : 'flex w-full justify-center p-3'
+        }
+      >
+        <div className='mx-auto w-fit max-w-full'>
           <div className='mx-auto w-fit'>
             <DeviceTile
               device={device}
@@ -104,8 +118,9 @@ export const ControlRecordMirror = memo(function ControlRecordMirror({
               hideControls={hideControls}
               hideDeviceFunctions={hideDeviceFunctions}
               readOnlyPreview={readOnlyPreview}
-              mockupScreenWidth={262}
+              mockupScreenWidth={mockupScreenWidth}
               streamFetchPriority='high'
+              hideAppCaption={compactPadding}
             />
           </div>
         </div>

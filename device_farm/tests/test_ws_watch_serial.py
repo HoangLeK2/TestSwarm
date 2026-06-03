@@ -34,7 +34,13 @@ def _h264_key(serial: str) -> bytes:
 @dataclass
 class _FakeDevice:
     serial: str
+    screen_width: int = 1080
+    screen_height: int = 1920
+    state: str = "READY"
+    _relay_id: str = "relay-test"
+    _scenario_active: int = 0
     _q: Optional[asyncio.Queue] = None
+    calls: list[tuple] | None = None
 
     def subscribe_status(self, _ctrl_q: asyncio.Queue) -> None:
         return
@@ -63,6 +69,11 @@ class _FakeDevice:
     def unsubscribe_frames(self, q: asyncio.Queue) -> None:
         if self._q is q:
             self._q = None
+
+    def tap(self, x: int, y: int) -> None:
+        if self.calls is None:
+            self.calls = []
+        self.calls.append(("tap", x, y))
 
 
 class _FakeManager:
@@ -102,3 +113,35 @@ def test_ws_watch_serial_spawns_sender_and_emits_binary_frames():
 
         ws.send_json({"type": "unwatch_serial", "serial": "SN001"})
 
+
+def test_ws_multi_action_returns_per_device_result_and_scales_ratio():
+    dev_a = _FakeDevice(serial="A", screen_width=1000, screen_height=2000)
+    dev_b = _FakeDevice(serial="B", screen_width=500, screen_height=1000)
+    mgr = _FakeManager([dev_a, dev_b])
+    ws_manager = WebSocketManager(mgr, db_enabled=False, read_only=False)
+
+    app = FastAPI()
+
+    @app.websocket("/ws")
+    async def _ws(ws: WebSocket):
+        await ws_manager.connect(ws, user_id=None)
+
+    client = TestClient(app)
+    with client.websocket_connect("/ws") as ws:
+        _ = ws.receive_json()
+        _ = ws.receive_json()
+        ws.send_json(
+            {
+                "type": "multi_action",
+                "request_id": "req-ws",
+                "serials": ["A", "B"],
+                "action": {"type": "tap_ratio", "rx": 0.25, "ry": 0.5},
+            }
+        )
+
+        result = ws.receive_json()
+        assert result["type"] == "multi_action_result"
+        assert result["request_id"] == "req-ws"
+        assert result["ok"] is True
+        assert dev_a.calls == [("tap", 250, 1000)]
+        assert dev_b.calls == [("tap", 125, 500)]

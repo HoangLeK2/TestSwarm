@@ -19,7 +19,7 @@ const DISPATCHABLE = new Set<string>([
   'cancelled'
 ]);
 const ACTIVE_EXECUTION = new Set<string>(['running', 'paused']);
-const BODY_EDITABLE = new Set<string>(['draft', 'idle']);
+const BODY_EDITABLE = new Set<string>(['draft', 'idle', 'cancelled']);
 const TERMINAL = new Set<string>(['completed', 'failed', 'archived']);
 
 /** Campaign may start a new run / dispatch (draft, scheduled, legacy idle). */
@@ -47,7 +47,7 @@ export function isCampaignMetadataEditable(s: string): boolean {
   return BODY_EDITABLE.has(s) || s === 'scheduled';
 }
 
-/** Body fields (scenario_refs, vars, overrides) editable only in draft/idle. */
+/** Body fields (scenario_refs, vars, overrides) editable in draft/idle/cancelled. */
 export function isCampaignBodyEditable(s: string): boolean {
   return BODY_EDITABLE.has(s);
 }

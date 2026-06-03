@@ -177,6 +177,24 @@ export function useDeviceFarm() {
           return { ...prev, [msg.serial]: arr };
         });
       }
+
+      if (msg.type === 'multi_action_result') {
+        setLogs((prev) => {
+          const next = { ...prev };
+          msg.results.forEach((item) => {
+            const status = item.ok ? 'ok' : item.error || 'failed';
+            const latency =
+              typeof item.latency_ms === 'number'
+                ? ` ${item.latency_ms}ms`
+                : '';
+            next[item.serial] = [
+              ...(next[item.serial] ?? []),
+              `[multi] ${status}${latency}`
+            ].slice(-50);
+          });
+          return next;
+        });
+      }
     });
 
     return () => wsRef.current?.close();

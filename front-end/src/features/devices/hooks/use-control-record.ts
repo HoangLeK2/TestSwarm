@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { campaignsApi, scenariosApi } from '@/features/campaigns/services/api';
 import { scenarioTemplatesApi } from '@/features/scenario-templates/services/api';
 import type { ScenarioOut } from '@/features/campaigns/types';
+import type { Device } from '../types';
 import type { ScenarioStep } from '../types/scenario';
 import { scenarioToJson } from '../types/scenario';
 import {
@@ -44,6 +45,96 @@ const HIERARCHY_BOOTSTRAP_RETRY_MS = 1500;
 const HIERARCHY_BOOTSTRAP_MAX_ATTEMPTS = 20;
 const RECORD_XML_POLL_INTERVAL_MS = 1200;
 const RECORD_XML_POLL_TIMEOUT_MS = 4800;
+
+type SendAndRecordOptions = {
+  multiSerials?: string[];
+};
+
+function ratio(value: number | undefined, size: number) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || size <= 0) {
+    return 0;
+  }
+  return Number(Math.max(0, Math.min(1, value / size)).toFixed(4));
+}
+
+function buildMultiAction(
+  msg: object,
+  primary: Device
+): Record<string, unknown> | null {
+  const m = msg as Record<string, any>;
+  const type = String(m.type ?? '');
+  const w = primary.screen_width || 1080;
+  const h = primary.screen_height || 1920;
+
+  if (type === 'tap') {
+    return {
+      type: 'tap_ratio',
+      rx: ratio(m.x, w),
+      ry: ratio(m.y, h)
+    };
+  }
+  if (type === 'swipe') {
+    return {
+      type: 'swipe_ratio',
+      rx1: ratio(m.x1, w),
+      ry1: ratio(m.y1, h),
+      rx2: ratio(m.x2, w),
+      ry2: ratio(m.y2, h),
+      ms: m.ms
+    };
+  }
+  if (type === 'drag') {
+    return {
+      type: 'drag_ratio',
+      rx1: ratio(m.x1, w),
+      ry1: ratio(m.y1, h),
+      rx2: ratio(m.x2, w),
+      ry2: ratio(m.y2, h),
+      duration_ms: m.ms ?? m.duration_ms
+    };
+  }
+  if (type === 'double_tap') {
+    return {
+      type: 'double_tap_ratio',
+      rx: ratio(m.x, w),
+      ry: ratio(m.y, h)
+    };
+  }
+  if (type === 'long_tap') {
+    return {
+      type: 'long_tap_ratio',
+      rx: ratio(m.x, w),
+      ry: ratio(m.y, h),
+      duration_ms: m.ms ?? m.duration_ms
+    };
+  }
+  if (type === 'pinch') {
+    return {
+      type: 'pinch_ratio',
+      rcx: ratio(m.cx, w),
+      rcy: ratio(m.cy, h),
+      scale: m.scale,
+      duration_ms: m.ms ?? m.duration_ms
+    };
+  }
+  if (
+    [
+      'key',
+      'tap_selector',
+      'input_text',
+      'launch_app',
+      'open_url',
+      'screen_on',
+      'screen_off',
+      'unlock',
+      'swipe_ext'
+    ].includes(type)
+  ) {
+    const { serial: _serial, ...rest } = m;
+    return rest;
+  }
+  return null;
+}
 
 export function useControlRecord(
   initialSerial?: string | null,
@@ -210,8 +301,21 @@ export function useControlRecord(
   }, []);
 
   const sendAndRecord = useCallback(
-    (msg: object) => {
+    (msg: object, options?: SendAndRecordOptions) => {
       const m0 = msg as { type?: string; serial?: string };
+      const multiSerials = Array.from(
+        new Set(
+          (options?.multiSerials ?? [])
+            .map((serial) => serial.trim())
+            .filter(Boolean)
+        )
+      );
+      const multiAction =
+        selectedDevice &&
+        m0.serial === selectedDevice.serial &&
+        multiSerials.length > 1
+          ? buildMultiAction(msg, selectedDevice)
+          : null;
 
       // Pre-fetch screenshot BEFORE sending the tap so we capture the screen
       // state at tap-time (before any UI transition the tap triggers).
@@ -226,7 +330,19 @@ export function useControlRecord(
           ? fetchScreenshotB64(selectedDevice.serial)
           : undefined;
 
-      wsSend(msg);
+      if (multiAction && selectedDevice) {
+        wsSend({
+          type: 'multi_action',
+          request_id: `control-${Date.now()}-${Math.random()
+            .toString(36)
+            .slice(2, 8)}`,
+          primary_serial: selectedDevice.serial,
+          serials: multiSerials,
+          action: multiAction
+        });
+      } else {
+        wsSend(msg);
+      }
       if (
         selectedDevice &&
         m0.serial === selectedDevice.serial &&
@@ -1059,11 +1175,14 @@ export function useControlRecord(
   >('text');
   const [selectorValue, setSelectorValue] = useState('');
 
-  const handleTapSelector = useCallback(() => {
+  const handleTapSelector = useCallback((options?: SendAndRecordOptions) => {
     if (!selectedDevice || !selectorValue.trim()) return;
     const by = selectorBy;
     const value = selectorValue.trim();
-    wsSend({ type: 'tap_selector', serial: selectedDevice.serial, by, value });
+    sendAndRecord(
+      { type: 'tap_selector', serial: selectedDevice.serial, by, value },
+      options
+    );
     if (recording) {
       recordStep(
         buildRecordedTapStep({
@@ -1082,7 +1201,7 @@ export function useControlRecord(
     selectedDevice,
     selectorBy,
     selectorValue,
-    wsSend,
+    sendAndRecord,
     recording,
     recordStep,
     t

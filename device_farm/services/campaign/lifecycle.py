@@ -56,7 +56,7 @@ def assert_body_fields_mutable(
         return
 
     state = normalize_status(row.status)
-    if state in (CampaignStatus.DRAFT, CampaignStatus.IDLE):
+    if state in (CampaignStatus.DRAFT, CampaignStatus.IDLE, CampaignStatus.CANCELLED):
         return
 
     if allows_scheduled_metadata_only(state):

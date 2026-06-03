@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
 
@@ -16,6 +17,45 @@ from temporalio import activity
 from temporal.schedule_shared import ScheduleDispatchResult
 
 log = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def _schedule_tenant_db(schedule_id: str):
+    """Activity DB session with tenant context resolved from schedule_id."""
+    from db.crud.schedule import lookup_schedule_org_id
+    from db.database import activity_session
+    from tenancy.context import tenant_context
+
+    async with activity_session() as db:
+        org_id = await lookup_schedule_org_id(db, schedule_id)
+        if not org_id:
+            raise ValueError(f"Schedule {schedule_id!r} not found")
+        with tenant_context(org_id):
+            yield db, org_id
+
+
+@asynccontextmanager
+async def _tenant_scope_for_config(cfg: dict[str, Any]):
+    """Tenant context for dispatch using org_id from config or schedule lookup."""
+    from db.crud.schedule import lookup_schedule_org_id
+    from db.database import activity_session
+    from tenancy.context import tenant_context
+
+    org_id = cfg.get("org_id")
+    if org_id:
+        with tenant_context(org_id):
+            yield
+        return
+    schedule_id = cfg.get("id")
+    if not schedule_id:
+        raise ValueError("Schedule config missing id")
+    async with activity_session() as db:
+        org_id = await lookup_schedule_org_id(db, schedule_id)
+        if not org_id:
+            raise ValueError(f"Schedule {schedule_id!r} not found")
+        with tenant_context(org_id):
+            yield
+
 
 # Injected by worker startup — same pattern as DeviceActivities
 _queue_ref = None
@@ -46,11 +86,10 @@ class ScheduleActivities:
     @activity.defn
     async def load_schedule(self, schedule_id: str) -> dict[str, Any]:
         """Load schedule config from DB. Returns serializable dict."""
-        from db.database import activity_session as AsyncSessionLocal
         from db.crud.schedule import get_schedule
 
         activity.heartbeat("load_schedule")
-        async with AsyncSessionLocal() as db:
+        async with _schedule_tenant_db(schedule_id) as (db, _org_id):
             schedule = await get_schedule(db, schedule_id)
             if schedule is None:
                 raise ValueError(f"Schedule {schedule_id!r} not found")
@@ -78,23 +117,23 @@ class ScheduleActivities:
                 "stagger_devices": schedule.stagger_devices,
                 "stagger_interval_seconds": schedule.stagger_interval_seconds,
                 "is_enabled": schedule.is_enabled,
-                "org_id": getattr(schedule, "org_id", None),
+                "org_id": schedule.org_id,
             }
 
     @activity.defn
     async def create_run_record(self, schedule_id: str) -> str:
         """Create a ScheduleRun record and return its ID."""
-        from db.database import activity_session as AsyncSessionLocal
         from db.crud.schedule import create_schedule_run
 
         activity.heartbeat("create_run_record")
-        async with AsyncSessionLocal() as db:
+        async with _schedule_tenant_db(schedule_id) as (db, org_id):
             run = await create_schedule_run(
                 db,
                 schedule_id=schedule_id,
                 status="pending",
                 trigger_source="temporal",
                 scheduled_at=datetime.now(timezone.utc),
+                org_id=org_id,
             )
             await db.commit()
             return run.id
@@ -122,23 +161,24 @@ class ScheduleActivities:
         # double the intended jitter (once in the workflow, once in the activity).
 
         try:
-            if target_type == "campaign":
-                result = await self._dispatch_campaign(
-                    schedule_config, stagger, stagger_interval
-                )
-            elif target_type == "template":
-                result = await self._dispatch_template(
-                    schedule_config, stagger, stagger_interval
-                )
-            elif target_type == "fleet":
-                result = await self._dispatch_fleet(
-                    schedule_config, stagger, stagger_interval
-                )
-            else:
-                return ScheduleDispatchResult(
-                    run_id=run_id,
-                    error=f"Unknown target_type: {target_type!r}",
-                )
+            async with _tenant_scope_for_config(schedule_config):
+                if target_type == "campaign":
+                    result = await self._dispatch_campaign(
+                        schedule_config, stagger, stagger_interval
+                    )
+                elif target_type == "template":
+                    result = await self._dispatch_template(
+                        schedule_config, stagger, stagger_interval
+                    )
+                elif target_type == "fleet":
+                    result = await self._dispatch_fleet(
+                        schedule_config, stagger, stagger_interval
+                    )
+                else:
+                    return ScheduleDispatchResult(
+                        run_id=run_id,
+                        error=f"Unknown target_type: {target_type!r}",
+                    )
 
             return ScheduleDispatchResult(
                 run_id=run_id,
@@ -241,6 +281,7 @@ class ScheduleActivities:
             filter_state=filter_state,
             filter_model=filter_model,
             max_devices=max_devices,
+            org_id=cfg.get("org_id"),
         )
 
         if not devices:
@@ -303,7 +344,6 @@ class ScheduleActivities:
 
         Idempotent: safe to call multiple times.
         """
-        from db.database import activity_session as AsyncSessionLocal
         from services.scheduler import finalize_schedule_run_record
 
         activity.heartbeat("finalize_run")
@@ -323,7 +363,7 @@ class ScheduleActivities:
             normalized = dispatch_result
         status = "failed" if normalized.error else "completed"
 
-        async with AsyncSessionLocal() as db:
+        async with _schedule_tenant_db(schedule_id) as (db, org_id):
             await finalize_schedule_run_record(
                 db,
                 run_id=run_id,
@@ -337,6 +377,7 @@ class ScheduleActivities:
                 },
                 cron_expression=cron_expression,
                 timezone_name=timezone_name,
+                organization_id=org_id,
                 error_code="DISPATCH_FAILED" if normalized.error else None,
                 error_message=normalized.error,
             )
@@ -352,6 +393,7 @@ async def _resolve_fleet_devices(
     filter_state: str,
     filter_model: str | None,
     max_devices: int | None,
+    org_id: str | None = None,
 ):
     """Resolve devices from DeviceManager (async to avoid asyncpg event-loop conflicts)."""
     manager = _manager_ref
@@ -359,12 +401,18 @@ async def _resolve_fleet_devices(
         return []
 
     if device_group_id:
-        from db.database import activity_session as AsyncSessionLocal
+        from db.database import activity_session
         from db.crud.device_group import list_group_devices
+        from tenancy.context import get_current_org_id, tenant_context
 
         try:
-            async with AsyncSessionLocal() as db:
-                db_devices = await list_group_devices(db, device_group_id)
+            async with activity_session() as db:
+                scope_org = get_current_org_id() or org_id
+                if scope_org:
+                    with tenant_context(scope_org):
+                        db_devices = await list_group_devices(db, device_group_id)
+                else:
+                    db_devices = await list_group_devices(db, device_group_id)
         except Exception:
             db_devices = []
 

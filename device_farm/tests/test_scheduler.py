@@ -12,10 +12,16 @@ Coverage:
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch, call
 import pytest
+
+
+@asynccontextmanager
+async def _mock_schedule_tenant_db(_schedule_id: str, db):
+    yield db, "org-001"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -57,6 +63,7 @@ def _make_schedule(**kwargs):
         "next_run_at": None,
         "run_count": 0,
         "user_id": "user-001",
+        "org_id": "org-001",
         "created_at": datetime.now(timezone.utc),
         "updated_at": datetime.now(timezone.utc),
     }
@@ -411,7 +418,7 @@ class TestScheduleActivities:
         mock_db.__aexit__ = AsyncMock(return_value=False)
 
         with patch("temporal.schedule_activities.activity") as mock_act, \
-             patch("db.database.AsyncSessionLocal", return_value=mock_db), \
+             patch("temporal.schedule_activities._schedule_tenant_db", lambda sid: _mock_schedule_tenant_db(sid, mock_db)), \
              patch("db.crud.schedule.get_schedule", return_value=mock_schedule):
             mock_act.heartbeat = MagicMock()
             activities = ScheduleActivities()
@@ -430,7 +437,7 @@ class TestScheduleActivities:
         mock_db.__aexit__ = AsyncMock(return_value=False)
 
         with patch("temporal.schedule_activities.activity") as mock_act, \
-             patch("db.database.AsyncSessionLocal", return_value=mock_db), \
+             patch("temporal.schedule_activities._schedule_tenant_db", lambda sid: _mock_schedule_tenant_db(sid, mock_db)), \
              patch("db.crud.schedule.get_schedule", return_value=None):
             mock_act.heartbeat = MagicMock()
             activities = ScheduleActivities()
@@ -448,7 +455,7 @@ class TestScheduleActivities:
         mock_db.commit = AsyncMock()
 
         with patch("temporal.schedule_activities.activity") as mock_act, \
-             patch("db.database.AsyncSessionLocal", return_value=mock_db), \
+             patch("temporal.schedule_activities._schedule_tenant_db", lambda sid: _mock_schedule_tenant_db(sid, mock_db)), \
              patch("db.crud.schedule.create_schedule_run", return_value=mock_run):
             mock_act.heartbeat = MagicMock()
             activities = ScheduleActivities()
@@ -473,9 +480,8 @@ class TestScheduleActivities:
         )
 
         with patch("temporal.schedule_activities.activity") as mock_act, \
-             patch("db.database.activity_session", return_value=mock_db), \
-             patch("db.crud.schedule.update_schedule_run", new_callable=AsyncMock) as mock_ur, \
-             patch("db.crud.schedule.update_schedule_after_run", new_callable=AsyncMock) as mock_ua:
+             patch("temporal.schedule_activities._schedule_tenant_db", lambda sid: _mock_schedule_tenant_db(sid, mock_db)), \
+             patch("services.scheduler.finalize_schedule_run_record", new_callable=AsyncMock) as mock_finalize:
             mock_act.heartbeat = MagicMock()
             activities = ScheduleActivities()
             await activities.finalize_schedule_run(
@@ -483,8 +489,7 @@ class TestScheduleActivities:
                 "*/30 * * * *", "Asia/Ho_Chi_Minh"
             )
 
-        mock_ur.assert_awaited_once()
-        mock_ua.assert_awaited_once()
+        mock_finalize.assert_awaited_once()
         # Should commit
         mock_db.commit.assert_awaited_once()
 
@@ -508,10 +513,12 @@ class TestScheduleActivities:
         async def _mock_update_run(db, run_id, **kwargs):
             captured.update(kwargs)
 
+        async def _capture_finalize(db, **kwargs):
+            captured.update(kwargs)
+
         with patch("temporal.schedule_activities.activity") as mock_act, \
-             patch("db.database.AsyncSessionLocal", return_value=mock_db), \
-             patch("db.crud.schedule.update_schedule_run", side_effect=_mock_update_run), \
-             patch("db.crud.schedule.update_schedule_after_run", new_callable=AsyncMock):
+             patch("temporal.schedule_activities._schedule_tenant_db", lambda sid: _mock_schedule_tenant_db(sid, mock_db)), \
+             patch("services.scheduler.finalize_schedule_run_record", side_effect=_capture_finalize):
             mock_act.heartbeat = MagicMock()
             activities = ScheduleActivities()
             await activities.finalize_schedule_run(

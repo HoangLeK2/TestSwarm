@@ -19,6 +19,10 @@ const baseConfig: NextConfig = {
   ],
   async rewrites() {
     return [
+      {
+        source: '/api/screenshot-b64/:path*',
+        destination: `${BACKEND}/screenshot-b64/:path*`
+      },
       // Proxy all /api/* calls to FastAPI backend
       { source: '/api/:path*', destination: `${BACKEND}/api/:path*` },
       // Proxy MJPEG stream and screenshot endpoints

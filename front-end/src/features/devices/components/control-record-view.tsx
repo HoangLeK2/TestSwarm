@@ -14,6 +14,7 @@ import {
   AlertDialogTitle
 } from '@/components/ui/alert-dialog';
 import { ControlRecordMirror } from './control-record/control-record-mirror';
+import { MultiDeviceStage } from './control-record/multi-device-stage';
 import { MirrorPhonePlaceholder } from './control-record/mirror-phone-placeholder';
 import { SafeModeBanner } from '@/features/core/components/safe-mode-banner';
 import { useSafeMode } from '@/features/core/services/use-safe-mode';
@@ -33,6 +34,15 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select';
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu';
 import {
   Circle,
   Square,
@@ -170,6 +180,9 @@ import { applyStepsToFlowgramDocument } from '@/features/scenario-templates/comp
 import type { FlowgramRunState } from '@/features/scenario-templates/components/scenario-flow-editor/flowgram-scenario-context';
 import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
 
+const MAX_MULTI_CONTROL_DEVICES = 20;
+const MAX_MULTI_FOLLOWER_DEVICES = MAX_MULTI_CONTROL_DEVICES - 1;
+
 /**
  * Template variables are stored as metadata dicts:
  *   {"GROUP_NAME": {"type": "string", "default": "foo", "description": "..."}}
@@ -228,6 +241,14 @@ function deviceSelectFullTitle(d: {
 }) {
   const left = `${d.brand} ${d.model}`.trim();
   return left ? `${left} — ${d.serial}` : d.serial;
+}
+
+function isManualControlEligible(d: {
+  state?: string | null;
+  scenario_active?: number | null;
+}) {
+  const state = String(d.state || '').replace('DeviceState.', '').toUpperCase();
+  return state === 'READY' && (d.scenario_active ?? 0) <= 0;
 }
 
 type Props = {
@@ -351,12 +372,84 @@ export function ControlRecordView({
   const [coordinatePickTarget, setCoordinatePickTarget] =
     useState<CoordinatePickTarget | null>(null);
   const mirrorColRef = useRef<HTMLDivElement>(null);
+  const leftCollapsedBeforeMultiRef = useRef<boolean | null>(null);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [flowMode, setFlowMode] = useState(false);
   useEffect(() => {
     if (!ENABLE_FLOWGRAM_CONTROL_UI) setFlowMode(false);
   }, []);
   const showFlowUi = ENABLE_FLOWGRAM_CONTROL_UI && flowMode;
+  const [multiFollowerSerials, setMultiFollowerSerials] = useState<string[]>(
+    []
+  );
+  const [stepPickerOpen, setStepPickerOpen] = useState(true);
+  const multiFollowerOptions = useMemo(
+    () =>
+      device.connectedDevices.filter(
+        (d) =>
+          d.serial !== device.selectedDevice?.serial &&
+          isManualControlEligible(d)
+      ),
+    [device.connectedDevices, device.selectedDevice?.serial]
+  );
+  useEffect(() => {
+    const allowed = new Set(multiFollowerOptions.map((d) => d.serial));
+    setMultiFollowerSerials((prev) =>
+      prev
+        .filter((serial) => allowed.has(serial))
+        .slice(0, MAX_MULTI_FOLLOWER_DEVICES)
+    );
+  }, [multiFollowerOptions]);
+  const activeMultiSerials = useMemo(() => {
+    const primary = device.selectedDevice?.serial;
+    if (!primary) return [];
+    return [
+      primary,
+      ...multiFollowerSerials.filter((serial) => serial !== primary)
+    ];
+  }, [device.selectedDevice?.serial, multiFollowerSerials]);
+  const selectedMultiFollowerDevices = useMemo(() => {
+    const selected = new Set(multiFollowerSerials);
+    return device.connectedDevices.filter((d) => selected.has(d.serial));
+  }, [device.connectedDevices, multiFollowerSerials]);
+  const hasMultiFollowers = multiFollowerSerials.length > 0;
+  const multiFocusMode = hasMultiFollowers && !stepPickerOpen && !playerMode;
+  const showEditorPanel =
+    !hasMultiFollowers || stepPickerOpen || playerMode;
+  const treePanelOpen = safeHierarchy && !leftCollapsed && !hasMultiFollowers;
+
+  const prevMultiRef = useRef(false);
+
+  useEffect(() => {
+    if (hasMultiFollowers) {
+      if (!prevMultiRef.current) {
+        setStepPickerOpen(false);
+      }
+      setLeftCollapsed((prev) => {
+        if (leftCollapsedBeforeMultiRef.current === null) {
+          leftCollapsedBeforeMultiRef.current = prev;
+        }
+        return true;
+      });
+    } else {
+      if (prevMultiRef.current) {
+        setStepPickerOpen(true);
+      }
+      if (leftCollapsedBeforeMultiRef.current !== null) {
+        const restore = leftCollapsedBeforeMultiRef.current;
+        leftCollapsedBeforeMultiRef.current = null;
+        setLeftCollapsed(restore);
+      }
+    }
+    prevMultiRef.current = hasMultiFollowers;
+  }, [hasMultiFollowers]);
+  const sendAndRecord = record.sendAndRecord;
+  const mirrorWsSend = useCallback(
+    (obj: object) => {
+      sendAndRecord(obj, { multiSerials: activeMultiSerials });
+    },
+    [sendAndRecord, activeMultiSerials]
+  );
   // Track steps updated from the flowgram canvas (used for saving in flow mode)
   const flowStepsRef = useRef<typeof steps.items>(steps.items);
   const [flowCanvasKey, setFlowCanvasKey] = useState(0);
@@ -601,6 +694,29 @@ export function ControlRecordView({
       }
     },
     [previewBlocking]
+  );
+
+  const promoteMultiFollower = useCallback(
+    (serial: string) => {
+      guardWhilePreviewActive(() => {
+        const previousPrimary = device.selectedDevice?.serial;
+        if (!previousPrimary) return;
+        setMultiFollowerSerials((prev) =>
+          Array.from(
+            new Set([
+              ...prev.filter((item) => item !== serial),
+              previousPrimary
+            ])
+          )
+        );
+        device.setSelectedSerial(serial);
+      });
+    },
+    [
+      device.selectedDevice?.serial,
+      device.setSelectedSerial,
+      guardWhilePreviewActive
+    ]
   );
 
   // Global guard: intercept sidebar/header links while preview is running.
@@ -1645,9 +1761,12 @@ export function ControlRecordView({
         </div>
 
         {save.editingContext && (
-          <span className='inline-flex shrink-0 items-center rounded-full border border-amber-400/40 bg-amber-400/10 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300'>
-            Đang chỉnh sửa
-          </span>
+          <Badge
+            variant='outline'
+            className='shrink-0 border-amber-400/40 bg-amber-400/10 text-[10px] font-medium text-amber-700 dark:text-amber-300'
+          >
+            {t('editingScenario')}
+          </Badge>
         )}
         {save.templateContext && (
           <span className='inline-flex shrink-0 items-center rounded-full border border-emerald-400/40 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300'>
@@ -1655,54 +1774,175 @@ export function ControlRecordView({
           </span>
         )}
 
-        {/* Device selector */}
-        <div className='min-w-0 max-w-[min(280px,calc(100vw-14rem))] shrink'>
-          <Select
-            value={deviceSelectValue}
-            onValueChange={(v) =>
-              guardWhilePreviewActive(() => device.setSelectedSerial(v || null))
-            }
-          >
-            <SelectTrigger
-              className={cn(
-                'h-8 w-full min-w-0 max-w-full overflow-hidden text-xs',
-                '[&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate [&_[data-slot=select-value]]:text-left'
-              )}
+        {/* Device selector + multi sync */}
+        <div className='flex min-w-0 shrink items-center gap-1.5'>
+          <div className='min-w-0 max-w-[min(240px,calc(100vw-16rem))]'>
+            <Select
+              value={deviceSelectValue}
+              onValueChange={(v) =>
+                guardWhilePreviewActive(() =>
+                  device.setSelectedSerial(v || null)
+                )
+              }
             >
-              <SelectValue placeholder={t('selectPhonePlaceholder')} />
-            </SelectTrigger>
-            <SelectContent className='max-w-[min(420px,calc(100vw-2rem))]'>
-              {device.connectedDevices.map((d) => (
-                <SelectItem
-                  key={d.serial}
-                  value={d.serial}
-                  title={deviceSelectFullTitle(d)}
-                  className='text-xs'
-                >
-                  <span className='inline-flex min-w-0 max-w-full items-center gap-1'>
-                    <span className='min-w-0 truncate'>
-                      {formatDeviceSelectLabel(d)}
-                    </span>
-                    {((d.state || '').replace('DeviceState.', '') === 'BUSY' ||
-                      (d.scenario_active ?? 0) > 0) && (
-                      <span className='shrink-0 rounded bg-amber-400/20 px-1 py-0.5 text-[9px] font-medium text-amber-700 dark:text-amber-300'>
-                        chiến dịch
+              <SelectTrigger
+                className={cn(
+                  'h-8 w-full min-w-0 max-w-full overflow-hidden text-xs',
+                  '[&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate [&_[data-slot=select-value]]:text-left'
+                )}
+              >
+                <SelectValue placeholder={t('selectPhonePlaceholder')} />
+              </SelectTrigger>
+              <SelectContent className='max-w-[min(420px,calc(100vw-2rem))]'>
+                {device.connectedDevices.map((d) => (
+                  <SelectItem
+                    key={d.serial}
+                    value={d.serial}
+                    title={deviceSelectFullTitle(d)}
+                    className='text-xs'
+                  >
+                    <span className='inline-flex min-w-0 max-w-full items-center gap-1'>
+                      <span className='min-w-0 truncate'>
+                        {formatDeviceSelectLabel(d)}
                       </span>
-                    )}
-                  </span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+                      {((d.state || '').replace('DeviceState.', '') ===
+                        'BUSY' ||
+                        (d.scenario_active ?? 0) > 0) && (
+                        <Badge
+                          variant='outline'
+                          className='h-4 shrink-0 border-amber-400/40 bg-amber-400/10 px-1 text-[9px] font-medium text-amber-700 dark:text-amber-300'
+                        >
+                          {t('deviceCampaignBadge')}
+                        </Badge>
+                      )}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type='button'
+                size='sm'
+                variant={
+                  multiFollowerSerials.length > 0 ? 'default' : 'outline'
+                }
+                className='h-8 shrink-0 gap-1.5 text-xs'
+                disabled={
+                  !selectedDevice ||
+                  !canExecuteDevice ||
+                  multiFollowerOptions.length === 0
+                }
+                title={
+                  !canExecuteDevice
+                    ? safeReadOnly
+                      ? t('safeModeReadOnly')
+                      : t('noControlPermission')
+                    : multiFollowerOptions.length === 0
+                      ? t('multiControl.noReadyDevices')
+                      : undefined
+                }
+              >
+                <SlidersHorizontal className='size-3.5' />
+                {t('multiControl.buttonLabel')}
+                {multiFollowerSerials.length > 0 ? (
+                  <Badge
+                    variant='secondary'
+                    className='ml-0.5 h-4 rounded px-1 text-[10px]'
+                  >
+                    {multiFollowerSerials.length + 1}
+                  </Badge>
+                ) : null}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align='end' className='w-72'>
+              <DropdownMenuLabel className='text-[11px] font-normal text-muted-foreground'>
+                {t('multiControl.pickerLabel')}
+              </DropdownMenuLabel>
+              <DropdownMenuItem
+                onSelect={(event) => {
+                  event.preventDefault();
+                  setMultiFollowerSerials(
+                    multiFollowerOptions
+                      .map((d) => d.serial)
+                      .slice(0, MAX_MULTI_FOLLOWER_DEVICES)
+                  );
+                }}
+                disabled={multiFollowerOptions.length === 0}
+                className='text-xs'
+              >
+                {multiFollowerOptions.length > MAX_MULTI_FOLLOWER_DEVICES
+                  ? t('multiControl.selectUpToLimit', {
+                      count: MAX_MULTI_CONTROL_DEVICES
+                    })
+                  : t('multiControl.selectAllReady')}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={(event) => {
+                  event.preventDefault();
+                  setMultiFollowerSerials([]);
+                }}
+                disabled={multiFollowerSerials.length === 0}
+                className='text-xs'
+              >
+                {t('multiControl.clearSelection')}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              {multiFollowerOptions.length === 0 ? (
+                <DropdownMenuItem disabled className='text-xs text-muted-foreground'>
+                  {t('multiControl.noReadyDevices')}
+                </DropdownMenuItem>
+              ) : (
+                multiFollowerOptions.map((d) => {
+                  const checked = multiFollowerSerials.includes(d.serial);
+                  const limitReached =
+                    !checked &&
+                    multiFollowerSerials.length >= MAX_MULTI_FOLLOWER_DEVICES;
+                  return (
+                    <DropdownMenuCheckboxItem
+                      key={d.serial}
+                      checked={checked}
+                      disabled={limitReached}
+                      onCheckedChange={(nextChecked) => {
+                        setMultiFollowerSerials((prev) => {
+                          if (!nextChecked) {
+                            return prev.filter((serial) => serial !== d.serial);
+                          }
+                          if (
+                            prev.includes(d.serial) ||
+                            prev.length >= MAX_MULTI_FOLLOWER_DEVICES
+                          ) {
+                            return prev;
+                          }
+                          return [...prev, d.serial];
+                        });
+                      }}
+                      onSelect={(event) => event.preventDefault()}
+                      className='min-w-0 text-xs'
+                      title={deviceSelectFullTitle(d)}
+                    >
+                      <span className='min-w-0 truncate'>
+                        {formatDeviceSelectLabel(d)}
+                      </span>
+                    </DropdownMenuCheckboxItem>
+                  );
+                })
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
 
-        {/* WS status dot */}
-        <span
+        {/* WS status */}
+        <Badge
+          variant='outline'
           className={cn(
-            'inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-1 text-[11px] font-medium',
+            'h-8 shrink-0 gap-1.5 rounded-full px-2.5 text-[11px] font-medium',
             device.wsConnected
-              ? 'border-green-500/20 bg-green-500/10 text-green-700 dark:text-green-400'
-              : 'border-red-500/20 bg-red-500/10 text-red-600 dark:text-red-400'
+              ? 'border-green-500/30 bg-green-500/10 text-green-700 dark:text-green-400'
+              : 'border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400'
           )}
         >
           <span
@@ -1712,7 +1952,7 @@ export function ControlRecordView({
             )}
           />
           {device.wsConnected ? t('wsConnected') : t('wsDisconnected')}
-        </span>
+        </Badge>
 
         <div className='h-5 w-px bg-border' />
 
@@ -1732,9 +1972,7 @@ export function ControlRecordView({
               setFlowMode((v) => !v);
             }}
             title={
-              flowMode
-                ? 'Chuyển về danh sách bước'
-                : 'Chuyển sang Flow Editor trực quan'
+              flowMode ? t('flowSwitchToList') : t('flowSwitchToFlow')
             }
           >
             {flowMode ? (
@@ -1742,7 +1980,7 @@ export function ControlRecordView({
             ) : (
               <GitBranch className='size-3.5' />
             )}
-            {flowMode ? 'Danh sách' : 'Flow'}
+            {flowMode ? t('flowListLabel') : t('flowFlowLabel')}
           </Button>
         )}
       </div>
@@ -1753,9 +1991,7 @@ export function ControlRecordView({
         <div
           className={cn(
             'flex shrink-0 flex-col border-r border-border/60 bg-muted/10 transition-all duration-200',
-            leftCollapsed || !safeHierarchy
-              ? 'w-0 overflow-hidden'
-              : 'w-[280px]'
+            treePanelOpen ? 'w-[280px]' : 'w-0 overflow-hidden'
           )}
         >
           {/* Tree */}
@@ -1823,7 +2059,9 @@ export function ControlRecordView({
                     size='sm'
                     variant='secondary'
                     className='h-5 shrink-0 px-1.5 text-[9px]'
-                    onClick={selector.tap}
+                    onClick={() =>
+                      selector.tap({ multiSerials: activeMultiSerials })
+                    }
                     disabled={!selectedDevice || !canExecuteDevice}
                     title={
                       !canExecuteDevice
@@ -1927,43 +2165,124 @@ export function ControlRecordView({
           </div>
         </div>
 
-        {/* Collapse toggle button */}
-        <button
-          type='button'
-          onClick={() => setLeftCollapsed(!leftCollapsed)}
-          className='relative z-10 flex w-4 shrink-0 items-center justify-center border-r border-border/40 bg-muted/20 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground'
-          title={leftCollapsed ? 'Mở cây giao diện' : 'Thu cây giao diện'}
-        >
-          {leftCollapsed ? (
-            <ChevronRight className='size-3' />
-          ) : (
-            <ChevronLeft className='size-3' />
-          )}
-        </button>
+        {/* Collapse toggle — hidden while multi-phone uses the freed horizontal space */}
+        {!hasMultiFollowers ? (
+          <button
+            type='button'
+            onClick={() => setLeftCollapsed(!leftCollapsed)}
+            className='relative z-10 flex w-4 shrink-0 items-center justify-center border-r border-border/40 bg-muted/20 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground'
+            title={leftCollapsed ? 'Mở cây giao diện' : 'Thu cây giao diện'}
+          >
+            {leftCollapsed ? (
+              <ChevronRight className='size-3' />
+            ) : (
+              <ChevronLeft className='size-3' />
+            )}
+          </button>
+        ) : null}
 
-        {/* ── COL 2: Phone screen (centered) ───────────────────────────── */}
+        {/* ── COL 2: Phone screen ───────────────────────────────────────── */}
         <div
           ref={mirrorColRef}
-          className='flex min-h-[520px] w-[clamp(300px,28vw,440px)] shrink-0 flex-col overflow-y-auto overflow-x-hidden border-r border-border/60 bg-muted/20'
+          className={cn(
+            'flex min-h-0 flex-col overflow-hidden bg-muted/20',
+            multiFocusMode
+              ? 'min-w-0 flex-1'
+              : 'w-[clamp(300px,30vw,360px)] shrink-0 border-r border-border/60'
+          )}
         >
           {selectedDevice ? (
-            <>
-              <ControlRecordMirror
-                device={selectedDevice}
-                logLines={device.logs[selectedDevice.serial] ?? []}
-                mode={device.mode}
-                wsSend={record.sendAndRecord}
-                onToggleMode={record.handleToggleMode}
-                onRestart={record.handleRestart}
-                onTap={mirrorOnTap}
-                onSwipe={mirrorOnSwipe}
-                highlightBounds={highlightBounds}
-                hideControls={mirrorInputLocked.hideControls}
-                hideDeviceFunctions={mirrorInputLocked.hideControls}
-                readOnlyPreview={mirrorInputLocked.readOnlyPreview}
-                busyBanner={mirrorBusyBanner}
+            hasMultiFollowers ? (
+              <MultiDeviceStage
+                mode={multiFocusMode ? 'focus' : 'edit'}
+                toolbar={
+                  multiFocusMode ? (
+                    <div className='flex shrink-0 items-center gap-2 border-b border-border/60 bg-background/90 px-3 py-1.5'>
+                      <Button
+                        size='sm'
+                        variant={record.recording ? 'destructive' : 'default'}
+                        className='h-7 gap-1.5 px-2.5 text-xs'
+                        onClick={() => void record.toggleRecording()}
+                      >
+                        {record.recording ? (
+                          <Square className='size-3.5' />
+                        ) : (
+                          <Circle className='size-3.5 fill-current' />
+                        )}
+                        {record.recording
+                          ? t('stopRecording')
+                          : t('startRecording')}
+                      </Button>
+                      <Button
+                        size='sm'
+                        variant='outline'
+                        className='h-7 gap-1.5 px-2.5 text-xs'
+                        onClick={() => setPlayerMode(true)}
+                        disabled={
+                          (selectedDevice.state || '').replace(
+                            'DeviceState.',
+                            ''
+                          ) === 'BUSY'
+                        }
+                      >
+                        <Play className='size-3.5' />
+                        {t('tryRun')}
+                      </Button>
+                      <div className='flex-1' />
+                      <Button
+                        size='sm'
+                        variant='outline'
+                        className='h-7 gap-1.5 px-2.5 text-xs'
+                        onClick={() => setStepPickerOpen(true)}
+                      >
+                        <Plus className='size-3.5' />
+                        {t('multiControl.openPicker')}
+                      </Button>
+                    </div>
+                  ) : undefined
+                }
+                primaryMirror={
+                  <ControlRecordMirror
+                    device={selectedDevice}
+                    logLines={device.logs[selectedDevice.serial] ?? []}
+                    mode={device.mode}
+                    wsSend={mirrorWsSend}
+                    onToggleMode={record.handleToggleMode}
+                    onRestart={record.handleRestart}
+                    onTap={mirrorOnTap}
+                    onSwipe={mirrorOnSwipe}
+                    highlightBounds={highlightBounds}
+                    hideControls={mirrorInputLocked.hideControls}
+                    hideDeviceFunctions={mirrorInputLocked.hideControls}
+                    readOnlyPreview={mirrorInputLocked.readOnlyPreview}
+                    busyBanner={mirrorBusyBanner}
+                    mirrorSize={multiFocusMode ? 'multiFocus' : 'multiCompact'}
+                  />
+                }
+                devices={selectedMultiFollowerDevices}
+                wsMode={device.mode}
+                wsSend={mirrorWsSend}
+                onPromote={promoteMultiFollower}
               />
-            </>
+            ) : (
+              <div className='flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden'>
+                <ControlRecordMirror
+                  device={selectedDevice}
+                  logLines={device.logs[selectedDevice.serial] ?? []}
+                  mode={device.mode}
+                  wsSend={mirrorWsSend}
+                  onToggleMode={record.handleToggleMode}
+                  onRestart={record.handleRestart}
+                  onTap={mirrorOnTap}
+                  onSwipe={mirrorOnSwipe}
+                  highlightBounds={highlightBounds}
+                  hideControls={mirrorInputLocked.hideControls}
+                  hideDeviceFunctions={mirrorInputLocked.hideControls}
+                  readOnlyPreview={mirrorInputLocked.readOnlyPreview}
+                  busyBanner={mirrorBusyBanner}
+                />
+              </div>
+            )
           ) : (
             <div className='flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center'>
               <MirrorPhonePlaceholder />
@@ -1975,7 +2294,8 @@ export function ControlRecordView({
         </div>
 
         {/* ── COL 3: Recording / scenario editor ───────────────────────── */}
-        <div className='flex min-w-0 flex-1 flex-col overflow-hidden'>
+        {showEditorPanel ? (
+          <div className='flex min-h-0 min-w-[min(100%,480px)] flex-1 flex-col overflow-hidden border-l border-border/60'>
           {playerMode && selectedDevice ? (
             /* Player mode — fill column; list scrolls inside ScenarioPlayer */
             <div className='flex min-h-0 flex-1 flex-col overflow-hidden p-4'>
@@ -2093,8 +2413,20 @@ export function ControlRecordView({
               )}
 
               {/* Section header */}
-              <div className='flex shrink-0 items-center border-b border-border/40 bg-muted/20 px-4 py-2'>
-                <div className='flex min-w-0 max-w-full flex-nowrap items-center gap-1.5 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'>
+              <div className='flex shrink-0 items-center gap-1 border-b border-border/40 bg-muted/20 px-2 py-2'>
+                {hasMultiFollowers && stepPickerOpen ? (
+                  <Button
+                    type='button'
+                    size='sm'
+                    variant='ghost'
+                    className='h-7 shrink-0 gap-1 px-2 text-xs text-muted-foreground'
+                    onClick={() => setStepPickerOpen(false)}
+                    title={t('multiControl.closePicker')}
+                  >
+                    <ChevronRight className='size-3.5' />
+                  </Button>
+                ) : null}
+                <div className='flex min-w-0 max-w-full flex-1 flex-nowrap items-center gap-1.5 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'>
                   {record.pollingXml && (
                     <RefreshCw
                       size={12}
@@ -2416,7 +2748,8 @@ export function ControlRecordView({
               </div>
             </div>
           )}
-        </div>
+          </div>
+        ) : null}
       </div>
 
       {/* ── Install APK dialog ──────────────────────────────────────────────── */}

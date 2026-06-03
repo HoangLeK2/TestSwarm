@@ -21,6 +21,7 @@ from db import crud as repo
 from db.crud.user import get_user_org_id
 from db.database import AsyncSessionLocal
 from runtime.core import DeviceManager, DeviceState
+from services.multi_control import MultiControlCoordinator
 from tenancy.background import (
     ensure_device_org_id,
     list_device_serials_for_user,
@@ -201,7 +202,7 @@ class WebSocketManager:
     WRITE_MESSAGE_TYPES: frozenset[str] = frozenset({
         "tap", "swipe", "key", "long_tap", "pinch", "double_tap", "drag",
         "tap_selector", "screen_on", "screen_off", "unlock", "swipe_ext",
-        "install",
+        "install", "multi_action",
     })
 
     def __init__(
@@ -227,6 +228,7 @@ class WebSocketManager:
         # Safe-mode: reject write-type frames. BaseHTTPMiddleware can't see
         # WS frames, so the gate must live inside the receive loop.
         self._read_only = bool(read_only)
+        self._multi_control = MultiControlCoordinator(manager)
 
     def bind_event_recorder(self, recorder) -> None:
         """Subscribe to EventRecorder to broadcast device_event messages to all frontends."""
@@ -638,6 +640,20 @@ class WebSocketManager:
                         await ws.send_json({"type": "pong", "ts": time.time()})
                     except Exception:
                         break
+                continue
+            if msg_type == "multi_action":
+                allowed_serials = (
+                    self._allowed_serials.get(conn_id) if conn_id is not None else None
+                )
+                result = await self._multi_control.execute(
+                    data,
+                    allowed_serials=allowed_serials,
+                    read_only=self._read_only,
+                )
+                try:
+                    await ws.send_json(result)
+                except Exception:
+                    break
                 continue
             serial = data.get("serial")
             if conn_id is not None:

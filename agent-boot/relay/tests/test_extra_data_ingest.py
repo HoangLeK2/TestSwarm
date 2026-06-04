@@ -47,6 +47,23 @@ def test_facebook_parser_diagnostic_module_imports() -> None:
     assert callable(diagnostic.parse_fb_comments_from_xml_with_diagnostic)
 
 
+def test_fb_comment_noise_filter_drops_empty_composer_placeholders() -> None:
+    from relay.extra_data.parsers.facebook.filters import _is_comment_row_parse_noise
+
+    assert _is_comment_row_parse_noise(
+        {
+            "author": "Chưa có bình luận nào",
+            "text": "Hãy là người đầu tiên bình luận. Giúp tôi viết Thêm biểu tượng cảm xúc",
+        }
+    )
+    assert _is_comment_row_parse_noise(
+        {
+            "author": "Giúp tôi viết",
+            "text": "Thêm biểu tượng cảm xúc",
+        }
+    )
+
+
 def test_fb_comment_target_returns_bounds_and_parent_hash(monkeypatch) -> None:
     class Module:
         pass
@@ -1084,3 +1101,76 @@ async def test_process_payload_requires_verified_parent_before_persisting_commen
     assert result["inserted_count"] == 0
     assert result["diagnostic"]["parent_context_required"] is True
     assert result["diagnostic"]["parent_context_missing"] is True
+
+
+@pytest.mark.asyncio
+async def test_process_payload_relinks_verified_parent_to_persisted_post_hash(
+    monkeypatch,
+) -> None:
+    class Module:
+        pass
+
+    module = Module()
+
+    def fake_parse(xml, parent_post_id=None, max_items=50):
+        return [
+            {
+                "comment_key": "c1",
+                "text": "comment body",
+                "author": "Bob",
+                "parent_post_id": "parser-generated-pid",
+            }
+        ], {"reason_code": "ok"}
+
+    module.parse_fb_comments_from_xml_with_diagnostic = fake_parse
+    monkeypatch.setitem(sys.modules, "relay.extra_data.parsers.facebook", module)
+
+    inserted: list[dict[str, Any]] = []
+
+    class FakeWriter:
+        async def prepare_context_for_persist(self, context):
+            return context
+
+        async def lookup_parent_hash_for_post_pid(self, **kwargs):
+            assert kwargs["parent_post_id"] == "verified-pid"
+            return "persisted-post-hash"
+
+        async def insert_rows(self, rows):
+            inserted.extend(rows)
+            return {"attempted": len(rows), "inserted": len(rows), "duplicates": 0}
+
+    server = ExtraDataIngestServer()
+    server._writer = FakeWriter()
+
+    result = await server.process_payload(
+        {
+            "serial": "serial-1",
+            "strategy": "fb_comments",
+            "xml": '<hierarchy><node text="comments" /></hierarchy>',
+            "context": {
+                "persist": True,
+                "collection": "fb_comments",
+                "content_type": "fb_comment",
+                "dedupe_field": "comment_key",
+                "hash_scope": "exec-1",
+                "parent_id": "tap-target-orphan-hash",
+                "parent_id_already_scoped": True,
+                "parent_post_id": "verified-pid",
+                "parent_context_source": "tap_fb_comment_button",
+                "require_verified_parent": True,
+                "_active_comment_parent_anchor": {
+                    "pid": "verified-pid",
+                    "text_prefix": "verified parent post",
+                },
+            },
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["diagnostic"]["parent_context_relinked"] is True
+    assert result["diagnostic"]["context_parent_hash"] == "tap-target-orphan-hash"
+    assert result["diagnostic"]["canonical_parent_hash"] == "persisted-post-hash"
+    assert inserted[0]["parent_id"] == "persisted-post-hash"
+    assert inserted[0]["raw_data"]["parent_post_id"] == "verified-pid"
+    assert inserted[0]["raw_data"]["parser_parent_post_id"] == "parser-generated-pid"
+    assert inserted[0]["raw_data"]["parent_content_hash"] == "persisted-post-hash"

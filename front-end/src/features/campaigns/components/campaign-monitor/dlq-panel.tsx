@@ -52,26 +52,12 @@ import {
   isDlqEntryReplayable
 } from '../../lib/dlq-replayable';
 import { DlqEntryDetailDrawer } from './dlq-entry-detail-drawer';
+import {
+  Z_CAMPAIGN_MONITOR_FLOATING,
+  Z_CAMPAIGN_MONITOR_NESTED
+} from '@/lib/z-index';
 
-function statusVariant(
-  status: string
-): 'default' | 'secondary' | 'destructive' | 'outline' {
-  if (status === 'pending') return 'destructive';
-  if (status === 'retrying') return 'default';
-  if (status === 'replayed' || status === 'resolved') return 'secondary';
-  if (status === 'closed' || status === 'dismissed') return 'outline';
-  return 'outline';
-}
-
-function statusLabel(status: string, t: (key: string) => string): string {
-  if (status === 'pending') return t('monitorDlqStatusPending');
-  if (status === 'retrying') return t('monitorDlqStatusRetrying');
-  if (status === 'replayed') return t('monitorDlqStatusReplayed');
-  if (status === 'closed') return t('monitorDlqStatusClosed');
-  if (status === 'resolved') return t('monitorDlqStatusResolved');
-  if (status === 'dismissed') return t('monitorDlqStatusDismissed');
-  return status;
-}
+import { dlqStatusLabel, dlqStatusVariant } from './dlq-status';
 
 function artifactPreviewUrl(entry: DlqEntry): string | null {
   const refs = entry.artifact_refs ?? {};
@@ -329,10 +315,10 @@ export function DlqPanel({
                       {entry.device_serial}
                     </code>
                     <Badge
-                      variant={statusVariant(entry.status)}
+                      variant={dlqStatusVariant(entry.status)}
                       className='px-2.5 py-0.5 text-xs'
                     >
-                      {statusLabel(entry.status, t)}
+                      {dlqStatusLabel(entry.status, t)}
                     </Badge>
                     {entry.failed_step_id ? (
                       <span className='text-xs text-muted-foreground'>
@@ -409,7 +395,10 @@ export function DlqPanel({
                                   />
                                 </Button>
                               </DropdownMenuTrigger>
-                              <DropdownMenuContent align='end'>
+                              <DropdownMenuContent
+                                align='end'
+                                style={{ zIndex: Z_CAMPAIGN_MONITOR_FLOATING }}
+                              >
                                 <DropdownMenuItem
                                   onClick={() => handleRetry(entry, true)}
                                 >
@@ -425,7 +414,10 @@ export function DlqPanel({
                           </span>
                         </TooltipTrigger>
                         {!replayable && blockedReason ? (
-                          <TooltipContent className='max-w-xs text-xs'>
+                          <TooltipContent
+                            className='max-w-xs text-xs'
+                            style={{ zIndex: Z_CAMPAIGN_MONITOR_FLOATING }}
+                          >
                             {blockedReason}
                           </TooltipContent>
                         ) : null}
@@ -446,7 +438,10 @@ export function DlqPanel({
                             <XCircle size={18} />
                           </Button>
                         </TooltipTrigger>
-                        <TooltipContent className='text-sm'>
+                        <TooltipContent
+                          className='text-sm'
+                          style={{ zIndex: Z_CAMPAIGN_MONITOR_FLOATING }}
+                        >
                           {t('monitorActionClose')}
                         </TooltipContent>
                       </Tooltip>
@@ -471,7 +466,10 @@ export function DlqPanel({
                             <Trash2 size={18} />
                           </Button>
                         </TooltipTrigger>
-                        <TooltipContent className='text-sm'>
+                        <TooltipContent
+                          className='text-sm'
+                          style={{ zIndex: Z_CAMPAIGN_MONITOR_FLOATING }}
+                        >
                           {t('monitorActionDismiss')}
                         </TooltipContent>
                       </Tooltip>
@@ -494,7 +492,10 @@ export function DlqPanel({
           }
         }}
       >
-        <DialogContent className='sm:max-w-md'>
+        <DialogContent
+          zIndex={Z_CAMPAIGN_MONITOR_NESTED}
+          className='sm:max-w-md'
+        >
           <DialogHeader>
             <DialogTitle>{t('monitorDlqCloseTitle')}</DialogTitle>
           </DialogHeader>
@@ -528,6 +529,7 @@ export function DlqPanel({
 
       <DlqEntryDetailDrawer
         entry={detailEntry}
+        campaignId={campaignId}
         open={detailEntry != null}
         onOpenChange={(open) => {
           if (!open) setDetailEntry(null);

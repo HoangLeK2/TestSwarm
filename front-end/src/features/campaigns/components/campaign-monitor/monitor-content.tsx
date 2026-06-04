@@ -19,6 +19,7 @@ import { WorkflowProgressCard } from './workflow-progress-card';
 import { ArtifactPanel } from './artifact-panel';
 import { DlqPanel } from './dlq-panel';
 import { MonitorFailureBanner } from './monitor-failure-banner';
+import { Z_CAMPAIGN_MONITOR_FLOATING } from '@/lib/z-index';
 
 interface Props {
   campaignId: string;
@@ -94,7 +95,7 @@ function MonitorWorkflowFilters({
           <SelectTrigger className='h-8 w-[180px]'>
             <SelectValue />
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent style={{ zIndex: Z_CAMPAIGN_MONITOR_FLOATING }}>
             {STATUS_FILTER_OPTIONS.map((key) => (
               <SelectItem key={key} value={key}>
                 {key === 'all' ? t('monitorFilterAll') : key}

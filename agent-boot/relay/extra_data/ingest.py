@@ -759,10 +759,40 @@ class ExtraDataIngestServer:
                     items=items,
                 )
                 parent_id_scoped = bool(parent_id)
+            require_verified_parent = bool(context.get("require_verified_parent"))
+            has_verified_parent_context = _has_verified_comment_parent_context(context)
             if (
                 is_comment_strategy
-                and bool(context.get("require_verified_parent"))
-                and not _has_verified_comment_parent_context(context)
+                and require_verified_parent
+                and has_verified_parent_context
+                and hasattr(self._writer, "lookup_parent_hash_for_post_pid")
+            ):
+                canonical_parent_id = await self._writer.lookup_parent_hash_for_post_pid(
+                    collection=str(context.get("collection") or ""),
+                    execution_id=context.get("execution_id") or context.get("hash_scope"),
+                    parent_post_id=str(context.get("parent_post_id") or ""),
+                    items=items,
+                )
+                if canonical_parent_id:
+                    if parent_id and str(parent_id) != str(canonical_parent_id):
+                        diagnostic["parent_context_relinked"] = True
+                        diagnostic["context_parent_hash"] = str(parent_id)
+                        diagnostic["canonical_parent_hash"] = str(canonical_parent_id)
+                    parent_id = canonical_parent_id
+                    parent_id_scoped = True
+                    context["parent_id"] = canonical_parent_id
+                    context["_active_comment_parent_hash"] = canonical_parent_id
+                    context["parent_id_already_scoped"] = True
+                else:
+                    diagnostic["parent_context_required"] = True
+                    diagnostic["parent_post_row_missing"] = True
+                    should_persist = False
+                    parent_id = None
+                    parent_id_scoped = False
+            if (
+                is_comment_strategy
+                and require_verified_parent
+                and not has_verified_parent_context
             ):
                 diagnostic["parent_context_required"] = True
                 diagnostic["parent_context_missing"] = True

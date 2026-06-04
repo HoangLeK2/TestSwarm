@@ -20,6 +20,14 @@ import type { FlowStep } from '../scenario-steps/types';
 import { formatStepLabelForCard, getStepSummary } from './constants';
 import { useCampaignFlowI18n } from './flow-i18n';
 import { StepIcon } from './step-icon';
+import {
+  coerceStepRetryPolicy,
+  formatRetryReasons,
+  parseRetryReasons,
+  retryPatchForEnabledState,
+  withRetryField,
+  type RetryBackoffStrategy
+} from './step-retry-policy';
 
 export function StepPanelField({
   label,
@@ -384,6 +392,186 @@ export function StepErrorPolicySection({
         {t('effectivePrefix')}{' '}
         <span className='font-medium text-foreground'>{effective}</span>
       </div>
+    </StepPanelSection>
+  );
+}
+
+export function StepRetryPolicySection({
+  step,
+  update
+}: {
+  step: FlowStep;
+  update: (patch: Partial<FlowStep>) => void;
+}) {
+  const t = useTranslations('campaignsFeature.stepEditor.retryPolicy');
+  const enabled = !!(
+    step.retry &&
+    typeof step.retry === 'object' &&
+    Object.keys(step.retry).length > 0
+  );
+  const policy = coerceStepRetryPolicy(step.retry);
+
+  const updateRetry = (retry: unknown) => {
+    update({ retry: coerceStepRetryPolicy(retry) });
+  };
+
+  const setCap = (raw: string) => {
+    const next = coerceStepRetryPolicy(step.retry);
+    if (!raw.trim()) {
+      delete next.backoff_cap_ms;
+    } else {
+      next.backoff_cap_ms = Number(raw);
+    }
+    updateRetry(next);
+  };
+
+  return (
+    <StepPanelSection
+      title={t('title')}
+      badge={
+        <Badge variant='outline' className='text-[10px] font-normal'>
+          {t('optionalBadge')}
+        </Badge>
+      }
+      className='bg-muted/10'
+    >
+      <StepPanelToggle
+        label={t('enableLabel')}
+        description={t('enableDescription')}
+        checked={enabled}
+        onCheckedChange={(checked) =>
+          update(retryPatchForEnabledState(step, checked))
+        }
+      />
+
+      {enabled ? (
+        <div className='space-y-3'>
+          <div className='grid grid-cols-2 gap-3'>
+            <StepPanelField label={t('attemptsLabel')}>
+              <Input
+                type='number'
+                min={2}
+                max={10}
+                className='h-8 text-xs'
+                value={policy.max_attempts}
+                onChange={(e) =>
+                  updateRetry(
+                    withRetryField(
+                      step.retry,
+                      'max_attempts',
+                      Number(e.target.value)
+                    )
+                  )
+                }
+              />
+            </StepPanelField>
+
+            <StepPanelField label={t('backoffMsLabel')}>
+              <Input
+                type='number'
+                min={0}
+                max={60000}
+                step={100}
+                className='h-8 text-xs'
+                value={policy.backoff_ms}
+                onChange={(e) =>
+                  updateRetry(
+                    withRetryField(
+                      step.retry,
+                      'backoff_ms',
+                      Number(e.target.value)
+                    )
+                  )
+                }
+              />
+            </StepPanelField>
+
+            <StepPanelField label={t('jitterLabel')}>
+              <Input
+                type='number'
+                min={0}
+                max={1}
+                step={0.05}
+                className='h-8 text-xs'
+                value={policy.jitter}
+                onChange={(e) =>
+                  updateRetry(
+                    withRetryField(
+                      step.retry,
+                      'jitter',
+                      Number(e.target.value)
+                    )
+                  )
+                }
+              />
+            </StepPanelField>
+
+            <StepPanelField label={t('capMsLabel')}>
+              <Input
+                type='number'
+                min={0}
+                max={60000}
+                step={1000}
+                className='h-8 text-xs'
+                value={policy.backoff_cap_ms ?? ''}
+                placeholder='60000'
+                onChange={(e) => setCap(e.target.value)}
+              />
+            </StepPanelField>
+          </div>
+
+          <StepPanelField label={t('strategyLabel')}>
+            <RadioGroup
+              value={policy.backoff_strategy}
+              onValueChange={(value) =>
+                updateRetry(
+                  withRetryField(
+                    step.retry,
+                    'backoff_strategy',
+                    value as RetryBackoffStrategy
+                  )
+                )
+              }
+              className='grid grid-cols-2 gap-2'
+            >
+              {(
+                [
+                  { value: 'exponential', label: t('strategyExponential') },
+                  { value: 'fixed', label: t('strategyFixed') }
+                ] as const
+              ).map((opt) => (
+                <label
+                  key={opt.value}
+                  className='flex cursor-pointer items-center gap-2 rounded-md border border-border/60 bg-background/80 px-2.5 py-2 text-[11px] hover:bg-muted/40 has-[[data-state=checked]]:border-primary/30 has-[[data-state=checked]]:bg-primary/[0.04]'
+                >
+                  <RadioGroupItem value={opt.value} />
+                  <span>{opt.label}</span>
+                </label>
+              ))}
+            </RadioGroup>
+          </StepPanelField>
+
+          <StepPanelField label={t('reasonsLabel')}>
+            <StepPanelTextarea
+              className='min-h-16 w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2'
+              value={formatRetryReasons(step.retry)}
+              placeholder={t('reasonsPlaceholder')}
+              onValueCommit={(raw) =>
+                updateRetry(
+                  withRetryField(
+                    step.retry,
+                    'retryable_reasons',
+                    parseRetryReasons(raw)
+                  )
+                )
+              }
+            />
+            <p className='text-[11px] leading-relaxed text-muted-foreground'>
+              {t('reasonsHint')}
+            </p>
+          </StepPanelField>
+        </div>
+      ) : null}
     </StepPanelSection>
   );
 }

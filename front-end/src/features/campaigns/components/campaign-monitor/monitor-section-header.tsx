@@ -4,6 +4,7 @@ import { CircleHelp } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
+import { Z_CAMPAIGN_MONITOR_FLOATING } from '@/lib/z-index';
 import {
   Tooltip,
   TooltipContent,
@@ -43,7 +44,11 @@ export function MonitorSectionHeader({
             <CircleHelp size={18} />
           </button>
         </TooltipTrigger>
-        <TooltipContent side='top' className='max-w-sm text-sm leading-snug'>
+        <TooltipContent
+          side='top'
+          className='max-w-sm text-sm leading-snug'
+          style={{ zIndex: Z_CAMPAIGN_MONITOR_FLOATING }}
+        >
           {hint}
         </TooltipContent>
       </Tooltip>

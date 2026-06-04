@@ -445,6 +445,14 @@ def _is_comment_row_parse_noise(c: Dict[str, Any]) -> bool:
         return True
     if "open features menu" in text or "use voice typing" in text:
         return True
+    if "chưa có bình luận" in combined or "no comments yet" in combined:
+        return True
+    if "hãy là người đầu tiên bình luận" in combined or "be the first to comment" in combined:
+        return True
+    if author == "giúp tôi viết" or text == "giúp tôi viết":
+        return True
+    if text in {"thêm biểu tượng cảm xúc", "add emoji"}:
+        return True
     if author.startswith("viết bình luận") or text.startswith("viết bình luận"):
         return True
     if author.startswith("write a comment") or text.startswith("write a comment"):
@@ -529,4 +537,3 @@ __all__ = [
     "_is_comment_left_avatar_name_strip",
     "_is_duplicate_short_author_footer_row",
 ]
-

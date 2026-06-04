@@ -27,7 +27,8 @@ import {
   StepPanelMetaFields,
   StepPanelSection,
   StepPanelTextarea,
-  StepPanelToggle
+  StepPanelToggle,
+  StepRetryPolicySection
 } from './step-panel-primitives';
 
 interface Props {
@@ -2275,6 +2276,7 @@ export function StepDetailPanel({
         </StepPanelSection>
 
         <StepErrorPolicySection step={step} update={update} />
+        <StepRetryPolicySection step={step} update={update} />
       </div>
     </div>
   );

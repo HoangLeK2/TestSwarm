@@ -13,6 +13,7 @@ import {
   directObjectStorageUrl,
   shouldProxyArtifactFetch
 } from '@/features/content/lib/artifact-url';
+import { Z_CAMPAIGN_MONITOR_NESTED } from '@/lib/z-index';
 import type { ExecutionArtifact } from '../../types';
 
 interface Props {
@@ -99,7 +100,10 @@ export function ArtifactMonitorTile({ artifact, href, label }: Props) {
 
       {needsAuthFetch ? (
         <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
-          <DialogContent className='max-h-[90dvh] max-w-[min(96vw,900px)] p-2 sm:p-4'>
+          <DialogContent
+            zIndex={Z_CAMPAIGN_MONITOR_NESTED}
+            className='max-h-[90dvh] max-w-[min(96vw,900px)] p-2 sm:p-4'
+          >
             <DialogTitle className='sr-only'>{label}</DialogTitle>
             {imageSrc ? (
               // eslint-disable-next-line @next/next/no-img-element

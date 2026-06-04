@@ -17,6 +17,7 @@ import {
 import { useTranslations } from 'next-intl';
 import { MonitorContent } from './monitor-content';
 import { MonitorControlBar } from './monitor-control-bar';
+import { Z_CAMPAIGN_MONITOR } from '@/lib/z-index';
 import type { CampaignOut } from '../../types';
 import { isCampaignActiveExecution } from '../../types';
 
@@ -70,7 +71,10 @@ export function CampaignMonitorDialog({
         </Tooltip>
       ) : null}
 
-      <DialogContent className='flex max-h-[min(92dvh,1040px)] min-h-0 w-[min(96vw,1120px)] max-w-[1120px] flex-col gap-0 overflow-hidden p-0 sm:rounded-xl'>
+      <DialogContent
+        zIndex={Z_CAMPAIGN_MONITOR}
+        className='flex max-h-[min(92dvh,1040px)] min-h-0 w-[min(96vw,1120px)] max-w-[1120px] flex-col gap-0 overflow-hidden p-0 sm:rounded-xl'
+      >
         <DialogHeader className='shrink-0 border-b px-6 py-4 pr-14'>
           <div className='flex min-w-0 items-center gap-3'>
             <MonitorPlay size={20} className='shrink-0 text-primary' />

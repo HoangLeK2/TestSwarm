@@ -89,20 +89,19 @@ async def _evaluate_now(
     user_id: str | None,
     reason: str | None,
 ) -> None:
-    from db.database import AsyncSessionLocal
+    from db.database import activity_session
     from services.campaign.aggregator import evaluate_campaign_status
-    from tenancy.context import set_current_org_id
+    from tenancy.context import tenant_context
 
-    async with AsyncSessionLocal() as db:
-        set_current_org_id(org_id)
-        await evaluate_campaign_status(
-            db,
-            org_id=org_id,
-            campaign_id=campaign_id,
-            user_id=user_id,
-            reason=reason,
-        )
-        await db.commit()
+    async with activity_session() as db:
+        with tenant_context(org_id):
+            await evaluate_campaign_status(
+                db,
+                org_id=org_id,
+                campaign_id=campaign_id,
+                user_id=user_id,
+                reason=reason,
+            )
 
 
 async def flush_pending_evaluations() -> None:

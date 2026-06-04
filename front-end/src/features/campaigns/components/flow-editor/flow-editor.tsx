@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -89,7 +89,16 @@ export function FlowEditor({
   campaignScenarios = []
 }: Props) {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const pendingDetailRef = useRef<FlowStep | null>(null);
   const selectedStep = selectedIndex != null ? steps[selectedIndex] : null;
+
+  const handleDetailPanelChange = useCallback((s: FlowStep) => {
+    pendingDetailRef.current = s;
+  }, []);
+
+  useEffect(() => {
+    if (selectedStep) pendingDetailRef.current = selectedStep;
+  }, [selectedStep, selectedIndex]);
   const availableVariables = useMemo(
     () => collectVariableNames(steps),
     [steps]
@@ -320,7 +329,13 @@ export function FlowEditor({
       <Dialog
         open={!compact && selectedIndex != null}
         onOpenChange={(open) => {
-          if (!open) setSelectedIndex(null);
+          if (!open) {
+            if (pendingDetailRef.current != null && selectedIndex != null) {
+              updateAt(selectedIndex, pendingDetailRef.current);
+            }
+            pendingDetailRef.current = null;
+            setSelectedIndex(null);
+          }
         }}
       >
         <DialogContent className='max-w-sm gap-0 p-0'>
@@ -330,8 +345,14 @@ export function FlowEditor({
           {selectedStep && selectedIndex != null && (
             <StepDetailPanel
               step={selectedStep}
-              onChange={(s) => updateAt(selectedIndex, s)}
-              onClose={() => setSelectedIndex(null)}
+              onChange={handleDetailPanelChange}
+              onClose={() => {
+                if (pendingDetailRef.current != null && selectedIndex != null) {
+                  updateAt(selectedIndex, pendingDetailRef.current);
+                }
+                pendingDetailRef.current = null;
+                setSelectedIndex(null);
+              }}
               availableVariables={availableVariables}
               campaignScenarios={campaignScenarios}
               onRequestPickSelector={

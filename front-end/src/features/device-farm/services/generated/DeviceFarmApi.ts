@@ -434,8 +434,32 @@ export interface ActivityLogOut {
   entity_id: string | null;
   /** Device Serial */
   device_serial: string | null;
+  /** Device Display */
+  device_display?: string | null;
+  /** Org Id */
+  org_id?: string | null;
   /** User Id */
   user_id: string | null;
+  /** User Name */
+  user_name?: string | null;
+  /** Method */
+  method?: string | null;
+  /** Path */
+  path?: string | null;
+  /** Route Template */
+  route_template?: string | null;
+  /** Status Code */
+  status_code?: number | null;
+  /** Request Id */
+  request_id?: string | null;
+  /** Ip Address */
+  ip_address?: string | null;
+  /** User Agent */
+  user_agent?: string | null;
+  /** Outcome */
+  outcome?: string | null;
+  /** Duration Ms */
+  duration_ms?: number | null;
   /** Details */
   details: Record<string, any>;
   /**
@@ -473,6 +497,120 @@ export interface AddDevicesToGroupBody {
   device_ids: string[];
 }
 
+/** AdminForceReleaseBody */
+export interface AdminForceReleaseBody {
+  /**
+   * Reason
+   * @minLength 1
+   * @maxLength 500
+   */
+  reason: string;
+  /** Session Id */
+  session_id?: string | null;
+}
+
+/** AdminOverrideOut */
+export interface AdminOverrideOut {
+  /** Device Id */
+  device_id: string;
+  /** From State */
+  from_state: string;
+  /** To State */
+  to_state: string;
+  /** Old Owner Type */
+  old_owner_type?: string | null;
+  /** Old Owner Id */
+  old_owner_id?: string | null;
+  /** Session Id */
+  session_id?: string | null;
+  /** Reason */
+  reason: string;
+  /** Actor */
+  actor: string;
+}
+
+/** AdminResetStateBody */
+export interface AdminResetStateBody {
+  /**
+   * Reason
+   * @minLength 1
+   * @maxLength 500
+   */
+  reason: string;
+  /**
+   * Target State
+   * connecting or online; default depends on current state
+   */
+  target_state?: string | null;
+}
+
+/** AnalyticsAdhocOut */
+export interface AnalyticsAdhocOut {
+  /** Rows */
+  rows: Record<string, any>[];
+  /** Row Count */
+  row_count: number;
+}
+
+/** AnalyticsPointOut */
+export interface AnalyticsPointOut {
+  /** Date */
+  date: string;
+  /** Resource Type */
+  resource_type: string;
+  /** Resource Id */
+  resource_id: string | null;
+  /** Event Type */
+  event_type: string;
+  /** Count */
+  count: number;
+  /** Success Count */
+  success_count: number;
+  /** Fail Count */
+  fail_count: number;
+  /** Latency P50 */
+  latency_p50?: number | null;
+  /** Latency P95 */
+  latency_p95?: number | null;
+}
+
+/** AnalyticsSummaryOut */
+export interface AnalyticsSummaryOut {
+  /** Window Days */
+  window_days: number;
+  /** Total Count */
+  total_count: number;
+  /** Success Count */
+  success_count: number;
+  /** Fail Count */
+  fail_count: number;
+  /** Success Rate */
+  success_rate: number;
+}
+
+/** AnalyticsTimeseriesOut */
+export interface AnalyticsTimeseriesOut {
+  /** Points */
+  points: AnalyticsPointOut[];
+}
+
+/** ArtifactUrlOut */
+export interface ArtifactUrlOut {
+  /** Url */
+  url: string | null;
+  /** Expires At */
+  expires_at: string;
+  /** Content Type */
+  content_type: string;
+  /** Size Bytes */
+  size_bytes?: number | null;
+  /**
+   * Proxy Required
+   * @default false
+   */
+  proxy_required?: boolean;
+}
+
 /**
  * AssignAccountBody
  * Used by POST /devices/{device_id}/accounts — assigns an account to a device.
@@ -507,6 +645,12 @@ export interface BodyBulkImportCsvApiAccountsImportCsvPost {
    * File
    * CSV file with columns: platform, username, password, display_name, tags, notes
    */
+  file: string;
+}
+
+/** Body_import_scenario_route_api_scenarios_import_post */
+export interface BodyImportScenarioRouteApiScenariosImportPost {
+  /** File */
   file: string;
 }
 
@@ -568,6 +712,50 @@ export interface BulkImportRow {
   notes?: string;
 }
 
+/** BulkScheduleToggleIn */
+export interface BulkScheduleToggleIn {
+  /**
+   * Schedule Ids
+   * @maxItems 500
+   * @minItems 1
+   */
+  schedule_ids: string[];
+}
+
+/** BulkScheduleToggleItemOut */
+export interface BulkScheduleToggleItemOut {
+  /** Schedule Id */
+  schedule_id: string;
+  /** Status */
+  status: string;
+  /** Enabled */
+  enabled?: boolean | null;
+  /** Error Code */
+  error_code?: string | null;
+}
+
+/** BulkScheduleToggleOut */
+export interface BulkScheduleToggleOut {
+  /** Success Count */
+  success_count: number;
+  /** Fail Count */
+  fail_count: number;
+  /** Skipped Count */
+  skipped_count: number;
+  /** Items */
+  items: BulkScheduleToggleItemOut[];
+}
+
+/** CampaignAccountBindIn */
+export interface CampaignAccountBindIn {
+  /** Account Group Id */
+  account_group_id?: string | null;
+  /** Scenario Account Id */
+  scenario_account_id?: string | null;
+  /** Per Device Accounts */
+  per_device_accounts?: Record<string, string>;
+}
+
 /** CampaignControlOut */
 export interface CampaignControlOut {
   /** Campaign Id */
@@ -606,6 +794,20 @@ export interface CampaignCreate {
    * @default {}
    */
   variables?: Record<string, any>;
+  /** Vars */
+  vars?: Record<string, any> | null;
+  /** Per Device Overrides */
+  per_device_overrides?: Record<string, Record<string, any>> | null;
+  /** Account Group Id */
+  account_group_id?: string | null;
+  /** Scenario Account Id */
+  scenario_account_id?: string | null;
+  /** Per Device Accounts */
+  per_device_accounts?: Record<string, string>;
+  /** Tags */
+  tags?: string[] | null;
+  /** Scenario Refs */
+  scenario_refs?: CampaignScenarioRefIn[] | null;
   /**
    * Device Ids
    * @default []
@@ -623,6 +825,163 @@ export interface CampaignDeviceOut {
   serial: string;
   /** Name */
   name: string;
+}
+
+/** CampaignDispatchExecutionOut */
+export interface CampaignDispatchExecutionOut {
+  /** Execution Id */
+  execution_id: string;
+  /** Device Id */
+  device_id: string;
+  /** Status */
+  status: string;
+  /** Effective Vars */
+  effective_vars?: Record<string, any>;
+  /** Account Id */
+  account_id?: string | null;
+  /** Failure Reason */
+  failure_reason?: string | null;
+  /** Claim Session Id */
+  claim_session_id?: string | null;
+  /** Dispatch Source */
+  dispatch_source?: string | null;
+  /** Workflow Id */
+  workflow_id?: string | null;
+}
+
+/** CampaignDispatchIn */
+export interface CampaignDispatchIn {
+  target: CampaignDispatchTargetIn;
+  /**
+   * Dispatch Strategy
+   * @default "parallel"
+   * @pattern ^(parallel|sequential)$
+   */
+  dispatch_strategy?: string;
+  /**
+   * Allow Partial
+   * @default false
+   */
+  allow_partial?: boolean;
+  /**
+   * Require Online
+   * @default true
+   */
+  require_online?: boolean;
+}
+
+/** CampaignDispatchOut */
+export interface CampaignDispatchOut {
+  /** Dispatch Id */
+  dispatch_id: string;
+  /** Campaign Id */
+  campaign_id: string;
+  /** Dispatch Strategy */
+  dispatch_strategy: string;
+  /** Target Count */
+  target_count: number;
+  /** Executions */
+  executions?: CampaignDispatchExecutionOut[];
+}
+
+/** CampaignDispatchTargetIn */
+export interface CampaignDispatchTargetIn {
+  /** Device Ids */
+  device_ids?: string[];
+  /** Device Group Ids */
+  device_group_ids?: string[];
+}
+
+/** CampaignEntityOut */
+export interface CampaignEntityOut {
+  /** Id */
+  id: string;
+  /** Organization Id */
+  organization_id: string;
+  /** Name */
+  name: string;
+  /** Description */
+  description: string;
+  /** Status */
+  status: string;
+  /** Vars */
+  vars?: Record<string, any>;
+  /** Per Device Overrides */
+  per_device_overrides?: Record<string, Record<string, any>>;
+  /** Account Group Id */
+  account_group_id?: string | null;
+  /** Scenario Account Id */
+  scenario_account_id?: string | null;
+  /** Per Device Accounts */
+  per_device_accounts?: Record<string, string>;
+  /** Tags */
+  tags?: string[];
+  /** Scenario Refs */
+  scenario_refs?: CampaignScenarioRefOut[];
+  /** Created By */
+  created_by?: string | null;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /**
+   * Updated At
+   * @format date-time
+   */
+  updated_at: string;
+  /** Started At */
+  started_at?: string | null;
+  /** Completed At */
+  completed_at?: string | null;
+  /** Cancelled At */
+  cancelled_at?: string | null;
+}
+
+/** CampaignEntityUpdate */
+export interface CampaignEntityUpdate {
+  /** Name */
+  name?: string | null;
+  /** Description */
+  description?: string | null;
+  /** Vars */
+  vars?: Record<string, any> | null;
+  /** Tags */
+  tags?: string[] | null;
+  /** Scenario Refs */
+  scenario_refs?: CampaignScenarioRefIn[] | null;
+  /** Per Device Overrides */
+  per_device_overrides?: Record<string, Record<string, any>> | null;
+}
+
+/** CampaignForceTransitionIn */
+export interface CampaignForceTransitionIn {
+  /**
+   * To Status
+   * @minLength 1
+   * @maxLength 32
+   */
+  to_status: string;
+  /**
+   * Reason
+   * @minLength 1
+   * @maxLength 2000
+   */
+  reason: string;
+}
+
+/** CampaignForceTransitionOut */
+export interface CampaignForceTransitionOut {
+  /** Campaign Id */
+  campaign_id: string;
+  /** From Status */
+  from_status: string;
+  /** To Status */
+  to_status: string;
+  /** Changed */
+  changed: boolean;
+  /** Reason */
+  reason?: string | null;
 }
 
 /** CampaignOut */
@@ -671,6 +1030,122 @@ export interface CampaignRunBody {
   filter_tags?: string | null;
   /** Max Devices */
   max_devices?: number | null;
+}
+
+/** CampaignScenarioRefIn */
+export interface CampaignScenarioRefIn {
+  /** Scenario Id */
+  scenario_id: string;
+  /** Scenario Version */
+  scenario_version?: number | null;
+}
+
+/** CampaignScenarioRefOut */
+export interface CampaignScenarioRefOut {
+  /** Scenario Id */
+  scenario_id: string;
+  /** Scenario Version */
+  scenario_version: number;
+}
+
+/** CapacityGroupBreakdownOut */
+export interface CapacityGroupBreakdownOut {
+  /** Group Id */
+  group_id: string;
+  /** Total */
+  total: number;
+  /** Available */
+  available: number;
+  /** Busy */
+  busy: number;
+  /** Dead */
+  dead: number;
+}
+
+/** CapacityRelayBreakdownOut */
+export interface CapacityRelayBreakdownOut {
+  /** Relay Host */
+  relay_host: string;
+  /** Total */
+  total: number;
+  /** Available */
+  available: number;
+  /** Busy */
+  busy: number;
+  /** Dead */
+  dead: number;
+}
+
+/** CapacityReportOut */
+export interface CapacityReportOut {
+  /** Filters */
+  filters: Record<string, string | null>;
+  summary: CapacityStateBreakdownOut;
+  /** By State */
+  by_state: Record<string, number>;
+  /** By Group */
+  by_group?: CapacityGroupBreakdownOut[];
+  /** By Relay */
+  by_relay?: CapacityRelayBreakdownOut[];
+  /** Sample Devices */
+  sample_devices?: DeviceIdBreakdownOut[];
+  /**
+   * Devices Scanned
+   * @default 0
+   */
+  devices_scanned?: number;
+  /**
+   * Latency Ms
+   * @default 0
+   */
+  latency_ms?: number;
+}
+
+/** CapacityStateBreakdownOut */
+export interface CapacityStateBreakdownOut {
+  /**
+   * Total
+   * @default 0
+   */
+  total?: number;
+  /**
+   * Available
+   * @default 0
+   */
+  available?: number;
+  /**
+   * Busy
+   * @default 0
+   */
+  busy?: number;
+  /**
+   * Dead
+   * @default 0
+   */
+  dead?: number;
+  /**
+   * Reconnecting
+   * @default 0
+   */
+  reconnecting?: number;
+  /**
+   * Connecting
+   * @default 0
+   */
+  connecting?: number;
+  /**
+   * Unknown
+   * @default 0
+   */
+  unknown?: number;
+}
+
+/** ChangePasswordRequest */
+export interface ChangePasswordRequest {
+  /** Current Password */
+  current_password: string;
+  /** New Password */
+  new_password: string;
 }
 
 /** ClipboardSetRequest */
@@ -862,6 +1337,52 @@ export interface ContentStatsOut {
   latest_extraction?: string | null;
 }
 
+/** DLQBulkRetryBody */
+export interface DLQBulkRetryBody {
+  /** Execution Ids */
+  execution_ids?: string[];
+  /** Dlq Ids */
+  dlq_ids?: string[];
+  /**
+   * From Checkpoint
+   * @default true
+   */
+  from_checkpoint?: boolean;
+}
+
+/** DLQBulkRetryItemOut */
+export interface DLQBulkRetryItemOut {
+  /** Dlq Id */
+  dlq_id?: string | null;
+  /** Execution Id */
+  execution_id?: string | null;
+  /** Status */
+  status: string;
+  /** Reason */
+  reason?: string | null;
+  /** Message */
+  message?: string | null;
+  /** Replayed To Execution Id */
+  replayed_to_execution_id?: string | null;
+  /** Entry Status */
+  entry_status?: string | null;
+}
+
+/** DLQBulkRetryOut */
+export interface DLQBulkRetryOut {
+  /** Results */
+  results: DLQBulkRetryItemOut[];
+}
+
+/** DLQCloseBody */
+export interface DLQCloseBody {
+  /**
+   * Reason
+   * @minLength 1
+   */
+  reason: string;
+}
+
 /** DLQEntryOut */
 export interface DLQEntryOut {
   /** Id */
@@ -883,6 +1404,33 @@ export interface DLQEntryOut {
    * @format date-time
    */
   created_at: string;
+  /** Campaign Id */
+  campaign_id?: string | null;
+  /** Failed Step Id */
+  failed_step_id?: string | null;
+  /** Failure Reason */
+  failure_reason?: string | null;
+  /** Failed At */
+  failed_at?: string | null;
+  /** Closed By */
+  closed_by?: string | null;
+  /** Closed At */
+  closed_at?: string | null;
+  /** Close Reason */
+  close_reason?: string | null;
+  /** Replayed To Execution Id */
+  replayed_to_execution_id?: string | null;
+  /** Artifact Refs */
+  artifact_refs?: Record<string, any>;
+}
+
+/** DLQRetryBody */
+export interface DLQRetryBody {
+  /**
+   * From Checkpoint
+   * @default true
+   */
+  from_checkpoint?: boolean;
 }
 
 /** DLQSummaryOut */
@@ -917,6 +1465,50 @@ export interface DeviceAccountOut {
    * @format date-time
    */
   assigned_at: string;
+}
+
+/** DeviceClaimBody */
+export interface DeviceClaimBody {
+  /**
+   * Owner Type
+   * @default "manual"
+   */
+  owner_type?: string;
+  /**
+   * Owner Id
+   * @default ""
+   */
+  owner_id?: string;
+  /** Ttl Sec */
+  ttl_sec?: number | null;
+  /** Ctx */
+  ctx?: Record<string, any> | null;
+}
+
+/** DeviceClaimOut */
+export interface DeviceClaimOut {
+  /** Session Id */
+  session_id: string;
+  /** Device Id */
+  device_id: string;
+  /** Owner Type */
+  owner_type: string;
+  /** Owner Id */
+  owner_id: string;
+  /**
+   * Claimed At
+   * @format date-time
+   */
+  claimed_at: string;
+  /**
+   * Last Heartbeat
+   * @format date-time
+   */
+  last_heartbeat: string;
+  /** Ttl Sec */
+  ttl_sec: number;
+  /** Ctx */
+  ctx?: Record<string, any> | null;
 }
 
 /** DeviceCreate */
@@ -1018,12 +1610,31 @@ export interface DeviceGroupUpdate {
   color?: string | null;
 }
 
+/** DeviceIdBreakdownOut */
+export interface DeviceIdBreakdownOut {
+  /** Db Id */
+  db_id: string;
+  /** Device Serial */
+  device_serial: string;
+  /** Adb Serial */
+  adb_serial?: string | null;
+  /** Relay Serial */
+  relay_serial?: string | null;
+}
+
 /** DeviceOut */
 export interface DeviceOut {
   /** Id */
   id: string;
+  /** Db Id */
+  db_id?: string | null;
   /** Serial */
   serial: string;
+  /**
+   * Device Serial
+   * @default ""
+   */
+  device_serial?: string;
   /** Name */
   name: string;
   /** Device Key */
@@ -1051,6 +1662,8 @@ export interface DeviceOut {
   created_at: string;
   /** Adb Serial */
   adb_serial?: string | null;
+  /** Relay Serial */
+  relay_serial?: string | null;
   /** Adb Ip */
   adb_ip?: string | null;
   /**
@@ -1070,6 +1683,52 @@ export interface DeviceOut {
    * @default "unknown"
    */
   state?: string;
+  /**
+   * Status
+   * @default "paired"
+   */
+  status?: string;
+  /** Paired At */
+  paired_at?: string | null;
+  /** Unpaired At */
+  unpaired_at?: string | null;
+  /**
+   * Notes
+   * @default ""
+   */
+  notes?: string;
+}
+
+/** DeviceReleaseBody */
+export interface DeviceReleaseBody {
+  /** Session Id */
+  session_id: string;
+}
+
+/** DeviceReserveSessionOut */
+export interface DeviceReserveSessionOut {
+  /** Session Id */
+  session_id: string;
+  /** Device Id */
+  device_id: string;
+  /** Owner Type */
+  owner_type: string;
+  /** Owner Id */
+  owner_id: string;
+  /**
+   * Claimed At
+   * @format date-time
+   */
+  claimed_at: string;
+  /**
+   * Last Heartbeat
+   * @format date-time
+   */
+  last_heartbeat: string;
+  /** Ttl Sec */
+  ttl_sec: number;
+  /** Ctx */
+  ctx?: Record<string, any> | null;
 }
 
 /** DeviceReviveOut */
@@ -1231,6 +1890,44 @@ export interface ExecutionCreate {
   meta?: Record<string, any>;
 }
 
+/** ExecutionEventListOut */
+export interface ExecutionEventListOut {
+  /** Items */
+  items: ExecutionEventOut[];
+  /**
+   * Has More
+   * @default false
+   */
+  has_more?: boolean;
+}
+
+/** ExecutionEventOut */
+export interface ExecutionEventOut {
+  /** Event Id */
+  event_id: string;
+  /** Event Type */
+  event_type: string;
+  /** Schema Version */
+  schema_version: string;
+  /**
+   * Occurred At
+   * @format date-time
+   */
+  occurred_at: string;
+  /** Organization Id */
+  organization_id: string;
+  /** Campaign Id */
+  campaign_id?: string | null;
+  /** Execution Id */
+  execution_id: string;
+  /** Step Id */
+  step_id?: string | null;
+  /** Payload */
+  payload?: Record<string, any>;
+  /** Tags */
+  tags?: string[];
+}
+
 /** ExecutionListOut */
 export interface ExecutionListOut {
   /** Total */
@@ -1323,6 +2020,53 @@ export interface ExecutionResultOut {
    * @format date-time
    */
   created_at: string;
+}
+
+/** ExecutionStepOut */
+export interface ExecutionStepOut {
+  /** Id */
+  id: string;
+  /** Execution Id */
+  execution_id: string;
+  /** Step Index */
+  step_index: number;
+  /** Step Id */
+  step_id?: string | null;
+  /** Step Type */
+  step_type?: string | null;
+  /** Status */
+  status: string;
+  /** Started At */
+  started_at?: string | null;
+  /** Ended At */
+  ended_at?: string | null;
+  /** Duration Ms */
+  duration_ms?: number | null;
+  /** Error Json */
+  error_json?: Record<string, any>;
+  /** Effective Config Json */
+  effective_config_json?: Record<string, any>;
+  /** Artifacts Json */
+  artifacts_json?: any[];
+  /** Attempts Json */
+  attempts_json?: any[];
+  /**
+   * Marked Ignored
+   * @default false
+   */
+  marked_ignored?: boolean;
+  /** Message */
+  message?: string | null;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /**
+   * Updated At
+   * @format date-time
+   */
+  updated_at: string;
 }
 
 /** FinishBody */
@@ -1446,6 +2190,11 @@ export interface HierarchyExtractBody {
    * @default "text"
    */
   format?: string;
+  /**
+   * Strategy
+   * @default "screen_data"
+   */
+  strategy?: string;
 }
 
 /** HitTestRequest */
@@ -1498,6 +2247,12 @@ export interface LoginRequest {
   password: string;
 }
 
+/** LogoutRequest */
+export interface LogoutRequest {
+  /** Refresh Token */
+  refresh_token?: string | null;
+}
+
 /** LongTapRequest */
 export interface LongTapRequest {
   /** X */
@@ -1509,6 +2264,25 @@ export interface LongTapRequest {
    * @default 800
    */
   duration_ms?: number;
+}
+
+/** McpTokenCreate */
+export interface McpTokenCreate {
+  /**
+   * Name
+   * @maxLength 120
+   * @default "MCP agent token"
+   */
+  name?: string;
+  /** Scope Type */
+  scope_type: "device" | "user";
+  /** Scope Ref */
+  scope_ref?: string | null;
+  /**
+   * Preview Consent
+   * @default false
+   */
+  preview_consent?: boolean;
 }
 
 /** NodeScope */
@@ -1532,7 +2306,7 @@ export interface NotificationChannelCreate {
   name: string;
   /**
    * Type
-   * @pattern ^(in_app|telegram|webhook)$
+   * @pattern ^(in_app|telegram|webhook|email|slack)$
    */
   type: string;
   /** Config */
@@ -1611,6 +2385,8 @@ export interface NotificationOut {
   data: Record<string, any>;
   /** Is Read */
   is_read: boolean;
+  /** Read At */
+  read_at?: string | null;
   /**
    * Sent At
    * @format date-time
@@ -1623,15 +2399,14 @@ export interface NotificationOut {
    * @format date-time
    */
   created_at: string;
+  /** Unread Count */
+  unread_count?: number | null;
 }
 
 /** OCRExtractBody */
 export interface OCRExtractBody {
-  /**
-   * Language
-   * @default "eng"
-   */
-  language?: string;
+  /** Languages */
+  languages?: string[];
   /** Region */
   region?: Record<string, number> | null;
   /**
@@ -1644,6 +2419,11 @@ export interface OCRExtractBody {
    * @default 2
    */
   scale_factor?: number;
+  /**
+   * Confidence Threshold
+   * @default 0.5
+   */
+  confidence_threshold?: number;
 }
 
 /** OpenUrlRequest */
@@ -1654,6 +2434,224 @@ export interface OpenUrlRequest {
   package?: string | null;
 }
 
+/** OrgScenarioBodyIn */
+export interface OrgScenarioBodyIn {
+  /** Steps */
+  steps?: Record<string, any>[] | null;
+  /** Nodes */
+  nodes?: Record<string, any>[] | null;
+  /** Edges */
+  edges?: Record<string, any>[] | null;
+  /** Variables */
+  variables?: Record<string, any> | null;
+}
+
+/** OrgScenarioBodyOut */
+export interface OrgScenarioBodyOut {
+  /** Scenario Id */
+  scenario_id: string;
+  /** Kind */
+  kind: string;
+  /** Scenario Version */
+  scenario_version: number;
+  /** Body Json */
+  body_json: Record<string, any>;
+  /** Is Runnable */
+  is_runnable: boolean;
+  /** Validation */
+  validation?: Record<string, any>;
+}
+
+/** OrgScenarioCloneTemplateIn */
+export interface OrgScenarioCloneTemplateIn {
+  /** Name Override */
+  name_override?: string | null;
+}
+
+/** OrgScenarioCreate */
+export interface OrgScenarioCreate {
+  /**
+   * Name
+   * @minLength 1
+   * @maxLength 255
+   */
+  name: string;
+  /**
+   * Kind
+   * @default "sequence"
+   */
+  kind?: "sequence" | "graph";
+  /**
+   * Description
+   * @default ""
+   */
+  description?: string;
+  /** Body Json */
+  body_json?: Record<string, any> | null;
+  /** Tags */
+  tags?: string[];
+}
+
+/** OrgScenarioImportOut */
+export interface OrgScenarioImportOut {
+  /** Scenario Id */
+  scenario_id: string;
+  /** Name */
+  name: string;
+  /** Kind */
+  kind: string;
+  /** Status */
+  status: string;
+  /** Scenario Version */
+  scenario_version: number;
+  /** Warnings */
+  warnings?: string[];
+  /** Created Stub Names */
+  created_stub_names?: string[];
+}
+
+/** OrgScenarioOut */
+export interface OrgScenarioOut {
+  /** Id */
+  id: string;
+  /** Organization Id */
+  organization_id: string;
+  /**
+   * Is System Template
+   * @default false
+   */
+  is_system_template?: boolean;
+  /** Name */
+  name: string;
+  /** Description */
+  description: string;
+  /** Kind */
+  kind: string;
+  /** Status */
+  status: string;
+  /** Scenario Version */
+  scenario_version: number;
+  /** Tags */
+  tags?: string[];
+  /** Created By */
+  created_by?: string | null;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /**
+   * Updated At
+   * @format date-time
+   */
+  updated_at: string;
+  /**
+   * Is Runnable
+   * @default false
+   */
+  is_runnable?: boolean;
+  /** Last Validation Summary */
+  last_validation_summary?: Record<string, any> | null;
+  /** Last Validated At */
+  last_validated_at?: string | null;
+  /** Body Json */
+  body_json?: Record<string, any> | null;
+}
+
+/** OrgScenarioSummaryOut */
+export interface OrgScenarioSummaryOut {
+  /** Id */
+  id: string;
+  /** Organization Id */
+  organization_id: string;
+  /**
+   * Is System Template
+   * @default false
+   */
+  is_system_template?: boolean;
+  /** Name */
+  name: string;
+  /** Description */
+  description: string;
+  /** Kind */
+  kind: string;
+  /** Status */
+  status: string;
+  /** Scenario Version */
+  scenario_version: number;
+  /** Tags */
+  tags?: string[];
+  /** Created By */
+  created_by?: string | null;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /**
+   * Updated At
+   * @format date-time
+   */
+  updated_at: string;
+  /**
+   * Is Runnable
+   * @default false
+   */
+  is_runnable?: boolean;
+  /** Last Validation Summary */
+  last_validation_summary?: Record<string, any> | null;
+  /** Last Validated At */
+  last_validated_at?: string | null;
+}
+
+/** OrgScenarioUpdate */
+export interface OrgScenarioUpdate {
+  /** Name */
+  name?: string | null;
+  /** Kind */
+  kind?: "sequence" | "graph" | null;
+  /** Description */
+  description?: string | null;
+  /** Status */
+  status?: "draft" | "active" | "archived" | null;
+  /** Body Json */
+  body_json?: Record<string, any> | null;
+  /** Tags */
+  tags?: string[] | null;
+}
+
+/** OrgScenarioValidateIn */
+export interface OrgScenarioValidateIn {
+  /** Steps */
+  steps?: Record<string, any>[] | null;
+  /** Nodes */
+  nodes?: Record<string, any>[] | null;
+  /** Edges */
+  edges?: Record<string, any>[] | null;
+  /** Variables */
+  variables?: Record<string, any> | null;
+  /** Campaign Variables */
+  campaign_variables?: Record<string, any> | null;
+}
+
+/** OrgScenarioValidationOut */
+export interface OrgScenarioValidationOut {
+  /** Scenario Id */
+  scenario_id: string;
+  /** Status */
+  status: string;
+  /** Errors */
+  errors?: ApiSchemasOrgScenarioValidationIssueOut[];
+  /** Warnings */
+  warnings?: ApiSchemasOrgScenarioValidationIssueOut[];
+  /** Infos */
+  infos?: ApiSchemasOrgScenarioValidationIssueOut[];
+  /** Last Validated At */
+  last_validated_at?: string | null;
+  /** Last Validation Summary */
+  last_validation_summary?: Record<string, any> | null;
+}
+
 /** OrganizationCreate */
 export interface OrganizationCreate {
   /** Businessname */
@@ -1662,6 +2660,94 @@ export interface OrganizationCreate {
   businessEmail?: string | null;
   /** Businesslogo */
   businessLogo?: string | null;
+}
+
+/** OrganizationInvitationAccept */
+export interface OrganizationInvitationAccept {
+  /** Token */
+  token: string;
+}
+
+/** OrganizationInvitationAcceptOut */
+export interface OrganizationInvitationAcceptOut {
+  /** Organizationid */
+  organizationId: string;
+  /** Organizationname */
+  organizationName: string;
+}
+
+/** OrganizationInvitationPreview */
+export interface OrganizationInvitationPreview {
+  /** Organizationname */
+  organizationName: string;
+  /** Email */
+  email: string;
+  /** Status */
+  status: string;
+  /** Expired */
+  expired: boolean;
+  /** Existinguser */
+  existingUser: boolean;
+}
+
+/** OrganizationListOut */
+export interface OrganizationListOut {
+  /** Items */
+  items: OrganizationOut[];
+  /** Total */
+  total: number;
+  /** Offset */
+  offset: number;
+  /** Limit */
+  limit: number;
+}
+
+/** OrganizationMemberInvite */
+export interface OrganizationMemberInvite {
+  /** Email */
+  email: string;
+  /**
+   * Role
+   * @default "member"
+   */
+  role?: string;
+}
+
+/** OrganizationMemberInviteOut */
+export interface OrganizationMemberInviteOut {
+  /** Email */
+  email: string;
+  /** Status */
+  status: string;
+  /** Existinguser */
+  existingUser: boolean;
+  /** Emailsent */
+  emailSent: boolean;
+}
+
+/** OrganizationMemberOut */
+export interface OrganizationMemberOut {
+  /** Id */
+  id: string;
+  /** Userid */
+  userId: string;
+  /** Email */
+  email: string;
+  /** Name */
+  name: string;
+  /** Role */
+  role: string;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+}
+
+/** OrganizationMemberUpdate */
+export interface OrganizationMemberUpdate {
+  /** Role */
+  role: string;
 }
 
 /** OrganizationOut */
@@ -1687,6 +2773,60 @@ export interface OrganizationOut {
   created_at: string;
 }
 
+/** PairRegistryBody */
+export interface PairRegistryBody {
+  /** Device Serial */
+  device_serial: string;
+  /**
+   * Adb Serial
+   * @default ""
+   */
+  adb_serial?: string;
+  /**
+   * Relay Serial
+   * @default ""
+   */
+  relay_serial?: string;
+  /**
+   * Name
+   * @default ""
+   */
+  name?: string;
+  /**
+   * Model
+   * @default ""
+   */
+  model?: string;
+  /**
+   * Android Version
+   * @default ""
+   */
+  android_version?: string;
+}
+
+/** PairRegistryOut */
+export interface PairRegistryOut {
+  /** Db Id */
+  db_id: string;
+  /** Device Serial */
+  device_serial: string;
+  /** Adb Serial */
+  adb_serial?: string | null;
+  /** Relay Serial */
+  relay_serial?: string | null;
+  /** Status */
+  status: string;
+  /**
+   * Device Key
+   * Plaintext device key — returned only on first pair
+   */
+  device_key?: string | null;
+  /** Device Key Disclaimer */
+  device_key_disclaimer?: string | null;
+  /** Created */
+  created: boolean;
+}
+
 /** PinchRequest */
 export interface PinchRequest {
   /** Cx */
@@ -1703,6 +2843,147 @@ export interface PinchRequest {
    * @default 400
    */
   duration_ms?: number;
+}
+
+/** PlatformFlagBody */
+export interface PlatformFlagBody {
+  /**
+   * Note
+   * @default ""
+   */
+  note?: string;
+}
+
+/** PlatformLifecycleBody */
+export interface PlatformLifecycleBody {
+  /** Version */
+  version?: string | null;
+  /**
+   * Note
+   * @default ""
+   */
+  note?: string;
+}
+
+/** PreviewListItem */
+export interface PreviewListItem {
+  /** Execution Id */
+  execution_id: string;
+  /** Status */
+  status: string;
+  /**
+   * Kind
+   * @default "preview"
+   */
+  kind?: string;
+  /** Org Scenario Id */
+  org_scenario_id?: string | null;
+  /** Org Scenario Name */
+  org_scenario_name?: string | null;
+  /** Device Id */
+  device_id?: string | null;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /** Finished At */
+  finished_at?: string | null;
+  /**
+   * Artifact Count
+   * @default 0
+   */
+  artifact_count?: number;
+  /**
+   * Artifacts Purged
+   * @default false
+   */
+  artifacts_purged?: boolean;
+  /** Warnings */
+  warnings?: string[];
+}
+
+/** PreviewListResponse */
+export interface PreviewListResponse {
+  /** Total */
+  total: number;
+  /** Items */
+  items: PreviewListItem[];
+}
+
+/** PreviewStartRequest */
+export interface PreviewStartRequest {
+  /** Device Id */
+  device_id: string;
+  /** Scenario Version */
+  scenario_version?: number | null;
+  /** Vars */
+  vars?: Record<string, any>;
+  /** Account Id */
+  account_id?: string | null;
+  /**
+   * Force
+   * @default false
+   */
+  force?: boolean;
+}
+
+/** PreviewStartResponse */
+export interface PreviewStartResponse {
+  /** Execution Id */
+  execution_id: string;
+  /** Status */
+  status: string;
+  /**
+   * Kind
+   * @default "preview"
+   */
+  kind?: string;
+  /** Warnings */
+  warnings?: string[];
+  /** Workflow Id */
+  workflow_id?: string | null;
+  /** Dispatch Source */
+  dispatch_source?: string | null;
+  /** Org Scenario Id */
+  org_scenario_id: string;
+  /** Device Id */
+  device_id: string;
+}
+
+/** ReconnectPolicyOut */
+export interface ReconnectPolicyOut {
+  /** Org Id */
+  org_id: string;
+  /** Interval Base Ms */
+  interval_base_ms: number;
+  /** Max Interval Ms */
+  max_interval_ms: number;
+  /** Max Attempts */
+  max_attempts: number;
+  /** Jitter Factor */
+  jitter_factor: number;
+  /** Updated At */
+  updated_at: string;
+  /** Updated By */
+  updated_by?: string | null;
+  /**
+   * Source
+   * default or configured
+   */
+  source: string;
+}
+
+/** ReconnectPolicyUpdate */
+export interface ReconnectPolicyUpdate {
+  /** Interval Base Ms */
+  interval_base_ms: number;
+  /** Max Interval Ms */
+  max_interval_ms: number;
+  /** Max Attempts */
+  max_attempts: number;
+  /** Jitter Factor */
+  jitter_factor: number;
 }
 
 /** RefreshRequest */
@@ -1747,6 +3028,8 @@ export interface RegisterRequest {
    * @default "operator"
    */
   role?: string;
+  /** Invitetoken */
+  inviteToken?: string | null;
 }
 
 /** RelayAgentOut */
@@ -1769,6 +3052,11 @@ export interface RelayAgentOut {
   device_names?: Record<string, string>;
   /** Status */
   status: string;
+  /**
+   * Live Connected
+   * @default false
+   */
+  live_connected?: boolean;
   /**
    * Connected At
    * @format date-time
@@ -1964,11 +3252,16 @@ export interface SaveContentBody {
   platform?: string | null;
   /**
    * Content Type
-   * @default "post"
+   * @default "fb_post"
    */
   content_type?: string;
   /** Dedupe Field */
   dedupe_field?: string | null;
+  /**
+   * Dedup Action
+   * @default "skip"
+   */
+  dedup_action?: string;
   /**
    * Tags
    * @default ""
@@ -2224,11 +3517,11 @@ export interface ScenarioValidationOut {
   /** Status */
   status: "valid" | "invalid";
   /** Errors */
-  errors?: ValidationIssueOut[];
+  errors?: ApiSchemasScenarioValidationValidationIssueOut[];
   /** Warnings */
-  warnings?: ValidationIssueOut[];
+  warnings?: ApiSchemasScenarioValidationValidationIssueOut[];
   /** Infos */
-  infos?: ValidationIssueOut[];
+  infos?: ApiSchemasScenarioValidationValidationIssueOut[];
   /** Last Validated At */
   last_validated_at?: string | null;
 }
@@ -2254,6 +3547,20 @@ export interface ScenarioValidationSummaryOut {
   info_count?: number;
   /** Codes */
   codes?: string[];
+}
+
+/** ScheduleConflictOut */
+export interface ScheduleConflictOut {
+  /** Conflict Id */
+  conflict_id: string;
+  /** Type */
+  type: string;
+  /** Severity */
+  severity: string;
+  /** Impacted Target */
+  impacted_target: string;
+  /** Suggested Action */
+  suggested_action: string;
 }
 
 /** ScheduleCreate */
@@ -2291,17 +3598,25 @@ export interface ScheduleCreate {
   filter_model?: string | null;
   /** Max Devices */
   max_devices?: number | null;
-  /**
-   * Cron Expression
-   * @minLength 1
-   * @maxLength 100
-   */
-  cron_expression: string;
+  /** Cron Expression */
+  cron_expression?: string | null;
   /**
    * Timezone
    * @default "Asia/Ho_Chi_Minh"
    */
   timezone?: string;
+  /** Run At */
+  run_at?: string | null;
+  /** Skip Dates */
+  skip_dates?: string[];
+  /** Skip Windows */
+  skip_windows?: Record<string, any>[];
+  /**
+   * Misfire Policy
+   * @default "skip"
+   * @pattern ^(skip|latest_only|catch_up)$
+   */
+  misfire_policy?: string;
   /**
    * Random Delay Min
    * @min 0
@@ -2331,6 +3646,23 @@ export interface ScheduleCreate {
    * @default true
    */
   is_enabled?: boolean;
+  /**
+   * Priority
+   * @default "normal"
+   * @pattern ^(low|normal|high)$
+   */
+  priority?: string;
+  /**
+   * Max Concurrent Per Device
+   * @min 1
+   * @max 10
+   * @default 1
+   */
+  max_concurrent_per_device?: number;
+  /** Account Rate Limit Per Hour */
+  account_rate_limit_per_hour?: number | null;
+  /** Quota Policy */
+  quota_policy?: Record<string, any>;
 }
 
 /** ScheduleOut */
@@ -2358,9 +3690,19 @@ export interface ScheduleOut {
   /** Max Devices */
   max_devices: number | null;
   /** Cron Expression */
-  cron_expression: string;
+  cron_expression: string | null;
   /** Timezone */
   timezone: string;
+  /** Schedule Kind */
+  schedule_kind: string;
+  /** Run At */
+  run_at: string | null;
+  /** Skip Dates */
+  skip_dates: string[];
+  /** Skip Windows */
+  skip_windows: Record<string, any>[];
+  /** Misfire Policy */
+  misfire_policy: string;
   /** Random Delay Min */
   random_delay_min: number;
   /** Random Delay Max */
@@ -2371,6 +3713,18 @@ export interface ScheduleOut {
   stagger_interval_seconds: number;
   /** Is Enabled */
   is_enabled: boolean;
+  /** Status */
+  status: string;
+  /** Priority */
+  priority: string;
+  /** Max Concurrent Per Device */
+  max_concurrent_per_device: number;
+  /** Account Rate Limit Per Hour */
+  account_rate_limit_per_hour: number | null;
+  /** Quota Policy */
+  quota_policy: Record<string, any>;
+  /** Deleted At */
+  deleted_at: string | null;
   /** Last Run At */
   last_run_at: string | null;
   /** Next Run At */
@@ -2417,6 +3771,14 @@ export interface SchedulePatch {
   cron_expression?: string | null;
   /** Timezone */
   timezone?: string | null;
+  /** Run At */
+  run_at?: string | null;
+  /** Skip Dates */
+  skip_dates?: string[] | null;
+  /** Skip Windows */
+  skip_windows?: Record<string, any>[] | null;
+  /** Misfire Policy */
+  misfire_policy?: string | null;
   /** Random Delay Min */
   random_delay_min?: number | null;
   /** Random Delay Max */
@@ -2427,6 +3789,46 @@ export interface SchedulePatch {
   stagger_interval_seconds?: number | null;
   /** Is Enabled */
   is_enabled?: boolean | null;
+  /** Priority */
+  priority?: string | null;
+  /** Max Concurrent Per Device */
+  max_concurrent_per_device?: number | null;
+  /** Account Rate Limit Per Hour */
+  account_rate_limit_per_hour?: number | null;
+  /** Quota Policy */
+  quota_policy?: Record<string, any> | null;
+}
+
+/** SchedulePreviewIn */
+export interface SchedulePreviewIn {
+  /**
+   * Target Type
+   * @pattern ^(campaign|template|fleet)$
+   */
+  target_type: string;
+  /** Target Id */
+  target_id?: string | null;
+  /** Cron Expression */
+  cron_expression?: string | null;
+  /**
+   * Timezone
+   * @default "Asia/Ho_Chi_Minh"
+   */
+  timezone?: string;
+  /** Run At */
+  run_at?: string | null;
+  /** Device Group Id */
+  device_group_id?: string | null;
+  /** Max Devices */
+  max_devices?: number | null;
+}
+
+/** SchedulePreviewOut */
+export interface SchedulePreviewOut {
+  /** Conflicts */
+  conflicts: ScheduleConflictOut[];
+  /** Next Runs */
+  next_runs: string[];
 }
 
 /** ScheduleRunOut */
@@ -2437,6 +3839,10 @@ export interface ScheduleRunOut {
   schedule_id: string;
   /** Status */
   status: string;
+  /** Trigger Source */
+  trigger_source: string;
+  /** Scheduled At */
+  scheduled_at: string | null;
   /**
    * Started At
    * @format date-time
@@ -2444,6 +3850,12 @@ export interface ScheduleRunOut {
   started_at: string;
   /** Finished At */
   finished_at: string | null;
+  /** Deferred Until */
+  deferred_until: string | null;
+  /** Was Catch Up */
+  was_catch_up: boolean;
+  /** Execution Id */
+  execution_id: string | null;
   /** Devices Dispatched */
   devices_dispatched: number;
   /** Devices Succeeded */
@@ -2452,6 +3864,10 @@ export interface ScheduleRunOut {
   devices_failed: number;
   /** Task Ids */
   task_ids: string[];
+  /** Workflow Ids */
+  workflow_ids: string[];
+  /** Error Code */
+  error_code: string | null;
   /** Error Message */
   error_message: string | null;
   /**
@@ -2459,6 +3875,18 @@ export interface ScheduleRunOut {
    * @format date-time
    */
   created_at: string;
+}
+
+/** ScheduleStatusOut */
+export interface ScheduleStatusOut {
+  /** Temporal Available */
+  temporal_available: boolean;
+  /** Fallback Active */
+  fallback_active: boolean;
+  /** Banner */
+  banner: string | null;
+  /** Metrics */
+  metrics: Record<string, any>;
 }
 
 /** ScrcpyAttachRequest */
@@ -2491,19 +3919,10 @@ export interface ScrollRequest {
   distance?: number;
 }
 
-/** SessionOut */
-export interface SessionOut {
-  /** Id */
-  id: string;
-  /** Client Ip */
-  client_ip: string;
-  /**
-   * Connected At
-   * @format date-time
-   */
-  connected_at: string;
-  /** Disconnected At */
-  disconnected_at: string | null;
+/** SessionListOut */
+export interface SessionListOut {
+  /** Sessions */
+  sessions: ApiSchemasAuthSessionOut[];
 }
 
 /** SessionOwnerAnomalyOut */
@@ -2701,6 +4120,10 @@ export interface TokenResponse {
    * @default "bearer"
    */
   token_type?: string;
+  /** Expires In */
+  expires_in: number;
+  /** Session Id */
+  session_id?: string | null;
 }
 
 /** TriggerResponse */
@@ -2712,6 +4135,19 @@ export interface TriggerResponse {
    * @default "Schedule triggered"
    */
   message?: string;
+}
+
+/** UnpairDeviceOut */
+export interface UnpairDeviceOut {
+  /** Db Id */
+  db_id: string;
+  /** Status */
+  status: string;
+  /**
+   * Unpaired At
+   * @format date-time
+   */
+  unpaired_at: string;
 }
 
 /** UnreadCountOut */
@@ -2773,23 +4209,6 @@ export interface ValidationError {
   ctx?: object;
 }
 
-/** ValidationIssueOut */
-export interface ValidationIssueOut {
-  /** Level */
-  level: "error" | "warning" | "info";
-  /** Code */
-  code: string;
-  /** Message */
-  message: string;
-  /**
-   * Location
-   * @default ""
-   */
-  location?: string;
-  /** Hint */
-  hint?: string | null;
-}
-
 /** PairBulkBody */
 export interface ApiRoutesDevicesPairBulkBody {
   /**
@@ -2805,6 +4224,31 @@ export interface ApiRoutesRelayAgentsPairBulkBody {
   serials: string[];
 }
 
+/** SessionOut */
+export interface ApiSchemasAuthSessionOut {
+  /** Session Id */
+  session_id: string;
+  /**
+   * Created At
+   * @format date-time
+   */
+  created_at: string;
+  /**
+   * Last Used At
+   * @format date-time
+   */
+  last_used_at: string;
+  /** Last Ip */
+  last_ip?: string | null;
+  /** User Agent Summary */
+  user_agent_summary?: string | null;
+  /**
+   * Is Current
+   * @default false
+   */
+  is_current?: boolean;
+}
+
 /** UserOut */
 export interface ApiSchemasAuthUserOut {
   /** Id */
@@ -2817,6 +4261,57 @@ export interface ApiSchemasAuthUserOut {
   role: string;
   /** Api Key */
   api_key: string;
+  /** Orgrole */
+  orgRole?: string | null;
+}
+
+/** SessionOut */
+export interface ApiSchemasDeviceSessionOut {
+  /** Id */
+  id: string;
+  /** Client Ip */
+  client_ip: string;
+  /**
+   * Connected At
+   * @format date-time
+   */
+  connected_at: string;
+  /** Disconnected At */
+  disconnected_at: string | null;
+}
+
+/** ValidationIssueOut */
+export interface ApiSchemasOrgScenarioValidationIssueOut {
+  /** Level */
+  level: string;
+  /** Code */
+  code: string;
+  /** Message */
+  message: string;
+  /**
+   * Location
+   * @default ""
+   */
+  location?: string;
+  /** Hint */
+  hint?: string | null;
+}
+
+/** ValidationIssueOut */
+export interface ApiSchemasScenarioValidationValidationIssueOut {
+  /** Level */
+  level: "error" | "warning" | "info";
+  /** Code */
+  code: string;
+  /** Message */
+  message: string;
+  /**
+   * Location
+   * @default ""
+   */
+  location?: string;
+  /** Hint */
+  hint?: string | null;
 }
 
 /** UserOut */
@@ -3055,6 +4550,36 @@ export class DeviceFarmHttpClient<
     /**
      * No description
      *
+     * @name ApiServerStatusApiServerStatusGet
+     * @summary Api Server Status
+     * @request GET:/api/server/status
+     */
+    apiServerStatusApiServerStatusGet: (params: RequestParams = {}) =>
+      this.request<any, any>({
+        path: `/api/server/status`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @name ApiServerVersionApiServerVersionGet
+     * @summary Api Server Version
+     * @request GET:/api/server/version
+     */
+    apiServerVersionApiServerVersionGet: (params: RequestParams = {}) =>
+      this.request<any, any>({
+        path: `/api/server/version`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
      * @name LivenessApiLiveGet
      * @summary Liveness
      * @request GET:/api/live
@@ -3282,6 +4807,28 @@ export class DeviceFarmHttpClient<
      * No description
      *
      * @tags auth
+     * @name LogoutApiAuthLogoutPost
+     * @summary Logout
+     * @request POST:/api/auth/logout
+     * @secure
+     */
+    logoutApiAuthLogoutPost: (
+      data: LogoutRequest,
+      params: RequestParams = {},
+    ) =>
+      this.request<void, HTTPValidationError>({
+        path: `/api/auth/logout`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags auth
      * @name MeApiAuthMeGet
      * @summary Me
      * @request GET:/api/auth/me
@@ -3315,17 +4862,205 @@ export class DeviceFarmHttpClient<
       }),
 
     /**
+     * No description
+     *
+     * @tags me
+     * @name ChangePasswordApiMeChangePasswordPost
+     * @summary Change Password
+     * @request POST:/api/me/change-password
+     * @secure
+     */
+    changePasswordApiMeChangePasswordPost: (
+      data: ChangePasswordRequest,
+      params: RequestParams = {},
+    ) =>
+      this.request<void, HTTPValidationError>({
+        path: `/api/me/change-password`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags me
+     * @name ListMySessionsApiMeSessionsGet
+     * @summary List My Sessions
+     * @request GET:/api/me/sessions
+     * @secure
+     */
+    listMySessionsApiMeSessionsGet: (params: RequestParams = {}) =>
+      this.request<SessionListOut, any>({
+        path: `/api/me/sessions`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags me
+     * @name RevokeOtherSessionsApiMeSessionsDelete
+     * @summary Revoke Other Sessions
+     * @request DELETE:/api/me/sessions
+     * @secure
+     */
+    revokeOtherSessionsApiMeSessionsDelete: (params: RequestParams = {}) =>
+      this.request<void, any>({
+        path: `/api/me/sessions`,
+        method: "DELETE",
+        secure: true,
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags me
+     * @name RevokeMySessionApiMeSessionsSessionIdDelete
+     * @summary Revoke My Session
+     * @request DELETE:/api/me/sessions/{session_id}
+     * @secure
+     */
+    revokeMySessionApiMeSessionsSessionIdDelete: (
+      sessionId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<void, HTTPValidationError>({
+        path: `/api/me/sessions/${sessionId}`,
+        method: "DELETE",
+        secure: true,
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminListMembersApiAdminMembersGet
+     * @summary Admin List Members
+     * @request GET:/api/admin/members
+     * @secure
+     */
+    adminListMembersApiAdminMembersGet: (params: RequestParams = {}) =>
+      this.request<OrganizationMemberOut[], any>({
+        path: `/api/admin/members`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name GetReconnectPolicyApiAdminReconnectPolicyGet
+     * @summary Get Reconnect Policy
+     * @request GET:/api/admin/reconnect-policy
+     * @secure
+     */
+    getReconnectPolicyApiAdminReconnectPolicyGet: (
+      params: RequestParams = {},
+    ) =>
+      this.request<ReconnectPolicyOut, any>({
+        path: `/api/admin/reconnect-policy`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name PutReconnectPolicyApiAdminReconnectPolicyPut
+     * @summary Put Reconnect Policy
+     * @request PUT:/api/admin/reconnect-policy
+     * @secure
+     */
+    putReconnectPolicyApiAdminReconnectPolicyPut: (
+      data: ReconnectPolicyUpdate,
+      params: RequestParams = {},
+    ) =>
+      this.request<ReconnectPolicyOut, HTTPValidationError>({
+        path: `/api/admin/reconnect-policy`,
+        method: "PUT",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminForceReleaseApiAdminDevicesDeviceIdForceReleasePost
+     * @summary Admin Force Release
+     * @request POST:/api/admin/devices/{device_id}/force-release
+     * @secure
+     */
+    adminForceReleaseApiAdminDevicesDeviceIdForceReleasePost: (
+      deviceId: string,
+      data: AdminForceReleaseBody,
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminOverrideOut, HTTPValidationError>({
+        path: `/api/admin/devices/${deviceId}/force-release`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags admin
+     * @name AdminResetStateApiAdminDevicesDeviceIdResetStatePost
+     * @summary Admin Reset State
+     * @request POST:/api/admin/devices/{device_id}/reset-state
+     * @secure
+     */
+    adminResetStateApiAdminDevicesDeviceIdResetStatePost: (
+      deviceId: string,
+      data: AdminResetStateBody,
+      params: RequestParams = {},
+    ) =>
+      this.request<AdminOverrideOut, HTTPValidationError>({
+        path: `/api/admin/devices/${deviceId}/reset-state`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
      * @description Serve the STFService.apk used by Android devices. The file is resolved from a small set of well-known locations: - device_farm/bundle/apks/STFService.apk                (download_bundle.py output) - ../STFService.apk/app/build/outputs/apk/release/...   (local Gradle build)
      *
      * @tags devices
      * @name DownloadStfApkApiDevicesStfApkGet
      * @summary Download STFService APK
      * @request GET:/api/devices/stf-apk
+     * @secure
      */
     downloadStfApkApiDevicesStfApkGet: (params: RequestParams = {}) =>
       this.request<any, any>({
         path: `/api/devices/stf-apk`,
         method: "GET",
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -3447,10 +5182,41 @@ export class DeviceFarmHttpClient<
      * @request GET:/api/devices
      * @secure
      */
-    listDevicesApiDevicesGet: (params: RequestParams = {}) =>
-      this.request<DeviceOut[], any>({
+    listDevicesApiDevicesGet: (
+      query?: {
+        /** Cursor */
+        cursor?: string | null;
+        /** Limit */
+        limit?: number | null;
+        /** State */
+        state?: string | null;
+        /** Group Id */
+        group_id?: string | null;
+        /** Owner Type */
+        owner_type?: string | null;
+        /** Relay Host */
+        relay_host?: string | null;
+        /** Tag */
+        tag?: string | null;
+        /** Q */
+        q?: string | null;
+        /** Sort */
+        sort?: string | null;
+        /** Device Id */
+        device_id?: string | null;
+        /** Device Serial */
+        device_serial?: string | null;
+        /** Adb Serial */
+        adb_serial?: string | null;
+        /** Relay Serial */
+        relay_serial?: string | null;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
         path: `/api/devices`,
         method: "GET",
+        query: query,
         secure: true,
         format: "json",
         ...params,
@@ -3475,6 +5241,37 @@ export class DeviceFarmHttpClient<
         body: data,
         secure: true,
         type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags devices
+     * @name DeviceCapacityReportApiDevicesCapacityGet
+     * @summary Device Capacity Report
+     * @request GET:/api/devices/capacity
+     * @secure
+     */
+    deviceCapacityReportApiDevicesCapacityGet: (
+      query?: {
+        /** Group Id */
+        group_id?: string | null;
+        /** Tag */
+        tag?: string | null;
+        /** State */
+        state?: string | null;
+        /** Relay Host */
+        relay_host?: string | null;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<CapacityReportOut, HTTPValidationError>({
+        path: `/api/devices/capacity`,
+        method: "GET",
+        query: query,
+        secure: true,
         format: "json",
         ...params,
       }),
@@ -3584,7 +5381,7 @@ export class DeviceFarmHttpClient<
       deviceId: string,
       params: RequestParams = {},
     ) =>
-      this.request<SessionOut[], HTTPValidationError>({
+      this.request<ApiSchemasDeviceSessionOut[], HTTPValidationError>({
         path: `/api/devices/${deviceId}/sessions`,
         method: "GET",
         secure: true,
@@ -3762,10 +5559,20 @@ export class DeviceFarmHttpClient<
      * @request GET:/api/campaigns
      * @secure
      */
-    listCampaignsApiCampaignsGet: (params: RequestParams = {}) =>
-      this.request<CampaignOut[], any>({
+    listCampaignsApiCampaignsGet: (
+      query?: {
+        /**
+         * Include Archived
+         * @default false
+         */
+        include_archived?: boolean;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<CampaignOut[], HTTPValidationError>({
         path: `/api/campaigns`,
         method: "GET",
+        query: query,
         secure: true,
         format: "json",
         ...params,
@@ -3784,7 +5591,7 @@ export class DeviceFarmHttpClient<
       data: CampaignCreate,
       params: RequestParams = {},
     ) =>
-      this.request<CampaignOut, HTTPValidationError>({
+      this.request<any, HTTPValidationError>({
         path: `/api/campaigns`,
         method: "POST",
         body: data,
@@ -3819,6 +5626,30 @@ export class DeviceFarmHttpClient<
      * No description
      *
      * @tags campaigns
+     * @name PatchCampaignEntityApiCampaignsCampaignIdPatch
+     * @summary Patch Campaign Entity
+     * @request PATCH:/api/campaigns/{campaign_id}
+     * @secure
+     */
+    patchCampaignEntityApiCampaignsCampaignIdPatch: (
+      campaignId: string,
+      data: CampaignEntityUpdate,
+      params: RequestParams = {},
+    ) =>
+      this.request<CampaignEntityOut, HTTPValidationError>({
+        path: `/api/campaigns/${campaignId}`,
+        method: "PATCH",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags campaigns
      * @name DeleteCampaignApiCampaignsCampaignIdDelete
      * @summary Delete Campaign
      * @request DELETE:/api/campaigns/{campaign_id}
@@ -3828,10 +5659,134 @@ export class DeviceFarmHttpClient<
       campaignId: string,
       params: RequestParams = {},
     ) =>
-      this.request<void, HTTPValidationError>({
+      this.request<CampaignEntityOut, HTTPValidationError>({
         path: `/api/campaigns/${campaignId}`,
         method: "DELETE",
         secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Fan-out campaign dispatch to explicit devices or device groups (DF-T-04-008).
+     *
+     * @tags campaigns
+     * @name DispatchCampaignRouteApiCampaignsCampaignIdDispatchPost
+     * @summary Dispatch Campaign Route
+     * @request POST:/api/campaigns/{campaign_id}/dispatch
+     * @secure
+     */
+    dispatchCampaignRouteApiCampaignsCampaignIdDispatchPost: (
+      campaignId: string,
+      data: CampaignDispatchIn,
+      query?: {
+        /**
+         * Include Vars
+         * Include effective_vars per execution (large fleets: keep false)
+         * @default false
+         */
+        include_vars?: boolean;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<CampaignDispatchOut, HTTPValidationError>({
+        path: `/api/campaigns/${campaignId}/dispatch`,
+        method: "POST",
+        query: query,
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Bind account_group, scenario_account, or per-device account map (DF-T-04-009).
+     *
+     * @tags campaigns
+     * @name BindCampaignAccountsRouteApiCampaignsCampaignIdAccountsPost
+     * @summary Bind Campaign Accounts Route
+     * @request POST:/api/campaigns/{campaign_id}/accounts
+     * @secure
+     */
+    bindCampaignAccountsRouteApiCampaignsCampaignIdAccountsPost: (
+      campaignId: string,
+      data: CampaignAccountBindIn,
+      params: RequestParams = {},
+    ) =>
+      this.request<CampaignEntityOut, HTTPValidationError>({
+        path: `/api/campaigns/${campaignId}/accounts`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags campaigns
+     * @name UnbindCampaignAccountsRouteApiCampaignsCampaignIdAccountsDelete
+     * @summary Unbind Campaign Accounts Route
+     * @request DELETE:/api/campaigns/{campaign_id}/accounts
+     * @secure
+     */
+    unbindCampaignAccountsRouteApiCampaignsCampaignIdAccountsDelete: (
+      campaignId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<CampaignEntityOut, HTTPValidationError>({
+        path: `/api/campaigns/${campaignId}/accounts`,
+        method: "DELETE",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags campaigns
+     * @name ArchiveCampaignRouteApiCampaignsCampaignIdArchivePost
+     * @summary Archive Campaign Route
+     * @request POST:/api/campaigns/{campaign_id}/archive
+     * @secure
+     */
+    archiveCampaignRouteApiCampaignsCampaignIdArchivePost: (
+      campaignId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<CampaignEntityOut, HTTPValidationError>({
+        path: `/api/campaigns/${campaignId}/archive`,
+        method: "POST",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags campaigns
+     * @name ForceTransitionCampaignApiCampaignsCampaignIdForceTransitionPost
+     * @summary Force Transition Campaign
+     * @request POST:/api/campaigns/{campaign_id}/force-transition
+     * @secure
+     */
+    forceTransitionCampaignApiCampaignsCampaignIdForceTransitionPost: (
+      campaignId: string,
+      data: CampaignForceTransitionIn,
+      params: RequestParams = {},
+    ) =>
+      this.request<CampaignForceTransitionOut, HTTPValidationError>({
+        path: `/api/campaigns/${campaignId}/force-transition`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
         ...params,
       }),
 
@@ -4474,10 +6429,35 @@ export class DeviceFarmHttpClient<
      * @request GET:/api/organizations
      * @secure
      */
-    listMyOrganizationsApiOrganizationsGet: (params: RequestParams = {}) =>
-      this.request<OrganizationOut[], any>({
+    listMyOrganizationsApiOrganizationsGet: (
+      query?: {
+        /** Search */
+        search?: string | null;
+        /**
+         * Offset
+         * @min 0
+         * @default 0
+         */
+        offset?: number;
+        /**
+         * Limit
+         * @min 1
+         * @max 100
+         * @default 50
+         */
+        limit?: number;
+        /**
+         * Ensure Id
+         * Always include this org if accessible
+         */
+        ensure_id?: string | null;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<OrganizationListOut, HTTPValidationError>({
         path: `/api/organizations`,
         method: "GET",
+        query: query,
         secure: true,
         format: "json",
         ...params,
@@ -4503,6 +6483,155 @@ export class DeviceFarmHttpClient<
         secure: true,
         type: ContentType.Json,
         format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags organizations
+     * @name ListOrganizationMembersApiOrganizationsMembersGet
+     * @summary List Organization Members
+     * @request GET:/api/organizations/members
+     * @secure
+     */
+    listOrganizationMembersApiOrganizationsMembersGet: (
+      params: RequestParams = {},
+    ) =>
+      this.request<OrganizationMemberOut[], any>({
+        path: `/api/organizations/members`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags organizations
+     * @name InviteOrganizationMemberApiOrganizationsMembersPost
+     * @summary Invite Organization Member
+     * @request POST:/api/organizations/members
+     * @secure
+     */
+    inviteOrganizationMemberApiOrganizationsMembersPost: (
+      data: OrganizationMemberInvite,
+      params: RequestParams = {},
+    ) =>
+      this.request<OrganizationMemberInviteOut, HTTPValidationError>({
+        path: `/api/organizations/members`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags organizations
+     * @name AcceptOrganizationInvitationRouteApiOrganizationsInvitationsAcceptPost
+     * @summary Accept Organization Invitation Route
+     * @request POST:/api/organizations/invitations/accept
+     * @secure
+     */
+    acceptOrganizationInvitationRouteApiOrganizationsInvitationsAcceptPost: (
+      data: OrganizationInvitationAccept,
+      params: RequestParams = {},
+    ) =>
+      this.request<OrganizationInvitationAcceptOut, HTTPValidationError>({
+        path: `/api/organizations/invitations/accept`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags organizations
+     * @name PreviewOrganizationInvitationApiOrganizationsInvitationsTokenGet
+     * @summary Preview Organization Invitation
+     * @request GET:/api/organizations/invitations/{token}
+     */
+    previewOrganizationInvitationApiOrganizationsInvitationsTokenGet: (
+      token: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<OrganizationInvitationPreview, HTTPValidationError>({
+        path: `/api/organizations/invitations/${token}`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags organizations
+     * @name UpdateOrganizationMemberApiOrganizationsMembersMemberUserIdPatch
+     * @summary Update Organization Member
+     * @request PATCH:/api/organizations/members/{member_user_id}
+     * @secure
+     */
+    updateOrganizationMemberApiOrganizationsMembersMemberUserIdPatch: (
+      memberUserId: string,
+      data: OrganizationMemberUpdate,
+      params: RequestParams = {},
+    ) =>
+      this.request<OrganizationMemberOut, HTTPValidationError>({
+        path: `/api/organizations/members/${memberUserId}`,
+        method: "PATCH",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags organizations
+     * @name RemoveOrganizationMemberApiOrganizationsMembersMemberUserIdDelete
+     * @summary Remove Organization Member
+     * @request DELETE:/api/organizations/members/{member_user_id}
+     * @secure
+     */
+    removeOrganizationMemberApiOrganizationsMembersMemberUserIdDelete: (
+      memberUserId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<void, HTTPValidationError>({
+        path: `/api/organizations/members/${memberUserId}`,
+        method: "DELETE",
+        secure: true,
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags organizations
+     * @name UnlockOrganizationMemberApiOrganizationsMembersMemberUserIdUnlockPost
+     * @summary Unlock Organization Member
+     * @request POST:/api/organizations/members/{member_user_id}/unlock
+     * @secure
+     */
+    unlockOrganizationMemberApiOrganizationsMembersMemberUserIdUnlockPost: (
+      memberUserId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<void, HTTPValidationError>({
+        path: `/api/organizations/members/${memberUserId}/unlock`,
+        method: "POST",
+        secure: true,
         ...params,
       }),
 
@@ -4638,6 +6767,366 @@ export class DeviceFarmHttpClient<
         path: `/api/scenario-templates/${templateId}/duplicate`,
         method: "POST",
         secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags scenarios
+     * @name ListScenariosApiScenariosGet
+     * @summary List Scenarios
+     * @request GET:/api/scenarios
+     * @secure
+     */
+    listScenariosApiScenariosGet: (
+      query?: {
+        /**
+         * Org
+         * Organization scope (superadmin only override)
+         */
+        org?: string | null;
+        /**
+         * Include Archived
+         * @default false
+         */
+        include_archived?: boolean;
+        /** Tag */
+        tag?: string | null;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<OrgScenarioSummaryOut[], HTTPValidationError>({
+        path: `/api/scenarios`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags scenarios
+     * @name CreateScenarioRouteApiScenariosPost
+     * @summary Create Scenario Route
+     * @request POST:/api/scenarios
+     * @secure
+     */
+    createScenarioRouteApiScenariosPost: (
+      data: OrgScenarioCreate,
+      params: RequestParams = {},
+    ) =>
+      this.request<OrgScenarioOut, HTTPValidationError>({
+        path: `/api/scenarios`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags scenarios
+     * @name ScenarioTemplateSummaryOutApiScenariosTemplatesGet
+     * @summary  Scenario Template Summary Out
+     * @request GET:/api/scenarios/templates
+     * @secure
+     */
+    scenarioTemplateSummaryOutApiScenariosTemplatesGet: (
+      query: {
+        /** T */
+        t: any;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<OrgScenarioSummaryOut[], HTTPValidationError>({
+        path: `/api/scenarios/templates`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags scenarios
+     * @name ImportScenarioRouteApiScenariosImportPost
+     * @summary Import Scenario Route
+     * @request POST:/api/scenarios/import
+     * @secure
+     */
+    importScenarioRouteApiScenariosImportPost: (
+      data: BodyImportScenarioRouteApiScenariosImportPost,
+      query?: {
+        /**
+         * Resolve
+         * @default "reject"
+         * @pattern ^(reject|create_stub)$
+         */
+        resolve?: string;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<OrgScenarioImportOut, HTTPValidationError>({
+        path: `/api/scenarios/import`,
+        method: "POST",
+        query: query,
+        body: data,
+        secure: true,
+        type: ContentType.FormData,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags scenarios
+     * @name CloneScenarioTemplateRouteApiScenariosTemplatesTemplateIdClonePost
+     * @summary Clone Scenario Template Route
+     * @request POST:/api/scenarios/templates/{template_id}/clone
+     * @secure
+     */
+    cloneScenarioTemplateRouteApiScenariosTemplatesTemplateIdClonePost: (
+      templateId: string,
+      data: OrgScenarioCloneTemplateIn,
+      params: RequestParams = {},
+    ) =>
+      this.request<OrgScenarioImportOut, HTTPValidationError>({
+        path: `/api/scenarios/templates/${templateId}/clone`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags scenarios
+     * @name GetScenarioApiScenariosScenarioIdGet
+     * @summary Get Scenario
+     * @request GET:/api/scenarios/{scenario_id}
+     * @secure
+     */
+    getScenarioApiScenariosScenarioIdGet: (
+      scenarioId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<OrgScenarioOut, HTTPValidationError>({
+        path: `/api/scenarios/${scenarioId}`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags scenarios
+     * @name PatchScenarioApiScenariosScenarioIdPatch
+     * @summary Patch Scenario
+     * @request PATCH:/api/scenarios/{scenario_id}
+     * @secure
+     */
+    patchScenarioApiScenariosScenarioIdPatch: (
+      scenarioId: string,
+      data: OrgScenarioUpdate,
+      params: RequestParams = {},
+    ) =>
+      this.request<OrgScenarioOut, HTTPValidationError>({
+        path: `/api/scenarios/${scenarioId}`,
+        method: "PATCH",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags scenarios
+     * @name DeleteScenarioApiScenariosScenarioIdDelete
+     * @summary Delete Scenario
+     * @request DELETE:/api/scenarios/{scenario_id}
+     * @secure
+     */
+    deleteScenarioApiScenariosScenarioIdDelete: (
+      scenarioId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<OrgScenarioOut, HTTPValidationError>({
+        path: `/api/scenarios/${scenarioId}`,
+        method: "DELETE",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags scenarios
+     * @name ExportScenarioRouteApiScenariosScenarioIdExportGet
+     * @summary Export Scenario Route
+     * @request GET:/api/scenarios/{scenario_id}/export
+     * @secure
+     */
+    exportScenarioRouteApiScenariosScenarioIdExportGet: (
+      scenarioId: string,
+      query?: {
+        /**
+         * Format
+         * @default "yaml"
+         * @pattern ^(yaml|json)$
+         */
+        format?: string;
+        /** Version */
+        version?: number | null;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/scenarios/${scenarioId}/export`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags scenarios
+     * @name ValidateScenarioRouteApiScenariosScenarioIdValidatePost
+     * @summary Validate Scenario Route
+     * @request POST:/api/scenarios/{scenario_id}/validate
+     * @secure
+     */
+    validateScenarioRouteApiScenariosScenarioIdValidatePost: (
+      scenarioId: string,
+      data: OrgScenarioValidateIn | null,
+      params: RequestParams = {},
+    ) =>
+      this.request<OrgScenarioValidationOut, HTTPValidationError>({
+        path: `/api/scenarios/${scenarioId}/validate`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags scenarios
+     * @name GetScenarioBodyRouteApiScenariosScenarioIdBodyGet
+     * @summary Get Scenario Body Route
+     * @request GET:/api/scenarios/{scenario_id}/body
+     * @secure
+     */
+    getScenarioBodyRouteApiScenariosScenarioIdBodyGet: (
+      scenarioId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<OrgScenarioBodyOut, HTTPValidationError>({
+        path: `/api/scenarios/${scenarioId}/body`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags scenarios
+     * @name PostScenarioBodyRouteApiScenariosScenarioIdBodyPost
+     * @summary Post Scenario Body Route
+     * @request POST:/api/scenarios/{scenario_id}/body
+     * @secure
+     */
+    postScenarioBodyRouteApiScenariosScenarioIdBodyPost: (
+      scenarioId: string,
+      data: OrgScenarioBodyIn,
+      query?: {
+        /**
+         * Force
+         * Save despite semantic validation errors
+         * @default false
+         */
+        force?: boolean;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<OrgScenarioBodyOut, HTTPValidationError>({
+        path: `/api/scenarios/${scenarioId}/body`,
+        method: "POST",
+        query: query,
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags scenarios
+     * @name RestoreScenarioRouteApiScenariosScenarioIdRestorePost
+     * @summary Restore Scenario Route
+     * @request POST:/api/scenarios/{scenario_id}/restore
+     * @secure
+     */
+    restoreScenarioRouteApiScenariosScenarioIdRestorePost: (
+      scenarioId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<OrgScenarioOut, HTTPValidationError>({
+        path: `/api/scenarios/${scenarioId}/restore`,
+        method: "POST",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Run scenario on one device as an isolated preview execution (DF-T-04-018).
+     *
+     * @tags scenarios
+     * @name StartScenarioPreviewApiScenariosScenarioIdPreviewPost
+     * @summary Start Scenario Preview
+     * @request POST:/api/scenarios/{scenario_id}/preview
+     * @secure
+     */
+    startScenarioPreviewApiScenariosScenarioIdPreviewPost: (
+      scenarioId: string,
+      data: PreviewStartRequest,
+      params: RequestParams = {},
+    ) =>
+      this.request<PreviewStartResponse, HTTPValidationError>({
+        path: `/api/scenarios/${scenarioId}/preview`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
         format: "json",
         ...params,
       }),
@@ -5615,6 +8104,44 @@ export class DeviceFarmHttpClient<
       }),
 
     /**
+     * @description Platform-qualified content type registry (DF-T-06-001).
+     *
+     * @tags content
+     * @name ListContentTypesApiContentTypesGet
+     * @summary List Content Types
+     * @request GET:/api/content/types
+     * @secure
+     */
+    listContentTypesApiContentTypesGet: (params: RequestParams = {}) =>
+      this.request<any, any>({
+        path: `/api/content/types`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags content
+     * @name RefreshContentTypesApiContentTypesRefreshPost
+     * @summary Refresh Content Types
+     * @request POST:/api/content/types/refresh
+     * @secure
+     */
+    refreshContentTypesApiContentTypesRefreshPost: (
+      params: RequestParams = {},
+    ) =>
+      this.request<any, any>({
+        path: `/api/content/types/refresh`,
+        method: "POST",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
      * @description Save extracted content with deduplication (used by scenarios and MCP).
      *
      * @tags content
@@ -5798,6 +8325,56 @@ export class DeviceFarmHttpClient<
       }),
 
     /**
+     * @description Stream artifact bytes through the API (browser-safe; avoids internal MinIO hosts).
+     *
+     * @tags artifacts
+     * @name GetArtifactContentApiArtifactsArtifactIdContentGet
+     * @summary Get Artifact Content
+     * @request GET:/api/artifacts/{artifact_id}/content
+     * @secure
+     */
+    getArtifactContentApiArtifactsArtifactIdContentGet: (
+      artifactId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/artifacts/${artifactId}/content`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags artifacts
+     * @name GetArtifactSignedUrlApiArtifactsArtifactIdUrlGet
+     * @summary Get Artifact Signed Url
+     * @request GET:/api/artifacts/{artifact_id}/url
+     * @secure
+     */
+    getArtifactSignedUrlApiArtifactsArtifactIdUrlGet: (
+      artifactId: string,
+      query?: {
+        /**
+         * Ttl Seconds
+         * @default 3600
+         */
+        ttl_seconds?: number;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<ArtifactUrlOut, HTTPValidationError>({
+        path: `/api/artifacts/${artifactId}/url`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
      * No description
      *
      * @tags schedules
@@ -5845,6 +8422,95 @@ export class DeviceFarmHttpClient<
     ) =>
       this.request<ScheduleOut, HTTPValidationError>({
         path: `/api/schedules`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags schedules
+     * @name PreviewScheduleEndpointApiSchedulesPreviewPost
+     * @summary Preview Schedule Endpoint
+     * @request POST:/api/schedules/preview
+     * @secure
+     */
+    previewScheduleEndpointApiSchedulesPreviewPost: (
+      data: SchedulePreviewIn,
+      params: RequestParams = {},
+    ) =>
+      this.request<SchedulePreviewOut, HTTPValidationError>({
+        path: `/api/schedules/preview`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags schedules
+     * @name ScheduleStatusEndpointApiSchedulesSystemStatusGet
+     * @summary Schedule Status Endpoint
+     * @request GET:/api/schedules/system/status
+     * @secure
+     */
+    scheduleStatusEndpointApiSchedulesSystemStatusGet: (
+      params: RequestParams = {},
+    ) =>
+      this.request<ScheduleStatusOut, any>({
+        path: `/api/schedules/system/status`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags schedules
+     * @name BulkPauseEndpointApiSchedulesBulkPausePost
+     * @summary Bulk Pause Endpoint
+     * @request POST:/api/schedules/bulk/pause
+     * @secure
+     */
+    bulkPauseEndpointApiSchedulesBulkPausePost: (
+      data: BulkScheduleToggleIn,
+      params: RequestParams = {},
+    ) =>
+      this.request<BulkScheduleToggleOut, HTTPValidationError>({
+        path: `/api/schedules/bulk/pause`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags schedules
+     * @name BulkResumeEndpointApiSchedulesBulkResumePost
+     * @summary Bulk Resume Endpoint
+     * @request POST:/api/schedules/bulk/resume
+     * @secure
+     */
+    bulkResumeEndpointApiSchedulesBulkResumePost: (
+      data: BulkScheduleToggleIn,
+      params: RequestParams = {},
+    ) =>
+      this.request<BulkScheduleToggleOut, HTTPValidationError>({
+        path: `/api/schedules/bulk/resume`,
         method: "POST",
         body: data,
         secure: true,
@@ -5982,6 +8648,8 @@ export class DeviceFarmHttpClient<
          * @default 50
          */
         limit?: number;
+        /** Status */
+        status?: string | null;
       },
       params: RequestParams = {},
     ) =>
@@ -6143,7 +8811,51 @@ export class DeviceFarmHttpClient<
       }),
 
     /**
-     * @description Re-enqueue a DLQ entry for retry with idempotent state transition.
+     * @description Return DLQ detail for a failed execution (DF-T-04-012).
+     *
+     * @tags executions
+     * @name GetDlqByExecutionApiExecutionsDlqExecutionsExecutionIdGet
+     * @summary Get Dlq By Execution
+     * @request GET:/api/executions/dlq/executions/{execution_id}
+     * @secure
+     */
+    getDlqByExecutionApiExecutionsDlqExecutionsExecutionIdGet: (
+      executionId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<DLQEntryOut, HTTPValidationError>({
+        path: `/api/executions/dlq/executions/${executionId}`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Bulk replay DLQ entries (max 50 per request).
+     *
+     * @tags executions
+     * @name BulkRetryDlqApiExecutionsDlqBulkRetryPost
+     * @summary Bulk Retry Dlq
+     * @request POST:/api/executions/dlq/bulk-retry
+     * @secure
+     */
+    bulkRetryDlqApiExecutionsDlqBulkRetryPost: (
+      data: DLQBulkRetryBody,
+      params: RequestParams = {},
+    ) =>
+      this.request<DLQBulkRetryOut, HTTPValidationError>({
+        path: `/api/executions/dlq/bulk-retry`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Replay a DLQ entry (Epic 04 checkpoint replay or legacy re-enqueue).
      *
      * @tags executions
      * @name RetryDlqApiExecutionsDlqDlqIdRetryPost
@@ -6153,12 +8865,39 @@ export class DeviceFarmHttpClient<
      */
     retryDlqApiExecutionsDlqDlqIdRetryPost: (
       dlqId: string,
+      data: DLQRetryBody | null,
       params: RequestParams = {},
     ) =>
       this.request<DLQEntryOut, HTTPValidationError>({
         path: `/api/executions/dlq/${dlqId}/retry`,
         method: "POST",
+        body: data,
         secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Close a DLQ entry without replaying (DF-T-04-012).
+     *
+     * @tags executions
+     * @name CloseDlqApiExecutionsDlqDlqIdClosePost
+     * @summary Close Dlq
+     * @request POST:/api/executions/dlq/{dlq_id}/close
+     * @secure
+     */
+    closeDlqApiExecutionsDlqDlqIdClosePost: (
+      dlqId: string,
+      data: DLQCloseBody,
+      params: RequestParams = {},
+    ) =>
+      this.request<DLQEntryOut, HTTPValidationError>({
+        path: `/api/executions/dlq/${dlqId}/close`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
         format: "json",
         ...params,
       }),
@@ -6245,6 +8984,58 @@ export class DeviceFarmHttpClient<
         path: `/api/executions/${executionId}`,
         method: "DELETE",
         secure: true,
+        ...params,
+      }),
+
+    /**
+     * @description Catch-up endpoint — events after ``since`` event_id (exclusive), ordered.
+     *
+     * @tags executions
+     * @name ListExecutionEventsApiExecutionsExecutionIdEventsGet
+     * @summary List Execution Events
+     * @request GET:/api/executions/{execution_id}/events
+     * @secure
+     */
+    listExecutionEventsApiExecutionsExecutionIdEventsGet: (
+      executionId: string,
+      query?: {
+        /** Since */
+        since?: string | null;
+        /**
+         * Limit
+         * @default 100
+         */
+        limit?: number;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<ExecutionEventListOut, HTTPValidationError>({
+        path: `/api/executions/${executionId}/events`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description SSE live stream with ``Last-Event-ID`` resume support (DF-T-04-013).
+     *
+     * @tags executions
+     * @name StreamExecutionEventsApiExecutionsExecutionIdEventsStreamGet
+     * @summary Stream Execution Events
+     * @request GET:/api/executions/{execution_id}/events/stream
+     * @secure
+     */
+    streamExecutionEventsApiExecutionsExecutionIdEventsStreamGet: (
+      executionId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/executions/${executionId}/events/stream`,
+        method: "GET",
+        secure: true,
+        format: "json",
         ...params,
       }),
 
@@ -6515,6 +9306,27 @@ export class DeviceFarmHttpClient<
       }),
 
     /**
+     * @description Normalized per-step rows including artifacts_json (DF-T-04-010).
+     *
+     * @tags executions
+     * @name ListExecutionStepsEndpointApiExecutionsExecutionIdStepsGet
+     * @summary List Execution Steps Endpoint
+     * @request GET:/api/executions/{execution_id}/steps
+     * @secure
+     */
+    listExecutionStepsEndpointApiExecutionsExecutionIdStepsGet: (
+      executionId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<ExecutionStepOut[], HTTPValidationError>({
+        path: `/api/executions/${executionId}/steps`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
      * No description
      *
      * @tags executions
@@ -6564,6 +9376,48 @@ export class DeviceFarmHttpClient<
         path: `/api/executions/${executionId}/artifacts`,
         method: "GET",
         query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Pin execution so artifacts skip retention cleanup (DF-T-06-011).
+     *
+     * @tags executions
+     * @name PinExecutionApiExecutionsExecutionIdPinPost
+     * @summary Pin Execution
+     * @request POST:/api/executions/{execution_id}/pin
+     * @secure
+     */
+    pinExecutionApiExecutionsExecutionIdPinPost: (
+      executionId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/executions/${executionId}/pin`,
+        method: "POST",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags executions
+     * @name UnpinExecutionApiExecutionsExecutionIdPinDelete
+     * @summary Unpin Execution
+     * @request DELETE:/api/executions/{execution_id}/pin
+     * @secure
+     */
+    unpinExecutionApiExecutionsExecutionIdPinDelete: (
+      executionId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/executions/${executionId}/pin`,
+        method: "DELETE",
         secure: true,
         format: "json",
         ...params,
@@ -6881,6 +9735,140 @@ export class DeviceFarmHttpClient<
     /**
      * No description
      *
+     * @tags devices
+     * @name RegistryPairDeviceApiDevicesRegistryPairPost
+     * @summary Registry Pair Device
+     * @request POST:/api/devices/registry/pair
+     * @secure
+     */
+    registryPairDeviceApiDevicesRegistryPairPost: (
+      data: PairRegistryBody,
+      params: RequestParams = {},
+    ) =>
+      this.request<PairRegistryOut, HTTPValidationError>({
+        path: `/api/devices/registry/pair`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags devices
+     * @name RegistryUnpairDeviceApiDevicesDeviceIdUnpairPost
+     * @summary Registry Unpair Device
+     * @request POST:/api/devices/{device_id}/unpair
+     * @secure
+     */
+    registryUnpairDeviceApiDevicesDeviceIdUnpairPost: (
+      deviceId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<UnpairDeviceOut, HTTPValidationError>({
+        path: `/api/devices/${deviceId}/unpair`,
+        method: "POST",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags devices
+     * @name ClaimDeviceApiDevicesDeviceIdClaimPost
+     * @summary Claim Device
+     * @request POST:/api/devices/{device_id}/claim
+     * @secure
+     */
+    claimDeviceApiDevicesDeviceIdClaimPost: (
+      deviceId: string,
+      data: DeviceClaimBody,
+      params: RequestParams = {},
+    ) =>
+      this.request<DeviceClaimOut, HTTPValidationError>({
+        path: `/api/devices/${deviceId}/claim`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags devices
+     * @name ReleaseDeviceApiDevicesDeviceIdReleasePost
+     * @summary Release Device
+     * @request POST:/api/devices/{device_id}/release
+     * @secure
+     */
+    releaseDeviceApiDevicesDeviceIdReleasePost: (
+      deviceId: string,
+      data: DeviceReleaseBody,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/devices/${deviceId}/release`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags devices
+     * @name GetDeviceActiveSessionApiDevicesDeviceIdSessionGet
+     * @summary Get Device Active Session
+     * @request GET:/api/devices/{device_id}/session
+     * @secure
+     */
+    getDeviceActiveSessionApiDevicesDeviceIdSessionGet: (
+      deviceId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<DeviceReserveSessionOut, HTTPValidationError>({
+        path: `/api/devices/${deviceId}/session`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags devices
+     * @name HeartbeatSessionApiSessionsSessionIdHeartbeatPost
+     * @summary Heartbeat Session
+     * @request POST:/api/sessions/{session_id}/heartbeat
+     * @secure
+     */
+    heartbeatSessionApiSessionsSessionIdHeartbeatPost: (
+      sessionId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<DeviceReserveSessionOut, HTTPValidationError>({
+        path: `/api/sessions/${sessionId}/heartbeat`,
+        method: "POST",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
      * @tags notifications
      * @name ListChannelsApiNotificationChannelsGet
      * @summary List Channels
@@ -7108,6 +10096,505 @@ export class DeviceFarmHttpClient<
         path: `/api/analytics/activity`,
         method: "GET",
         query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags analytics
+     * @name TimeseriesApiAnalyticsTimeseriesGet
+     * @summary Timeseries
+     * @request GET:/api/analytics/timeseries
+     * @secure
+     */
+    timeseriesApiAnalyticsTimeseriesGet: (
+      query: {
+        /**
+         * Dimension
+         * @pattern ^(device|campaign|platform|account|event_type)$
+         */
+        dimension: string;
+        /** Resource Id */
+        resource_id?: string | null;
+        /** Event Type */
+        event_type?: string | null;
+        /** From */
+        from: string;
+        /** To */
+        to: string;
+        /**
+         * Granularity
+         * @default "day"
+         * @pattern ^(day|week)$
+         */
+        granularity?: string;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<AnalyticsTimeseriesOut, HTTPValidationError>({
+        path: `/api/analytics/timeseries`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags analytics
+     * @name SummaryApiAnalyticsSummaryGet
+     * @summary Summary
+     * @request GET:/api/analytics/summary
+     * @secure
+     */
+    summaryApiAnalyticsSummaryGet: (
+      query?: {
+        /**
+         * Window Days
+         * @default 7
+         */
+        window_days?: number;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<AnalyticsSummaryOut, HTTPValidationError>({
+        path: `/api/analytics/summary`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags analytics
+     * @name AdhocQueryApiAnalyticsAdhocQueryPost
+     * @summary Adhoc Query
+     * @request POST:/api/analytics/adhoc-query
+     * @secure
+     */
+    adhocQueryApiAnalyticsAdhocQueryPost: (
+      data: Record<string, any>,
+      params: RequestParams = {},
+    ) =>
+      this.request<AnalyticsAdhocOut, HTTPValidationError>({
+        path: `/api/analytics/adhoc-query`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags analytics
+     * @name AuditExportApiAnalyticsAuditExportGet
+     * @summary Audit Export
+     * @request GET:/api/analytics/audit/export
+     * @secure
+     */
+    auditExportApiAnalyticsAuditExportGet: (
+      query: {
+        /** From */
+        from: string;
+        /** To */
+        to: string;
+        /** Action */
+        action?: string | null;
+        /** Actor */
+        actor?: string | null;
+        /** Resource Type */
+        resource_type?: string | null;
+        /** Resource Id */
+        resource_id?: string | null;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<string, HTTPValidationError>({
+        path: `/api/analytics/audit/export`,
+        method: "GET",
+        query: query,
+        secure: true,
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags preview
+     * @name ListPreviewsApiPreviewGet
+     * @summary List Previews
+     * @request GET:/api/preview
+     * @secure
+     */
+    listPreviewsApiPreviewGet: (
+      query?: {
+        /** Org */
+        org?: string | null;
+        /** User */
+        user?: string | null;
+        /** Since */
+        since?: string | null;
+        /**
+         * Limit
+         * @min 1
+         * @max 200
+         * @default 50
+         */
+        limit?: number;
+        /**
+         * Offset
+         * @min 0
+         * @default 0
+         */
+        offset?: number;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<PreviewListResponse, HTTPValidationError>({
+        path: `/api/preview`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags social-ext
+     * @name ListSocialPlatformsApiSocialExtPlatformsGet
+     * @summary List Social Platforms
+     * @request GET:/api/social-ext/platforms
+     * @secure
+     */
+    listSocialPlatformsApiSocialExtPlatformsGet: (params: RequestParams = {}) =>
+      this.request<any, any>({
+        path: `/api/social-ext/platforms`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags social-ext
+     * @name GetSocialPlatformStepsApiSocialExtPlatformsPlatformStepsGet
+     * @summary Get Social Platform Steps
+     * @request GET:/api/social-ext/platforms/{platform}/steps
+     * @secure
+     */
+    getSocialPlatformStepsApiSocialExtPlatformsPlatformStepsGet: (
+      platform: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/social-ext/platforms/${platform}/steps`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags social-ext
+     * @name LoadSocialPlatformApiSocialExtPlatformsPlatformLoadPost
+     * @summary Load Social Platform
+     * @request POST:/api/social-ext/platforms/{platform}/load
+     * @secure
+     */
+    loadSocialPlatformApiSocialExtPlatformsPlatformLoadPost: (
+      platform: string,
+      data: PlatformLifecycleBody,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/social-ext/platforms/${platform}/load`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags social-ext
+     * @name UnloadSocialPlatformApiSocialExtPlatformsPlatformUnloadPost
+     * @summary Unload Social Platform
+     * @request POST:/api/social-ext/platforms/{platform}/unload
+     * @secure
+     */
+    unloadSocialPlatformApiSocialExtPlatformsPlatformUnloadPost: (
+      platform: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/social-ext/platforms/${platform}/unload`,
+        method: "POST",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags social-ext
+     * @name MigrateSocialPlatformApiSocialExtPlatformsPlatformMigratePost
+     * @summary Migrate Social Platform
+     * @request POST:/api/social-ext/platforms/{platform}/migrate
+     * @secure
+     */
+    migrateSocialPlatformApiSocialExtPlatformsPlatformMigratePost: (
+      platform: string,
+      data: PlatformLifecycleBody,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/social-ext/platforms/${platform}/migrate`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags social-ext
+     * @name GetSocialPlatformVersionHistoryApiSocialExtPlatformsPlatformVersionHistoryGet
+     * @summary Get Social Platform Version History
+     * @request GET:/api/social-ext/platforms/{platform}/version-history
+     * @secure
+     */
+    getSocialPlatformVersionHistoryApiSocialExtPlatformsPlatformVersionHistoryGet:
+      (platform: string, params: RequestParams = {}) =>
+        this.request<any, HTTPValidationError>({
+          path: `/api/social-ext/platforms/${platform}/version-history`,
+          method: "GET",
+          secure: true,
+          format: "json",
+          ...params,
+        }),
+
+    /**
+     * No description
+     *
+     * @tags social-ext
+     * @name ListOrgSocialPlatformFlagsApiSocialExtOrgsOrgIdPlatformsGet
+     * @summary List Org Social Platform Flags
+     * @request GET:/api/social-ext/orgs/{org_id}/platforms
+     * @secure
+     */
+    listOrgSocialPlatformFlagsApiSocialExtOrgsOrgIdPlatformsGet: (
+      orgId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/social-ext/orgs/${orgId}/platforms`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags social-ext
+     * @name EnableOrgSocialPlatformApiSocialExtOrgsOrgIdPlatformsPlatformEnablePost
+     * @summary Enable Org Social Platform
+     * @request POST:/api/social-ext/orgs/{org_id}/platforms/{platform}/enable
+     * @secure
+     */
+    enableOrgSocialPlatformApiSocialExtOrgsOrgIdPlatformsPlatformEnablePost: (
+      orgId: string,
+      platform: string,
+      data: PlatformFlagBody,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/social-ext/orgs/${orgId}/platforms/${platform}/enable`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags social-ext
+     * @name DisableOrgSocialPlatformApiSocialExtOrgsOrgIdPlatformsPlatformDisablePost
+     * @summary Disable Org Social Platform
+     * @request POST:/api/social-ext/orgs/{org_id}/platforms/{platform}/disable
+     * @secure
+     */
+    disableOrgSocialPlatformApiSocialExtOrgsOrgIdPlatformsPlatformDisablePost: (
+      orgId: string,
+      platform: string,
+      data: PlatformFlagBody,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/social-ext/orgs/${orgId}/platforms/${platform}/disable`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags mcp
+     * @name ListMcpToolsApiMcpToolsGet
+     * @summary List Mcp Tools
+     * @request GET:/api/mcp/tools
+     * @secure
+     */
+    listMcpToolsApiMcpToolsGet: (params: RequestParams = {}) =>
+      this.request<any, any>({
+        path: `/api/mcp/tools`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags mcp
+     * @name ListMcpAuditLogApiMcpAuditLogGet
+     * @summary List Mcp Audit Log
+     * @request GET:/api/mcp/audit-log
+     * @secure
+     */
+    listMcpAuditLogApiMcpAuditLogGet: (
+      query?: {
+        /** Tool Name */
+        tool_name?: string | null;
+        /** Session Id */
+        session_id?: string | null;
+        /** Agent Id */
+        agent_id?: string | null;
+        /**
+         * Limit
+         * @min 1
+         * @max 200
+         * @default 50
+         */
+        limit?: number;
+        /**
+         * Offset
+         * @min 0
+         * @default 0
+         */
+        offset?: number;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/mcp/audit-log`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags mcp
+     * @name ListMcpTokensApiMcpTokensGet
+     * @summary List Mcp Tokens
+     * @request GET:/api/mcp/tokens
+     * @secure
+     */
+    listMcpTokensApiMcpTokensGet: (
+      query?: {
+        /**
+         * Include Revoked
+         * @default false
+         */
+        include_revoked?: boolean;
+      },
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/mcp/tokens`,
+        method: "GET",
+        query: query,
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags mcp
+     * @name CreateMcpTokenApiMcpTokensPost
+     * @summary Create Mcp Token
+     * @request POST:/api/mcp/tokens
+     * @secure
+     */
+    createMcpTokenApiMcpTokensPost: (
+      data: McpTokenCreate,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/mcp/tokens`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @tags mcp
+     * @name RevokeMcpTokenApiMcpTokensTokenIdRevokePost
+     * @summary Revoke Mcp Token
+     * @request POST:/api/mcp/tokens/{token_id}/revoke
+     * @secure
+     */
+    revokeMcpTokenApiMcpTokensTokenIdRevokePost: (
+      tokenId: string,
+      params: RequestParams = {},
+    ) =>
+      this.request<any, HTTPValidationError>({
+        path: `/api/mcp/tokens/${tokenId}/revoke`,
+        method: "POST",
         secure: true,
         format: "json",
         ...params,
@@ -8048,7 +11535,7 @@ export class DeviceFarmHttpClient<
       }),
 
     /**
-     * @description Pause a running scenario workflow at the next step boundary. SECURITY NOTE: workflow_id is caller-supplied and not validated for ownership. Any authenticated caller can pause any workflow whose ID they know. Add campaign-ownership middleware before exposing this to untrusted users.
+     * @description Pause a running scenario workflow at the next step boundary. SECURITY NOTE: workflow_id is caller-supplied and not validated for ownership. Caller-supplied workflow IDs must resolve to a campaign owned by the current user before any Temporal handle is signalled.
      *
      * @tags device-control
      * @name ApiWorkflowPauseApiWorkflowsWorkflowIdPausePost
@@ -8400,6 +11887,37 @@ export class DeviceFarmHttpClient<
         path: `/api/stf/properties/${serial}`,
         method: "GET",
         secure: true,
+        format: "json",
+        ...params,
+      }),
+  };
+  health = {
+    /**
+     * No description
+     *
+     * @name RootHealthHealthGet
+     * @summary Root Health
+     * @request GET:/health
+     */
+    rootHealthHealthGet: (params: RequestParams = {}) =>
+      this.request<any, any>({
+        path: `/health`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
+     * @name RootReadinessHealthReadyGet
+     * @summary Root Readiness
+     * @request GET:/health/ready
+     */
+    rootReadinessHealthReadyGet: (params: RequestParams = {}) =>
+      this.request<any, any>({
+        path: `/health/ready`,
+        method: "GET",
         format: "json",
         ...params,
       }),

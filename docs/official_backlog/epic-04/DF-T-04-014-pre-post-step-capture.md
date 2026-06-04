@@ -11,7 +11,7 @@
 | **Module** | DF-MOD-04 — Campaign, Scenario & Execution |
 | **Priority** | P1 |
 | **Story Points** | 5 |
-| **Status** | `Backlog` |
+| **Status** | `Done` |
 | **Labels** | `module:campaigns`, `layer:backend`, `layer:contract`, `type:feature`, `persona:automation-builder`, `persona:social-data-operator` |
 | **Truy vết — FR refs** | FR-04-14, FR-04-19 |
 | **Truy vết — UC refs** | UC-04-11, UC-04-12 |

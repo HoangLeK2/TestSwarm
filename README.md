@@ -140,7 +140,7 @@ Important variables:
 | `NEXT_PUBLIC_DEVICE_FARM_WS_URL` | Frontend browser bundle | Usually `ws://localhost:8081/ws` for local Docker. |
 | `DEVICE_FARM_BACKEND_URL` | Next.js server/proxy | Use `http://localhost:8081` locally or `http://farm:8081` inside Compose. |
 | `DEVICE_FARM_URL` | MCP server | Backend URL, default `http://localhost:8081`. |
-| `DEVICE_FARM_MCP_TOKEN`, `MCP_AUTH_TOKEN` | MCP server | JWT for authenticated campaign tools. |
+| `MCP_AUTH_TOKEN` | MCP server | Bearer token for authenticated MCP device, session, campaign, content, account, and scenario tools. |
 
 ## Installation
 

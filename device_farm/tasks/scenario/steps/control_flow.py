@@ -342,12 +342,46 @@ def handle_if_element(sc: ScenarioContext, step: Dict[str, Any], idx: int, resul
         result["message"] = f"if_element(element_found={element_found}): no steps for {branch_name}, skip"
 
 
-@register_step("tap_fb_comment_button")
+@register_step("tap_fb_comment_button", "fb_tap_comment_button")
 def handle_tap_fb_comment_button(
     sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any],
 ) -> None:
     """Resolve the visible FB comment button via agent-boot, then tap locally."""
-    from tasks.scenario.steps.extraction import request_edge_comment_target
+    from tasks.scenario.steps.extraction import (
+        _clear_active_comment_parent,
+        request_edge_comment_target,
+    )
+
+    if step.get("pre_scroll"):
+        try:
+            distance = float(step.get("pre_scroll_distance", 0.24) or 0.24)
+            duration_ms = int(step.get("pre_scroll_duration_ms", 520) or 520)
+            start_x_ratio = float(step.get("pre_scroll_x_ratio", 0.68) or 0.68)
+            start_y_ratio = float(step.get("pre_scroll_start_y_ratio", 0.65) or 0.65)
+            end_y_ratio = float(step.get("pre_scroll_end_y_ratio", 0.47) or 0.47)
+            pause_s = float(step.get("pre_scroll_pause_s", 0.6) or 0.6)
+            start_x_ratio = min(0.95, max(0.05, start_x_ratio))
+            start_y_ratio = min(0.95, max(0.55, start_y_ratio))
+            end_y_ratio = min(0.75, max(0.1, end_y_ratio))
+            if end_y_ratio >= start_y_ratio:
+                end_y_ratio = max(0.1, start_y_ratio - distance)
+            sx = int(sc.w * start_x_ratio)
+            sy1 = int(sc.h * start_y_ratio)
+            sy2 = int(sc.h * end_y_ratio)
+            sc.device.swipe(sx, sy1, sx, sy2, duration_ms=max(120, duration_ms))
+            if pause_s > 0:
+                if sc.cancel_event is not None:
+                    sc.cancel_event.wait(pause_s)
+                else:
+                    time.sleep(pause_s)
+            if _cancelled(sc):
+                result["ok"] = False
+                result["message"] = "tap_fb_comment_button: cancelled"
+                result["cancelled"] = True
+                return
+            result["pre_scrolled"] = True
+        except Exception as exc:
+            log.warning("[%s] tap_fb_comment_button: pre_scroll failed: %s", sc.serial, exc)
 
     target = request_edge_comment_target(
         device=sc.device,
@@ -356,6 +390,7 @@ def handle_tap_fb_comment_button(
         scenario=sc.scenario,
         step=step,
         result=result,
+        cancel_event=sc.cancel_event,
     )
     ignore_error = bool(step.get("ignore_error", True))
     then_steps = step.get("then") or []
@@ -364,8 +399,24 @@ def handle_tap_fb_comment_button(
     tapped = False
     if result.get("reason_code") == "already_on_comment_sheet":
         tapped = True
-        sc.ctx["_active_comment_anchor_verified"] = True
-        result["message"] = "tap_fb_comment_button: comment sheet already open"
+        keep_existing_parent = bool(
+            sc.ctx.get("_active_comment_parent_hash")
+            and (
+                sc.ctx.get("_active_comment_anchor_verified")
+                or sc.ctx.get("_active_comment_parent_source") == "post_detail"
+            )
+        )
+        if keep_existing_parent:
+            result["parent_id"] = sc.ctx.get("_active_comment_parent_hash")
+            result["_pid"] = sc.ctx.get("_fb_comment_parent_pid")
+            result["parent_context_preserved"] = True
+            result["message"] = (
+                "tap_fb_comment_button: comment sheet already open; preserved verified parent context"
+            )
+        else:
+            _clear_active_comment_parent(sc.ctx)
+            result["parent_context_cleared"] = True
+            result["message"] = "tap_fb_comment_button: comment sheet already open"
     elif target:
         bounds = target.get("bounds")
         if isinstance(bounds, list) and len(bounds) == 4:
@@ -374,38 +425,55 @@ def handle_tap_fb_comment_button(
             cy = (y1 + y2) // 2
             try:
                 agent_tapped = bool(target.get("_agent_tapped"))
-                if not agent_tapped:
-                    sc.device.tap(cx, cy)
-                tapped = True
-                parent_base_hash = target.get("parent_base_hash")
-                if parent_base_hash:
-                    sc.ctx["_edge_comment_parent_base_hash"] = parent_base_hash
-                if target.get("parent_id"):
-                    sc.ctx["_active_comment_parent_hash"] = target.get("parent_id")
-                    sc.ctx["_first_new_post_hash"] = target.get("parent_id")
-                if target.get("pid"):
-                    sc.ctx["_fb_comment_parent_pid"] = target.get("pid")
-                sc.ctx["_active_comment_parent_anchor"] = {
-                    "post_key": target.get("post_key"),
-                    "stable_post_id": target.get("stable_post_id"),
-                    "fb_post_id": target.get("fb_post_id"),
-                    "author": target.get("author"),
-                    "timestamp": target.get("timestamp"),
-                    "text_prefix": target.get("text_prefix"),
-                }
                 edge_summary = result.get("edge_extra_summary") if isinstance(result.get("edge_extra_summary"), dict) else None
                 diag = edge_summary.get("diagnostic") if isinstance(edge_summary, dict) and isinstance(edge_summary.get("diagnostic"), dict) else None
-                verified = bool(diag.get("verified")) if diag else (not agent_tapped)
-                sc.ctx["_active_comment_anchor_verified"] = verified
-                result["tapped_at"] = [cx, cy]
-                result["agent_tapped"] = agent_tapped
-                result["_bounds"] = bounds
-                result["_pid"] = target.get("pid")
-                result["parent_id"] = target.get("parent_id")
-                result["target_score"] = target.get("score")
-                result["target_chosen_index"] = diag.get("chosen_index") if diag else None
-                result["target_verified"] = verified
-                result["target_candidate_count"] = diag.get("candidate_count") if diag else None
+                verified = bool(diag.get("verified")) if diag else False
+                if not agent_tapped:
+                    sc.device.tap(cx, cy)
+                    verified = bool(diag.get("verified")) if diag else False
+                elif verified:
+                    pass
+                elif not verified:
+                    result["target_verified"] = False
+                    result["message"] = (
+                        "tap_fb_comment_button: comment sheet did not open after tap"
+                    )
+                if verified:
+                    tapped = True
+                    keep_post_detail_parent = bool(
+                        sc.ctx.get("_active_comment_parent_hash")
+                        and sc.ctx.get("_active_comment_parent_source") == "post_detail"
+                    )
+                    parent_base_hash = target.get("parent_base_hash")
+                    if parent_base_hash and not keep_post_detail_parent:
+                        sc.ctx["_edge_comment_parent_base_hash"] = parent_base_hash
+                    if target.get("parent_id") and not keep_post_detail_parent:
+                        sc.ctx["_active_comment_parent_hash"] = target.get("parent_id")
+                        sc.ctx["_first_new_post_hash"] = target.get("parent_id")
+                    if target.get("pid"):
+                        sc.ctx["_fb_comment_parent_pid"] = target.get("pid")
+                    if not keep_post_detail_parent:
+                        sc.ctx["_active_comment_parent_source"] = "tap_fb_comment_button"
+                    sc.ctx["_active_comment_parent_anchor"] = {
+                        "pid": target.get("pid"),
+                        "post_key": target.get("post_key"),
+                        "stable_post_id": target.get("stable_post_id"),
+                        "fb_post_id": target.get("fb_post_id"),
+                        "author": target.get("author"),
+                        "timestamp": target.get("timestamp"),
+                        "text_prefix": target.get("text_prefix"),
+                    }
+                    sc.ctx["_active_comment_anchor_verified"] = True
+                    result["tapped_at"] = [cx, cy]
+                    result["agent_tapped"] = agent_tapped
+                    result["_bounds"] = bounds
+                    result["_pid"] = target.get("pid")
+                    result["parent_id"] = sc.ctx.get("_active_comment_parent_hash") or target.get("parent_id")
+                    result["parent_context_preserved"] = keep_post_detail_parent
+                    result["target_score"] = target.get("score")
+                    result["target_chosen_index"] = diag.get("chosen_index") if diag else None
+                    result["target_verified"] = True
+                    result["target_candidate_count"] = diag.get("candidate_count") if diag else None
             except Exception as exc:
                 result["ok"] = False
                 result["message"] = f"tap_fb_comment_button: tap failed: {exc}"
@@ -424,6 +492,7 @@ def handle_tap_fb_comment_button(
                 scenario=sc.scenario,
                 step=step,
                 result=result,
+                cancel_event=sc.cancel_event,
             )
         except Exception as exc:
             log.warning("[%s] tap_fb_comment_button: filter switch failed: %s", sc.serial, exc)
@@ -431,7 +500,15 @@ def handle_tap_fb_comment_button(
             step.get("comment_filter_settle_s", step.get("post_tap_wait_s", 0.6)) or 0.6
         )
         if settle_s > 0:
-            time.sleep(settle_s)
+            if sc.cancel_event is not None:
+                sc.cancel_event.wait(settle_s)
+            else:
+                time.sleep(settle_s)
+        if _cancelled(sc):
+            result["ok"] = False
+            result["message"] = "tap_fb_comment_button: cancelled"
+            result["cancelled"] = True
+            return
 
     branch_steps = then_steps if tapped else else_steps
     branch_name = "then" if tapped else "else"

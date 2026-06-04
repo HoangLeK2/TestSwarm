@@ -11,7 +11,9 @@ class DeviceCreate(BaseModel):
 
 class DeviceOut(BaseModel):
     id: str
+    db_id: str | None = None
     serial: str
+    device_serial: str = ""
     name: str
     device_key: str
     user_id: Optional[str]
@@ -24,11 +26,16 @@ class DeviceOut(BaseModel):
     last_seen: Optional[datetime]
     created_at: datetime
     adb_serial: Optional[str] = None
+    relay_serial: Optional[str] = None
     adb_ip: Optional[str] = None
     adb_port: int = 5555
-    tags: str = ""  # DF-004: comma-separated device tags
+    tags: str = ""
     relay_id: Optional[str] = None
-    state: str = "unknown"  # FSM state at control plane (DF-T-02-002)
+    state: str = "unknown"
+    status: str = "paired"
+    paired_at: Optional[datetime] = None
+    unpaired_at: Optional[datetime] = None
+    notes: str = ""
 
 
 class SessionOut(BaseModel):

@@ -13,7 +13,7 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 
-from db.database import AsyncSessionLocal
+from db.database import AsyncSessionLocal, activity_session
 from db.crud.account import get_account, update_account
 from db.models.enums import AccountEventType, AccountState
 from services.account_state import AccountStateService
@@ -37,7 +37,7 @@ async def start_account_usage(
 ) -> None:
     """Mark the account as actively in use (sets last_used_at to now)."""
     now = datetime.now(timezone.utc)
-    async with AsyncSessionLocal() as db:
+    async with activity_session() as db:
         account = await update_account(
             db, account_id, last_used_at=now, reload=False
         )
@@ -80,7 +80,7 @@ async def end_account_usage(
         duration_minutes = 0.0
 
     entered_cooldown = False
-    async with AsyncSessionLocal() as db:
+    async with activity_session() as db:
         account = await get_account(db, account_id)
         if not account:
             logger.warning("end_account_usage: account %s not found", account_id)

@@ -29,6 +29,10 @@ import {
   TooltipTrigger
 } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
+import {
+  DeviceOpsRailSection,
+  type DeviceOpsConfig
+} from './device-ops-rail';
 
 interface DeviceControlsProps {
   serial: string;
@@ -51,6 +55,8 @@ interface DeviceControlsProps {
   hidePinch?: boolean;
   /** Hide ADB/scrcpy session restart on the rail. */
   hideRestart?: boolean;
+  /** Device ops (ADB shell, APK, files…) on the rail — control-record only. */
+  deviceOps?: DeviceOpsConfig;
 }
 
 function RailIconButton({
@@ -152,24 +158,27 @@ function DeviceControlsRail({
   onUnlock,
   hidePinch,
   hideRestart,
+  deviceOps,
   className
 }: DeviceControlsProps) {
   const t = useTranslations('devicesControlRecord.controls');
   const id = serialToId(serial);
   const ModeIcon = mode === 'tap' ? MousePointerClick : MoveHorizontal;
   const iconClass = 'size-[18px] shrink-0 stroke-[2.25]';
-  const gestureActive =
-    gestureMode === 'double_tap' || gestureMode === 'drag';
+  const gestureActive = gestureMode === 'double_tap' || gestureMode === 'drag';
+
+  const railSectionClass =
+    'relative z-10 flex w-full shrink-0 flex-col items-center gap-1.5 px-1.5';
 
   return (
     <div
       className={cn(
-        'flex h-full min-h-full w-11 shrink-0 flex-col justify-between rounded-[1.35rem] bg-zinc-900 py-3.5 shadow-lg ring-1 ring-black/20',
+        'flex h-full min-h-0 w-11 shrink-0 flex-col overflow-hidden rounded-[1.35rem] bg-zinc-900 py-2 shadow-lg ring-1 ring-black/20',
         className
       )}
       data-device-controls-rail={id}
     >
-      <div className='flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-1.5'>
+      <div className='flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto overscroll-y-contain px-1.5'>
         <RailIconButton
           label={mode === 'tap' ? t('tapMode') : t('swipeMode')}
           hint={t('tapModeToggleHint')}
@@ -225,8 +234,19 @@ function DeviceControlsRail({
           </>
         ) : null}
 
-        <div className='my-0.5 h-px bg-white/10' aria-hidden />
+        {!hideRestart ? (
+          <RailIconButton
+            label={t('restart')}
+            hint={t('restartTitle')}
+            onClick={onRestart}
+          >
+            <RotateCw className={iconClass} aria-hidden />
+          </RailIconButton>
+        ) : null}
+      </div>
 
+      <div className={cn(railSectionClass, 'pt-1')}>
+        <div className='mb-0.5 h-px w-7 shrink-0 bg-white/10' aria-hidden />
         <RailIconButton label={t('home')} onClick={() => onKey('home')}>
           <Home className={iconClass} aria-hidden />
         </RailIconButton>
@@ -263,20 +283,18 @@ function DeviceControlsRail({
         <RailIconButton label={t('power')} onClick={() => onKey('power')}>
           <Power className={iconClass} aria-hidden />
         </RailIconButton>
-        {!hideRestart ? (
-          <RailIconButton
-            label={t('restart')}
-            hint={t('restartTitle')}
-            onClick={onRestart}
-          >
-            <RotateCw className={iconClass} aria-hidden />
-          </RailIconButton>
-        ) : null}
       </div>
 
+      {deviceOps ? (
+        <div className={cn(railSectionClass, 'py-1')}>
+          <div className='h-px w-7 shrink-0 bg-white/10' aria-hidden />
+          <DeviceOpsRailSection config={deviceOps} iconClass={iconClass} />
+        </div>
+      ) : null}
+
       {onSwipeExt ? (
-        <div className='relative z-10 flex w-full shrink-0 flex-col items-center px-1.5 pb-2 pt-2'>
-          <div className='mb-2 h-px w-7 shrink-0 bg-white/10' aria-hidden />
+        <div className={cn(railSectionClass, 'pb-2 pt-0.5')}>
+          <div className='mb-0.5 h-px w-7 shrink-0 bg-white/10' aria-hidden />
           <DeviceControlsSwipePad onSwipe={onSwipeExt} t={t} />
         </div>
       ) : null}
@@ -411,15 +429,30 @@ function DeviceControlsBelow(props: DeviceControlsProps) {
         </>
       ) : null}
 
-      <Button size='sm' variant='outline' className={btn} onClick={() => onKey('home')}>
+      <Button
+        size='sm'
+        variant='outline'
+        className={btn}
+        onClick={() => onKey('home')}
+      >
         <Home className={icon} aria-hidden />
         {t('home')}
       </Button>
-      <Button size='sm' variant='outline' className={btn} onClick={() => onKey('back')}>
+      <Button
+        size='sm'
+        variant='outline'
+        className={btn}
+        onClick={() => onKey('back')}
+      >
         <ArrowLeft className={icon} aria-hidden />
         {t('back')}
       </Button>
-      <Button size='sm' variant='outline' className={btn} onClick={() => onKey('power')}>
+      <Button
+        size='sm'
+        variant='outline'
+        className={btn}
+        onClick={() => onKey('power')}
+      >
         <Power className={icon} aria-hidden />
         {t('power')}
       </Button>
@@ -445,7 +478,12 @@ function DeviceControlsBelow(props: DeviceControlsProps) {
       {onScreenOn && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button size='sm' variant='outline' className={btn} onClick={onScreenOn}>
+            <Button
+              size='sm'
+              variant='outline'
+              className={btn}
+              onClick={onScreenOn}
+            >
               <Sun className={icon} aria-hidden />
               {!compact && t('screenOn')}
             </Button>
@@ -458,7 +496,12 @@ function DeviceControlsBelow(props: DeviceControlsProps) {
       {onScreenOff && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button size='sm' variant='outline' className={btn} onClick={onScreenOff}>
+            <Button
+              size='sm'
+              variant='outline'
+              className={btn}
+              onClick={onScreenOff}
+            >
               <Moon className={icon} aria-hidden />
               {!compact && t('screenOff')}
             </Button>
@@ -471,7 +514,12 @@ function DeviceControlsBelow(props: DeviceControlsProps) {
       {onUnlock && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button size='sm' variant='outline' className={btn} onClick={onUnlock}>
+            <Button
+              size='sm'
+              variant='outline'
+              className={btn}
+              onClick={onUnlock}
+            >
               <LockOpen className={icon} aria-hidden />
               {!compact && t('unlock')}
             </Button>

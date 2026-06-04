@@ -27,6 +27,10 @@ async def log_activity(
     user_agent: Optional[str] = None,
     outcome: Optional[str] = None,
     details: Optional[dict[str, Any]] = None,
+    before_state: Optional[dict[str, Any]] = None,
+    after_state: Optional[dict[str, Any]] = None,
+    reason: Optional[str] = None,
+    event_id: Optional[str] = None,
 ) -> ActivityLog:
     record = ActivityLog(
         action=action,
@@ -38,6 +42,10 @@ async def log_activity(
         ip_address=ip_address,
         user_agent=(user_agent or "")[:255] or None,
         outcome=outcome,
+        before_state=before_state or {},
+        after_state=after_state or {},
+        reason=(reason or "")[:2000] or None,
+        event_id=event_id,
         details=details or {},
     )
     db.add(record)

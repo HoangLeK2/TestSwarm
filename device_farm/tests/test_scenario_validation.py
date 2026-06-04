@@ -41,6 +41,65 @@ def test_graph_unreachable_node() -> None:
     assert "GRAPH_UNREACHABLE_NODE" in [e.code for e in result.errors]
 
 
+def test_graph_nested_scope_nodes_are_reachable() -> None:
+    result = _result()
+    nodes = [
+        {"id": "root", "type": "tap_fb_comment_button", "order": "a0", "config": {}},
+        {
+            "id": "child",
+            "type": "extract",
+            "order": "a0",
+            "scope": {"parentId": "root", "branch": "then"},
+            "config": {},
+        },
+    ]
+    check_graph(nodes, [], result)
+    assert result.status == "valid"
+    assert not result.errors
+
+
+def test_graph_last_root_step_without_outgoing_edge_is_valid() -> None:
+    result = _result()
+    nodes = [
+        {"id": "first", "type": "open_app", "order": "a0", "config": {}},
+        {"id": "last", "type": "extract", "order": "a1", "config": {"strategy": "fb_posts"}},
+    ]
+    edges = [{"source": "first", "target": "last"}]
+    check_graph(nodes, edges, result)
+    assert not any(e.code == "GRAPH_DEAD_END_NODE" for e in result.errors)
+
+
+def test_graph_dead_end_mid_chain_still_invalid() -> None:
+    result = _result()
+    nodes = [
+        {"id": "a", "type": "open_app", "order": "a0", "config": {}},
+        {"id": "b", "type": "custom_unknown_step", "order": "a1", "config": {}},
+        {"id": "c", "type": "extract", "order": "a2", "config": {}},
+    ]
+    edges = [{"source": "a", "target": "b"}]
+    check_graph(nodes, edges, result)
+    assert any(
+        e.code == "GRAPH_DEAD_END_NODE" and e.location == "node.b"
+        for e in result.errors
+    )
+
+
+def test_graph_dead_end_container_with_children_is_allowed() -> None:
+    result = _result()
+    nodes = [
+        {"id": "loop", "type": "loop", "order": "a0", "config": {}},
+        {
+            "id": "inner",
+            "type": "wait",
+            "order": "a0",
+            "scope": {"parentId": "loop", "branch": "steps"},
+            "config": {},
+        },
+    ]
+    check_graph(nodes, [], result)
+    assert not any(e.code == "GRAPH_DEAD_END_NODE" for e in result.errors)
+
+
 def test_undeclared_variable() -> None:
     result = _result()
     steps = [
@@ -71,6 +130,23 @@ def test_set_variable_declares_for_following_steps() -> None:
     assert not result.errors
 
 
+def test_set_variable_in_loop_body_before_wait() -> None:
+    """Regression: parent loop must not scan nested steps before index walk."""
+    result = _result()
+    steps = [
+        {
+            "type": "loop",
+            "count": 3,
+            "steps": [
+                {"type": "set_variable", "name": "_W", "from_list": [0.5, 1, 2]},
+                {"type": "wait", "seconds": "${_W}"},
+            ],
+        },
+    ]
+    check_variables(_idx(steps), {}, {}, result)
+    assert not any(e.code == "UNDECLARED_VARIABLE" for e in result.errors)
+
+
 def test_invalid_on_error_target() -> None:
     result = _result()
     steps = [{"id": "s1", "type": "wait", "on_error": "s_recovery"}]
@@ -89,7 +165,7 @@ def test_retry_attempts_out_of_range() -> None:
     result = _result()
     steps = [{"type": "wait", "retry": {"attempts": 99}}]
     check_retry_config(_idx(steps), result)
-    assert any(e.code == "INVALID_RETRY_CONFIG" for e in result.errors)
+    assert any(e.code == "RETRY_MAX_ATTEMPTS_OUT_OF_RANGE" for e in result.errors)
 
 
 def test_no_verification_warning() -> None:

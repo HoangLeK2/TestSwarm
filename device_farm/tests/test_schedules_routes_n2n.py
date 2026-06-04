@@ -33,12 +33,49 @@ def _fake_schedule(**overrides):
         "stagger_devices": False,
         "stagger_interval_seconds": 60,
         "is_enabled": True,
+        "status": "enabled",
+        "schedule_kind": "cron",
+        "run_at": None,
+        "skip_dates": [],
+        "skip_windows": [],
+        "misfire_policy": "skip",
+        "priority": "normal",
+        "max_concurrent_per_device": 1,
+        "account_rate_limit_per_hour": None,
+        "quota_policy": {},
+        "deleted_at": None,
         "last_run_at": None,
         "next_run_at": None,
         "run_count": 0,
         "user_id": "user-1",
         "created_at": now,
         "updated_at": now,
+    }
+    payload.update(overrides)
+    return SimpleNamespace(**payload)
+
+
+def _fake_run(**overrides):
+    now = datetime.now(timezone.utc)
+    payload = {
+        "id": "run-1",
+        "schedule_id": "sched-1",
+        "status": "completed",
+        "trigger_source": "run_now",
+        "scheduled_at": now,
+        "started_at": now,
+        "finished_at": now,
+        "deferred_until": None,
+        "was_catch_up": False,
+        "execution_id": "exec-1",
+        "devices_dispatched": 1,
+        "devices_succeeded": 1,
+        "devices_failed": 0,
+        "task_ids": ["task-1"],
+        "workflow_ids": [],
+        "error_code": None,
+        "error_message": None,
+        "created_at": now,
     }
     payload.update(overrides)
     return SimpleNamespace(**payload)
@@ -113,6 +150,117 @@ async def test_run_now_returns_400_when_trigger_raises_value_error():
 
     assert resp.status_code == 400
     assert resp.json()["detail"] == "schedule is disabled"
+
+
+@pytest.mark.asyncio
+async def test_run_now_disabled_schedule_returns_409_business_code():
+    scheduler = MagicMock()
+    app = _build_app(scheduler)
+
+    with patch("api.routes.schedules.get_schedule", new=AsyncMock(return_value=_fake_schedule(is_enabled=False))):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.post("/api/schedules/sched-1/run-now")
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["code"] == "SCHEDULE_DISABLED"
+    scheduler.trigger_now.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_list_runs_filters_by_status():
+    scheduler = MagicMock()
+    app = _build_app(scheduler)
+
+    with (
+        patch("api.routes.schedules.get_schedule", new=AsyncMock(return_value=_fake_schedule(id="sched-1"))),
+        patch("api.routes.schedules.list_schedule_runs", new=AsyncMock(return_value=[_fake_run(status="failed")])) as list_runs,
+    ):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.get("/api/schedules/sched-1/runs?status=failed")
+
+    assert resp.status_code == 200
+    list_runs.assert_awaited_once()
+    assert list_runs.await_args.kwargs["status_filter"] == "failed"
+    assert resp.json()[0]["trigger_source"] == "run_now"
+    assert resp.json()[0]["execution_id"] == "exec-1"
+
+
+@pytest.mark.asyncio
+async def test_bulk_pause_returns_per_item_result():
+    scheduler = MagicMock()
+    scheduler.bulk_toggle = AsyncMock(return_value={
+        "success_count": 1,
+        "fail_count": 0,
+        "skipped_count": 1,
+        "items": [
+            {"schedule_id": "sched-1", "status": "updated", "enabled": False},
+            {"schedule_id": "sched-missing", "status": "skipped", "error_code": "NOT_FOUND"},
+        ],
+    })
+    app = _build_app(scheduler)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.post(
+            "/api/schedules/bulk/pause",
+            json={"schedule_ids": ["sched-1", "sched-missing"]},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["success_count"] == 1
+    assert resp.json()["skipped_count"] == 1
+    scheduler.bulk_toggle.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_preview_conflicts_is_read_only_and_returns_conflict_shape():
+    scheduler = MagicMock()
+    scheduler.preview_conflicts = AsyncMock(return_value={
+        "conflicts": [
+            {
+                "conflict_id": "conflict-sched-1",
+                "type": "same_campaign_time",
+                "severity": "warning",
+                "impacted_target": "camp-1",
+                "suggested_action": "stagger schedule by at least 5 minutes",
+            }
+        ],
+        "next_runs": ["2026-05-31T01:00:00+00:00"],
+    })
+    app = _build_app(scheduler)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.post(
+            "/api/schedules/preview",
+            json={
+                "target_type": "campaign",
+                "target_id": "camp-1",
+                "cron_expression": "0 8 * * *",
+                "timezone": "UTC",
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["conflicts"][0]["conflict_id"] == "conflict-sched-1"
+    scheduler.preview_conflicts.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_schedule_status_exposes_fallback_banner_and_metrics():
+    scheduler = MagicMock()
+    scheduler.status_snapshot = AsyncMock(return_value={
+        "temporal_available": False,
+        "fallback_active": True,
+        "banner": "Fallback mode active",
+        "metrics": {"queue_depth": 0, "missed_ticks": 0, "starvation_count": 0},
+    })
+    app = _build_app(scheduler)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/api/schedules/system/status")
+
+    assert resp.status_code == 200
+    assert resp.json()["fallback_active"] is True
+    assert resp.json()["banner"] == "Fallback mode active"
 
 
 @pytest.mark.asyncio

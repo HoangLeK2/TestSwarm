@@ -6,6 +6,7 @@ export type PermissionObject =
   | 'campaigns'
   | 'executions'
   | 'scenario-templates'
+  | 'scenarios'
   | 'accounts'
   | 'account-groups'
   | 'device-groups'
@@ -14,6 +15,7 @@ export type PermissionObject =
   | 'notifications'
   | 'content'
   | 'analytics'
+  | 'mcp'
   | '*';
 
 export type PermissionAction =

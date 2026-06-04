@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import logging
 import os
 import secrets
 import shlex
@@ -24,6 +25,7 @@ from api.schemas.relay_agent import (
     RelayAgentTokenOut,
     RelayCommandOut,
 )
+from core.env import device_farm_ws_public_base
 from db import crud as repo
 from services import pairing as _pairing_mod
 from services.device_registration import (
@@ -35,6 +37,7 @@ from services import relay_onboarding
 from services.relay_onboarding import RELAY_SAME_WIFI_FILTER_ENABLED
 
 router = APIRouter(prefix="/relay-agents", tags=["relay-agents"])
+log = logging.getLogger(__name__)
 
 
 def _check_relay_key(request: Request) -> None:
@@ -349,10 +352,46 @@ def _job_to_out(job, items: list | None = None) -> RelayBatchJobOut:
     )
 
 
+def _normalize_ws_base_url(raw: str) -> str | None:
+    """Parse ws(s)://host[:port] (optional /device-agent suffix) for phone-facing URLs."""
+    from urllib.parse import urlparse
+
+    s = (raw or "").strip()
+    if not s:
+        return None
+    if "/device-agent" in s:
+        s = s.split("/device-agent", 1)[0].rstrip("/")
+    lower = s.lower()
+    if lower.startswith("ws://"):
+        http_equiv = "http://" + s[5:]
+        ws_scheme = "ws"
+    elif lower.startswith("wss://"):
+        http_equiv = "https://" + s[6:]
+        ws_scheme = "wss"
+    else:
+        return None
+    parsed = urlparse(http_equiv)
+    if not parsed.hostname:
+        return None
+    netloc = parsed.netloc or parsed.hostname
+    return f"{ws_scheme}://{netloc}"
+
+
 def _ws_base_url_from_request(request: Request) -> str:
+    configured = device_farm_ws_public_base()
+    if configured:
+        return configured
     scheme = "wss" if request.url.scheme == "https" else "ws"
     host = request.headers.get("host", request.url.netloc)
     return f"{scheme}://{host}"
+
+
+def _ws_base_for_push(request: Request, ws_base_url: str | None) -> str:
+    """Prefer dashboard-provided LAN URL; fall back to server env / request host."""
+    normalized = _normalize_ws_base_url(ws_base_url or "")
+    if normalized:
+        return normalized
+    return _ws_base_url_from_request(request)
 
 
 def _raise_onboarding_error(exc: relay_onboarding.RelayOnboardingError) -> None:
@@ -436,7 +475,7 @@ async def _dispatch_relay_job(
     dependencies=[Depends(require_permission("relay-agents", "read"))],
 )
 async def list_relay_agents(db: DB, user: CurrentUser):
-    rows = _dedupe_relay_rows(await repo.list_relay_agents(db, user_id=data_owner_user_id(user)))
+    rows = _dedupe_relay_rows(await repo.list_relay_agents(db, user_id=user.id))
     devices = await repo.list_devices(db)
     owner_by_alias = _device_owner_aliases(devices)
     caps_by_serial: dict[str, dict] = {}
@@ -478,7 +517,7 @@ async def create_relay_agent_token(body: RelayAgentTokenCreate, db: DB, user: Cu
     dependencies=[Depends(require_permission("relay-agents", "read"))],
 )
 async def list_relay_agent_tokens(db: DB, user: CurrentUser):
-    return await repo.list_relay_agent_tokens(db, user_id=data_owner_user_id(user))
+    return await repo.list_relay_agent_tokens(db, user_id=user.id)
 
 
 @router.delete(
@@ -488,7 +527,7 @@ async def list_relay_agent_tokens(db: DB, user: CurrentUser):
 )
 async def revoke_relay_agent_token(token_id: str, db: DB, user: CurrentUser):
     ok = await repo.revoke_relay_agent_token(
-        db, token_id=token_id, user_id=data_owner_user_id(user)
+        db, token_id=token_id, user_id=user.id
     )
     if not ok:
         raise HTTPException(status_code=404, detail="relay agent token not found")
@@ -509,7 +548,7 @@ async def create_relay_provision_job(
     db: DB,
     user: CurrentUser,
 ):
-    row = await repo.get_relay_agent(db, relay_id, user_id=data_owner_user_id(user))
+    row = await repo.get_relay_agent(db, relay_id, user_id=user.id)
     try:
         job = await relay_onboarding.create_relay_batch_job(
             db,
@@ -539,7 +578,7 @@ async def create_relay_claim_connect_job(
     db: DB,
     user: CurrentUser,
 ):
-    row = await repo.get_relay_agent(db, relay_id, user_id=data_owner_user_id(user))
+    row = await repo.get_relay_agent(db, relay_id, user_id=user.id)
     try:
         job = await relay_onboarding.create_relay_batch_job(
             db,
@@ -571,7 +610,7 @@ async def create_relay_claim_connect_job(
 )
 async def get_relay_job(relay_id: str, job_id: str, db: DB, user: CurrentUser):
     job = await repo.get_relay_job(
-        db, job_id, user_id=data_owner_user_id(user), relay_id=relay_id
+        db, job_id, user_id=user.id, relay_id=relay_id
     )
     if job is None:
         raise HTTPException(status_code=404, detail="relay job not found")
@@ -594,7 +633,7 @@ async def list_relay_job_items(
     offset: int = Query(0, ge=0),
 ):
     job = await repo.get_relay_job(
-        db, job_id, user_id=data_owner_user_id(user), relay_id=relay_id
+        db, job_id, user_id=user.id, relay_id=relay_id
     )
     if job is None:
         raise HTTPException(status_code=404, detail="relay job not found")
@@ -632,7 +671,7 @@ async def _relay_token_user_id_from_request(request: Request, db: DB) -> str:
     dependencies=[Depends(require_permission("relay-agents", "read"))],
 )
 async def get_relay_agent(relay_id: str, db: DB, user: CurrentUser):
-    row = await repo.get_relay_agent(db, relay_id, user_id=data_owner_user_id(user))
+    row = await repo.get_relay_agent(db, relay_id, user_id=user.id)
     if not row:
         raise HTTPException(status_code=404, detail="relay agent not found")
     devices = await repo.list_devices(db)
@@ -654,7 +693,7 @@ async def register_relay_device(
     user: CurrentUser,
 ):
     """Register/claim a device from an ADB serial currently reported by agent-boot."""
-    row = await repo.get_relay_agent(db, relay_id, user_id=data_owner_user_id(user))
+    row = await repo.get_relay_agent(db, relay_id, user_id=user.id)
     if not row or row.status != "online":
         raise HTTPException(status_code=404, detail="relay agent not online")
 
@@ -719,9 +758,13 @@ async def push_connect_url_to_device(
         None,
         description="Logical device id when DB serial is pending-* but ADB path serial is physical",
     ),
+    ws_base_url: str | None = Query(
+        None,
+        description="Phone-reachable ws(s) origin (same as dashboard QR). Overrides DEVICE_FARM_WS.",
+    ),
 ):
     """Send the device-agent URL to STFService via agent-boot/ADB; no QR scan required."""
-    row = await repo.get_relay_agent(db, relay_id, user_id=data_owner_user_id(user))
+    row = await repo.get_relay_agent(db, relay_id, user_id=user.id)
     if not row or row.status != "online":
         raise HTTPException(status_code=404, detail="relay agent not online")
 
@@ -752,14 +795,17 @@ async def push_connect_url_to_device(
             detail="relay serial does not belong to the selected device",
         )
 
-    scheme = "wss" if request.url.scheme == "https" else "ws"
-    host = request.headers.get("host", request.url.netloc)
-    ws_url = f"{scheme}://{host}/device-agent?key={device.device_key}"
+    ws_url = relay_onboarding.build_device_agent_url(
+        _ws_base_for_push(request, ws_base_url),
+        device,
+    )
+    log.info("push-connect-url relay=%s serial=%s ws_url=%s", relay_id, serial, ws_url)
 
     cmd = (
         "am start "
         "-n jp.co.cyberagent.stf/.IdentityActivity "
-        "-a android.intent.action.MAIN "
+        "-a jp.co.cyberagent.stf.ACTION_IDENTIFY "
+        "--activity-single-top "
         f"--es qr_content {shlex.quote(ws_url)}"
     )
     ctrl = _get_ctrl()
@@ -773,7 +819,7 @@ async def push_connect_url_to_device(
     dependencies=[Depends(require_permission("relay-agents", "execute"))],
 )
 async def bootstrap_all(relay_id: str, db: DB, user: CurrentUser):
-    row = await repo.get_relay_agent(db, relay_id, user_id=data_owner_user_id(user))
+    row = await repo.get_relay_agent(db, relay_id, user_id=user.id)
     if not row:
         raise HTTPException(status_code=404, detail="relay agent not found")
 

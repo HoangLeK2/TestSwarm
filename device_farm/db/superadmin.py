@@ -28,8 +28,8 @@ def verify_superadmin_password(password: str, hashed: str) -> bool:
 
 
 async def _attach_personal_org(db: AsyncSession, user: User) -> None:
-    """Ensure user has a personal org before persisting users.org_id (NOT NULL)."""
-    if user.org_id:
+    """Ensure user has a personal org before persisting users.default_org_id (NOT NULL)."""
+    if user.default_org_id:
         return
     org = Organization(
         business_name=make_personal_org_name(user.name, user.email),
@@ -37,7 +37,7 @@ async def _attach_personal_org(db: AsyncSession, user: User) -> None:
     )
     db.add(org)
     await db.flush()
-    user.org_id = org.id
+    user.default_org_id = org.id
     db.add(
         OrganizationMember(
             organization_id=org.id,
@@ -67,14 +67,14 @@ async def ensure_superadmin_from_env(db: AsyncSession) -> User | None:
         existing.hashed_password = hashed_password
         existing.role = _SUPERADMIN_ROLE
         existing.is_active = True
-        if not existing.org_id:
+        if not existing.default_org_id:
             await _attach_personal_org(db, existing)
         else:
             await db.flush()
         return existing
 
     # Create org before the user row: a pending User is auto-flushed with the org
-    # and would violate users.org_id NOT NULL if org_id is still unset.
+    # and would violate users.default_org_id NOT NULL if still unset.
     org = Organization(
         business_name=make_personal_org_name(name, email),
         business_email=email,
@@ -88,7 +88,7 @@ async def ensure_superadmin_from_env(db: AsyncSession) -> User | None:
         api_key=secrets.token_urlsafe(32)[:64],
         role=_SUPERADMIN_ROLE,
         is_active=True,
-        org_id=org.id,
+        default_org_id=org.id,
     )
     db.add(user)
     await db.flush()

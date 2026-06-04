@@ -198,38 +198,40 @@ export function getAccountColumns(
               <AccountStateTransitionDialog account={account} />
             ) : null}
             {perms.canUpdate || perms.canDelete ? (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button size='icon' variant='ghost' className='size-8'>
-                  <MoreHorizontal size={14} />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align='end'>
-                {perms.canUpdate
-                  ? targets.map((target) => (
-                      <AccountStateTransitionDialog
-                        key={target}
-                        account={account}
-                        defaultTo={target}
-                        trigger={
-                          <DropdownMenuItem onSelect={(e) => e.preventDefault()}>
-                            {t('setStatus', { status: statusLabel[target] })}
-                          </DropdownMenuItem>
-                        }
-                      />
-                    ))
-                  : null}
-                {perms.canDelete ? (
-                  <DropdownMenuItem
-                    className='text-destructive'
-                    onClick={() => onDelete(account)}
-                  >
-                    <Trash2 size={14} className='mr-2' />
-                    {t('delete')}
-                  </DropdownMenuItem>
-                ) : null}
-              </DropdownMenuContent>
-            </DropdownMenu>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button size='icon' variant='ghost' className='size-8'>
+                    <MoreHorizontal size={14} />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align='end'>
+                  {perms.canUpdate
+                    ? targets.map((target) => (
+                        <AccountStateTransitionDialog
+                          key={target}
+                          account={account}
+                          defaultTo={target}
+                          trigger={
+                            <DropdownMenuItem
+                              onSelect={(e) => e.preventDefault()}
+                            >
+                              {t('setStatus', { status: statusLabel[target] })}
+                            </DropdownMenuItem>
+                          }
+                        />
+                      ))
+                    : null}
+                  {perms.canDelete ? (
+                    <DropdownMenuItem
+                      className='text-destructive'
+                      onClick={() => onDelete(account)}
+                    >
+                      <Trash2 size={14} className='mr-2' />
+                      {t('delete')}
+                    </DropdownMenuItem>
+                  ) : null}
+                </DropdownMenuContent>
+              </DropdownMenu>
             ) : null}
           </div>
         );

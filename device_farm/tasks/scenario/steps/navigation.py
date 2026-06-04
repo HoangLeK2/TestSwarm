@@ -1,6 +1,7 @@
 """Step handlers: launch_app, stop_app, clear_app, wait_app, push_file, pull_file, open_url, install_apk, key, scroll."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any, Dict
@@ -11,6 +12,11 @@ from tasks.scenario.context import ScenarioContext
 
 log = logging.getLogger(__name__)
 
+_ADB_SHELL_DEFAULT_TIMEOUT_S = 30.0
+_ADB_SHELL_MAX_TIMEOUT_S = 120.0
+_ADB_SHELL_DEFAULT_MAX_OUTPUT_CHARS = 8000
+_ADB_SHELL_MAX_OUTPUT_CHARS = 50000
+
 
 def _poll_u2_ready(device: Any, serial: str, pkg: str) -> None:
     _u2_poll_start = time.monotonic()
@@ -20,6 +26,48 @@ def _poll_u2_ready(device: Any, serial: str, pkg: str) -> None:
         time.sleep(0.5)
     if getattr(device, "_u2", None) is None:
         log.warning("[%s] launch_app %s: u2 not ready after 8s poll", serial, pkg)
+
+
+def _bounded_float(raw: Any, default: float, *, min_value: float, max_value: float) -> float:
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = default
+    return min(max_value, max(min_value, value))
+
+
+def _bounded_int(raw: Any, default: int, *, min_value: int, max_value: int) -> int:
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = default
+    return min(max_value, max(min_value, value))
+
+
+def _truncate_output(output: str, limit: int) -> tuple[str, bool]:
+    if len(output) <= limit:
+        return output, False
+    return output[:limit], True
+
+
+def _output_preview(output: str, limit: int = 160) -> str:
+    preview = " ".join(line.strip() for line in output.splitlines() if line.strip())
+    if len(preview) <= limit:
+        return preview
+    return preview[:limit] + "..."
+
+
+def _resolve_relay_serial(device: Any, fallback_serial: str) -> str:
+    resolver = getattr(device, "_resolve_relay_serial", None)
+    if callable(resolver):
+        resolved = resolver()
+        if resolved:
+            return str(resolved)
+    return str(
+        getattr(device, "_adb_serial", None)
+        or getattr(device, "serial", None)
+        or fallback_serial
+    )
 
 
 @register_step("launch_app")
@@ -177,6 +225,94 @@ def handle_key(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict
         except Exception as exc:
             result["ok"] = False
             result["message"] = f"key({key}) failed: {exc}"
+
+
+@register_step("adb_shell")
+def handle_adb_shell(sc: ScenarioContext, step: Dict[str, Any], idx: int, result: Dict[str, Any]) -> None:
+    command = str(step.get("command") or step.get("cmd") or "").strip()
+    if not command:
+        result["ok"] = False
+        result["message"] = "adb_shell: empty command"
+        return
+
+    timeout = _bounded_float(
+        step.get("timeout"),
+        _ADB_SHELL_DEFAULT_TIMEOUT_S,
+        min_value=1.0,
+        max_value=_ADB_SHELL_MAX_TIMEOUT_S,
+    )
+    max_output_chars = _bounded_int(
+        step.get("max_output_chars"),
+        _ADB_SHELL_DEFAULT_MAX_OUTPUT_CHARS,
+        min_value=1000,
+        max_value=_ADB_SHELL_MAX_OUTPUT_CHARS,
+    )
+    fail_on_error = bool(step.get("fail_on_error", True))
+    save_as = str(step.get("save_as") or "").strip()
+
+    try:
+        from runtime.transports.adb_relay_server import get_relay_manager
+    except Exception as exc:
+        result["ok"] = False
+        result["message"] = f"adb_shell: relay manager unavailable: {exc}"
+        return
+
+    relay = get_relay_manager()
+    loop = getattr(sc.device, "_loop", None)
+    target_serial = _resolve_relay_serial(sc.device, sc.serial)
+    if relay is None or loop is None or not target_serial:
+        result["ok"] = False
+        result["message"] = "adb_shell: no agent-boot relay loop available"
+        return
+
+    actual_serial = relay.resolve_serial(target_serial)
+    if relay.relay_for_serial(actual_serial) is None:
+        result["ok"] = False
+        result["message"] = f"adb_shell: no relay for serial={actual_serial!r}"
+        return
+
+    try:
+        fut = asyncio.run_coroutine_threadsafe(
+            relay.run_command(actual_serial, command, timeout),
+            loop,
+        )
+        relay_result = fut.result(timeout=timeout + 10.0) or {}
+    except Exception as exc:
+        result["ok"] = False
+        result["message"] = f"adb_shell failed: {exc}"
+        return
+
+    output = str(relay_result.get("output") or "")
+    truncated_output, was_truncated = _truncate_output(output, max_output_chars)
+    exit_code = int(relay_result.get("exit_code", 0) or 0)
+    ok = bool(relay_result.get("ok", False))
+    error = str(relay_result.get("error") or "")
+
+    result["exit_code"] = exit_code
+    result["output"] = truncated_output
+    result["output_truncated"] = was_truncated
+    result["relay_serial"] = actual_serial
+    preview = _output_preview(truncated_output)
+    result["message"] = (
+        f"adb_shell exit={exit_code}"
+        + (f" · {preview}" if preview else "")
+        + (f" output_truncated={max_output_chars}" if was_truncated else "")
+    )
+
+    if save_as:
+        sc.var_ctx.set(save_as, truncated_output)
+        sc.ctx.setdefault("vars", {})[save_as] = truncated_output
+        result["save_as"] = save_as
+
+    if not ok and fail_on_error:
+        result["ok"] = False
+        result["message"] = error or truncated_output or f"adb_shell exit={exit_code}"
+    elif not ok:
+        result["ok"] = True
+        result["message"] = (
+            f"adb_shell ignored failure exit={exit_code}: "
+            f"{error or truncated_output or 'no output'}"
+        )
 
 
 @register_step("scroll_down")

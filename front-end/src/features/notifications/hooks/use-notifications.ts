@@ -6,22 +6,27 @@ import {
   type NotificationItem
 } from '../services/api';
 
-export const notificationKeys = {
-  list: (orgId: string | null, limit: number) =>
-    ['notifications', orgId, limit] as const,
-  unreadCount: (orgId: string | null) =>
-    ['notifications', 'unread-count', orgId] as const,
-  channels: (orgId: string | null) =>
-    ['notification-channels', orgId] as const
+export type NotificationListQuery = {
+  unread?: boolean;
+  offset?: number;
+  limit?: number;
 };
 
-export function useNotifications(limit = 12) {
+export const notificationKeys = {
+  list: (orgId: string | null, query: NotificationListQuery) =>
+    ['notifications', orgId, query] as const,
+  unreadCount: (orgId: string | null) =>
+    ['notifications', 'unread-count', orgId] as const,
+  channels: (orgId: string | null) => ['notification-channels', orgId] as const
+};
+
+export function useNotifications(query: NotificationListQuery = { limit: 12 }) {
   const { currentOrg } = useOrganization();
   const orgId = currentOrg?.id ?? null;
 
   return useQuery({
-    queryKey: notificationKeys.list(orgId, limit),
-    queryFn: () => notificationsApi.list({ limit }),
+    queryKey: notificationKeys.list(orgId, query),
+    queryFn: () => notificationsApi.list(query),
     enabled: Boolean(orgId),
     staleTime: 5_000
   });

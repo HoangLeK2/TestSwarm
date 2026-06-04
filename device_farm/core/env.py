@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 
 def _truthy(name: str) -> bool:
@@ -189,6 +190,33 @@ def device_farm_frontend_url() -> str:
         or os.environ.get("FRONTEND_URL", "").strip()
         or "http://localhost:3000"
     )
+
+
+def device_farm_ws_public_base() -> Optional[str]:
+    """WS origin (scheme + host[:port]) for /device-agent URLs sent to phones.
+
+    Prefer DEVICE_FARM_WS (may include /device-agent path). Falls back to DEVICE_FARM_URL.
+    """
+    raw = (os.environ.get("DEVICE_FARM_WS") or "").strip()
+    if not raw:
+        raw = (os.environ.get("DEVICE_FARM_URL") or "").strip()
+    if not raw:
+        return None
+    ws_src = (os.environ.get("DEVICE_FARM_WS") or "").strip().lower()
+    if raw.lower().startswith("ws://"):
+        http_equiv = "http://" + raw[5:]
+    elif raw.lower().startswith("wss://"):
+        http_equiv = "https://" + raw[6:]
+    elif raw.startswith(("http://", "https://")):
+        http_equiv = raw
+    else:
+        http_equiv = "http://" + raw
+    parsed = urlparse(http_equiv)
+    if not parsed.hostname:
+        return None
+    scheme = "wss" if parsed.scheme == "https" or ws_src.startswith("wss://") else "ws"
+    netloc = parsed.netloc or parsed.hostname
+    return f"{scheme}://{netloc}"
 
 
 def org_invite_expire_days() -> int:

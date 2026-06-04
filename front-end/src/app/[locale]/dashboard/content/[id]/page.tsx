@@ -14,34 +14,29 @@ export default function ContentDetailPage() {
   const pathname = usePathname();
   const router = useRouter();
   const contentId = typeof params.id === 'string' ? params.id : '';
+  const shareToken = searchParams.get('share');
+  const isAuthenticated = tokenStorage.isAuthenticated();
 
   useEffect(() => {
-    if (tokenStorage.isAuthenticated()) return;
+    if (isAuthenticated) return;
     const query = searchParams.toString();
     const returnTo = query ? `${pathname}?${query}` : pathname;
     saveAuthReturnTo(returnTo || ROUTES.CONTENT.DETAIL(contentId));
     router.replace(ROUTES.AUTH.SIGN_IN);
-  }, [contentId, pathname, router, searchParams]);
-
-  if (!tokenStorage.isAuthenticated()) {
-    return null;
-  }
-
-  const shareToken = searchParams.get('share');
+  }, [contentId, isAuthenticated, pathname, router, searchParams]);
 
   useEffect(() => {
-    if (!contentId && tokenStorage.isAuthenticated()) {
-      router.replace(ROUTES.CONTENT.ROOT);
-    }
-  }, [contentId, router]);
+    if (!isAuthenticated || contentId) return;
+    router.replace(ROUTES.CONTENT.ROOT);
+  }, [contentId, isAuthenticated, router]);
+
+  if (!isAuthenticated) {
+    return null;
+  }
 
   if (!contentId) {
     return null;
   }
 
-  return (
-    <div className='p-4 md:p-6'>
-      <ContentDetailView contentId={contentId} shareToken={shareToken} />
-    </div>
-  );
+  return <ContentDetailView contentId={contentId} shareToken={shareToken} />;
 }

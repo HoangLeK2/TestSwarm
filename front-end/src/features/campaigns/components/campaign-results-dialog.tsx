@@ -49,12 +49,12 @@ function useQuickStats(campaignId: string, enabled: boolean) {
     Promise.all([
       contentApi.list({
         campaign_id: campaignId,
-        content_type: 'group_post',
+        content_type: 'fb_post',
         limit: 1
       }),
       contentApi.list({
         campaign_id: campaignId,
-        content_type: 'group_comment',
+        content_type: 'fb_comment',
         limit: 1
       }),
       contentApi.list({ campaign_id: campaignId, limit: 1 })

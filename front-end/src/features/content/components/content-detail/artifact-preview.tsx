@@ -1,11 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, Download, Loader2 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { tokenStorage } from '@/lib/token-storage';
 import {
   contentApi,
   type ContentArtifact,
@@ -13,12 +13,18 @@ import {
 } from '../../services/api';
 import { deviceFarmBackendBase } from '@/lib/farm-api';
 import { triggerBlobDownload } from '../../lib/download';
-import { isImageArtifact, resolveArtifactUrl } from '../../lib/artifact-url';
+import {
+  directObjectStorageUrl,
+  isImageArtifact,
+  resolveArtifactUrl,
+  shouldProxyArtifactFetch
+} from '../../lib/artifact-url';
 
 const PREVIEW_LINE_LIMIT = 400;
 const LARGE_INLINE_BYTES = 256_000;
 const VIRTUAL_LINE_HEIGHT_PX = 16;
 const VIRTUAL_VIEWPORT_LINES = 32;
+const CONTENT_IMAGE_PREVIEW_ENABLED = true;
 
 type Props = {
   detail: ContentDetail;
@@ -41,7 +47,10 @@ function readInlineFromDetail(
   return JSON.stringify(value, null, 2);
 }
 
-function truncateLines(text: string, maxLines: number): { text: string; truncated: boolean } {
+function truncateLines(
+  text: string,
+  maxLines: number
+): { text: string; truncated: boolean } {
   const lines = text.split('\n');
   if (lines.length <= maxLines) {
     return { text, truncated: false };
@@ -69,7 +78,7 @@ function VirtualTextPreview({ text }: { text: string }) {
     >
       <div style={{ height: totalHeight, position: 'relative' }}>
         <pre
-          className='absolute left-0 right-0 p-3 font-mono text-[11px] leading-4 whitespace-pre-wrap break-all'
+          className='absolute left-0 right-0 whitespace-pre-wrap break-all p-3 font-mono text-[11px] leading-4'
           style={{ transform: `translateY(${offsetY}px)` }}
         >
           {slice.join('\n')}
@@ -81,58 +90,93 @@ function VirtualTextPreview({ text }: { text: string }) {
 
 export function ArtifactPreview({ detail, artifact, shareToken }: Props) {
   const t = useTranslations('contentFeature.detail');
-  const [imageError, setImageError] = useState(false);
   const [previewError, setPreviewError] = useState(false);
   const [textPreview, setTextPreview] = useState<string | null>(null);
   const [loadingText, setLoadingText] = useState(false);
   const [showFullText, setShowFullText] = useState(false);
   const [downloading, setDownloading] = useState(false);
-  const [imageSrc, setImageSrc] = useState<string | null>(null);
+  const [directImageFailed, setDirectImageFailed] = useState(false);
 
   const resolvedUrl = useMemo(
     () => resolveArtifactUrl(artifact.url, deviceFarmBackendBase),
     [artifact.url]
   );
 
-  const isImage = isImageArtifact(artifact.kind, resolvedUrl);
-  const isExpired =
-    artifact.status === 'expired' || imageError || previewError;
+  const directImageUrl = useMemo(
+    () => directObjectStorageUrl(artifact.url, resolvedUrl),
+    [artifact.url, resolvedUrl]
+  );
 
+  const isImage = isImageArtifact(artifact.kind, resolvedUrl, {
+    label: artifact.label,
+    mimeType: artifact.mime_type,
+    source: artifact.source
+  });
+  const shouldShowImagePreview = CONTENT_IMAGE_PREVIEW_ENABLED && isImage;
+  const canOpenStorageLink = Boolean(directImageUrl);
+  const artifactExpired = artifact.status === 'expired';
+  const needsProxyImage =
+    shouldShowImagePreview &&
+    (directImageFailed ||
+      !directImageUrl ||
+      shouldProxyArtifactFetch(artifact.url, resolvedUrl));
+
+  const {
+    data: proxyImageSrc,
+    isError: proxyImageError,
+    isLoading: proxyImageLoading
+  } = useQuery({
+    queryKey: [
+      'content-artifact-image',
+      detail.id,
+      artifact.id,
+      shareToken ?? ''
+    ],
+    queryFn: async () => {
+      const { blob } = await contentApi.downloadArtifact(
+        detail.id,
+        artifact.id,
+        shareToken
+      );
+      return URL.createObjectURL(blob);
+    },
+    enabled: needsProxyImage && !artifactExpired,
+    staleTime: 10 * 60_000,
+    gcTime: 15 * 60_000,
+    refetchOnWindowFocus: false,
+    retry: 1
+  });
+
+  const proxyBlobRef = useRef<string | null>(null);
   useEffect(() => {
-    setImageSrc(null);
-    if (!isImage || !resolvedUrl || isExpired) return undefined;
-
-    let cancelled = false;
-    let objectUrl: string | null = null;
-    const token = tokenStorage.getAuthToken();
-    fetch(resolvedUrl, {
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error(String(res.status));
-        return res.blob();
-      })
-      .then((blob) => {
-        if (cancelled) return;
-        objectUrl = URL.createObjectURL(blob);
-        setImageSrc(objectUrl);
-      })
-      .catch(() => {
-        if (!cancelled) setImageError(true);
-      });
-
+    if (proxyImageSrc?.startsWith('blob:')) {
+      proxyBlobRef.current = proxyImageSrc;
+    }
     return () => {
-      cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      if (proxyBlobRef.current) {
+        URL.revokeObjectURL(proxyBlobRef.current);
+        proxyBlobRef.current = null;
+      }
     };
-  }, [isExpired, isImage, resolvedUrl]);
+  }, [proxyImageSrc]);
 
   useEffect(() => {
-    setImageError(false);
+    setDirectImageFailed(false);
     setPreviewError(false);
     setShowFullText(false);
     setTextPreview(null);
+  }, [artifact.id, detail.id]);
 
+  const imageSrc = needsProxyImage
+    ? proxyImageSrc ?? null
+    : directImageUrl ?? null;
+  const imageLoadFailed =
+    shouldShowImagePreview &&
+    !artifactExpired &&
+    (proxyImageError || (needsProxyImage && !proxyImageLoading && !imageSrc));
+  const isExpired = artifactExpired || previewError || imageLoadFailed;
+
+  useEffect(() => {
     if (isImage || isExpired) return;
 
     const inline = artifact.inline
@@ -151,14 +195,8 @@ export function ArtifactPreview({ detail, artifact, shareToken }: Props) {
 
     let cancelled = false;
     setLoadingText(true);
-    const token = tokenStorage.getAuthToken();
-    fetch(resolvedUrl, {
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined
-    })
-      .then(async (res) => {
-        if (!res.ok) throw new Error(String(res.status));
-        return res.text();
-      })
+    contentApi
+      .fetchArtifactText(resolvedUrl)
       .then((text) => {
         if (cancelled) return;
         if (!showFullText && text.length > LARGE_INLINE_BYTES) {
@@ -177,7 +215,7 @@ export function ArtifactPreview({ detail, artifact, shareToken }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [artifact, detail, isExpired, isImage, resolvedUrl, showFullText]);
+  }, [artifact.id, detail.id, isImage, artifactExpired, resolvedUrl, showFullText]);
 
   const displayText = useMemo(() => {
     if (!textPreview) return null;
@@ -192,6 +230,10 @@ export function ArtifactPreview({ detail, artifact, shareToken }: Props) {
   }, [showFullText, textPreview]);
 
   const handleDownload = async () => {
+    if (directImageUrl) {
+      window.open(directImageUrl, '_blank', 'noopener,noreferrer');
+      return;
+    }
     setDownloading(true);
     try {
       const { blob, filename } = await contentApi.downloadArtifact(
@@ -230,25 +272,44 @@ export function ArtifactPreview({ detail, artifact, shareToken }: Props) {
               : ''}
           </p>
         </div>
-        <Button
-          type='button'
-          size='sm'
-          variant='outline'
-          className='h-8 shrink-0 gap-1'
-          disabled={downloading}
-          onClick={() => void handleDownload()}
-        >
-          {downloading ? (
-            <Loader2 className='size-3.5 animate-spin' />
-          ) : (
-            <Download className='size-3.5' />
-          )}
-          {t('download')}
-        </Button>
+        <div className='flex shrink-0 items-center gap-1'>
+          {canOpenStorageLink ? (
+            <Button
+              type='button'
+              size='sm'
+              variant='ghost'
+              className='h-8 text-xs'
+              asChild
+            >
+              <a
+                href={directImageUrl}
+                target='_blank'
+                rel='noopener noreferrer'
+              >
+                {t('openStorageLink', { default: 'Mở link storage' })}
+              </a>
+            </Button>
+          ) : null}
+          <Button
+            type='button'
+            size='sm'
+            variant='outline'
+            className='h-8 gap-1'
+            disabled={downloading}
+            onClick={() => void handleDownload()}
+          >
+            {downloading ? (
+              <Loader2 className='size-3.5 animate-spin' />
+            ) : (
+              <Download className='size-3.5' />
+            )}
+            {t('download')}
+          </Button>
+        </div>
       </div>
 
       <div className='min-h-0 flex-1 p-3'>
-        {isImage ? (
+        {shouldShowImagePreview ? (
           <div className='flex max-h-[min(60vh,520px)] items-center justify-center overflow-hidden rounded-md bg-muted/40'>
             {imageSrc ? (
               // eslint-disable-next-line @next/next/no-img-element
@@ -256,14 +317,18 @@ export function ArtifactPreview({ detail, artifact, shareToken }: Props) {
                 src={imageSrc}
                 alt={artifact.label}
                 className='max-h-[min(60vh,520px)] w-full object-contain'
-                onError={() => setImageError(true)}
+                onError={() => {
+                  if (directImageUrl && !directImageFailed && !needsProxyImage) {
+                    setDirectImageFailed(true);
+                  }
+                }}
               />
-            ) : (
+            ) : proxyImageLoading || (directImageUrl && !directImageFailed) ? (
               <p className='flex items-center gap-2 p-4 text-sm text-muted-foreground'>
                 <Loader2 className='size-4 animate-spin' />
                 {t('loadingPreview')}
               </p>
-            )}
+            ) : null}
           </div>
         ) : loadingText ? (
           <p className='flex items-center gap-2 text-sm text-muted-foreground'>
@@ -275,7 +340,7 @@ export function ArtifactPreview({ detail, artifact, shareToken }: Props) {
             <VirtualTextPreview text={textPreview ?? ''} />
           ) : (
             <ScrollArea className='h-[min(60vh,520px)] w-full rounded-md border bg-muted/20'>
-              <pre className='p-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-all'>
+              <pre className='whitespace-pre-wrap break-all p-3 font-mono text-[11px] leading-relaxed'>
                 {displayText}
               </pre>
             </ScrollArea>

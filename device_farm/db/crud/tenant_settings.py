@@ -6,7 +6,11 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models.tenant_settings import DEFAULT_DEAD_THRESHOLD_SEC, TenantSettings
+from db.models.tenant_settings import (
+    DEFAULT_DEAD_THRESHOLD_SEC,
+    DEFAULT_SESSION_IDLE_THRESHOLDS,
+    TenantSettings,
+)
 
 
 async def get_tenant_settings(
@@ -51,3 +55,17 @@ async def upsert_dead_threshold_sec(
         row.dead_threshold_sec = value
     await db.flush()
     return row
+
+
+async def get_session_idle_threshold_sec(
+    db: AsyncSession, org_id: str, owner_type: str
+) -> int:
+    row = await get_tenant_settings(db, org_id)
+    defaults = dict(DEFAULT_SESSION_IDLE_THRESHOLDS)
+    if row and isinstance(row.session_idle_thresholds, dict):
+        for key, value in row.session_idle_thresholds.items():
+            try:
+                defaults[str(key)] = max(1, int(value))
+            except (TypeError, ValueError):
+                continue
+    return defaults.get(owner_type, defaults.get("manual", 300))

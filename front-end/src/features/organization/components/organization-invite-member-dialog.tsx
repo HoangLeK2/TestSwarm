@@ -149,7 +149,11 @@ export function OrganizationInviteMemberDialog({ trigger }: Props) {
           </div>
           {error ? (
             <p className='text-xs text-destructive'>
-              {formatOrgMemberInviteError(error, t, t('inviteFailed', { email: '' }))}
+              {formatOrgMemberInviteError(
+                error,
+                t,
+                t('inviteFailed', { email: '' })
+              )}
             </p>
           ) : null}
           <div className='flex justify-end gap-2'>

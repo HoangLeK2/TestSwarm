@@ -3,9 +3,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import QRCode from 'qrcode';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
 import {
   Select,
   SelectContent,
@@ -41,9 +39,12 @@ import {
   relayAgentsApi,
   isPendingDevice
 } from '@/features/devices/services/manage-api';
-import { getDeviceAgentWsUrl } from '@/lib/farm-api';
+import { getDeviceAgentWsBase, getDeviceAgentWsUrl } from '@/lib/farm-api';
 import { useTranslations } from 'next-intl';
-import { getRelayConnectionState, isRelayOperational } from '../lib/relay-agent-status';
+import {
+  getRelayConnectionState,
+  isRelayOperational
+} from '../lib/relay-agent-status';
 import type {
   DeviceOut,
   RelayAgentOut
@@ -72,8 +73,6 @@ export function RegisterDeviceDialog({
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState<Step>('form');
   const [loading, setLoading] = useState(false);
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
   const [selectedRelayDeviceId, setSelectedRelayDeviceId] = useState('');
   const [registeredDevice, setRegisteredDevice] = useState<DeviceOut | null>(
     null
@@ -124,8 +123,6 @@ export function RegisterDeviceDialog({
     if (!open) {
       stopPolling();
       setStep('form');
-      setName('');
-      setDescription('');
       setSelectedRelayDeviceId('');
       setRegisteredDevice(null);
       setConnectedDevice(null);
@@ -193,17 +190,16 @@ export function RegisterDeviceDialog({
     const choice = relayDeviceChoices.find(
       (item) => item.id === selectedRelayDeviceId
     );
+    if (!choice) {
+      toast.error(t('errorNoDevice'));
+      return;
+    }
     setLoading(true);
     try {
-      const displayName = [name.trim(), description.trim()]
-        .filter(Boolean)
-        .join(' — ');
-      const device = choice
-        ? await relayAgentsApi.registerDevice(choice.relayId, choice.serial)
-        : await devicesApi.register({
-            name: displayName || name.trim() || undefined,
-            description: ''
-          });
+      const device = await relayAgentsApi.registerDevice(
+        choice.relayId,
+        choice.serial
+      );
       setRegisteredDevice(device);
       qrOpenedAtRef.current = Date.now();
       setStep('qr');
@@ -234,7 +230,8 @@ export function RegisterDeviceDialog({
     try {
       const res = await relayAgentsApi.pushConnectUrl(
         registeredDevice.relay_id,
-        registeredDevice.serial
+        registeredDevice.serial,
+        { wsBaseUrl: getDeviceAgentWsBase() }
       );
       if (!res.ok) {
         toast.error(res.error || t('errorPushToPhone'));
@@ -276,17 +273,6 @@ export function RegisterDeviceDialog({
             <p className='text-sm text-muted-foreground'>
               {t.rich('description', { strong: (c) => <strong>{c}</strong> })}
             </p>
-            {!hasRelayChoices && (
-              <div className='space-y-2'>
-                <Label htmlFor='reg-name'>{t('nameLabel')}</Label>
-                <Input
-                  id='reg-name'
-                  placeholder={t('namePlaceholder')}
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                />
-              </div>
-            )}
             <div className='space-y-2'>
               <Label htmlFor='reg-relay-device'>{t('deviceLabel')}</Label>
               <Select
@@ -315,20 +301,11 @@ export function RegisterDeviceDialog({
                 </p>
               )}
             </div>
-            {!hasRelayChoices && (
-              <div className='space-y-2'>
-                <Label htmlFor='reg-desc'>{t('descLabel')}</Label>
-                <Textarea
-                  id='reg-desc'
-                  placeholder={t('descPlaceholder')}
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  rows={2}
-                  className='resize-none'
-                />
-              </div>
-            )}
-            <Button type='submit' className='w-full' disabled={loading}>
+            <Button
+              type='submit'
+              className='w-full'
+              disabled={loading || !hasRelayChoices}
+            >
               {loading ? t('submitting') : t('submit')}
             </Button>
           </form>

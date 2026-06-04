@@ -19,7 +19,7 @@ import { cn } from '@/lib/utils';
 import { Progress } from '@/components/ui/progress';
 import { scenariosApi } from '../services/api';
 import { useCampaignFlowI18n } from './flow-editor/flow-i18n';
-import { useWorkflowProgress, useWorkflowSteps } from '../hooks/use-campaigns';
+import { useWorkflowSteps } from '../hooks/use-campaigns';
 import type { StepLogEntry, WorkflowInfo } from '../types';
 import type { FlowStep } from './scenario-steps/types';
 
@@ -35,6 +35,41 @@ export function parseWorkflowId(id: string) {
 }
 
 // ── Single step row ───────────────────────────────────────────────────────────
+
+function stepOutput(logEntry?: StepLogEntry): {
+  output: string;
+  exitCode?: number;
+  saveAs?: string;
+  truncated: boolean;
+} | null {
+  if (!logEntry) return null;
+  const details = logEntry.details ?? {};
+  const output =
+    typeof logEntry.output === 'string'
+      ? logEntry.output
+      : typeof details.output === 'string'
+        ? details.output
+        : '';
+  if (!output) return null;
+  const exitCode =
+    typeof logEntry.exit_code === 'number'
+      ? logEntry.exit_code
+      : typeof details.exit_code === 'number'
+        ? details.exit_code
+        : undefined;
+  const saveAs =
+    typeof logEntry.save_as === 'string'
+      ? logEntry.save_as
+      : typeof details.save_as === 'string'
+        ? details.save_as
+        : undefined;
+  return {
+    output,
+    exitCode,
+    saveAs,
+    truncated: Boolean(logEntry.output_truncated ?? details.output_truncated)
+  };
+}
 
 export function StepRow({
   index,
@@ -77,6 +112,7 @@ export function StepRow({
   const isFailed = isDone && !logEntry.ok;
   const isOk = isDone && logEntry.ok;
   const msg = isCurrentlyRunning ? currentMessage : (logEntry?.message ?? '');
+  const adbOutput = stepOutput(logEntry);
 
   return (
     <div
@@ -155,6 +191,34 @@ export function StepRow({
             {msg}
           </div>
         )}
+        {adbOutput && (
+          <div className='mt-1.5 rounded-md border border-border/60 bg-muted/35'>
+            <div className='flex min-w-0 items-center gap-2 border-b border-border/50 px-2 py-1 text-[9px] font-medium uppercase tracking-wide text-muted-foreground'>
+              <span>{t('monitorStepAdbOutput')}</span>
+              {adbOutput.exitCode != null && (
+                <span className='rounded bg-background px-1 py-px normal-case tracking-normal'>
+                  exit {adbOutput.exitCode}
+                </span>
+              )}
+              {adbOutput.saveAs && (
+                <span
+                  className='truncate rounded bg-background px-1 py-px font-mono normal-case tracking-normal'
+                  title={`\${${adbOutput.saveAs}}`}
+                >
+                  {`\${${adbOutput.saveAs}}`}
+                </span>
+              )}
+              {adbOutput.truncated && (
+                <span className='rounded bg-amber-500/10 px-1 py-px text-amber-700 dark:text-amber-300'>
+                  {t('monitorStepOutputTruncated')}
+                </span>
+              )}
+            </div>
+            <pre className='max-h-28 overflow-auto whitespace-pre-wrap break-words px-2 py-1.5 font-mono text-[10px] leading-relaxed text-foreground'>
+              {adbOutput.output}
+            </pre>
+          </div>
+        )}
       </div>
 
       {/* Type badge */}
@@ -184,20 +248,34 @@ interface WorkflowStepListProps {
   wf: WorkflowInfo;
   /** Maximum height of the scrollable step list (default: 360px) */
   maxHeight?: string;
+  sseStepLog?: StepLogEntry[];
+  sseConnected?: boolean;
+  /** When SSE is active, progress fields from the event stream (skips poll). */
+  liveProgress?: {
+    current_step: number;
+    total_steps: number;
+    current_step_type: string;
+    message: string;
+    loop_iteration: number | null;
+  };
 }
 
 export function WorkflowStepList({
   wf,
-  maxHeight = '360px'
+  maxHeight = '360px',
+  sseStepLog,
+  sseConnected = false,
+  liveProgress
 }: WorkflowStepListProps) {
   const t = useTranslations('campaignsFeature.list');
   const isActive = wf.status === 'RUNNING' || wf.status === 'PAUSED';
   const { campaignId, scenarioId } = parseWorkflowId(wf.workflow_id);
 
-  const { data: prog } = useWorkflowProgress(wf.workflow_id, isActive);
+  const useSseSteps = sseConnected && (sseStepLog?.length ?? 0) > 0;
+
   const { data: stepLog, isLoading: logLoading } = useWorkflowSteps(
     wf.workflow_id,
-    true
+    isActive && !useSseSteps
   );
 
   const { data: scenario, isLoading: scenarioLoading } = useQuery({
@@ -207,7 +285,7 @@ export function WorkflowStepList({
     staleTime: 30_000
   });
 
-  if (logLoading || scenarioLoading) {
+  if (scenarioLoading || (!useSseSteps && logLoading)) {
     return (
       <div className='flex items-center gap-2 py-4 text-xs text-muted-foreground'>
         <Loader2 size={12} className='animate-spin' />{' '}
@@ -217,16 +295,20 @@ export function WorkflowStepList({
   }
 
   const scenarioDefs: FlowStep[] = (scenario?.steps ?? []) as FlowStep[];
-  const executedSteps: StepLogEntry[] = stepLog?.steps ?? [];
+  const executedSteps: StepLogEntry[] = useSseSteps
+    ? (sseStepLog ?? [])
+    : (stepLog?.steps ?? []);
 
-  const current = prog?.current_step ?? 0;
+  const current = liveProgress?.current_step ?? 0;
   const total =
-    prog?.total_steps ?? scenarioDefs.length ?? executedSteps.length;
-  const stepType = prog?.current_step_type ?? '';
-  const message = prog?.message ?? '';
+    liveProgress?.total_steps ??
+    scenarioDefs.length ??
+    executedSteps.length;
+  const stepType = liveProgress?.current_step_type ?? '';
+  const message = liveProgress?.message ?? '';
   const loopIter =
-    prog?.loop_iteration != null && prog.loop_iteration >= 0
-      ? prog.loop_iteration
+    liveProgress?.loop_iteration != null && liveProgress.loop_iteration >= 0
+      ? liveProgress.loop_iteration
       : null;
   const pct =
     total > 0

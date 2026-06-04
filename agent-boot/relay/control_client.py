@@ -38,6 +38,28 @@ _CMD_BOOTSTRAP       = 4
 _CMD_SHELL_VAL       = 0
 _CMD_RESTART_SCRCPY  = 7
 
+def _is_maintenance_kind(kind: str | None) -> bool:
+    return kind in {"bootstrap", "restart_u2", "restart_atx", "restart_scrcpy"}
+
+
+def _control_command_fields(msg) -> tuple[str | None, str, str, str, int]:
+    kind = msg.WhichOneof("payload")
+    cmd = getattr(msg, kind) if kind else None
+    msg_id = str(getattr(cmd, "msg_id", "") or "")
+    serial = str(getattr(cmd, "serial", "") or "")
+    raw_cmd = str(getattr(cmd, "cmd", "") or "")
+    timeout = int(getattr(cmd, "timeout", 0) or 0)
+    return kind, msg_id, serial, raw_cmd, timeout
+
+
+def _control_lane(msg) -> str:
+    kind, _, _, _, _ = _control_command_fields(msg)
+    if kind == "shell":
+        return "interactive"
+    if _is_maintenance_kind(kind):
+        return "maintenance"
+    return "interactive"
+
 
 def _primary_lan_ip() -> str:
     try:
@@ -120,20 +142,118 @@ class AgentControlClient:
                 yield msg
 
         heartbeat_task = asyncio.create_task(self._heartbeat_loop(send_q))
+        worker_queues: dict[tuple[str, str], asyncio.Queue] = {}
+        worker_tasks: list[asyncio.Task] = []
+
+        async def _worker(name: str, q: asyncio.Queue) -> None:
+            while True:
+                msg, received_at = await q.get()
+                try:
+                    await self._handle_timed(msg, send_q, received_at)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    logger.warning("control %s worker failed: %s", name, exc)
+
+        def _queue_limit(lane: str) -> int:
+            return 256 if lane == "interactive" else 64
+
+        def _queue_for(serial: str, lane: str) -> asyncio.Queue:
+            key = (serial or "-", lane)
+            q = worker_queues.get(key)
+            if q is not None:
+                return q
+            q = asyncio.Queue(maxsize=_queue_limit(lane))
+            worker_queues[key] = q
+            worker_tasks.append(asyncio.create_task(_worker(f"{key[0]}:{key[1]}", q)))
+            return q
+
         try:
             async for ctrl in stub.ControlStream(_producer(), metadata=meta):
-                await self._handle(ctrl, send_q)
+                received_at = asyncio.get_running_loop().time()
+                lane = _control_lane(ctrl)
+                _, _, serial, _, _ = _control_command_fields(ctrl)
+                target_q = _queue_for(serial, lane)
+                try:
+                    target_q.put_nowait((ctrl, received_at))
+                except asyncio.QueueFull:
+                    await self._enqueue_queue_full_result(ctrl, send_q, serial=serial, lane=lane)
         finally:
             heartbeat_task.cancel()
+            for task in worker_tasks:
+                task.cancel()
             try:
                 await heartbeat_task
             except asyncio.CancelledError:
                 pass
+            await asyncio.gather(*worker_tasks, return_exceptions=True)
             # Drain producer
             try:
                 send_q.put_nowait(None)
             except asyncio.QueueFull:
                 pass
+
+    async def _enqueue_queue_full_result(
+        self,
+        msg,
+        q: asyncio.Queue,
+        *,
+        serial: str,
+        lane: str,
+    ) -> None:
+        from .grpc_gen import relay_pb2
+
+        kind, msg_id, _, _, _ = _control_command_fields(msg)
+        if not msg_id:
+            logger.warning("control queue full kind=%s serial=%s lane=%s", kind, serial or "-", lane)
+            return
+        error = f"control queue full: serial={serial or '-'} lane={lane}"
+        try:
+            await asyncio.wait_for(
+                q.put(relay_pb2.AgentControlMsg(
+                    result=relay_pb2.CommandResultMsg(
+                        msg_id=msg_id,
+                        ok=False,
+                        exit_code=-1,
+                        output="",
+                        error=error,
+                    )
+                )),
+                timeout=1.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "control result queue full kind=%s serial=%s lane=%s",
+                kind,
+                serial or "-",
+                lane,
+            )
+        except Exception as exc:
+            logger.warning(
+                "failed to enqueue queue-full result kind=%s serial=%s lane=%s error=%s",
+                kind,
+                serial or "-",
+                lane,
+                exc,
+            )
+
+    async def _handle_timed(self, msg, q: asyncio.Queue, received_at: float) -> None:
+        kind, msg_id, serial, _, _ = _control_command_fields(msg)
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+        try:
+            await self._handle(msg, q)
+        finally:
+            finished = loop.time()
+            if kind != "ack":
+                logger.info(
+                    "control command handled kind=%s serial=%s msg_id=%s queue_wait_ms=%.1f total_ms=%.1f",
+                    kind or "-",
+                    serial or "-",
+                    msg_id or "-",
+                    (start - received_at) * 1000.0,
+                    (finished - received_at) * 1000.0,
+                )
 
     async def _heartbeat_loop(self, q: asyncio.Queue) -> None:
         from .grpc_gen import relay_pb2

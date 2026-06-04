@@ -8,18 +8,40 @@ from __future__ import annotations
 from enum import StrEnum
 
 
-class UserRole(StrEnum):
+class SystemUserRole(StrEnum):
+
     SUPERADMIN = "superadmin"
+    SUPPORT = "support"
+    SYSTEM = "system"
+
+
+UserRole = SystemUserRole
+
+
+class OrgMemberRole(StrEnum):
+
+    OWNER = "owner"
     ADMIN = "admin"
-    OPERATOR = "operator"
+    MEMBER = "member"
+    SUPERVISOR = "supervisor"
+
+
+class OrgMemberStatus(StrEnum):
+    ACTIVE = "active"
+    INVITED = "invited"
+    SUSPENDED = "suspended"
 
 
 class CampaignStatus(StrEnum):
+    DRAFT = "draft"
+    SCHEDULED = "scheduled"
     IDLE = "idle"
     RUNNING = "running"
     PAUSED = "paused"
     COMPLETED = "completed"
+    CANCELLED = "cancelled"
     FAILED = "failed"
+    ARCHIVED = "archived"
 
 
 class ExecutionStatus(StrEnum):
@@ -29,6 +51,8 @@ class ExecutionStatus(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    DLQ_OPEN = "dlq_open"
+    DLQ_CLOSED = "dlq_closed"
 
 
 class ExecutionResultStatus(StrEnum):
@@ -49,7 +73,6 @@ class AccountState(StrEnum):
     RETIRED = "retired"
 
 
-# Backward-compatible alias — prefer AccountState for new code.
 AccountStatus = AccountState
 
 
@@ -75,6 +98,8 @@ class DLQStatus(StrEnum):
     RETRYING = "retrying"
     RESOLVED = "resolved"
     DISMISSED = "dismissed"
+    CLOSED = "closed"
+    REPLAYED = "replayed"
 
 
 class RunStatus(StrEnum):
@@ -84,6 +109,11 @@ class RunStatus(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     PARTIAL = "partial"
+    DEFERRED = "deferred"
+    DEFERRED_ACCOUNT_RATE = "deferred_account_rate"
+    THROTTLED_REJECTED = "throttled_rejected"
+    THROTTLED_ACCOUNT_RATE_REJECTED = "throttled_account_rate_rejected"
+    THROTTLED_EXPIRED = "throttled_expired"
 
 
 class ScheduleTargetType(StrEnum):
@@ -121,6 +151,8 @@ class DeviceFsmEvent(StrEnum):
     SESSION_CLAIM = "session.claim"
     SESSION_RELEASED = "session.released"
     SESSION_LOST = "session.lost_device"
+    ADMIN_RESET = "admin.reset"
+    ADMIN_FORCE_ONLINE = "admin.force_online"
 
 
 class SessionOwnerType(StrEnum):
@@ -131,3 +163,53 @@ class SessionOwnerType(StrEnum):
     CAMPAIGN = "campaign"
     SYSTEM = "system"
     UNKNOWN = "unknown"
+
+
+class ExecutionKind(StrEnum):
+    """Execution surface marker (DF-T-04-018)."""
+
+    CAMPAIGN = "campaign"
+    PREVIEW = "preview"
+    SESSION = "session"
+
+
+class DeviceReserveOwnerType(StrEnum):
+    """Reserve session owner (DF-T-02-003)."""
+
+    MANUAL = "manual"
+    SCENARIO = "scenario"
+    MCP = "mcp"
+    CAMPAIGN = "campaign"
+
+
+class CampaignTargetSourceKind(StrEnum):
+    """How a device entered a dispatch snapshot (DF-T-04-008)."""
+
+    EXPLICIT = "explicit"
+    DEVICE_GROUP = "device_group"
+
+
+class DeviceReserveReleaseReason(StrEnum):
+    MANUAL = "manual"
+    TIMEOUT = "timeout"
+    FORCE = "force"
+
+
+class DeviceRegistryStatus(StrEnum):
+    PAIRED = "paired"
+    UNPAIRED = "unpaired"
+
+
+class ScenarioKind(StrEnum):
+    """Org-scoped scenario layout (DF-T-04-001)."""
+
+    SEQUENCE = "sequence"
+    GRAPH = "graph"
+
+
+class OrgScenarioStatus(StrEnum):
+    """Lifecycle of org-scoped scenario library entries (DF-T-04-001)."""
+
+    DRAFT = "draft"
+    ACTIVE = "active"
+    ARCHIVED = "archived"

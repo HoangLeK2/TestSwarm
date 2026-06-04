@@ -14,6 +14,10 @@ const routeMapping: Record<string, string[]> = {
     'navigation.dashboard',
     'navigation.activity_history'
   ],
+  '/dashboard/notifications': [
+    'navigation.dashboard',
+    'navigation.notifications'
+  ],
   '/dashboard/scenario-templates': [
     'navigation.dashboard',
     'navigation.scenario_templates'

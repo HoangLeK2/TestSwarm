@@ -6,6 +6,7 @@ import { useTranslations } from 'next-intl';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { StepPanelInput } from './step-panel-primitives';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import type { FlowStep } from '../scenario-steps/types';
@@ -23,9 +24,24 @@ const SELECTOR_BY_OPTIONS = [
   'class name',
   'description',
   'descriptionContains',
+  'descriptionStartsWith'
+] as const;
+
+/** Legacy alias; normalized to `description` in the UI. */
+const DESCRIPTION_SELECTOR_BYS = new Set([
+  'description',
+  'descriptionContains',
   'descriptionStartsWith',
   'content-desc'
-] as const;
+]);
+
+function normalizeSelectorByForUi(by: string): (typeof SELECTOR_BY_OPTIONS)[number] {
+  if (by === 'content-desc') return 'description';
+  if ((SELECTOR_BY_OPTIONS as readonly string[]).includes(by)) {
+    return by as (typeof SELECTOR_BY_OPTIONS)[number];
+  }
+  return 'text';
+}
 
 function valueInsertRowClassName() {
   return 'flex min-w-0 flex-col gap-2 sm:flex-row sm:items-stretch sm:gap-2';
@@ -125,7 +141,10 @@ function VariableInsertSelect({
   );
 }
 
-const SELECTOR_BY_I18N_KEY: Record<(typeof SELECTOR_BY_OPTIONS)[number], string> = {
+const SELECTOR_BY_I18N_KEY: Record<
+  (typeof SELECTOR_BY_OPTIONS)[number],
+  string
+> = {
   text: 'byOptions.text',
   'resource-id': 'byOptions.resource_id',
   xpath: 'byOptions.xpath',
@@ -143,12 +162,15 @@ function SelectorBySelect({
 }: {
   value: string;
   onChange: (by: string) => void;
-  tSel: ReturnType<typeof useTranslations<'campaignsFeature.stepEditor.selector'>>;
+  tSel: ReturnType<
+    typeof useTranslations<'campaignsFeature.stepEditor.selector'>
+  >;
 }) {
+  const uiValue = normalizeSelectorByForUi(value);
   return (
     <select
       className='w-full rounded-md border border-input bg-background px-2 py-2 text-xs'
-      value={value}
+      value={uiValue}
       onChange={(e) => onChange(e.target.value)}
     >
       {SELECTOR_BY_OPTIONS.map((o) => (
@@ -183,7 +205,13 @@ function shortWidgetName(className: string): string {
 function friendlyPackageName(packageName: string): string {
   const pkg = packageName.trim();
   if (!pkg) return '';
-  return KNOWN_PACKAGES[pkg] ?? pkg.replace(/^com\./, '').split('.').join(' · ');
+  return (
+    KNOWN_PACKAGES[pkg] ??
+    pkg
+      .replace(/^com\./, '')
+      .split('.')
+      .join(' · ')
+  );
 }
 
 function chainTargetLabel(target: Record<string, unknown>): string {
@@ -198,7 +226,9 @@ function chainTargetLabel(target: Record<string, unknown>): string {
 
 function describeChain(
   chain: Record<string, unknown>,
-  tSel: ReturnType<typeof useTranslations<'campaignsFeature.stepEditor.selector'>>
+  tSel: ReturnType<
+    typeof useTranslations<'campaignsFeature.stepEditor.selector'>
+  >
 ): string {
   const op = String(chain.op ?? '').trim();
   const target = (chain.target ?? {}) as Record<string, unknown>;
@@ -266,7 +296,9 @@ function SelectorAdvancedBlock({
   onInstanceChange: (instance: number | undefined) => void;
   onChainChange: (chain: Record<string, unknown> | undefined) => void;
   onClearAll: () => void;
-  tSel: ReturnType<typeof useTranslations<'campaignsFeature.stepEditor.selector'>>;
+  tSel: ReturnType<
+    typeof useTranslations<'campaignsFeature.stepEditor.selector'>
+  >;
 }) {
   const [open, setOpen] = useState(false);
   const [technicalOpen, setTechnicalOpen] = useState(false);
@@ -540,7 +572,9 @@ export function FallbackRatioFields({
   onRxChange: (n: number) => void;
   onRyChange: (n: number) => void;
   onRequestPick?: () => void;
-  tSel: ReturnType<typeof useTranslations<'campaignsFeature.stepEditor.selector'>>;
+  tSel: ReturnType<
+    typeof useTranslations<'campaignsFeature.stepEditor.selector'>
+  >;
 }) {
   return (
     <StepPanelSection
@@ -661,13 +695,17 @@ export function SelectorFields({
         />
       </StepPanelField>
 
+      {DESCRIPTION_SELECTOR_BYS.has(by) ? (
+        <StepPanelHint>{tSel('byDescriptionHint')}</StepPanelHint>
+      ) : null}
+
       <StepPanelField label={tSel('valueLabel')}>
         <div className={valueInsertRowClassName()}>
-          <Input
+          <StepPanelInput
             className='h-9 min-w-0 flex-1 text-xs'
             value={value}
-            onChange={(e) =>
-              onChange(patchSelector(step, { value: e.target.value }))
+            onValueCommit={(nextValue) =>
+              onChange(patchSelector(step, { value: nextValue }))
             }
             placeholder={tSel('valuePlaceholder')}
           />
@@ -675,7 +713,9 @@ export function SelectorFields({
             availableVariables={availableVariables}
             t={t}
             onInsert={(token) =>
-              onChange(patchSelector(step, { value: insertToken(value, token) }))
+              onChange(
+                patchSelector(step, { value: insertToken(value, token) })
+              )
             }
           />
         </div>
@@ -708,9 +748,7 @@ export function SelectorFields({
           onChange(
             patchSelector(step, {
               conditions:
-                Object.keys(nextConditions).length > 0
-                  ? nextConditions
-                  : null,
+                Object.keys(nextConditions).length > 0 ? nextConditions : null,
               instance: null,
               chain: null
             })

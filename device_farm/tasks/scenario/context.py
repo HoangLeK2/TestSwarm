@@ -130,15 +130,14 @@ class ScenarioContext:
                 for s in steps if isinstance(s, dict)
             )
 
-        # Step capture config
+        # Step capture config (DF-T-04-014: default ON for Epic 04 executions)
         from core.env import capture_pre_step_enabled
-        capture_enabled = (
-            scenario.get("capture_steps", False)
-            or os.environ.get("CAPTURE_STEPS", "").lower() in {"1", "true", "yes"}
-            or os.environ.get("DEBUG_AUTO", "").lower() in {"1", "true", "yes"}
-        )
+        from services.execution.capture_service import epic04_capture_default_enabled
+
+        capture_enabled = epic04_capture_default_enabled(scenario)
         capture_dir: Optional[str] = None
-        capture_pre = capture_pre_step_enabled()
+        _exec_id = scenario.get("execution_id") or scenario.get("run_id")
+        capture_pre = bool(_exec_id) or capture_pre_step_enabled()
         capture_settle_ms = int(scenario.get("settle_timeout_ms") or os.environ.get("SETTLE_TIMEOUT_MS", "800"))
         capture_stale_wait_s = float(os.environ.get("CAPTURE_STALE_WAIT_MS", "1000")) / 1000.0
         capture_skip_settle = frozenset({
@@ -153,7 +152,6 @@ class ScenarioContext:
             capture_dir = os.path.join(base, f"{serial}_{ts}")
             os.makedirs(capture_dir, exist_ok=True)
 
-        _exec_id = scenario.get("execution_id") or scenario.get("run_id")
         _start_step = int(scenario.get("_checkpoint_step") or scenario.get("start_step") or 0)
 
         # Phase 2 — anti-detection jitter. Scenario-level overrides env.

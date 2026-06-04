@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import threading
+import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -46,6 +48,135 @@ class TestTapFallbackFlow:
         assert msg["type"] == "shell"
         assert "input tap 100 200" in msg["cmd"]
 
+    def test_tap_uses_relay_u2_batch_before_shell_when_local_u2_none(self):
+        d = _make_device()
+        d._u2 = None
+        d._loop = object()
+        d._adb_serial = "172.16.0.83:5555"
+        d._agent_send = MagicMock()
+
+        class _Relay:
+            def relay_for_serial(self, serial):
+                return object() if serial == "172.16.0.83:5555" else None
+
+            def resolve_serial(self, serial):
+                return "172.16.0.83:5555"
+
+            async def u2_batch(self, serial, actions, timeout=30.0):
+                self.serial = serial
+                self.actions = actions
+                self.timeout = timeout
+                return {"ok": True, "results": [{"op": "click", "ok": True}]}
+
+        relay = _Relay()
+
+        def run_now(coro, _loop):
+            result = {}
+
+            async def _run():
+                result["value"] = await coro
+
+            import asyncio
+
+            asyncio.run(_run())
+            return SimpleNamespace(result=lambda timeout=None: result["value"])
+
+        with patch("runtime.transports.adb_relay_server.get_relay_manager", return_value=relay), \
+                patch("runtime.core.device_client.asyncio.run_coroutine_threadsafe", side_effect=run_now):
+            d.tap(100, 200)
+
+        assert relay.serial == "172.16.0.83:5555"
+        assert relay.actions == [{"op": "click", "x": 100, "y": 200}]
+        assert relay.timeout <= 2.0
+        d._agent_send.assert_not_called()
+
+    def test_tap_prefers_legacy_relay_proxy_before_relay_u2_batch(self):
+        d = _make_device()
+        d._loop = object()
+        d._adb_serial = "172.16.0.83:5555"
+        d._agent_send = MagicMock()
+        mock_u2 = MagicMock()
+        d._u2 = mock_u2
+        d._u2_last_ok_at = time.monotonic()
+        d.ensure_u2_healthy = MagicMock(return_value=True)
+
+        class _Relay:
+            def relay_for_serial(self, serial):
+                return object() if serial == "172.16.0.83:5555" else None
+
+            def resolve_serial(self, serial):
+                return "172.16.0.83:5555"
+
+            async def u2_batch(self, serial, actions, timeout=30.0):
+                self.actions = actions
+                return {"ok": True, "results": [{"op": "click", "ok": True}]}
+
+        relay = _Relay()
+        relay.actions = None
+
+        def run_now(coro, _loop):
+            result = {}
+
+            async def _run():
+                result["value"] = await coro
+
+            import asyncio
+
+            asyncio.run(_run())
+            return SimpleNamespace(result=lambda timeout=None: result["value"])
+
+        with patch.object(d, "_u2_session_uses_relay", return_value=True), \
+                patch("runtime.transports.adb_relay_server.get_relay_manager", return_value=relay), \
+                patch("runtime.core.device_client.asyncio.run_coroutine_threadsafe", side_effect=run_now):
+            d.tap(100, 200)
+
+        mock_u2.click.assert_called_once_with(100, 200)
+        assert relay.actions is None
+        d._agent_send.assert_not_called()
+
+    def test_tap_skips_stale_u2_proxy_probe_when_relay_u2_batch_available(self):
+        d = _make_device()
+        d._loop = object()
+        d._adb_serial = "172.16.0.83:5555"
+        d._agent_send = MagicMock()
+        mock_u2 = MagicMock()
+        d._u2 = mock_u2
+        d._u2_last_ok_at = 0.0
+        d.ensure_u2_healthy = MagicMock(return_value=False)
+
+        class _Relay:
+            def relay_for_serial(self, serial):
+                return object() if serial == "172.16.0.83:5555" else None
+
+            def resolve_serial(self, serial):
+                return "172.16.0.83:5555"
+
+            async def u2_batch(self, serial, actions, timeout=30.0):
+                self.actions = actions
+                return {"ok": True, "results": [{"op": "click", "ok": True}]}
+
+        relay = _Relay()
+
+        def run_now(coro, _loop):
+            result = {}
+
+            async def _run():
+                result["value"] = await coro
+
+            import asyncio
+
+            asyncio.run(_run())
+            return SimpleNamespace(result=lambda timeout=None: result["value"])
+
+        with patch("runtime.transports.adb_relay_server.get_relay_manager", return_value=relay), \
+                patch("runtime.core.device_client.asyncio.run_coroutine_threadsafe", side_effect=run_now):
+            d.tap(100, 200)
+
+        d.ensure_u2_healthy.assert_not_called()
+        mock_u2.click.assert_not_called()
+        assert relay.actions == [{"op": "click", "x": 100, "y": 200}]
+        d._agent_send.assert_not_called()
+
     def test_tap_logs_warning_when_no_u2_no_scrcpy_no_agent(self):
         """No touch path; tap logs a warning and returns without crash."""
         d = _make_device()
@@ -76,6 +207,51 @@ class TestSwipeFallbackFlow:
         msg = mock_send.call_args[0][0]
         assert msg["type"] == "shell"
         assert "input swipe 10 20 30 40 500" in msg["cmd"]
+
+    def test_swipe_uses_relay_u2_batch_before_shell_when_local_u2_none(self):
+        d = _make_device()
+        d._u2 = None
+        d._loop = object()
+        d._adb_serial = "172.16.0.83:5555"
+        d._agent_send = MagicMock()
+
+        class _Relay:
+            def relay_for_serial(self, serial):
+                return object() if serial == "172.16.0.83:5555" else None
+
+            def resolve_serial(self, serial):
+                return "172.16.0.83:5555"
+
+            async def u2_batch(self, serial, actions, timeout=30.0):
+                self.actions = actions
+                return {"ok": True, "results": [{"op": "swipe", "ok": True}]}
+
+        relay = _Relay()
+
+        def run_now(coro, _loop):
+            result = {}
+
+            async def _run():
+                result["value"] = await coro
+
+            import asyncio
+
+            asyncio.run(_run())
+            return SimpleNamespace(result=lambda timeout=None: result["value"])
+
+        with patch("runtime.transports.adb_relay_server.get_relay_manager", return_value=relay), \
+                patch("runtime.core.device_client.asyncio.run_coroutine_threadsafe", side_effect=run_now):
+            d.swipe(10, 20, 30, 40, duration_ms=500)
+
+        assert relay.actions == [{
+            "op": "swipe",
+            "fx": 10,
+            "fy": 20,
+            "tx": 30,
+            "ty": 40,
+            "duration": 0.5,
+        }]
+        d._agent_send.assert_not_called()
 
     def test_swipe_logs_warning_when_no_u2_no_scrcpy_no_agent(self):
         """No touch path; swipe logs a warning and returns without crash."""

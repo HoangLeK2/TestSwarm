@@ -19,10 +19,44 @@ import logging
 import struct
 from typing import Optional
 
+import grpc
+from grpc import aio as grpc_aio
+
 log = logging.getLogger("grpc_client")
 
 # Matches scrcpy_relay.py binary frame format
 _PTS_CONFIG_MASK = 0x8000_0000_0000_0000
+
+_GRPC_CHANNEL_OPTIONS = [
+    ("grpc.keepalive_time_ms",               10_000),
+    ("grpc.keepalive_timeout_ms",              5_000),
+    ("grpc.keepalive_permit_without_calls",        1),
+    ("grpc.http2.max_pings_without_data",          0),
+    ("grpc.http2.min_time_between_pings_ms",   5_000),
+    ("grpc.initial_reconnect_backoff_ms",      1_000),
+    ("grpc.max_reconnect_backoff_ms",         30_000),
+    ("grpc.max_send_message_length",    4 * 1024 * 1024),
+    ("grpc.max_receive_message_length", 4 * 1024 * 1024),
+]
+
+
+def create_grpc_channel(
+    addr: str,
+    *,
+    tls_enabled: bool = False,
+    root_cert_file: str = "",
+    options: list[tuple[str, int]] | None = None,
+):
+    channel_options = options if options is not None else _GRPC_CHANNEL_OPTIONS
+    if not tls_enabled:
+        return grpc_aio.insecure_channel(addr, options=channel_options)
+
+    root_certificates = None
+    if root_cert_file:
+        with open(root_cert_file, "rb") as cert_file:
+            root_certificates = cert_file.read()
+    credentials = grpc.ssl_channel_credentials(root_certificates=root_certificates)
+    return grpc_aio.secure_channel(addr, credentials, options=channel_options)
 
 
 def _parse_binary_frame(data: bytes):
@@ -65,6 +99,8 @@ class GrpcRelayClient:
         send_queue: asyncio.Queue,
         loop: asyncio.AbstractEventLoop,
         channel=None,
+        tls_enabled: bool = False,
+        root_cert_file: str = "",
     ) -> None:
         self._addr = server_addr          # "host:50051"
         self._api_key = api_key or ""
@@ -72,6 +108,8 @@ class GrpcRelayClient:
         self._send_queue = send_queue     # shared with ScrcpyRelaySession (same as WS)
         self._loop = loop
         self._shared_channel = channel    # pre-created channel shared with control stream
+        self._tls_enabled = tls_enabled
+        self._root_cert_file = root_cert_file
         self.ctrl_q: asyncio.Queue = asyncio.Queue(maxsize=256)
         self._running = False
 
@@ -100,7 +138,6 @@ class GrpcRelayClient:
         # Called either from start() (which already set _running=True) or
         # directly from agent.py — ensure the generator loop runs in both cases.
         self._running = True
-        from grpc import aio
         from .grpc_gen import relay_pb2, relay_pb2_grpc
 
         metadata = [
@@ -124,19 +161,10 @@ class GrpcRelayClient:
                     pass
             return
 
-        async with aio.insecure_channel(
+        async with create_grpc_channel(
             self._addr,
-            options=[
-                ("grpc.keepalive_time_ms",               10_000),
-                ("grpc.keepalive_timeout_ms",              5_000),
-                ("grpc.keepalive_permit_without_calls",        1),
-                ("grpc.http2.max_pings_without_data",          0),
-                ("grpc.http2.min_time_between_pings_ms",   5_000),
-                ("grpc.initial_reconnect_backoff_ms",      1_000),
-                ("grpc.max_reconnect_backoff_ms",         30_000),
-                ("grpc.max_send_message_length",    4 * 1024 * 1024),
-                ("grpc.max_receive_message_length", 4 * 1024 * 1024),
-            ],
+            tls_enabled=self._tls_enabled,
+            root_cert_file=self._root_cert_file,
         ) as ch:
             stub = relay_pb2_grpc.RelayServiceStub(ch)
             call = stub.Stream(

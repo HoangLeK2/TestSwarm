@@ -236,6 +236,7 @@ async def start_grpc_server(
     tls_cert_file: str = "",
     tls_key_file: str = "",
     allow_insecure: bool = True,
+    control_callbacks: tuple | None = None,
 ) -> Any:
     """Start gRPC relay server. Returns the server object (call stop() on shutdown)."""
     server = aio.server(
@@ -262,6 +263,8 @@ async def start_grpc_server(
     # ── AgentControlService (control plane — separate from video stream) ────
     from .agent_control_servicer import AgentControlServicer, set_control_servicer
     ctrl_servicer = AgentControlServicer()
+    if control_callbacks is not None:
+        ctrl_servicer.set_persistence_callbacks(*control_callbacks)
     set_control_servicer(ctrl_servicer)
     relay_pb2_grpc.add_AgentControlServiceServicer_to_server(ctrl_servicer, server)
     env_name = os.environ.get("DEVICE_FARM_ENV", "").strip().lower()

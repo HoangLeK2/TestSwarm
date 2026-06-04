@@ -20,15 +20,17 @@ Endpoints:
     GET    /api/executions/{id}/results                 List per-device results
     GET    /api/executions/{id}/results/{device_id}     Get single device result
     PUT    /api/executions/{id}/results/{device_id}     Upsert device result
+    GET    /api/executions/{id}/steps                   List normalized step rows
     GET    /api/executions/{id}/summary                 Aggregated summary
 """
 from __future__ import annotations
 
 import logging
 import os
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import StreamingResponse
 
 from api.deps import CurrentUser, DB, require_permission
 from api.org_scope import data_owner_user_id
@@ -41,6 +43,7 @@ from api.schemas.execution import (
     ExecutionOut,
     ExecutionPatch,
     ExecutionResultOut,
+    ExecutionStepOut,
     FinishBody,
     SummaryOut,
     UpsertResultBody,
@@ -131,6 +134,18 @@ async def create_execution_endpoint(body: ExecutionCreate, db: DB, user: Current
     # Attach devices if provided
     for device_id in body.device_ids:
         await add_device_to_execution(db, ex.id, device_id)
+    from services.execution.event_publisher import enqueue_execution_event
+    from services.execution.event_types import EXECUTION_CREATED
+
+    await enqueue_execution_event(
+        db,
+        event_type=EXECUTION_CREATED,
+        execution_id=ex.id,
+        organization_id=str(user_org or ""),
+        campaign_id=ex.campaign_id,
+        payload={"run_type": ex.run_type, "status": ex.status},
+        execution=ex,
+    )
     return ExecutionOut.model_validate(ex)
 
 
@@ -179,8 +194,45 @@ class DLQEntryOut(_BaseModel):
     status: str
     last_attempt_at: _Optional[_datetime]
     created_at: _datetime
+    campaign_id: _Optional[str] = None
+    failed_step_id: _Optional[str] = None
+    failure_reason: _Optional[str] = None
+    failed_at: _Optional[_datetime] = None
+    closed_by: _Optional[str] = None
+    closed_at: _Optional[_datetime] = None
+    close_reason: _Optional[str] = None
+    replayed_to_execution_id: _Optional[str] = None
+    artifact_refs: dict = Field(default_factory=dict)
 
     model_config = {"from_attributes": True}
+
+
+class DLQRetryBody(_BaseModel):
+    from_checkpoint: bool = True
+
+
+class DLQCloseBody(_BaseModel):
+    reason: str = Field(min_length=1)
+
+
+class DLQBulkRetryBody(_BaseModel):
+    execution_ids: list[str] = Field(default_factory=list)
+    dlq_ids: list[str] = Field(default_factory=list)
+    from_checkpoint: bool = True
+
+
+class DLQBulkRetryItemOut(_BaseModel):
+    dlq_id: _Optional[str] = None
+    execution_id: _Optional[str] = None
+    status: str
+    reason: _Optional[str] = None
+    message: _Optional[str] = None
+    replayed_to_execution_id: _Optional[str] = None
+    entry_status: _Optional[str] = None
+
+
+class DLQBulkRetryOut(_BaseModel):
+    results: list[DLQBulkRetryItemOut]
 
 
 class DLQSummaryOut(_BaseModel):
@@ -204,6 +256,24 @@ class ExecutionArtifactOut(_BaseModel):
     created_at: _Optional[_datetime] = None
 
 
+class ExecutionEventOut(_BaseModel):
+    event_id: str
+    event_type: str
+    schema_version: str
+    occurred_at: _datetime
+    organization_id: str
+    campaign_id: _Optional[str] = None
+    execution_id: str
+    step_id: _Optional[str] = None
+    payload: dict = Field(default_factory=dict)
+    tags: list[str] = Field(default_factory=list)
+
+
+class ExecutionEventListOut(_BaseModel):
+    items: list[ExecutionEventOut]
+    has_more: bool = False
+
+
 def _dlq_offline_dismiss_minutes() -> int:
     raw = os.environ.get("DEVICE_FARM_DLQ_OFFLINE_DISMISS_MINUTES", "5")
     try:
@@ -218,6 +288,36 @@ def _dlq_alert_threshold() -> int:
         return max(1, int(raw))
     except ValueError:
         return 10
+
+
+def _normalize_dlq_status_filter(status: str | None) -> str | None:
+    if status is None:
+        return None
+    normalized = status.strip().lower()
+    if normalized == "":
+        return None
+    if normalized == "open":
+        return "pending"
+    return normalized
+
+
+def _temporal_from_request(request: Request) -> tuple[Any, Any, Any]:
+    scheduler = getattr(request.app.state, "scheduler", None)
+    temporal_client = getattr(scheduler, "_client", None) if scheduler is not None else None
+    temporal_cfg = getattr(scheduler, "_cfg", None) if scheduler is not None else None
+    manager = getattr(request.app.state, "manager", None)
+    return temporal_client, temporal_cfg, manager
+
+
+def _raise_dlq_http(exc: Exception) -> None:
+    from services.campaign.dlq_errors import DLQError
+
+    if isinstance(exc, DLQError):
+        raise HTTPException(
+            status_code=exc.http_status,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    raise exc
 
 
 async def _dismiss_stale_offline_dlq(
@@ -302,10 +402,8 @@ async def list_dlq(
     # Defensive coercion: FastAPI passes `?key=` as the empty string, not None.
     # Without this, an accidentally-empty filter would WHERE column='' → []
     # instead of falling back to the unfiltered view.
-    norm_status = status.strip() if status else None
+    norm_status = _normalize_dlq_status_filter(status)
     norm_campaign = campaign_id.strip() if campaign_id else None
-    if norm_status == "":
-        norm_status = None
     if norm_campaign == "":
         norm_campaign = None
 
@@ -380,97 +478,154 @@ async def dlq_summary(
     )
 
 
+@router.get(
+    "/dlq/executions/{execution_id}",
+    response_model=DLQEntryOut,
+    dependencies=[Depends(require_permission("executions", "read"))],
+)
+async def get_dlq_by_execution(execution_id: str, db: DB, user: CurrentUser):
+    """Return DLQ detail for a failed execution (DF-T-04-012)."""
+    from services.campaign.dlq_errors import DLQNotFoundError
+    from services.campaign.dlq_service import get_dlq_detail_for_user
+
+    try:
+        entry = await get_dlq_detail_for_user(
+            db,
+            execution_id=execution_id,
+            user_id=_dlq_scope_kwargs(user).get("user_id"),
+            org_id=_dlq_scope_kwargs(user).get("org_id"),
+        )
+    except DLQNotFoundError as exc:
+        _raise_dlq_http(exc)
+    return DLQEntryOut.model_validate(entry)
+
+
+@router.post(
+    "/dlq/bulk-retry",
+    response_model=DLQBulkRetryOut,
+    dependencies=[Depends(require_permission("executions", "execute"))],
+)
+async def bulk_retry_dlq(body: DLQBulkRetryBody, request: Request, db: DB, user: CurrentUser):
+    """Bulk replay DLQ entries (max 50 per request)."""
+    from services.campaign.dlq_service import bulk_replay_dlq
+
+    ids = body.dlq_ids or body.execution_ids
+    if not ids:
+        raise HTTPException(status_code=400, detail={"code": "DLQ_BULK_EMPTY", "message": "No ids provided"})
+
+    temporal_client, temporal_cfg, manager = _temporal_from_request(request)
+    scope = _dlq_scope_kwargs(user)
+    results = await bulk_replay_dlq(
+        db,
+        dlq_ids=body.dlq_ids or None,
+        execution_ids=body.execution_ids or None,
+        user_id=scope.get("user_id"),
+        org_id=scope.get("org_id"),
+        actor_user_id=user.id,
+        from_checkpoint=body.from_checkpoint,
+        temporal_client=temporal_client,
+        temporal_config=temporal_cfg,
+        manager=manager,
+        offline_after_minutes=_dlq_offline_dismiss_minutes(),
+    )
+    await db.commit()
+    return DLQBulkRetryOut(results=[DLQBulkRetryItemOut.model_validate(r) for r in results])
+
+
 @router.post(
     "/dlq/{dlq_id}/retry",
     response_model=DLQEntryOut,
     dependencies=[Depends(require_permission("executions", "execute"))],
 )
-async def retry_dlq(dlq_id: str, request: Request, db: DB, user: CurrentUser):
-    """Re-enqueue a DLQ entry for retry with idempotent state transition."""
-    from db.crud.execution_dlq import begin_dlq_retry_for_user, set_dlq_status
-    from services.campaign_dispatch import enqueue_campaign_run_temporal
-
-    entry, changed = await begin_dlq_retry_for_user(db, dlq_id, **_dlq_scope_kwargs(user))
-    if entry is None:
-        raise HTTPException(status_code=404, detail="DLQ entry not found")
-
+async def retry_dlq(
+    dlq_id: str,
+    request: Request,
+    db: DB,
+    user: CurrentUser,
+    body: DLQRetryBody | None = None,
+):
+    """Replay a DLQ entry (Epic 04 checkpoint replay or legacy re-enqueue)."""
     from api.execution_access import get_execution_for_user
+    from db.crud.execution_dlq import get_dlq_entry_for_user
+    from services.campaign.dlq_errors import DLQError
+    from services.campaign.dlq_service import (
+        legacy_retry_dlq_entry,
+        replay_dlq_entry,
+        uses_epic04_replay,
+    )
+
+    body = body or DLQRetryBody()
+    scope = _dlq_scope_kwargs(user)
+    temporal_client, temporal_cfg, manager = _temporal_from_request(request)
+
+    entry = await get_dlq_entry_for_user(db, dlq_id, **scope)
+    if entry is None:
+        raise HTTPException(status_code=404, detail={"code": "DLQ_NOT_FOUND", "message": "DLQ entry not found"})
 
     try:
         execution = await get_execution_for_user(db, entry.execution_id, user)
     except HTTPException:
-        raise HTTPException(status_code=404, detail="Execution not found") from None
-    if not execution.campaign_id:
-        await set_dlq_status(
-            db,
-            dlq_id,
-            "pending",
-            error="DLQ retry only supports campaign-linked executions",
-        )
-        await db.commit()
-        raise HTTPException(status_code=400, detail="Execution is not linked to a campaign")
-
-    # Idempotency: retry already in progress/scheduled.
-    if not changed:
-        await db.commit()
-        return DLQEntryOut.model_validate(entry)
-
-    scheduler = getattr(request.app.state, "scheduler", None)
-    temporal_client = getattr(scheduler, "_client", None) if scheduler is not None else None
-    temporal_cfg = getattr(scheduler, "_cfg", None) if scheduler is not None else None
-    if temporal_client is None:
-        await set_dlq_status(db, dlq_id, "pending", error="Temporal client unavailable for retry")
-        await db.commit()
-        raise HTTPException(status_code=503, detail="Temporal is unavailable")
-
-    from db import crud as repo
-    from db.crud.device import get_device_by_serial
-    from services.device_liveness import is_device_dispatchable
-
-    user_org = getattr(user, "org_id", None) or await repo.get_user_org_id(db, user.id)
-    device = await get_device_by_serial(db, entry.device_serial)
-    if device is None or (user_org and device.org_id != user_org):
-        await set_dlq_status(db, dlq_id, "dismissed", error="Device is not available for retry")
-        await db.commit()
-        return DLQEntryOut.model_validate(entry)
-    device_live = await is_device_dispatchable(
-        db,
-        device,
-        offline_after_minutes=_dlq_offline_dismiss_minutes(),
-        manager=getattr(request.app.state, "manager", None),
-    )
-    if not device_live:
-        await set_dlq_status(
-            db,
-            dlq_id,
-            "dismissed",
-            error="Device is offline; DLQ retry skipped",
-        )
-        await db.commit()
-        return DLQEntryOut.model_validate(entry)
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "DLQ_NOT_FOUND", "message": "Execution not found"},
+        ) from None
 
     try:
-        payload, status_code = await enqueue_campaign_run_temporal(
-            execution.campaign_id,
-            temporal_client,
-            temporal_cfg,
-            device_serials_override=[entry.device_serial],
-        )
-        if status_code >= 400:
-            error_msg = payload.get("error", "retry enqueue failed")
-            await set_dlq_status(db, dlq_id, "pending", error=error_msg)
-            await db.commit()
-            raise HTTPException(status_code=status_code, detail=error_msg)
+        if uses_epic04_replay(execution):
+            entry, _, _ = await replay_dlq_entry(
+                db,
+                dlq_id=dlq_id,
+                user_id=scope.get("user_id"),
+                org_id=scope.get("org_id"),
+                actor_user_id=user.id,
+                from_checkpoint=body.from_checkpoint,
+                temporal_client=temporal_client,
+                temporal_config=temporal_cfg,
+                manager=manager,
+            )
+        else:
+            entry = await legacy_retry_dlq_entry(
+                db,
+                dlq_id=dlq_id,
+                user_id=scope.get("user_id"),
+                org_id=scope.get("org_id"),
+                temporal_client=temporal_client,
+                temporal_config=temporal_cfg,
+                manager=manager,
+                offline_after_minutes=_dlq_offline_dismiss_minutes(),
+            )
+    except DLQError as exc:
+        await db.commit()
+        _raise_dlq_http(exc)
 
-        await set_dlq_status(db, dlq_id, "resolved")
-        await db.commit()
-        return DLQEntryOut.model_validate(entry)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        await set_dlq_status(db, dlq_id, "pending", error=str(exc))
-        await db.commit()
-        raise HTTPException(status_code=500, detail=f"Retry enqueue failed: {exc}")
+    await db.commit()
+    return DLQEntryOut.model_validate(entry)
+
+
+@router.post(
+    "/dlq/{dlq_id}/close",
+    response_model=DLQEntryOut,
+    dependencies=[Depends(require_permission("executions", "execute"))],
+)
+async def close_dlq(dlq_id: str, body: DLQCloseBody, db: DB, user: CurrentUser):
+    """Close a DLQ entry without replaying (DF-T-04-012)."""
+    from services.campaign.dlq_errors import DLQError
+    from services.campaign.dlq_service import close_dlq_entry
+
+    scope = _dlq_scope_kwargs(user)
+    try:
+        entry = await close_dlq_entry(
+            db,
+            dlq_id=dlq_id,
+            user_id=scope.get("user_id"),
+            org_id=scope.get("org_id"),
+            closed_by=user.id,
+            close_reason=body.reason,
+        )
+    except DLQError as exc:
+        _raise_dlq_http(exc)
+    await db.commit()
+    return DLQEntryOut.model_validate(entry)
 
 
 @router.delete(
@@ -498,6 +653,108 @@ async def dismiss_dlq(dlq_id: str, db: DB, user: CurrentUser):
 async def get_execution_endpoint(execution_id: str, db: DB, user: CurrentUser):
     ex = await _get_or_404(db, execution_id, user)
     return ExecutionOut.model_validate(ex)
+
+
+def _event_out_from_row(row) -> ExecutionEventOut:
+    envelope = row.to_envelope()
+    return ExecutionEventOut.model_validate(envelope)
+
+
+@router.get(
+    "/{execution_id}/events",
+    response_model=ExecutionEventListOut,
+    dependencies=[Depends(require_permission("executions", "read"))],
+)
+async def list_execution_events(
+    execution_id: str,
+    db: DB,
+    user: CurrentUser,
+    since: _Optional[str] = None,
+    limit: int = 100,
+):
+    """Catch-up endpoint — events after ``since`` event_id (exclusive), ordered."""
+    await _get_or_404(db, execution_id, user)
+    from db.crud.execution_events import list_execution_events
+
+    norm_since = since.strip() if since else None
+    if norm_since == "":
+        norm_since = None
+    page_limit = min(max(limit, 1), 500)
+    rows = await list_execution_events(
+        db,
+        execution_id,
+        since_event_id=norm_since,
+        limit=page_limit + 1,
+    )
+    has_more = len(rows) > page_limit
+    items = [_event_out_from_row(r) for r in rows[:page_limit]]
+    return ExecutionEventListOut(items=items, has_more=has_more)
+
+
+@router.get(
+    "/{execution_id}/events/stream",
+    dependencies=[Depends(require_permission("executions", "read"))],
+)
+async def stream_execution_events(
+    execution_id: str,
+    request: Request,
+    db: DB,
+    user: CurrentUser,
+):
+    """SSE live stream with ``Last-Event-ID`` resume support (DF-T-04-013)."""
+    import asyncio
+    import json
+
+    await _get_or_404(db, execution_id, user)
+    from db.crud.execution_events import list_execution_events
+    from services.execution.event_bus import get_execution_event_bus
+
+    last_event_id = request.headers.get("last-event-id") or request.headers.get("Last-Event-ID")
+    if last_event_id == "":
+        last_event_id = None
+
+    def _sse_frame(envelope: dict) -> str:
+        return (
+            f"id: {envelope['event_id']}\n"
+            f"event: {envelope['event_type']}\n"
+            f"data: {json.dumps(envelope)}\n\n"
+        )
+
+    async def event_generator():
+        backlog = await list_execution_events(
+            db,
+            execution_id,
+            since_event_id=last_event_id,
+            limit=500,
+        )
+        for row in backlog:
+            yield _sse_frame(row.to_envelope())
+
+        queue: asyncio.Queue = asyncio.Queue(maxsize=256)
+
+        async def pump() -> None:
+            async for envelope in get_execution_event_bus().subscribe(execution_id):
+                await queue.put(envelope)
+
+        pump_task = asyncio.create_task(pump())
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    envelope = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                yield _sse_frame(envelope)
+        finally:
+            pump_task.cancel()
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get(
@@ -575,8 +832,19 @@ async def delete_execution_endpoint(execution_id: str, db: DB, user: CurrentUser
     dependencies=[Depends(require_permission("executions", "execute"))],
 )
 async def start_endpoint(execution_id: str, db: DB, user: CurrentUser):
-    await _get_or_404(db, execution_id, user)
+    ex = await _get_or_404(db, execution_id, user)
     ex = await start_execution(db, execution_id)
+    from services.execution.event_publisher import enqueue_execution_event
+    from services.execution.event_types import EXECUTION_STARTED
+
+    if ex:
+        await enqueue_execution_event(
+            db,
+            event_type=EXECUTION_STARTED,
+            execution_id=execution_id,
+            payload={"status": ex.status},
+            execution=ex,
+        )
     return ExecutionOut.model_validate(ex)
 
 
@@ -588,6 +856,28 @@ async def start_endpoint(execution_id: str, db: DB, user: CurrentUser):
 async def finish_endpoint(execution_id: str, body: FinishBody, db: DB, user: CurrentUser):
     await _get_or_404(db, execution_id, user)
     ex = await finish_execution(db, execution_id, status=body.status)
+    from services.execution.event_publisher import enqueue_execution_event
+    from services.execution.event_types import (
+        EXECUTION_CANCELLED,
+        EXECUTION_COMPLETED,
+        EXECUTION_FAILED,
+    )
+
+    if ex:
+        status = ex.status
+        if status == "cancelled":
+            event_type = EXECUTION_CANCELLED
+        elif status == "completed":
+            event_type = EXECUTION_COMPLETED
+        else:
+            event_type = EXECUTION_FAILED
+        await enqueue_execution_event(
+            db,
+            event_type=event_type,
+            execution_id=execution_id,
+            payload={"status": status},
+            execution=ex,
+        )
     return ExecutionOut.model_validate(ex)
 
 
@@ -788,19 +1078,35 @@ async def upsert_result_endpoint(
     execution_id: str, device_id: str, body: UpsertResultBody, db: DB, user: CurrentUser
 ):
     await _get_or_404(db, execution_id, user)
+    from services.execution.step_store import slim_step_results
+
     er = await upsert_execution_result(
         db,
         execution_id=execution_id,
         device_id=device_id,
         status=body.status,
-        passed_steps=body.passed_steps,
-        failed_steps=body.failed_steps,
+        passed_steps=slim_step_results(body.passed_steps),
+        failed_steps=slim_step_results(body.failed_steps),
         error_detail=body.error_detail,
         run_time_sec=body.run_time_sec,
         started_at=body.started_at,
         finished_at=body.finished_at,
     )
     return ExecutionResultOut.model_validate(er)
+
+
+@router.get(
+    "/{execution_id}/steps",
+    response_model=list[ExecutionStepOut],
+    dependencies=[Depends(require_permission("executions", "read"))],
+)
+async def list_execution_steps_endpoint(execution_id: str, db: DB, user: CurrentUser):
+    """Normalized per-step rows including artifacts_json (DF-T-04-010)."""
+    await _get_or_404(db, execution_id, user)
+    from db.crud.execution_steps import list_execution_steps
+
+    rows = await list_execution_steps(db, execution_id)
+    return [ExecutionStepOut.model_validate(row) for row in rows]
 
 
 @router.get(
@@ -833,23 +1139,67 @@ def _normalize_artifact_url(url: str | None) -> str | None:
     return value
 
 
+def _artifact_proxy_url(artifact_id: str | None) -> str | None:
+    aid = str(artifact_id or "").strip()
+    if not aid:
+        return None
+    return f"/artifacts/{aid}/content"
+
+
+_ARTIFACT_REF_FIELDS = (
+    ("screenshot_url", "screenshot", "screenshot_artifact_id", "image/jpeg"),
+    ("hierarchy_url", "hierarchy", "hierarchy_artifact_id", "application/xml"),
+    ("selector_url", "selector", None, "application/xml"),
+    ("element_url", "element", None, "image/jpeg"),
+)
+
+
 def _extract_step_artifacts(execution_id: str, device_serial: str, steps: list, created_at: _datetime) -> list[ExecutionArtifactOut]:
     out: list[ExecutionArtifactOut] = []
     for step in steps or []:
-        screenshots = []
+        screenshots: list[tuple[str, str | None, dict[str, Any]]] = []
         if isinstance(step.get("screenshot"), str):
-            screenshots.append(("screenshot", step.get("screenshot")))
+            screenshots.append(("screenshot", _normalize_artifact_url(step.get("screenshot")), {}))
         elif isinstance(step.get("screenshot"), dict):
-            for key in ("full", "element", "hierarchy", "selector"):
+            for key in ("full", "hierarchy", "selector"):
                 if step["screenshot"].get(key):
-                    screenshots.append((f"screenshot.{key}", step["screenshot"].get(key)))
+                    screenshots.append(
+                        (
+                            f"screenshot.{key}",
+                            _normalize_artifact_url(step["screenshot"].get(key)),
+                            {},
+                        )
+                    )
         if isinstance(step.get("screenshot_pre"), dict):
-            for key in ("full", "element", "hierarchy", "selector"):
+            for key in ("full", "hierarchy", "selector"):
                 if step["screenshot_pre"].get(key):
-                    screenshots.append((f"screenshot_pre.{key}", step["screenshot_pre"].get(key)))
+                    screenshots.append(
+                        (
+                            f"screenshot_pre.{key}",
+                            _normalize_artifact_url(step["screenshot_pre"].get(key)),
+                            {},
+                        )
+                    )
 
-        for art_type, url in screenshots:
-            resolved_url = _normalize_artifact_url(url)
+        for art in step.get("artifacts") or step.get("artifacts_json") or []:
+            if not isinstance(art, dict):
+                continue
+            art_type = str(art.get("type") or "artifact")
+            for url_key, label, id_key, content_type in _ARTIFACT_REF_FIELDS:
+                artifact_id = str(art.get(id_key) or "").strip() if id_key else ""
+                url = art.get(url_key)
+                proxy_url = _artifact_proxy_url(artifact_id) if artifact_id else None
+                resolved_url = proxy_url or _normalize_artifact_url(url)
+                if not resolved_url:
+                    continue
+                metadata: dict[str, Any] = {"content_type": content_type}
+                if artifact_id:
+                    metadata["artifact_id"] = artifact_id
+                screenshots.append((f"{art_type}.{label}", resolved_url, metadata))
+
+        for art_type, url, metadata in screenshots:
+            if not url:
+                continue
             out.append(
                 ExecutionArtifactOut(
                     artifact_type=art_type,
@@ -859,12 +1209,28 @@ def _extract_step_artifacts(execution_id: str, device_serial: str, steps: list, 
                     step_type=step.get("type"),
                     ok=step.get("ok"),
                     message=step.get("message"),
-                    url=resolved_url,
-                    metadata={},
+                    url=url,
+                    metadata=metadata,
                     created_at=created_at,
                 )
             )
     return out
+
+
+async def _legacy_step_dicts_for_artifacts(db, execution_id: str) -> list[dict[str, Any]]:
+    from db.crud.execution import list_execution_results
+    from db.crud.execution_steps import list_execution_steps
+    from services.execution.step_store import execution_step_to_legacy_dict
+
+    rows = await list_execution_steps(db, execution_id)
+    if rows:
+        return [execution_step_to_legacy_dict(row) for row in rows]
+
+    legacy: list[dict[str, Any]] = []
+    results = await list_execution_results(db, execution_id)
+    for er in results:
+        legacy.extend((er.passed_steps or []) + (er.failed_steps or []))
+    return legacy
 
 
 @router.get(
@@ -887,14 +1253,25 @@ async def list_execution_artifacts(
     artifacts: list[ExecutionArtifactOut] = []
 
     results = await list_execution_results(db, execution_id)
+    step_dicts = await _legacy_step_dicts_for_artifacts(db, execution_id)
+    step_by_index = {int(s.get("index", -1)): s for s in step_dicts if isinstance(s, dict)}
+
     for er in results:
         device = await get_device(db, er.device_id)
         serial = device.serial if device else None
+        if step_by_index:
+            steps_for_device = [
+                step_by_index[idx]
+                for idx in sorted(step_by_index)
+                if idx >= 0
+            ]
+        else:
+            steps_for_device = (er.passed_steps or []) + (er.failed_steps or [])
         artifacts.extend(
             _extract_step_artifacts(
                 execution_id,
                 serial or "unknown",
-                (er.passed_steps or []) + (er.failed_steps or []),
+                steps_for_device,
                 er.created_at,
             )
         )
@@ -922,3 +1299,43 @@ async def list_execution_artifacts(
     floor = _datetime.min.replace(tzinfo=_timezone.utc)
     artifacts.sort(key=lambda x: x.created_at or floor, reverse=True)
     return artifacts
+
+
+@router.post(
+    "/{execution_id}/pin",
+    dependencies=[Depends(require_permission("executions", "update"))],
+)
+async def pin_execution(execution_id: str, db: DB, user: CurrentUser):
+    """Pin execution so artifacts skip retention cleanup (DF-T-06-011)."""
+    from datetime import datetime, timezone
+
+    execution = await _get_or_404(db, execution_id, user)
+    execution.pinned_at = datetime.now(timezone.utc)
+    execution.pinned_by = user.id
+    meta = dict(execution.meta or {})
+    meta["pinned_by_user"] = user.id
+    execution.meta = meta
+    await db.flush()
+    try:
+        from web.metrics import artifact_pinned_total
+
+        artifact_pinned_total.inc()
+    except Exception:
+        pass
+    return {"execution_id": execution_id, "pinned": True, "pinned_at": execution.pinned_at.isoformat()}
+
+
+@router.delete(
+    "/{execution_id}/pin",
+    dependencies=[Depends(require_permission("executions", "update"))],
+)
+async def unpin_execution(execution_id: str, db: DB, user: CurrentUser):
+    execution = await _get_or_404(db, execution_id, user)
+    execution.pinned_at = None
+    execution.pinned_by = None
+    meta = dict(execution.meta or {})
+    meta.pop("pinned_by_user", None)
+    execution.meta = meta
+    await db.flush()
+    return {"execution_id": execution_id, "pinned": False}
+

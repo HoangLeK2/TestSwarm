@@ -136,10 +136,30 @@ function broadcast(msg: WsMessage) {
   });
 }
 
+function sendPong(ts: unknown) {
+  if (sharedSocket?.readyState !== WebSocket.OPEN) return;
+  const payload: { type: 'pong'; ts?: number } = { type: 'pong' };
+  if (typeof ts === 'number') payload.ts = ts;
+  try {
+    sharedSocket.send(JSON.stringify(payload));
+  } catch {
+    // socket may be closing; the normal onclose path reconnects
+  }
+}
+
 function handleTextMessage(raw: string) {
   try {
-    const msg = JSON.parse(raw) as WsMessage;
-    broadcast(msg);
+    const parsed = JSON.parse(raw) as unknown;
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      'type' in parsed &&
+      (parsed as { type?: unknown }).type === 'ping'
+    ) {
+      sendPong((parsed as { ts?: unknown }).ts);
+      return;
+    }
+    broadcast(parsed as WsMessage);
   } catch {
     // ignore malformed messages
   }

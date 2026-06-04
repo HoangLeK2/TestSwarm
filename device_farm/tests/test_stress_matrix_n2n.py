@@ -54,7 +54,7 @@ async def test_matrix_single_device_two_campaign_allow_policy_distinct_workflows
     ]
 
     with ExitStack() as stack:
-        stack.enter_context(patch("services.campaign_dispatch.AsyncSessionLocal", return_value=db))
+        stack.enter_context(patch("services.campaign_dispatch.activity_session", return_value=db))
         stack.enter_context(patch("services.campaign_dispatch.repo.get_campaign", side_effect=campaigns))
         stack.enter_context(
             patch("services.campaign_dispatch.repo.list_campaign_devices", return_value=[_device("dev-1", "SN001")])
@@ -91,7 +91,7 @@ async def test_matrix_n_device_m_campaign_partial_overlap_device_sets():
     ]
 
     with ExitStack() as stack:
-        stack.enter_context(patch("services.campaign_dispatch.AsyncSessionLocal", return_value=db))
+        stack.enter_context(patch("services.campaign_dispatch.activity_session", return_value=db))
         stack.enter_context(
             patch("services.campaign_dispatch.repo.get_campaign", side_effect=[_campaign_for("camp-a"), _campaign_for("camp-b")])
         )

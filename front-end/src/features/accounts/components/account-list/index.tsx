@@ -11,11 +11,13 @@ import { useDataTable } from '@/hooks/use-data-table';
 import { CreateAccountDialog } from '../create-account-dialog';
 import { ImportAccountsDialog } from '../import-accounts-dialog';
 import { Can, useResourcePermissions } from '@/features/auth';
+import { CoreEmptyState } from '@/components/core-empty-state';
 import { getAccountColumns, type AccountStateKey } from './columns';
 import { useConfirm } from '@/providers/modal-provider';
 
 export function AccountList() {
   const t = useTranslations('accountsFeature.list');
+  const tEmpty = useTranslations('coreEmptyState');
   const tCommon = useTranslations('common');
   const locale = useLocale();
   const dateLocale = locale === 'vi' ? vi : enUS;
@@ -84,10 +86,31 @@ export function AccountList() {
       </div>
 
       {data.length === 0 && !isLoading ? (
-        <div className='rounded-lg border border-dashed p-8 text-center'>
-          <p className='font-medium'>{t('emptyTitle')}</p>
-          <p className='text-sm text-muted-foreground'>{t('emptyDescription')}</p>
-        </div>
+        <Can
+          object='accounts'
+          action='create'
+          fallback={
+            <CoreEmptyState
+              icon={Users}
+              title={tEmpty('accounts.title')}
+              description={tEmpty('accounts.description')}
+              readOnlyHint={tEmpty('readOnlyHint')}
+              trackingKey='accounts-empty-readonly'
+            />
+          }
+        >
+          <div className='space-y-4'>
+            <CoreEmptyState
+              icon={Users}
+              title={tEmpty('accounts.title')}
+              description={tEmpty('accounts.description')}
+              trackingKey='accounts-empty'
+            />
+            <div className='flex justify-center'>
+              <CreateAccountDialog />
+            </div>
+          </div>
+        </Can>
       ) : (
         <DataTable table={table} />
       )}

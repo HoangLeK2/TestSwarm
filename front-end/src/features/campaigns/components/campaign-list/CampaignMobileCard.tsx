@@ -3,27 +3,38 @@
 import { formatDistanceToNow } from 'date-fns';
 import { vi } from 'date-fns/locale';
 import { Badge } from '@/components/ui/badge';
-import type { CampaignOut, CampaignStatus } from '../../types';
+import { cn } from '@/lib/utils';
+import type { CampaignOut } from '../../types';
+import {
+  campaignStatusLabel,
+  campaignStatusVariant
+} from '../../campaign-status-ui';
 import { CampaignSetupCell } from './CampaignSetupCell';
 import { CampaignRowActions } from './CampaignRowActions';
 import { CampaignRunStats } from './CampaignRunStats';
+import { CampaignEngineBadge } from './CampaignEngineBadge';
 
 export function CampaignMobileCard({
   campaign,
   statusLabel,
-  statusVariant
+  id,
+  className
 }: {
   campaign: CampaignOut;
-  statusLabel: Record<CampaignStatus, string>;
-  statusVariant: Record<
-    CampaignStatus,
-    'secondary' | 'default' | 'outline' | 'destructive'
-  >;
+  statusLabel: Record<string, string>;
+  id?: string;
+  className?: string;
 }) {
   const description = (campaign.description ?? '').trim();
 
   return (
-    <article className='rounded-xl border border-border bg-card p-3 shadow-sm'>
+    <article
+      id={id}
+      className={cn(
+        'rounded-xl border border-border bg-card p-3 shadow-sm',
+        className
+      )}
+    >
       <div className='flex items-start justify-between gap-2'>
         <div className='min-w-0 flex-1'>
           <h3 className='truncate text-sm font-semibold leading-snug'>
@@ -36,11 +47,18 @@ export function CampaignMobileCard({
           ) : null}
         </div>
         <Badge
-          variant={statusVariant[campaign.status]}
+          variant={campaignStatusVariant(campaign.status)}
           className='shrink-0 text-[10px]'
         >
-          {statusLabel[campaign.status]}
+          {campaignStatusLabel(campaign.status, statusLabel)}
         </Badge>
+      </div>
+
+      <div className='mt-1'>
+        <CampaignEngineBadge
+          campaignId={campaign.id}
+          status={campaign.status}
+        />
       </div>
 
       <div className='mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground'>

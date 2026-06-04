@@ -33,6 +33,7 @@ import {
   CollapsibleTrigger
 } from '@/components/ui/collapsible';
 import { cn } from '@/lib/utils';
+import { normalizeScenarioVariables } from '@/lib/scenario-variables';
 
 type VarType = 'string' | 'number' | 'list';
 
@@ -99,20 +100,22 @@ const SYSTEM_BUILTINS = BUILTINS.filter((b) => b.group === 'system');
 const ACCOUNT_BUILTINS = BUILTINS.filter((b) => b.group === 'account');
 
 function toEntries(vars: Record<string, any>): VarEntry[] {
-  return Object.entries(vars).map(([key, value]) => {
-    if (Array.isArray(value)) {
-      return { key, type: 'list', strVal: '', listVal: value.map(String) };
+  return Object.entries(normalizeScenarioVariables(vars)).map(
+    ([key, value]) => {
+      if (Array.isArray(value)) {
+        return { key, type: 'list', strVal: '', listVal: value.map(String) };
+      }
+      if (typeof value === 'number') {
+        return { key, type: 'number', strVal: String(value), listVal: [] };
+      }
+      return {
+        key,
+        type: 'string',
+        strVal: typeof value === 'string' ? value : JSON.stringify(value),
+        listVal: []
+      };
     }
-    if (typeof value === 'number') {
-      return { key, type: 'number', strVal: String(value), listVal: [] };
-    }
-    return {
-      key,
-      type: 'string',
-      strVal: typeof value === 'string' ? value : JSON.stringify(value),
-      listVal: []
-    };
-  });
+  );
 }
 
 function toRecord(entries: VarEntry[]): Record<string, any> {
@@ -227,7 +230,7 @@ function TypeSelect({
       <SelectTrigger size='sm' className='h-8 w-[96px] shrink-0 text-xs'>
         <SelectValue />
       </SelectTrigger>
-      <SelectContent className='z-[10001]'>
+      <SelectContent className='z-[calc(var(--z-floating)+1)]'>
         <SelectItem value='string'>{t('types.string')}</SelectItem>
         <SelectItem value='number'>{t('types.number')}</SelectItem>
         <SelectItem value='list'>{t('types.list')}</SelectItem>
@@ -565,7 +568,7 @@ export function VariableEditor({
               </Button>
             </PopoverTrigger>
             <PopoverContent
-              className='z-[10001] w-80 space-y-2 p-3 text-xs'
+              className='z-[calc(var(--z-floating)+1)] w-80 space-y-2 p-3 text-xs'
               align='start'
             >
               <p className='font-medium text-foreground'>

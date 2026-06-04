@@ -274,7 +274,7 @@ describe('lifecycle use cases (dashboard realtime)', () => {
     assert.deepEqual(result.invalidate, ['devices', 'fleet-stats']);
   });
 
-    it('UC-10: stale replay in snapshot does not double-shift fleet counts', () => {
+  it('UC-10: stale replay in snapshot does not double-shift fleet counts', () => {
     const result = applyLifecycleMessageToCache(
       {
         devices: [device('dev-1', 'online')],

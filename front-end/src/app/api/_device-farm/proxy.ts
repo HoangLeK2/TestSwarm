@@ -31,16 +31,27 @@ export async function proxyDeviceFarm(req: NextRequest, upstreamPath: string) {
       ? undefined
       : await req.text();
 
-  const upstream = await axios.request({
+  const upstream = await axios.request<ArrayBuffer>({
     url: upstreamUrl,
     method: req.method,
     headers: Object.fromEntries(headers),
     data: body,
+    // Pass through raw bytes; axios default JSON parse + NextResponse(object)
+    // coerces to the literal string "[object Object]".
+    responseType: 'arraybuffer',
     // Always pass through status codes, don't throw on 4xx/5xx
     validateStatus: () => true
   });
 
-  const resHeaders = new Headers(upstream.headers as any);
+  const resHeaders = new Headers();
+  for (const [key, value] of Object.entries(upstream.headers)) {
+    if (value === undefined || value === null) continue;
+    if (Array.isArray(value)) {
+      for (const v of value) resHeaders.append(key, v);
+    } else {
+      resHeaders.set(key, String(value));
+    }
+  }
   // Next will manage compression itself
   resHeaders.delete('content-encoding');
 

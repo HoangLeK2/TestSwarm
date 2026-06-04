@@ -54,13 +54,23 @@ async def get_device(db: AsyncSession, device_id: str) -> Optional[Device]:
     return result.scalar_one_or_none()
 
 
+async def get_devices_by_ids(
+    db: AsyncSession, device_ids: list[str]
+) -> dict[str, Device]:
+    """Batch load devices by primary key — O(1) round-trip."""
+    if not device_ids:
+        return {}
+    result = await db.execute(select(Device).where(Device.id.in_(device_ids)))
+    return {row.id: row for row in result.scalars().all()}
+
+
 async def get_or_create_device(
     db: AsyncSession, serial: str, user_id: Optional[str] = None, org_id: Optional[str] = None
 ) -> Device:
     """Get existing device by serial, or create a new one (auto-register)."""
     device = await get_device_by_serial(db, serial)
     if device is None:
-        device = Device(serial=serial, user_id=user_id, org_id=org_id)  # type: ignore[arg-type]
+        device = Device(serial=serial, device_serial=serial, user_id=user_id, org_id=org_id)  # type: ignore[arg-type]
         db.add(device)
         await db.flush()
         await ensure_device_state(db, device.id)
@@ -74,7 +84,7 @@ async def create_device(
     user_id: Optional[str] = None,
     org_id: Optional[str] = None,
 ) -> Device:
-    device = Device(serial=serial, name=name, user_id=user_id, org_id=org_id)  # type: ignore[arg-type]
+    device = Device(serial=serial, device_serial=serial, name=name, user_id=user_id, org_id=org_id)  # type: ignore[arg-type]
     db.add(device)
     await db.flush()
     await ensure_device_state(db, device.id)
@@ -89,7 +99,7 @@ async def create_pending_device(
 ) -> Device:
     """Tạo bản ghi thiết bị chưa kết nối (đăng ký). Serial = pending-{uuid}."""
     serial = f"{PENDING_SERIAL_PREFIX}{uuid.uuid4().hex}"
-    device = Device(serial=serial, name=name or "Thiết bị mới", user_id=user_id, org_id=org_id)  # type: ignore[arg-type]
+    device = Device(serial=serial, device_serial=serial, name=name or "Thiết bị mới", user_id=user_id, org_id=org_id)  # type: ignore[arg-type]
     db.add(device)
     await db.flush()
     await ensure_device_state(db, device.id)
@@ -276,7 +286,23 @@ async def list_devices(
     q = select(Device).order_by(Device.created_at)
     # Prefer org scoping (multi-user org). `user_id` kept for legacy call sites.
     if org_id:
-        q = q.where(Device.org_id == org_id)
+        from db.crud.organization import list_organization_members
+
+        member_rows = await list_organization_members(db, org_id)
+        member_ids = [
+            str(member.user_id)
+            for member, _ in member_rows
+            if getattr(member, "user_id", None)
+        ]
+        if member_ids:
+            q = q.where(
+                or_(
+                    Device.org_id == org_id,
+                    (Device.org_id.is_(None)) & (Device.user_id.in_(member_ids)),
+                )
+            )
+        else:
+            q = q.where(Device.org_id == org_id)
     elif user_id:
         q = q.where(Device.user_id == user_id)
     result = await db.execute(q)

@@ -464,6 +464,8 @@ def _extract_post(
 
     comment_preview = " ".join(comment_preview_parts).strip() or None
     body = " ".join(body_parts).strip()
+    if not body and image_desc:
+        body = image_desc.strip()
     if body and "chia sẻ với: nhóm công khai" in body.lower() and len(body) < 60:
         body = ""
     permalinks = list(permalink_candidates or [])

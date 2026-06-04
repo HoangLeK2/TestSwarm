@@ -38,6 +38,9 @@ relay:
   enabled: true
   port: 50051
   api_key: ""   # set via RELAY_API_KEY env var
+  tls_cert_file: ""  # set via RELAY_TLS_CERT_FILE for gRPC TLS
+  tls_key_file: ""   # set via RELAY_TLS_KEY_FILE for gRPC TLS
+  allow_insecure_grpc: true
 
 # ─── Redis (shared state for HA) ──────────────────────────────────────────────
 redis:

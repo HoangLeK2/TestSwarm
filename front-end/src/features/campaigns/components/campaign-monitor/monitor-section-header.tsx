@@ -3,6 +3,8 @@
 import { CircleHelp } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Badge } from '@/components/ui/badge';
+import { cn } from '@/lib/utils';
+import { Z_CAMPAIGN_MONITOR_FLOATING } from '@/lib/z-index';
 import {
   Tooltip,
   TooltipContent,
@@ -15,6 +17,7 @@ interface Props {
   hint: string;
   count: number;
   countVariant?: 'default' | 'secondary' | 'destructive';
+  actions?: React.ReactNode;
 }
 
 export function MonitorSectionHeader({
@@ -22,12 +25,13 @@ export function MonitorSectionHeader({
   title,
   hint,
   count,
-  countVariant = 'secondary'
+  countVariant = 'secondary',
+  actions
 }: Props) {
   const t = useTranslations('campaignsFeature.list');
 
   return (
-    <div className='flex items-center gap-2.5'>
+    <div className='flex flex-wrap items-center gap-2.5'>
       <span className='text-muted-foreground'>{icon}</span>
       <span className='text-base font-semibold'>{title}</span>
       <Tooltip>
@@ -40,13 +44,23 @@ export function MonitorSectionHeader({
             <CircleHelp size={18} />
           </button>
         </TooltipTrigger>
-        <TooltipContent side='top' className='max-w-sm text-sm leading-snug'>
+        <TooltipContent
+          side='top'
+          className='max-w-sm text-sm leading-snug'
+          style={{ zIndex: Z_CAMPAIGN_MONITOR_FLOATING }}
+        >
           {hint}
         </TooltipContent>
       </Tooltip>
+      {actions ? (
+        <div className='ml-auto flex items-center gap-2'>{actions}</div>
+      ) : null}
       <Badge
         variant={countVariant}
-        className='ml-auto min-h-7 min-w-7 justify-center px-2.5 text-sm tabular-nums'
+        className={cn(
+          'min-h-7 min-w-7 justify-center px-2.5 text-sm tabular-nums',
+          !actions && 'ml-auto'
+        )}
       >
         {count}
       </Badge>

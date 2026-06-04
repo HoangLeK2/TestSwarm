@@ -31,15 +31,26 @@ async def create_schedule(
     filter_state: str = "READY",
     filter_model: Optional[str] = None,
     max_devices: Optional[int] = None,
-    cron_expression: str,
+    cron_expression: Optional[str],
     timezone_name: str = "Asia/Ho_Chi_Minh",
+    schedule_kind: str = "cron",
+    run_at: Optional[datetime] = None,
+    skip_dates: Optional[list] = None,
+    skip_windows: Optional[list] = None,
+    misfire_policy: str = "skip",
     random_delay_min: int = 0,
     random_delay_max: int = 0,
     stagger_devices: bool = False,
     stagger_interval_seconds: int = 60,
     is_enabled: bool = True,
+    status: Optional[str] = None,
+    priority: str = "normal",
+    max_concurrent_per_device: int = 1,
+    account_rate_limit_per_hour: Optional[int] = None,
+    quota_policy: Optional[dict] = None,
     next_run_at: Optional[datetime] = None,
     user_id: Optional[str] = None,
+    org_id: Optional[str] = None,
 ) -> Schedule:
     schedule = Schedule(
         name=name,
@@ -54,17 +65,37 @@ async def create_schedule(
         max_devices=max_devices,
         cron_expression=cron_expression,
         timezone=timezone_name,
+        schedule_kind=schedule_kind,
+        run_at=run_at,
+        skip_dates=skip_dates or [],
+        skip_windows=skip_windows or [],
+        misfire_policy=misfire_policy,
         random_delay_min=random_delay_min,
         random_delay_max=random_delay_max,
         stagger_devices=stagger_devices,
         stagger_interval_seconds=stagger_interval_seconds,
         is_enabled=is_enabled,
+        status=status or ("enabled" if is_enabled else "disabled"),
+        priority=priority,
+        max_concurrent_per_device=max_concurrent_per_device,
+        account_rate_limit_per_hour=account_rate_limit_per_hour,
+        quota_policy=quota_policy or {},
         next_run_at=next_run_at,
         user_id=user_id,
+        org_id=org_id,
     )
     db.add(schedule)
     await db.flush()
     return schedule
+
+
+async def lookup_schedule_org_id(db: AsyncSession, schedule_id: str) -> str | None:
+    """Resolve schedule org without tenant context (Temporal/background paths)."""
+    table = Schedule.__table__
+    result = await db.execute(
+        select(table.c.org_id).where(table.c.id == schedule_id).limit(1)
+    )
+    return result.scalar_one_or_none()
 
 
 async def get_schedule(
@@ -82,7 +113,7 @@ async def list_schedules(
     offset: int = 0,
     limit: int = 50,
 ) -> list[Schedule]:
-    q = select(Schedule).order_by(Schedule.created_at.desc())
+    q = select(Schedule).where(Schedule.status != "deleted").order_by(Schedule.created_at.desc())
     if user_id is not None:
         q = q.where(Schedule.user_id == user_id)
     q = q.offset(offset).limit(limit)
@@ -111,7 +142,12 @@ async def delete_schedule(db: AsyncSession, schedule_id: str) -> bool:
     schedule = await get_schedule(db, schedule_id)
     if schedule is None:
         return False
-    await db.delete(schedule)
+    now = _now()
+    schedule.is_enabled = False
+    schedule.status = "deleted"
+    schedule.next_run_at = None
+    schedule.deleted_at = now
+    schedule.updated_at = now
     await db.flush()
     return True
 
@@ -129,6 +165,7 @@ async def get_due_schedules(
     result = await db.execute(
         select(Schedule).where(
             Schedule.is_enabled.is_(True),
+            Schedule.status == "enabled",
             Schedule.next_run_at <= now,
             Schedule.next_run_at.is_not(None),
         )
@@ -160,6 +197,7 @@ async def claim_due_schedules(
         update(Schedule)
         .where(
             Schedule.is_enabled.is_(True),
+            Schedule.status == "enabled",
             Schedule.next_run_at <= now,
             Schedule.next_run_at.is_not(None),
         )
@@ -187,6 +225,9 @@ async def update_schedule_after_run(
     schedule.last_run_at = last_run_at
     schedule.next_run_at = next_run_at
     schedule.run_count = (schedule.run_count or 0) + 1
+    if schedule.schedule_kind == "one_shot":
+        schedule.is_enabled = False
+        schedule.status = "completed"
     schedule.updated_at = _now()
     await db.flush()
 
@@ -199,10 +240,31 @@ async def create_schedule_run(
     *,
     schedule_id: str,
     status: str = "pending",
+    trigger_source: str = "cron",
+    scheduled_at: Optional[datetime] = None,
+    deferred_until: Optional[datetime] = None,
+    was_catch_up: bool = False,
+    execution_id: Optional[str] = None,
+    error_code: Optional[str] = None,
+    org_id: Optional[str] = None,
 ) -> ScheduleRun:
+    if org_id is None:
+        try:
+            from tenancy.context import get_current_org_id
+
+            org_id = get_current_org_id()
+        except Exception:
+            org_id = None
     run = ScheduleRun(
         schedule_id=schedule_id,
         status=status,
+        trigger_source=trigger_source,
+        scheduled_at=scheduled_at,
+        deferred_until=deferred_until,
+        was_catch_up=was_catch_up,
+        execution_id=execution_id,
+        error_code=error_code,
+        org_id=org_id,
     )
     db.add(run)
     await db.flush()
@@ -223,14 +285,13 @@ async def list_schedule_runs(
     schedule_id: str,
     offset: int = 0,
     limit: int = 50,
+    status_filter: Optional[str] = None,
 ) -> list[ScheduleRun]:
-    result = await db.execute(
-        select(ScheduleRun)
-        .where(ScheduleRun.schedule_id == schedule_id)
-        .order_by(ScheduleRun.started_at.desc())
-        .offset(offset)
-        .limit(limit)
-    )
+    q = select(ScheduleRun).where(ScheduleRun.schedule_id == schedule_id)
+    if status_filter:
+        q = q.where(ScheduleRun.status == status_filter)
+    q = q.order_by(ScheduleRun.started_at.desc()).offset(offset).limit(limit)
+    result = await db.execute(q)
     return list(result.scalars().all())
 
 

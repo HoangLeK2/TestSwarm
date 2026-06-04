@@ -1,8 +1,8 @@
 import type { QueryClient } from '@tanstack/react-query';
 import type { DeviceOut, FleetStatsOut } from '../services/manage-api';
 import {
-  DEVICES_LIST_KEY,
-  FLEET_STATS_KEY
+  devicesListQueryKey,
+  fleetStatsQueryKey
 } from './device-query-keys';
 import {
   lifecycleMessageNeedsRefresh,
@@ -21,8 +21,20 @@ export type LifecycleMessageHandlerOptions = {
   ) => void;
 };
 
-function queryKeyFor(target: CacheInvalidationTarget) {
-  return target === 'devices' ? DEVICES_LIST_KEY : FLEET_STATS_KEY;
+function organizationIdFromMessage(msg: LifecycleWsMessage): string | null {
+  if (msg.type === 'lifecycle.event') {
+    return msg.event.organization_id?.trim() || null;
+  }
+  if (msg.type === 'lifecycle.snapshot' || msg.type === 'lifecycle.batch') {
+    return msg.organization_id?.trim() || null;
+  }
+  return null;
+}
+
+function queryKeyFor(target: CacheInvalidationTarget, orgId: string) {
+  return target === 'devices'
+    ? devicesListQueryKey(orgId)
+    : fleetStatsQueryKey(orgId);
 }
 
 /**
@@ -36,23 +48,31 @@ export function applyLifecycleMessage(
 ): void {
   if (!lifecycleMessageNeedsRefresh(msg)) return;
 
+  const orgId = organizationIdFromMessage(msg);
+  if (!orgId) return;
+
+  const devicesKey = devicesListQueryKey(orgId);
+  const fleetKey = fleetStatsQueryKey(orgId);
+  const devicesCache = queryClient.getQueryData<DeviceOut[]>(devicesKey);
+  const fleetStatsCache = queryClient.getQueryData<FleetStatsOut>(fleetKey);
+
   const result = applyLifecycleMessageToCache(
     {
-      devices: queryClient.getQueryData<DeviceOut[]>(DEVICES_LIST_KEY),
-      fleetStats: queryClient.getQueryData<FleetStatsOut>(FLEET_STATS_KEY)
+      devices: devicesCache,
+      fleetStats: fleetStatsCache
     },
     msg
   );
 
   if (result.cache.devices !== undefined) {
-    queryClient.setQueryData(DEVICES_LIST_KEY, result.cache.devices);
+    queryClient.setQueryData(devicesKey, result.cache.devices);
   }
   if (result.cache.fleetStats !== undefined) {
-    queryClient.setQueryData(FLEET_STATS_KEY, result.cache.fleetStats);
+    queryClient.setQueryData(fleetKey, result.cache.fleetStats);
   }
 
   for (const target of result.invalidate) {
-    void queryClient.invalidateQueries({ queryKey: queryKeyFor(target) });
+    void queryClient.invalidateQueries({ queryKey: queryKeyFor(target, orgId) });
   }
 
   for (const event of result.notifyEvents) {

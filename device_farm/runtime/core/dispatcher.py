@@ -236,7 +236,11 @@ class Dispatcher(threading.Thread):
 
             # NOTE: Campaign status is currently updated explicitly via the API.
             # Dispatcher only manages per-device task lifecycle.
-            if self.config.database.enabled and task.status in (TaskStatus.DONE, TaskStatus.FAILED):
+            database_config = getattr(self.config, "database", None)
+            if getattr(database_config, "enabled", False) and task.status in (
+                TaskStatus.DONE,
+                TaskStatus.FAILED,
+            ):
                 try:
                     from services.activity_logger import log_task_activity_sync
 

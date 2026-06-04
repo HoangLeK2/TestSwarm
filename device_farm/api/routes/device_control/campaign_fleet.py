@@ -41,7 +41,6 @@ _WORKFLOW_CAMPAIGN_RE = re.compile(r"^campaign:([^:]+):")
 
 
 async def _workflow_ui_status(client, workflow_id: str, temporal_status: str) -> str:
-   
     if temporal_status != "RUNNING":
         return temporal_status
     try:
@@ -73,20 +72,31 @@ def build_campaign_fleet_router(
             return None
         return campaign
 
-    async def _assert_campaign_owned(db: DB, campaign_id: str, user: CurrentUser) -> None:
-        if not await _get_campaign_or_404(db, campaign_id, user):
+    async def _assert_campaign_owned(db: DB, campaign_id: str, user_id: str) -> None:
+        campaign = await repo.get_campaign(db, campaign_id)
+        if campaign is None or str(getattr(campaign, "user_id", "")) != str(user_id):
             from fastapi import HTTPException
 
             raise HTTPException(status_code=404, detail="Campaign not found")
 
     async def _assert_workflow_owned(db: DB, workflow_id: str, user: CurrentUser) -> None:
         from fastapi import HTTPException
+        from api.execution_access import get_execution_for_user
+
+        if workflow_id.startswith("exec_"):
+            execution_id = workflow_id[5:]
+            if not execution_id:
+                raise HTTPException(status_code=404, detail="Workflow not found")
+            await get_execution_for_user(db, execution_id, user)
+            return
 
         match = _WORKFLOW_CAMPAIGN_RE.match(workflow_id or "")
         if not match:
             raise HTTPException(status_code=404, detail="Workflow not found")
         campaign_id = match.group(1)
-        await _assert_campaign_owned(db, campaign_id, user)
+        campaign = await repo.get_campaign(db, campaign_id)
+        if campaign is None or str(getattr(campaign, "user_id", "")) != str(user.id):
+            raise HTTPException(status_code=404, detail="Workflow not found")
 
     # ── Campaign → Temporal workflow ─────────────────────────────────
 
@@ -100,7 +110,7 @@ def build_campaign_fleet_router(
         user: CurrentUser,
         body: CampaignRunBody = Body(default_factory=CampaignRunBody),
     ):
-        await _assert_campaign_owned(db, campaign_id, user)
+        await _assert_campaign_owned(db, campaign_id, user.id)
         if not config.database.enabled:
             return JSONResponse(
                 {"error": "Database is disabled; campaigns are not available"},
@@ -178,21 +188,41 @@ def build_campaign_fleet_router(
     )
     async def api_execution_runtime():
         """How campaign runs are executed — for UI/docs."""
-        return {
-            "temporal": {
-                "enabled": config.temporal.enabled,
-                "server_url": config.temporal.server_url,
-                "namespace": config.temporal.namespace,
-                "task_queue": config.temporal.task_queue,
-            },
-            "campaign_run": {
-                "engine": "temporal",
-                "note": (
-                    "All campaign executions use Temporal workflows. "
-                    "POST /api/campaigns/{id}/run returns 503 if Temporal is disabled or unreachable."
+        from api.schemas.execution_runtime import (
+            CampaignRunRuntimeInfo,
+            ExecutionRuntimeOut,
+            TemporalRuntimeInfo,
+        )
+
+        epic04_note = (
+            "Epic 04 entity dispatch uses workflow_id=exec_{execution_id} per device execution. "
+            "When Temporal is disabled or unreachable, dispatch_source=fallback runs in-process."
+        )
+        temporal = TemporalRuntimeInfo(
+            enabled=config.temporal.enabled,
+            server_url=config.temporal.server_url,
+            namespace=config.temporal.namespace,
+            task_queue=config.temporal.task_queue,
+        )
+        if not config.temporal.enabled:
+            return ExecutionRuntimeOut(
+                temporal=temporal,
+                campaign_run=CampaignRunRuntimeInfo(
+                    engine="fallback",
+                    dispatch_source="fallback",
+                    fallback_mode_active=True,
+                    note=epic04_note,
                 ),
-            },
-        }
+            )
+        return ExecutionRuntimeOut(
+            temporal=temporal,
+            campaign_run=CampaignRunRuntimeInfo(
+                engine="temporal",
+                dispatch_source="temporal",
+                fallback_mode_active=False,
+                note=epic04_note,
+            ),
+        )
 
     # ── Workflow monitoring & control ────────────────────────────────
 
@@ -207,7 +237,7 @@ def build_campaign_fleet_router(
         Child workflows (ScenarioStepsWorkflow) are excluded — they are an
         implementation detail and would flood the list.
         """
-        await _assert_campaign_owned(db, campaign_id, user)
+        await _assert_campaign_owned(db, campaign_id, user.id)
         if not config.temporal.enabled:
             return {
                 "campaign_id": campaign_id,
@@ -252,6 +282,25 @@ def build_campaign_fleet_router(
                 if prev is None or _rank(row) >= _rank(prev):
                     latest_by_workflow_id[wf_id] = row
 
+            from db.crud.execution import list_running_executions_for_campaign
+
+            for ex in await list_running_executions_for_campaign(db, campaign_id):
+                wf_id = (ex.meta or {}).get("workflow_id")
+                if not wf_id or wf_id in latest_by_workflow_id:
+                    continue
+                try:
+                    handle = client.get_workflow_handle(str(wf_id))
+                    desc = await handle.describe()
+                    temporal_st = desc.status.name if desc.status else "UNKNOWN"
+                    latest_by_workflow_id[str(wf_id)] = (
+                        str(wf_id),
+                        desc.run_id,
+                        temporal_st,
+                        desc.start_time,
+                    )
+                except Exception:
+                    log.debug("epic04 workflow describe failed: %s", wf_id, exc_info=True)
+
             async def _one(row: tuple[str, str, str, datetime | None]) -> dict:
                 wf_id, run_id, temporal_st, start_time = row
                 ui_st = await _workflow_ui_status(client, wf_id, temporal_st)
@@ -280,32 +329,104 @@ def build_campaign_fleet_router(
     )
     async def api_device_running_workflows(serial: str, db: DB, user: CurrentUser):
         """List RUNNING/PAUSED top-level scenario workflows for a specific device serial."""
+        from fastapi import HTTPException
+
+        from api.execution_access import get_execution_for_user
+        from db.crud.execution import list_running_executions_for_device
+        from services.campaign.execution_runtime import workflow_id_for_execution
+
         device = await repo.get_device_by_serial(db, serial)
         if not await device_visible_to_user(db, user, device):
             from fastapi import HTTPException
 
             raise HTTPException(status_code=404, detail="Device not found")
+
+        workflows_by_id: dict[str, dict] = {}
+
+        def _append_workflow(
+            wf_id: str,
+            *,
+            run_id: str | None = None,
+            status: str = "RUNNING",
+            start_time: str | None = None,
+        ) -> None:
+            prev = workflows_by_id.get(wf_id)
+            if prev is not None and prev.get("status") == "RUNNING":
+                return
+            workflows_by_id[wf_id] = {
+                "workflow_id": wf_id,
+                "run_id": run_id or prev.get("run_id") if prev else None,
+                "status": status,
+                "start_time": start_time or (prev.get("start_time") if prev else None),
+            }
+
+        # Epic 04: workflow_id=exec_{execution_id} (no :device: segment in Temporal ID).
+        for ex in await list_running_executions_for_device(db, device.id):
+            try:
+                await get_execution_for_user(db, ex.id, user)
+            except HTTPException:
+                continue
+            meta = ex.meta or {}
+            wf_id = str(meta.get("workflow_id") or workflow_id_for_execution(ex.id))
+            ui_status = "PAUSED" if ex.status == "paused" else "RUNNING"
+            _append_workflow(
+                wf_id,
+                status=ui_status,
+                start_time=ex.started_at.isoformat() if ex.started_at else None,
+            )
+
         if not config.temporal.enabled:
-            return {"serial": serial, "workflows": [], "temporal_available": False}
+            return {
+                "serial": serial,
+                "workflows": list(workflows_by_id.values()),
+                "temporal_available": False,
+            }
         try:
             client = await get_temporal_client(config.temporal)
-            # Temporal query language has no CONTAINS operator — fetch all
-            # running workflows and filter by serial client-side.
+            # Legacy campaign dispatch IDs: campaign:{id}:device:{serial}:scenario:…
             safe_serial = serial.replace('"', "").replace("\\", "")
             needle = f":device:{safe_serial}:"
-            workflows = []
             async for wf in client.list_workflows('ExecutionStatus = "Running"'):
                 if needle not in wf.id:
                     continue
                 if not _TOP_LEVEL_WF_RE.match(wf.id):
                     continue
-                workflows.append({
-                    "workflow_id": wf.id,
-                    "run_id": wf.run_id,
-                    "status": wf.status.name if wf.status else "UNKNOWN",
-                    "start_time": wf.start_time.isoformat() if wf.start_time else None,
-                })
-            return {"serial": serial, "workflows": workflows, "temporal_available": True}
+                _append_workflow(
+                    wf.id,
+                    run_id=wf.run_id,
+                    status=wf.status.name if wf.status else "UNKNOWN",
+                    start_time=wf.start_time.isoformat() if wf.start_time else None,
+                )
+
+            # Enrich exec_* rows with live Temporal status when possible.
+            for wf_id in list(workflows_by_id):
+                if not wf_id.startswith("exec_"):
+                    continue
+                try:
+                    handle = client.get_workflow_handle(wf_id)
+                    desc = await handle.describe()
+                    temporal_st = desc.status.name if desc.status else "UNKNOWN"
+                    if temporal_st not in ("RUNNING", "PAUSED"):
+                        workflows_by_id.pop(wf_id, None)
+                        continue
+                    ui_st = await _workflow_ui_status(client, wf_id, temporal_st)
+                    row = workflows_by_id[wf_id]
+                    row["run_id"] = desc.run_id
+                    row["status"] = ui_st
+                    if desc.start_time:
+                        row["start_time"] = desc.start_time.isoformat()
+                except Exception:
+                    log.debug(
+                        "device running workflow describe failed id=%s",
+                        wf_id,
+                        exc_info=True,
+                    )
+
+            return {
+                "serial": serial,
+                "workflows": list(workflows_by_id.values()),
+                "temporal_available": True,
+            }
         except Exception as exc:
             return JSONResponse(
                 {"error": f"Failed to list device workflows: {exc}"}, status_code=500,
@@ -441,9 +562,8 @@ def build_campaign_fleet_router(
         """Pause a running scenario workflow at the next step boundary.
 
         SECURITY NOTE: workflow_id is caller-supplied and not validated for
-        ownership. Any authenticated caller can pause any workflow whose ID they
-        know. Add campaign-ownership middleware before exposing this to untrusted
-        users.
+        ownership. Caller-supplied workflow IDs must resolve to a campaign owned
+        by the current user before any Temporal handle is signalled.
         """
         await _assert_workflow_owned(db, workflow_id, user)
         try:

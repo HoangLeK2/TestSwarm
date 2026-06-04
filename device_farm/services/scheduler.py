@@ -25,7 +25,7 @@ import asyncio
 import logging
 import random
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from services.idempotency import (
@@ -34,6 +34,7 @@ from services.idempotency import (
     mark_intent_accepted,
     mark_intent_failed,
 )
+from services.schedule_events import emit_schedule_run_terminal
 
 log = logging.getLogger(__name__)
 
@@ -95,6 +96,87 @@ def validate_cron(cron_expression: str) -> bool:
         return False
 
 
+def _normalize_run_at(run_at: datetime) -> datetime:
+    if run_at.tzinfo is None:
+        return run_at.replace(tzinfo=timezone.utc)
+    return run_at.astimezone(timezone.utc)
+
+
+def _schedule_kind(cron_expression: Optional[str], run_at: Optional[datetime]) -> str:
+    if run_at is not None:
+        return "one_shot"
+    if cron_expression:
+        return "cron"
+    raise ValueError("CRON_OR_RUN_AT_REQUIRED")
+
+
+async def finalize_schedule_run_record(
+    db,
+    *,
+    run_id: str,
+    schedule_id: str,
+    status: str,
+    finished_at: datetime,
+    dispatch_result: dict[str, Any],
+    cron_expression: Optional[str],
+    timezone_name: str,
+    organization_id: Optional[str] = None,
+    execution_id: Optional[str] = None,
+    error_message: Optional[str] = None,
+    error_code: Optional[str] = None,
+) -> None:
+    """Persist terminal run state, update schedule cursor, and emit domain event."""
+    from db.crud.schedule import update_schedule_run, update_schedule_after_run
+
+    next_run = (
+        compute_next_run(cron_expression, timezone_name, base=finished_at)
+        if cron_expression
+        else None
+    )
+    await update_schedule_run(
+        db,
+        run_id,
+        status=status,
+        finished_at=finished_at,
+        devices_dispatched=dispatch_result.get("devices_dispatched", 0),
+        devices_succeeded=dispatch_result.get("devices_succeeded", 0),
+        devices_failed=dispatch_result.get("devices_failed", 0),
+        task_ids=dispatch_result.get("task_ids", []),
+        workflow_ids=dispatch_result.get("workflow_ids", []),
+        execution_id=execution_id or dispatch_result.get("execution_id"),
+        error_code=error_code,
+        error_message=error_message,
+    )
+    await update_schedule_after_run(
+        db,
+        schedule_id,
+        last_run_at=finished_at,
+        next_run_at=next_run,
+    )
+    await emit_schedule_run_terminal(
+        db,
+        organization_id=organization_id,
+        schedule_id=schedule_id,
+        run_id=run_id,
+        status=status,
+        execution_id=execution_id or dispatch_result.get("execution_id"),
+        occurred_at=finished_at,
+        details={"error_code": error_code, "error_message": error_message},
+    )
+    try:
+        from web.metrics import (
+            schedule_dispatch_failed_total,
+            schedule_dispatch_success_total,
+        )
+
+        if status == "completed":
+            schedule_dispatch_success_total.inc()
+        elif status == "failed":
+            schedule_dispatch_failed_total.inc()
+    except Exception:
+        pass
+
+
 # ── SchedulerService ──────────────────────────────────────────────────────────
 
 
@@ -134,19 +216,45 @@ class SchedulerService:
         filter_state: str = "READY",
         filter_model: Optional[str] = None,
         max_devices: Optional[int] = None,
-        cron_expression: str,
+        cron_expression: Optional[str],
         timezone_name: str = "Asia/Ho_Chi_Minh",
+        run_at: Optional[datetime] = None,
+        skip_dates: Optional[list] = None,
+        skip_windows: Optional[list] = None,
+        misfire_policy: str = "skip",
         random_delay_min: int = 0,
         random_delay_max: int = 0,
         stagger_devices: bool = False,
         stagger_interval_seconds: int = 60,
         is_enabled: bool = True,
+        priority: str = "normal",
+        max_concurrent_per_device: int = 1,
+        account_rate_limit_per_hour: Optional[int] = None,
+        quota_policy: Optional[dict] = None,
         user_id: Optional[str] = None,
+        org_id: Optional[str] = None,
+        now: Optional[datetime] = None,
     ):
         """Create schedule in DB + register Temporal Schedule if Temporal enabled."""
         from db.crud.schedule import create_schedule
 
-        next_run_at = compute_next_run(cron_expression, timezone_name) if is_enabled else None
+        now = now or datetime.now(timezone.utc)
+        kind = _schedule_kind(cron_expression, run_at)
+        normalized_run_at = _normalize_run_at(run_at) if run_at else None
+        if cron_expression and run_at:
+            raise ValueError("CRON_AND_RUN_AT_MUTUALLY_EXCLUSIVE")
+        if normalized_run_at and normalized_run_at <= now:
+            raise ValueError("RUN_AT_IN_PAST")
+        if cron_expression and not validate_cron(cron_expression):
+            raise ValueError("INVALID_CRON_EXPRESSION")
+
+        next_run_at = None
+        if is_enabled:
+            next_run_at = (
+                normalized_run_at
+                if kind == "one_shot"
+                else compute_next_run(cron_expression or "", timezone_name, base=now)
+            )
 
         schedule = await create_schedule(
             db,
@@ -162,17 +270,28 @@ class SchedulerService:
             max_devices=max_devices,
             cron_expression=cron_expression,
             timezone_name=timezone_name,
+            schedule_kind=kind,
+            run_at=normalized_run_at,
+            skip_dates=skip_dates,
+            skip_windows=skip_windows,
+            misfire_policy=misfire_policy,
             random_delay_min=random_delay_min,
             random_delay_max=random_delay_max,
             stagger_devices=stagger_devices,
             stagger_interval_seconds=stagger_interval_seconds,
             is_enabled=is_enabled,
+            status="enabled" if is_enabled else "disabled",
+            priority=priority,
+            max_concurrent_per_device=max_concurrent_per_device,
+            account_rate_limit_per_hour=account_rate_limit_per_hour,
+            quota_policy=quota_policy,
             next_run_at=next_run_at,
             user_id=user_id,
+            org_id=org_id,
         )
         await db.commit()
 
-        if self._client is not None and is_enabled:
+        if self._client is not None and is_enabled and kind == "cron":
             await self._create_temporal_schedule(schedule.id, cron_expression, timezone_name)
         else:
             log.debug(
@@ -187,9 +306,24 @@ class SchedulerService:
 
         cron = patch.get("cron_expression")
         tz_name = patch.get("timezone_name", "Asia/Ho_Chi_Minh")
+        run_at = patch.get("run_at")
+
+        if cron and run_at:
+            raise ValueError("CRON_AND_RUN_AT_MUTUALLY_EXCLUSIVE")
+        if cron and not validate_cron(cron):
+            raise ValueError("INVALID_CRON_EXPRESSION")
 
         if cron:
             patch.setdefault("next_run_at", compute_next_run(cron, tz_name))
+            patch.setdefault("schedule_kind", "cron")
+        if run_at:
+            normalized_run_at = _normalize_run_at(run_at)
+            if normalized_run_at <= datetime.now(timezone.utc):
+                raise ValueError("RUN_AT_IN_PAST")
+            patch["run_at"] = normalized_run_at
+            patch["schedule_kind"] = "one_shot"
+            patch["cron_expression"] = None
+            patch["next_run_at"] = normalized_run_at
 
         schedule = await update_schedule(db, schedule_id, **patch)
         if schedule is None:
@@ -227,11 +361,17 @@ class SchedulerService:
 
         next_run = (
             compute_next_run(schedule.cron_expression, schedule.timezone)
-            if enabled
+            if enabled and schedule.schedule_kind == "cron"
+            else schedule.run_at
+            if enabled and schedule.schedule_kind == "one_shot"
             else None
         )
         schedule = await update_schedule(
-            db, schedule_id, is_enabled=enabled, next_run_at=next_run
+            db,
+            schedule_id,
+            is_enabled=enabled,
+            status="enabled" if enabled else "disabled",
+            next_run_at=next_run,
         )
         await db.commit()
 
@@ -251,6 +391,8 @@ class SchedulerService:
         schedule = await get_schedule(db, schedule_id)
         if schedule is None:
             raise ValueError(f"Schedule {schedule_id!r} not found")
+        if not schedule.is_enabled or getattr(schedule, "status", "enabled") != "enabled":
+            raise ValueError("SCHEDULE_DISABLED: enable the schedule before run-now")
 
         if self._client is not None:
             # Temporal: trigger the existing schedule handle
@@ -267,9 +409,148 @@ class SchedulerService:
             return await self._trigger_fallback(db, schedule)
 
         # Create a pending run record for UI tracking
-        run = await create_schedule_run(db, schedule_id=schedule_id, status="pending")
+        run = await create_schedule_run(
+            db,
+            schedule_id=schedule_id,
+            status="pending",
+            trigger_source="run_now",
+            scheduled_at=datetime.now(timezone.utc),
+            org_id=getattr(schedule, "org_id", None),
+        )
         await db.commit()
         return run.id
+
+    async def bulk_toggle(
+        self,
+        db,
+        schedule_ids: list[str],
+        *,
+        enabled: bool,
+        user_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Pause/resume schedules with per-item results."""
+        from db.crud.schedule import get_schedule
+
+        items: list[dict[str, Any]] = []
+        success = failed = skipped = 0
+        for schedule_id in schedule_ids:
+            schedule = await get_schedule(db, schedule_id)
+            if schedule is None or getattr(schedule, "status", "") == "deleted":
+                skipped += 1
+                items.append({
+                    "schedule_id": schedule_id,
+                    "status": "skipped",
+                    "error_code": "NOT_FOUND",
+                })
+                continue
+            try:
+                await self.toggle(db, schedule_id, enabled)
+                success += 1
+                items.append({
+                    "schedule_id": schedule_id,
+                    "status": "updated",
+                    "enabled": enabled,
+                })
+            except Exception as exc:
+                failed += 1
+                items.append({
+                    "schedule_id": schedule_id,
+                    "status": "failed",
+                    "error_code": exc.__class__.__name__.upper(),
+                })
+        return {
+            "success_count": success,
+            "fail_count": failed,
+            "skipped_count": skipped,
+            "items": items,
+        }
+
+    async def preview_conflicts(self, db, payload: dict[str, Any]) -> dict[str, Any]:
+        """Read-only conflict preview for schedule drafts."""
+        from db.crud.schedule import list_schedules
+
+        cron_expression = payload.get("cron_expression")
+        timezone_name = payload.get("timezone") or "Asia/Ho_Chi_Minh"
+        run_at = payload.get("run_at")
+        base = datetime.now(timezone.utc)
+        next_runs: list[datetime] = []
+        if run_at:
+            next_runs = [_normalize_run_at(run_at)]
+        elif cron_expression:
+            cursor = base
+            for _ in range(5):
+                nxt = compute_next_run(cron_expression, timezone_name, cursor)
+                if not nxt:
+                    break
+                next_runs.append(nxt)
+                cursor = nxt
+
+        conflicts: list[dict[str, str]] = []
+        schedules = await list_schedules(db, offset=0, limit=500)
+        for existing in schedules:
+            if not existing.is_enabled or getattr(existing, "status", "enabled") != "enabled":
+                continue
+            if payload.get("target_id") and existing.target_id == payload.get("target_id"):
+                existing_next = existing.next_run_at
+                if existing_next and any(abs((existing_next - nr).total_seconds()) < 300 for nr in next_runs):
+                    conflicts.append({
+                        "conflict_id": f"conflict-{existing.id}",
+                        "type": "same_target_time",
+                        "severity": "warning",
+                        "impacted_target": str(payload.get("target_id")),
+                        "suggested_action": "stagger schedule by at least 5 minutes",
+                    })
+            if payload.get("device_group_id") and existing.device_group_id == payload.get("device_group_id"):
+                conflicts.append({
+                    "conflict_id": f"device-group-{existing.id}",
+                    "type": "device_group_overlap",
+                    "severity": "info",
+                    "impacted_target": str(payload.get("device_group_id")),
+                    "suggested_action": "review device capacity before enabling",
+                })
+        return {"conflicts": conflicts, "next_runs": next_runs}
+
+    async def status_snapshot(self, db=None) -> dict[str, Any]:
+        """Return schedule health/observability data for dashboard and API."""
+        temporal_available = self._client is not None
+        fallback_active = not temporal_available
+        queue_depth = 0
+        if self._queue is not None:
+            if hasattr(self._queue, "qsize"):
+                try:
+                    queue_depth = int(self._queue.qsize())
+                except Exception:
+                    queue_depth = 0
+            elif hasattr(self._queue, "_q"):
+                try:
+                    queue_depth = len(self._queue._q)
+                except Exception:
+                    queue_depth = 0
+        try:
+            from web.metrics import (
+                schedule_fallback_active,
+                schedule_queue_depth,
+                schedule_tick_lag_seconds,
+            )
+
+            schedule_fallback_active.set(1 if fallback_active else 0)
+            schedule_queue_depth.set(queue_depth)
+            schedule_tick_lag_seconds.set(0)
+        except Exception:
+            pass
+        return {
+            "temporal_available": temporal_available,
+            "fallback_active": fallback_active,
+            "banner": "Fallback mode active" if fallback_active else None,
+            "metrics": {
+                "queue_depth": queue_depth,
+                "tick_lag_seconds": 0,
+                "missed_ticks": 0,
+                "dispatch_success": 0,
+                "dispatch_failed": 0,
+                "starvation_count": 0,
+            },
+        }
 
     async def _trigger_fallback(self, db, schedule) -> str:
         """Direct dispatch when Temporal is not available."""
@@ -303,7 +584,14 @@ class SchedulerService:
                     "[scheduler] idempotency claim failed for trigger, proceeding: %s", exc
                 )
 
-            run = await create_schedule_run(db, schedule_id=schedule.id, status="running")
+            run = await create_schedule_run(
+                db,
+                schedule_id=schedule.id,
+                status="running",
+                trigger_source="run_now",
+                scheduled_at=datetime.now(timezone.utc),
+                org_id=getattr(schedule, "org_id", None),
+            )
             await db.commit()
             try:
                 run_id = await self._trigger_fallback_body(db, schedule, run)
@@ -330,8 +618,6 @@ class SchedulerService:
         intent as failed. The schedule_run row is updated in both paths so the
         UI still reflects reality even when we re-raise.
         """
-        from db.crud.schedule import update_schedule_run
-        from db.crud.schedule import update_schedule_after_run
         from db.database import AsyncSessionLocal
 
         cfg = {
@@ -357,37 +643,34 @@ class SchedulerService:
             log.error("[scheduler] fallback dispatch error: %s", exc)
             failed_at = datetime.now(timezone.utc)
             async with AsyncSessionLocal() as udb:
-                await update_schedule_run(
-                    udb, run.id,
+                await finalize_schedule_run_record(
+                    udb,
+                    run_id=run.id,
+                    schedule_id=schedule.id,
                     status="failed",
                     finished_at=failed_at,
+                    dispatch_result={"devices_dispatched": 0, "task_ids": []},
+                    cron_expression=schedule.cron_expression,
+                    timezone_name=schedule.timezone,
+                    organization_id=getattr(schedule, "org_id", None),
+                    error_code="DISPATCH_FAILED",
                     error_message=str(exc),
-                )
-                await update_schedule_after_run(
-                    udb, schedule.id,
-                    last_run_at=failed_at,
-                    next_run_at=compute_next_run(
-                        schedule.cron_expression, schedule.timezone, base=failed_at
-                    ),
                 )
                 await udb.commit()
             raise
 
         finished_at = datetime.now(timezone.utc)
         async with AsyncSessionLocal() as udb:
-            await update_schedule_run(
-                udb, run.id,
+            await finalize_schedule_run_record(
+                udb,
+                run_id=run.id,
+                schedule_id=schedule.id,
                 status="completed",
                 finished_at=finished_at,
-                devices_dispatched=result.get("devices_dispatched", 0),
-                task_ids=result.get("task_ids", []),
-            )
-            await update_schedule_after_run(
-                udb, schedule.id,
-                last_run_at=finished_at,
-                next_run_at=compute_next_run(
-                    schedule.cron_expression, schedule.timezone, base=finished_at
-                ),
+                dispatch_result=result,
+                cron_expression=schedule.cron_expression,
+                timezone_name=schedule.timezone,
+                organization_id=getattr(schedule, "org_id", None),
             )
             await udb.commit()
         return run.id
@@ -578,8 +861,6 @@ class SchedulerEngine:
         from db.database import AsyncSessionLocal
         from db.crud.schedule import (
             create_schedule_run,
-            update_schedule_run,
-            update_schedule_after_run,
         )
 
         now = datetime.now(timezone.utc)
@@ -611,7 +892,14 @@ class SchedulerEngine:
             log.warning("[scheduler] idempotency claim failed, proceeding: %s", exc)
 
         async with AsyncSessionLocal() as db:
-            run = await create_schedule_run(db, schedule_id=schedule.id, status="pending")
+            run = await create_schedule_run(
+                db,
+                schedule_id=schedule.id,
+                status="pending",
+                trigger_source="fallback",
+                scheduled_at=now,
+                org_id=getattr(schedule, "org_id", None),
+            )
             run_id = run.id
             await db.commit()
 
@@ -664,23 +952,21 @@ class SchedulerEngine:
                 except Exception as mk_exc:
                     log.warning("[scheduler-engine] mark_intent_failed failed: %s", mk_exc)
 
-        next_run = compute_next_run(schedule.cron_expression, schedule.timezone, now)
-
         async with AsyncSessionLocal() as db:
             if run_id:
-                await update_schedule_run(
-                    db, run_id,
+                await finalize_schedule_run_record(
+                    db,
+                    run_id=run_id,
+                    schedule_id=schedule.id,
                     status=status,
                     finished_at=datetime.now(timezone.utc),
-                    devices_dispatched=result.get("devices_dispatched", 0),
-                    task_ids=result.get("task_ids", []),
+                    dispatch_result=result,
+                    cron_expression=schedule.cron_expression,
+                    timezone_name=schedule.timezone,
+                    organization_id=getattr(schedule, "org_id", None),
+                    error_code="DISPATCH_FAILED" if error else None,
                     error_message=error,
                 )
-            await update_schedule_after_run(
-                db, schedule.id,
-                last_run_at=now,
-                next_run_at=next_run,
-            )
             await db.commit()
 
 

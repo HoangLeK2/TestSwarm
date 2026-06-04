@@ -46,6 +46,11 @@ class ContentItemOut(BaseModel):
     created_at: datetime | None = None
     content_hash: str | None = None
     parent_id: str | None = None
+    parent_item_id: str | None = None
+    parent_item_hash: str | None = None
+    parent_item_author: str | None = None
+    parent_item_body: str | None = None
+    parent_item_content_type: str | None = None
     item_level: int = 0
 
 
@@ -74,8 +79,9 @@ class SaveContentBody(BaseModel):
     data: dict[str, Any]
     collection: str = "default"
     platform: str | None = None
-    content_type: str = "post"
+    content_type: str = "fb_post"
     dedupe_field: str | None = None
+    dedup_action: str = "skip"
     tags: str = ""
     device_serial: str | None = None
     campaign_id: str | None = None

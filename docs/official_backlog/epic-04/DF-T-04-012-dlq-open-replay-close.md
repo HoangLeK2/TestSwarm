@@ -11,14 +11,14 @@
 | **Module** | DF-MOD-04 — Campaign, Scenario & Execution |
 | **Priority** | P2 |
 | **Story Points** | 5 |
-| **Status** | `Backlog` |
+| **Status** | `Done` |
 | **Labels** | `module:campaigns`, `layer:backend`, `layer:db`, `layer:contract`, `type:feature`, `persona:social-data-operator`, `risk:data-loss` |
 | **Truy vết — FR refs** | FR-04-15, FR-04-16, FR-04-19 |
 | **Truy vết — UC refs** | UC-04-10, UC-04-12 |
 | **Reporter** | (placeholder) |
 | **Assignee** | (placeholder) |
 | **Created** | 2026-05-26 |
-| **Last updated** | 2026-05-26 |
+| **Last updated** | 2026-05-31 |
 
 ## 2. Bối cảnh nghiệp vụ
 
@@ -126,36 +126,36 @@ And nếu 1 entry đã closed → response ghi rõ skip với reason
 
 **Backend** (`layer:backend`)
 
-- [ ] `DLQService` orchestrator (open, list, get, retry, close).
-- [ ] Wire vào DF-T-04-010 workflow `failed` post-action.
-- [ ] Retry: tạo execution mới từ checkpoint hoặc full; gọi lại DF-T-04-010 dispatch.
-- [ ] Idempotency lock (DB row lock or Redis lock).
-- [ ] Bulk retry endpoint.
+- [x] `DLQService` orchestrator (open, list, get, retry, close).
+- [x] Wire vào DF-T-04-010 workflow `failed` post-action.
+- [x] Retry: tạo execution mới từ checkpoint hoặc full; gọi lại DF-T-04-010 dispatch.
+- [x] Idempotency lock (DB row lock or Redis lock).
+- [x] Bulk retry endpoint.
 
 **Contract / API** (`layer:contract`)
 
-- [ ] OpenAPI 5 endpoint DLQ.
-- [ ] Schema DLQ entry với enriched info (artifact preview URL).
-- [ ] Mã lỗi: `DLQ_NOT_FOUND`, `DLQ_RETRY_IN_PROGRESS`, `DLQ_ALREADY_CLOSED`, `DLQ_PERMISSION_DENIED`.
-- [ ] Event schema dlq.opened/replayed/closed.
+- [x] OpenAPI 5 endpoint DLQ.
+- [x] Schema DLQ entry với enriched info (artifact preview URL).
+- [x] Mã lỗi: `DLQ_NOT_FOUND`, `DLQ_RETRY_IN_PROGRESS`, `DLQ_ALREADY_CLOSED`, `DLQ_PERMISSION_DENIED`.
+- [x] Event schema dlq.opened/replayed/closed.
 
 **Database / Migration** (`layer:db`)
 
-- [ ] Cột `dlq_status` (open/closed/replayed) trên `executions` hoặc bảng `dlq_entries` riêng.
-- [ ] Cột `closed_by`, `closed_at`, `close_reason`, `replayed_to_execution_id`.
-- [ ] Index `(organization_id, dlq_status, failed_at DESC)` cho list query.
+- [x] Cột `dlq_status` (open/closed/replayed) trên `executions` hoặc bảng `dlq_entries` riêng.
+- [x] Cột `closed_by`, `closed_at`, `close_reason`, `replayed_to_execution_id`.
+- [x] Index `(organization_id, dlq_status, failed_at DESC)` cho list query.
 
 **Documentation** (`layer:docs`)
 
-- [ ] Operator playbook: "Khi xử lý DLQ — khi nào retry vs close".
-- [ ] Doc relationship campaign ↔ DLQ ↔ aggregator.
+- [x] Operator playbook: "Khi xử lý DLQ — khi nào retry vs close".
+- [x] Doc relationship campaign ↔ DLQ ↔ aggregator.
 
 **Test** (`layer:test`)
 
-- [ ] Unit test FSM dlq.
-- [ ] Integration test full lifecycle.
-- [ ] Idempotency test concurrent retry.
-- [ ] Test checkpoint resume.
+- [x] Unit test FSM dlq.
+- [x] Integration test full lifecycle.
+- [x] Idempotency test concurrent retry.
+- [x] Test checkpoint resume.
 
 ## 8. Test case nghiệp vụ
 
@@ -188,10 +188,10 @@ And nếu 1 entry đã closed → response ghi rõ skip với reason
 
 - [ ] Code merged, CI pass.
 - [ ] Test coverage ≥ 80%.
-- [ ] Idempotency test pass.
+- [x] Idempotency test pass.
 - [ ] KPI test "fail → dlq_open < 60s" pass on staging.
-- [ ] Operator playbook published.
-- [ ] Telemetry: metric DLQ open/retry/close rate.
+- [x] Operator playbook published.
+- [x] Telemetry: metric DLQ open/retry/close rate.
 - [ ] Code review ≥ 1 approve.
 - [ ] Release notes.
 - [ ] E2E test: dispatch scenario fail → DLQ open → retry → completed pass.

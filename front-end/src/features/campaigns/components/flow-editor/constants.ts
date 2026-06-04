@@ -11,6 +11,7 @@ export const STEP_COLORS: Record<string, string> = {
   input_selector: 'border-l-cyan-500',
   key: 'border-l-cyan-500',
   key_back: 'border-l-cyan-500',
+  adb_shell: 'border-l-slate-500',
   launch_app: 'border-l-indigo-500',
   stop_app: 'border-l-indigo-500',
   clear_app: 'border-l-indigo-500',
@@ -95,6 +96,16 @@ export const BRACKET_COLORS: Record<
     bg: 'bg-amber-50/50 dark:bg-amber-950/20',
     label: 'text-amber-600 dark:text-amber-400'
   },
+  fb_tap_comment_button: {
+    border: 'border-blue-400/60',
+    bg: 'bg-blue-50/50 dark:bg-blue-950/20',
+    label: 'text-blue-600 dark:text-blue-400'
+  },
+  tap_fb_comment_button: {
+    border: 'border-blue-400/60',
+    bg: 'bg-blue-50/50 dark:bg-blue-950/20',
+    label: 'text-blue-600 dark:text-blue-400'
+  },
   break_if: {
     border: 'border-amber-400/60',
     bg: 'bg-amber-50/50 dark:bg-amber-950/20',
@@ -140,10 +151,39 @@ function localizeCollection(collection?: string): string {
   return trimmed;
 }
 
+function hasFbCommentExtract(steps: unknown): boolean {
+  if (!Array.isArray(steps)) return false;
+  return steps.some((raw) => {
+    if (!raw || typeof raw !== 'object') return false;
+    const step = raw as FlowStep;
+    if (step.type === 'extract' && step.strategy === 'fb_comments') {
+      return true;
+    }
+    return (
+      hasFbCommentExtract(step.steps) ||
+      hasFbCommentExtract(step.then) ||
+      hasFbCommentExtract(step.else) ||
+      (Array.isArray(step.branches) &&
+        step.branches.some((branch: unknown) => {
+          if (!branch || typeof branch !== 'object') return false;
+          return hasFbCommentExtract((branch as { steps?: unknown }).steps);
+        }))
+    );
+  });
+}
+
 /** Set `true` to show hierarchy / OCR / AI / auto screen-extract in the "+" insert menu again. */
 export const INSERT_MENU_SHOW_TEXT_EXTRACT_SHORTCUTS = false;
 
+/** Quick actions on device control rail (control-record) — not scenario nodes. */
+export const DEVICE_RAIL_STEP_TYPES = new Set<string>([
+  'adb_shell',
+  'clear_app',
+  'install_apk'
+]);
+
 const _INSERT_MENU_HIDDEN_TYPES = new Set<string>([
+  'pull_file',
   'extract_text_hierarchy',
   'extract_text_ocr',
   'extract_text_ai',
@@ -185,6 +225,7 @@ export const INSERT_MENU_DEF = [
       'input_selector',
       'key',
       'key_back',
+      'adb_shell',
       'launch_app',
       'stop_app',
       'clear_app',
@@ -226,7 +267,7 @@ export const INSERT_MENU_DEF = [
   },
   {
     groupKey: 'facebook' as const,
-    items: ['tap_fb_comment_button', 'extract_fb_comments', 'extract_fb_posts']
+    items: ['fb_tap_comment_button', 'extract_fb_comments', 'extract_fb_posts']
   }
 ] as const;
 
@@ -245,11 +286,18 @@ export type InsertMenuGroup = {
   items: InsertMenuItem[];
 };
 
-function insertItemDescription(
-  t: FlowInsertTranslator,
-  type: string
-): string {
-  const key = `itemDesc.${type}`;
+/** i18n slug for adb_shell (avoids ambiguous `items.adb_*` paths in catalogs). */
+export function adbShellStepI18nSlug(type: string): string {
+  return type === 'adb_shell' ? 'adb' : type;
+}
+
+function isIntlMissingMessage(key: string, label: string): boolean {
+  return label === key || label.includes('campaignsFeature.');
+}
+
+function insertItemDescription(t: FlowInsertTranslator, type: string): string {
+  const slug = adbShellStepI18nSlug(type);
+  const key = `itemDesc.${slug}`;
   const value = t(key as 'itemDesc.extract');
   return value === key ? '' : value;
 }
@@ -267,7 +315,7 @@ export function getInsertMenuForUi(t: FlowInsertTranslator): InsertMenuGroup[] {
       )
       .map((type) => ({
         type,
-        label: t(`items.${type}` as 'items.launch_app'),
+        label: t(`items.${adbShellStepI18nSlug(type)}` as 'items.launch_app'),
         description: insertItemDescription(t, type)
       }))
   })).filter((group) => group.items.length > 0);
@@ -320,6 +368,8 @@ export function getStepSummary(step: FlowStep): string {
     }
     case 'key':
       return step.key;
+    case 'adb_shell':
+      return step.command || step.cmd || '';
     case 'launch_app':
       return step.package || '';
     case 'stop_app':
@@ -405,10 +455,14 @@ export function getStepSummary(step: FlowStep): string {
       return step.scenario_name || step.scenario_id || '';
     case 'loop':
       return `×${step.count ?? '?'}`;
+    case 'fb_tap_comment_button':
     case 'tap_fb_comment_button': {
       const thenN = Array.isArray(step.then) ? step.then.length : 0;
       const elseN = Array.isArray(step.else) ? step.else.length : 0;
-      return `OK: ${thenN} bước${elseN ? ` · Không thấy: ${elseN} bước` : ''} · chờ ${step.timeout ?? 6}s`;
+      const commentPart = hasFbCommentExtract(step.then)
+        ? ' · có trích xuất bình luận'
+        : '';
+      return `OK: ${thenN} bước${commentPart}${elseN ? ` · Không thấy: ${elseN} bước` : ''} · chờ ${step.timeout ?? 6}s`;
     }
     case 'extract': {
       const base = localizeExtractStrategy(step.strategy);
@@ -485,6 +539,8 @@ export function getStepDisplay(
       };
     case 'key':
       return { target: step.key ?? '' };
+    case 'adb_shell':
+      return { target: step.command || step.cmd || '' };
     case 'launch_app':
       return { target: step.package ?? '' };
     case 'stop_app':
@@ -597,19 +653,23 @@ export function getStepDisplay(
       };
     case 'loop':
       return { target: `×${step.count ?? '?'}` };
+    case 'fb_tap_comment_button':
     case 'tap_fb_comment_button': {
       const thenN = Array.isArray(step.then) ? step.then.length : 0;
       const elseN = Array.isArray(step.else) ? step.else.length : 0;
+      const commentPart = hasFbCommentExtract(step.then)
+        ? ' · lấy bình luận'
+        : '';
       if (t) {
         return {
           target: td('fbCommentSummary', {
             thenCount: thenN,
-            elsePart: elseN ? td('fbCommentElse', { elseCount: elseN }) : ''
+            elsePart: `${commentPart}${elseN ? td('fbCommentElse', { elseCount: elseN }) : ''}`
           })
         };
       }
       return {
-        target: `Comment · OK ${thenN}${elseN ? ` / miss ${elseN}` : ''}`
+        target: `Comment · OK ${thenN}${commentPart}${elseN ? ` / miss ${elseN}` : ''}`
       };
     }
     case 'extract': {
@@ -657,23 +717,34 @@ export function getStepCategory(type: string): 'action' | 'flow' {
   return flowTypes.has(type) ? 'flow' : 'action';
 }
 
+const DEFAULT_STEP_TYPE_LABELS: Record<string, string> = {
+  adb_shell: 'ADB shell'
+};
+
 /** Localized step type badge (flow editor, monitor). */
 export function getStepTypeName(type: string, t?: FlowStepTranslator): string {
   if (t) {
-    const key = `typeName.${type}`;
-    const label = t(key);
-    if (label !== key) return label;
+    const slug = adbShellStepI18nSlug(type);
+    const key = `typeName.${slug}`;
+    const label = t(key as 'typeName.tap_selector');
+    if (!isIntlMissingMessage(key, label)) return label;
+    if (slug !== type) {
+      const directKey = `typeName.${type}`;
+      const direct = t(directKey as 'typeName.tap_selector');
+      if (!isIntlMissingMessage(directKey, direct)) return direct;
+    }
   }
-  return type.toUpperCase();
+  return DEFAULT_STEP_TYPE_LABELS[type] ?? type.toUpperCase();
 }
 
 /** Card-friendly label: sentence case when i18n returns ALL CAPS. */
 export function formatStepLabelForCard(label: string): string {
   const trimmed = label.trim();
   if (!trimmed) return trimmed;
-  const hasLowercase = /[a-zàáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổộơớờởỡùúủũụưứừửữựỳýỷỹỵđ]/.test(
-    trimmed
-  );
+  const hasLowercase =
+    /[a-zàáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổộơớờởỡùúủũụưứừửữựỳýỷỹỵđ]/.test(
+      trimmed
+    );
   if (hasLowercase) return trimmed;
   return trimmed
     .toLowerCase()

@@ -24,6 +24,11 @@ import { toast } from 'sonner';
 import { DeviceStepMonitorButton } from './device-step-monitor';
 import { SHOW_RELAY_SCRCPY_UI_TOGGLE } from '../streaming-ui-flags';
 import { useH264Video } from '../hooks/use-h264-canvas';
+import {
+  ensureWatchSerial,
+  requestIdr,
+  subscribeDeviceFarm
+} from '../services/ws';
 import { Badge } from '@/components/ui/badge';
 
 /** When true (default), grid tiles load MJPEG/H264 immediately for active devices (no scroll-to-load). Set NEXT_PUBLIC_DEVICE_FARM_GRID_PREVIEW_EAGER=0 to restore lazy viewport loading. */
@@ -112,6 +117,11 @@ function DeviceTilePreviewInner({
   }, []);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [hasFrame, setHasFrame] = useState(false);
+  const [mjpegFailed, setMjpegFailed] = useState(false);
+  const [mjpegAttempt, setMjpegAttempt] = useState(0);
+  const [wsConnected, setWsConnected] = useState(false);
+  const [loadingElapsedSec, setLoadingElapsedSec] = useState(0);
   const [h264Active, setH264Active] = useState(false);
   const [hasH264Slot, setHasH264Slot] = useState(false);
   const h264TimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -138,20 +148,8 @@ function DeviceTilePreviewInner({
     return Math.max(1, Math.min(8, Math.round(raw)));
   }, []);
 
-  const mjpegUrl = useMemo(() => {
-    if (!isActive) return null;
-    const base = `${deviceFarmBackendBase}/stream/${encodeURIComponent(device.serial)}?fps=${previewFps}`;
-    const token = tokenStorage.getAuthToken();
-    return token ? `${base}&token=${encodeURIComponent(token)}` : base;
-  }, [device.serial, isActive, previewFps]);
-
-  const showMjpeg =
-    Boolean(mjpegUrl) && (serverAllowPreviewMjpeg || !h264Active) && loadStream;
-
-  const isUnresponsive = isActive && loadStream && !h264Active && !showMjpeg;
-
-  /** Grid preview — target ~282px outer after lib bezel + side padding. */
-  const previewMockupScreenWidth = 262;
+  /** Compact grid preview — readable enough for scanning without dominating the dashboard. */
+  const previewMockupScreenWidth = 216;
 
   const isContinuous =
     streamingConfig !== null && streamingConfig.mode === 'continuous';
@@ -195,6 +193,31 @@ function DeviceTilePreviewInner({
 
   const allowH264 = wantsH264 && hasH264Slot;
 
+  const mjpegUrl = useMemo(() => {
+    if (!isActive || !serverAllowPreviewMjpeg) return null;
+    // Keep MJPEG as fallback until H264 is actually rendering (same as control mirror).
+    if (allowH264 && h264Active) return null;
+    const base = `${deviceFarmBackendBase}/stream/${encodeURIComponent(device.serial)}?fps=${previewFps}`;
+    const token = tokenStorage.getAuthToken();
+    const withAuth = token
+      ? `${base}&token=${encodeURIComponent(token)}`
+      : base;
+    return mjpegAttempt > 0 ? `${withAuth}&_r=${mjpegAttempt}` : withAuth;
+  }, [
+    allowH264,
+    device.serial,
+    h264Active,
+    isActive,
+    mjpegAttempt,
+    previewFps,
+    serverAllowPreviewMjpeg
+  ]);
+
+  const showMjpegImg = Boolean(mjpegUrl) && loadStream && !mjpegFailed;
+
+  const isUnresponsive =
+    isActive && loadStream && !hasFrame && loadingElapsedSec >= 12;
+
   useLayoutEffect(() => {
     if (!streamingConfig || streamingConfig.mode !== 'continuous') return;
     // Grid tiles without a relay toggle always try H264 when they have a slot.
@@ -221,6 +244,7 @@ function DeviceTilePreviewInner({
   }, [
     streamingConfig?.mode,
     streamingConfig?.autoAttachScrcpy,
+    streamingConfig,
     device.serial,
     device.relay_scrcpy_enabled,
     allowH264
@@ -255,7 +279,8 @@ function DeviceTilePreviewInner({
     isContinuous,
     relayStreamOn,
     streamingConfig?.autoAttachScrcpy,
-    streamingConfig?.mode
+    streamingConfig?.mode,
+    streamingConfig
   ]);
 
   const onRelayStreamChange = useCallback(
@@ -302,6 +327,7 @@ function DeviceTilePreviewInner({
           h264WarmupRef.current = { startedAt: 0, frames: 0 };
           return;
         }
+        setHasFrame(true);
         const now = Date.now();
         const warm = h264WarmupRef.current;
         if (warm.startedAt === 0 || now - warm.startedAt > 1500) {
@@ -310,7 +336,7 @@ function DeviceTilePreviewInner({
         } else {
           warm.frames += 1;
         }
-        if (!h264Active && warm.frames >= 4) {
+        if (!h264Active && warm.frames >= 1) {
           setH264Active(true);
         }
         if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
@@ -321,6 +347,9 @@ function DeviceTilePreviewInner({
   });
 
   useEffect(() => {
+    setHasFrame(false);
+    setMjpegFailed(false);
+    setMjpegAttempt(0);
     setH264Active(false);
     h264WarmupRef.current = { startedAt: 0, frames: 0 };
     if (h264TimeoutRef.current) clearTimeout(h264TimeoutRef.current);
@@ -329,13 +358,62 @@ function DeviceTilePreviewInner({
     };
   }, [device.serial, allowH264]);
 
+  useEffect(() => {
+    setMjpegFailed(false);
+  }, [mjpegUrl]);
+
+  useEffect(() => {
+    if (!mjpegFailed || !isActive || !loadStream || !serverAllowPreviewMjpeg)
+      return;
+    const retry = window.setTimeout(() => setMjpegAttempt((n) => n + 1), 3000);
+    return () => window.clearTimeout(retry);
+  }, [mjpegFailed, isActive, loadStream, serverAllowPreviewMjpeg]);
+
+  useEffect(() => {
+    const unsub = subscribeDeviceFarm((msg) => {
+      if (msg.type === 'ws_status') setWsConnected(Boolean(msg.connected));
+    });
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    if (!isActive || !loadStream) return;
+    if (allowH264) ensureWatchSerial(device.serial);
+  }, [allowH264, device.serial, isActive, loadStream]);
+
+  useEffect(() => {
+    if (!isActive || !wsConnected || hasFrame) return;
+    ensureWatchSerial(device.serial);
+    const idr = window.setTimeout(() => requestIdr(device.serial), 100);
+    const armMjpeg = window.setTimeout(() => {
+      setMjpegFailed(false);
+      setMjpegAttempt((n) => n + 1);
+    }, 2500);
+    return () => {
+      window.clearTimeout(idr);
+      window.clearTimeout(armMjpeg);
+    };
+  }, [device.serial, hasFrame, isActive, wsConnected]);
+
+  useEffect(() => {
+    if (!isActive || hasFrame) {
+      setLoadingElapsedSec(0);
+      return;
+    }
+    const startedAt = Date.now();
+    const timer = window.setInterval(() => {
+      setLoadingElapsedSec(Math.floor((Date.now() - startedAt) / 1000));
+    }, 500);
+    return () => window.clearInterval(timer);
+  }, [device.serial, hasFrame, isActive, loadStream]);
+
   return (
     <Card
       id={`tile-${id}`}
       data-serial={device.serial}
       className='flex h-full flex-col overflow-hidden border-border bg-card shadow-sm'
     >
-      <CardHeader className='relative z-10 border-b border-border/60 px-4 py-3'>
+      <CardHeader className='relative z-10 border-b border-border/60 px-3 py-2.5'>
         <div className='flex items-center justify-between gap-2'>
           <div className='flex min-w-0 flex-col gap-0.5'>
             <CardTitle className='truncate text-xs font-medium text-foreground'>
@@ -369,7 +447,11 @@ function DeviceTilePreviewInner({
               />
             ) : null}
             {isActive ? (
-              <Button asChild size='sm' className='shrink-0'>
+              <Button
+                asChild
+                size='sm'
+                className='h-7 shrink-0 px-2.5 text-[11px]'
+              >
                 <Link
                   href={ROUTES.DEVICES.CONTROL_RECORD_WITH_SERIAL(
                     device.serial
@@ -379,16 +461,20 @@ function DeviceTilePreviewInner({
                 </Link>
               </Button>
             ) : (
-              <Button size='sm' className='shrink-0' disabled>
+              <Button
+                size='sm'
+                className='h-7 shrink-0 px-2.5 text-[11px]'
+                disabled
+              >
                 {t('controlDevice')}
               </Button>
             )}
           </div>
         </div>
       </CardHeader>
-      <CardContent className='flex flex-1 flex-col gap-2 px-3 pb-3 pt-3'>
+      <CardContent className='flex flex-1 flex-col gap-2 px-2.5 pb-2.5 pt-2.5'>
         <div className='flex flex-col items-center gap-2'>
-          <div className='mx-auto'>
+          <div className='flex w-full justify-center'>
             <DeviceAndroidFrame
               screenWidth={previewMockupScreenWidth}
               deviceWidth={device.screen_width}
@@ -396,33 +482,62 @@ function DeviceTilePreviewInner({
             >
               <div
                 ref={previewZoneRef}
-                className='relative h-full w-full overflow-hidden bg-black'
+                className='relative h-full w-full overflow-hidden bg-zinc-900'
               >
-                {isActive && showMjpeg ? (
+                {isActive && loadStream && !hasFrame && (
+                  <div
+                    className='absolute inset-0 bg-gradient-to-b from-zinc-700 to-zinc-900'
+                    aria-hidden
+                  />
+                )}
+                {showMjpegImg && (
+                  // eslint-disable-next-line @next/next/no-img-element -- MJPEG stream endpoint
                   <img
                     src={mjpegUrl!}
-                    alt={`${device.brand} ${device.model} preview`}
-                    className={`pointer-events-none absolute inset-0 h-full w-full object-cover object-bottom transition-opacity duration-300 ${h264Active ? 'opacity-0' : 'opacity-100'}`}
+                    alt=''
+                    role='presentation'
+                    decoding='async'
+                    className={`pointer-events-none absolute inset-0 h-full w-full object-contain object-center transition-opacity duration-300 ${h264Active ? 'opacity-0' : 'opacity-100'}`}
+                    onLoad={() => setHasFrame(true)}
+                    onError={() => setMjpegFailed(true)}
+                    draggable={false}
                   />
-                ) : isActive && !serverAllowPreviewMjpeg ? (
-                  <div className='flex h-full w-full items-center justify-center bg-zinc-900 px-2 text-center text-[10px] text-muted-foreground'>
-                    {t('previewDisabledByServer')}
-                  </div>
-                ) : isActive && !loadStream ? (
-                  <div className='flex h-full w-full items-center justify-center bg-zinc-900 px-2 text-center text-[10px] text-muted-foreground'>
-                    {t('previewScrollToLoad')}
-                  </div>
-                ) : (
-                  <div className='flex h-full w-full items-center justify-center bg-zinc-900 text-[11px] text-muted-foreground'>
-                    {t('deviceInactive')}
-                  </div>
                 )}
                 {allowH264 && (
                   <canvas
                     ref={canvasRef}
-                    className={`pointer-events-none absolute inset-0 h-full w-full object-cover object-bottom transition-opacity duration-300 ${h264Active ? 'opacity-100' : 'opacity-0'}`}
+                    className={`pointer-events-none absolute inset-0 h-full w-full object-contain object-center transition-opacity duration-300 ${h264Active ? 'opacity-100' : 'opacity-0'}`}
                   />
                 )}
+                {!isActive ? (
+                  <div className='absolute inset-0 flex items-center justify-center px-2 text-center text-[11px] text-muted-foreground'>
+                    {t('deviceInactive')}
+                  </div>
+                ) : !loadStream ? (
+                  <div className='absolute inset-0 flex items-center justify-center px-2 text-center text-[10px] text-muted-foreground'>
+                    {t('previewScrollToLoad')}
+                  </div>
+                ) : !serverAllowPreviewMjpeg && !allowH264 ? (
+                  <div className='absolute inset-0 flex items-center justify-center px-2 text-center text-[10px] text-muted-foreground'>
+                    {t('previewDisabledByServer')}
+                  </div>
+                ) : !hasFrame ? (
+                  <div
+                    className='absolute inset-0 flex items-center justify-center'
+                    aria-live='polite'
+                  >
+                    <span className='sr-only'>
+                      {isUnresponsive
+                        ? t('streamUnresponsive')
+                        : wsConnected
+                          ? t('streamWaitingFirstFrame')
+                          : t('streamConnecting')}
+                    </span>
+                    {!isUnresponsive && (
+                      <div className='h-5 w-5 animate-spin rounded-full border-2 border-zinc-400/80 border-t-transparent' />
+                    )}
+                  </div>
+                ) : null}
               </div>
             </DeviceAndroidFrame>
           </div>

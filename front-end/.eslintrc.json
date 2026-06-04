@@ -19,5 +19,20 @@
     "import/no-unresolved": "error",
     "unused-imports/no-unused-imports": "error",
     "react/no-unescaped-entities": "off"
-  }
+  },
+  "overrides": [
+    {
+      "files": ["src/features/**/components/**/*.{ts,tsx}"],
+      "excludedFiles": ["**/*.test.*", "**/*.spec.*"],
+      "rules": {
+        "no-restricted-syntax": [
+          "error",
+          {
+            "selector": "CallExpression[callee.name='fetch']",
+            "message": "Use feature service instead of ad hoc fetch (FR-11-15)."
+          }
+        ]
+      }
+    }
+  ]
 }

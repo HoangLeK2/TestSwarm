@@ -50,6 +50,15 @@ async def create_account(
     return account
 
 
+async def lookup_account_org_id(db: AsyncSession, account_id: str) -> str | None:
+    """Resolve account org without tenant context (Temporal/background paths)."""
+    table = Account.__table__
+    result = await db.execute(
+        select(table.c.org_id).where(table.c.id == account_id).limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
 async def get_account(db: AsyncSession, account_id: str) -> Optional[Account]:
     result = await db.execute(
         select(Account)
@@ -57,6 +66,23 @@ async def get_account(db: AsyncSession, account_id: str) -> Optional[Account]:
         .where(Account.id == account_id)
     )
     return result.scalar_one_or_none()
+
+
+async def get_accounts_by_ids(
+    db: AsyncSession,
+    account_ids: list[str],
+    *,
+    org_id: str | None = None,
+) -> dict[str, Account]:
+    """Batch-load accounts by id; optional org scope filter for dispatch/bind validation."""
+    if not account_ids:
+        return {}
+    unique = list(dict.fromkeys(account_ids))
+    stmt = select(Account).where(Account.id.in_(unique))
+    if org_id is not None:
+        stmt = stmt.where(Account.org_id == org_id)
+    result = await db.execute(stmt)
+    return {row.id: row for row in result.scalars().all()}
 
 
 async def get_account_by_platform_username(

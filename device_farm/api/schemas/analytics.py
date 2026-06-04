@@ -36,3 +36,32 @@ class ActivityLogListOut(BaseModel):
     offset: int
     limit: int
     activities: list[ActivityLogOut]
+
+
+class AnalyticsPointOut(BaseModel):
+    date: str
+    resource_type: str
+    resource_id: Optional[str]
+    event_type: str
+    count: int
+    success_count: int
+    fail_count: int
+    latency_p50: Optional[float] = None
+    latency_p95: Optional[float] = None
+
+
+class AnalyticsTimeseriesOut(BaseModel):
+    points: list[AnalyticsPointOut]
+
+
+class AnalyticsSummaryOut(BaseModel):
+    window_days: int
+    total_count: int
+    success_count: int
+    fail_count: int
+    success_rate: float
+
+
+class AnalyticsAdhocOut(BaseModel):
+    rows: list[dict[str, Any]]
+    row_count: int

@@ -21,7 +21,7 @@ class DeviceGroup(TenantScopedModel, Base):
 
     __tablename__ = "device_groups"
     __table_args__ = (
-        UniqueConstraint("name", "user_id", name="uq_device_groups_name_user"),
+        UniqueConstraint("org_id", "name", name="uq_device_groups_org_name"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -54,7 +54,7 @@ class DeviceGroupMember(TenantScopedModel, Base):
 
     __tablename__ = "device_group_members"
     __table_args__ = (
-        UniqueConstraint("group_id", "device_id", name="uq_dgm_group_device"),
+        UniqueConstraint("org_id", "group_id", "device_id", name="uq_device_group_members_org_group_device"),
         Index("idx_dgm_group", "group_id"),
         Index("idx_dgm_device", "device_id"),
     )

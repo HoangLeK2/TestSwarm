@@ -60,7 +60,9 @@ describe('lifecycle-cache', () => {
       true
     );
     assert.equal(
-      snapshotDeviceIdsMatchCache(cached, [{ device_id: 'dev-1', state: 'online' }]),
+      snapshotDeviceIdsMatchCache(cached, [
+        { device_id: 'dev-1', state: 'online' }
+      ]),
       false
     );
     assert.equal(

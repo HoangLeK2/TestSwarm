@@ -37,10 +37,12 @@ export const DEVICE_FSM_BADGE_VARIANT: Record<
 };
 
 /** Extra Tailwind classes for FSM badge emphasis. */
-export const DEVICE_FSM_BADGE_CLASS: Partial<Record<DeviceFsmStateKey, string>> =
-  {
-    reconnecting: 'animate-pulse border-amber-500/50 text-amber-700 dark:text-amber-400'
-  };
+export const DEVICE_FSM_BADGE_CLASS: Partial<
+  Record<DeviceFsmStateKey, string>
+> = {
+  reconnecting:
+    'animate-pulse border-amber-500/50 text-amber-700 dark:text-amber-400'
+};
 
 export function normalizeDeviceFsmState(
   state: string | null | undefined

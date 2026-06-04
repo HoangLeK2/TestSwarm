@@ -3,12 +3,25 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import unicodedata
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
+
+log = logging.getLogger(__name__)
+
+# Optional FK columns on content_items that agent-boot may receive from device_farm
+# workflow context. When stale/missing, drop the reference and still persist content.
+_OPTIONAL_FK_FIELDS: tuple[str, ...] = ("campaign_id", "execution_id", "user_id", "org_id")
+_FK_LOOKUP_TABLES: dict[str, str] = {
+    "campaign_id": "campaigns",
+    "execution_id": "executions",
+    "user_id": "users",
+    "org_id": "organizations",
+}
 
 try:
     import ftfy as _ftfy  # type: ignore
@@ -206,7 +219,10 @@ def build_content_item_row(
     scope = context.get("hash_scope") or context.get("execution_id")
     base_hash = compute_content_hash(data, context.get("dedupe_field"))
     content_hash = scope_content_hash(base_hash, scope)
-    scoped_parent_id = scope_content_hash(parent_id, scope) if parent_id else None
+    if parent_id and context.get("parent_id_already_scoped"):
+        scoped_parent_id = str(parent_id)
+    else:
+        scoped_parent_id = scope_content_hash(parent_id, scope) if parent_id else None
     body = clean_text(
         data.get("content")
         or data.get("body")
@@ -214,6 +230,7 @@ def build_content_item_row(
         or data.get("message")
         or data.get("caption")
         or data.get("description")
+        or data.get("image_desc")
     )
     author = clean_text(
         data.get("author")
@@ -222,6 +239,9 @@ def build_content_item_row(
         or data.get("full_name")
     )
     url = data.get("url") or data.get("permalink") or data.get("link")
+    screenshot_path = data.get("_screenshot_path") or data.get("screenshot_path") or None
+    if screenshot_path is not None:
+        screenshot_path = str(screenshot_path)[:1000] or None
     return {
         "id": str(uuid.uuid4()),
         "collection": context.get("collection") or "default",
@@ -237,7 +257,7 @@ def build_content_item_row(
         "shares_count": _safe_int(_first_present(data, "shares_count", "shares", "share")),
         "views_count": _safe_int(_first_present(data, "views_count", "views", "view")),
         "media_urls": _normalize_media_urls(_first_present(data, "media_urls", "media_artifacts", "permalink_candidates")),
-        "screenshot_path": None,
+        "screenshot_path": screenshot_path,
         "raw_data": data,
         "tags": context.get("tags") or "",
         "content_hash": content_hash,
@@ -248,6 +268,7 @@ def build_content_item_row(
         "execution_id": context.get("execution_id") or None,
         "scenario_name": context.get("scenario_name") or None,
         "user_id": context.get("user_id") or None,
+        "org_id": context.get("org_id") or None,
         "extracted_at": _parse_captured_at(captured_at),
         "content_date": _parse_content_date(
             _first_present(data, "content_date", "posted_at", "published_at", "timestamp", "date", "date_posted"),
@@ -281,10 +302,194 @@ class ContentItemWriter:
             await self._pool.close()
             self._pool = None
 
-    async def insert_rows(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
-        if not rows:
-            return {"attempted": 0, "inserted": 0, "duplicates": 0}
+    async def _existing_ids(self, conn, table: str, ids: list[str]) -> set[str]:
+        if not ids:
+            return set()
+        try:
+            valid_rows = await conn.fetch(
+                f"SELECT id::text AS id FROM {table} WHERE id::text = ANY($1::text[])",
+                ids,
+            )
+            return {str(row["id"]) for row in valid_rows}
+        except Exception as exc:
+            log.warning(
+                "content_items FK guard: cannot verify %s (%s); dropping optional FK refs",
+                table,
+                exc,
+            )
+            return set()
+
+    @staticmethod
+    def _strip_optional_fk_fields(rows: list[dict[str, Any]]) -> list[str]:
+        """Null-out optional FK columns; return names that were cleared."""
+        stripped: list[str] = []
+        for row in rows:
+            for field in _OPTIONAL_FK_FIELDS:
+                if row.get(field) is not None:
+                    row[field] = None
+                    if field not in stripped:
+                        stripped.append(field)
+        return stripped
+
+    async def _sanitize_fk_field(
+        self,
+        conn,
+        field: str,
+        value: str | None,
+    ) -> str | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        table = _FK_LOOKUP_TABLES.get(field)
+        if not table:
+            return text
+        valid_ids = await self._existing_ids(conn, table, [text])
+        if text not in valid_ids:
+            log.info("content_items FK guard: dropping stale %s=%s", field, text)
+            return None
+        return text
+
+    async def _resolve_org_id_from_user(self, conn, user_id: str | None) -> str | None:
+        text = str(user_id or "").strip()
+        if not text:
+            return None
+        try:
+            row = await conn.fetchrow(
+                "SELECT default_org_id::text AS org_id FROM users WHERE id::text = $1",
+                text,
+            )
+        except Exception as exc:
+            log.warning("content_items org_id lookup from user_id failed: %s", exc)
+            return None
+        if not row or not row.get("org_id"):
+            return None
+        return str(row["org_id"])
+
+    async def prepare_context_for_persist(self, context: dict[str, Any]) -> dict[str, Any]:
+        """Drop stale optional FK refs from ingest context before row build."""
         pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            if not context.get("org_id") and context.get("user_id"):
+                context["org_id"] = await self._resolve_org_id_from_user(conn, context.get("user_id"))
+            for field in _OPTIONAL_FK_FIELDS:
+                if field not in context:
+                    continue
+                context[field] = await self._sanitize_fk_field(conn, field, context.get(field))
+        return context
+
+    async def _sanitize_row_fk_refs(self, conn, rows: list[dict[str, Any]]) -> list[str]:
+        """Validate optional FK refs on each row; return stripped field names."""
+        stripped: list[str] = []
+        for field in _OPTIONAL_FK_FIELDS:
+            table = _FK_LOOKUP_TABLES[field]
+            ids = sorted({str(row.get(field)) for row in rows if row.get(field)})
+            if not ids:
+                continue
+            valid_ids = await self._existing_ids(conn, table, ids)
+            for row in rows:
+                value = row.get(field)
+                if value and str(value) not in valid_ids:
+                    row[field] = None
+                    if field not in stripped:
+                        stripped.append(field)
+        if stripped:
+            log.info(
+                "content_items FK guard: stripped stale refs from rows: %s",
+                ", ".join(stripped),
+            )
+        return stripped
+
+    async def sanitize_campaign_id(self, campaign_id: str | None) -> str | None:
+        """Return campaign_id only when the row still exists (content_items FK safe)."""
+        text = str(campaign_id or "").strip()
+        if not text:
+            return None
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            return await self._sanitize_fk_field(conn, "campaign_id", text)
+
+    @staticmethod
+    def _is_content_items_fk_violation(exc: Exception) -> bool:
+        msg = str(exc).lower()
+        if "content_items" not in msg:
+            return False
+        return (
+            "foreign key" in msg
+            or "violates foreign key constraint" in msg
+            or "_fkey" in msg
+        )
+
+    @staticmethod
+    def _is_campaign_fk_violation(exc: Exception) -> bool:
+        msg = str(exc).lower()
+        return ContentItemWriter._is_content_items_fk_violation(exc) and "campaign_id" in msg
+
+    async def lookup_parent_hash_for_post_pid(
+        self,
+        *,
+        collection: str,
+        execution_id: str | None,
+        parent_post_id: str,
+        items: list[dict[str, Any]],
+    ) -> str | None:
+        """Find parent post content_hash in DB by Facebook post id (_pid / fb_post_id)."""
+        pid = str(parent_post_id or "").strip()
+        if not pid:
+            for item in items:
+                if isinstance(item, dict) and item.get("_type") != "post_stats":
+                    pid = str(item.get("parent_post_id") or "").strip()
+                    if pid:
+                        break
+        if not pid or not collection:
+            return None
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            base_where = """
+                collection = $1
+                  AND item_level <= 1
+                  AND (
+                    content_type IN ('fb_post', 'fb_group_posts', 'post')
+                    OR content_type IS NULL
+                  )
+                  AND (
+                    raw_data->>'_pid' = $2
+                    OR raw_data->>'post_key' = $2
+                    OR raw_data->>'fb_post_id' = $2
+                    OR raw_data->>'stable_post_id' = $2
+                  )
+            """
+            if execution_id:
+                row = await conn.fetchrow(
+                    f"""
+                    SELECT content_hash
+                    FROM content_items
+                    WHERE {base_where}
+                      AND execution_id = $3
+                    ORDER BY extracted_at DESC NULLS LAST
+                    LIMIT 1
+                    """,
+                    collection,
+                    pid,
+                    str(execution_id),
+                )
+                if row and row.get("content_hash"):
+                    return str(row["content_hash"])
+            row = await conn.fetchrow(
+                f"""
+                SELECT content_hash
+                FROM content_items
+                WHERE {base_where}
+                ORDER BY extracted_at DESC NULLS LAST
+                LIMIT 1
+                """,
+                collection,
+                pid,
+            )
+            if row and row.get("content_hash"):
+                return str(row["content_hash"])
+        return None
+
+    async def _insert_rows_once(self, conn, rows: list[dict[str, Any]]) -> dict[str, Any]:
         payload = json.dumps(rows, ensure_ascii=False, default=str)
         sql = """
         WITH incoming AS (
@@ -294,7 +499,7 @@ class ContentItemWriter:
                 likes_count integer, comments_count integer, shares_count integer, views_count integer,
                 media_urls jsonb, screenshot_path text, raw_data jsonb, tags text,
                 content_hash text, parent_id text, item_level integer, device_serial text,
-                campaign_id text, execution_id text, scenario_name text, user_id text,
+                campaign_id text, execution_id text, scenario_name text, user_id text, org_id text,
                 extracted_at timestamptz, content_date timestamptz, created_at timestamptz
             )
         ),
@@ -303,38 +508,89 @@ class ContentItemWriter:
                 id, collection, platform, content_type, title, body, author, author_id, url,
                 likes_count, comments_count, shares_count, views_count, media_urls, screenshot_path,
                 raw_data, tags, content_hash, parent_id, item_level, device_serial, campaign_id,
-                execution_id, scenario_name, user_id, extracted_at, content_date, created_at
+                execution_id, scenario_name, user_id, org_id, extracted_at, content_date, created_at
             )
             SELECT
                 id, collection, platform, content_type, title, body, author, author_id, url,
                 likes_count, comments_count, shares_count, views_count, media_urls::json, screenshot_path,
                 raw_data::json, tags, content_hash, parent_id, item_level, device_serial, campaign_id,
-                execution_id, scenario_name, user_id, extracted_at, content_date, created_at
+                execution_id, scenario_name, user_id, org_id, extracted_at, content_date, created_at
             FROM incoming
             ON CONFLICT DO NOTHING
-            RETURNING collection, user_id, platform, content_type
+            RETURNING content_hash
         )
-        SELECT collection, user_id, platform, content_type, COUNT(*)::int AS inserted_count
+        SELECT
+            COALESCE(array_agg(content_hash), ARRAY[]::text[]) AS inserted_hashes,
+            COUNT(*)::int AS inserted_count
         FROM inserted
-        GROUP BY collection, user_id, platform, content_type
         """
+        async with conn.transaction():
+            row = await conn.fetchrow(sql, payload)
+            inserted_hashes = [str(h) for h in (row["inserted_hashes"] or []) if h]
+            inserted = int(row["inserted_count"] or 0)
+            if inserted <= 0:
+                return {
+                    "attempted": len(rows),
+                    "inserted": 0,
+                    "duplicates": len(rows),
+                    "inserted_content_hashes": [],
+                }
+            # collection counts — group by first row metadata (same batch shares collection)
+            groups: dict[tuple[str, str | None, str | None, str | None], int] = {}
+            hash_set = set(inserted_hashes)
+            for item in rows:
+                ch = str(item.get("content_hash") or "")
+                if ch not in hash_set:
+                    continue
+                key = (
+                    str(item.get("collection") or ""),
+                    item.get("user_id"),
+                    item.get("org_id"),
+                    item.get("platform"),
+                    item.get("content_type"),
+                )
+                groups[key] = groups.get(key, 0) + 1
+            for (
+                collection,
+                user_id,
+                org_id,
+                platform,
+                content_type,
+            ), inserted_count in groups.items():
+                await self._increment_collection_count(
+                    conn,
+                    collection=collection,
+                    user_id=user_id,
+                    org_id=org_id,
+                    platform=platform,
+                    content_type=content_type,
+                    inserted_count=inserted_count,
+                )
+        return {
+            "attempted": len(rows),
+            "inserted": inserted,
+            "duplicates": len(rows) - inserted,
+            "inserted_content_hashes": inserted_hashes,
+        }
+
+    async def insert_rows(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
+        if not rows:
+            return {"attempted": 0, "inserted": 0, "duplicates": 0}
+        pool = await self._ensure_pool()
         async with pool.acquire() as conn:
-            async with conn.transaction():
-                inserted_groups = await conn.fetch(sql, payload)
-                inserted = sum(int(group["inserted_count"] or 0) for group in inserted_groups)
-                for group in inserted_groups:
-                    inserted_count = int(group["inserted_count"] or 0)
-                    if inserted_count <= 0:
-                        continue
-                    await self._increment_collection_count(
-                        conn,
-                        collection=group["collection"],
-                        user_id=group["user_id"],
-                        platform=group["platform"],
-                        content_type=group["content_type"],
-                        inserted_count=inserted_count,
-                    )
-        return {"attempted": len(rows), "inserted": inserted, "duplicates": len(rows) - inserted}
+            await self._sanitize_row_fk_refs(conn, rows)
+            try:
+                return await self._insert_rows_once(conn, rows)
+            except Exception as exc:
+                if not self._is_content_items_fk_violation(exc):
+                    raise
+                stripped = self._strip_optional_fk_fields(rows)
+                log.warning(
+                    "content_items optional FK insert failed (%s); retrying without %s",
+                    exc,
+                    ", ".join(stripped) or "optional FK refs",
+                )
+                return await self._insert_rows_once(conn, rows)
 
     async def _increment_collection_count(
         self,
@@ -342,6 +598,7 @@ class ContentItemWriter:
         *,
         collection: str,
         user_id: str | None,
+        org_id: str | None,
         platform: str | None,
         content_type: str | None,
         inserted_count: int,
@@ -349,31 +606,23 @@ class ContentItemWriter:
         inserted_count = max(0, int(inserted_count or 0))
         if inserted_count <= 0:
             return
-        if user_id is None:
-            await conn.execute(
-                """
-                INSERT INTO content_collections (
-                    id, name, description, platform, content_type, item_count, user_id, created_at, updated_at
-                ) VALUES ($1, $2, '', $3, $4, $5, NULL, NOW(), NOW())
-                ON CONFLICT (name) WHERE user_id IS NULL DO UPDATE SET
-                    item_count = content_collections.item_count + EXCLUDED.item_count,
-                    platform = COALESCE(content_collections.platform, EXCLUDED.platform),
-                    content_type = COALESCE(content_collections.content_type, EXCLUDED.content_type),
-                    updated_at = NOW()
-                """,
-                str(uuid.uuid4()),
+        effective_org = str(org_id or "").strip() or None
+        if not effective_org and user_id:
+            effective_org = await self._resolve_org_id_from_user(conn, user_id)
+        if not effective_org:
+            log.warning(
+                "content_collections skip: missing org_id for collection=%s user_id=%s",
                 collection,
-                platform,
-                content_type,
-                inserted_count,
+                user_id,
             )
             return
         await conn.execute(
             """
             INSERT INTO content_collections (
-                id, name, description, platform, content_type, item_count, user_id, created_at, updated_at
-            ) VALUES ($1, $2, '', $3, $4, $5, $6, NOW(), NOW())
-            ON CONFLICT ON CONSTRAINT uq_content_collections_name_user DO UPDATE SET
+                id, name, description, platform, content_type, item_count,
+                user_id, org_id, created_at, updated_at
+            ) VALUES ($1, $2, '', $3, $4, $5, $6, $7, NOW(), NOW())
+            ON CONFLICT ON CONSTRAINT uq_content_collections_org_name_user DO UPDATE SET
                 item_count = content_collections.item_count + EXCLUDED.item_count,
                 platform = COALESCE(content_collections.platform, EXCLUDED.platform),
                 content_type = COALESCE(content_collections.content_type, EXCLUDED.content_type),
@@ -385,4 +634,5 @@ class ContentItemWriter:
             content_type,
             inserted_count,
             user_id,
+            effective_org,
         )

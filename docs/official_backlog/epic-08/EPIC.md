@@ -41,6 +41,7 @@ Mục tiêu nghiệp vụ:
 - Plugin registry / discovery: tự động đăng ký platform extension khi boot, expose qua API.
 - Plugin lifecycle: load / unload / version một extension; migration giữa version.
 - Facebook L2 Active: parser `fb_posts` / `fb_comments`, handler `fb_tap_comment_button` (canonical) + `tap_fb_comment_button` (legacy), scenario starter pack, frontend node.
+- Boundary triển khai: contract/registry/feature flag nằm trong `device_farm`; parser XML, extra data, và `raw_data` persistence nằm trong `agent-boot/relay/extra_data`.
 - Facebook L3 Foundation: stub MCP guardrail (allowed action cap khung, evidence requirement schema, handoff condition placeholder) — không nằm trong lộ trình ngắn hạn.
 - TikTok / Threads / Instagram: parser draft, handler draft và readiness bundle được giữ trong backlog P3 để phase sau.
 - Per-platform feature flag + rollout policy theo organization.
@@ -81,12 +82,12 @@ Mục tiêu nghiệp vụ:
 
 | Ticket ID | Title | Type | Priority | SP | Labels chính | Trạng thái |
 |---|---|---|---|---|---|---|
-| DF-T-08-001 | Plugin contract — interface parser/handler/scenario lib | feature | P1 | 5 | `module:social-ext`, `layer:contract`, `platform:agnostic` | Ready |
-| DF-T-08-002 | Plugin registry & discovery | feature | P2 | 5 | `module:social-ext`, `layer:backend`, `platform:agnostic` | Ready |
-| DF-T-08-003 | Plugin lifecycle (load / unload / version) | feature | P3 | 5 | `module:social-ext`, `layer:backend`, `platform:agnostic` | Ready |
-| DF-T-08-004 | Facebook parser — post / comment / feed | feature | P0 | 8 | `module:social-ext`, `layer:backend`, `platform:facebook`, `coverage:L2` | Ready |
-| DF-T-08-005 | Facebook handler — like / comment / share / follow | feature | P0 | 8 | `module:social-ext`, `layer:backend`, `platform:facebook`, `coverage:L2` | Ready |
-| DF-T-08-006 | Facebook scenario library — starter pack | feature | P0 | 5 | `module:social-ext`, `layer:backend`, `platform:facebook`, `coverage:L2` | Ready |
+| DF-T-08-001 | Plugin contract — interface parser/handler/scenario lib | feature | P1 | 5 | `module:social-ext`, `layer:contract`, `platform:agnostic` | Done |
+| DF-T-08-002 | Plugin registry & discovery | feature | P2 | 5 | `module:social-ext`, `layer:backend`, `platform:agnostic` | Done |
+| DF-T-08-003 | Plugin lifecycle (load / unload / version) | feature | P3 | 5 | `module:social-ext`, `layer:backend`, `platform:agnostic` | Done |
+| DF-T-08-004 | Facebook parser — post / comment / feed | feature | P0 | 8 | `module:social-ext`, `layer:backend`, `platform:facebook`, `coverage:L2` | Done |
+| DF-T-08-005 | Facebook handler — like / comment / share / follow | feature | P0 | 8 | `module:social-ext`, `layer:backend`, `platform:facebook`, `coverage:L2` | Done |
+| DF-T-08-006 | Facebook scenario library — starter pack | feature | P0 | 5 | `module:social-ext`, `layer:backend`, `platform:facebook`, `coverage:L2` | Done |
 | DF-T-08-007 | Facebook L3 Foundation — MCP guardrail stub | feature | P3 | 5 | `module:social-ext`, `layer:backend`, `platform:facebook`, `coverage:L3` | Backlog |
 | DF-T-08-008 | TikTok parser draft | feature | P3 | 5 | `module:social-ext`, `layer:backend`, `platform:tiktok`, `coverage:L2` | Backlog |
 | DF-T-08-009 | TikTok handler draft | feature | P3 | 5 | `module:social-ext`, `layer:backend`, `platform:tiktok`, `coverage:L2` | Backlog |
@@ -94,7 +95,7 @@ Mục tiêu nghiệp vụ:
 | DF-T-08-011 | Threads handler draft | feature | P3 | 5 | `module:social-ext`, `layer:backend`, `platform:threads`, `coverage:L2` | Backlog |
 | DF-T-08-012 | Instagram parser draft | feature | P3 | 5 | `module:social-ext`, `layer:backend`, `platform:instagram`, `coverage:L2` | Backlog |
 | DF-T-08-013 | Instagram handler draft | feature | P3 | 5 | `module:social-ext`, `layer:backend`, `platform:instagram`, `coverage:L2` | Backlog |
-| DF-T-08-014 | Per-platform feature flag & rollout | feature | P1 | 3 | `module:social-ext`, `layer:backend`, `platform:agnostic` | Ready |
+| DF-T-08-014 | Per-platform feature flag & rollout | feature | P1 | 3 | `module:social-ext`, `layer:backend`, `platform:agnostic` | Done |
 | DF-T-08-015 | TikTok L2 Active readiness bundle | feature | P3 | 5 | `module:social-ext`, `layer:backend`, `layer:frontend`, `platform:tiktok`, `coverage:L2` | Backlog |
 | DF-T-08-016 | Threads L2 Active readiness bundle | feature | P3 | 5 | `module:social-ext`, `layer:backend`, `layer:frontend`, `platform:threads`, `coverage:L2` | Backlog |
 | DF-T-08-017 | Instagram L2 Active readiness bundle | feature | P3 | 5 | `module:social-ext`, `layer:backend`, `layer:frontend`, `platform:instagram`, `coverage:L2` | Backlog |

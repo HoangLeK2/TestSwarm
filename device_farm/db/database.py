@@ -33,6 +33,9 @@ from tenancy.sqlalchemy import init_tenant_scoping
 
 log = logging.getLogger(__name__)
 
+# None = not initialized yet; True after init_db(); False when init_db() failed.
+schema_init_ok: bool | None = None
+
 
 def _build_url() -> str:
     cfg = load_config(farm_config_path()).database
@@ -185,6 +188,9 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 async def init_db() -> None:
     """Initialize database schema and run incremental migrations on startup."""
+    global schema_init_ok
+    schema_init_ok = None
+
     from db import models  # noqa: F401 — ensure models are registered
     from db.migrations import run_migrations
 
@@ -206,6 +212,8 @@ async def init_db() -> None:
         await ensure_superadmin_from_env(seed_db)
         await seed_builtin_templates(seed_db)
         await seed_db.commit()
+
+    schema_init_ok = True
 
 
 def _auto_create_schema_enabled() -> bool:

@@ -10,7 +10,22 @@ from temporal.account_state_workflows import AccountCooldownTickWorkflow
 log = logging.getLogger(__name__)
 
 COOLDOWN_SCHEDULE_ID = "df-account-cooldown-tick"
-_CRON = "*/1 * * * *"
+COOLDOWN_TICK_INTERVAL_SECONDS = 300
+_CRON = "*/5 * * * *"
+
+
+async def _sync_cooldown_schedule_cron(client: Client) -> None:
+    from temporalio.client import ScheduleSpec, ScheduleUpdate
+
+    handle = client.get_schedule_handle(COOLDOWN_SCHEDULE_ID)
+
+    def _updater(input):
+        schedule = input.description.schedule
+        schedule.spec = ScheduleSpec(cron_expressions=[_CRON])
+        return ScheduleUpdate(schedule=schedule)
+
+    await handle.update(_updater)
+    log.info("Temporal schedule updated: %s cron=%s", COOLDOWN_SCHEDULE_ID, _CRON)
 
 
 async def ensure_account_cooldown_schedule(
@@ -18,7 +33,7 @@ async def ensure_account_cooldown_schedule(
     *,
     task_queue: str,
 ) -> None:
-    """Idempotent: create 1-minute cooldown tick schedule if missing."""
+    """Idempotent: create or sync 5-minute cooldown tick schedule."""
     schedule = Schedule(
         action=ScheduleActionStartWorkflow(
             AccountCooldownTickWorkflow.run,
@@ -33,6 +48,13 @@ async def ensure_account_cooldown_schedule(
     except Exception as exc:
         msg = str(exc).lower()
         if "already exists" in msg or "already_exists" in msg:
-            log.debug("Temporal schedule %s already exists", COOLDOWN_SCHEDULE_ID)
+            try:
+                await _sync_cooldown_schedule_cron(client)
+            except Exception as sync_exc:
+                log.warning(
+                    "Temporal schedule %s exists but cron sync failed: %s",
+                    COOLDOWN_SCHEDULE_ID,
+                    sync_exc,
+                )
             return
         raise

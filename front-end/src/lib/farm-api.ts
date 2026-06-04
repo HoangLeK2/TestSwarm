@@ -16,9 +16,43 @@ function newRequestId(): string {
 const CURRENT_ORG_STORAGE_KEY = 'device-farm:current-organization-id';
 
 /** Origin of the Device Farm HTTP API (no `/api` suffix). */
-export const deviceFarmBackendBase = (
-  process.env.NEXT_PUBLIC_PRODUCT_API_URL || 'http://localhost:8081'
-).replace(/\/+$/, '');
+function resolveDeviceFarmBackendBase(): string {
+  const configured = (
+    process.env.NEXT_PUBLIC_PRODUCT_API_URL || 'http://localhost:8081'
+  ).replace(/\/+$/, '');
+
+  if (typeof window === 'undefined') {
+    return configured;
+  }
+
+  try {
+    const configuredUrl = new URL(configured);
+    const pageOrigin = window.location.origin.replace(/\/+$/, '');
+    const pageHost = new URL(pageOrigin).host;
+    if (configuredUrl.host === pageHost) {
+      return configured;
+    }
+
+    const isDev =
+      (process.env.NEXT_PUBLIC_ENVIRONMENT || '').trim().toLowerCase() ===
+      'dev';
+    const pointsAtNextDevServer =
+      configuredUrl.port === '3000' ||
+      configuredUrl.hostname === 'localhost' ||
+      configuredUrl.hostname === '127.0.0.1';
+
+    // `next.config` rewrites `/api/*` → DEVICE_FARM_BACKEND_URL on the Next host.
+    // Use the tab origin when env still says localhost:3000 but the user opened via LAN IP.
+    if (isDev || pointsAtNextDevServer) {
+      return pageOrigin;
+    }
+  } catch {
+    // keep configured
+  }
+  return configured;
+}
+
+export const deviceFarmBackendBase = resolveDeviceFarmBackendBase();
 const backendBase = deviceFarmBackendBase;
 const API_BASE_URL = `${backendBase}/api`;
 
@@ -88,13 +122,18 @@ export function getStfApkDownloadUrl(): string {
   return `${API_BASE_URL}/devices/stf-apk`;
 }
 
+/** WS origin (scheme + host[:port]) — same base used for QR / link in connect dialogs. */
+export function getDeviceAgentWsBase(): string {
+  return getDeviceBackendBase()
+    .replace(/^http:\/\//i, 'ws://')
+    .replace(/^https:\/\//i, 'wss://')
+    .replace(/\/+$/, '');
+}
+
 /** WebSocket URL for device-agent (Pair device QR). */
 export function getDeviceAgentWsUrl(query = ''): string {
-  const base = getDeviceBackendBase()
-    .replace(/^http:\/\//i, 'ws://')
-    .replace(/^https:\/\//i, 'wss://');
   const suffix = query.startsWith('?') ? query : query ? `?${query}` : '';
-  return `${base}/device-agent${suffix}`;
+  return `${getDeviceAgentWsBase()}/device-agent${suffix}`;
 }
 
 /** URL for connect-by-QR (ADB): app on phone POSTs its IP here after scanning QR.
@@ -185,6 +224,10 @@ farmApi.interceptors.request.use((config) => {
   }
   if (backendBase.includes('ngrok')) {
     config.headers['ngrok-skip-browser-warning'] = '1';
+  }
+  if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
+    // Let the browser set multipart boundary (manual Content-Type breaks uploads).
+    delete config.headers['Content-Type'];
   }
   return config;
 });

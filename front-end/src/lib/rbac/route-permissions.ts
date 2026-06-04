@@ -68,8 +68,21 @@ export const DASHBOARD_ROUTE_ACCESS: readonly RouteAccessRule[] = [
     permission: { object: 'analytics', action: 'read' }
   },
   {
+    // Temporary: analytics rollout — superadmin platform accounts only.
+    prefix: ROUTES.ANALYTICS.ROOT,
+    roles: ['superadmin']
+  },
+  {
     prefix: ROUTES.NOTIFICATIONS.ROOT,
     permission: { object: 'notifications', action: 'read' }
+  },
+  {
+    prefix: ROUTES.MCP.ROOT,
+    permission: { object: 'mcp', action: 'read' }
+  },
+  {
+    prefix: ROUTES.MCP.LEGACY_ROOT,
+    permission: { object: 'mcp', action: 'read' }
   },
   {
     prefix: ROUTES.RELAY_AGENTS.ROOT,

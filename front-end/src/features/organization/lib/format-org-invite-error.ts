@@ -3,8 +3,9 @@ import { formatFarmApiError } from '@/lib/format-farm-api-error';
 type ApiDetail = { code?: string };
 
 function extractApiCode(err: unknown): string | undefined {
-  const detail = (err as { response?: { data?: { detail?: ApiDetail | string } } })
-    ?.response?.data?.detail;
+  const detail = (
+    err as { response?: { data?: { detail?: ApiDetail | string } } }
+  )?.response?.data?.detail;
   if (detail && typeof detail === 'object' && typeof detail.code === 'string') {
     return detail.code;
   }

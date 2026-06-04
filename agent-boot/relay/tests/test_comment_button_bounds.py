@@ -80,3 +80,34 @@ def test_action_bar_finds_comment_not_like() -> None:
     card = etree.fromstring(xml)
     bnds = _find_binh_luan_button_bounds_in_element(card)
     assert bnds == (220, 1100, 380, 1160)
+
+
+def test_click_target_includes_u2_xpath_from_node() -> None:
+    from relay.extra_data.parsers.facebook.comment_pipeline import (
+        _find_comment_button_click_target_in_element,
+    )
+
+    xml = """
+    <node bounds="[0,900][1080,1500]">
+      <node class="android.widget.Button" clickable="true" text="Bình luận"
+            bounds="[220,1100][380,1160]" />
+    </node>
+    """
+    card = etree.fromstring(xml)
+    hit = _find_comment_button_click_target_in_element(card)
+    assert hit is not None
+    u2 = hit["u2_click"]
+    assert '[220,1100][380,1160]' in u2["xpath"]
+    assert u2["selector"]["text"] == "Bình luận"
+
+
+def test_nut_binh_luan_content_desc_matches_action_button() -> None:
+    from lxml import etree
+
+    from relay.extra_data.parsers.facebook.comment_pipeline import _node_has_comment_button_token
+
+    node = etree.fromstring(
+        '<node class="android.widget.Button" clickable="true" '
+        'content-desc="Nút Bình luận. Nhấn đúp để xem bình luận." bounds="[203,2649][433,2800]" />'
+    )
+    assert _node_has_comment_button_token(node)

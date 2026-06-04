@@ -11,7 +11,7 @@
 | **Module** | DF-MOD-03 — Agent Boot & Relay |
 | **Priority** | P2 |
 | **Story Points** | 8 |
-| **Status** | Backlog |
+| **Status** | Done |
 | **Labels** | `module:relay`, `layer:backend`, `layer:infra`, `layer:contract`, `type:feature`, `risk:auth`, `persona:platform-engineer` |
 | **Truy vết — FR refs** | FR-03-07 |
 | **Truy vết — UC refs** | UC-03-07, UC-03-08 |

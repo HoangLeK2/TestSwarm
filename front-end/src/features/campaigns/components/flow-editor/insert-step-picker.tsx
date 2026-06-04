@@ -2,7 +2,6 @@
 
 import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import { Search } from 'lucide-react';
-import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
   Popover,
@@ -11,10 +10,7 @@ import {
 } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
 import { createDefaultStep, type FlowStep } from '../scenario-steps/types';
-import {
-  findInsertMenuItem,
-  type InsertMenuGroupKey
-} from './constants';
+import { findInsertMenuItem, type InsertMenuGroupKey } from './constants';
 import { useCampaignFlowI18n } from './flow-i18n';
 import { StepIcon } from './step-icon';
 

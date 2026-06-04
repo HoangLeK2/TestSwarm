@@ -174,7 +174,11 @@ function RunStatsPopoverBody({
       </div>
 
       {total > 0 && (
-        <RunStatsProgressBar passed={s.passed} failed={s.failed} total={total} />
+        <RunStatsProgressBar
+          passed={s.passed}
+          failed={s.failed}
+          total={total}
+        />
       )}
 
       <div className='divide-y divide-border/60 rounded-md border border-border/60 bg-muted/20 px-2.5'>

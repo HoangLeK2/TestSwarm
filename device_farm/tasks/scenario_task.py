@@ -501,8 +501,8 @@ def _retry_find_element(
         return None
 
 
-_IW_DEFAULT_TIMEOUT = 10.0
-_IW_DEFAULT_POLL = 0.5
+_IW_DEFAULT_TIMEOUT = 3.0
+_IW_DEFAULT_POLL = 0.25
 _IW_MAX_TIMEOUT = 60.0
 
 
@@ -513,7 +513,7 @@ def _get_implicit_wait_config(
     """
     Resolve implicit_wait timeout and poll interval.
 
-    Priority: step.implicit_wait > scenario.implicit_wait > defaults (10s / 0.5s).
+    Priority: step.implicit_wait > scenario.implicit_wait > defaults (3s / 0.25s).
     Accepts either a number (timeout only) or a dict {timeout, poll}.
     Clamps timeout to [0.1, 60] to prevent runaway waits.
     """
@@ -736,8 +736,8 @@ def _execute_tap(
     fallback_ry: Optional[float],
     timeout: float = 4.0,
     retries: int = 2,
-    implicit_wait_timeout: float = 10.0,
-    implicit_wait_poll: float = 0.5,
+    implicit_wait_timeout: float = _IW_DEFAULT_TIMEOUT,
+    implicit_wait_poll: float = _IW_DEFAULT_POLL,
     element_image: Optional[bytes] = None,
     image_threshold: float = 0.7,
     screenshot_anchor: Optional[Dict[str, Any]] = None,
@@ -894,7 +894,7 @@ def _capture_step_screenshot(
     screen_h: int,
     selector: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
-    """Save full screenshot + cropped element + XML hierarchy + selector info."""
+    """Save full-screen screenshot + XML hierarchy + selector info (no element crops)."""
     from services import capture_store
 
     jpeg = device.take_screenshot()
@@ -937,32 +937,8 @@ def _capture_step_screenshot(
         if sel_url:
             result["selector"] = sel_url
 
-    # Crop element
     if bounds:
-        try:
-            from PIL import Image
-            img = Image.open(io.BytesIO(jpeg))
-            iw, ih = img.size
-            sx, sy = iw / max(screen_w, 1), ih / max(screen_h, 1)
-            crop_box = (
-                max(0, int(bounds["left"] * sx)),
-                max(0, int(bounds["top"] * sy)),
-                min(iw, int(bounds["right"] * sx)),
-                min(ih, int(bounds["bottom"] * sy)),
-            )
-            if crop_box[2] > crop_box[0] and crop_box[3] > crop_box[1]:
-                cropped = img.crop(crop_box)
-                buf = io.BytesIO()
-                cropped.save(buf, format="JPEG", quality=85)
-                crop_bytes = buf.getvalue()
-                elem_local = os.path.join(capture_dir, f"{prefix}_element.jpg")
-                elem_key = f"{minio_prefix}/{prefix}_element.jpg"
-                elem_url = capture_store.save_capture(crop_bytes, elem_local, elem_key, "image/jpeg", skip_quality=True)
-                if elem_url:
-                    result["element"] = elem_url
-                result["bounds"] = [bounds["left"], bounds["top"], bounds["right"], bounds["bottom"]]
-        except Exception as exc:
-            log.debug(f"crop failed: {exc}")
+        result["bounds"] = [bounds["left"], bounds["top"], bounds["right"], bounds["bottom"]]
 
     return result
 def _xml_has_element(xml: str, by: str, value: str) -> bool:
@@ -2161,6 +2137,7 @@ def _run_scenario_task_legacy(
                     step=step,
                     strategy=strategy,
                     result=step_result,
+                    cancel_event=cancel_event,
                 ):
                     results.append(step_result)
                     continue
@@ -2359,14 +2336,38 @@ def _run_scenario_task_legacy(
                         offsets = ctx.setdefault("__save_extraction_offsets__", {})
                         _parent_id_var = step.get("parent_id_var")
                         _parent_id = ctx.get(_parent_id_var) if _parent_id_var else None
+                        _campaign_vars = scenario.get("_campaign_vars") or {}
+                        _scenario_cfg = {
+                            k: scenario.get(k)
+                            for k in ("capture_steps", "preview_collection")
+                            if scenario.get(k) is not None
+                        }
+                        from services.execution.preview_collection import resolve_content_collection
+
+                        _collection = resolve_content_collection(
+                            step,
+                            campaign_vars=_campaign_vars,
+                            scenario_config=_scenario_cfg,
+                        )
+                        _platform = step.get("platform")
+                        _ctype = step.get("content_type")
+                        if not _ctype:
+                            step_result["ok"] = False
+                            step_result["message"] = (
+                                "save_extraction: content_type is required (platform-qualified, e.g. fb_post)"
+                            )
+                            continue
+                        from services.content.legacy_type_map import qualify_content_type
+
+                        _ctype = qualify_content_type(_ctype, platform=_platform) or _ctype
                         report, updated_offsets = _run_async_coro_sync(
                             persist_data_items(
                                 data=data,
                                 data_var=data_var,
                                 offsets=offsets,
-                                collection=step.get("collection", "default"),
-                                platform=step.get("platform"),
-                                content_type=step.get("content_type", "post"),
+                                collection=_collection,
+                                platform=_platform,
+                                content_type=_ctype,
                                 dedupe_field=step.get("dedupe_field"),
                                 tags=step.get("tags", ""),
                                 device_serial=device.serial,

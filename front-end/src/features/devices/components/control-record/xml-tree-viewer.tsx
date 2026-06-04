@@ -1,11 +1,21 @@
 'use client';
 
-import React, { useCallback, useMemo, useState } from 'react';
-import { HelpCircle } from 'lucide-react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react';
+import { HelpCircle, Loader2, RefreshCw } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import {
   parseHierarchyTree,
   searchTree,
   bestSelector,
+  filterSystemUiFromTree,
   type HierarchyTreeNode
 } from '../../utils/hierarchy-tree';
 import {
@@ -45,25 +55,62 @@ export function XmlTreeViewer({
 }: XmlTreeViewerProps) {
   const t = useTranslations('devicesControlRecord.view');
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const [hideSystemUi, setHideSystemUi] = useState(true);
+  const lastExpandSigRef = useRef('');
 
-  const root = useMemo(() => parseHierarchyTree(xml), [xml]);
+  useEffect(() => {
+    const tid = window.setTimeout(() => setDebouncedSearch(search), 150);
+    return () => window.clearTimeout(tid);
+  }, [search]);
 
-  // Auto-expand all nodes so the full tree is visible by default
-  useMemo(() => {
-    if (!root) return;
+  const root = useMemo(() => {
+    const parsed = parseHierarchyTree(xml);
+    return hideSystemUi ? filterSystemUiFromTree(parsed) : parsed;
+  }, [xml, hideSystemUi]);
+
+  // Auto-expand all nodes when hierarchy changes. Schedule via idle callback so
+  // the first paint is not blocked on large XML (Facebook feed).
+  useEffect(() => {
+    if (!root) {
+      setExpanded(new Set());
+      return;
+    }
+    const sig = `${xml.length}:${xml.slice(0, 96)}:hide=${hideSystemUi}`;
+    if (lastExpandSigRef.current === sig) return;
+    lastExpandSigRef.current = sig;
+
     const ids = new Set<number>();
     function collectAll(node: HierarchyTreeNode) {
       ids.add(node.id);
       node.children.forEach(collectAll);
     }
     collectAll(root);
-    setExpanded(ids);
-  }, [root]);
+
+    let cancelled = false;
+    const apply = () => {
+      if (!cancelled) setExpanded(ids);
+    };
+    let idleId: number | undefined;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    if (typeof requestIdleCallback !== 'undefined') {
+      idleId = requestIdleCallback(apply, { timeout: 400 });
+    } else {
+      timeoutId = setTimeout(apply, 0);
+    }
+    return () => {
+      cancelled = true;
+      if (idleId !== undefined && typeof cancelIdleCallback !== 'undefined') {
+        cancelIdleCallback(idleId);
+      }
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+    };
+  }, [root, xml, hideSystemUi]);
 
   const matchingIds = useMemo(
-    () => (root && search ? searchTree(root, search) : null),
-    [root, search]
+    () => (root && debouncedSearch ? searchTree(root, debouncedSearch) : null),
+    [root, debouncedSearch]
   );
 
   const toggle = useCallback((id: number) => {
@@ -85,17 +132,17 @@ export function XmlTreeViewer({
 
   return (
     <div className='flex h-full flex-col'>
-      {/* Header */}
-      <div className='flex items-center gap-2 border-b border-border/60 bg-background/80 px-3 py-2'>
-        <div className='flex items-center gap-1'>
-          <span className='text-xs font-semibold text-foreground'>
+      {/* Header — two rows so controls fit the 280px hierarchy column */}
+      <div className='shrink-0 border-b border-border/60 bg-muted/20'>
+        <div className='flex items-center gap-1 px-2.5 pb-1 pt-2'>
+          <span className='min-w-0 flex-1 truncate text-xs font-semibold leading-tight text-foreground'>
             {t('hierarchyTitle')}
           </span>
           <Tooltip delayDuration={400}>
             <TooltipTrigger asChild>
               <button
                 type='button'
-                className='rounded-full p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground'
+                className='shrink-0 rounded-full p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground'
                 aria-label={t('tooltipHierarchyPanel')}
               >
                 <HelpCircle className='size-3.5' />
@@ -108,31 +155,59 @@ export function XmlTreeViewer({
               {t('tooltipHierarchyPanel')}
             </TooltipContent>
           </Tooltip>
+          <Button
+            type='button'
+            variant='outline'
+            size='sm'
+            className='h-6 shrink-0 gap-1 px-2 text-[11px]'
+            onClick={onRefresh}
+            disabled={loading}
+          >
+            {loading ? (
+              <Loader2 className='size-3 shrink-0 animate-spin' aria-hidden />
+            ) : (
+              <RefreshCw className='size-3 shrink-0' aria-hidden />
+            )}
+            <span className='whitespace-nowrap'>{t('refreshHierarchy')}</span>
+          </Button>
         </div>
-        <div className='flex-1' />
-        <label className='flex items-center gap-1 text-[10px] text-muted-foreground'>
-          <input
-            type='checkbox'
-            checked={autoRefresh}
-            onChange={(e) => onAutoRefreshChange(e.target.checked)}
-            className='h-3 w-3'
-          />
-          Auto
-        </label>
-        <button
-          onClick={onRefresh}
-          disabled={loading}
-          className='rounded bg-muted px-2 py-0.5 text-[10px] hover:bg-accent disabled:opacity-50'
-        >
-          {loading ? '...' : 'Refresh'}
-        </button>
+        <div className='flex items-center justify-between gap-2 border-t border-border/40 px-2.5 py-1.5'>
+          <div className='flex items-center gap-1.5'>
+            <Switch
+              id='hierarchy-hide-system'
+              checked={hideSystemUi}
+              onCheckedChange={setHideSystemUi}
+              className='scale-[0.85]'
+            />
+            <Label
+              htmlFor='hierarchy-hide-system'
+              className='cursor-pointer whitespace-nowrap text-[11px] font-normal leading-none text-muted-foreground'
+            >
+              {t('hideSystemUiShort')}
+            </Label>
+          </div>
+          <div className='flex items-center gap-1.5'>
+            <Switch
+              id='hierarchy-auto-refresh'
+              checked={autoRefresh}
+              onCheckedChange={onAutoRefreshChange}
+              className='scale-[0.85]'
+            />
+            <Label
+              htmlFor='hierarchy-auto-refresh'
+              className='cursor-pointer whitespace-nowrap text-[11px] font-normal leading-none text-muted-foreground'
+            >
+              {t('autoShort')}
+            </Label>
+          </div>
+        </div>
       </div>
 
       {/* Search */}
       <div className='border-b border-border px-3 py-1.5'>
         <input
           type='text'
-          placeholder='Search text, resource-id, content-desc...'
+          placeholder={t('hierarchySearchPlaceholder')}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className='w-full rounded border border-border bg-background px-2 py-1 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring'

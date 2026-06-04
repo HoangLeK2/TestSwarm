@@ -13,9 +13,7 @@ export function normalizeNavUserRole(
   return 'operator';
 }
 
-export function isSuperadminRole(
-  role: string | null | undefined
-): boolean {
+export function isSuperadminRole(role: string | null | undefined): boolean {
   return normalizeNavUserRole(role) === 'superadmin';
 }
 

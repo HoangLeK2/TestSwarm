@@ -33,6 +33,17 @@ _URL_KEYS = (
 )
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def content_images_enabled() -> bool:
+    return _env_bool("DEVICE_FARM_CONTENT_IMAGES_ENABLED", False)
+
+
 def normalize_artifact_url(url: str | None) -> str | None:
     if not url:
         return None
@@ -50,6 +61,49 @@ def normalize_artifact_url(url: str | None) -> str | None:
     if value.startswith("screenshots/"):
         return f"/{value}"
     return value
+
+
+def _object_name_from_storage_url(url: str) -> str | None:
+    path = urlparse(url).path.lstrip("/")
+    if not path:
+        return None
+    marker = "content-screenshots/"
+    if marker in path:
+        return path[path.index(marker) :]
+    return None
+
+
+_ARTIFACT_PROXY_RE = re.compile(
+    r"^/artifacts/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/content$",
+    re.IGNORECASE,
+)
+
+
+async def _load_execution_artifact_proxy_bytes(proxy_path: str) -> bytes | None:
+    """Load /artifacts/{id}/content via DB + object storage (no HTTP loopback)."""
+    match = _ARTIFACT_PROXY_RE.match(str(proxy_path).strip())
+    if not match:
+        return None
+    artifact_id = match.group(1)
+    from db.database import activity_session
+    from db.models.content import ExecutionArtifact
+    from services import minio_store
+
+    async with activity_session() as db:
+        row = await db.get(ExecutionArtifact, artifact_id)
+        if row is None or row.object_deleted:
+            return None
+        return minio_store.get_object_bytes(row.object_key)
+
+
+def _kind_for_execution_artifact(art_type: str, url: str) -> str:
+    """Map execution step artifact types to preview kinds (proxy URLs lack extensions)."""
+    lowered = art_type.lower()
+    if "screenshot" in lowered or lowered.endswith(".element") or ".element" in lowered:
+        return "image"
+    if "hierarchy" in lowered or "selector" in lowered:
+        return "xml"
+    return _guess_kind(url)
 
 
 def _guess_kind(value: str, *, mime_hint: str | None = None) -> str:
@@ -114,41 +168,72 @@ def _artifact_base(
     }
 
 
-def collect_content_artifacts(item: ContentItem) -> list[dict[str, Any]]:
+def _inline_hierarchy_label(key: str) -> str:
+    if key == "hierarchy_xml":
+        return "XML giao diện"
+    return f"XML ({key})"
+
+
+def _item_has_persisted_screenshot(item: ContentItem) -> bool:
+    return bool(str(getattr(item, "screenshot_path", None) or "").strip())
+
+
+def _item_has_inline_hierarchy(item: ContentItem) -> bool:
+    raw = item.raw_data if isinstance(item.raw_data, dict) else {}
+    return any(raw.get(k) for k in _INLINE_HIERARCHY_KEYS)
+
+
+def _base_has_screenshot(artifacts: list[dict[str, Any]]) -> bool:
+    return any(a.get("id") == "screenshot" for a in artifacts)
+
+
+def _base_has_hierarchy(artifacts: list[dict[str, Any]]) -> bool:
+    return any(
+        str(a.get("id", "")).startswith("inline:")
+        and "hierarchy" in str(a.get("source", ""))
+        for a in artifacts
+    )
+
+
+def _screenshot_label_for_item(item: ContentItem) -> str:
+    ct = str(getattr(item, "content_type", None) or "").lower()
+    level = int(getattr(item, "item_level", 0) or 0)
+    if ct.endswith("comment") or level > 0:
+        return "Màn hình bình luận"
+    if ct.endswith("post") or level == 0:
+        return "Ảnh bài viết"
+    return "Screenshot"
+
+
+def _pick_primary_hierarchy(raw: dict[str, Any]) -> tuple[str, Any] | None:
+    """Single hierarchy blob from crawl (same UI moment as screenshot_path)."""
+    for key in _INLINE_HIERARCHY_KEYS:
+        value = raw.get(key)
+        if value:
+            return key, value
+    return None
+
+
+def collect_primary_content_artifacts(item: ContentItem) -> list[dict[str, Any]]:
+    """At most one screenshot + one XML for content detail UI."""
     artifacts: list[dict[str, Any]] = []
     raw = item.raw_data if isinstance(item.raw_data, dict) else {}
 
-    if item.screenshot_path:
+    if content_images_enabled() and item.screenshot_path:
         path = str(item.screenshot_path)
         artifacts.append(
             _artifact_base(
                 artifact_id="screenshot",
                 kind=_guess_kind(path),
-                label="Screenshot",
+                label=_screenshot_label_for_item(item),
                 source="screenshot_path",
                 url=path,
             )
         )
 
-    for key in _URL_KEYS:
-        value = raw.get(key)
-        if not value or not isinstance(value, str):
-            continue
-        kind = _guess_kind(value)
-        artifacts.append(
-            _artifact_base(
-                artifact_id=f"url:{key}",
-                kind=kind,
-                label=key.replace("_", " ").title(),
-                source=f"raw_data.{key}",
-                url=value,
-            )
-        )
-
-    for idx, key in enumerate(_INLINE_HIERARCHY_KEYS):
-        value = raw.get(key)
-        if not value:
-            continue
+    picked = _pick_primary_hierarchy(raw)
+    if picked:
+        key, value = picked
         if isinstance(value, (dict, list)):
             text = json.dumps(value, ensure_ascii=False, indent=2)
             kind = "json"
@@ -157,52 +242,21 @@ def collect_content_artifacts(item: ContentItem) -> list[dict[str, Any]]:
             kind = _guess_kind(text)
         artifacts.append(
             _artifact_base(
-                artifact_id=f"inline:{key}",
+                artifact_id="inline:hierarchy_xml",
                 kind=kind,
-                label=f"Hierarchy ({key})",
+                label=_inline_hierarchy_label(key),
                 source=f"raw_data.{key}",
                 inline=True,
                 size_bytes=len(text.encode("utf-8")),
             )
         )
-
-    for key in _INLINE_TEXT_KEYS:
-        value = raw.get(key)
-        if not value:
-            continue
-        text = str(value) if not isinstance(value, (dict, list)) else json.dumps(value)
-        artifacts.append(
-            _artifact_base(
-                artifact_id=f"inline:{key}",
-                kind="text",
-                label=key.replace("_", " ").title(),
-                source=f"raw_data.{key}",
-                inline=True,
-                size_bytes=len(text.encode("utf-8")),
-            )
-        )
-
-    nested = raw.get("artifacts")
-    if isinstance(nested, list):
-        for i, entry in enumerate(nested):
-            if not isinstance(entry, dict):
-                continue
-            url = entry.get("url") or entry.get("path")
-            kind = str(entry.get("kind") or entry.get("type") or "text")
-            label = str(entry.get("label") or entry.get("name") or f"Artifact {i + 1}")
-            artifacts.append(
-                _artifact_base(
-                    artifact_id=f"nested:{i}",
-                    kind=kind if kind in ("image", "xml", "json", "text") else _guess_kind(str(url or "")),
-                    label=label,
-                    source=f"raw_data.artifacts[{i}]",
-                    url=str(url) if url else None,
-                    inline=bool(entry.get("content")),
-                    size_bytes=int(entry["size_bytes"]) if entry.get("size_bytes") else None,
-                )
-            )
 
     return artifacts
+
+
+def collect_content_artifacts(item: ContentItem) -> list[dict[str, Any]]:
+    """Alias for UI/detail — one screenshot + one hierarchy XML only."""
+    return collect_primary_content_artifacts(item)
 
 
 def merge_execution_artifacts(
@@ -215,14 +269,26 @@ def merge_execution_artifacts(
     seen_ids = {a["id"] for a in base}
     out = list(base)
 
+    skip_screenshot = _base_has_screenshot(base)
+    skip_hierarchy = _base_has_hierarchy(base)
+
     for art_type, url in execution_steps:
         resolved = normalize_artifact_url(url)
         if not resolved or resolved in seen_urls:
             continue
-        kind = _guess_kind(resolved)
-        if kind not in ("image", "xml", "json", "text"):
-            continue
         if "hierarchy" not in art_type and "screenshot" not in art_type:
+            continue
+        lowered = art_type.lower()
+        if "element" in lowered:
+            continue
+        if not content_images_enabled() and "screenshot" in lowered:
+            continue
+        if skip_screenshot and "screenshot" in lowered:
+            continue
+        if skip_hierarchy and "hierarchy" in lowered:
+            continue
+        kind = _kind_for_execution_artifact(art_type, resolved)
+        if kind not in ("image", "xml", "json", "text"):
             continue
         artifact_id = f"execution:{art_type}"
         if artifact_id in seen_ids:
@@ -324,13 +390,31 @@ async def read_artifact_bytes(
     if not url:
         raise FileNotFoundError("artifact expired")
 
-    if str(url).startswith(("http://", "https://")):
-        data = await asyncio.to_thread(_fetch_url_bytes, str(url))
-        parsed = urlparse(str(url))
+    url_str = str(url).strip()
+
+    proxy_bytes = await _load_execution_artifact_proxy_bytes(url_str)
+    if proxy_bytes is not None:
+        base = os.path.basename(url_str) or f"artifact_{stamp}.jpg"
+        return proxy_bytes, f"content_{content_id}_{base}", art["mime_type"]
+
+    if url_str.startswith(("http://", "https://")):
+        object_name = _object_name_from_storage_url(url_str)
+        if object_name:
+            from services import minio_store
+
+            data = minio_store.get_object_bytes(object_name)
+            if data is not None:
+                parsed = urlparse(url_str)
+                base = os.path.basename(parsed.path) or f"artifact_{stamp}"
+                return data, f"content_{content_id}_{base}", art["mime_type"]
+            # Public URL may point at localhost:9000 — unreachable from inside Docker.
+            raise FileNotFoundError("artifact expired")
+        data = await asyncio.to_thread(_fetch_url_bytes, url_str)
+        parsed = urlparse(url_str)
         base = os.path.basename(parsed.path) or f"artifact_{stamp}"
         return data, f"content_{content_id}_{base}", art["mime_type"]
 
-    local = _resolve_local_path(str(url))
+    local = _resolve_local_path(url_str)
     if not local or not os.path.isfile(local):
         raise FileNotFoundError("artifact expired")
     with open(local, "rb") as fh:

@@ -1,28 +1,14 @@
 'use client';
 
 import React from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import type { ProtoOrganization } from '@/features/device-farm';
+import { useAuthContext } from '@/features/auth/providers/auth-provider';
+import { DEVICES_LIST_KEY, FLEET_STATS_KEY } from '@/features/devices/lib/device-query-keys';
+import { pickDefaultOrganization } from '../lib/pick-default-organization';
 import { useOrganizationsQuery } from '../hooks/use-organizations';
 
 const CURRENT_ORG_STORAGE_KEY = 'device-farm:current-organization-id';
-
-function isPersonalWorkspaceName(name: string | undefined | null): boolean {
-  return Boolean(name?.trim().endsWith("'s Workspace"));
-}
-
-function pickDefaultOrganization(
-  organizations: ProtoOrganization[],
-  storedId: string | null
-): ProtoOrganization {
-  if (storedId) {
-    const fromStorage = organizations.find((o) => o.id === storedId);
-    if (fromStorage) return fromStorage;
-  }
-  const shared = organizations.filter(
-    (o) => !isPersonalWorkspaceName(o.businessName)
-  );
-  return shared[0] ?? organizations[0];
-}
 
 type OrganizationContextValue = {
   organizations: ProtoOrganization[];
@@ -41,6 +27,8 @@ export function OrganizationProvider({
 }: {
   children: React.ReactNode;
 }) {
+  const queryClient = useQueryClient();
+  const { user } = useAuthContext();
   const {
     data: organizations = [],
     isLoading,
@@ -57,28 +45,52 @@ export function OrganizationProvider({
     }
 
     setCurrentOrgState((prev) => {
-      if (prev && organizations.some((o) => o.id === prev.id)) {
-        return organizations.find((o) => o.id === prev.id) ?? prev;
-      }
-
       const storedId =
         typeof window !== 'undefined'
           ? localStorage.getItem(CURRENT_ORG_STORAGE_KEY)?.trim() || null
           : null;
 
-      return pickDefaultOrganization(organizations, storedId);
+      const picked = pickDefaultOrganization(organizations, storedId, {
+        preferredOrgId: user?.defaultOrgId,
+        userEmail: user?.email
+      });
+
+      const preferred = (user?.defaultOrgId ?? '').trim();
+      if (preferred) {
+        const preferredOrg = organizations.find((o) => o.id === preferred);
+        if (preferredOrg && prev?.id !== preferred) return preferredOrg;
+      }
+
+      if (prev && organizations.some((o) => o.id === prev.id)) {
+        return organizations.find((o) => o.id === prev.id) ?? prev;
+      }
+
+      return picked;
     });
-  }, [organizations]);
+  }, [organizations, user?.defaultOrgId, user?.email]);
 
   const setCurrentOrg = React.useCallback((org: ProtoOrganization | null) => {
     setCurrentOrgState(org);
+  }, []);
+
+  // Keep X-Organization-Id (farmApi interceptor) aligned with UI org selection.
+  React.useEffect(() => {
     if (typeof window === 'undefined') return;
-    if (org) {
-      localStorage.setItem(CURRENT_ORG_STORAGE_KEY, org.id);
+    if (currentOrg?.id) {
+      localStorage.setItem(CURRENT_ORG_STORAGE_KEY, currentOrg.id);
     } else {
       localStorage.removeItem(CURRENT_ORG_STORAGE_KEY);
     }
-  }, []);
+  }, [currentOrg?.id]);
+
+  React.useEffect(() => {
+    if (!currentOrg?.id) return;
+    void queryClient.invalidateQueries({ queryKey: DEVICES_LIST_KEY });
+    void queryClient.invalidateQueries({ queryKey: FLEET_STATS_KEY });
+    void queryClient.invalidateQueries({ queryKey: ['notifications'] });
+    void queryClient.invalidateQueries({ queryKey: ['control-record-device-map'] });
+    void queryClient.invalidateQueries({ queryKey: ['relay-agents'] });
+  }, [currentOrg?.id, queryClient]);
 
   const value = React.useMemo<OrganizationContextValue>(
     () => ({

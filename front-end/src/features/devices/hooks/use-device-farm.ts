@@ -6,7 +6,11 @@ import { useTranslations } from 'next-intl';
 import type { Device, Task, WsMessage } from '../types';
 import { createWs } from '../services/ws';
 import { fetchConfig, fetchLiveDevices, fetchTasks } from '../services/api';
-import { devicesApi, relayAgentsApi, type DeviceOut } from '../services/manage-api';
+import {
+  devicesApi,
+  relayAgentsApi,
+  type DeviceOut
+} from '../services/manage-api';
 import { hasOperationalRelayAgent } from '../lib/relay-agent-status';
 import { useConfirm } from '@/providers/modal-provider';
 import { useOrganization } from '@/features/organization/hooks/use-organization';
@@ -175,6 +179,24 @@ export function useDeviceFarm() {
         setLogs((prev) => {
           const arr = [...(prev[msg.serial] ?? []), msg.line].slice(-50);
           return { ...prev, [msg.serial]: arr };
+        });
+      }
+
+      if (msg.type === 'multi_action_result') {
+        setLogs((prev) => {
+          const next = { ...prev };
+          msg.results.forEach((item) => {
+            const status = item.ok ? 'ok' : item.error || 'failed';
+            const latency =
+              typeof item.latency_ms === 'number'
+                ? ` ${item.latency_ms}ms`
+                : '';
+            next[item.serial] = [
+              ...(next[item.serial] ?? []),
+              `[multi] ${status}${latency}`
+            ].slice(-50);
+          });
+          return next;
         });
       }
     });

@@ -23,13 +23,22 @@ async def get_execution_for_user(
     if ex is None:
         raise HTTPException(status_code=404, detail="Execution not found")
 
-    user_org = getattr(user, "org_id", None) or await repo.get_user_org_id(db, user.id)
+    user_org = getattr(user, "org_id", None)
+    if user_org is None and hasattr(user, "org_id"):
+        maybe_org = await repo.get_user_org_id(db, user.id)
+        if isinstance(maybe_org, str) and maybe_org:
+            user_org = maybe_org
 
-    if ex.campaign_id:
+    if ex.campaign_id and user_org:
         campaign = await get_campaign(db, ex.campaign_id)
         if campaign is None:
             raise HTTPException(status_code=404, detail="Execution not found")
-        if user_org and campaign.org_id != user_org:
+        if campaign.org_id != user_org:
+            raise HTTPException(status_code=404, detail="Execution not found")
+        return ex
+
+    if ex.campaign_id:
+        if ex.user_id != user.id:
             raise HTTPException(status_code=404, detail="Execution not found")
         return ex
 

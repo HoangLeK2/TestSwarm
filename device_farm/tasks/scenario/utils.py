@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple, TYPE_CHECKING
 
@@ -58,8 +59,8 @@ _VOLATILE_ATTRS = re.compile(
     r'\s+(?:index|bounds|focused|selected|drawing-order|rotation)="[^"]*"'
 )
 
-_IW_DEFAULT_TIMEOUT = 10.0
-_IW_DEFAULT_POLL = 0.5
+_IW_DEFAULT_TIMEOUT = 3.0
+_IW_DEFAULT_POLL = 0.25
 _IW_MAX_TIMEOUT = 60.0
 
 
@@ -290,7 +291,7 @@ def _get_implicit_wait_config(
     """
     Resolve implicit_wait timeout and poll interval.
 
-    Priority: step.implicit_wait > scenario.implicit_wait > defaults (10s / 0.5s).
+    Priority: step.implicit_wait > scenario.implicit_wait > defaults (3s / 0.25s).
     Accepts either a number (timeout only) or a dict {timeout, poll}.
     """
     for source in (step, scenario_config):
@@ -481,12 +482,13 @@ def _execute_tap(
     fallback_ry: Optional[float],
     timeout: float = 4.0,
     retries: int = 2,
-    implicit_wait_timeout: float = 10.0,
-    implicit_wait_poll: float = 0.5,
+    implicit_wait_timeout: float = _IW_DEFAULT_TIMEOUT,
+    implicit_wait_poll: float = _IW_DEFAULT_POLL,
     element_image: Optional[bytes] = None,
     image_threshold: float = 0.7,
     screenshot_anchor: Optional[Dict[str, Any]] = None,
     spec: Optional[Any] = None,
+    cancel_event: Optional[threading.Event] = None,
 ) -> Tuple[bool, str, Optional[Dict[str, int]]]:
     """
     Full tap pipeline: selector → image match (ROI→full) → position fallback.
@@ -508,6 +510,9 @@ def _execute_tap(
     w = device.screen_width or 1080
     h = device.screen_height or 1920
     u2 = device.u2
+
+    if cancel_event is not None and cancel_event.is_set():
+        return False, "cancelled", None
 
     if spec is None and by and value:
         spec = ScenarioSelectorSpec(by=str(by), value=str(value))
@@ -556,8 +561,8 @@ def _execute_tap(
                 fallback_rx, fallback_ry,
                 implicit_wait_timeout, implicit_wait_poll,
                 w, h,
-                find_fn=lambda u, b, v, timeout=10.0, poll=0.5, cancel_event=None, **kw: _retry_find_element(
-                    u, timeout=timeout, poll=poll, cancel_event=cancel_event, spec=spec, device=device,
+                find_fn=lambda u, b, v, timeout=10.0, poll=0.5, cancel_event=None, _ce=cancel_event, **kw: _retry_find_element(
+                    u, timeout=timeout, poll=poll, cancel_event=cancel_event or _ce, spec=spec, device=device,
                 ),
             )
         phases.append(_phase_spec)
@@ -567,8 +572,8 @@ def _execute_tap(
             fallback_rx, fallback_ry,
             implicit_wait_timeout, implicit_wait_poll,
             w, h,
-            find_fn=lambda u, b, v, timeout=10.0, poll=0.5, cancel_event=None, **kw: _retry_find_element(
-                u, b, v, timeout=timeout, poll=poll, cancel_event=cancel_event, device=device,
+            find_fn=lambda u, b, v, timeout=10.0, poll=0.5, cancel_event=None, _ce=cancel_event, **kw: _retry_find_element(
+                u, b, v, timeout=timeout, poll=poll, cancel_event=cancel_event or _ce, device=device,
             ),
         ))
 
@@ -592,6 +597,8 @@ def _execute_tap(
         ))
 
     resolver = ElementResolver(phases=phases)
+    if cancel_event is not None and cancel_event.is_set():
+        return False, "cancelled", None
     result = resolver.resolve()
 
     # F1.6 — if resolver missed AND the selector was real, force a fresh
@@ -599,22 +606,29 @@ def _execute_tap(
     # between capture and tap, so the previous cached tree no longer has the
     # target. Cheap (~200ms per retry), only fires on miss.
     if not result.hit and has_selector:
+        if cancel_event is not None and cancel_event.is_set():
+            return False, "cancelled", None
         try:
             device.hierarchy_xml(force_refresh=True)
         except Exception as exc:
             log.debug(f"[{serial}] tap-retry force_refresh failed: {exc}")
+        if cancel_event is not None and cancel_event.is_set():
+            return False, "cancelled", None
         result = resolver.resolve()
         if result.hit:
             log.info(f"[{serial}] tap: recovered after hierarchy refresh")
 
     if not result.hit:
+        if cancel_event is not None and cancel_event.is_set():
+            return False, "cancelled", None
         lbl = selector_summary(spec) if spec else f"{by}={value!r}"
         return False, f"selector {lbl} not found, no fallback position", None
 
     if result.x == -1 and result.y == -1:
         try:
             eid_result = _retry_find_element(
-                u2, effective_by, effective_value, timeout=1.0, poll=0.3, spec=spec, device=device,
+                u2, effective_by, effective_value, timeout=1.0, poll=0.3,
+                cancel_event=cancel_event, spec=spec, device=device,
             )
             if eid_result is not None:
                 from services.scenario_selector import spec_eid
@@ -722,7 +736,7 @@ def _capture_step_screenshot(
     screen_h: int,
     selector: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
-    """Save full screenshot + cropped element + XML hierarchy + selector info."""
+    """Save full-screen screenshot + XML hierarchy + selector info (no element crops)."""
     from services import capture_store
 
     jpeg = device.take_screenshot()
@@ -762,30 +776,7 @@ def _capture_step_screenshot(
             result["selector"] = sel_url
 
     if bounds:
-        try:
-            from PIL import Image
-            img = Image.open(io.BytesIO(jpeg))
-            iw, ih = img.size
-            sx, sy = iw / max(screen_w, 1), ih / max(screen_h, 1)
-            crop_box = (
-                max(0, int(bounds["left"] * sx)),
-                max(0, int(bounds["top"] * sy)),
-                min(iw, int(bounds["right"] * sx)),
-                min(ih, int(bounds["bottom"] * sy)),
-            )
-            if crop_box[2] > crop_box[0] and crop_box[3] > crop_box[1]:
-                cropped = img.crop(crop_box)
-                buf = io.BytesIO()
-                cropped.save(buf, format="JPEG", quality=85)
-                crop_bytes = buf.getvalue()
-                elem_local = os.path.join(capture_dir, f"{prefix}_element.jpg")
-                elem_key = f"{minio_prefix}/{prefix}_element.jpg"
-                elem_url = capture_store.save_capture(crop_bytes, elem_local, elem_key, "image/jpeg", skip_quality=True)
-                if elem_url:
-                    result["element"] = elem_url
-                result["bounds"] = [bounds["left"], bounds["top"], bounds["right"], bounds["bottom"]]
-        except Exception as exc:
-            log.debug(f"crop failed: {exc}")
+        result["bounds"] = [bounds["left"], bounds["top"], bounds["right"], bounds["bottom"]]
 
     return result
 

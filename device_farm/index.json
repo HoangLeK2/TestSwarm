@@ -55,7 +55,7 @@
     { "type": "wait_stable", "timeout": 4, "stable_duration": 0.5 },
 
     {
-      "_comment": "Loop crawl: extract bài viết → lấy comment bài đầu tiên → scroll. Không dừng sớm.",
+      "_comment": "Loop crawl: mở detail → extract bài viết → filter/cào comment đúng bài → quay feed → scroll. Không dừng sớm.",
       "type": "loop",
       "count": "${MAX_SCROLLS}",
       "steps": [
@@ -63,54 +63,62 @@
         { "_comment": "Chờ nội dung load xong (đặc biệt quan trọng cho bài viết dài)" },
         { "type": "wait", "seconds": 1 },
 
-        { "_comment": "Expand 'Xem thêm' rồi extract bài viết + lưu collection (inline save)" },
+        { "_comment": "Mở detail, expand 'Xem thêm' rồi extract bài viết + lưu collection (inline save)" },
         {
           "type": "extract",
           "strategy": "fb_posts",
           "edge_extra_data": true,
+          "extract_profile": "balanced",
+          "strategy_version": "fb_posts:v1",
+          "open_post_before_extract": true,
+          "open_post_press_back_after_extract": false,
           "expand_see_more": true,
+          "expand_see_more_max_passes": 2,
+          "expand_see_more_scroll": true,
+          "expand_see_more_scroll_distance": 0.25,
+          "expand_completion_retries": 2,
           "stop_if_no_new": false,
           "collection": "${SAVE_COLLECTION}",
           "platform": "facebook",
-          "content_type": "group_post",
-          "dedupe_field": "text",
+          "content_type": "fb_post",
+          "dedupe_field": "post_key",
           "tags": "group,crawl,${GROUP_NAME}"
         },
 
-        { "_comment": "Atomic resolve+tap Bình luận — link comment đúng bài (không còn 'láy sai tè le'). then[] chạy khi tap thành công." },
+        { "_comment": "Atomic tap/filter trên chính detail vừa mở — giữ parent context chính xác cho comments." },
         {
-          "type": "tap_fb_comment_button", "timeout": 6,
+          "type": "fb_tap_comment_button",
+          "timeout": 5,
+          "pre_scroll": true,
+          "pre_scroll_distance": 0.24,
+          "post_tap_wait_s": 0.6,
+          "enter_comment_sheet_timeout": 2,
+          "switch_to_all_comments": true,
           "then": [
-            { "type": "wait_stable", "timeout": 6, "stable_duration": 0.5 },
+            { "type": "wait", "seconds": 0.6 },
 
-            { "_comment": "Lần 1: extract comment + lưu (parent từ _active_comment_parent_hash)" },
+            { "_comment": "Extract comment + lưu parent từ detail post đang active" },
             {
               "type": "extract",
               "strategy": "fb_comments",
               "edge_extra_data": true,
+              "extract_profile": "balanced",
+              "strategy_version": "fb_comments:v1",
               "parent_post_id_var": "_fb_comment_parent_pid",
+              "require_verified_parent": true,
+              "max_items": 500,
+              "comment_scroll_passes": 48,
+              "comment_swipes_per_dump": 3,
+              "comment_scroll_distance": 0.3,
+              "comment_scroll_duration_ms": 300,
+              "comment_scroll_pause_s": 0.12,
+              "comment_no_growth_break": 3,
+              "min_comment_scan_passes": 2,
+              "stop_if_no_new": false,
+              "no_new_threshold": 4,
               "collection": "${SAVE_COLLECTION}",
               "platform": "facebook",
-              "content_type": "comment",
-              "dedupe_field": "comment_key",
-              "tags": "group,comment,${GROUP_NAME}",
-              "save_parent_id_var": "_active_comment_parent_hash",
-              "item_level": 1
-            },
-
-            { "_comment": "Cuộn xuống load thêm comment (chậm hơn để RecyclerView kịp hydrate)" },
-            { "type": "scroll_down", "repeats": 2, "start_x_ratio": 0.5, "duration_ms": 900, "pause_seconds": 1.0 },
-            { "type": "wait", "seconds": 1.8 },
-
-            { "_comment": "Lần 2: extract thêm comment sau khi scroll" },
-            {
-              "type": "extract",
-              "strategy": "fb_comments",
-              "edge_extra_data": true,
-              "parent_post_id_var": "_fb_comment_parent_pid",
-              "collection": "${SAVE_COLLECTION}",
-              "platform": "facebook",
-              "content_type": "comment",
+              "content_type": "fb_comment",
               "dedupe_field": "comment_key",
               "tags": "group,comment,${GROUP_NAME}",
               "save_parent_id_var": "_active_comment_parent_hash",
@@ -118,8 +126,21 @@
             },
 
             { "type": "key", "key": "back" },
-            { "type": "wait_stable", "timeout": 5, "stable_duration": 0.5 }
-          ]
+            { "type": "wait", "seconds": 0.5 },
+            {
+              "type": "if_element",
+              "by": "text",
+              "value": "Bài viết",
+              "timeout": 1,
+              "then": [
+                { "type": "key", "key": "back" },
+                { "type": "wait", "seconds": 1 }
+              ],
+              "else": []
+            },
+            { "type": "dismiss_popup", "retries": 1 }
+          ],
+          "else": []
         },
 
         { "_comment": "Scroll feed (neo trái)" },

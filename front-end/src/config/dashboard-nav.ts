@@ -18,19 +18,13 @@ type NavGroupDef = {
   items: NavLeafDef[];
 };
 
-const DEVICES_GROUP: NavGroupDef = {
-  titleKey: 'nav_group_devices',
+const DAILY_OPERATIONS_GROUP: NavGroupDef = {
+  titleKey: 'nav_group_daily_operations',
   items: [
     {
       titleKey: 'device_farm',
       url: ROUTES.DEVICES.ROOT,
       icon: 'laptop',
-      permission: { object: 'devices', action: 'read' }
-    },
-    {
-      titleKey: 'devices_manage',
-      url: ROUTES.DEVICES.MANAGE,
-      icon: 'smartphone',
       permission: { object: 'devices', action: 'read' }
     },
     {
@@ -40,35 +34,29 @@ const DEVICES_GROUP: NavGroupDef = {
       permission: { object: 'devices', action: 'execute' }
     },
     {
-      titleKey: 'device_groups',
-      url: ROUTES.DEVICE_GROUPS.ROOT,
-      icon: 'folder',
-      permission: { object: 'device-groups', action: 'read' }
-    }
-  ]
-};
-
-const AUTOMATION_GROUP: NavGroupDef = {
-  titleKey: 'nav_group_automation',
-  items: [
-    {
       titleKey: 'campaigns',
       url: ROUTES.CAMPAIGNS.ROOT,
       icon: 'play',
       permission: { object: 'campaigns', action: 'read' }
     },
     {
-      titleKey: 'schedules',
-      url: ROUTES.SCHEDULES.ROOT,
-      icon: 'calendarTime',
-      permission: { object: 'schedules', action: 'read' }
+      titleKey: 'content',
+      url: ROUTES.CONTENT.ROOT,
+      icon: 'stats',
+      permission: { object: 'content', action: 'read' }
     }
   ]
 };
 
-const LIBRARY_GROUP: NavGroupDef = {
-  titleKey: 'nav_group_library',
+const PREPARATION_GROUP: NavGroupDef = {
+  titleKey: 'nav_group_preparation',
   items: [
+    {
+      titleKey: 'org_scenarios',
+      url: ROUTES.ORG_SCENARIOS.ROOT,
+      icon: 'flow',
+      permission: { object: 'scenarios', action: 'read' }
+    },
     {
       titleKey: 'accounts',
       url: ROUTES.ACCOUNTS.ROOT,
@@ -82,35 +70,48 @@ const LIBRARY_GROUP: NavGroupDef = {
       permission: { object: 'account-groups', action: 'read' }
     },
     {
-      titleKey: 'scenario_templates',
-      url: ROUTES.SCENARIO_TEMPLATES.ROOT,
-      icon: 'template',
-      permission: { object: 'scenario-templates', action: 'read' }
+      titleKey: 'device_groups',
+      url: ROUTES.DEVICE_GROUPS.ROOT,
+      icon: 'folder',
+      permission: { object: 'device-groups', action: 'read' }
+    }
+  ]
+};
+
+const ADMIN_MONITORING_GROUP: NavGroupDef = {
+  titleKey: 'nav_group_admin_monitoring',
+  items: [
+    {
+      titleKey: 'devices_manage',
+      url: ROUTES.DEVICES.MANAGE,
+      icon: 'smartphone',
+      permission: { object: 'devices', action: 'read' }
     },
     {
-      titleKey: 'content',
-      url: ROUTES.CONTENT.ROOT,
+      titleKey: 'schedules',
+      url: ROUTES.SCHEDULES.ROOT,
+      icon: 'calendarTime',
+      permission: { object: 'schedules', action: 'read' }
+    },
+    {
+      titleKey: 'notifications',
+      url: ROUTES.NOTIFICATIONS.ROOT,
+      icon: 'bell',
+      permission: { object: 'notifications', action: 'read' }
+    },
+    {
+      // Temporary: analytics rollout — superadmin platform accounts only.
+      titleKey: 'analytics',
+      url: ROUTES.ANALYTICS.ROOT,
       icon: 'stats',
-      permission: { object: 'content', action: 'read' }
+      roles: ['superadmin']
     },
     {
       titleKey: 'activity_history',
       url: ROUTES.DASHBOARD.ACTIVITY_HISTORY.ROOT,
       icon: 'history',
       permission: { object: 'analytics', action: 'read' }
-    }
-  ]
-};
-
-const OPERATIONS_GROUP: NavGroupDef = {
-  titleKey: 'nav_group_operations',
-  items: [
-    {
-      titleKey: 'notifications',
-      url: ROUTES.NOTIFICATIONS.ROOT,
-      icon: 'bell',
-      permission: { object: 'notifications', action: 'read' }
-    }
+    },
   ]
 };
 
@@ -146,15 +147,20 @@ const INFRASTRUCTURE_GROUP: NavGroupDef = {
       url: ROUTES.RELAY_AGENTS.ROOT,
       icon: 'server',
       permission: { object: 'relay-agents', action: 'read' }
+    },
+    {
+      titleKey: 'mcp_tokens',
+      url: ROUTES.MCP.ROOT,
+      icon: 'key',
+      permission: { object: 'mcp', action: 'read' }
     }
   ]
 };
 
 export const DASHBOARD_MAIN_NAV_GROUPS = [
-  DEVICES_GROUP,
-  AUTOMATION_GROUP,
-  LIBRARY_GROUP,
-  OPERATIONS_GROUP
+  DAILY_OPERATIONS_GROUP,
+  PREPARATION_GROUP,
+  ADMIN_MONITORING_GROUP
 ] as const;
 
 export const DASHBOARD_SETTINGS_NAV_GROUPS = [
@@ -167,10 +173,7 @@ export const DASHBOARD_NAV_PATHS: string[] = [
   ...DASHBOARD_SETTINGS_NAV_GROUPS.flatMap((g) => g.items.map((i) => i.url))
 ];
 
-function leafFromDef(
-  def: NavLeafDef,
-  t: (key: string) => string
-): NavItem {
+function leafFromDef(def: NavLeafDef, t: (key: string) => string): NavItem {
   return {
     title: t(def.titleKey),
     url: def.url,
@@ -180,10 +183,7 @@ function leafFromDef(
   };
 }
 
-function groupFromDef(
-  def: NavGroupDef,
-  t: (key: string) => string
-): NavItem {
+function groupFromDef(def: NavGroupDef, t: (key: string) => string): NavItem {
   return {
     title: t(def.titleKey),
     type: 'group',
@@ -191,9 +191,10 @@ function groupFromDef(
   };
 }
 
-export function buildDashboardNavItems(
-  t: (key: string) => string
-): { baseItems: NavItem[]; settingItems: NavItem[] } {
+export function buildDashboardNavItems(t: (key: string) => string): {
+  baseItems: NavItem[];
+  settingItems: NavItem[];
+} {
   return {
     baseItems: DASHBOARD_MAIN_NAV_GROUPS.map((g) => groupFromDef(g, t)),
     settingItems: DASHBOARD_SETTINGS_NAV_GROUPS.map((g) => groupFromDef(g, t))

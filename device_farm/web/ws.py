@@ -21,6 +21,7 @@ from db import crud as repo
 from db.crud.user import get_user_org_id
 from db.database import AsyncSessionLocal
 from runtime.core import DeviceManager, DeviceState
+from services.multi_control import MultiControlCoordinator
 from tenancy.background import (
     ensure_device_org_id,
     list_device_serials_for_user,
@@ -201,7 +202,7 @@ class WebSocketManager:
     WRITE_MESSAGE_TYPES: frozenset[str] = frozenset({
         "tap", "swipe", "key", "long_tap", "pinch", "double_tap", "drag",
         "tap_selector", "screen_on", "screen_off", "unlock", "swipe_ext",
-        "install",
+        "install", "multi_action",
     })
 
     def __init__(
@@ -227,6 +228,7 @@ class WebSocketManager:
         # Safe-mode: reject write-type frames. BaseHTTPMiddleware can't see
         # WS frames, so the gate must live inside the receive loop.
         self._read_only = bool(read_only)
+        self._multi_control = MultiControlCoordinator(manager)
 
     def bind_event_recorder(self, recorder) -> None:
         """Subscribe to EventRecorder to broadcast device_event messages to all frontends."""
@@ -254,12 +256,17 @@ class WebSocketManager:
             except Exception:
                 pass
 
-    async def _load_allowed_serials(self, user_id: Optional[str]) -> Optional[set[str]]:
+    async def _load_allowed_serials(
+        self,
+        user_id: Optional[str],
+        *,
+        org_id: Optional[str] = None,
+    ) -> Optional[set[str]]:
         """
         Per-connection serial allowlist.
         - DB disabled: None (allow all)
         - DB enabled + no user: empty set (allow none)
-        - DB enabled + user: devices owned by that user
+        - DB enabled + user: org-scoped devices (see list_device_serials_for_user)
         """
         if not self._db_enabled:
             return None
@@ -267,8 +274,15 @@ class WebSocketManager:
             return set()
         try:
             async with AsyncSessionLocal() as db:
-                return await list_device_serials_for_user(db, user_id)
-        except Exception:
+                return await list_device_serials_for_user(
+                    db, user_id, org_id=org_id
+                )
+        except Exception as exc:
+            log.warning(
+                "WS allowlist load failed for user %s: %s",
+                user_id,
+                exc,
+            )
             return set()
 
     async def connect(
@@ -276,13 +290,14 @@ class WebSocketManager:
         ws: WebSocket,
         user_id: Optional[str] = None,
         *,
+        org_id: Optional[str] = None,
         session_id: Optional[str] = None,
     ) -> None:
         await ws.accept()
         conn_id = str(uuid.uuid4())
         # ctrl_q: JSON status/control — maxsize=16 (small msgs, generous headroom)
         ctrl_q: asyncio.Queue = asyncio.Queue(maxsize=16)
-        allowed_serials = await self._load_allowed_serials(user_id)
+        allowed_serials = await self._load_allowed_serials(user_id, org_id=org_id)
         session_id = (ws.query_params.get("session_id") or "").strip()
 
         prev_ws_to_close = None
@@ -345,7 +360,7 @@ class WebSocketManager:
                 # Video senders are spawned on-demand via watch_serial/unwatch_serial.
                 self._conn_sender_groups[conn_id] = []
             send_task = asyncio.create_task(self._sender_ctrl(ws, ctrl_q, ws_send_lock))
-            recv_task = asyncio.create_task(self._receiver(ws))
+            recv_task = asyncio.create_task(self._receiver(ws, ws_send_lock))
             # Ping loop keeps TCP alive; excluded from wait so silent failures don't tear down connection.
             ping_task = asyncio.create_task(self._ws_ping_loop(ws, ws_send_lock))
             watchdog_task = asyncio.create_task(self._ws_pong_watchdog(ws, ws_send_lock))
@@ -391,6 +406,9 @@ class WebSocketManager:
 
         for device in devices:
             device.unsubscribe_status(ctrl_q)
+        from auth.ws_session_registry import get_ws_session_registry
+
+        await get_ws_session_registry().unregister(conn_id)
         async with self._lock:
             self._connections.pop(conn_id, None)
             self._ctrl_queues.pop(conn_id, None)
@@ -436,11 +454,18 @@ class WebSocketManager:
             except Exception:
                 return
 
-            if session_id and self._session_to_conn.get(session_id) == conn_id:
-                self._session_to_conn.pop(session_id, None)
-        from auth.ws_session_registry import get_ws_session_registry
-
-        await get_ws_session_registry().unregister(conn_id)
+    async def _send_json_locked(
+        self,
+        ws: WebSocket,
+        ws_send_lock: asyncio.Lock,
+        msg: dict,
+    ) -> bool:
+        try:
+            async with ws_send_lock:
+                await ws.send_json(msg)
+            return True
+        except Exception:
+            return False
 
     async def _ws_ping_loop(
         self, ws: WebSocket, ws_send_lock: asyncio.Lock, interval: float = 30.0
@@ -594,7 +619,7 @@ class WebSocketManager:
             except Exception:
                 pass
 
-    async def _receiver(self, ws: WebSocket) -> None:
+    async def _receiver(self, ws: WebSocket, ws_send_lock: asyncio.Lock) -> None:
         loop = asyncio.get_running_loop()
         conn_id: Optional[str] = None
         async with self._lock:
@@ -624,10 +649,24 @@ class WebSocketManager:
                 except Exception:
                     pass
                 if msg_type == "ping":
-                    try:
-                        await ws.send_json({"type": "pong", "ts": time.time()})
-                    except Exception:
+                    ok = await self._send_json_locked(
+                        ws, ws_send_lock, {"type": "pong", "ts": time.time()}
+                    )
+                    if not ok:
                         break
+                continue
+            if msg_type == "multi_action":
+                allowed_serials = (
+                    self._allowed_serials.get(conn_id) if conn_id is not None else None
+                )
+                result = await self._multi_control.execute(
+                    data,
+                    allowed_serials=allowed_serials,
+                    read_only=self._read_only,
+                )
+                ok = await self._send_json_locked(ws, ws_send_lock, result)
+                if not ok:
+                    break
                 continue
             serial = data.get("serial")
             if conn_id is not None:
@@ -718,15 +757,16 @@ class WebSocketManager:
                         msg_type, serial, is_busy_state, scenario_active,
                     )
                     reason = "busy_state" if is_busy_state else "scenario_active"
-                    try:
-                        await ws.send_json({
+                    await self._send_json_locked(
+                        ws,
+                        ws_send_lock,
+                        {
                             "type": "device_busy",
                             "serial": serial,
                             "reason": reason,
                             "scenario_active": scenario_active,
-                        })
-                    except Exception:
-                        pass
+                        },
+                    )
                     continue
 
             # Fire-and-forget all input commands — don't await executor so the receiver
@@ -1207,11 +1247,29 @@ class DeviceAgentSession:
 
                 device._adb_serial = resolved_serial
                 _u2_relay_mapped = relay_mapped
-                # Local/same-LAN: set _u2_host so atx-agent at device_ip:7912 is used directly.
-                # Docker/cloud with relay: keep _u2_host as a host hint so DeviceClient
-                # can build an agent_boot_u2_proxy session. Docker/cloud without relay
-                # falls back to the legacy WS tunnel.
-                device._u2_host = client_ip if (relay_mapped or not _u2_always_tunnel) else None
+                if relay_mapped:
+                    # Relay owns u2 in cloud/Docker. WS client_ip is the TCP hop
+                    # (NAT, load balancer, reverse proxy) — never the phone's LAN IP.
+                    _u2_host_hint = ""
+                    if relay:
+                        _caps = relay.get_capabilities(resolved_serial) or {}
+                        _u2_host_hint = str(_caps.get("wlan_ip") or "").strip()
+                    if not _u2_host_hint and ":" in resolved_serial:
+                        _u2_host_hint = resolved_serial.rsplit(":", 1)[0].strip()
+                    if not _u2_host_hint:
+                        _existing = str(getattr(device, "_u2_host", "") or "").strip()
+                        _u2_host_hint = _existing
+                    device._u2_host = _u2_host_hint or None
+                elif not _u2_always_tunnel and _is_trusted_device_lan_ip(client_ip):
+                    # Local LAN only: farm reaches atx-agent on device_ip:7912 directly.
+                    # Never overwrite a relay-probed host (e.g. 172.16.x) with WS NAT hop.
+                    _existing_u2 = str(getattr(device, "_u2_host", "") or "").strip()
+                    if _existing_u2 and _existing_u2 != client_ip.strip():
+                        pass
+                    else:
+                        device._u2_host = client_ip.strip()
+                else:
+                    device._u2_host = None
                 # Tell relay agents to `adb connect ip:5555` only for trusted/private LAN IP.
                 try:
                     if relay and trusted_client_ip:
@@ -1266,6 +1324,23 @@ class DeviceAgentSession:
                     except Exception as _exc:
                         log.warning("[DEVICE-WS] _send failed for %s: %s", msg.get("type"), _exc)
                 asyncio.run_coroutine_threadsafe(_do_send(), loop)
+
+            # Bind relay u2 host before attach so _u2_host is set even if attach runs setup.
+            if _u2_relay_mapped:
+                try:
+                    from runtime.transports.adb_relay_server import get_relay_manager
+
+                    _ws_relay = get_relay_manager()
+                    _ws_relay_serial = str(getattr(device, "_adb_serial", None) or serial)
+                    if _ws_relay and _ws_relay.relay_for_serial(_ws_relay_serial):
+                        _caps = _ws_relay.get_capabilities(_ws_relay_serial) or {}
+                        _wlan = str(_caps.get("wlan_ip") or "").strip()
+                        device.bind_relay_u2(
+                            _ws_relay_serial,
+                            host=_wlan or getattr(device, "_u2_host", None),
+                        )
+                except Exception as _bind_exc:
+                    log.debug("[DEVICE-WS] relay u2 bind before attach skipped: %s", _bind_exc)
 
             tunnels = device.attach_agent_sender(_send)
             device.state = DeviceState.CONNECTING

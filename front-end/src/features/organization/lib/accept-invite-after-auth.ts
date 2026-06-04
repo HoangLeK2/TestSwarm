@@ -4,7 +4,9 @@ import { consumeOrgInviteToken } from './invite-token';
 const CURRENT_ORG_STORAGE_KEY = 'device-farm:current-organization-id';
 
 /** Accept a pending org invite after login/register. Returns org id when accepted. */
-export async function acceptPendingOrgInviteAfterAuth(): Promise<string | null> {
+export async function acceptPendingOrgInviteAfterAuth(): Promise<
+  string | null
+> {
   const token = consumeOrgInviteToken();
   if (!token) return null;
   try {

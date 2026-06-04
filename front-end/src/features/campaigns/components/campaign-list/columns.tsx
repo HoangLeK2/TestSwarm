@@ -2,7 +2,11 @@ import { formatDistanceToNow } from 'date-fns';
 import { vi } from 'date-fns/locale';
 import { Badge } from '@/components/ui/badge';
 import type { ColumnDef } from '@tanstack/react-table';
-import type { CampaignOut, CampaignStatus } from '../../types';
+import type { CampaignOut } from '../../types';
+import {
+  campaignStatusLabel,
+  campaignStatusVariant
+} from '../../campaign-status-ui';
 import { CampaignSetupCell } from './CampaignSetupCell';
 import { CampaignRowActions } from './CampaignRowActions';
 import {
@@ -13,14 +17,12 @@ import {
 import { useQuery } from '@tanstack/react-query';
 import { executionsApi } from '../../services/api';
 import { CampaignRunStats } from './CampaignRunStats';
+import { CampaignEngineBadge } from './CampaignEngineBadge';
 import { cn } from '@/lib/utils';
 
 type TFn = (key: string, values?: Record<string, any>) => string;
 
-function responsiveCol(
-  cellClassName: string,
-  visibility?: 'lg' | 'xl'
-) {
+function responsiveCol(cellClassName: string, visibility?: 'lg' | 'xl') {
   const hide =
     visibility === 'lg'
       ? 'hidden lg:table-cell'
@@ -71,11 +73,7 @@ function CampaignLastRunCell({ campaignId }: { campaignId: string }) {
 
 export function getCampaignColumns(
   t: TFn,
-  statusLabel: Record<CampaignStatus, string>,
-  statusVariant: Record<
-    CampaignStatus,
-    'secondary' | 'default' | 'outline' | 'destructive'
-  >
+  statusLabel: Record<string, string>
 ): ColumnDef<CampaignOut>[] {
   const CELL = 'align-middle py-2';
   return [
@@ -98,10 +96,10 @@ export function getCampaignColumns(
               <TooltipContent>{c.name}</TooltipContent>
             </Tooltip>
             <Badge
-              variant={statusVariant[c.status]}
+              variant={campaignStatusVariant(c.status)}
               className='mt-1 inline-flex text-[10px] xl:hidden'
             >
-              {statusLabel[c.status]}
+              {campaignStatusLabel(c.status, statusLabel)}
             </Badge>
           </div>
         );
@@ -139,12 +137,15 @@ export function getCampaignColumns(
       cell: ({ row }) => {
         const c = row.original;
         return (
-          <Badge
-            variant={statusVariant[c.status]}
-            className='inline-flex items-center gap-1 text-[11px]'
-          >
-            {statusLabel[c.status]}
-          </Badge>
+          <div className='flex flex-col items-start gap-1'>
+            <Badge
+              variant={campaignStatusVariant(c.status)}
+              className='inline-flex items-center gap-1 text-[11px]'
+            >
+              {campaignStatusLabel(c.status, statusLabel)}
+            </Badge>
+            <CampaignEngineBadge campaignId={c.id} status={c.status} />
+          </div>
         );
       }
     },

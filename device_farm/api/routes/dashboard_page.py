@@ -27,8 +27,9 @@ def build_dashboard_router(
                 return HTMLResponse(content=index_path.read_text())
         devices = [d.status_dict() for d in manager.all_devices()]
         return templates.TemplateResponse(
+            request,
             "dashboard.html",
-            {"request": request, "devices": devices, "config": config},
+            {"devices": devices, "config": config},
         )
 
     return router

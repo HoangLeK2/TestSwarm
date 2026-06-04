@@ -3,7 +3,8 @@ capture_store.py — Persist step captures (screenshots, XML, JSON) to MinIO or 
 
 Storage backends (same pattern as image_store.py):
 * Object storage (MinIO/R2/S3): when ``minio_store.enabled()`` is True.
-* Local filesystem (fallback): ``<captures_dir>/<session>/step_*.{jpg,xml,json}``
+* Local filesystem (debug fallback): non-image captures, or images only when
+  ``DEVICE_FARM_LOCAL_IMAGE_FALLBACK_ENABLED=1``.
 
 Quality gate applies only to image/* content types — XML and JSON always pass.
 """
@@ -41,7 +42,7 @@ def save_capture(
     skip_quality: bool = False,
 ) -> Optional[str]:
     """
-    Persist capture bytes via MinIO or local filesystem.
+    Persist capture bytes via MinIO or debug local filesystem.
 
     Returns URL (MinIO) or local path string, or None if rejected by quality gate.
     Non-image content types (XML/JSON) always skip the quality gate.
@@ -58,6 +59,12 @@ def save_capture(
         url = minio_store.upload(data, minio_key, content_type=content_type)
         if url:
             return url
+
+    if is_image and not minio_store.local_image_fallback_enabled():
+        raise RuntimeError(
+            f"capture_store: image object upload unavailable for {minio_key}; "
+            "local fallback disabled"
+        )
 
     try:
         p = Path(local_path)

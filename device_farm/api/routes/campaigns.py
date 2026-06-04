@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import re as _re
+from datetime import datetime
+from typing import Union
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
@@ -21,6 +23,17 @@ from api.schemas.campaign import (
     ScenarioCreate, ScenarioUpdate, ScenarioOut,
     ScenarioDeviceVariablesBody, ScenarioDeviceVariablesOut,
 )
+from api.schemas.campaign_entity import (
+    CampaignEntityOut,
+    CampaignEntityUpdate,
+    CampaignAccountBindIn,
+    CampaignDispatchIn,
+    CampaignDispatchOut,
+    CampaignDispatchExecutionOut,
+    CampaignScenarioRefOut,
+    CampaignForceTransitionIn,
+    CampaignForceTransitionOut,
+)
 from api.schemas.scenario_validation import ScenarioValidationOut, ValidationIssueOut
 from api.schemas.execution import CampaignControlOut, ExecutionCancelBody
 from db import crud as repo
@@ -38,6 +51,18 @@ from db.crud.scenario_device_variable import (
     replace_scenario_device_variables,
 )
 from services.image_store import save_step_images, delete_scenario_images
+from services.campaign.scenario_ref_resolver import CampaignScenarioRefError
+from services.campaign.service import (
+    CampaignError,
+    CampaignNotFoundError,
+    CampaignView,
+    archive_campaign as archive_campaign_entity,
+    create_campaign as create_campaign_entity,
+    get_campaign_for_org,
+    list_campaigns_for_org,
+    map_scenario_ref_error,
+    update_campaign as update_campaign_entity,
+)
 
 router = APIRouter(prefix="/campaigns", tags=["campaigns"])
 
@@ -188,8 +213,70 @@ def _to_out(c, scenarios=None) -> CampaignOut:
     )
 
 
+def _map_campaign_error(exc: CampaignError) -> HTTPException:
+    from services.campaign.lifecycle import CampaignInvalidTransitionError, CampaignLockedError
+    from services.campaign.service import (
+        CampaignDuplicateNameError,
+        CampaignNotFoundError,
+        CampaignRunningError,
+        CampaignValidationError,
+    )
+
+    if isinstance(exc, CampaignNotFoundError):
+        return HTTPException(status_code=404, detail={"code": exc.code})
+    if isinstance(exc, CampaignDuplicateNameError):
+        return HTTPException(status_code=409, detail={"code": exc.code})
+    if isinstance(exc, (CampaignRunningError, CampaignInvalidTransitionError)):
+        return HTTPException(status_code=409, detail={"code": exc.code, "message": str(exc)})
+    if isinstance(exc, CampaignLockedError):
+        return HTTPException(status_code=409, detail={"code": exc.code, "message": str(exc)})
+    if isinstance(exc, CampaignValidationError):
+        return HTTPException(status_code=422, detail={"code": exc.code, "message": str(exc)})
+    return HTTPException(status_code=400, detail={"code": exc.code, "message": str(exc)})
+
+
+def _entity_out(view: CampaignView) -> CampaignEntityOut:
+    return CampaignEntityOut(
+        id=view.id,
+        organization_id=view.organization_id,
+        name=view.name,
+        description=view.description,
+        status=view.status,
+        vars=view.vars,
+        per_device_overrides=view.per_device_overrides,
+        account_group_id=view.account_group_id,
+        scenario_account_id=view.scenario_account_id,
+        per_device_accounts=view.per_device_accounts,
+        tags=view.tags,
+        scenario_refs=[
+            CampaignScenarioRefOut(
+                scenario_id=ref.scenario_id,
+                scenario_version=ref.scenario_version,
+            )
+            for ref in view.scenario_refs
+        ],
+        created_by=view.created_by,
+        created_at=datetime.fromisoformat(view.created_at),
+        updated_at=datetime.fromisoformat(view.updated_at),
+        started_at=datetime.fromisoformat(view.started_at) if view.started_at else None,
+        completed_at=datetime.fromisoformat(view.completed_at) if view.completed_at else None,
+        cancelled_at=datetime.fromisoformat(view.cancelled_at) if view.cancelled_at else None,
+    )
+
+
 async def _get_campaign_or_404(campaign_id: str, user: User, db):
-    campaign = await repo.get_campaign(db, campaign_id)
+    from contextlib import nullcontext
+
+    from db.crud import campaign_entity as campaign_entity_repo
+    from tenancy.context import get_current_org_id, tenant_context
+
+    org_scope = get_current_org_id() or getattr(user, "org_id", None)
+    if not org_scope:
+        camp_org = await campaign_entity_repo.lookup_campaign_org_id(db, campaign_id)
+        org_scope = camp_org
+    tenant_ctx = tenant_context(org_scope) if org_scope else nullcontext()
+    with tenant_ctx:
+        campaign = await repo.get_campaign(db, campaign_id)
     if not campaign or not await campaign_visible_to_user(db, user, campaign):
         raise HTTPException(status_code=404, detail="Campaign not found")
     return campaign
@@ -199,14 +286,26 @@ async def _get_campaign_or_404(campaign_id: str, user: User, db):
 
 @router.get(
     "",
-    response_model=list[CampaignOut],
+    response_model=list[Union[CampaignEntityOut, CampaignOut]],
     dependencies=[Depends(require_permission("campaigns", "read"))],
 )
-async def list_campaigns(db: DB, user: CurrentUser):
+async def list_campaigns(
+    db: DB,
+    user: CurrentUser,
+    include_archived: bool = Query(default=False),
+):
+    org_id = getattr(user, "org_id", None)
+    if org_id:
+        views = await list_campaigns_for_org(
+            db, org_id, include_archived=include_archived
+        )
+        return [_entity_out(view) for view in views]
+
     campaigns = await repo.list_campaigns(
         db,
-        org_id=getattr(user, "org_id", None),
+        org_id=None,
         user_id=data_owner_user_id(user),
+        include_archived=include_archived,
     )
     result = []
     for c in campaigns:
@@ -215,13 +314,57 @@ async def list_campaigns(db: DB, user: CurrentUser):
     return result
 
 
+def _inline_scenario_steps(scenario: dict | None) -> list | None:
+    if not isinstance(scenario, dict):
+        return None
+    steps = scenario.get("steps")
+    return steps if isinstance(steps, list) else None
+
+
 @router.post(
     "",
-    response_model=CampaignOut,
     status_code=status.HTTP_201_CREATED,
+    response_model=Union[CampaignEntityOut, CampaignOut],
     dependencies=[Depends(require_permission("campaigns", "create"))],
 )
 async def create_campaign(body: CampaignCreate, db: DB, user: CurrentUser):
+    org_id = getattr(user, "org_id", None)
+    inline_steps = _inline_scenario_steps(body.scenario)
+    if org_id and body.scenario_refs is None and not inline_steps:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "SCENARIO_REQUIRED",
+                "message": "At least one org scenario is required",
+            },
+        )
+    if body.scenario_refs is not None:
+        if not org_id:
+            raise HTTPException(status_code=404, detail={"code": "NO_ORGANIZATION"})
+        refs = [ref.model_dump(exclude_none=True) for ref in body.scenario_refs]
+        vars_payload = body.vars if body.vars is not None else (body.variables or {})
+        try:
+            view = await create_campaign_entity(
+                db,
+                org_id=org_id,
+                name=body.name,
+                description=body.description,
+                vars=vars_payload,
+                per_device_overrides=body.per_device_overrides or None,
+                account_group_id=body.account_group_id,
+                scenario_account_id=body.scenario_account_id,
+                per_device_accounts=body.per_device_accounts or None,
+                tags=body.tags or [],
+                scenario_refs=refs,
+                created_by=user.id,
+            )
+        except CampaignScenarioRefError as exc:
+            raise _map_campaign_error(map_scenario_ref_error(exc)) from exc
+        except CampaignError as exc:
+            raise _map_campaign_error(exc) from exc
+        await db.commit()
+        return _entity_out(view)
+
     existing = await repo.get_campaign_by_name(
         db, org_id=getattr(user, "org_id", None), name=body.name
     )
@@ -299,26 +442,314 @@ async def create_campaign(body: CampaignCreate, db: DB, user: CurrentUser):
 
 @router.get(
     "/{campaign_id}",
-    response_model=CampaignOut,
+    response_model=Union[CampaignOut, CampaignEntityOut],
     dependencies=[Depends(require_permission("campaigns", "read"))],
 )
 async def get_campaign(campaign_id: str, db: DB, user: CurrentUser):
+    org_id = getattr(user, "org_id", None)
+    if org_id:
+        try:
+            view = await get_campaign_for_org(db, campaign_id, org_id)
+            return _entity_out(view)
+        except CampaignNotFoundError:
+            pass
+        except CampaignError:
+            pass
     campaign = await _get_campaign_or_404(campaign_id, user, db)
     scenarios = await repo.list_scenarios(db, campaign_id)
     return _to_out(campaign, scenarios)
 
 
+@router.post(
+    "/{campaign_id}/dispatch",
+    response_model=CampaignDispatchOut,
+    dependencies=[Depends(require_permission("campaigns", "execute"))],
+)
+async def dispatch_campaign_route(
+    campaign_id: str,
+    body: CampaignDispatchIn,
+    db: DB,
+    user: CurrentUser,
+    request: Request,
+    include_vars: bool = Query(
+        False,
+        description="Include effective_vars per execution (large fleets: keep false)",
+    ),
+):
+    """Fan-out campaign dispatch to explicit devices or device groups (DF-T-04-008)."""
+    org_id = getattr(user, "org_id", None)
+    if not org_id:
+        raise HTTPException(status_code=404, detail={"code": "NO_ORGANIZATION"})
+
+    from api.schemas.campaign_entity import _dispatch_http_status
+    from services.campaign.dispatcher import CampaignDispatchError, dispatch_campaign
+
+    try:
+        result = await dispatch_campaign(
+            db,
+            campaign_id=campaign_id,
+            org_id=org_id,
+            actor_user_id=user.id,
+            device_ids=body.target.device_ids,
+            device_group_ids=body.target.device_group_ids,
+            dispatch_strategy=body.dispatch_strategy,  # type: ignore[arg-type]
+            allow_partial=body.allow_partial,
+            require_online=body.require_online,
+        )
+    except CampaignDispatchError as exc:
+        raise HTTPException(
+            status_code=_dispatch_http_status(exc.code),
+            detail={"code": exc.code, "message": str(exc), **exc.details},
+        ) from exc
+
+    from db.crud import campaign_entity as campaign_entity_repo
+    from services.campaign.execution_runtime import start_execution_runtime
+
+    campaign = await campaign_entity_repo.get_campaign_entity(
+        db, campaign_id, org_id=org_id
+    )
+    if campaign is None:
+        raise HTTPException(status_code=404, detail={"code": "CAMPAIGN_NOT_FOUND"})
+    config = getattr(request.app.state, "config", None)
+    temporal_client = await _campaign_temporal_client(request)
+    temporal_config = getattr(config, "temporal", None) if config else None
+    manager = getattr(request.app.state, "manager", None)
+    _runtime_stats = await start_execution_runtime(
+        db,
+        fan_out=result,
+        campaign=campaign,
+        org_id=org_id,
+        actor_user_id=user.id,
+        temporal_client=temporal_client,
+        temporal_config=temporal_config,
+        manager=manager,
+    )
+
+    await db.commit()
+
+    from db.crud.execution import get_execution
+
+    payload = result.to_dict(include_vars=include_vars)
+    execution_rows: list[CampaignDispatchExecutionOut] = []
+    for item in payload["executions"]:
+        ex = await get_execution(db, item["execution_id"])
+        meta = (ex.meta or {}) if ex else {}
+        execution_rows.append(
+            CampaignDispatchExecutionOut(
+                **item,
+                dispatch_source=meta.get("dispatch_source"),
+                workflow_id=meta.get("workflow_id"),
+            )
+        )
+    return CampaignDispatchOut(
+        dispatch_id=payload["dispatch_id"],
+        campaign_id=payload["campaign_id"],
+        dispatch_strategy=payload["dispatch_strategy"],
+        target_count=payload["target_count"],
+        executions=execution_rows,
+    )
+
+
+@router.post(
+    "/{campaign_id}/accounts",
+    response_model=CampaignEntityOut,
+    dependencies=[Depends(require_permission("campaigns", "update"))],
+)
+async def bind_campaign_accounts_route(
+    campaign_id: str,
+    body: CampaignAccountBindIn,
+    db: DB,
+    user: CurrentUser,
+):
+    """Bind account_group, scenario_account, or per-device account map (DF-T-04-009)."""
+    org_id = getattr(user, "org_id", None)
+    if not org_id:
+        raise HTTPException(status_code=404, detail={"code": "NO_ORGANIZATION"})
+
+    from services.campaign.account_binding import bind_campaign_accounts
+    from services.campaign.account_resolver import AccountBindingError
+    from services.campaign.service import get_campaign_for_org
+
+    try:
+        await bind_campaign_accounts(
+            db,
+            org_id=org_id,
+            campaign_id=campaign_id,
+            user_id=user.id,
+            account_group_id=body.account_group_id,
+            scenario_account_id=body.scenario_account_id,
+            per_device_accounts=body.per_device_accounts or None,
+        )
+    except AccountBindingError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": exc.code, "message": str(exc), **exc.details},
+        ) from exc
+    except CampaignError as exc:
+        raise _map_campaign_error(exc) from exc
+
+    await db.commit()
+    view = await get_campaign_for_org(db, campaign_id, org_id)
+    return _entity_out(view)
+
+
+@router.delete(
+    "/{campaign_id}/accounts",
+    response_model=CampaignEntityOut,
+    dependencies=[Depends(require_permission("campaigns", "update"))],
+)
+async def unbind_campaign_accounts_route(
+    campaign_id: str,
+    db: DB,
+    user: CurrentUser,
+):
+    org_id = getattr(user, "org_id", None)
+    if not org_id:
+        raise HTTPException(status_code=404, detail={"code": "NO_ORGANIZATION"})
+
+    from services.campaign.account_binding import clear_campaign_accounts
+    from services.campaign.service import get_campaign_for_org
+
+    try:
+        await clear_campaign_accounts(
+            db,
+            org_id=org_id,
+            campaign_id=campaign_id,
+            user_id=user.id,
+        )
+    except CampaignError as exc:
+        raise _map_campaign_error(exc) from exc
+
+    await db.commit()
+    view = await get_campaign_for_org(db, campaign_id, org_id)
+    return _entity_out(view)
+
+
+@router.patch(
+    "/{campaign_id}",
+    response_model=CampaignEntityOut,
+    dependencies=[Depends(require_permission("campaigns", "update"))],
+)
+async def patch_campaign_entity(
+    campaign_id: str,
+    body: CampaignEntityUpdate,
+    db: DB,
+    user: CurrentUser,
+):
+    org_id = getattr(user, "org_id", None)
+    if not org_id:
+        raise HTTPException(status_code=404, detail={"code": "NO_ORGANIZATION"})
+    refs = (
+        [ref.model_dump(exclude_none=True) for ref in body.scenario_refs]
+        if body.scenario_refs is not None
+        else None
+    )
+    try:
+        view = await update_campaign_entity(
+            db,
+            org_id=org_id,
+            campaign_id=campaign_id,
+            user_id=user.id,
+            name=body.name,
+            description=body.description,
+            vars=body.vars,
+            per_device_overrides=body.per_device_overrides,
+            tags=body.tags,
+            scenario_refs=refs,
+        )
+    except CampaignScenarioRefError as exc:
+        raise _map_campaign_error(map_scenario_ref_error(exc)) from exc
+    except CampaignError as exc:
+        raise _map_campaign_error(exc) from exc
+    await db.commit()
+    return _entity_out(view)
+
+
 @router.delete(
     "/{campaign_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=CampaignEntityOut,
     dependencies=[Depends(require_permission("campaigns", "delete"))],
 )
 async def delete_campaign(campaign_id: str, db: DB, user: CurrentUser):
-    campaign = await _get_campaign_or_404(campaign_id, user, db)
-    from sqlalchemy import delete
-    from db.models import Campaign as CampaignModel
-    await db.execute(delete(CampaignModel).where(CampaignModel.id == campaign_id))
+    org_id = getattr(user, "org_id", None)
+    if not org_id:
+        raise HTTPException(status_code=404, detail={"code": "NO_ORGANIZATION"})
+    try:
+        view = await archive_campaign_entity(
+            db,
+            org_id=org_id,
+            campaign_id=campaign_id,
+            user_id=user.id,
+        )
+    except CampaignError as exc:
+        raise _map_campaign_error(exc) from exc
     await db.commit()
+    return _entity_out(view)
+
+
+@router.post(
+    "/{campaign_id}/archive",
+    response_model=CampaignEntityOut,
+    dependencies=[Depends(require_permission("campaigns", "delete"))],
+)
+async def archive_campaign_route(campaign_id: str, db: DB, user: CurrentUser):
+    org_id = getattr(user, "org_id", None)
+    if not org_id:
+        raise HTTPException(status_code=404, detail={"code": "NO_ORGANIZATION"})
+    try:
+        view = await archive_campaign_entity(
+            db,
+            org_id=org_id,
+            campaign_id=campaign_id,
+            user_id=user.id,
+        )
+    except CampaignError as exc:
+        raise _map_campaign_error(exc) from exc
+    await db.commit()
+    return _entity_out(view)
+
+
+@router.post(
+    "/{campaign_id}/force-transition",
+    response_model=CampaignForceTransitionOut,
+    dependencies=[Depends(require_permission("campaigns", "manage"))],
+)
+async def force_transition_campaign(
+    campaign_id: str,
+    body: CampaignForceTransitionIn,
+    db: DB,
+    user: CurrentUser,
+):
+    from api.auth.rbac import is_superadmin
+    from services.campaign.lifecycle import transition_campaign_for_org
+
+    if not is_superadmin(user):
+        raise HTTPException(status_code=403, detail={"code": "FORBIDDEN"})
+
+    org_id = getattr(user, "org_id", None)
+    if not org_id:
+        raise HTTPException(status_code=404, detail={"code": "NO_ORGANIZATION"})
+
+    try:
+        result = await transition_campaign_for_org(
+            db,
+            org_id=org_id,
+            campaign_id=campaign_id,
+            to_status=body.to_status,
+            user_id=user.id,
+            reason=body.reason,
+            force=True,
+        )
+    except CampaignError as exc:
+        raise _map_campaign_error(exc) from exc
+    await db.commit()
+    return CampaignForceTransitionOut(
+        campaign_id=result.campaign_id,
+        from_status=result.from_status,
+        to_status=result.to_status,
+        changed=result.changed,
+        reason=result.reason,
+    )
 
 
 @router.patch(
@@ -345,21 +776,47 @@ async def update_status(campaign_id: str, body: StatusUpdate, db: DB, user: Curr
     config = getattr(request.app.state, "config", None)
     if config is not None and getattr(config, "temporal", None) and config.temporal.enabled:
         try:
-            from temporal.worker import get_temporal_client
             from temporal.workflows import ScenarioStepsWorkflow, ScenarioWorkflow
+            from services.execution_control import _resolve_workflow_ids_for_campaign
+            from db.crud.execution import list_running_executions_for_campaign
 
-            t_client = await get_temporal_client(config.temporal)
-            wf_query = f'WorkflowId STARTS_WITH "campaign:{campaign_id}:" AND ExecutionStatus="Running"'
-            async for wf in t_client.list_workflows(wf_query):
-                for wf_id in [wf.id, f"{wf.id}:steps"]:
+            t_client = await _campaign_temporal_client(request)
+            if t_client is not None:
+                wf_ids: set[str] = set()
+                wf_query = (
+                    f'WorkflowId STARTS_WITH "campaign:{campaign_id}:" '
+                    f'AND ExecutionStatus="Running"'
+                )
+                async for wf in t_client.list_workflows(wf_query):
+                    wf_ids.add(wf.id)
+                    wf_ids.add(f"{wf.id}:steps")
+
+                executions = await list_running_executions_for_campaign(db, campaign_id)
+                wf_ids.update(
+                    await _resolve_workflow_ids_for_campaign(
+                        db, campaign_id, executions, t_client,
+                    )
+                )
+
+                for wf_id in wf_ids:
                     try:
                         handle = t_client.get_workflow_handle(wf_id)
                         if cancel_trigger:
                             await handle.cancel()
                         elif pause_trigger:
-                            await handle.signal(ScenarioWorkflow.pause if wf_id == wf.id else ScenarioStepsWorkflow.pause)
+                            is_parent = not wf_id.endswith(":steps")
+                            await handle.signal(
+                                ScenarioWorkflow.pause
+                                if is_parent
+                                else ScenarioStepsWorkflow.pause
+                            )
                         elif resume_trigger:
-                            await handle.signal(ScenarioWorkflow.resume if wf_id == wf.id else ScenarioStepsWorkflow.resume)
+                            is_parent = not wf_id.endswith(":steps")
+                            await handle.signal(
+                                ScenarioWorkflow.resume
+                                if is_parent
+                                else ScenarioStepsWorkflow.resume
+                            )
                     except Exception as exc:
                         import logging
                         logging.getLogger(__name__).warning(
@@ -384,9 +841,14 @@ async def _campaign_temporal_client(request: Request):
     config = getattr(request.app.state, "config", None)
     if config is None or not getattr(config, "temporal", None) or not config.temporal.enabled:
         return None
+    cached = getattr(request.app.state, "temporal_client", None)
+    if cached is not None:
+        return cached
     from temporal.worker import get_temporal_client
 
-    return await get_temporal_client(config.temporal)
+    client = await get_temporal_client(config.temporal)
+    request.app.state.temporal_client = client
+    return client
 
 
 @router.post(

@@ -6,7 +6,10 @@ import assert from 'node:assert/strict';
 import { QueryClient } from '@tanstack/react-query';
 import type { DeviceOut, FleetStatsOut } from '../services/manage-api.ts';
 import { applyLifecycleMessage } from './lifecycle-message-handler.ts';
-import { DEVICES_LIST_KEY, FLEET_STATS_KEY } from './device-query-keys.ts';
+import {
+  devicesListQueryKey,
+  fleetStatsQueryKey
+} from './device-query-keys.ts';
 
 function device(id: string, state: string): DeviceOut {
   return {
@@ -33,8 +36,8 @@ function device(id: string, state: string): DeviceOut {
 describe('lifecycle message handler (QueryClient)', () => {
   it('UC-HC-01: applies live event to React Query cache', () => {
     const qc = new QueryClient();
-    qc.setQueryData(DEVICES_LIST_KEY, [device('dev-1', 'online')]);
-    qc.setQueryData(FLEET_STATS_KEY, {
+    qc.setQueryData(devicesListQueryKey('org-1'), [device('dev-1', 'online')]);
+    qc.setQueryData(fleetStatsQueryKey('org-1'), {
       filters: { organization_id: 'org-1', group_id: null, relay_host: null },
       devices: {
         unknown: 0,
@@ -70,9 +73,13 @@ describe('lifecycle message handler (QueryClient)', () => {
       }
     });
 
-    assert.equal(qc.getQueryData<DeviceOut[]>(DEVICES_LIST_KEY)![0].state, 'busy');
     assert.equal(
-      qc.getQueryData<FleetStatsOut>(FLEET_STATS_KEY)!.active_sessions.execution,
+      qc.getQueryData<DeviceOut[]>(devicesListQueryKey('org-1'))![0].state,
+      'busy'
+    );
+    assert.equal(
+      qc.getQueryData<FleetStatsOut>(fleetStatsQueryKey('org-1'))!
+        .active_sessions.execution,
       1
     );
   });
@@ -88,7 +95,7 @@ describe('lifecycle message handler (QueryClient)', () => {
       return original(opts);
     }) as typeof qc.invalidateQueries;
 
-    qc.setQueryData(DEVICES_LIST_KEY, [
+    qc.setQueryData(devicesListQueryKey('org-1'), [
       device('dev-1', 'online'),
       device('dev-2', 'online')
     ]);
@@ -100,9 +107,69 @@ describe('lifecycle message handler (QueryClient)', () => {
       replay: []
     });
 
-    assert.ok(invalidated.some((k) => k.length === 1 && k[0] === 'devices'));
     assert.ok(
-      invalidated.some((k) => k[0] === 'devices' && k[1] === 'fleet-stats')
+      invalidated.some(
+        (k) => k[0] === 'devices' && k[1] === 'org-1' && k.length === 2
+      )
+    );
+    assert.ok(
+      invalidated.some(
+        (k) =>
+          k[0] === 'devices' &&
+          k[1] === 'fleet-stats' &&
+          k[2] === 'org-1' &&
+          k.length === 3
+      )
+    );
+  });
+
+  it('UC-HC-03: device list patch does not overwrite fleet-stats cache', () => {
+    const qc = new QueryClient();
+    const fleetStats = {
+      filters: { organization_id: 'org-1', group_id: null, relay_host: null },
+      devices: {
+        unknown: 0,
+        connecting: 0,
+        online: 1,
+        busy: 0,
+        reconnecting: 0,
+        dead: 0,
+        total: 1
+      },
+      active_sessions: {
+        user: 0,
+        execution: 0,
+        campaign: 0,
+        system: 0,
+        unknown: 0,
+        total: 0
+      },
+      owner_anomalies: null
+    } satisfies FleetStatsOut;
+
+    qc.setQueryData(devicesListQueryKey('org-1'), [device('dev-1', 'online')]);
+    qc.setQueryData(fleetStatsQueryKey('org-1'), fleetStats);
+
+    applyLifecycleMessage(qc, {
+      type: 'lifecycle.event',
+      event: {
+        type: 'device.state_changed',
+        event_id: 'hc-3',
+        organization_id: 'org-1',
+        device_id: 'dev-1',
+        from_state: 'online',
+        to_state: 'busy',
+        timestamp: '2026-05-29T12:00:00Z'
+      }
+    });
+
+    assert.equal(
+      qc.getQueryData<FleetStatsOut>(fleetStatsQueryKey('org-1'))!.devices.busy,
+      1
+    );
+    assert.equal(
+      qc.getQueryData<DeviceOut[]>(devicesListQueryKey('org-1'))![0].state,
+      'busy'
     );
   });
 });

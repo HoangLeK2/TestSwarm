@@ -1,29 +1,20 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
 import { ROUTES } from '@/config/routes';
 import { DeviceTilePreview } from './device-tile-preview';
 import { ConnectDeviceDialog } from './connect-device-dialog';
 import { DeviceStepsSheet } from './device-step-monitor';
 import { useDeviceFarm } from '../hooks/use-device-farm';
-import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import {
-  Pagination,
-  PaginationContent,
-  PaginationItem,
-  PaginationNext,
-  PaginationPrevious
-} from '@/components/ui/pagination';
-import { cn } from '@/lib/utils';
-import { Can } from '@/features/auth';
-import { Smartphone, Plus } from 'lucide-react';
+import { TablePaginationControls } from '@/components/ui/table/data-table-pagination';
+import { CoreEmptyState } from '@/components/core-empty-state';
+import { Smartphone } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { farmApi } from '@/lib/farm-api';
 import type { DeviceFarmStreamingConfig } from '../types';
 
-const GRID_PAGE_SIZE = (() => {
+const DEFAULT_GRID_PAGE_SIZE = (() => {
   const raw = Number(process.env.NEXT_PUBLIC_DEVICE_FARM_GRID_PAGE_SIZE ?? 10);
   if (!Number.isFinite(raw)) return 10;
   return Math.max(1, Math.min(50, Math.round(raw)));
@@ -31,8 +22,8 @@ const GRID_PAGE_SIZE = (() => {
 
 export function DeviceFarm() {
   const t = useTranslations('devicesFarm');
+  const tEmpty = useTranslations('coreEmptyState');
   const tHeader = useTranslations('devicesFarm.header');
-  const tTable = useTranslations('components.table');
   const [connectDialogOpen, setConnectDialogOpen] = useState(false);
   const [stepsSerial, setStepsSerial] = useState<string | null>(null);
   const [serverAllowPreviewMjpeg, setServerAllowPreviewMjpeg] = useState(true);
@@ -81,9 +72,10 @@ export function DeviceFarm() {
   );
 
   const [pageIndex, setPageIndex] = useState(0);
+  const [pageSize, setPageSize] = useState(DEFAULT_GRID_PAGE_SIZE);
   const pageCount = Math.max(
     1,
-    Math.ceil(activeDevices.length / GRID_PAGE_SIZE)
+    Math.ceil(activeDevices.length / pageSize)
   );
 
   useEffect(() => {
@@ -91,9 +83,9 @@ export function DeviceFarm() {
   }, [pageCount]);
 
   const pageDevices = useMemo(() => {
-    const start = pageIndex * GRID_PAGE_SIZE;
-    return activeDevices.slice(start, start + GRID_PAGE_SIZE);
-  }, [activeDevices, pageIndex]);
+    const start = pageIndex * pageSize;
+    return activeDevices.slice(start, start + pageSize);
+  }, [activeDevices, pageIndex, pageSize]);
 
   const activeTaskCount = (Array.isArray(tasks) ? tasks : []).filter((task) =>
     ['PENDING', 'RUNNING', 'REQUEUED'].includes(task.status)
@@ -150,32 +142,43 @@ export function DeviceFarm() {
       )}
 
       {activeDevices.length === 0 ? (
-        <div className='flex flex-col items-center justify-center rounded-lg border border-dashed border-border py-20 text-center'>
-          <Smartphone className='mb-4 size-12 text-muted-foreground' />
-          <p className='mb-1 text-sm font-medium text-foreground'>
-            {devices.length > 0
-              ? t('allDevicesOffline')
-              : t('noConnectedDevices')}
-          </p>
-          <p className='mb-5 text-xs text-muted-foreground'>
-            {devices.length > 0
+        <CoreEmptyState
+          icon={Smartphone}
+          title={
+            devices.length > 0 ? t('allDevicesOffline') : tEmpty('fleet.title')
+          }
+          description={
+            devices.length > 0
               ? t('allDevicesOfflineHint', { count: devices.length })
-              : t('noConnectedDevicesHint')}
-          </p>
-          <div className='flex flex-wrap items-center justify-center gap-2'>
-            <Can object='devices' action='create'>
-              <Button asChild size='sm' variant='outline'>
-                <Link href={ROUTES.DEVICES.MANAGE}>
-                  <Plus size={14} className='mr-1.5' />
-                  {t('addDevice')}
-                </Link>
-              </Button>
-            </Can>
-          </div>
-        </div>
+              : tEmpty('fleet.description')
+          }
+          trackingKey='fleet-empty'
+          cta={
+            devices.length === 0
+              ? {
+                  label: tEmpty('fleet.ctaPair'),
+                  href: ROUTES.DEVICES.MANAGE
+                }
+              : undefined
+          }
+          secondaryCta={
+            devices.length === 0
+              ? {
+                  label: tEmpty('fleet.ctaRelay'),
+                  href: ROUTES.RELAY_AGENTS.ROOT
+                }
+              : undefined
+          }
+        />
       ) : (
         <>
-          <section className='grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4'>
+          <section
+            className='grid justify-start gap-3'
+            style={{
+              gridTemplateColumns:
+                'repeat(auto-fill, minmax(min(100%, 260px), 320px))'
+            }}
+          >
             {pageDevices.map((device) => (
               <DeviceTilePreview
                 key={device.serial}
@@ -186,51 +189,18 @@ export function DeviceFarm() {
               />
             ))}
           </section>
-          <footer className='flex flex-col items-center gap-2 border-t border-border/40 pt-4 sm:flex-row sm:justify-between'>
-            <p className='text-xs tabular-nums text-muted-foreground'>
-              {tTable('total')}: {activeDevices.length}
-              {pageCount > 1
-                ? ` · ${tTable('pageOf', { current: pageIndex + 1, total: pageCount })}`
-                : null}
-            </p>
-            {pageCount > 1 ? (
-              <Pagination className='mx-0 w-auto'>
-                <PaginationContent>
-                  <PaginationItem>
-                    <PaginationPrevious
-                      href='#'
-                      onClick={(e) => {
-                        e.preventDefault();
-                        setPageIndex((p) => Math.max(0, p - 1));
-                      }}
-                      className={cn(
-                        'h-8',
-                        pageIndex <= 0 && 'pointer-events-none opacity-50'
-                      )}
-                    />
-                  </PaginationItem>
-                  <PaginationItem>
-                    <span className='flex h-8 min-w-[4.5rem] items-center justify-center rounded-md border border-border/60 bg-muted/40 px-3 text-xs font-medium tabular-nums'>
-                      {pageIndex + 1} / {pageCount}
-                    </span>
-                  </PaginationItem>
-                  <PaginationItem>
-                    <PaginationNext
-                      href='#'
-                      onClick={(e) => {
-                        e.preventDefault();
-                        setPageIndex((p) => Math.min(pageCount - 1, p + 1));
-                      }}
-                      className={cn(
-                        'h-8',
-                        pageIndex >= pageCount - 1 &&
-                          'pointer-events-none opacity-50'
-                      )}
-                    />
-                  </PaginationItem>
-                </PaginationContent>
-              </Pagination>
-            ) : null}
+          <footer className='border-t border-border/40 pt-4'>
+            <TablePaginationControls
+              total={activeDevices.length}
+              pageIndex={pageIndex}
+              pageCount={pageCount}
+              pageSize={pageSize}
+              onPageIndexChange={setPageIndex}
+              onPageSizeChange={(nextPageSize) => {
+                setPageSize(nextPageSize);
+                setPageIndex(0);
+              }}
+            />
           </footer>
         </>
       )}

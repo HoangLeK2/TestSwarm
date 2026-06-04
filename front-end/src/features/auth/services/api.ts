@@ -21,6 +21,7 @@ export type UserOut = {
   role: string;
   api_key: string;
   orgRole?: string | null;
+  defaultOrgId?: string | null;
 };
 
 export const authApi = {

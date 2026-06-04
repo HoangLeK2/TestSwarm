@@ -19,7 +19,20 @@ class _FakeIngest:
 
 
 class _FakeExecutor:
+    def __init__(self) -> None:
+        self.ops: list[str] = []
+
     async def run_batch(self, serial: str, actions: list[dict], early_exit: bool = True) -> dict:
+        self.ops.extend(str(action.get("op")) for action in actions)
+        if actions and actions[0].get("op") == "screenshot":
+            return {
+                "ok": True,
+                "results": [{
+                    "op": "screenshot",
+                    "ok": True,
+                    "value": "shot-b64",
+                }],
+            }
         return {
             "ok": True,
             "results": [{
@@ -68,6 +81,9 @@ async def test_handle_extra_data_success() -> None:
     assert msg["route"] == "relay_u2"
     assert msg["ingest"]["parsed_count"] == 2
     assert len(agent._extra_ingest.payloads) == 1
+    assert "screenshot" not in agent._u2_executor.ops
+    assert "screenshot_b64" not in agent._extra_ingest.payloads[0].get("evidence", {})
+    assert "screenshot_b64" not in msg["ingest"]
 
 
 @pytest.mark.asyncio
@@ -118,3 +134,22 @@ async def test_handle_extra_data_not_configured() -> None:
     msg = json.loads(await queue.get())
     assert msg["ok"] is False
     assert msg["error"] == "extra_data_not_configured"
+
+
+@pytest.mark.asyncio
+async def test_cancel_extra_data_task_by_request_id() -> None:
+    agent = RelayAgent(
+        server_url="localhost:50051",
+        api_key=None,
+        relay_id="test-relay",
+        relay_mode="grpc",
+        extra_ingest=_FakeIngest({"ok": True}),
+    )
+    task = asyncio.create_task(asyncio.sleep(30))
+    agent._extra_data_tasks["extra-cancel"] = task
+
+    assert agent._cancel_extra_data_task("extra-cancel") is True
+    await asyncio.sleep(0)
+
+    assert task.cancelled()
+    assert "extra-cancel" not in agent._extra_data_tasks

@@ -46,10 +46,7 @@ import { formatOrgMemberInviteError } from '../lib/format-org-invite-error';
 
 type AssignableOrgRole = 'member' | 'supervisor';
 
-function roleLabel(
-  role: string,
-  t: (key: string) => string
-): string {
+function roleLabel(role: string, t: (key: string) => string): string {
   if (role === 'owner') return t('owner');
   if (role === 'supervisor') return t('supervisor');
   return t('staff');
@@ -64,14 +61,15 @@ function MemberRoleCell({
   member: OrganizationMemberOut;
   canManage: boolean;
   currentUserId?: string;
-  onRoleChange: (member: OrganizationMemberOut, role: AssignableOrgRole) => void;
+  onRoleChange: (
+    member: OrganizationMemberOut,
+    role: AssignableOrgRole
+  ) => void;
 }) {
   const t = useTranslations('organization.memberManagement');
   const role = member.role;
   const editable =
-    canManage &&
-    role !== 'owner' &&
-    member.userId !== currentUserId;
+    canManage && role !== 'owner' && member.userId !== currentUserId;
 
   if (!editable) {
     return (

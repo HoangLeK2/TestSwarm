@@ -4,7 +4,6 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useCampaigns, useCreateCampaign } from '../hooks/use-campaigns';
-import { useDeviceGroups } from '@/features/device-groups/hooks/use-device-groups';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -17,32 +16,27 @@ import {
   DialogTitle,
   DialogTrigger
 } from '@/components/ui/dialog';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue
-} from '@/components/ui/select';
-import { useState } from 'react';
-import { Plus, Layers, FileText, MonitorSpeaker, Variable } from 'lucide-react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useRouter } from '@/i18n/navigation';
+import { ROUTES } from '@/config/routes';
+import { toast } from 'sonner';
+import { mergeScenarioVariables } from '@/lib/scenario-variables';
+import { useOrgScenarioBodies } from '@/features/org-scenarios/hooks/use-org-scenarios';
+import { Plus, Layers, FileText, Variable, Library } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import { cn } from '@/lib/utils';
+import { CampaignOrgScenarioPicker } from './campaign-org-scenario-picker';
+import {
+  CampaignAccountBindingFields,
+  campaignBindingToPayload,
+  type CampaignAccountBindingValue
+} from './campaign-account-binding-fields';
 
 type FormData = {
   name: string;
   description?: string;
 };
-
-type SocialPlatform = 'facebook' | 'instagram' | 'tiktok' | 'linkedin';
-
-const PLATFORM_OPTIONS: Array<{ value: SocialPlatform; labelKey: string }> = [
-  { value: 'facebook', labelKey: 'platformFacebook' },
-  { value: 'instagram', labelKey: 'platformInstagram' },
-  { value: 'tiktok', labelKey: 'platformTiktok' },
-  { value: 'linkedin', labelKey: 'platformLinkedin' }
-];
 
 function Section({
   icon: Icon,
@@ -69,8 +63,25 @@ function Section({
   );
 }
 
-export function CreateCampaignDialog() {
+export function CreateCampaignDialog({
+  initialOpen = false,
+  preselectedScenarioIds = [],
+  trigger,
+  defaultCampaignName
+}: {
+  initialOpen?: boolean;
+  /** @deprecated Classic create removed; kept for call-site compat. */
+  initialMode?: 'classic' | 'library';
+  preselectedScenarioIds?: string[];
+  /** Custom open trigger; defaults to “New campaign” button. */
+  trigger?: ReactNode;
+  /** Prefill campaign name (e.g. from scenario library). */
+  defaultCampaignName?: string;
+  /** @deprecated Library mode is always used. */
+  lockLibraryMode?: boolean;
+} = {}) {
   const t = useTranslations('campaignsFeature.createDialog');
+  const router = useRouter();
   const { data: campaigns } = useCampaigns();
   const existingNames = new Set(
     (campaigns ?? [])
@@ -89,12 +100,69 @@ export function CreateCampaignDialog() {
   });
   const [open, setOpen] = useState(false);
   const [variables, setVariables] = useState<Record<string, any>>({});
-  const [platform, setPlatform] = useState<SocialPlatform>('facebook');
-  const [targetGroupId, setTargetGroupId] = useState<string | undefined>(
-    undefined
+  const [tags, setTags] = useState('');
+  const [selectedScenarioIds, setSelectedScenarioIds] = useState<string[]>(
+    preselectedScenarioIds
   );
+  const bodyQueries = useOrgScenarioBodies(selectedScenarioIds, open);
+  const lastMergedSelectionRef = useRef<string>('');
+
+  useEffect(() => {
+    if (!initialOpen) return;
+    setOpen(true);
+    if (preselectedScenarioIds.length) {
+      setSelectedScenarioIds(preselectedScenarioIds);
+    }
+  }, [initialOpen, preselectedScenarioIds]);
+
+  useEffect(() => {
+    if (preselectedScenarioIds.length) {
+      setSelectedScenarioIds(preselectedScenarioIds);
+    }
+  }, [preselectedScenarioIds]);
+
+  const scenarioBodiesKey = bodyQueries
+    .map((query) => {
+      const body = query.data?.body_json;
+      if (!body || typeof body !== 'object') return '';
+      return JSON.stringify((body as Record<string, unknown>).variables ?? {});
+    })
+    .join('|');
+
+  useEffect(() => {
+    if (!open) {
+      lastMergedSelectionRef.current = '';
+      return;
+    }
+    const selectionKey = selectedScenarioIds.join(',');
+    if (!selectedScenarioIds.length) {
+      lastMergedSelectionRef.current = '';
+      setVariables({});
+      return;
+    }
+    if (selectionKey === lastMergedSelectionRef.current) return;
+    const pending = selectedScenarioIds.some(
+      (_id, index) => bodyQueries[index]?.isLoading
+    );
+    if (pending) return;
+    const layers = bodyQueries.map((query) => {
+      const body = query.data?.body_json;
+      if (!body || typeof body !== 'object') return {};
+      return (body as Record<string, unknown>).variables as
+        | Record<string, unknown>
+        | undefined;
+    });
+    setVariables(mergeScenarioVariables(...layers) as Record<string, any>);
+    lastMergedSelectionRef.current = selectionKey;
+  }, [open, selectedScenarioIds, scenarioBodiesKey, bodyQueries]);
+
+  const [accountBinding, setAccountBinding] =
+    useState<CampaignAccountBindingValue>({
+      mode: 'none',
+      accountGroupId: '',
+      scenarioAccountId: ''
+    });
   const { mutate, isPending, error } = useCreateCampaign();
-  const { data: groups } = useDeviceGroups();
   const {
     register,
     handleSubmit,
@@ -102,37 +170,82 @@ export function CreateCampaignDialog() {
     formState: { errors }
   } = useForm<FormData>({ resolver: zodResolver(schema) });
 
+  const handleOpenChange = (next: boolean) => {
+    setOpen(next);
+    if (next) {
+      setSelectedScenarioIds(preselectedScenarioIds);
+      reset({
+        name: defaultCampaignName ?? '',
+        description: ''
+      });
+      setVariables({});
+      setTags('');
+      setAccountBinding({
+        mode: 'none',
+        accountGroupId: '',
+        scenarioAccountId: ''
+      });
+      lastMergedSelectionRef.current = '';
+    }
+  };
+
+  const effectiveScenarioIds =
+    selectedScenarioIds.length > 0
+      ? selectedScenarioIds
+      : preselectedScenarioIds;
+
   const onSubmit = (data: FormData) => {
-    const nextVariables: Record<string, any> = {
-      ...variables,
-      __PLATFORM__: platform
-    };
+    if (!effectiveScenarioIds.length) {
+      toast.error(t('libraryScenarioRequired'));
+      return;
+    }
     mutate(
       {
-        ...data,
-        variables:
-          Object.keys(nextVariables).length > 0 ? nextVariables : undefined,
-        target_group_id: targetGroupId || undefined
+        name: data.name,
+        description: data.description,
+        vars: Object.keys(variables).length ? variables : {},
+        tags: tags
+          .split(',')
+          .map((tag) => tag.trim())
+          .filter(Boolean),
+        scenario_refs: effectiveScenarioIds.map((scenario_id) => ({
+          scenario_id
+        })),
+        ...campaignBindingToPayload(accountBinding)
       },
       {
-        onSuccess: () => {
+        onSuccess: (created) => {
           reset();
           setVariables({});
-          setPlatform('facebook');
-          setTargetGroupId(undefined);
+          setTags('');
+          setSelectedScenarioIds(preselectedScenarioIds);
+          setAccountBinding({
+            mode: 'none',
+            accountGroupId: '',
+            scenarioAccountId: ''
+          });
           setOpen(false);
+          toast.success(t('createSuccess'));
+          if (created?.id) {
+            router.push(ROUTES.CAMPAIGNS.DETAIL(created.id));
+          }
+        },
+        onError: (err: unknown) => {
+          toast.error(formatFarmApiError(err, t('createFailed')));
         }
       }
     );
   };
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>
-        <Button size='sm'>
-          <Plus size={16} className='mr-1' />
-          {t('trigger')}
-        </Button>
+        {trigger ?? (
+          <Button size='sm'>
+            <Plus size={16} className='mr-1' />
+            {t('trigger')}
+          </Button>
+        )}
       </DialogTrigger>
 
       <DialogContent className='max-h-[90vh] max-w-lg gap-0 overflow-y-auto p-0'>
@@ -144,13 +257,12 @@ export function CreateCampaignDialog() {
             </DialogTitle>
           </div>
           <p className='mt-0.5 text-[11px] text-muted-foreground'>
-            Campaign gộp nhiều thiết bị và kịch bản vào một lần chạy.
+            {t('subtitle')}
           </p>
         </DialogHeader>
 
         <form onSubmit={handleSubmit(onSubmit)}>
           <div className='space-y-5 px-5 py-5'>
-            {/* Basic info */}
             <Section icon={FileText} title='Thông tin cơ bản'>
               <div className='space-y-3'>
                 <div className='space-y-1.5'>
@@ -178,110 +290,39 @@ export function CreateCampaignDialog() {
             </Section>
 
             <hr className='border-border' />
-
-            <Section icon={Layers} title={t('platformLabel')} hint='(required)'>
-              <Select
-                value={platform}
-                onValueChange={(v) => setPlatform(v as SocialPlatform)}
-              >
-                <SelectTrigger className='h-9 w-full'>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent className='z-[10001]'>
-                  {PLATFORM_OPTIONS.map((opt) => (
-                    <SelectItem key={opt.value} value={opt.value}>
-                      {t(opt.labelKey)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className='mt-1.5 text-[11px] text-muted-foreground'>
-                {t('platformHint')}
-              </p>
+            <Section icon={Library} title={t('libraryScenariosLabel')}>
+              <CampaignOrgScenarioPicker
+                selectedIds={selectedScenarioIds}
+                onSelectedIdsChange={setSelectedScenarioIds}
+              />
             </Section>
-
             <hr className='border-border' />
-
-            {/* Target group */}
-            <Section
-              icon={MonitorSpeaker}
-              title={t('targetGroupLabel')}
-              hint='(tuỳ chọn)'
-            >
-              <Select
-                value={targetGroupId ?? '_none'}
-                onValueChange={(v) =>
-                  setTargetGroupId(v === '_none' ? undefined : v)
-                }
-              >
-                <SelectTrigger className='h-9 w-full'>
-                  <SelectValue placeholder={t('targetGroupPlaceholder')} />
-                </SelectTrigger>
-                {/* z-[10001] to appear above DialogContent (which is at z-10000) */}
-                <SelectContent className='z-[10001]'>
-                  <SelectItem value='_none'>
-                    <span className='text-muted-foreground'>
-                      {t('noGroup')}
-                    </span>
-                  </SelectItem>
-                  {(groups ?? []).map((g) => (
-                    <SelectItem key={g.id} value={g.id}>
-                      <span className='flex items-center gap-2'>
-                        <span
-                          className='inline-block size-3 shrink-0 rounded-full'
-                          style={{ backgroundColor: g.color }}
-                        />
-                        <span>{g.name}</span>
-                        <span className='text-muted-foreground'>
-                          ({g.device_count})
-                        </span>
-                      </span>
-                    </SelectItem>
-                  ))}
-                  {(groups ?? []).length === 0 && (
-                    <div className='px-2 py-1.5 text-xs text-muted-foreground'>
-                      Chưa có nhóm nào. Tạo nhóm thiết bị trước.
-                    </div>
-                  )}
-                </SelectContent>
-              </Select>
-              <p className='mt-1.5 text-[11px] text-muted-foreground'>
-                Campaign sẽ chạy trên tất cả thiết bị trong nhóm này. Bỏ trống
-                để chọn thiết bị sau.
-              </p>
+            <Section icon={Variable} title={t('tagsLabel')}>
+              <Input
+                value={tags}
+                onChange={(e) => setTags(e.target.value)}
+                placeholder={t('tagsPlaceholder')}
+              />
             </Section>
-
             <hr className='border-border' />
-
-            {/* Variables */}
-            <Section
-              icon={Variable}
-              title={t('variablesLabel')}
-              hint='(tuỳ chọn)'
-            >
+            <Section icon={Variable} title={t('variablesLabel')}>
               <p className='mb-2 text-[11px] text-muted-foreground'>
-                Biến được dùng trong kịch bản qua cú pháp{' '}
-                <code className='rounded bg-muted px-1 font-mono'>
-                  {'${tên_biến}'}
-                </code>
-                . Ví dụ:{' '}
-                <code className='rounded bg-muted px-1 font-mono'>
-                  username
-                </code>
-                ,{' '}
-                <code className='rounded bg-muted px-1 font-mono'>
-                  password
-                </code>
-                .
-              </p>
-              <p className='mb-2 text-[11px] text-muted-foreground'>
-                {t('accountModeHint')}
+                {t('libraryVariablesHint')}
               </p>
               <VariableEditor variables={variables} onChange={setVariables} />
             </Section>
+            <hr className='border-border' />
+            <Section icon={Layers} title={t('accountBindingSection')}>
+              <p className='mb-2 text-[11px] text-muted-foreground'>
+                {t('libraryAccountHint')}
+              </p>
+              <CampaignAccountBindingFields
+                value={accountBinding}
+                onChange={setAccountBinding}
+              />
+            </Section>
           </div>
 
-          {/* Footer */}
           <div className='border-t bg-muted/30 px-5 py-3'>
             {error && (
               <p className='mb-2 text-[11px] text-destructive'>
@@ -293,12 +334,16 @@ export function CreateCampaignDialog() {
                 type='button'
                 variant='ghost'
                 size='sm'
-                onClick={() => setOpen(false)}
+                onClick={() => handleOpenChange(false)}
                 disabled={isPending}
               >
                 Huỷ
               </Button>
-              <Button type='submit' size='sm' disabled={isPending}>
+              <Button
+                type='submit'
+                size='sm'
+                disabled={isPending || effectiveScenarioIds.length === 0}
+              >
                 {isPending ? t('creating') : t('submit')}
               </Button>
             </div>

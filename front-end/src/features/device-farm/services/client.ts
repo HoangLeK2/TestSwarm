@@ -37,3 +37,14 @@ export function createDeviceFarmHttpClient(
 
 /** Alias aligned with older `ProtoOrganization` name. */
 export type ProtoOrganization = OrganizationOut;
+
+let deviceFarmApiSingleton: DeviceFarmHttpClient<{ token: string }> | null =
+  null;
+
+/** Shared generated client for product API routes (`/api/*`). */
+export function getDeviceFarmApi(): DeviceFarmHttpClient<{ token: string }> {
+  if (!deviceFarmApiSingleton) {
+    deviceFarmApiSingleton = createDeviceFarmHttpClient({ secure: true });
+  }
+  return deviceFarmApiSingleton;
+}

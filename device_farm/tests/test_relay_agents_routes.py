@@ -516,3 +516,28 @@ async def test_relay_job_dispatch_requires_temporal_when_configured(monkeypatch)
     assert excinfo.value.status_code == 503
     local_dispatch.assert_not_called()
     mock_repo.finish_relay_job_item.assert_awaited_once()
+
+
+def test_normalize_ws_base_url_accepts_dashboard_lan_origin(monkeypatch):
+    from api.routes.relay_agents import _normalize_ws_base_url, _ws_base_for_push
+    from unittest.mock import MagicMock
+
+    assert _normalize_ws_base_url("ws://172.16.0.182:8081") == "ws://172.16.0.182:8081"
+    assert (
+        _normalize_ws_base_url("ws://172.16.0.182:8081/device-agent?key=abc")
+        == "ws://172.16.0.182:8081"
+    )
+    assert _normalize_ws_base_url("http://bad") is None
+
+    request = MagicMock()
+    request.url.scheme = "http"
+    request.headers.get.return_value = "localhost:3000"
+    monkeypatch.setattr(
+        "api.routes.relay_agents.device_farm_ws_public_base",
+        lambda: "ws://127.0.0.1:8080",
+    )
+    assert (
+        _ws_base_for_push(request, "ws://172.16.0.182:8081")
+        == "ws://172.16.0.182:8081"
+    )
+    assert _ws_base_for_push(request, None) == "ws://127.0.0.1:8080"

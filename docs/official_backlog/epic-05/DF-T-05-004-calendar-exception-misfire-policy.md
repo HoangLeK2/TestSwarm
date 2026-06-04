@@ -11,7 +11,7 @@
 | **Module** | DF-MOD-05 — Scheduling |
 | **Priority** | P2 |
 | **Story Points** | 3 |
-| **Status** | `Backlog` |
+| **Status** | `Done` |
 | **Labels** | `module:scheduling`, `layer:backend`, `layer:contract`, `type:feature`, `persona:social-data-operator` |
 | **Truy vết — FR refs** | FR-05-01, FR-05-08, FR-05-09 |
 | **Truy vết — UC refs** | UC-05-01 (mở rộng) |

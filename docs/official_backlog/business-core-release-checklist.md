@@ -56,7 +56,7 @@ Luồng R1 cần chứng minh được:
 - **Technical hardening/foundation:** DF-T-01-005, DF-T-01-006, DF-T-01-008, DF-T-01-013, DF-T-03-007, DF-T-03-009, DF-T-03-010, DF-T-03-013, DF-T-03-014.
 - **Optimization/capacity/advanced ops:** DF-T-02-010, DF-T-04-017, DF-T-05-007, DF-T-05-008, DF-T-05-012.
 - **Failure handling ngoài happy path:** DF-T-04-012, DF-T-11-018.
-- **AI/MCP/Preview:** DF-T-06-005, DF-T-06-013, toàn bộ DF-E-10.
+- **AI/MCP/Preview:** DF-T-06-005, toàn bộ DF-E-10.
 - **Multi-platform roadmap:** DF-T-08-008, DF-T-08-009, DF-T-08-010, DF-T-08-011, DF-T-08-012, DF-T-08-013, DF-T-08-015, DF-T-08-016, DF-T-08-017, trừ khi business chốt launch platform cụ thể ngoài Facebook.
 - **Notification/analytics sâu:** DF-T-09-003 tới DF-T-09-014.
 

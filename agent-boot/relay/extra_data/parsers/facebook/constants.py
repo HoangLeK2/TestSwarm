@@ -73,7 +73,6 @@ _AUTHOR_PREFIXES: Tuple[str, ...] = (
     "ảnh đại diện của",
     "profile picture of",
     "profile photo of",
-    "lựa chọn khác cho bài viết của",
 )
 
 

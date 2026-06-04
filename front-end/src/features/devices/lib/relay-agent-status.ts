@@ -16,20 +16,14 @@ export function getRelayConnectionState(
 
   const now = Date.now();
   const connectedAt = Date.parse(agent.connected_at);
-  if (
-    Number.isFinite(connectedAt) &&
-    now - connectedAt < CONNECTING_GRACE_MS
-  ) {
+  if (Number.isFinite(connectedAt) && now - connectedAt < CONNECTING_GRACE_MS) {
     return 'connecting';
   }
 
   const heartbeatAt = agent.last_heartbeat_at
     ? Date.parse(agent.last_heartbeat_at)
     : NaN;
-  if (
-    !Number.isFinite(heartbeatAt) ||
-    now - heartbeatAt > HEARTBEAT_STALE_MS
-  ) {
+  if (!Number.isFinite(heartbeatAt) || now - heartbeatAt > HEARTBEAT_STALE_MS) {
     return 'connecting';
   }
 

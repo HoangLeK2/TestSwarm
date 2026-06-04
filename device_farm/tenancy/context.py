@@ -30,3 +30,13 @@ def tenant_context(org_id: str | None) -> Iterator[None]:
     finally:
         clear_current_org_id(token)
 
+
+@contextmanager
+def use_tenant_scope(org_id: str | None) -> Iterator[None]:
+    """Apply tenant ORM filter when ``org_id`` is known but context var is unset."""
+    if get_current_org_id() or not org_id:
+        yield
+        return
+    with tenant_context(org_id):
+        yield
+

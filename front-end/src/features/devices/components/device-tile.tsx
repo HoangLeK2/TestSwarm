@@ -10,9 +10,13 @@ import {
   DeviceStepsSheet
 } from './device-step-monitor';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { DeviceAndroidFrame } from './device-android-frame';
+import {
+  DeviceAndroidFrame,
+  mockupOuterHeightPx
+} from './device-android-frame';
 import { cn } from '@/lib/utils';
 import { useTranslations } from 'next-intl';
+import type { DeviceOpsConfig } from './device-ops-rail';
 
 interface DeviceTileProps {
   device: Device;
@@ -53,6 +57,11 @@ interface DeviceTileProps {
   mockupScreenWidth?: number;
   /** Rail: ẩn pinch zoom + khởi động lại phiên ADB/scrcpy (trang ghi kịch bản). */
   minimalRailControls?: boolean;
+  streamFetchPriority?: 'high' | 'low' | 'auto';
+  /** Hide current-app label under the mockup (filmstrip tiles). */
+  hideAppCaption?: boolean;
+  /** ADB / APK / file ops on the control rail (control-record). */
+  deviceOps?: DeviceOpsConfig;
 }
 
 export function DeviceTile({
@@ -73,7 +82,10 @@ export function DeviceTile({
   hideDeviceFunctions = false,
   readOnlyPreview = false,
   mockupScreenWidth: mockupScreenWidthProp,
-  minimalRailControls = false
+  minimalRailControls = false,
+  streamFetchPriority = 'auto',
+  hideAppCaption = false,
+  deviceOps
 }: DeviceTileProps) {
   const t = useTranslations('devicesFarm');
   const id = serialToId(device.serial);
@@ -99,6 +111,10 @@ export function DeviceTile({
   const mockupScreenWidth = useMemo(
     () => mockupScreenWidthProp ?? (compact ? 232 : 288),
     [compact, mockupScreenWidthProp]
+  );
+  const mirrorRowHeightPx = useMemo(
+    () => mockupOuterHeightPx(mockupScreenWidth),
+    [mockupScreenWidth]
   );
   const studioMirror =
     mockupScreenWidthProp != null && mockupScreenWidthProp <= 260;
@@ -198,14 +214,17 @@ export function DeviceTile({
               className={cn(
                 compact
                   ? 'flex flex-col items-center gap-2'
-                  : 'inline-grid h-full grid-cols-[auto_auto] items-stretch gap-2.5'
+                  : 'inline-flex items-stretch gap-2.5'
               )}
+              style={
+                compact ? undefined : { height: mirrorRowHeightPx }
+              }
             >
               <DeviceAndroidFrame
                 screenWidth={mockupScreenWidth}
                 deviceWidth={device.screen_width}
                 deviceHeight={device.screen_height}
-                className='shrink-0'
+                className='h-full shrink-0'
               >
                 <div className='flex h-full min-h-0 w-full flex-col'>
                   {isActive ? (
@@ -220,6 +239,7 @@ export function DeviceTile({
                       gestureMode={gestureMode}
                       captionBelowFrame
                       interactive={!readOnlyPreview}
+                      streamFetchPriority={streamFetchPriority}
                     />
                   ) : (
                     <div className='flex h-full w-full items-center justify-center bg-zinc-900 text-[11px] text-muted-foreground'>
@@ -233,7 +253,7 @@ export function DeviceTile({
                   serial={device.serial}
                   mode={mode}
                   layout='rail'
-                  className='h-full min-h-full self-stretch'
+                  className='h-full min-h-0 self-stretch'
                   onToggleMode={() => onToggleMode(device.serial)}
                   onKey={(key) =>
                     wsSend({ type: 'key', serial: device.serial, key })
@@ -248,10 +268,11 @@ export function DeviceTile({
                   onUnlock={handleUnlock}
                   hidePinch={minimalRailControls}
                   hideRestart={minimalRailControls}
+                  deviceOps={deviceOps}
                 />
               ) : null}
             </div>
-            {isActive && (
+            {isActive && !hideAppCaption && (
               <p
                 className='mx-auto max-w-[min(320px,90vw)] truncate px-1 text-center font-mono text-[10px] text-muted-foreground'
                 id={`app-${id}`}

@@ -10,7 +10,9 @@ import {
 } from './server-status';
 
 export function useServerStatus(): ServerStatus {
-  const [status, setStatus] = useState<ServerStatus>(() => getServerStatusSync());
+  const [status, setStatus] = useState<ServerStatus>(() =>
+    getServerStatusSync()
+  );
 
   useEffect(() => {
     const unsub = subscribeServerStatus(setStatus);

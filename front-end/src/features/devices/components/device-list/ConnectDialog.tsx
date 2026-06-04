@@ -16,7 +16,7 @@ import {
   DialogTitle
 } from '@/components/ui/dialog';
 import { Separator } from '@/components/ui/separator';
-import { getDeviceAgentWsUrl } from '@/lib/farm-api';
+import { getDeviceAgentWsBase, getDeviceAgentWsUrl } from '@/lib/farm-api';
 import { ROUTES } from '@/config/routes';
 import { invalidateDeviceFleetQueries } from '../../hooks/use-devices';
 import {
@@ -198,7 +198,8 @@ export function ConnectDialog({
         relayPush.relayId,
         relayPush.serial,
         {
-          deviceId: isPendingDevice(device) ? device.id : undefined
+          deviceId: isPendingDevice(device) ? device.id : undefined,
+          wsBaseUrl: getDeviceAgentWsBase()
         }
       );
       if (!res.ok) {

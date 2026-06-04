@@ -4,6 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { toast } from 'sonner';
 import {
+  extractVariablesFromScenarioJson,
+  normalizeScenarioVariables
+} from '@/lib/scenario-variables';
+import {
   useCampaignDevices,
   useCompileCampaignScenario,
   useScenarios,
@@ -48,7 +52,6 @@ import {
   cancelPreviewStream,
   fetchHierarchy,
   interruptDevice,
-  previewScenario,
   previewScenarioStream
 } from '@/features/devices/services/api';
 import {
@@ -227,21 +230,7 @@ function sanitizeScenarioStepsForApi(input: unknown): any[] {
 }
 
 function flattenVarDefs(vars: Record<string, any>): Record<string, any> {
-  const out: Record<string, any> = {};
-  for (const [k, v] of Object.entries(vars)) {
-    if (
-      v !== null &&
-      typeof v === 'object' &&
-      !Array.isArray(v) &&
-      'type' in v &&
-      'default' in v
-    ) {
-      out[k] = (v as { default?: unknown }).default;
-    } else {
-      out[k] = v;
-    }
-  }
-  return out;
+  return normalizeScenarioVariables(vars) as Record<string, any>;
 }
 
 type StepType =
@@ -651,6 +640,7 @@ export function ScenarioDialog({
   );
   const flowRunAbortRef = useRef<AbortController | null>(null);
   const stepRunAbortRef = useRef<AbortController | null>(null);
+  const previewAllAbortRef = useRef<AbortController | null>(null);
   const flowRunningIdsRef = useRef<Set<string>>(new Set());
   // Captured from the server's 'start' SSE event. Lets Stop / dialog-close
   // hit the explicit cancel endpoint instead of relying on the SSE disconnect
@@ -663,12 +653,16 @@ export function ScenarioDialog({
   );
 
   const hardStopPreview = useCallback(() => {
+    previewAllAbortRef.current?.abort();
     flowRunAbortRef.current?.abort();
     stepRunAbortRef.current?.abort();
     const active = previewSession.takeActiveForCancel();
+    const serial = (previewSerial || devices[0]?.serial || '').trim();
     if (active) {
       cancelPreviewStream(active.serial, active.traceId).catch(() => undefined);
       interruptDevice(active.serial).catch(() => undefined);
+    } else if (serial) {
+      interruptDevice(serial).catch(() => undefined);
     }
     setStepRunStates((s) => {
       const hadRunning = Object.values(s).some((st) => st === 'running');
@@ -690,7 +684,7 @@ export function ScenarioDialog({
     });
     flowRunningIdsRef.current.clear();
     queueMicrotask(() => toast.info('Đã dừng chạy thử'));
-  }, [previewSession]);
+  }, [previewSession, previewSerial, devices]);
 
   // Dialog close / tab close / Next.js route change all end up unmounting
   // this component. Make sure the scenario actually stops server-side.
@@ -768,6 +762,61 @@ export function ScenarioDialog({
     [scheduleGraphSync]
   );
 
+  const applyPreviewStepRunEvent = useCallback(
+    (
+      runKey: string,
+      ev: { event: string; ok?: boolean; success?: boolean; message?: string; error?: string; failed_message?: string },
+      setStates: React.Dispatch<
+        React.SetStateAction<Record<string, 'idle' | 'running' | 'ok' | 'error'>>
+      >
+    ) => {
+      if (ev.event === 'step_done') {
+        setStates((s) => ({
+          ...s,
+          [runKey]: ev.ok ? 'ok' : 'error'
+        }));
+        if (!ev.ok) toast.error(String(ev.message ?? 'Step lỗi'));
+        return;
+      }
+      if (ev.event === 'done') {
+        setStates((s) => {
+          if (s[runKey] !== 'running') return s;
+          const ok = ev.success !== false;
+          return { ...s, [runKey]: ok ? 'ok' : 'error' };
+        });
+        if (ev.success === false) {
+          toast.error(
+            String(ev.failed_message ?? ev.message ?? 'Kịch bản lỗi')
+          );
+        }
+        return;
+      }
+      if (ev.event === 'error') {
+        setStates((s) => ({ ...s, [runKey]: 'error' }));
+        toast.error(String(ev.error ?? 'Lỗi chạy thử'));
+      }
+    },
+    []
+  );
+
+  const clearPreviewRunStateAfterDelay = useCallback(
+    (
+      runKey: string,
+      setStates: React.Dispatch<
+        React.SetStateAction<Record<string, 'idle' | 'running' | 'ok' | 'error'>>
+      >
+    ) => {
+      setTimeout(() => {
+        setStates((s) => {
+          const n = { ...s };
+          if (n[runKey] !== 'running') delete n[runKey];
+          return n;
+        });
+      }, 2800);
+    },
+    []
+  );
+
   const handleFlowRunLeaf = useCallback(
     async (fgId: string, step: FlowStep) => {
       const serial = previewSerial?.trim();
@@ -791,13 +840,7 @@ export function ScenarioDialog({
           serial,
           [payload],
           previewSession.makeStreamHandler(runId, serial, (ev) => {
-            if (ev.event === 'step_done') {
-              setFlowRunStates((s) => ({
-                ...s,
-                [fgId]: ev.ok ? 'ok' : 'error'
-              }));
-              if (!ev.ok) toast.error(String(ev.message ?? 'Step lỗi'));
-            }
+            applyPreviewStepRunEvent(fgId, ev, setFlowRunStates);
           }),
           ctrl.signal,
           flattenVarDefs(variables)
@@ -810,16 +853,22 @@ export function ScenarioDialog({
       } finally {
         previewSession.onStreamEnd(runId);
         flowRunningIdsRef.current.delete(fgId);
-        setTimeout(() => {
+        if (!ctrl.signal.aborted) {
           setFlowRunStates((s) => {
-            const n = { ...s };
-            if (n[fgId] !== 'running') delete n[fgId];
-            return n;
+            if (s[fgId] !== 'running') return s;
+            return { ...s, [fgId]: 'error' };
           });
-        }, 2800);
+          clearPreviewRunStateAfterDelay(fgId, setFlowRunStates);
+        }
       }
     },
-    [previewSerial, variables, previewSession]
+    [
+      previewSerial,
+      variables,
+      previewSession,
+      applyPreviewStepRunEvent,
+      clearPreviewRunStateAfterDelay
+    ]
   );
 
   const handleFlowDetailChange = useCallback(
@@ -886,13 +935,7 @@ export function ScenarioDialog({
           serial,
           [payload],
           previewSession.makeStreamHandler(runId, serial, (ev) => {
-            if (ev.event === 'step_done') {
-              setStepRunStates((s) => ({
-                ...s,
-                [runKey]: ev.ok ? 'ok' : 'error'
-              }));
-              if (!ev.ok) toast.error(String(ev.message ?? 'Step lỗi'));
-            }
+            applyPreviewStepRunEvent(runKey, ev, setStepRunStates);
           }),
           ctrl.signal,
           flattenVarDefs(variables)
@@ -911,17 +954,23 @@ export function ScenarioDialog({
       } finally {
         previewSession.onStreamEnd(runId);
         if (!ctrl.signal.aborted) {
-          setTimeout(() => {
-            setStepRunStates((s) => {
-              const n = { ...s };
-              if (n[runKey] !== 'running') delete n[runKey];
-              return n;
-            });
-          }, 2800);
+          setStepRunStates((s) => {
+            if (s[runKey] !== 'running') return s;
+            return { ...s, [runKey]: 'error' };
+          });
+          clearPreviewRunStateAfterDelay(runKey, setStepRunStates);
         }
       }
     },
-    [previewSerial, devices, stepRunStates, variables, previewSession]
+    [
+      previewSerial,
+      devices,
+      stepRunStates,
+      variables,
+      previewSession,
+      applyPreviewStepRunEvent,
+      clearPreviewRunStateAfterDelay
+    ]
   );
 
   const handleFetchXml = async () => {
@@ -1256,7 +1305,12 @@ export function ScenarioDialog({
       currentSteps = Array.isArray(effectiveRow.steps)
         ? coerceSteps(effectiveRow.steps)
         : [];
-      currentVariables = (effectiveRow as ScenarioOut).variables ?? {};
+      currentVariables = normalizeScenarioVariables(
+        ((effectiveRow as ScenarioOut).variables ?? {}) as Record<
+          string,
+          unknown
+        >
+      ) as Record<string, any>;
       const sc: any = (campaign.scenario as any) ?? {};
       const ctx: any = sc.device_context ?? {};
       currentDeviceModel = ctx.device_model ?? '';
@@ -1265,7 +1319,9 @@ export function ScenarioDialog({
       currentDeviceNotes = ctx.notes ?? '';
       setAccountGroupId((effectiveRow as ScenarioOut).account_group_id ?? '');
     } else {
-      currentVariables = campaign.variables ?? {};
+      currentVariables = normalizeScenarioVariables(
+        (campaign.variables ?? {}) as Record<string, unknown>
+      ) as Record<string, any>;
       setAccountGroupId('');
     }
 
@@ -1356,7 +1412,25 @@ export function ScenarioDialog({
     setCollectedXmls([]);
   }, [xmlSerial]);
 
+  const resolveVariablesForSave = (): Record<string, any> => {
+    const text = rawJson.trim();
+    if (text) {
+      return extractVariablesFromScenarioJson(JSON.parse(text)) as Record<
+        string,
+        any
+      >;
+    }
+    return normalizeScenarioVariables(variables) as Record<string, any>;
+  };
+
   const handleSave = () => {
+    let variablesToSave: Record<string, any>;
+    try {
+      variablesToSave = resolveVariablesForSave();
+    } catch {
+      toast.error(tScenarioForm('saveInvalidJsonVariables'));
+      return;
+    }
     const sanitizedSteps = sanitizeScenarioStepsForApi(steps);
     const check = validateScenarioStepsForApi(sanitizedSteps, (key, values) =>
       tScenarioValidation(key, values)
@@ -1373,7 +1447,7 @@ export function ScenarioDialog({
           data: {
             instructions,
             steps: sanitizedSteps,
-            variables,
+            variables: variablesToSave,
             nodes: graphNodes as any,
             edges: graphEdges as any,
             // Empty string clears the binding on the backend.
@@ -1402,7 +1476,7 @@ export function ScenarioDialog({
         ...existing,
         instructions,
         steps: sanitizedSteps,
-        variables,
+        variables: variablesToSave,
         device_context: deviceContext
       };
       saveScenario(
@@ -1431,24 +1505,39 @@ export function ScenarioDialog({
       toast.error('Chưa có bước nào để test');
       return;
     }
+    previewAllAbortRef.current?.abort();
+    const ctrl = new AbortController();
+    previewAllAbortRef.current = ctrl;
+    const runId = previewSession.beginRun();
     setPreviewingAll(true);
+    const failedSteps: number[] = [];
     try {
-      const res = await previewScenario(serial, sanitizedSteps);
-      const failed =
-        res.step_results?.filter(
-          (r) => r && typeof r.ok === 'boolean' && !r.ok
-        ) ?? [];
-      if (failed.length > 0) {
-        const idxList = failed.map((r) => `#${(r.index ?? 0) + 1}`).join(', ');
-        toast.error(`Một số bước lỗi: ${idxList}`);
-      } else {
-        toast.success(
-          'Đã gửi toàn bộ kịch bản lên thiết bị (backend không báo lỗi step)'
+      await previewScenarioStream(
+        serial,
+        sanitizedSteps,
+        previewSession.makeStreamHandler(runId, serial, (ev) => {
+          if (ev.event === 'step_done' && ev.ok === false) {
+            failedSteps.push(Number(ev.index ?? 0) + 1);
+          }
+        }),
+        ctrl.signal,
+        flattenVarDefs(variables)
+      );
+      if (ctrl.signal.aborted) return;
+      if (failedSteps.length > 0) {
+        toast.error(
+          `Một số bước lỗi: ${failedSteps.map((n) => `#${n}`).join(', ')}`
         );
+      } else {
+        toast.success('Đã chạy thử toàn bộ kịch bản');
       }
     } catch {
-      toast.error('Test kịch bản thất bại');
+      if (!ctrl.signal.aborted) {
+        toast.error('Test kịch bản thất bại');
+      }
     } finally {
+      previewSession.onStreamEnd(runId);
+      previewAllAbortRef.current = null;
       setPreviewingAll(false);
     }
   };
@@ -1534,7 +1623,7 @@ export function ScenarioDialog({
   const handleApplyJson = () => {
     const text = rawJson.trim();
     if (!text) {
-      toast.error('JSON rỗng');
+      toast.error(tScenarioForm('jsonEmpty'));
       return;
     }
     try {
@@ -1545,13 +1634,16 @@ export function ScenarioDialog({
           : parsed;
 
       if (!Array.isArray(sc.steps) || sc.steps.length === 0) {
-        toast.error('JSON phải có steps là một mảng không rỗng');
+        toast.error(tScenarioForm('jsonInvalidSteps'));
         return;
       }
       const nextInstructions = String(sc.instructions ?? '');
       const nextSteps = coerceSteps(sc.steps);
-      const nextVariables =
-        sc.variables && typeof sc.variables === 'object' ? sc.variables : {};
+      const nextVariables = normalizeScenarioVariables(
+        sc.variables && typeof sc.variables === 'object'
+          ? (sc.variables as Record<string, unknown>)
+          : {}
+      ) as Record<string, any>;
       const ctx: any = sc.device_context ?? {};
       setDeviceModel(String(ctx.device_model ?? ''));
       setAndroidVersion(String(ctx.android_version ?? ''));
@@ -1570,9 +1662,9 @@ export function ScenarioDialog({
         variables: nextVariables
       };
       setRawJson(JSON.stringify(preserved, null, 2));
-      toast.success('Đã áp dụng JSON vào kịch bản');
+      toast.success(tScenarioForm('jsonApplySuccess'));
     } catch {
-      toast.error('JSON không hợp lệ');
+      toast.error(tScenarioForm('jsonInvalid'));
     }
   };
 
@@ -1872,29 +1964,37 @@ export function ScenarioDialog({
 
             <div className='space-y-1'>
               <p className='text-xs font-medium'>
-                Raw scenario JSON (optional)
+                {tScenarioForm('rawJsonTitle')}
               </p>
               <p className='text-[11px] text-muted-foreground'>
-                Paste{' '}
-                <code className='rounded bg-muted px-1'>
-                  {'{"scenario": {...}}'}
-                </code>{' '}
-                or{' '}
-                <code className='rounded bg-muted px-1'>
-                  {'{"instructions": ..., "steps": [...]}'}
-                </code>
-                . Sẽ ghi đè form bên dưới.
+                {tScenarioForm.rich('rawJsonHint', {
+                  scenarioWrapper: () => (
+                    <code className='rounded bg-muted px-1'>
+                      {tScenarioForm('rawJsonScenarioWrapper')}
+                    </code>
+                  ),
+                  flatWrapper: () => (
+                    <code className='rounded bg-muted px-1'>
+                      {tScenarioForm('rawJsonFlatWrapper')}
+                    </code>
+                  )
+                })}
               </p>
               <Textarea
                 className='h-32 font-mono text-[11px]'
                 value={rawJson}
                 onChange={(e) => setRawJson(e.target.value)}
-                placeholder='{"instructions": "...", "steps": [...]}'
+                placeholder={tScenarioForm('rawJsonPlaceholder')}
               />
-              <div className='flex justify-end pt-1'>
+              <div className='flex flex-col items-end gap-1 pt-1'>
                 <Button size='sm' variant='outline' onClick={handleApplyJson}>
-                  Áp dụng JSON
+                  {tScenarioForm('jsonApply')}
                 </Button>
+                <p className='max-w-full text-right text-[10px] text-muted-foreground'>
+                  {tScenarioForm('jsonApplyHint', {
+                    applyLabel: tScenarioForm('jsonApply')
+                  })}
+                </p>
               </div>
             </div>
 
@@ -1943,11 +2043,25 @@ export function ScenarioDialog({
 
             {/* DF-001: Variables */}
             <div className='space-y-2'>
-              <details className='group'>
+              <details
+                className='group'
+                open={Object.keys(variables).length > 0}
+              >
                 <summary className='flex cursor-pointer items-center gap-1 text-xs font-medium'>
-                  <span>Biến (Variables)</span>
+                  <span>
+                    {tScenarioForm('variablesTitle')}
+                    {Object.keys(variables).length > 0 ? (
+                      <span className='ml-1.5 font-normal text-muted-foreground'>
+                        {tScenarioForm('variablesCount', {
+                          count: Object.keys(variables).length
+                        })}
+                      </span>
+                    ) : null}
+                  </span>
                   <span className='font-normal text-muted-foreground'>
-                    — {'${VAR}'} trong steps sẽ được thay thế khi chạy
+                    {tScenarioForm('variablesRuntimeHint', {
+                      syntax: '${VAR}'
+                    })}
                   </span>
                 </summary>
                 <div className='space-y-2 pt-2'>
@@ -1956,7 +2070,7 @@ export function ScenarioDialog({
                     onChange={setVariables}
                   />
                   <p className='text-[10px] leading-relaxed text-muted-foreground'>
-                    Crawl nhóm FB (ví dụ):{' '}
+                    {tScenarioForm('variablesExampleIntro')}{' '}
                     <code className='rounded bg-muted px-1 font-mono'>
                       GROUP_NAME
                     </code>
@@ -1972,11 +2086,7 @@ export function ScenarioDialog({
                     <code className='rounded bg-muted px-1 font-mono'>
                       SCROLL_X_RATIO
                     </code>{' '}
-                    (dùng trong{' '}
-                    <code className='rounded bg-muted px-1 font-mono'>
-                      scroll_down.start_x_ratio
-                    </code>
-                    ),{' '}
+                    {tScenarioForm('variablesExampleScrollHint')}{' '}
                     <code className='rounded bg-muted px-1 font-mono'>
                       SAVE_COLLECTION
                     </code>
@@ -2046,18 +2156,27 @@ export function ScenarioDialog({
                           ))}
                         </SelectContent>
                       </Select>
-                      <Button
-                        size='sm'
-                        variant='outline'
-                        onClick={handlePreviewAll}
-                        disabled={
-                          previewingAll ||
-                          !steps.length ||
-                          (!previewSerial && devices.length === 0)
-                        }
-                      >
-                        {previewingAll ? 'Đang test…' : 'Test toàn bộ'}
-                      </Button>
+                      {previewingAll ? (
+                        <Button
+                          size='sm'
+                          variant='destructive'
+                          onClick={hardStopPreview}
+                        >
+                          Dừng
+                        </Button>
+                      ) : (
+                        <Button
+                          size='sm'
+                          variant='outline'
+                          onClick={handlePreviewAll}
+                          disabled={
+                            !steps.length ||
+                            (!previewSerial && devices.length === 0)
+                          }
+                        >
+                          Test toàn bộ
+                        </Button>
+                      )}
                     </>
                   )}
                   <Button size='sm' variant='outline' onClick={handleAddStep}>

@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -67,12 +68,26 @@ async def run_migrations(conn) -> None:
         applied_checksum = applied.get(f.name)
         if applied_checksum is not None:
             if applied_checksum != checksum:
-                raise RuntimeError(
-                    f"Applied migration {f.name} checksum mismatch. "
-                    "Do not edit historical migrations after production apply; "
-                    "create a new migration instead."
-                )
-            log.debug("migration skipped: %s", f.name)
+                if _reconcile_drift_enabled():
+                    log.warning(
+                        "migration checksum drift reconciled for %s (old=%s new=%s). "
+                        "Set MIGRATION_RECONCILE_DRIFT=0 in production after fixing schema_migrations.",
+                        f.name,
+                        applied_checksum[:12],
+                        checksum[:12],
+                    )
+                    await _record_applied_migration(compat_conn, f.name, checksum)
+                    applied[f.name] = checksum
+                else:
+                    raise RuntimeError(
+                        f"Applied migration {f.name} checksum mismatch. "
+                        "Do not edit historical migrations after production apply; "
+                        "create a new migration instead. "
+                        "For local/dev volumes with idempotent drift only, set "
+                        "MIGRATION_RECONCILE_DRIFT=1 once, restart, then unset."
+                    )
+            else:
+                log.debug("migration skipped: %s", f.name)
             continue
 
         module_name = f"db.migrations.{f.stem}"
@@ -89,6 +104,11 @@ async def run_migrations(conn) -> None:
 
 def _checksum(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _reconcile_drift_enabled() -> bool:
+    raw = os.environ.get("MIGRATION_RECONCILE_DRIFT", "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
 
 
 async def _ensure_migration_table(conn: _CompatConn) -> None:

@@ -11,7 +11,7 @@
 | **Module** | DF-MOD-04 — Campaign, Scenario & Execution |
 | **Priority** | P1 |
 | **Story Points** | 5 |
-| **Status** | `Backlog` |
+| **Status** | `Done` |
 | **Labels** | `module:campaigns`, `layer:backend`, `layer:contract`, `type:feature`, `persona:social-data-operator` |
 | **Truy vết — FR refs** | FR-04-17 |
 | **Truy vết — UC refs** | UC-04-09 |
@@ -128,34 +128,34 @@ And doc runbook cảnh báo
 
 **Backend** (`layer:backend`)
 
-- [ ] Define Temporal signal handlers `pauseSignal`, `resumeSignal`, `cancelSignal`.
-- [ ] Workflow trong DF-T-04-010 phải poll signal giữa step.
-- [ ] Endpoint REST 3 action × execution + campaign.
-- [ ] Campaign-level fan-out logic.
-- [ ] Audit log + event hook.
+- [x] Define Temporal signal handlers `pauseSignal`, `resumeSignal`, `cancelSignal`.
+- [x] Workflow trong DF-T-04-010 phải poll signal giữa step.
+- [x] Endpoint REST 3 action × execution + campaign.
+- [x] Campaign-level fan-out logic.
+- [x] Audit log + event hook.
 
 **Contract / API** (`layer:contract`)
 
-- [ ] OpenAPI 6 endpoint (pause/resume/cancel × execution/campaign).
-- [ ] Mã lỗi: `INVALID_ACTION`, `EXECUTION_NOT_FOUND`.
-- [ ] Cập nhật state machine campaign: thêm `paused` state.
+- [x] OpenAPI 6 endpoint (pause/resume/cancel × execution/campaign).
+- [x] Mã lỗi: `INVALID_ACTION`, `EXECUTION_NOT_FOUND`.
+- [x] Cập nhật state machine campaign: thêm `paused` state.
 
 **Database / Migration** (`layer:db`)
 
-- [ ] Cột `pause_signal_received_at`, `cancel_signal_received_at`.
+- [x] Cột `pause_signal_received_at`, `cancel_signal_received_at`.
 
 **Documentation** (`layer:docs`)
 
-- [ ] Runbook: "Pause vs Cancel — khi nào dùng cái nào".
-- [ ] Cảnh báo "Cancel does not undo".
+- [x] Runbook: "Pause vs Cancel — khi nào dùng cái nào".
+- [x] Cảnh báo "Cancel does not undo".
 
 **Test** (`layer:test`)
 
-- [ ] Integration test với Temporal test server.
-- [ ] Test pause atomic step (step đang chạy hoàn thành).
-- [ ] Test resume từ checkpoint.
-- [ ] Test idempotent.
-- [ ] Test campaign-level fan-out.
+- [x] Test idempotent.
+- [x] Test campaign-level fan-out.
+- [x] Integration test với Temporal test server.
+- [x] Test pause atomic step (step đang chạy hoàn thành).
+- [x] Test resume từ checkpoint.
 
 ## 8. Test case nghiệp vụ
 
@@ -174,7 +174,7 @@ And doc runbook cảnh báo
 
 **Bị chặn bởi:** DF-T-04-010 (workflow + signal stub), DF-T-04-007 (FSM cần `paused` state), DF-T-04-015 (audit), DF-T-04-013 (event).
 
-**Chặn:** DF-E-11 (UI control button).
+**Chặn:** DF-E-11 (UI control button) — monitor toolbar + per-device workflow controls shipped.
 
 **Rủi ro:**
 

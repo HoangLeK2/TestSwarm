@@ -110,7 +110,8 @@ async def accept_organization_invitation(
         role=invitation.role or "member",
     )
     try:
-        user.org_id = invitation.organization_id  # type: ignore[attr-defined]
+        if not user.default_org_id:
+            user.default_org_id = invitation.organization_id
         await db.flush()
     except Exception:
         log.warning(

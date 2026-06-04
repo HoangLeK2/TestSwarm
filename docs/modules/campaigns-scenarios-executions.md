@@ -24,12 +24,105 @@ editing state that is not persisted through campaign/scenario models.
 | Execution CRUD/DLQ/artifacts | `device_farm/api/routes/executions.py` |
 | Scenario schema | `device_farm/api/schemas/scenario.py` |
 | Scenario execution loop | `device_farm/tasks/scenario/executor.py`, `device_farm/tasks/scenario/steps/*` |
-| Dispatch service | `device_farm/services/campaign_dispatch.py` |
+| Dispatch service | `device_farm/services/campaign_dispatch.py`, `device_farm/services/campaign/dispatcher.py` |
 | Temporal workflows | `device_farm/temporal/workflows.py`, `device_farm/temporal/activities.py`, `device_farm/temporal/worker.py` |
 | Models | `device_farm/db/models/campaign.py`, `device_farm/db/models/scenario_version.py`, `device_farm/db/models/execution.py`, `device_farm/db/models/execution_dlq.py` |
 | Frontend | `front-end/src/features/campaigns/*`, `front-end/src/features/scenario-templates/*`, `front-end/src/app/[locale]/scenario-flow/[id]/page.tsx` |
 
 ## Diagrams
+
+### Campaign Fan-Out Dispatch (DF-T-04-008)
+
+Epic 04 org-scoped campaigns dispatch via `POST /api/campaigns/{id}/dispatch`.
+Targets may be explicit `device_ids` and/or `device_group_ids` (expanded at
+dispatch time). Group membership is snapshotted into `campaign_targets` so
+later group edits do not affect an in-flight dispatch.
+
+```mermaid
+sequenceDiagram
+    participant API as POST /campaigns/{id}/dispatch
+    participant Val as device_validator
+    participant Snap as campaign_targets
+    participant Disp as CampaignDispatcher
+    participant Claim as device_reserve.claim
+    participant DB as executions
+
+    API->>Val: resolve + validate targets
+    alt empty / cross-org / offline strict
+        Val-->>API: 400 EMPTY_DISPATCH_TARGET / DEVICE_NOT_FOUND / DEVICE_OFFLINE
+    end
+    Val->>Snap: snapshot device list (dispatch_id)
+    loop each device (parallel default)
+        Disp->>DB: create execution (campaign_device)
+        Disp->>Claim: claim device (owner=campaign)
+        alt claim ok
+            Claim-->>Disp: session_id
+            Disp->>DB: execution status=running
+        else claim fail
+            Disp->>DB: execution status=failed reason=device_claim_failed
+        end
+    end
+    Disp-->>API: FanOutResult
+```
+
+Per-device variables: campaign `vars` plus `per_device_overrides[device_id]`
+merge into each execution's `device_config.effective_vars`. The DSL resolver
+uses `EffectiveVariableResolver.for_campaign_device(...)`.
+
+### Campaign Lifecycle FSM (DF-T-04-007)
+
+Org-scoped Epic 04 campaigns use a finite state machine enforced by
+`services/campaign/fsm.py` and `services/campaign/lifecycle.py`. Invalid
+transitions return HTTP 409 (`INVALID_TRANSITION`); body edits on non-draft
+campaigns return `CAMPAIGN_LOCKED`.
+
+```mermaid
+stateDiagram-v2
+    [*] --> draft
+    draft --> scheduled: schedule attach (DF-E-05)
+    draft --> running: dispatch
+    scheduled --> running: dispatch
+    running --> completed: aggregator (all executions terminal)
+    running --> failed: aggregator (all DLQ open)
+    running --> cancelled: operator cancel
+    draft --> cancelled: operator cancel
+    scheduled --> cancelled: operator cancel
+    completed --> archived: archive / delete
+    failed --> archived: archive
+    cancelled --> archived: archive
+    draft --> archived: soft delete (draft only)
+```
+
+Timestamps: `started_at` on `running`, `completed_at` on `completed`,
+`cancelled_at` on `cancelled`. Each transition emits `campaign.status.changed`
+and increments `campaign_status_transition_total{from,to}`.
+
+Aggregation uses grouped SQL counts (not full execution row loads) and is
+debounced per campaign via `aggregator_scheduler.py` (~500ms coalesce) so
+N concurrent execution terminals trigger one evaluation.
+
+### Execution runtime (DF-T-04-010)
+
+After fan-out (`POST /campaigns/{id}/dispatch`), `execution_runtime.py`
+starts one durable workflow per running execution:
+
+- **Temporal path:** `workflow_id = exec_{execution_id}`, task queue from config.
+  Pinned org scenarios are expanded into `run_scenario` steps with a pre-built
+  registry (`by_id` / `by_campaign_name`).
+- **Fallback path:** when Temporal is disabled or `start_workflow` fails,
+  `dispatch_source=fallback` is stored on the execution and an in-process
+  asyncio task runs `run_scenario_task` (best-effort durability).
+- **Terminal:** `finalize_campaign` activity calls `finish_fan_out_execution`
+  (release device claim + debounced campaign aggregator). Legacy campaign-idle
+  logic is skipped when `dispatch_source` is set.
+- **Sequential dispatch:** when one execution finishes, the next queued
+  pending execution for the same `dispatch_id` is claimed and started.
+- **Step retry (DF-T-04-011):** on the Temporal path, steps with an explicit
+  `retry` block run one `execute_device_action` per attempt; backoff uses
+  `workflow.sleep()` so waits survive worker restart. In-process / fallback
+  execution still uses `execute_step_with_retry` inside the executor.
+
+`GET /api/execution/runtime` reports `fallback_mode_active` when Temporal is off.
 
 ### Campaign Dispatch Sequence
 
@@ -214,8 +307,10 @@ flowchart TB
   available UI evidence such as screenshot, hierarchy, or artifacts.
 - Campaign dispatch creates execution/workflow state and can target devices or
   groups.
-- DLQ retry re-enters campaign dispatch and must preserve ownership and
-  idempotency semantics.
+- DLQ retry re-enters campaign dispatch (legacy) or Epic 04 execution runtime
+  (checkpoint replay via `replayed_from` + `start_step`) and must preserve
+  ownership and idempotency semantics. Operator guide:
+  [dlq-playbook.md](../operator/dlq-playbook.md).
 
 ## Step Families
 
@@ -261,6 +356,14 @@ Primary APIs:
 - `/api/campaigns/{campaign_id}/scenarios/{scenario_id}/devices/{device_id}/variables`
 - `/api/campaigns/{campaign_id}/run`
 - `/api/executions*`
+- `/api/executions/dlq` — list (`status=open` → pending entries)
+- `/api/executions/dlq/summary`
+- `/api/executions/dlq/executions/{execution_id}` — DLQ detail (DF-T-04-012)
+- `/api/executions/dlq/{dlq_id}/retry` — body `{ from_checkpoint }`
+- `/api/executions/dlq/{dlq_id}/close` — body `{ reason }`
+- `/api/executions/dlq/bulk-retry` — body `{ execution_ids, from_checkpoint }`
+- `/api/executions/{id}/events` — catch-up (`?since=event_id`)
+- `/api/executions/{id}/events/stream` — SSE live stream (DF-T-04-013)
 - `/api/workflows/{workflow_id}/progress`
 - `/api/workflows/{workflow_id}/steps`
 - `/api/workflows/{workflow_id}/pause|resume|cancel`

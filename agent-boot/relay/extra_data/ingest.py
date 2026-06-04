@@ -24,6 +24,29 @@ _SUPPORTED_CONTENT_STRATEGIES = (
 )
 
 
+def _build_post_id_map(items: list[dict[str, Any]], context: dict[str, Any]) -> dict[str, str]:
+    """Map Facebook post ids (_pid / fb_post_id) to scoped content_hash for comment parent linking."""
+    dedupe_field = str(
+        context.get("posts_dedupe_field")
+        or context.get("_fb_posts_dedupe_field")
+        or context.get("dedupe_field")
+        or "text"
+    )
+    scope = context.get("hash_scope") or context.get("execution_id")
+    mapping: dict[str, str] = {}
+    for item in items:
+        if not isinstance(item, dict) or item.get("_type") == "post_stats":
+            continue
+        pid = str(item.get("_pid") or item.get("fb_post_id") or "").strip()
+        if not pid:
+            continue
+        base = compute_content_hash(item, dedupe_field=dedupe_field)
+        scoped = scope_content_hash(base, scope)
+        if scoped:
+            mapping[pid] = scoped
+    return mapping
+
+
 def _text_node_items(xml: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     import xml.etree.ElementTree as ET
 
@@ -89,6 +112,9 @@ def _parse_items(strategy: str, xml: str, context: dict[str, Any]) -> tuple[list
         return [], resolve_comment_filter_next_tap(xml, context)
     if strategy in {"fb_comment_target", "fb_comment_target_tap"}:
         from relay.extra_data.parsers.facebook import resolve_comment_targets_from_xml
+        from relay.extra_data.parsers.facebook.comment_pipeline import (
+            diagnose_comment_target_resolution,
+        )
         from relay.extra_data.parsers.facebook.parser import _hierarchy_is_fb_comment_sheet, _parse_xml
 
         root = _parse_xml(xml)
@@ -104,21 +130,39 @@ def _parse_items(strategy: str, xml: str, context: dict[str, Any]) -> tuple[list
         # visible "Bình luận" rows never silently latches onto the wrong post.
         top, ranked = resolve_comment_targets_from_xml(xml)
         if not top:
+            diag = diagnose_comment_target_resolution(xml)
             return [], {
                 "reason_code": "comment_button_not_found",
                 "target": None,
                 "alternates": [],
                 "candidate_count": 0,
+                "resolution_diagnostic": diag,
             }
-        dedupe_field = str(context.get("dedupe_field") or "post_key")
+        dedupe_field = str(
+            context.get("posts_dedupe_field")
+            or context.get("_fb_posts_dedupe_field")
+            or context.get("dedupe_field")
+            or "text"
+        )
         scope = context.get("hash_scope") or context.get("execution_id")
 
         def _target_from(cand: dict[str, Any]) -> dict[str, Any]:
             post = cand["post"]
             bnds = cand["comment_bounds"]
             base_hash = compute_content_hash(post, dedupe_field=dedupe_field)
+            text_prefix = (
+                post.get("text")
+                or post.get("body")
+                or post.get("content")
+                or post.get("message")
+                or post.get("caption")
+                or post.get("description")
+                or post.get("image_desc")
+                or ""
+            )
             return {
                 "bounds": list(bnds),
+                "u2_click": cand.get("comment_u2_click"),
                 "parent_post_bounds": (
                     list(cand["parent_post_bounds"])
                     if cand.get("parent_post_bounds")
@@ -132,7 +176,7 @@ def _parse_items(strategy: str, xml: str, context: dict[str, Any]) -> tuple[list
                 "fb_post_id": post.get("fb_post_id"),
                 "author": post.get("author"),
                 "timestamp": post.get("timestamp"),
-                "text_prefix": str(post.get("text") or "")[:220],
+                "text_prefix": str(text_prefix)[:220],
                 "score": cand.get("score"),
                 "score_breakdown": cand.get("breakdown"),
                 "feed_item_index": cand.get("feed_item_index"),
@@ -259,6 +303,265 @@ def _parse_payload_items(
         return items, diagnostic, snapshots
     items, diagnostic = _parse_items(strategy, xml, context)
     return items, diagnostic, snapshots
+
+
+def _comment_parent_anchor(context: dict[str, Any]) -> dict[str, Any] | None:
+    anchor = context.get("_active_comment_parent_anchor")
+    if not isinstance(anchor, dict):
+        return None
+    clean: dict[str, Any] = {}
+    for key in (
+        "pid",
+        "post_key",
+        "stable_post_id",
+        "fb_post_id",
+        "author",
+        "timestamp",
+        "text_prefix",
+    ):
+        value = anchor.get(key)
+        if value is not None and str(value).strip():
+            clean[key] = value
+    return clean or None
+
+
+def _comment_parent_source(context: dict[str, Any]) -> str:
+    anchor = context.get("_active_comment_parent_anchor")
+    anchor_source = anchor.get("source") if isinstance(anchor, dict) else ""
+    return str(
+        context.get("parent_context_source")
+        or context.get("_active_comment_parent_source")
+        or anchor_source
+        or ""
+    ).strip()
+
+
+def _has_verified_comment_parent_context(context: dict[str, Any]) -> bool:
+    source = _comment_parent_source(context)
+    return bool(
+        context.get("parent_id")
+        and source in {"post_detail", "tap_fb_comment_button"}
+    )
+
+
+def _parsed_comment_parent_post_ids(items: list[dict[str, Any]]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in items:
+        if not isinstance(item, dict) or item.get("_type") == "post_stats":
+            continue
+        pid = str(item.get("parent_post_id") or "").strip()
+        if not pid or pid in seen:
+            continue
+        seen.add(pid)
+        out.append(pid)
+    return out
+
+
+def _drop_stale_comment_parent_context(
+    context: dict[str, Any],
+    items: list[dict[str, Any]],
+    diagnostic: dict[str, Any],
+) -> dict[str, Any]:
+    """Prefer parser-observed parent PID over stale tap context for comment rows."""
+    context_pid = str(
+        context.get("parent_post_id")
+        or context.get("_fb_comment_parent_pid")
+        or ""
+    ).strip()
+    parsed_pids = _parsed_comment_parent_post_ids(items)
+    if not context_pid or not parsed_pids or context_pid in parsed_pids:
+        return context
+    if _has_verified_comment_parent_context(context):
+        diagnostic["parent_context_locked"] = True
+        diagnostic["context_parent_post_id"] = context_pid
+        diagnostic["parsed_parent_post_ids"] = parsed_pids
+        return context
+
+    corrected = dict(context)
+    corrected.pop("parent_id", None)
+    corrected.pop("parent_content_hash", None)
+    corrected.pop("_active_comment_parent_hash", None)
+    corrected.pop("_active_comment_parent_anchor", None)
+    corrected.pop("_edge_comment_parent_base_hash", None)
+    corrected["parent_id_already_scoped"] = False
+    if len(parsed_pids) == 1:
+        corrected["parent_post_id"] = parsed_pids[0]
+        corrected["_fb_comment_parent_pid"] = parsed_pids[0]
+    else:
+        corrected.pop("parent_post_id", None)
+        corrected.pop("_fb_comment_parent_pid", None)
+
+    diagnostic["parent_context_corrected"] = True
+    diagnostic["context_parent_post_id"] = context_pid
+    diagnostic["parsed_parent_post_ids"] = parsed_pids
+    logger.warning(
+        "extra-data fb_comments parent context corrected: context_pid=%s parsed_pids=%s",
+        context_pid,
+        parsed_pids,
+    )
+    return corrected
+
+
+def _with_comment_parent_context(
+    items: list[dict[str, Any]],
+    context: dict[str, Any],
+    *,
+    parent_id: str | None,
+) -> list[dict[str, Any]]:
+    parent_post_id = str(
+        context.get("parent_post_id")
+        or context.get("_fb_comment_parent_pid")
+        or ""
+    ).strip()
+    parent_hash = str(
+        parent_id
+        or context.get("_active_comment_parent_hash")
+        or context.get("parent_content_hash")
+        or ""
+    ).strip()
+    anchor = _comment_parent_anchor(context)
+    parent_source = _comment_parent_source(context)
+    force_context_parent = _has_verified_comment_parent_context(context)
+    if not parent_post_id and not parent_hash and not anchor:
+        return items
+
+    enriched: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict) or item.get("_type") == "post_stats":
+            enriched.append(item)
+            continue
+        row = dict(item)
+        if parent_post_id and (force_context_parent or not row.get("parent_post_id")):
+            existing_pid = str(row.get("parent_post_id") or "").strip()
+            if force_context_parent and existing_pid and existing_pid != parent_post_id:
+                row["parser_parent_post_id"] = existing_pid
+            row["parent_post_id"] = parent_post_id
+        if parent_hash and (force_context_parent or not row.get("parent_content_hash")):
+            row["parent_content_hash"] = parent_hash
+        if anchor and (force_context_parent or not row.get("parent_post_anchor")):
+            row["parent_post_anchor"] = anchor
+        if parent_source and not row.get("parent_context_source"):
+            row["parent_context_source"] = parent_source
+        enriched.append(row)
+    return enriched
+
+
+def _active_parent_post_payload(item: dict[str, Any], row: dict[str, Any]) -> dict[str, Any] | None:
+    parent_id = str(row.get("content_hash") or "").strip()
+    if not parent_id:
+        return None
+    text_prefix = (
+        item.get("text")
+        or item.get("body")
+        or item.get("content")
+        or item.get("message")
+        or item.get("caption")
+        or item.get("description")
+        or item.get("image_desc")
+        or ""
+    )
+    payload = {
+        "pid": item.get("_pid"),
+        "parent_id": parent_id,
+        "post_key": item.get("post_key"),
+        "stable_post_id": item.get("stable_post_id"),
+        "fb_post_id": item.get("fb_post_id"),
+        "author": item.get("author"),
+        "timestamp": item.get("timestamp"),
+        "text_prefix": str(text_prefix)[:220],
+    }
+    return {key: value for key, value in payload.items() if value is not None and str(value).strip()}
+
+
+def _opened_post_from_context(context: dict[str, Any]) -> dict[str, Any] | None:
+    diagnostic = context.get("open_post_detail_diagnostic")
+    if not isinstance(diagnostic, dict):
+        return None
+    opened = diagnostic.get("opened_post")
+    if not isinstance(opened, dict):
+        return None
+    return opened
+
+
+def _post_matches_opened(item: dict[str, Any], opened: dict[str, Any]) -> bool:
+    comparisons = (
+        ("_pid", "pid"),
+        ("post_key", "post_key"),
+        ("stable_post_id", "stable_post_id"),
+        ("fb_post_id", "fb_post_id"),
+    )
+    for item_key, opened_key in comparisons:
+        item_value = str(item.get(item_key) or "").strip()
+        opened_value = str(opened.get(opened_key) or "").strip()
+        if item_value and opened_value and item_value == opened_value:
+            return True
+    if _post_metadata_matches_opened(item, opened):
+        return True
+    return False
+
+
+def _norm_match_text(value: Any) -> str:
+    return " ".join(str(value or "").casefold().split())
+
+
+def _post_match_text(item: dict[str, Any]) -> str:
+    return _norm_match_text(
+        item.get("text")
+        or item.get("body")
+        or item.get("content")
+        or item.get("message")
+        or item.get("caption")
+        or item.get("description")
+        or item.get("image_desc")
+        or ""
+    )
+
+
+def _post_metadata_matches_opened(item: dict[str, Any], opened: dict[str, Any]) -> bool:
+    opened_prefix = _norm_match_text(
+        opened.get("text_prefix")
+        or opened.get("text")
+        or opened.get("body")
+        or ""
+    )
+    item_text = _post_match_text(item)
+    if len(opened_prefix) < 16 or len(item_text) < 16:
+        return False
+    if opened_prefix not in item_text and item_text not in opened_prefix:
+        return False
+
+    opened_author = _norm_match_text(opened.get("author"))
+    item_author = _norm_match_text(item.get("author"))
+    if opened_author and item_author and opened_author != item_author:
+        return False
+
+    opened_timestamp = _norm_match_text(opened.get("timestamp"))
+    item_timestamp = _norm_match_text(item.get("timestamp"))
+    if opened_timestamp and item_timestamp and opened_timestamp != item_timestamp:
+        return False
+    return True
+
+
+def _active_parent_from_opened_post(
+    context: dict[str, Any],
+    row_items: list[dict[str, Any]],
+    rows: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    opened = _opened_post_from_context(context)
+    if not opened:
+        return None
+    for item, row in zip(row_items, rows):
+        if _post_matches_opened(item, opened):
+            payload = _active_parent_post_payload(item, row)
+            if payload is None:
+                return None
+            for key in ("pid", "post_key", "stable_post_id", "fb_post_id", "author", "timestamp"):
+                value = opened.get(key)
+                if key not in payload and value is not None and str(value).strip():
+                    payload[key] = value
+            return payload
+    return None
 
 
 class ExtraDataIngestServer:
@@ -423,13 +726,98 @@ class ExtraDataIngestServer:
             }:
                 return {"ok": False, "error": "unsupported_strategy", "strategy": strategy}
 
+            should_persist = bool(context.get("persist", True)) and bool(context.get("collection"))
+            if should_persist:
+                try:
+                    context = await self._writer.prepare_context_for_persist(context)
+                except Exception as exc:
+                    logger.warning(
+                        "extra-data FK preflight failed; continuing without optional FK refs: %s",
+                        exc,
+                    )
+                    for field in ("campaign_id", "execution_id", "user_id", "org_id"):
+                        context.pop(field, None)
+
             content_type = str(context.get("content_type") or ("comment" if strategy.endswith("_comments") or strategy == "fb_comments" else "post"))
             item_level = int(context.get("item_level") if context.get("item_level") is not None else (1 if strategy.endswith("_comments") or strategy == "fb_comments" else 0))
-            parent_id = context.get("parent_id") if strategy.endswith("_comments") or strategy == "fb_comments" else None
+            is_comment_strategy = strategy.endswith("_comments") or strategy == "fb_comments"
+            if is_comment_strategy:
+                context = _drop_stale_comment_parent_context(context, items, diagnostic)
+            parent_id = context.get("parent_id") if is_comment_strategy else None
+            parent_id_scoped = bool(context.get("parent_id_already_scoped"))
+            if is_comment_strategy and not parent_id:
+                from relay.extra_data.parent_resolve import resolve_fb_comment_parent_id
+
+                parent_id, parent_id_scoped = resolve_fb_comment_parent_id(context, items)
+            if is_comment_strategy and not parent_id and hasattr(
+                self._writer, "lookup_parent_hash_for_post_pid"
+            ):
+                parent_id = await self._writer.lookup_parent_hash_for_post_pid(
+                    collection=str(context.get("collection") or ""),
+                    execution_id=context.get("execution_id") or context.get("hash_scope"),
+                    parent_post_id=str(context.get("parent_post_id") or ""),
+                    items=items,
+                )
+                parent_id_scoped = bool(parent_id)
+            require_verified_parent = bool(context.get("require_verified_parent"))
+            has_verified_parent_context = _has_verified_comment_parent_context(context)
+            if (
+                is_comment_strategy
+                and require_verified_parent
+                and has_verified_parent_context
+                and hasattr(self._writer, "lookup_parent_hash_for_post_pid")
+            ):
+                canonical_parent_id = await self._writer.lookup_parent_hash_for_post_pid(
+                    collection=str(context.get("collection") or ""),
+                    execution_id=context.get("execution_id") or context.get("hash_scope"),
+                    parent_post_id=str(context.get("parent_post_id") or ""),
+                    items=items,
+                )
+                if canonical_parent_id:
+                    if parent_id and str(parent_id) != str(canonical_parent_id):
+                        diagnostic["parent_context_relinked"] = True
+                        diagnostic["context_parent_hash"] = str(parent_id)
+                        diagnostic["canonical_parent_hash"] = str(canonical_parent_id)
+                    parent_id = canonical_parent_id
+                    parent_id_scoped = True
+                    context["parent_id"] = canonical_parent_id
+                    context["_active_comment_parent_hash"] = canonical_parent_id
+                    context["parent_id_already_scoped"] = True
+                else:
+                    diagnostic["parent_context_required"] = True
+                    diagnostic["parent_post_row_missing"] = True
+                    should_persist = False
+                    parent_id = None
+                    parent_id_scoped = False
+            if (
+                is_comment_strategy
+                and require_verified_parent
+                and not has_verified_parent_context
+            ):
+                diagnostic["parent_context_required"] = True
+                diagnostic["parent_context_missing"] = True
+                should_persist = False
+                parent_id = None
+                parent_id_scoped = False
+            if is_comment_strategy:
+                items = _with_comment_parent_context(items, context, parent_id=parent_id)
+
+            evidence = payload.get("evidence") if isinstance(payload.get("evidence"), dict) else {}
+            if not evidence and snapshots:
+                evidence = {"hierarchy_xml": snapshots[-1]}
+
+            from relay.extra_data.artifact_store import merge_evidence_into_item
+
+            row_context = {
+                **context,
+                "device_serial": context.get("device_serial") or serial,
+                "content_type": content_type,
+                "parent_id_already_scoped": parent_id_scoped,
+            }
             rows = [
                 build_content_item_row(
-                    item,
-                    {**context, "device_serial": context.get("device_serial") or serial, "content_type": content_type},
+                    merge_evidence_into_item(item, evidence),
+                    row_context,
                     parent_id=parent_id,
                     item_level=item_level,
                     captured_at=payload.get("captured_at") or payload.get("captured_at_ms"),
@@ -437,12 +825,17 @@ class ExtraDataIngestServer:
                 for item in items
                 if isinstance(item, dict) and item.get("_type") != "post_stats"
             ]
+            row_items = [
+                item
+                for item in items
+                if isinstance(item, dict) and item.get("_type") != "post_stats"
+            ]
             db_started = time.perf_counter()
-            should_persist = bool(context.get("persist", True)) and bool(context.get("collection"))
             write = await self._insert_rows_with_retry(rows) if should_persist else {
                 "attempted": 0,
                 "inserted": 0,
                 "duplicates": 0,
+                "inserted_content_hashes": [],
             }
             db_ms = int((time.perf_counter() - db_started) * 1000)
 
@@ -454,6 +847,8 @@ class ExtraDataIngestServer:
             "inserted_attempted": write.get("attempted", 0),
             "inserted_count": write.get("inserted", 0),
             "duplicate_count": write.get("duplicates", 0),
+            "inserted_content_hashes": write.get("inserted_content_hashes") or [],
+            "batch_content_hashes": [str(r["content_hash"]) for r in rows if r.get("content_hash")],
             "diagnostic": diagnostic,
             "xml_bytes": sum(len(snapshot.encode("utf-8")) for snapshot in snapshots),
             "snapshot_count": len(snapshots),
@@ -468,6 +863,21 @@ class ExtraDataIngestServer:
                 for item in items
                 if isinstance(item, dict) and item.get("_type") != "post_stats"
             ]
+        evidence_payload = payload.get("evidence") if isinstance(payload.get("evidence"), dict) else {}
+        screenshot_b64 = evidence_payload.get("screenshot_b64")
+        if isinstance(screenshot_b64, str) and screenshot_b64.strip() and should_persist:
+            result["screenshot_b64"] = screenshot_b64.strip()
+        if strategy == "fb_posts" and items:
+            post_id_map = _build_post_id_map(items, context)
+            if post_id_map:
+                result["post_id_map"] = post_id_map
+            active_parent = _active_parent_from_opened_post(context, row_items, rows)
+            if active_parent is None and len(row_items) == 1 and len(rows) == 1:
+                active_parent = _active_parent_post_payload(row_items[0], rows[0])
+            if active_parent:
+                if context.get("open_post_detail"):
+                    active_parent["source"] = "post_detail"
+                result["active_parent_post"] = active_parent
         return result
 
     async def _insert_rows_with_retry(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -479,6 +889,19 @@ class ExtraDataIngestServer:
                 return await self._writer.insert_rows(rows)
             except Exception as exc:
                 last_exc = exc
+                if ContentItemWriter._is_content_items_fk_violation(exc):
+                    stripped = ContentItemWriter._strip_optional_fk_fields(rows)
+                    logger.warning(
+                        "content_items optional FK failed at ingest layer (%s); retrying without %s",
+                        exc,
+                        ", ".join(stripped) or "optional FK refs",
+                    )
+                    try:
+                        return await self._writer.insert_rows(rows)
+                    except Exception as retry_exc:
+                        last_exc = retry_exc
+                        if not ContentItemWriter._is_content_items_fk_violation(retry_exc):
+                            raise
                 if attempt >= attempts - 1:
                     break
                 delay = base_delay * (2 ** attempt) + random.uniform(0, base_delay)

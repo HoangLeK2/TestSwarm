@@ -52,7 +52,7 @@ async def test_dispatch_single_device_single_scenario_n2n():
     execution = SimpleNamespace(id="exec-1", meta={"scenarios_count": 1})
 
     with ExitStack() as stack:
-        stack.enter_context(patch("services.campaign_dispatch.AsyncSessionLocal", return_value=db))
+        stack.enter_context(patch("services.campaign_dispatch.activity_session", return_value=db))
         stack.enter_context(patch("services.campaign_dispatch.repo.get_campaign", return_value=_campaign("camp-1")))
         stack.enter_context(
             patch("services.campaign_dispatch.repo.list_campaign_devices", return_value=[_device("dev-1", "SN001")])
@@ -88,7 +88,7 @@ async def test_dispatch_skips_all_stale_offline_devices_before_creating_executio
     create_execution = AsyncMock()
 
     with ExitStack() as stack:
-        stack.enter_context(patch("services.campaign_dispatch.AsyncSessionLocal", return_value=db))
+        stack.enter_context(patch("services.campaign_dispatch.activity_session", return_value=db))
         stack.enter_context(patch("services.campaign_dispatch.repo.get_campaign", return_value=_campaign("camp-offline")))
         stack.enter_context(
             patch(
@@ -121,7 +121,7 @@ async def test_dispatch_device_vars_share_namespace_and_override_global_vars():
     scenario.variables = {"group_name": "global-group", "save_collection": "global_collection"}
 
     with ExitStack() as stack:
-        stack.enter_context(patch("services.campaign_dispatch.AsyncSessionLocal", return_value=db))
+        stack.enter_context(patch("services.campaign_dispatch.activity_session", return_value=db))
         stack.enter_context(patch("services.campaign_dispatch.repo.get_campaign", return_value=_campaign("camp-override")))
         stack.enter_context(
             patch("services.campaign_dispatch.repo.list_campaign_devices", return_value=[_device("dev-1", "SN001")])
@@ -164,7 +164,7 @@ async def test_dispatch_multi_device_multi_scenario_starts_one_sequence_per_devi
     scenarios = [_scenario("sc-1"), _scenario("sc-2")]
 
     with ExitStack() as stack:
-        stack.enter_context(patch("services.campaign_dispatch.AsyncSessionLocal", return_value=db))
+        stack.enter_context(patch("services.campaign_dispatch.activity_session", return_value=db))
         stack.enter_context(patch("services.campaign_dispatch.repo.get_campaign", return_value=_campaign("camp-2")))
         stack.enter_context(patch("services.campaign_dispatch.repo.list_campaign_devices", return_value=devices))
         stack.enter_context(patch("services.campaign_dispatch.repo.list_scenarios", return_value=scenarios))
@@ -195,7 +195,7 @@ async def test_dispatch_skips_empty_scenarios_and_starts_only_valid_steps():
     execution = SimpleNamespace(id="exec-3", meta={"scenarios_count": 2})
 
     with ExitStack() as stack:
-        stack.enter_context(patch("services.campaign_dispatch.AsyncSessionLocal", return_value=db))
+        stack.enter_context(patch("services.campaign_dispatch.activity_session", return_value=db))
         stack.enter_context(patch("services.campaign_dispatch.repo.get_campaign", return_value=_campaign("camp-3")))
         stack.enter_context(
             patch("services.campaign_dispatch.repo.list_campaign_devices", return_value=[_device("dev-1", "SN001")])
@@ -236,7 +236,7 @@ async def test_same_device_can_be_dispatched_in_two_campaigns_with_distinct_work
     ]
 
     with ExitStack() as stack:
-        stack.enter_context(patch("services.campaign_dispatch.AsyncSessionLocal", return_value=db))
+        stack.enter_context(patch("services.campaign_dispatch.activity_session", return_value=db))
         stack.enter_context(patch("services.campaign_dispatch.repo.get_campaign", side_effect=campaigns))
         stack.enter_context(
             patch("services.campaign_dispatch.repo.list_campaign_devices", return_value=[_device("dev-1", "SN001")])
@@ -275,7 +275,7 @@ async def test_partial_start_failure_still_returns_running_when_at_least_one_sta
     temporal.start_workflow = _start_workflow
 
     with ExitStack() as stack:
-        stack.enter_context(patch("services.campaign_dispatch.AsyncSessionLocal", return_value=db))
+        stack.enter_context(patch("services.campaign_dispatch.activity_session", return_value=db))
         stack.enter_context(patch("services.campaign_dispatch.repo.get_campaign", return_value=_campaign("camp-4")))
         stack.enter_context(patch("services.campaign_dispatch.repo.list_campaign_devices", return_value=devices))
         stack.enter_context(

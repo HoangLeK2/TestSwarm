@@ -2,7 +2,11 @@
 
 import { Badge } from '@/components/ui/badge';
 import { useTranslations } from 'next-intl';
-import type { DeviceOut, FleetStatsOut, RelayAgentOut } from '../../services/manage-api';
+import type {
+  DeviceOut,
+  FleetStatsOut,
+  RelayAgentOut
+} from '../../services/manage-api';
 import { computeDeviceTransportCounts } from '../../lib/device-online';
 
 /** FSM states worth surfacing in the operator summary (not transport). */
@@ -36,7 +40,8 @@ export function FleetStatsSummary({
   }
 
   const transport = computeDeviceTransportCounts(devices, relayMap);
-  const total = transport.total || stats?.devices.total || 0;
+  const deviceCounts = stats?.devices;
+  const total = transport.total || deviceCounts?.total || 0;
   const sessions = stats?.active_sessions;
 
   if (total === 0) return null;
@@ -57,9 +62,9 @@ export function FleetStatsSummary({
             {t('filters.statusOffline')}: {transport.offline}
           </Badge>
         ) : null}
-        {stats
+        {deviceCounts
           ? FSM_SUMMARY_STATES.map((state) => {
-              const n = stats.devices[state] ?? 0;
+              const n = deviceCounts[state] ?? 0;
               if (n === 0) return null;
               return (
                 <Badge

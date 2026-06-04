@@ -11,7 +11,7 @@
 | **Module** | DF-MOD-04 — Campaign, Scenario & Execution |
 | **Priority** | P2 |
 | **Story Points** | 3 |
-| **Status** | `Backlog` |
+| **Status** | `Done` |
 | **Labels** | `module:campaigns`, `layer:backend`, `layer:db`, `type:feature`, `risk:legal-compliance` |
 | **Truy vết — FR refs** | FR-04-09 (log effective_config), FR-04-19 |
 | **Truy vết — UC refs** | UC-04-08, UC-04-12, UC-04-13 |
@@ -123,7 +123,7 @@ And action logged (export là audit-able)
 
 **Contract / API** (`layer:contract`)
 
-- [ ] OpenAPI cho query + export.
+- [x] OpenAPI cho query + export.
 - [ ] Schema audit entry.
 
 **Database / Migration** (`layer:db`)

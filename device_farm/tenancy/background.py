@@ -87,11 +87,13 @@ async def lookup_device_by_serial(
 async def list_device_serials_for_user(
     db: AsyncSession,
     user_id: str,
+    *,
+    org_id: str | None = None,
 ) -> set[str]:
     """Serials visible to ``user_id`` for frontend WS allowlists.
 
-    Org members see all devices in their active org (``users.org_id``), not
-    only rows they personally registered.
+    Org members see all devices in the effective org (JWT ``org_id`` or
+    ``users.default_org_id``), not only rows they personally registered.
     """
     if not user_id:
         return set()
@@ -99,7 +101,7 @@ async def list_device_serials_for_user(
         await db.execute(
             text(
                 """
-                SELECT org_id, role
+                SELECT default_org_id, role
                 FROM users
                 WHERE id = :user_id
                 LIMIT 1
@@ -110,7 +112,8 @@ async def list_device_serials_for_user(
     ).first()
     if user_row is None:
         return set()
-    org_id, role = user_row[0], str(user_row[1] or "")
+    default_org_id, role = user_row[0], str(user_row[1] or "")
+    effective_org = (org_id or default_org_id or "").strip() or None
     if role == "superadmin":
         rows = await db.execute(
             text(
@@ -123,7 +126,7 @@ async def list_device_serials_for_user(
             )
         )
         return {str(r[0]) for r in rows.fetchall()}
-    if org_id:
+    if effective_org:
         rows = await db.execute(
             text(
                 """
@@ -134,7 +137,7 @@ async def list_device_serials_for_user(
                   AND serial <> ''
                 """
             ),
-            {"org_id": org_id},
+            {"org_id": effective_org},
         )
         return {str(r[0]) for r in rows.fetchall()}
     rows = await db.execute(

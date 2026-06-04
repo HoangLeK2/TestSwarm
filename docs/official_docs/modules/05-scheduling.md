@@ -185,7 +185,17 @@ Phần này minh bạch các giới hạn để có cơ sở đánh giá đúng 
 | Tỷ lệ schedule run nằm trong fallback mode | < 5% theo tháng | Cảnh báo khi vượt; nghĩa là Temporal mất ổn định. |
 | Trung vị thời gian từ run-now tới schedule run được tạo | < 5 giây | Đo trải nghiệm tức thời. |
 
-## 10. Glossary refs & Open questions
+## 10. Implementation artifacts
+
+Backend/API implementation for DF-E-05 is in:
+
+- `device_farm/api/routes/schedules.py` — CRUD, toggle, run-now, filtered run history, preview conflict, bulk pause/resume, and scheduler status API.
+- `device_farm/services/scheduler.py` — Temporal schedule registration, fallback polling, one-shot validation, shared terminal-run finalization, conflict preview, and status snapshot.
+- `device_farm/db/models/schedule.py` and `device_farm/db/migrations/076_epic05_scheduling_completion.py` — schedule/run persistence fields for cron, one-shot, soft delete, throttle/quota metadata, run source, execution/workflow links, and terminal errors.
+- `docs/runbooks/scheduling-temporal-fallback.md` — operator runbook when Temporal is unavailable.
+- `monitoring/grafana/dashboards/scheduling-epic05.json` — dashboard panels for fallback, queue depth, tick lag, dispatch success/fail, missed ticks, and starvation.
+
+## 11. Glossary refs & Open questions
 
 **Thuật ngữ chính tham chiếu Glossary:** [Schedule](../00-glossary.md), [Schedule run](../00-glossary.md), [Cron expression](../00-glossary.md), [Run-now](../00-glossary.md), [Toggle](../00-glossary.md), [Temporal](../00-glossary.md), [Workflow](../00-glossary.md), [Dispatch](../00-glossary.md), [Campaign](../00-glossary.md), [Execution](../00-glossary.md), [Domain event](../00-glossary.md).
 

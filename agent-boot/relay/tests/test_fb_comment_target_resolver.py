@@ -33,8 +33,14 @@ def test_filter_drops_button_above_top_band() -> None:
 
 
 def test_filter_drops_button_below_bottom_band() -> None:
-    cand = _cand(comment_bounds=(0, int(SCREEN_H * 0.90), 100, int(SCREEN_H * 0.95)))
+    cand = _cand(comment_bounds=(0, int(SCREEN_H * 0.985), 100, int(SCREEN_H * 0.995)))
     assert not comment_pipeline._comment_candidate_passes_filter(cand, screen_h=SCREEN_H)
+
+
+def test_filter_keeps_low_action_bar_on_tall_screen() -> None:
+    # Vivo group feed: action bar can sit at y≈2649 on 2800px screen.
+    cand = _cand(comment_bounds=(203, 2649, 433, 2800))
+    assert comment_pipeline._comment_candidate_passes_filter(cand, screen_h=2800)
 
 
 def test_filter_keeps_button_inside_band() -> None:

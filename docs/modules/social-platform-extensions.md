@@ -26,8 +26,11 @@ this module contract.
 | Extraction handlers | `device_farm/tasks/scenario/steps/extraction.py` |
 | Extraction profiles | `device_farm/services/extract_profiles.py` |
 | Step normalization | `device_farm/services/scenario_step_contract.py` |
-| Facebook parser implementation | `device_farm/tasks/fb_extract/*` |
-| Content persistence | `device_farm/services/content_store.py`, `device_farm/db/models/content.py` |
+| Social extension contract/registry | `device_farm/services/social_ext/*` |
+| Discovery API | `device_farm/api/routes/social_ext.py` |
+| Facebook parser implementation | `agent-boot/relay/extra_data/parsers/facebook/*` |
+| Extra-data persistence owner | `agent-boot/relay/extra_data/writer.py` |
+| Content query/storage model | `device_farm/services/content_store.py`, `device_farm/db/models/content.py` |
 | Frontend flow editor | `front-end/src/features/campaigns/components/flow-editor/*` |
 | Platform profiles | `docs/product/platforms/*` |
 
@@ -103,7 +106,10 @@ should use the canonical naming model once implementation aliases exist.
 ## Content Output Contract
 
 Platform extraction output should map common fields into `content_items` where
-possible and keep platform-specific parser fields in `raw_data`.
+possible and keep platform-specific parser fields in `raw_data`. Raw XML parsing,
+extra-data payload handling, and `raw_data` writes are owned by `agent-boot`.
+`device_farm` declares the contract and sends edge extraction requests; it must
+not add a parallel raw parser or raw payload persistence path.
 
 Required extension decisions:
 
@@ -114,7 +120,7 @@ Required extension decisions:
 | Parent-child behavior | Define `parent_id` and `item_level` behavior |
 | Dedupe | Define the dedupe key/field and hash scope |
 | Runtime variable | Define where parsed objects land, for example `posts` or `comments` |
-| Save behavior | Define default collection/content type examples |
+| Save behavior | Define default collection/content type examples; raw saves stay in agent-boot |
 
 ## Platform Profile Requirements
 

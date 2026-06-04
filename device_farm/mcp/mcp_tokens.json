@@ -1,0 +1,79 @@
+[
+  {
+    "id": "ca74fb28361f8f18f72447b3",
+    "name": "cursor-session",
+    "hashed_value": "ca74fb28361f8f18f72447b36d2b1173645ffd2fddd57ebee18b264e89ed65c4",
+    "scope_type": "device",
+    "scope_ref": "*",
+    "owner_user_id": null,
+    "org_id": null,
+    "created_at": 1780334880.1282449,
+    "revoked_at": null
+  },
+  {
+    "id": "da6a23f3450653564274e902",
+    "name": "cursor-agent",
+    "hashed_value": "da6a23f3450653564274e902da9f545bc7b6b8a790280429c346df55696a9dde",
+    "scope_type": "device",
+    "scope_ref": "*",
+    "owner_user_id": null,
+    "org_id": null,
+    "created_at": 1780334990.689543,
+    "revoked_at": null
+  },
+  {
+    "id": "10800ee086c30f976cc5d429",
+    "name": "cursor-test2",
+    "hashed_value": "10800ee086c30f976cc5d429c578a2ab9e8c754469ebe63fc575fccc709d549b",
+    "scope_type": "device",
+    "scope_ref": "*",
+    "owner_user_id": null,
+    "org_id": null,
+    "created_at": 1780335006.529168,
+    "revoked_at": null
+  },
+  {
+    "id": "c0d12a02fb7d8c88a33065a6",
+    "name": "cursor-agent-20260602",
+    "hashed_value": "c0d12a02fb7d8c88a33065a6bbcbfdeec0d6f19d8ce021b43f4c2659d9ef55b5",
+    "scope_type": "device",
+    "scope_ref": "*",
+    "owner_user_id": "955262e3-ab6b-434c-8cd2-ff1ab216147b",
+    "org_id": null,
+    "created_at": 1780335660.131861,
+    "revoked_at": null
+  },
+  {
+    "id": "e5708541c042401127f0a7f1",
+    "name": "cursor-mcp-live",
+    "hashed_value": "e5708541c042401127f0a7f1d0e817c8b750fe11931264462d635619fa68a92e",
+    "scope_type": "device",
+    "scope_ref": "*",
+    "owner_user_id": "955262e3-ab6b-434c-8cd2-ff1ab216147b",
+    "org_id": null,
+    "created_at": 1780335713.490782,
+    "revoked_at": null
+  },
+  {
+    "id": "a4c790d7030ae17e56b7a255",
+    "name": "cursor-mcp",
+    "hashed_value": "a4c790d7030ae17e56b7a2551e8063e4432ba82e6d20c4477f7990ac4a237347",
+    "scope_type": "device",
+    "scope_ref": "*",
+    "owner_user_id": "955262e3-ab6b-434c-8cd2-ff1ab216147b",
+    "org_id": null,
+    "created_at": 1780335979.01162,
+    "revoked_at": null
+  },
+  {
+    "id": "245bd038cd7ccbbe419ff1ad",
+    "name": "walk-verify-1780336935",
+    "hashed_value": "245bd038cd7ccbbe419ff1ad53be3e237aca82d57ea003e3745bf44f169af014",
+    "scope_type": "device",
+    "scope_ref": "*",
+    "owner_user_id": "955262e3-ab6b-434c-8cd2-ff1ab216147b",
+    "org_id": null,
+    "created_at": 1780336935.470177,
+    "revoked_at": null
+  }
+]

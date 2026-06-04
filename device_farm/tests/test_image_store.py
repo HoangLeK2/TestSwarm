@@ -27,7 +27,10 @@ def reset_module(tmp_path):
     """
     image_store._CAPTURES_DIR = None
     image_store.init(tmp_path)
-    with patch.object(minio_store, "is_quality_ok", return_value=True):
+    with (
+        patch.object(minio_store, "is_quality_ok", return_value=True),
+        patch.object(minio_store, "local_image_fallback_enabled", return_value=True),
+    ):
         yield
     image_store._CAPTURES_DIR = None
 
@@ -89,46 +92,43 @@ def test_replaces_screenshot_with_url_path():
     assert result[0]["screen"]["screenshot"] == "/captures/screenshots/scen1/step_0_screenshot.jpg"
 
 
-def test_saves_element_image_in_screen(tmp_path):
+def test_raises_when_object_storage_unavailable_without_debug_fallback(tmp_path):
+    with patch.object(minio_store, "local_image_fallback_enabled", return_value=False):
+        steps = [{"type": "tap", "screen": {"screenshot": _B64}}]
+        with pytest.raises(RuntimeError, match="local fallback disabled"):
+            image_store.save_step_images(steps, "scen-no-local")
+
+    path = tmp_path / "screenshots" / "scen-no-local" / "step_0_screenshot.jpg"
+    assert not path.exists()
+
+
+def test_drops_element_image_in_screen(tmp_path):
     steps = [{"type": "tap", "screen": {"element_image": _B64}}]
     result = image_store.save_step_images(steps, "scen2")
 
     path = tmp_path / "screenshots" / "scen2" / "step_0_element.jpg"
-    assert path.exists()
-    assert result[0]["screen"]["element_image"] == "/captures/screenshots/scen2/step_0_element.jpg"
+    assert not path.exists()
+    assert "element_image" not in result[0].get("screen", {})
 
 
-def test_saves_both_screenshot_and_element_image(tmp_path):
+def test_saves_screenshot_but_drops_element_image(tmp_path):
     steps = [{"type": "tap", "screen": {"screenshot": _B64, "element_image": _B64}}]
     result = image_store.save_step_images(steps, "scen3")
 
     sc = result[0]["screen"]
     assert sc["screenshot"].endswith("step_0_screenshot.jpg")
-    assert sc["element_image"].endswith("step_0_element.jpg")
+    assert "element_image" not in sc
     assert (tmp_path / "screenshots" / "scen3" / "step_0_screenshot.jpg").exists()
-    assert (tmp_path / "screenshots" / "scen3" / "step_0_element.jpg").exists()
+    assert not (tmp_path / "screenshots" / "scen3" / "step_0_element.jpg").exists()
 
 
-# ── save_step_images() — top-level element_image ─────────────────────────────
-
-def test_saves_top_level_element_image(tmp_path):
+def test_drops_top_level_element_image(tmp_path):
     steps = [{"type": "tap_selector", "element_image": _B64}]
     result = image_store.save_step_images(steps, "scen4")
 
     path = tmp_path / "screenshots" / "scen4" / "step_0_element.jpg"
-    assert path.exists()
-    assert result[0]["element_image"] == "/captures/screenshots/scen4/step_0_element.jpg"
-
-
-def test_top_level_element_image_bypasses_quality_gate(tmp_path):
-    # element_image is an intentional crop and can be very small.
-    # It must still be saved even when quality gate would reject generic frames.
-    with patch.object(minio_store, "is_quality_ok", return_value=False):
-        steps = [{"type": "tap_selector", "element_image": _B64}]
-        result = image_store.save_step_images(steps, "scen4b")
-    path = tmp_path / "screenshots" / "scen4b" / "step_0_element.jpg"
-    assert path.exists()
-    assert result[0]["element_image"] == "/captures/screenshots/scen4b/step_0_element.jpg"
+    assert not path.exists()
+    assert "element_image" not in result[0]
 
 
 def test_accepts_data_url_base64_payload(tmp_path):

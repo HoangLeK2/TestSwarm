@@ -1,15 +1,68 @@
-"""DF-010: Content Pipeline — SQLAlchemy models for crawled content storage."""
+"""DF-010 / Epic 06: Content Pipeline — SQLAlchemy models for crawled content storage."""
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Integer, JSON, SmallInteger, String, Text, Index, UniqueConstraint
+from sqlalchemy import Boolean, BigInteger, DateTime, ForeignKey, Integer, JSON, SmallInteger, String, Text, Index, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.database import Base
 from tenancy.models import TenantScopedModel
 from .utils import _now, _uuid
+
+
+class ContentType(Base):
+    """Platform-qualified content type registry (DF-T-06-001)."""
+
+    __tablename__ = "content_types"
+
+    code: Mapped[str] = mapped_column(String(64), primary_key=True)
+    platform: Mapped[str] = mapped_column(String(32), nullable=False)
+    object_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+    parent_kinds_json: Mapped[list] = mapped_column(JSON, default=list)
+    description: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class ExecutionArtifact(Base):
+    """Execution step artifact metadata (DF-T-06-002)."""
+
+    __tablename__ = "execution_artifacts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("organizations.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    execution_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("executions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    device_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("devices.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    step_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    object_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    content_type_mime: Mapped[str] = mapped_column(String(128), nullable=False, default="image/jpeg")
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    retention_class: Mapped[str] = mapped_column(String(32), nullable=False, default="standard")
+    object_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    object_deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    __table_args__ = (
+        Index("idx_execution_artifacts_exec_step", "execution_id", "step_index"),
+    )
 
 
 class ContentItem(TenantScopedModel, Base):
@@ -59,6 +112,16 @@ class ContentItem(TenantScopedModel, Base):
         String(36), ForeignKey("executions.id", ondelete="SET NULL"), nullable=True, index=True
     )
     scenario_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    scenario_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("org_scenarios.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    device_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("devices.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    account_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    external_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
     user_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
@@ -67,6 +130,8 @@ class ContentItem(TenantScopedModel, Base):
     extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     content_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     execution: Mapped[Optional["Execution"]] = relationship(
         "Execution",
@@ -122,7 +187,7 @@ class ContentCollection(TenantScopedModel, Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
     __table_args__ = (
-        UniqueConstraint("name", "user_id", name="uq_content_collections_name_user"),
+        UniqueConstraint("org_id", "name", "user_id", name="uq_content_collections_org_name_user"),
     )
 
 

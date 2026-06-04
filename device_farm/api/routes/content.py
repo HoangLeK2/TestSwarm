@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import logging
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
+from sqlalchemy import or_, select
 
 from api.auth.content_share import create_content_share_token, verify_content_share_token
 from api.deps import CurrentUser, DB, require_permission
@@ -23,9 +25,9 @@ from api.schemas.content import (
     SaveContentBody,
 )
 from db.crud import content as content_crud
+from db.models.content import ContentItem
 from services.content_artifacts import (
-    collect_content_artifacts,
-    merge_execution_artifacts,
+    collect_primary_content_artifacts,
     read_artifact_bytes,
 )
 
@@ -226,8 +228,13 @@ async def list_content(
         limit=limit,
         offset=offset,
     )
+    parent_items = await _resolve_parent_items_for_list(db, items)
+    out_items = [
+        _item_to_out_with_parent(item, parent_item=parent_items.get(item.id))
+        for item in items
+    ]
     return {
-        "items": [_item_to_out(i) for i in items],
+        "items": out_items,
         "total": total,
         "limit": limit,
         "offset": offset,
@@ -244,22 +251,70 @@ async def get_stats(db: DB, user: CurrentUser):
     return await content_crud.content_stats(db, user_id=owner_id)
 
 
+@router.get(
+    "/types",
+    dependencies=[Depends(require_permission("content", "read"))],
+)
+async def list_content_types(db: DB):
+    """Platform-qualified content type registry (DF-T-06-001)."""
+    from services.content.registry import get_registry
+
+    registry = get_registry()
+    await registry.ensure_fresh(db)
+    items = [entry.to_dict() for entry in registry.list()]
+    return Response(
+        content=json.dumps({"items": items, "total": len(items)}),
+        media_type="application/json",
+        headers={"Cache-Control": "max-age=300"},
+    )
+
+
+@router.post("/types/refresh", dependencies=[Depends(require_permission("content", "create"))])
+async def refresh_content_types(db: DB):
+    from services.content.registry import get_registry
+
+    count = await get_registry().refresh(db)
+    return {"refreshed": count}
+
+
 @router.post("/save", dependencies=[Depends(require_permission("content", "create"))])
 async def save_content(body: SaveContentBody, db: DB, user: CurrentUser):
     """Save extracted content with deduplication (used by scenarios and MCP)."""
+    import json
+
+    from services.content.errors import ContentError, ContentTypeError, NormalizationError, RawDataSizeError
     from services.content_store import save_content_item
-    result = await save_content_item(
-        data=body.data,
-        collection=body.collection,
-        platform=body.platform,
-        content_type=body.content_type,
-        dedupe_field=body.dedupe_field,
-        tags=body.tags,
-        device_serial=body.device_serial,
-        campaign_id=body.campaign_id,
-        user_id=user.id,
-    )
-    return result
+    from tenancy.context import set_current_org_id
+
+    if user.org_id:
+        set_current_org_id(user.org_id)
+    try:
+        result = await save_content_item(
+            data=body.data,
+            collection=body.collection,
+            platform=body.platform,
+            content_type=body.content_type,
+            dedupe_field=body.dedupe_field,
+            dedup_action=getattr(body, "dedup_action", "skip") or "skip",
+            tags=body.tags,
+            device_serial=body.device_serial,
+            campaign_id=body.campaign_id,
+            execution_id=getattr(body, "execution_id", None),
+            user_id=user.id,
+            org_id=user.org_id,
+            db=db,
+        )
+        return result
+    except ContentTypeError as exc:
+        raise HTTPException(422, detail={"error_code": exc.code, **exc.details}) from exc
+    except NormalizationError as exc:
+        raise HTTPException(422, detail={"error_code": exc.code, **exc.details}) from exc
+    except RawDataSizeError as exc:
+        raise HTTPException(422, detail={"error_code": exc.code, **exc.details}) from exc
+    except ContentError as exc:
+        if exc.code == "CONTENT_DEDUP_CONFLICT":
+            raise HTTPException(409, detail={"error_code": exc.code, **exc.details}) from exc
+        raise HTTPException(422, detail={"error_code": exc.code, **exc.details}) from exc
 
 
 async def _load_content_item(
@@ -287,24 +342,30 @@ async def _execution_step_artifact_pairs(
 ) -> list[tuple[str, str | None]]:
     if not item.execution_id:
         return []
-    from api.routes.executions import _extract_step_artifacts, _get_or_404
+    from api.routes.executions import (
+        _extract_step_artifacts,
+        _get_or_404,
+        _legacy_step_dicts_for_artifacts,
+    )
     from db.crud.device import get_device
     from db.crud.execution import list_execution_results
 
     try:
-        await _get_or_404(db, item.execution_id, user.id)
+        await _get_or_404(db, item.execution_id, user)
     except HTTPException:
         return []
 
     pairs: list[tuple[str, str | None]] = []
     results = await list_execution_results(db, item.execution_id)
+    step_dicts = await _legacy_step_dicts_for_artifacts(db, item.execution_id)
     for er in results:
         device = await get_device(db, er.device_id)
         serial = device.serial if device else None
+        steps_for_device = step_dicts or ((er.passed_steps or []) + (er.failed_steps or []))
         for step_art in _extract_step_artifacts(
             item.execution_id,
             serial or "unknown",
-            (er.passed_steps or []) + (er.failed_steps or []),
+            steps_for_device,
             er.created_at,
         ):
             pairs.append((step_art.artifact_type, step_art.url))
@@ -327,6 +388,42 @@ async def get_content_item(
 
 
 @router.get(
+    "/{item_id}/children",
+    dependencies=[Depends(require_permission("content", "read"))],
+)
+async def list_content_children(
+    item_id: str,
+    db: DB,
+    user: CurrentUser,
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
+    """Comments for a post — matches parent_id hash variants and parser post ids."""
+    owner_id = data_owner_user_id(user)
+    item = await content_crud.get_content_item(db, item_id, user_id=owner_id)
+    if item is None:
+        raise HTTPException(404, "Content item not found")
+    children, total = await content_crud.query_content_children(
+        db,
+        item,
+        user_id=owner_id,
+        limit=limit,
+        offset=offset,
+    )
+    parent_items = await _resolve_parent_items_for_list(db, children)
+    out_items = [
+        _item_to_out_with_parent(child, parent_item=parent_items.get(child.id))
+        for child in children
+    ]
+    return {
+        "items": out_items,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@router.get(
     "/{item_id}/artifacts/{artifact_id}/download",
     dependencies=[Depends(require_permission("content", "read"))],
 )
@@ -345,6 +442,21 @@ async def download_content_artifact(
         )
     except FileNotFoundError as exc:
         raise HTTPException(410, "Artifact expired or unavailable") from exc
+    except Exception as exc:
+        # Defensive: misconfigured storage URLs must not surface as opaque 500s.
+        exc_name = type(exc).__name__
+        if exc_name in {"ConnectError", "ConnectTimeout", "ReadTimeout"} or (
+            exc.__class__.__module__.startswith("httpx")
+            and exc_name.endswith("Error")
+        ):
+            log.warning(
+                "content artifact_download fetch failed item_id=%s artifact_id=%s: %s",
+                item_id,
+                artifact_id,
+                exc,
+            )
+            raise HTTPException(410, "Artifact expired or unavailable") from exc
+        raise
     log.info(
         "content artifact_download item_id=%s artifact_id=%s user_id=%s bytes=%s",
         item_id,
@@ -435,6 +547,10 @@ async def delete_collection(name: str, db: DB, user: CurrentUser):
 
 
 def _item_to_out(item, *, include_raw: bool = False) -> dict:
+    return _item_to_out_with_parent(item, include_raw=include_raw, parent_item=None)
+
+
+def _item_to_out_with_parent(item, *, include_raw: bool = False, parent_item=None) -> dict:
     raw = item.raw_data if isinstance(item.raw_data, dict) else {}
     return ContentItemOut(
         id=item.id,
@@ -463,8 +579,220 @@ def _item_to_out(item, *, include_raw: bool = False) -> dict:
         created_at=item.created_at,
         content_hash=item.content_hash,
         parent_id=item.parent_id,
+        parent_item_id=parent_item.id if parent_item is not None else None,
+        parent_item_hash=parent_item.content_hash if parent_item is not None else None,
+        parent_item_author=parent_item.author if parent_item is not None else None,
+        parent_item_body=parent_item.body if parent_item is not None else None,
+        parent_item_content_type=parent_item.content_type if parent_item is not None else None,
         item_level=int(item.item_level or 0),
     ).model_dump(mode="json", exclude_none=include_raw is False)
+
+
+def _raw_dict(item) -> dict:
+    raw = item.raw_data
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _parent_post_identifiers(item) -> list[tuple[str, str]]:
+    raw = _raw_dict(item)
+    anchor = raw.get("parent_post_anchor") if isinstance(raw.get("parent_post_anchor"), dict) else {}
+    pairs = [
+        ("post_key", anchor.get("post_key") or raw.get("parent_post_key")),
+        ("_pid", anchor.get("pid") or raw.get("parent_post_id")),
+        ("stable_post_id", anchor.get("stable_post_id") or raw.get("parent_stable_post_id")),
+        ("fb_post_id", anchor.get("fb_post_id") or raw.get("parent_fb_post_id")),
+    ]
+    seen: set[tuple[str, str]] = set()
+    out: list[tuple[str, str]] = []
+    for key, value in pairs:
+        text = str(value or "").strip()
+        pair = (key, text)
+        if not text or pair in seen:
+            continue
+        seen.add(pair)
+        out.append(pair)
+    return out
+
+
+async def _resolve_parent_item(db, item):
+    if not (
+        item.parent_id
+        or int(item.item_level or 0) > 0
+        or str(item.content_type or "").endswith("comment")
+    ):
+        return None
+
+    base_filters = [ContentItem.deleted_at.is_(None)]
+    if item.user_id:
+        base_filters.append(ContentItem.user_id == item.user_id)
+    if item.org_id:
+        base_filters.append(ContentItem.org_id == item.org_id)
+
+    async def _fetch(stmt):
+        row = await db.execute(stmt.limit(1))
+        return row.scalar_one_or_none()
+
+    if item.parent_id:
+        same_execution = list(base_filters)
+        same_execution.append(ContentItem.content_hash == item.parent_id)
+        if item.execution_id:
+            same_execution.append(ContentItem.execution_id == item.execution_id)
+        parent = await _fetch(select(ContentItem).where(*same_execution))
+        if parent is not None:
+            return parent
+        parent = await _fetch(
+            select(ContentItem).where(
+                *base_filters,
+                ContentItem.content_hash == item.parent_id,
+            )
+        )
+        if parent is not None:
+            return parent
+
+    identifiers = _parent_post_identifiers(item)
+    post_filters = [
+        *base_filters,
+        ContentItem.collection == item.collection,
+        or_(
+            ContentItem.content_type == "fb_post",
+            ContentItem.content_type == "fb_group_posts",
+            ContentItem.content_type == "post",
+            ContentItem.content_type == "group_post",
+            ContentItem.content_type.like("%post"),
+        ),
+    ]
+    if identifiers:
+        identifier_filters = []
+        for key, value in identifiers:
+            identifier_filters.append(ContentItem.raw_data[key].as_string() == value)
+        anchored_filters = [*post_filters, or_(*identifier_filters)]
+        if item.execution_id:
+            parent = await _fetch(
+                select(ContentItem)
+                .where(*anchored_filters, ContentItem.execution_id == item.execution_id)
+                .order_by(ContentItem.extracted_at.desc().nullslast(), ContentItem.created_at.desc())
+            )
+            if parent is not None:
+                return parent
+        parent = await _fetch(
+            select(ContentItem)
+            .where(*anchored_filters)
+            .order_by(ContentItem.extracted_at.desc().nullslast(), ContentItem.created_at.desc())
+        )
+        if parent is not None:
+            return parent
+
+    return None
+
+
+async def _resolve_parent_items_for_list(db, items: list[ContentItem]) -> dict[str, ContentItem]:
+    comments = [item for item in items if _is_comment_content_item(item)]
+    if not comments:
+        return {}
+
+    resolved: dict[str, ContentItem] = {}
+
+    parent_hashes = {item.parent_id for item in comments if item.parent_id}
+    if parent_hashes:
+        direct_rows = (
+            await db.execute(
+                select(ContentItem).where(
+                    ContentItem.deleted_at.is_(None),
+                    ContentItem.content_hash.in_(parent_hashes),
+                )
+            )
+        ).scalars().all()
+        by_hash: dict[str, list[ContentItem]] = {}
+        for parent in direct_rows:
+            by_hash.setdefault(parent.content_hash, []).append(parent)
+
+        for item in comments:
+            if not item.parent_id:
+                continue
+            parent = _best_parent_candidate(item, by_hash.get(item.parent_id, []))
+            if parent is not None:
+                resolved[item.id] = parent
+
+    unresolved = [item for item in comments if item.id not in resolved and item.execution_id]
+    if not unresolved:
+        return resolved
+
+    executions = {item.execution_id for item in unresolved if item.execution_id}
+    collections = {item.collection for item in unresolved if item.collection}
+    org_ids = {item.org_id for item in unresolved if item.org_id}
+    user_ids = {item.user_id for item in unresolved if item.user_id}
+
+    post_filters = [
+        ContentItem.deleted_at.is_(None),
+        ContentItem.execution_id.in_(executions),
+        ContentItem.collection.in_(collections),
+        or_(
+            ContentItem.content_type == "fb_post",
+            ContentItem.content_type == "fb_group_posts",
+            ContentItem.content_type == "post",
+            ContentItem.content_type == "group_post",
+            ContentItem.content_type.like("%post"),
+        ),
+    ]
+    if org_ids:
+        post_filters.append(ContentItem.org_id.in_(org_ids))
+    if user_ids:
+        post_filters.append(ContentItem.user_id.in_(user_ids))
+
+    posts = (
+        await db.execute(
+            select(ContentItem)
+            .where(*post_filters)
+            .order_by(ContentItem.extracted_at.desc().nullslast(), ContentItem.created_at.desc())
+        )
+    ).scalars().all()
+
+    by_scope: dict[tuple[str | None, str, str | None, str | None], list[ContentItem]] = {}
+    for post in posts:
+        key = (post.execution_id, post.collection, post.org_id, post.user_id)
+        by_scope.setdefault(key, []).append(post)
+
+    for item in unresolved:
+        key = (item.execution_id, item.collection, item.org_id, item.user_id)
+        parent = _match_parent_by_identifiers(item, by_scope.get(key, []))
+        if parent is not None:
+            resolved[item.id] = parent
+
+    return resolved
+
+
+def _match_parent_by_identifiers(item, posts: list[ContentItem]) -> ContentItem | None:
+    identifiers = _parent_post_identifiers(item)
+    if not identifiers:
+        return None
+    for post in posts:
+        raw = _raw_dict(post)
+        for key, value in identifiers:
+            if str(raw.get(key) or "").strip() == value:
+                return post
+    return None
+
+
+def _best_parent_candidate(item, candidates: list[ContentItem]) -> ContentItem | None:
+    if not candidates:
+        return None
+    same_execution = [p for p in candidates if item.execution_id and p.execution_id == item.execution_id]
+    scoped = same_execution or candidates
+    for parent in scoped:
+        if item.org_id and parent.org_id != item.org_id:
+            continue
+        if item.user_id and parent.user_id != item.user_id:
+            continue
+        return parent
+    return None
 
 
 def _build_payload(item) -> dict:
@@ -499,14 +827,20 @@ def _build_payload(item) -> dict:
     return payload
 
 
+def _is_comment_content_item(item) -> bool:
+    ct = str(item.content_type or "").lower()
+    return int(item.item_level or 0) > 0 or ct.endswith("comment")
+
+
 async def _collect_all_artifacts(db, item, user: CurrentUser) -> list[dict]:
-    artifacts = collect_content_artifacts(item)
-    steps = await _execution_step_artifact_pairs(db, item, user)
-    return merge_execution_artifacts(item, artifacts, steps)
+    """Content detail: only crawl-time screenshot + hierarchy_xml (no execution/parent dupes)."""
+    del db, user  # kept for call-site stability
+    return collect_primary_content_artifacts(item)
 
 
 async def _item_detail_out(db, item, user: CurrentUser) -> dict:
-    base = _item_to_out(item, include_raw=True)
+    parent_item = await _resolve_parent_item(db, item)
+    base = _item_to_out_with_parent(item, include_raw=True, parent_item=parent_item)
     artifacts = [
         ContentArtifactOut(**a) for a in await _collect_all_artifacts(db, item, user)
     ]

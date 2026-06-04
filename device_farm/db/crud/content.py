@@ -4,10 +4,34 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Optional
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.content import ContentCollection, ContentItem
+
+
+async def resolve_org_id(db: AsyncSession, *, user_id: str | None = None) -> str | None:
+    if not user_id:
+        return None
+    from db.models.user import User
+
+    result = await db.execute(select(User.default_org_id).where(User.id == user_id))
+    return result.scalar_one_or_none()
+
+
+async def compute_item_level(db: AsyncSession, parent_id: str | None) -> int:
+    """Epic 06: root level=1, each child adds one."""
+    if not parent_id:
+        return 1
+    result = await db.execute(
+        select(ContentItem.item_level).where(
+            (ContentItem.id == parent_id) | (ContentItem.content_hash == parent_id)
+        )
+    )
+    parent_level = result.scalar_one_or_none()
+    if parent_level is None:
+        return 1
+    return min(int(parent_level) + 1, 10)
 
 
 async def get_content_by_hash(
@@ -66,7 +90,7 @@ async def query_content(
     offset: int = 0,
 ) -> tuple[list[ContentItem], int]:
     """Query content items with filters. Returns (items, total_count)."""
-    stmt = select(ContentItem)
+    stmt = select(ContentItem).where(ContentItem.deleted_at.is_(None))
 
     if collection:
         stmt = stmt.where(ContentItem.collection == collection)
@@ -105,6 +129,142 @@ async def query_content(
     items = list(result.scalars().all())
 
     return items, total
+
+
+async def query_content_children(
+    db: AsyncSession,
+    parent_item: ContentItem,
+    *,
+    user_id: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> tuple[list[ContentItem], int]:
+    """Comments linked to a post via parent_id variants or parser post ids."""
+    from services.content.parent_links import (
+        parent_link_candidates,
+        parent_post_id_values,
+    )
+
+    candidates = parent_link_candidates(parent_item)
+    pid_values = parent_post_id_values(parent_item)
+    link_filters = []
+    if candidates:
+        link_filters.append(ContentItem.parent_id.in_(candidates))
+    for pid in pid_values:
+        link_filters.append(ContentItem.raw_data["parent_post_id"].as_string() == pid)
+        link_filters.append(ContentItem.raw_data["post_key"].as_string() == pid)
+        link_filters.append(ContentItem.raw_data["_pid"].as_string() == pid)
+        link_filters.append(ContentItem.raw_data["stable_post_id"].as_string() == pid)
+        link_filters.append(ContentItem.raw_data["fb_post_id"].as_string() == pid)
+    for candidate in candidates:
+        link_filters.append(
+            ContentItem.raw_data["parent_content_hash"].as_string() == candidate
+        )
+
+    if not link_filters:
+        return [], 0
+
+    stmt = select(ContentItem).where(
+        ContentItem.deleted_at.is_(None),
+        or_(
+            ContentItem.content_type == "fb_comment",
+            ContentItem.content_type.like("%comment"),
+            ContentItem.item_level > 0,
+        ),
+        or_(*link_filters),
+    )
+    if parent_item.collection:
+        stmt = stmt.where(ContentItem.collection == parent_item.collection)
+    if parent_item.campaign_id:
+        stmt = stmt.where(ContentItem.campaign_id == parent_item.campaign_id)
+    if user_id:
+        stmt = stmt.where(ContentItem.user_id == user_id)
+    if parent_item.org_id:
+        stmt = stmt.where(ContentItem.org_id == parent_item.org_id)
+
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total = (await db.execute(count_stmt)).scalar_one()
+
+    data_stmt = (
+        stmt.order_by(ContentItem.extracted_at.asc().nullslast(), ContentItem.created_at.asc())
+        .offset(offset)
+        .limit(limit)
+    )
+    result = await db.execute(data_stmt)
+    return list(result.scalars().all()), total
+
+
+async def update_content_screenshot_path(
+    db: AsyncSession,
+    *,
+    content_hash: str,
+    collection: str,
+    screenshot_path: str,
+    execution_id: str | None = None,
+    user_id: str | None = None,
+    only_if_missing: bool = False,
+) -> bool:
+    stmt = (
+        update(ContentItem)
+        .where(
+            ContentItem.content_hash == content_hash,
+            ContentItem.collection == collection,
+        )
+        .values(screenshot_path=screenshot_path[:1000])
+    )
+    if execution_id:
+        stmt = stmt.where(ContentItem.execution_id == execution_id)
+    if user_id:
+        stmt = stmt.where(ContentItem.user_id == user_id)
+    if only_if_missing:
+        from sqlalchemy import or_
+
+        stmt = stmt.where(
+            or_(
+                ContentItem.screenshot_path.is_(None),
+                ContentItem.screenshot_path == "",
+            )
+        )
+    result = await db.execute(stmt)
+    return bool(result.rowcount)
+
+
+async def update_content_screenshot_paths(
+    db: AsyncSession,
+    *,
+    content_hashes: list[str],
+    collection: str,
+    screenshot_path: str,
+    execution_id: str | None = None,
+    user_id: str | None = None,
+    only_if_missing: bool = False,
+) -> int:
+    hashes = [str(h) for h in content_hashes if h]
+    if not hashes:
+        return 0
+    stmt = (
+        update(ContentItem)
+        .where(
+            ContentItem.content_hash.in_(hashes),
+            ContentItem.collection == collection,
+        )
+        .values(screenshot_path=screenshot_path[:1000])
+    )
+    if execution_id:
+        stmt = stmt.where(ContentItem.execution_id == execution_id)
+    if user_id:
+        stmt = stmt.where(ContentItem.user_id == user_id)
+    if only_if_missing:
+        from sqlalchemy import or_
+
+        stmt = stmt.where(
+            or_(
+                ContentItem.screenshot_path.is_(None),
+                ContentItem.screenshot_path == "",
+            )
+        )
+    result = await db.execute(stmt)
+    return int(result.rowcount or 0)
 
 
 async def update_content_stats(

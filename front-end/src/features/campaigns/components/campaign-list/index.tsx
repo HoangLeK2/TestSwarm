@@ -1,47 +1,83 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslations } from 'next-intl';
-import { FileText } from 'lucide-react';
+import { FileText, Plus } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { useCampaigns } from '../../hooks/use-campaigns';
-import type { CampaignOut, CampaignStatus } from '../../types';
+import { useCampaignListFocus } from '../../hooks/use-campaign-list-focus';
+import type { CampaignOut } from '../../types';
 import { DataTable } from '@/components/ui/table/data-table';
 import { useDataTable } from '@/hooks/use-data-table';
 import { CreateCampaignDialog } from '../create-campaign-dialog';
 import { Can } from '@/features/auth';
 import { getCampaignColumns } from './columns';
 import { CampaignMobileList } from './CampaignMobileList';
+import { CampaignExecutionRuntimeBanner } from './CampaignExecutionRuntimeBanner';
+import { buildCampaignStatusLabels } from '../../campaign-status-ui';
+import { CoreEmptyState } from '@/components/core-empty-state';
+import { useCampaignFocusFromDeepLink } from '../campaign-deep-link';
+import {
+  campaignRowAnchorId,
+  campaignRowHighlightClass
+} from '../../lib/campaign-row-anchor';
+import { cn } from '@/lib/utils';
 
-const STATUS_VARIANT: Record<
-  CampaignStatus,
-  'secondary' | 'default' | 'outline' | 'destructive'
-> = {
-  idle: 'outline',
-  draft: 'outline',
-  running: 'default',
-  paused: 'outline',
-  completed: 'outline'
-};
+function useIsLgUp() {
+  const [isLgUp, setIsLgUp] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 1024px)');
+    setIsLgUp(mq.matches);
+    const onChange = () => setIsLgUp(mq.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+  return isLgUp;
+}
 
-export function CampaignList() {
+export function CampaignList({
+  attachScenarioId,
+  openCreateCampaign = false
+}: {
+  attachScenarioId?: string | null;
+  openCreateCampaign?: boolean;
+} = {}) {
   const t = useTranslations('campaignsFeature.list');
+  const tCreate = useTranslations('campaignsFeature.createDialog');
+  const createDialogProps = {
+    initialOpen: openCreateCampaign && Boolean(attachScenarioId),
+    preselectedScenarioIds: attachScenarioId ? [attachScenarioId] : []
+  };
+  const tEmpty = useTranslations('coreEmptyState');
   const { data: campaigns, isLoading, error } = useCampaigns();
+  const { focusCampaignId, onFocusCampaignHandled } =
+    useCampaignFocusFromDeepLink();
+  const isLgUp = useIsLgUp();
+  const highlightCampaignId = useCampaignListFocus(
+    focusCampaignId,
+    campaigns,
+    onFocusCampaignHandled
+  );
 
   const data: CampaignOut[] = campaigns ?? [];
 
-  const statusLabel = useMemo<Record<CampaignStatus, string>>(
-    () => ({
-      idle: t('statusIdle'),
-      draft: t('statusDraft'),
-      running: t('statusRunning'),
-      paused: t('statusPaused'),
-      completed: t('statusCompleted')
+  const getRowProps = useCallback(
+    (row: { original: CampaignOut }) => ({
+      ...(isLgUp ? { id: campaignRowAnchorId(row.original.id) } : {}),
+      className: cn(
+        highlightCampaignId === row.original.id && campaignRowHighlightClass
+      )
     }),
+    [highlightCampaignId, isLgUp]
+  );
+
+  const statusLabel = useMemo(
+    () => buildCampaignStatusLabels((key) => t(key)),
     [t]
   );
 
   const columns = useMemo(() => {
-    return getCampaignColumns(t, statusLabel, STATUS_VARIANT);
+    return getCampaignColumns(t, statusLabel);
   }, [t, statusLabel]);
 
   const { table } = useDataTable<CampaignOut>({
@@ -52,6 +88,7 @@ export function CampaignList() {
 
   return (
     <div className='space-y-3'>
+      <CampaignExecutionRuntimeBanner />
       {isLoading || error ? (
         <div>
           {isLoading && (
@@ -71,25 +108,42 @@ export function CampaignList() {
               {t('campaignCountLabel')}
             </p>
             <Can object='campaigns' action='create'>
-              <CreateCampaignDialog />
+              <CreateCampaignDialog {...createDialogProps} />
             </Can>
           </div>
 
           {!campaigns?.length && (
-            <div className='rounded-xl border border-dashed border-border bg-muted/20 p-12 text-center'>
-              <FileText className='mx-auto mb-3 size-10 text-muted-foreground/60' />
-              <p className='text-sm font-medium text-foreground'>
-                {t('emptyTitle')}
-              </p>
-              <p className='mt-1 text-xs text-muted-foreground'>
-                {t('emptyDescription')}
-              </p>
-              <div className='mt-4'>
-                <Can object='campaigns' action='create'>
-                  <CreateCampaignDialog />
-                </Can>
-              </div>
-            </div>
+            <Can
+              object='campaigns'
+              action='create'
+              fallback={
+                <CoreEmptyState
+                  icon={FileText}
+                  title={tEmpty('campaigns.title')}
+                  description={tEmpty('campaigns.description')}
+                  readOnlyHint={tEmpty('readOnlyHint')}
+                  trackingKey='campaigns-empty-readonly'
+                />
+              }
+            >
+              <CoreEmptyState
+                icon={FileText}
+                title={tEmpty('campaigns.title')}
+                description={tEmpty('campaigns.description')}
+                trackingKey='campaigns-empty'
+                action={
+                  <CreateCampaignDialog
+                    {...createDialogProps}
+                    trigger={
+                      <Button size='sm' className='min-w-[8rem]'>
+                        <Plus size={16} className='mr-1' />
+                        {tCreate('trigger')}
+                      </Button>
+                    }
+                  />
+                }
+              />
+            </Can>
           )}
 
           {campaigns?.length ? (
@@ -97,10 +151,15 @@ export function CampaignList() {
               <CampaignMobileList
                 campaigns={campaigns}
                 statusLabel={statusLabel}
-                statusVariant={STATUS_VARIANT}
+                highlightCampaignId={highlightCampaignId}
+                withRowAnchor={!isLgUp}
               />
               <div className='hidden lg:block'>
-                <DataTable table={table} total={campaigns.length} />
+                <DataTable
+                  table={table}
+                  total={campaigns.length}
+                  getRowProps={getRowProps}
+                />
               </div>
             </>
           ) : null}

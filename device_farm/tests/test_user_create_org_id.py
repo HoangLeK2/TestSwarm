@@ -1,4 +1,4 @@
-"""User creation must satisfy users.org_id NOT NULL."""
+"""User creation must satisfy users.default_org_id NOT NULL."""
 
 from __future__ import annotations
 
@@ -54,6 +54,6 @@ async def test_create_user_with_default_org_sets_org_id_before_flush():
 
     assert result is user
     user_cls.assert_called_once()
-    assert user_cls.call_args.kwargs["org_id"] == "org-new"
+    assert user_cls.call_args.kwargs["default_org_id"] == "org-new"
     assert db.add.call_count == 3
     assert flush_order == ["flush", "flush", "flush"]

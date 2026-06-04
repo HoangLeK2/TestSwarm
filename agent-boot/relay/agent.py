@@ -138,6 +138,8 @@ class RelayAgent:
         relay_id: str,
         relay_mode: str = "ws",
         enrollment_token: Optional[str] = None,
+        grpc_tls: bool = False,
+        grpc_root_cert_file: str = "",
         extra_ingest: Any = None,
     ) -> None:
         self._api_key   = api_key
@@ -148,7 +150,8 @@ class RelayAgent:
         if self._relay_mode == "grpc":
             # Accept "host:port" or "grpc://host:port" → strip scheme
             addr = server_url
-            for prefix in ("grpc://", "ws://", "wss://", "http://", "https://"):
+            grpc_scheme_tls = addr.startswith(("grpcs://", "https://"))
+            for prefix in ("grpcs://", "grpc://", "ws://", "wss://", "http://", "https://"):
                 if addr.startswith(prefix):
                     addr = addr[len(prefix):]
                     break
@@ -159,12 +162,22 @@ class RelayAgent:
                 addr = f"{addr}:50051"
             self._grpc_addr  = addr
             self._server_url = addr  # for logging
+            tls_env = os.getenv("RELAY_GRPC_TLS", "").strip().lower() in ("1", "true", "yes", "on")
+            self._grpc_tls_enabled = bool(grpc_tls or grpc_scheme_tls or tls_env)
+            self._grpc_root_cert_file = (
+                grpc_root_cert_file
+                or os.getenv("RELAY_GRPC_ROOT_CERT_FILE", "").strip()
+            )
+            if self._grpc_root_cert_file:
+                self._grpc_tls_enabled = True
         else:
             # WS mode: normalise URL
             if not server_url.startswith("ws://") and not server_url.startswith("wss://"):
                 server_url = f"ws://{server_url}/relay-agent"
             self._server_url = server_url
             self._grpc_addr  = ""
+            self._grpc_tls_enabled = False
+            self._grpc_root_cert_file = ""
 
         self._registry   = DeviceRegistry()
         self._scrcpy_mgr = ScrcpySessionManager(on_session_stopped=self._on_session_stopped)
@@ -195,6 +208,7 @@ class RelayAgent:
         # registry exists so `_handle_*` paths can spawn tasks before the
         # first stream is established (e.g. during the brief startup window).
         self._stream_tasks: TaskRegistry = TaskRegistry()
+        self._extra_data_tasks: dict[str, asyncio.Task] = {}
         self._loop_watchdog: Optional[LoopWatchdog] = None
         self._runtime_stats: Optional[RuntimeStats] = None
 
@@ -438,6 +452,7 @@ class RelayAgent:
                 "version":  "2.0.0",
             }))
             logger.info("register sent: relay_id=%s serials=%s", self._relay_id, serials)
+            await self._send_heartbeat(send_queue)
             if self._scrcpy_auto_resume_enabled:
                 self._ensure_default_scrcpy_desired()
                 await self._resume_desired_scrcpy_sessions(send_queue, loop, source="ws-connected")
@@ -493,8 +508,7 @@ class RelayAgent:
 
     async def _connect_and_stream_grpc(self) -> None:
         """gRPC mode: bidirectional stream with HTTP/2 multiplexing."""
-        from grpc import aio as grpc_aio
-        from relay.grpc_client import GrpcRelayClient
+        from relay.grpc_client import GrpcRelayClient, create_grpc_channel
         from relay.control_client import AgentControlClient
 
         # FairSendQueue: same per-device fairness story as the WS path. The
@@ -512,19 +526,10 @@ class RelayAgent:
 
         # Shared channel — HTTP/2 multiplexes video stream + control stream
         # over a single TCP connection; the two streams are fully independent.
-        async with grpc_aio.insecure_channel(
+        async with create_grpc_channel(
             self._grpc_addr,
-            options=[
-                ("grpc.keepalive_time_ms",               10_000),
-                ("grpc.keepalive_timeout_ms",              5_000),
-                ("grpc.keepalive_permit_without_calls",        1),
-                ("grpc.http2.max_pings_without_data",          0),
-                ("grpc.http2.min_time_between_pings_ms",   5_000),
-                ("grpc.initial_reconnect_backoff_ms",      1_000),
-                ("grpc.max_reconnect_backoff_ms",         30_000),
-                ("grpc.max_send_message_length",    4 * 1024 * 1024),
-                ("grpc.max_receive_message_length", 4 * 1024 * 1024),
-            ],
+            tls_enabled=self._grpc_tls_enabled,
+            root_cert_file=self._grpc_root_cert_file,
         ) as channel:
             client = GrpcRelayClient(
                 server_addr=self._grpc_addr,
@@ -533,6 +538,8 @@ class RelayAgent:
                 send_queue=send_queue,
                 loop=loop,
                 channel=channel,
+                tls_enabled=self._grpc_tls_enabled,
+                root_cert_file=self._grpc_root_cert_file,
             )
 
             # Channel 2: control plane (register/heartbeat/commands) — runs
@@ -550,6 +557,7 @@ class RelayAgent:
                 "version":  "2.0.0",
             })
             await send_queue.put(register_msg)
+            await self._send_heartbeat(send_queue)
             if self._scrcpy_auto_resume_enabled:
                 self._ensure_default_scrcpy_desired()
                 await self._resume_desired_scrcpy_sessions(send_queue, loop, source="grpc-connected")
@@ -685,16 +693,7 @@ class RelayAgent:
 
         if ctx.state == DeviceState.ONLINE:
             loop = asyncio.get_running_loop()
-            if not ctx.capabilities:
-                caps = await loop.run_in_executor(adb_executor(), _probe_capabilities, serial)
-                self._registry.set_capabilities(serial, caps)
-                # Invalidate the cached heartbeat payload — next emit will
-                # re-render to include the freshly probed capabilities.
-                self._hb_caps_version += 1
-                wlan_ip = str((caps or {}).get("wlan_ip") or "").strip()
-                if wlan_ip and ":" not in serial:
-                    self._atx_lan_host_cache[serial] = wlan_ip
-                logger.info("capabilities %s: %s", serial, caps)
+            await self._ensure_capabilities_for_serials([serial], loop)
             pairs = await loop.run_in_executor(
                 adb_executor(),
                 reconcile_usb_preferred_for_duplicate_devices,
@@ -751,8 +750,31 @@ class RelayAgent:
             await asyncio.sleep(30)
             await self._send_heartbeat(send_queue)
 
+    async def _ensure_capabilities_for_serials(
+        self, serials: list[str], loop: asyncio.AbstractEventLoop
+    ) -> None:
+        """Probe capabilities for ONLINE serials missing cached caps (before heartbeat)."""
+        for serial in serials:
+            ctx = self._registry.get(serial)
+            if not ctx or ctx.state != DeviceState.ONLINE or ctx.capabilities:
+                continue
+            caps = await loop.run_in_executor(adb_executor(), _probe_capabilities, serial)
+            self._registry.set_capabilities(serial, caps)
+            self._hb_caps_version += 1
+            wlan_ip = str((caps or {}).get("wlan_ip") or "").strip()
+            if wlan_ip and ":" not in serial:
+                self._atx_lan_host_cache[serial] = wlan_ip
+            logger.info(
+                "capabilities (pre-heartbeat) %s: wlan_ip=%s",
+                serial,
+                wlan_ip or "unset",
+            )
+
     async def _send_heartbeat(self, send_queue: asyncio.Queue) -> None:
         serials = self._registry.online_serials
+        loop = asyncio.get_running_loop()
+        await self._ensure_capabilities_for_serials(serials, loop)
+
         key = (tuple(serials), self._hb_caps_version)
         if key == self._hb_cache_key and self._hb_cache_payload is not None:
             bounded_put_nowait(send_queue, self._hb_cache_payload, label="heartbeat")
@@ -885,10 +907,19 @@ class RelayAgent:
             )
 
         elif mtype == "extra_data":
-            self._stream_tasks.add(
+            req_id = str(msg.get("id", "") or "")
+            task = self._stream_tasks.add(
                 self._guarded(extra_data_sem(), self._handle_extra_data(msg, send_queue)),
                 name="extra-data",
             )
+            if req_id:
+                self._extra_data_tasks[req_id] = task
+                task.add_done_callback(
+                    lambda _task, _req_id=req_id: self._extra_data_tasks.pop(_req_id, None)
+                )
+
+        elif mtype == "extra_data_cancel":
+            self._cancel_extra_data_task(str(msg.get("id", "") or ""))
 
         elif mtype == "a11y_action":
             await self._handle_a11y_action(msg, send_queue, loop)
@@ -1347,13 +1378,21 @@ class RelayAgent:
     async def _handle_u2_batch(self, msg: dict, send_queue: asyncio.Queue) -> None:
         """Execute a batch of primitive u2 actions and return aggregated results."""
         serial = str(msg.get("serial", "") or "")
-        if self._u2_executor is None:
+        actions = msg.get("actions") or []
+        result = await self._try_u2_batch_touch_fast_path(
+            serial=serial,
+            actions=actions,
+            early_exit=bool(msg.get("early_exit", True)),
+        )
+        if result is not None:
+            pass
+        elif self._u2_executor is None:
             result = {"ok": False, "stopped_at": 0, "results": [],
                       "error": "u2 batch not enabled"}
         else:
             result = await self._u2_executor.run_batch(
                 serial=serial,
-                actions=msg.get("actions") or [],
+                actions=actions,
                 early_exit=bool(msg.get("early_exit", True)),
             )
         result["type"] = "u2_batch_result"
@@ -1365,6 +1404,112 @@ class RelayAgent:
         await bounded_put(
             send_queue, payload, serial=serial, label="u2_batch_result"
         )
+
+    async def _try_u2_batch_touch_fast_path(
+        self,
+        *,
+        serial: str,
+        actions: list[dict],
+        early_exit: bool,
+    ) -> Optional[dict]:
+        """Low-latency u2_batch path for coordinate touch only.
+
+        Selector, dump, app, and file operations stay on U2Executor because they
+        need the richer uiautomator2 Python surface. Plain coordinate touch can
+        use the same atx-agent JSON-RPC HTTP path as u2_proxy, avoiding the
+        batch session pool, per-serial lock, and alive-check overhead.
+        """
+        if not actions:
+            return None
+        prepared: list[tuple[str, dict, float]] = []
+        for act in actions:
+            rpc = self._u2_touch_rpc_payload(act, len(prepared) + 1)
+            if rpc is None:
+                return None
+            method, payload, timeout = rpc
+            prepared.append((method, payload, timeout))
+
+        loop = asyncio.get_running_loop()
+
+        def _run() -> dict:
+            results: list[dict] = []
+            stopped_at: Optional[int] = None
+            for idx, (op, payload, timeout) in enumerate(prepared):
+                try:
+                    res = self._do_u2_http(
+                        serial,
+                        "POST",
+                        "/jsonrpc/0",
+                        json.dumps(payload),
+                        "application/json",
+                        timeout,
+                    )
+                    ok, error = self._parse_u2_touch_rpc_result(res)
+                except Exception as exc:
+                    ok, error = False, str(exc)
+                entry: dict[str, Any] = {"op": op, "ok": ok}
+                if error:
+                    entry["error"] = error
+                results.append(entry)
+                if not ok and early_exit:
+                    stopped_at = idx
+                    break
+            all_ok = all(bool(item.get("ok")) for item in results) and len(results) == len(prepared)
+            return {
+                "ok": all_ok,
+                "stopped_at": stopped_at,
+                "results": results,
+                "error": None if all_ok else (results[-1].get("error") if results else "touch_failed"),
+            }
+
+        return await loop.run_in_executor(u2_executor_pool(), _run)
+
+    def _u2_touch_rpc_payload(self, act: dict, req_id: int) -> Optional[tuple[str, dict, float]]:
+        op = str(act.get("op", "") or "")
+        payload: dict[str, Any] = {
+            "jsonrpc": "2.0",
+            "id": req_id,
+        }
+        timeout = 1.5
+        if op == "click":
+            payload["method"] = "click"
+            payload["params"] = [int(act["x"]), int(act["y"])]
+        elif op == "swipe":
+            duration = max(0.0, float(act.get("duration", 0.5)))
+            steps = max(1, int(duration * 40))
+            payload["method"] = "swipe"
+            payload["params"] = [
+                int(act["fx"]), int(act["fy"]),
+                int(act["tx"]), int(act["ty"]),
+                steps,
+            ]
+            timeout = max(1.5, duration + 0.8)
+        elif op == "long_click":
+            duration = max(0.1, float(act.get("duration", 0.5)))
+            payload["method"] = "longClick"
+            payload["params"] = [int(act["x"]), int(act["y"])]
+            timeout = max(1.5, duration + 0.8)
+        else:
+            return None
+        return op, payload, timeout
+
+    @staticmethod
+    def _parse_u2_touch_rpc_result(res: dict) -> tuple[bool, str]:
+        if not bool(res.get("ok")):
+            status = int(res.get("status", 0) or 0)
+            if status:
+                return False, f"JSON-RPC HTTP {status}"
+            return False, str(res.get("body") or "JSON-RPC request failed")
+        raw = str(res.get("body") or "")
+        if not raw.strip():
+            return False, "JSON-RPC empty response"
+        try:
+            data = json.loads(raw)
+        except Exception:
+            return False, f"JSON-RPC invalid response: {raw[:120]!r}"
+        if "error" in data:
+            return False, f"JSON-RPC error: {data['error']}"
+        return True, ""
 
     async def _handle_u2_flow(self, msg: dict, send_queue: asyncio.Queue) -> None:
         """Execute a named high-level u2 flow and return result."""
@@ -1499,6 +1644,20 @@ class RelayAgent:
                 await bounded_put(send_queue, await dumps_maybe_offload(reply), serial=serial, label="extra_data_result")
                 return
 
+            from relay.extra_data.collector import (
+                _capture_screenshot_b64,
+                should_capture_screenshot,
+            )
+
+            evidence: dict[str, Any] = {}
+            if snapshots:
+                evidence["hierarchy_xml"] = snapshots[-1]
+            screenshot_b64 = str(context.pop("_ingest_screenshot_b64", "") or "").strip()
+            if not screenshot_b64 and should_capture_screenshot(context):
+                screenshot_b64 = await _capture_screenshot_b64(self._u2_executor, serial) or ""
+            if screenshot_b64:
+                evidence["screenshot_b64"] = screenshot_b64
+
             payload = build_ingest_payload(
                 serial=serial,
                 strategy=strategy,
@@ -1506,10 +1665,18 @@ class RelayAgent:
                 snapshots=snapshots,
                 request_id=req_id,
             )
+            if evidence:
+                payload["evidence"] = evidence
             ingest = await self._extra_ingest.process_payload(payload)
             if ingest.get("ok"):
                 reply["ok"] = True
-                reply["ingest"] = ingest
+                reply_ingest = dict(ingest)
+                reply_ingest.pop("evidence_pending", None)
+                if screenshot_b64:
+                    reply_ingest["screenshot_b64"] = screenshot_b64
+                if not bool(context.get("return_items")):
+                    reply_ingest.pop("items", None)
+                reply["ingest"] = reply_ingest
             else:
                 reply["error"] = str(ingest.get("error") or "ingest_failed")
                 reply["ingest"] = ingest
@@ -1517,6 +1684,16 @@ class RelayAgent:
             logger.warning("extra_data failed serial=%s strategy=%s: %s", serial, strategy, exc)
             reply["error"] = str(exc)
         await bounded_put(send_queue, await dumps_maybe_offload(reply), serial=serial, label="extra_data_result")
+
+    def _cancel_extra_data_task(self, req_id: str) -> bool:
+        if not req_id:
+            return False
+        task = self._extra_data_tasks.pop(req_id, None)
+        if task is None or task.done():
+            return False
+        task.cancel()
+        logger.info("extra_data cancelled request_id=%s", req_id)
+        return True
 
     def _execute_command(
         self,

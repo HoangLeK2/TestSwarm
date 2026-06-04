@@ -1,8 +1,5 @@
 import { buildDashboardNavItems } from '@/config/dashboard-nav';
-import {
-  filterNavItemsByAccess,
-  normalizeNavUserRole
-} from '@/lib/nav-access';
+import { filterNavItemsByAccess, normalizeNavUserRole } from '@/lib/nav-access';
 import type { NavItem } from '@/types';
 import { useTranslations } from 'next-intl';
 import { useUser } from '@/features/auth';

@@ -3,7 +3,9 @@
 import { FileText, ChevronRight } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
-import { useScenarios } from '../../hooks/use-campaigns';
+import { useCampaign, useScenarios } from '../../hooks/use-campaigns';
+import { isCampaignEntityOut } from '../../services/api';
+import { useOrgScenarios } from '@/features/org-scenarios/hooks/use-org-scenarios';
 import { ScenarioListDialog } from '../scenario-list-dialog';
 import type { CampaignOut } from '../../types';
 import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
@@ -19,11 +21,31 @@ export function CampaignScenarioSummary({
   const t = useTranslations('campaignsFeature.scenarioList');
   const { canUpdate } = useResourcePermissions('campaigns');
   const { data: scenarios = [] } = useScenarios(campaign.id);
+  const { data: detail } = useCampaign(
+    campaign.id,
+    !campaign.scenario_refs?.length
+  );
+  const { data: orgScenarios = [] } = useOrgScenarios();
+  const entityRefs =
+    campaign.scenario_refs ??
+    (detail && isCampaignEntityOut(detail) ? detail.scenario_refs : []) ??
+    [];
+  const entityRefCount = entityRefs.length;
+  const entityRefNames = entityRefs
+    .map(
+      (ref) =>
+        orgScenarios.find((row) => row.id === ref.scenario_id)?.name ?? ''
+    )
+    .filter(Boolean);
   const totalSteps = scenarios.reduce((s, sc) => s + sc.steps.length, 0);
-  const hasScenario = totalSteps > 0;
+  const hasScenario = totalSteps > 0 || entityRefCount > 0;
 
   const label = hasScenario
-    ? t('summaryCount', { scenarios: scenarios.length, steps: totalSteps })
+    ? entityRefNames.length > 0
+      ? t('summaryEntityRefNames', { names: entityRefNames.join(', ') })
+      : entityRefCount > 0 && totalSteps === 0
+        ? t('summaryEntityRefs', { count: entityRefCount })
+        : t('summaryCount', { scenarios: scenarios.length, steps: totalSteps })
     : t('summaryEmpty');
 
   const buttonClassName = cn(

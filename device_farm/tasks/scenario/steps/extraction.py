@@ -53,15 +53,9 @@ def _platform_for_strategy(strategy: str, step: Dict[str, Any]) -> str:
 
 
 def _content_type_for_strategy(strategy: str, step: Dict[str, Any]) -> str:
-    if step.get("content_type"):
-        return str(step["content_type"])
-    if strategy in COMMENT_STRATEGIES:
-        return "comment"
-    if strategy == "text_nodes":
-        return "text"
-    if strategy.startswith("tiktok_"):
-        return "video"
-    return "post"
+    from services.content.legacy_type_map import default_content_type_for_strategy
+
+    return default_content_type_for_strategy(strategy, step)
 
 
 def _data_var_for_edge_strategy(strategy: str, step: Dict[str, Any]) -> str:
@@ -95,6 +89,70 @@ def _store_returned_items(ctx: Dict[str, Any], strategy: str, step: Dict[str, An
         ctx[data_var] = values
 
 
+_COMMENT_PARENT_ANCHOR_KEYS = (
+    "pid",
+    "post_key",
+    "stable_post_id",
+    "fb_post_id",
+    "author",
+    "timestamp",
+    "text_prefix",
+)
+_ACTIVE_COMMENT_PARENT_CTX_KEYS = (
+    "_active_comment_parent_hash",
+    "_first_new_post_hash",
+    "_fb_comment_parent_pid",
+    "_active_comment_parent_anchor",
+    "_active_comment_anchor_verified",
+    "_active_comment_parent_source",
+)
+
+
+def _clean_comment_parent_anchor(source: Dict[str, Any]) -> Dict[str, Any]:
+    anchor: Dict[str, Any] = {}
+    for key in _COMMENT_PARENT_ANCHOR_KEYS:
+        value = source.get(key)
+        if value is not None and str(value).strip():
+            anchor[key] = value
+    return anchor
+
+
+def _clear_active_comment_parent(ctx: Dict[str, Any]) -> None:
+    for key in _ACTIVE_COMMENT_PARENT_CTX_KEYS:
+        ctx.pop(key, None)
+
+
+def _remember_active_comment_parent(ctx: Dict[str, Any], ingest: Dict[str, Any]) -> None:
+    active_parent = ingest.get("active_parent_post")
+    pid_map = ingest.get("post_id_map") if isinstance(ingest.get("post_id_map"), dict) else None
+    if not isinstance(active_parent, dict):
+        if not pid_map or len(pid_map) != 1:
+            _clear_active_comment_parent(ctx)
+            return
+        pid, parent_hash = next(iter(pid_map.items()))
+        active_parent = {"pid": pid, "parent_id": parent_hash}
+
+    parent_id = (
+        active_parent.get("parent_id")
+        or active_parent.get("content_hash")
+        or active_parent.get("parent_content_hash")
+    )
+    pid = active_parent.get("pid") or active_parent.get("parent_post_id")
+    if parent_id:
+        ctx["_active_comment_parent_hash"] = parent_id
+        ctx["_first_new_post_hash"] = parent_id
+    if pid:
+        ctx["_fb_comment_parent_pid"] = pid
+    source = str(active_parent.get("source") or "").strip()
+    if source:
+        ctx["_active_comment_parent_source"] = source
+    anchor = _clean_comment_parent_anchor(active_parent)
+    if anchor:
+        ctx["_active_comment_parent_anchor"] = anchor
+    if parent_id or pid or anchor:
+        ctx["_active_comment_anchor_verified"] = True
+
+
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = os.environ.get(name)
     if raw is None or str(raw).strip() == "":
@@ -125,6 +183,79 @@ def _relay_extra_data_available(device: Any) -> bool:
         return bool(relay.relay_for_serial(str(relay_serial or "")))
     except Exception:
         return False
+
+
+def _attach_edge_content_screenshots(
+    *,
+    device: Any,
+    ingest: dict[str, Any],
+    collection: str,
+    execution_id: str | None,
+    user_id: str | None,
+) -> None:
+    """Attach one full-screen screenshot to all rows in this extract batch.
+
+    Prefer framebuffer captured on agent-boot immediately after the last XML dump.
+    The same full-screen JPEG is stored once and linked to every content_hash in the batch.
+    """
+    if not _env_bool("DEVICE_FARM_CONTENT_IMAGES_ENABLED", False):
+        return
+
+    import base64
+
+    hashes = ingest.get("batch_content_hashes") or ingest.get("inserted_content_hashes") or []
+    hashes = [str(h) for h in hashes if h]
+    if not hashes or not collection:
+        return
+    jpeg: bytes | None = None
+    b64 = ingest.get("screenshot_b64")
+    if isinstance(b64, str) and b64.strip():
+        try:
+            jpeg = base64.b64decode(b64, validate=False)
+        except Exception as exc:
+            log.debug("edge extra_data screenshot b64 decode failed: %s", exc)
+    if not jpeg:
+        capture = getattr(device, "capture_screenshot", None)
+        if callable(capture):
+            try:
+                jpeg = capture(skip_cache=True)
+            except TypeError:
+                jpeg = capture()
+            except Exception as exc:
+                log.debug("edge extra_data fresh screencap failed: %s", exc)
+    if not jpeg:
+        try:
+            jpeg = device.take_screenshot()
+        except Exception as exc:
+            log.debug("edge extra_data screenshot attach skipped: %s", exc)
+            return
+    if not jpeg:
+        log.warning(
+            "edge extra_data: screenshot attach skipped — no framebuffer "
+            "(ingest screenshot_b64 missing and device capture failed)"
+        )
+        return
+    try:
+        from db.database import run_activity_coro
+        from services.content_store import attach_screenshot_to_content_hashes
+
+        updated = run_activity_coro(
+            attach_screenshot_to_content_hashes(
+                content_hashes=hashes,
+                collection=collection,
+                execution_id=execution_id,
+                screenshot_bytes=jpeg,
+                user_id=user_id,
+                only_if_missing=True,
+            )
+        )
+        if updated:
+            log.info(
+                "edge extra_data: attached full-screen screenshot to %d content item(s)",
+                updated,
+            )
+    except Exception as exc:
+        log.warning("edge extra_data screenshot attach failed: %s", exc)
 
 
 def _edge_extra_should_return_items(step: Dict[str, Any], collection: Any) -> bool:
@@ -249,6 +380,89 @@ def _resolve_user_id_for_edge(serial: str, scenario: Dict[str, Any]) -> str | No
         return None
 
 
+def _resolve_org_id_for_edge(serial: str, scenario: Dict[str, Any]) -> str | None:
+    raw = scenario.get("_org_id") or scenario.get("org_id")
+    if raw:
+        text = str(raw).strip()
+        if text:
+            return text
+    campaign_vars = scenario.get("_campaign_vars") or {}
+    if isinstance(campaign_vars, dict):
+        cv_org = campaign_vars.get("__ORG_ID__") or campaign_vars.get("org_id")
+        if cv_org:
+            text = str(cv_org).strip()
+            if text:
+                return text
+    user_id = _resolve_user_id_for_edge(serial, scenario)
+    if user_id:
+        try:
+            from db.database import run_activity_coro, activity_session
+            from db.crud.content import resolve_org_id
+
+            async def _resolve_from_user():
+                async with activity_session() as db:
+                    return await resolve_org_id(db, user_id=user_id)
+
+            org = run_activity_coro(_resolve_from_user())
+            if org:
+                return str(org)
+        except Exception:
+            pass
+    return None
+
+
+def _edge_persist_fk_context(scenario: Dict[str, Any], serial: str) -> dict[str, Any]:
+    """FK-safe fields forwarded to agent-boot for direct content_items writes."""
+    execution_id = scenario.get("_execution_id") or scenario.get("execution_id") or scenario.get("run_id")
+    exec_text = str(execution_id).strip() if execution_id else None
+    return {
+        "execution_id": exec_text,
+        "campaign_id": _resolve_campaign_id_for_edge(scenario),
+        "user_id": _resolve_user_id_for_edge(serial, scenario),
+        "org_id": _resolve_org_id_for_edge(serial, scenario),
+    }
+
+
+def _resolve_campaign_id_for_edge(scenario: Dict[str, Any]) -> str | None:
+    execution_id = (
+        scenario.get("_execution_id")
+        or scenario.get("execution_id")
+        or scenario.get("run_id")
+    )
+    exec_id = str(execution_id).strip() if execution_id else None
+
+    # When upstream already resolved FK-safe campaign (e.g. Temporal execute_extract),
+    # honor explicit None — do not fall back to stale workflow campaign_id.
+    if "_campaign_id" in scenario:
+        pre = scenario.get("_campaign_id")
+        if not pre:
+            return None
+        campaign_id = str(pre).strip() or None
+    else:
+        raw = scenario.get("campaign_id")
+        campaign_id = str(raw).strip() if raw else None
+
+    if not campaign_id and not exec_id:
+        return None
+
+    try:
+        from db.database import run_activity_coro, activity_session
+        from services.content.campaign_ref import resolve_persist_campaign_id
+
+        async def _resolve():
+            async with activity_session() as db:
+                return await resolve_persist_campaign_id(
+                    db,
+                    campaign_id=campaign_id,
+                    execution_id=exec_id,
+                )
+
+        return run_activity_coro(_resolve())
+    except Exception as exc:
+        log.warning("edge extra_data: campaign_id resolve failed: %s", exc)
+        return None
+
+
 def request_edge_extra_data(
     *,
     device: Any,
@@ -258,6 +472,7 @@ def request_edge_extra_data(
     step: Dict[str, Any],
     strategy: str,
     result: Dict[str, Any],
+    cancel_event: Any = None,
 ) -> bool:
     has_edge_flag = "edge_extra_data" in step
     explicit_enabled = (
@@ -272,6 +487,11 @@ def request_edge_extra_data(
         return False
     if strategy not in EDGE_CONTENT_STRATEGIES:
         return False
+    if cancel_event is not None and cancel_event.is_set():
+        result["ok"] = False
+        result["message"] = f"edge extra_data {strategy}: cancelled"
+        result["cancelled"] = True
+        return True
     collection = step.get("collection")
     if not _relay_extra_data_available(device):
         result["ok"] = False
@@ -289,9 +509,21 @@ def request_edge_extra_data(
     parent_post_id_var = step.get("parent_post_id_var")
     parent_post_id = ctx.get(parent_post_id_var) if parent_post_id_var else ctx.get("_fb_comment_parent_pid")
     parent_var = step.get("save_parent_id_var") or step.get("parent_id_var")
-    parent_id = ctx.get("_edge_comment_parent_base_hash") if strategy == "fb_comments" else None
-    if parent_id is None and parent_var:
-        parent_id = ctx.get(parent_var)
+    parent_id_already_scoped = False
+    parent_id = None
+    if strategy == "fb_comments":
+        # Prefer tap-scoped hash (matches persisted fb_post row). Base hash uses
+        # comment-target dedupe and must not override the scoped parent_id.
+        parent_id = ctx.get("_active_comment_parent_hash")
+        parent_id_already_scoped = bool(parent_id)
+        if parent_id is None:
+            parent_id = ctx.get("_edge_comment_parent_base_hash")
+            parent_id_already_scoped = False
+        if parent_id is None and parent_var:
+            parent_id = ctx.get(parent_var)
+            parent_id_already_scoped = bool(parent_id)
+    if strategy == "fb_posts" and step.get("dedupe_field"):
+        ctx["_fb_posts_dedupe_field"] = step.get("dedupe_field")
     return_items = _edge_extra_should_return_items(step, collection)
     comment_defaults: dict[str, Any] = {}
     if strategy in COMMENT_STRATEGIES:
@@ -302,9 +534,7 @@ def request_edge_extra_data(
     context = {
         "schema_version": 1,
         "context_id": scenario.get("_execution_id") or scenario.get("_run_hash_scope") or serial,
-        "execution_id": scenario.get("_execution_id"),
-        "campaign_id": scenario.get("_campaign_id"),
-        "user_id": _resolve_user_id_for_edge(serial, scenario),
+        **_edge_persist_fk_context(scenario, serial),
         "device_serial": serial,
         "collection": collection,
         "platform": _platform_for_strategy(strategy, step),
@@ -315,8 +545,16 @@ def request_edge_extra_data(
         "tags": step.get("tags", ""),
         "item_level": int(step.get("item_level") or (1 if strategy in COMMENT_STRATEGIES else 0)),
         "parent_id": parent_id,
+        "parent_id_already_scoped": parent_id_already_scoped,
         "parent_post_id": parent_post_id,
+        "parent_context_source": ctx.get("_active_comment_parent_source"),
         "post_key": step.get("post_key") or ctx.get("last_post_key"),
+        "_post_id_map": ctx.get("_post_id_map"),
+        "_fb_posts_dedupe_field": ctx.get("_fb_posts_dedupe_field"),
+        "posts_dedupe_field": ctx.get("_fb_posts_dedupe_field")
+        or step.get("posts_dedupe_field"),
+        "posts": ctx.get("posts"),
+        "_active_comment_parent_anchor": ctx.get("_active_comment_parent_anchor"),
         "max_items": int(
             step.get("max_items")
             or comment_defaults.get("max_items")
@@ -327,6 +565,8 @@ def request_edge_extra_data(
         "return_items": return_items,
         "package_name": step.get("package_name") or step.get("current_package") or "",
     }
+    if _env_bool("DEVICE_FARM_CONTENT_IMAGES_ENABLED", False):
+        context["capture_screenshot"] = True
     for key, val in comment_defaults.items():
         context.setdefault(key, val)
     for key in (
@@ -353,6 +593,12 @@ def request_edge_extra_data(
         "expand_see_more_xml_fallback",
         "expand_selector_timeout_s",
         "hierarchy_compressed",
+        "open_post_before_extract",
+        "open_post_press_back_after_extract",
+        "open_post_tap_settle_s",
+        "open_post_max_attempts",
+        "open_post_verify",
+        "require_verified_parent",
         "allow_a11y_xml_fallback",
     ):
         if key in step:
@@ -361,31 +607,39 @@ def request_edge_extra_data(
         context["expand_see_more"] = False
     elif "expand_see_more" in step:
         context["expand_see_more"] = step["expand_see_more"]
-    if strategy not in COMMENT_STRATEGIES and "expand_see_more" not in context:
+    if strategy not in COMMENT_STRATEGIES:
         from services.extract_profiles import DEFAULT_EXTRACT_PROFILE, get_profile_defaults
         from services.scenario_step_contract import resolve_extract_profile
 
         profile_name = resolve_extract_profile(step)
-        expand_defaults = get_profile_defaults(profile_name, strategy)
-        if not expand_defaults and strategy.endswith("_posts"):
-            expand_defaults = get_profile_defaults(profile_name, "fb_posts")
-        for ek, ev in expand_defaults.items():
+        profile_defaults = get_profile_defaults(profile_name, strategy)
+        if not profile_defaults and strategy.endswith("_posts"):
+            profile_defaults = get_profile_defaults(profile_name, "fb_posts")
+        for ek, ev in (profile_defaults or {}).items():
             context.setdefault(ek, ev)
-        context.setdefault("expand_see_more", True)
-        context.setdefault("expand_see_more_fast", True)
-        context.setdefault("expand_completion_retries", 1)
-        context.setdefault("expand_see_more_wall_s", 18)
+        if "expand_see_more" not in context:
+            context.setdefault("expand_see_more", True)
+            context.setdefault("expand_see_more_fast", True)
+            context.setdefault("expand_completion_retries", 1)
+            context.setdefault("expand_see_more_wall_s", 18)
     timeout = float(step.get("edge_extra_timeout_s") or os.environ.get("EDGE_EXTRA_TIMEOUT_S", "60"))
     try:
         summary = device.request_extra_data_xml(
             strategy=strategy,
             context=context,
             timeout=timeout,
+            cancel_event=cancel_event,
         )
     except Exception as exc:
         log.warning("[%s] edge extra_data failed before request: %s", serial, exc)
         return False
     if not summary.get("ok"):
+        if summary.get("cancelled"):
+            result["ok"] = False
+            result["message"] = f"edge extra_data {strategy}: cancelled"
+            result["edge_extra_summary"] = summary
+            result["cancelled"] = True
+            return True
         log.warning("[%s] edge extra_data failed: %s", serial, summary.get("error") or summary)
         result["ok"] = False
         result["message"] = f"edge extra_data failed: {summary.get('error') or 'unknown'}"
@@ -395,14 +649,39 @@ def request_edge_extra_data(
     parsed_count = int(ingest.get("parsed_count", 0) or 0)
     inserted_count = int(ingest.get("inserted_count", 0) or 0)
     duplicate_count = int(ingest.get("duplicate_count", 0) or 0)
+    if collection and parsed_count > 0 and (
+        ingest.get("screenshot_b64") or ingest.get("batch_content_hashes")
+    ):
+        _attach_edge_content_screenshots(
+            device=device,
+            ingest=ingest,
+            collection=str(collection),
+            execution_id=scenario.get("_execution_id") or scenario.get("_run_hash_scope"),
+            user_id=(scenario.get("_campaign_vars") or {}).get("__USER_ID__") or scenario.get("user_id"),
+        )
     result["extracted"] = inserted_count if collection else parsed_count
     result["duplicate_count"] = duplicate_count
     edge_extra_summary = ingest
     if not return_items and isinstance(ingest.get("items"), list):
-        edge_extra_summary = {k: v for k, v in ingest.items() if k != "items"}
+        edge_extra_summary = {
+            k: v
+            for k, v in ingest.items()
+            if k not in ("items", "screenshot_b64")
+        }
         edge_extra_summary["items_omitted"] = len(ingest["items"])
+    elif isinstance(edge_extra_summary, dict):
+        edge_extra_summary = {
+            k: v for k, v in edge_extra_summary.items() if k != "screenshot_b64"
+        }
     result["edge_extra_summary"] = edge_extra_summary
     result["reason_code"] = ((ingest.get("diagnostic") or {}) if isinstance(ingest.get("diagnostic"), dict) else {}).get("reason_code", "ok")
+    if strategy == "fb_posts":
+        pid_map = ingest.get("post_id_map") if isinstance(ingest.get("post_id_map"), dict) else None
+        if pid_map:
+            merged = ctx.setdefault("_post_id_map", {})
+            if isinstance(merged, dict):
+                merged.update(pid_map)
+        _remember_active_comment_parent(ctx, ingest)
     items = ingest.get("items") if return_items and isinstance(ingest.get("items"), list) else []
     if items:
         _store_returned_items(ctx, strategy, step, items)
@@ -440,25 +719,47 @@ def request_edge_comment_target(
     scenario: Dict[str, Any],
     step: Dict[str, Any],
     result: Dict[str, Any],
+    cancel_event: Any = None,
 ) -> dict[str, Any] | None:
     if not _relay_extra_data_available(device):
         result["ok"] = False
         result["message"] = "tap_fb_comment_button: no relay for device"
         return None
+    if cancel_event is not None and cancel_event.is_set():
+        result["ok"] = False
+        result["message"] = "tap_fb_comment_button: cancelled"
+        result["cancelled"] = True
+        return None
     context = {
         "schema_version": 1,
         "context_id": scenario.get("_execution_id") or scenario.get("_run_hash_scope") or serial,
-        "execution_id": scenario.get("_execution_id"),
-        "campaign_id": scenario.get("_campaign_id"),
-        "user_id": _resolve_user_id_for_edge(serial, scenario),
+        **_edge_persist_fk_context(scenario, serial),
         "device_serial": serial,
         "hash_scope": scenario.get("_run_hash_scope") or scenario.get("_execution_id"),
         "dedupe_field": step.get("dedupe_field") or "post_key",
+        "posts_dedupe_field": ctx.get("_fb_posts_dedupe_field")
+        or step.get("posts_dedupe_field")
+        or "text",
         "source_index": int(ctx.get("_loop_iter", 0) or 0),
         "switch_to_all_comments": bool(step.get("switch_to_all_comments", True)),
         "post_tap_wait_s": float(step.get("post_tap_wait_s", 0.8) or 0.8),
         "comment_filter_step_pause_s": float(step.get("comment_filter_step_pause_s", 0.45) or 0.45),
+        "comment_filter_post_select_s": float(step.get("comment_filter_post_select_s", 0.85) or 0.85),
     }
+    for ctx_key in (
+        "comment_target_verify",
+        "comment_recover_chrome",
+        "comment_target_verify_max_retries",
+        "comment_target_center_y_ratio",
+        "comment_target_band_low",
+        "comment_target_band_high",
+        "comment_target_u2_click",
+        "comment_sheet_u2_wait",
+        "comment_sheet_wait_s",
+        "comment_target_click_timeout_s",
+    ):
+        if ctx_key in step:
+            context[ctx_key] = step[ctx_key]
     timeout = float(
         step.get("edge_extra_timeout_s")
         or os.environ.get("EDGE_COMMENT_TARGET_TIMEOUT_S", "12")
@@ -469,6 +770,7 @@ def request_edge_comment_target(
             strategy=strategy,
             context=context,
             timeout=timeout,
+            cancel_event=cancel_event,
         )
     except Exception as exc:
         result["ok"] = False
@@ -497,6 +799,7 @@ def run_edge_comment_filter_switch(
     scenario: Dict[str, Any],
     step: Dict[str, Any],
     result: Dict[str, Any],
+    cancel_event: Any = None,
 ) -> Dict[str, Any]:
     """Drive FB comment sort sheet via agent-boot (open sheet, tap chosen option)."""
     target_filter = resolve_step_comment_filter(step)
@@ -513,19 +816,22 @@ def run_edge_comment_filter_switch(
     if not _relay_extra_data_available(device):
         report["reason_code"] = "no_relay"
         return report
+    if cancel_event is not None and cancel_event.is_set():
+        report["reason_code"] = "cancelled"
+        report["cancelled"] = True
+        return report
 
     wait_s = float(step.get("post_tap_wait_s", 0.8) or 0.8)
     context = {
         "schema_version": 1,
         "context_id": scenario.get("_execution_id") or scenario.get("_run_hash_scope") or serial,
-        "execution_id": scenario.get("_execution_id"),
-        "campaign_id": scenario.get("_campaign_id"),
-        "user_id": _resolve_user_id_for_edge(serial, scenario),
+        **_edge_persist_fk_context(scenario, serial),
         "device_serial": serial,
         "comment_filter": target_filter,
         "switch_to_all_comments": True,
         "post_tap_wait_s": wait_s,
         "comment_filter_step_pause_s": float(step.get("comment_filter_step_pause_s", 0.45) or 0.45),
+        "comment_filter_post_select_s": float(step.get("comment_filter_post_select_s", 0.85) or 0.85),
     }
     timeout = float(
         step.get("edge_extra_timeout_s")
@@ -543,6 +849,7 @@ def run_edge_comment_filter_switch(
                 strategy="fb_comment_filter_apply",
                 context=context,
                 timeout=apply_timeout,
+                cancel_event=cancel_event,
             )
         except Exception as exc:
             report["reason_code"] = "request_failed"
@@ -568,6 +875,7 @@ def run_edge_comment_filter_switch(
                 strategy="fb_comment_filter_next",
                 context=context,
                 timeout=timeout,
+                cancel_event=cancel_event,
             )
         except Exception as exc:
             report["reason_code"] = "request_failed"
@@ -624,6 +932,7 @@ def _try_edge_extra_data(sc: ScenarioContext, step: Dict[str, Any], strategy: st
         step=step,
         strategy=strategy,
         result=result,
+        cancel_event=sc.cancel_event,
     )
 
 @register_step("extract")
@@ -654,19 +963,47 @@ def handle_extract_text_hierarchy(sc: ScenarioContext, step: Dict[str, Any], idx
         result["message"] = "extract_text_hierarchy: missing save_as"
         return
     try:
-        from runtime.extraction.hierarchy_extractor import HierarchyExtractor
-        xml = sc.device.hierarchy_xml(force_refresh=True)
-        if not xml:
-            result["ok"] = False
-            result["message"] = "No hierarchy XML available"
-            return
+        from services.content.extraction.capture_service import ExtractionCaptureService
+        from services.content.extraction.hierarchy.service import HierarchyService
+        from services.content.extraction.models import CaptureError, StrategyMismatchError
+        from services.content.extraction.scenario_bridge import (
+            execution_capture_ctx,
+            run_extraction_async,
+            should_persist_artifact,
+        )
+
+        exec_ctx = execution_capture_ctx(sc, idx, "hierarchy_snapshot")
+        persist = should_persist_artifact(sc, step) and exec_ctx is not None
+
+        async def _run():
+            svc = HierarchyService(ExtractionCaptureService())
+            return await svc.extract(
+                sc.device,
+                "screen_data",
+                config={
+                    "filter_class": step.get("filter_class"),
+                    "exclude_empty": step.get("exclude_empty", True),
+                },
+                persist=persist,
+                execution_ctx=exec_ctx,
+            )
+
+        hr = run_extraction_async(_run())
+        items = hr.data if isinstance(hr.data, list) else [hr.data]
         fmt = step.get("format", "text")
-        items = HierarchyExtractor.extract_texts(xml, filter_class=step.get("filter_class"), exclude_empty=step.get("exclude_empty", True))
         if fmt == "json":
             sc.var_ctx.set(save_as, items)
         else:
-            sc.var_ctx.set(save_as, "\n".join(i["text"] for i in items if i.get("text")))
+            sc.var_ctx.set(
+                save_as,
+                "\n".join(i["text"] for i in items if isinstance(i, dict) and i.get("text")),
+            )
         result["message"] = f"Extracted {len(items)} text elements"
+        if hr.raw_data.get("artifact_id"):
+            result["artifact_id"] = hr.raw_data["artifact_id"]
+    except (CaptureError, StrategyMismatchError) as exc:
+        result["ok"] = False
+        result["message"] = f"extract_text_hierarchy failed: {exc}"
     except Exception as exc:
         result["ok"] = False
         result["message"] = f"extract_text_hierarchy failed: {exc}"
@@ -680,18 +1017,49 @@ def handle_extract_text_ocr(sc: ScenarioContext, step: Dict[str, Any], idx: int,
         result["message"] = "extract_text_ocr: missing save_as"
         return
     try:
-        from runtime.extraction.ocr_engine import OCREngine
-        frame = sc.device.take_screenshot()
-        if not frame:
-            result["ok"] = False
-            result["message"] = "No screenshot available for OCR"
-            return
-        ocr = OCREngine()
-        text = ocr.extract_text(frame, language=step.get("language", "eng"), region=step.get("region"),
-                                psm=int(step.get("psm", 11)), preprocess=step.get("preprocess", True),
-                                scale_factor=float(step.get("scale_factor", 2.0)))
+        from services.content.extraction.capture_service import ExtractionCaptureService
+        from services.content.extraction.models import CaptureError, OCRError
+        from services.content.extraction.ocr_service import OCRService
+        from services.content.extraction.scenario_bridge import (
+            capture_screenshot_async,
+            execution_capture_ctx,
+            map_ocr_languages,
+            run_extraction_async,
+            should_persist_artifact,
+        )
+
+        exec_ctx = execution_capture_ctx(sc, idx, "screenshot_ocr")
+        persist = should_persist_artifact(sc, step) and exec_ctx is not None
+        region = step.get("region")
+
+        async def _run():
+            capture = ExtractionCaptureService()
+            handle = await capture_screenshot_async(
+                capture,
+                sc.device,
+                region=region,
+                persist=persist,
+                execution_ctx=exec_ctx,
+            )
+            ocr = OCRService(confidence_threshold=float(step.get("confidence_threshold", 0.5)))
+            langs = map_ocr_languages(step.get("languages") or step.get("language", "eng"))
+            ocr_result = await ocr.extract(
+                handle.image_bytes,
+                lang=langs,
+                region=region,
+                confidence_threshold=float(step.get("confidence_threshold", 0.5)),
+            )
+            return ocr_result, handle.artifact_id
+
+        ocr_result, artifact_id = run_extraction_async(_run())
+        text = "\n".join(r["text"] for r in ocr_result.results if r.get("text"))
         sc.var_ctx.set(save_as, text)
         result["message"] = f"OCR extracted {len(text)} chars"
+        if artifact_id:
+            result["artifact_id"] = artifact_id
+    except (CaptureError, OCRError) as exc:
+        result["ok"] = False
+        result["message"] = f"extract_text_ocr failed: {exc}"
     except Exception as exc:
         result["ok"] = False
         result["message"] = f"extract_text_ocr failed: {exc}"
@@ -734,24 +1102,76 @@ def handle_extract_screen_data(sc: ScenarioContext, step: Dict[str, Any], idx: i
     extracted = None
     source = ""
     try:
+        from services.content.extraction.capture_service import ExtractionCaptureService
+        from services.content.extraction.hierarchy.service import HierarchyService
+        from services.content.extraction.models import CaptureError, OCRError, StrategyMismatchError
+        from services.content.extraction.ocr_service import OCRService
+        from services.content.extraction.scenario_bridge import (
+            capture_screenshot_async,
+            execution_capture_ctx,
+            map_ocr_languages,
+            run_extraction_async,
+            should_persist_artifact,
+        )
+
+        persist = should_persist_artifact(sc, step)
+
         if strategy in ("auto", "hierarchy"):
-            from runtime.extraction.hierarchy_extractor import HierarchyExtractor
-            xml = sc.device.hierarchy_xml(force_refresh=True)
-            if xml:
-                items = HierarchyExtractor.extract_texts(xml, exclude_empty=True)
+            exec_ctx = execution_capture_ctx(sc, idx, "hierarchy_snapshot")
+            hierarchy_persist = persist and exec_ctx is not None
+
+            async def _hierarchy():
+                svc = HierarchyService(ExtractionCaptureService())
+                return await svc.extract(
+                    sc.device,
+                    "screen_data",
+                    config={"exclude_empty": True},
+                    persist=hierarchy_persist,
+                    execution_ctx=exec_ctx,
+                )
+
+            try:
+                hr = run_extraction_async(_hierarchy())
+                items = hr.data if isinstance(hr.data, list) else []
                 if items:
-                    extracted = "\n".join(i["text"] for i in items if i.get("text"))
+                    extracted = "\n".join(
+                        i["text"] for i in items if isinstance(i, dict) and i.get("text")
+                    )
                     source = "hierarchy"
+                    if hr.raw_data.get("artifact_id"):
+                        result["artifact_id"] = hr.raw_data["artifact_id"]
+            except StrategyMismatchError:
+                pass
+
         if extracted is None and strategy in ("auto", "ocr"):
-            from runtime.extraction.ocr_engine import OCREngine
-            frame = sc.device.take_screenshot()
-            if frame:
-                ocr = OCREngine()
-                if ocr.available:
-                    text = ocr.extract_text(frame, language=step.get("language", "eng"), psm=11)
-                    if text and len(text) > 3:
-                        extracted = text
-                        source = "ocr"
+            ocr_ctx = execution_capture_ctx(sc, idx, "screenshot_ocr")
+            ocr_persist = persist and ocr_ctx is not None
+
+            async def _ocr():
+                capture = ExtractionCaptureService()
+                handle = await capture_screenshot_async(
+                    capture,
+                    sc.device,
+                    region=None,
+                    persist=ocr_persist,
+                    execution_ctx=ocr_ctx,
+                )
+                ocr = OCRService()
+                langs = map_ocr_languages(step.get("language", "eng"))
+                ocr_result = await ocr.extract(handle.image_bytes, lang=langs)
+                text = "\n".join(r["text"] for r in ocr_result.results if r.get("text"))
+                return text, handle.artifact_id
+
+            try:
+                text, artifact_id = run_extraction_async(_ocr())
+                if text and len(text) > 3:
+                    extracted = text
+                    source = "ocr"
+                    if artifact_id:
+                        result["artifact_id"] = artifact_id
+            except (CaptureError, OCRError):
+                pass
+
         if extracted is None and strategy in ("auto", "ai"):
             from runtime.extraction.ai_vision import AIVisionExtractor
             frame = sc.device.take_screenshot()

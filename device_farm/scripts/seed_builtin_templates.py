@@ -22,6 +22,8 @@ from sqlalchemy import select, update
 from db.database import AsyncSessionLocal
 from db.models.scenario_template import ScenarioTemplate
 from db.models.utils import _uuid as _make_uuid
+from common.graph_compiler import steps_to_graph
+from db.seeds.scenario_templates import repair_builtin_templates_to_sequence
 
 # ── Template definitions ───────────────────────────────────────────────────────
 
@@ -89,6 +91,7 @@ async def run(dry_run: bool = False) -> None:
         for tmpl_def in BUILTIN_TEMPLATES:
             name = tmpl_def["name"]
             steps = _load_steps(tmpl_def["steps_file"])
+            nodes, edges = steps_to_graph(steps)
 
             result = await db.execute(
                 select(ScenarioTemplate).where(ScenarioTemplate.name == name)
@@ -108,6 +111,8 @@ async def run(dry_run: bool = False) -> None:
                             steps=steps,
                             variables=tmpl_def["variables"],
                             is_builtin=True,
+                            nodes=nodes,
+                            edges=edges,
                         )
                     )
             else:
@@ -124,10 +129,15 @@ async def run(dry_run: bool = False) -> None:
                             variables=tmpl_def["variables"],
                             is_builtin=True,
                             user_id=None,
+                            nodes=nodes,
+                            edges=edges,
                         )
                     )
 
         if not dry_run:
+            repaired = await repair_builtin_templates_to_sequence(db)
+            if repaired:
+                print(f"  Synced {repaired} builtin template(s) (steps + graph mirror).")
             await db.commit()
             print(f"\nSeeded {len(BUILTIN_TEMPLATES)} template(s).")
         else:

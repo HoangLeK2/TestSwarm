@@ -144,11 +144,11 @@ Bảng dưới chi tiết hơn — liệt kê từng artifact mà contract yêu 
 | Artifact core bắt buộc | Facebook | TikTok | Threads | Instagram |
 |---|---|---|---|---|
 | Platform profile (tại `platforms/*.md`) | Active | Draft | Draft | Draft |
-| Step type platform-specific (action) | Active (`tap_fb_comment_button`, đang thêm canonical `fb_tap_comment_button`) | Chưa có | Chưa có | Chưa có |
-| Extraction strategy | Active (`fb_posts`, `fb_comments`) | Chỉ tên trong draft (`tiktok_videos`, `tiktok_comments`) | Chỉ tên trong draft (`threads_posts`, `threads_comments`) | Chỉ tên trong draft (`ig_media`, `ig_comments`) |
+| Step type platform-specific (action) | Active (`fb_tap_comment_button`, legacy alias `tap_fb_comment_button`) | Chưa có | Chưa có | Chưa có |
+| Extraction strategy | Active (`fb_posts`, `fb_comments`) | Draft metadata (`tiktok_posts`, `tiktok_comments`) | Draft metadata (`threads_posts`, `threads_comments`) | Draft metadata (`ig_posts`, `ig_comments`) |
 | Content type platform-qualified | Active (`fb_post`, `fb_comment`) | Draft (`tiktok_video`, `tiktok_comment`) | Draft (`threads_post`, `threads_comment`) | Draft (`ig_media`, `ig_comment`, `ig_profile`) |
-| Parser implementation | Active | Chưa có | Chưa có | Chưa có |
-| Content persistence với `raw_data` | Active | Chưa có | Chưa có | Chưa có |
+| Parser implementation | Active trong `agent-boot/relay/extra_data/parsers/facebook` | Draft metadata | Draft metadata | Draft metadata |
+| Content persistence với `raw_data` | Active trong `agent-boot/relay/extra_data/writer.py` | Draft metadata, owner là `agent-boot` | Draft metadata, owner là `agent-boot` | Draft metadata, owner là `agent-boot` |
 | Frontend flow editor node | Active | Đang phát triển | Đang phát triển | Đang phát triển |
 | Test (schema + executor + parser + persistence) | Active | Chưa có | Chưa có | Chưa có |
 | Scenario template ví dụ user-facing | Active | Chưa có | Chưa có | Chưa có |
@@ -179,7 +179,7 @@ Phần này minh bạch các giới hạn để có cơ sở đánh giá đúng 
 
 **Content type cũ generic có thể còn tồn tại trong template.** Một số template scenario cũ vẫn lưu content với type `post` hay `comment` generic thay vì `fb_post`, `fb_comment`. Đội Product đang migrate template; trong giai đoạn này, người dựng nên kiểm tra template trước khi dispatch và update content type qualified. Backward compatibility trong query được giữ để không phá báo cáo lịch sử.
 
-**Naming canonical đôi khi đi trước implementation.** Một số tên canonical (vd `fb_tap_comment_button`) đã được công bố trong doc trước khi schema backend, handler, và frontend node hoàn chỉnh. Trong tình huống này, scenario dùng tên canonical chưa implement sẽ bị runtime từ chối. Người dựng nên tra cứu trạng thái thực tế tại bảng artifact (mục 7.2) trước khi áp dụng.
+**Boundary extra data nằm ở agent-boot.** Social-ext trong `device_farm` chỉ khai báo contract, registry/discovery, feature flag, schema step, và điều phối scenario. Parser XML/hierarchy, extra data payload, và cột `raw_data` được xử lý ở `agent-boot/relay/extra_data/*`; code mới không được thêm parser raw XML hoặc persistence raw payload vào `device_farm`.
 
 **Hardening secret và credential nằm ở roadmap thấp.** Một số platform yêu cầu account login với mật khẩu hoặc token; hiện config scenario là free-form JSON và có thể chứa giá trị credential. Đội Product khuyến cáo không thiết kế workflow xoay quanh credential plaintext, nhưng chưa có cơ chế vault-backed reference. Đây là gap SPG-008.
 

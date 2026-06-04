@@ -67,7 +67,7 @@ export function OrganizationListPage() {
 
       <div className='flex flex-col gap-3 sm:flex-row sm:items-center'>
         <div className='relative flex-1'>
-          <Search className='absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground' />
+          <Search className='absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground' />
           <Input
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
@@ -92,7 +92,9 @@ export function OrganizationListPage() {
       ) : error ? (
         <p className='text-sm text-destructive'>{tOrg('messages.loadError')}</p>
       ) : rows.length === 0 ? (
-        <p className='text-sm text-muted-foreground'>{t('noOrganizationsFound')}</p>
+        <p className='text-sm text-muted-foreground'>
+          {t('noOrganizationsFound')}
+        </p>
       ) : (
         <div className='overflow-hidden rounded-xl border border-border'>
           <div className='divide-y divide-border'>

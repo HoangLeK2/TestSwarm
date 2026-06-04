@@ -61,6 +61,28 @@ function getObjectCoverRect(
   };
 }
 
+function getObjectContainRect(
+  sourceW: number,
+  sourceH: number,
+  displayW: number,
+  displayH: number,
+  align: 'center' | 'bottom'
+): ObjectFitRect {
+  if (sourceW <= 0 || sourceH <= 0 || displayW <= 0 || displayH <= 0) {
+    return { left: 0, top: 0, width: displayW, height: displayH, scale: 1 };
+  }
+  const scale = Math.min(displayW / sourceW, displayH / sourceH);
+  const width = sourceW * scale;
+  const height = sourceH * scale;
+  return {
+    left: (displayW - width) / 2,
+    top: align === 'bottom' ? displayH - height : (displayH - height) / 2,
+    width,
+    height,
+    scale
+  };
+}
+
 interface DeviceScreenProps {
   device: Device;
   wsSend: (obj: object) => void;
@@ -91,8 +113,12 @@ interface DeviceScreenProps {
   captionBelowFrame?: boolean;
   /** Must match Tailwind object-* on img/canvas so taps map to the visible crop. */
   streamCoverAlign?: 'center' | 'bottom';
+  /** Stream fit strategy. `contain` avoids crop on odd aspect-ratio devices. */
+  streamFit?: 'cover' | 'contain';
   /** Read-only preview: disable all interactions with device. */
   interactive?: boolean;
+  /** Hint browser to prioritize MJPEG fetch (control-record mirror). */
+  streamFetchPriority?: 'high' | 'low' | 'auto';
 }
 
 export function DeviceScreen({
@@ -106,7 +132,9 @@ export function DeviceScreen({
   gestureMode,
   captionBelowFrame = false,
   streamCoverAlign = 'bottom',
-  interactive = true
+  streamFit,
+  interactive = true,
+  streamFetchPriority = 'auto'
 }: DeviceScreenProps) {
   const t = useTranslations('devicesFarm');
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -226,11 +254,11 @@ export function DeviceScreen({
   useLayoutEffect(() => {
     if (!streamingMode) return;
     if (streamingMode !== 'continuous') {
-      setScreenStreamOn(true);
+      setScreenStreamOn((prev) => (prev ? prev : true));
       return;
     }
     if (!SHOW_RELAY_SCRCPY_UI_TOGGLE) {
-      setScreenStreamOn(true);
+      setScreenStreamOn((prev) => (prev ? prev : true));
       return;
     }
     const serverWants =
@@ -238,7 +266,7 @@ export function DeviceScreen({
       device.relay_scrcpy_enabled !== null
         ? Boolean(device.relay_scrcpy_enabled)
         : Boolean(streamingAutoAttach ?? true);
-    setScreenStreamOn(serverWants);
+    setScreenStreamOn((prev) => (prev === serverWants ? prev : serverWants));
   }, [
     streamingMode,
     streamingAutoAttach,
@@ -481,26 +509,27 @@ export function DeviceScreen({
   // MJPEG remains the visible baseline so the user does not see a black canvas.
   useEffect(() => {
     if (h264PrimaryMode) {
-      setMjpegEnabled(!h264Active || h264Stalled);
+      const next = !h264Active || h264Stalled;
+      setMjpegEnabled((prev) => (prev === next ? prev : next));
       return;
     }
     if (!isActive) {
-      setMjpegEnabled(false);
+      setMjpegEnabled((prev) => (prev ? false : prev));
       return;
     }
     if (!relayH264Allowed) {
       if (h264StableTimerRef.current) clearTimeout(h264StableTimerRef.current);
-      setMjpegEnabled(true);
+      setMjpegEnabled((prev) => (prev ? prev : true));
       return;
     }
     if (h264Active) {
       if (h264StableTimerRef.current) clearTimeout(h264StableTimerRef.current);
       h264StableTimerRef.current = setTimeout(() => {
-        setMjpegEnabled(false);
+        setMjpegEnabled((prev) => (prev ? false : prev));
       }, 2000);
     } else {
       if (h264StableTimerRef.current) clearTimeout(h264StableTimerRef.current);
-      setMjpegEnabled(true);
+      setMjpegEnabled((prev) => (prev ? prev : true));
     }
     return () => {
       if (h264StableTimerRef.current) clearTimeout(h264StableTimerRef.current);
@@ -535,13 +564,12 @@ export function DeviceScreen({
     if (!isActive || !wsConnected || hasFrame) return;
     ensureWatchSerial(device.serial);
     const idr = setTimeout(() => requestIdr(device.serial), 100);
-    const armMjpeg =
-      h264PrimaryMode
-        ? setTimeout(() => {
-            setMjpegEnabled(true);
-            setMjpegFailed(false);
-          }, 2500)
-        : undefined;
+    const armMjpeg = h264PrimaryMode
+      ? setTimeout(() => {
+          setMjpegEnabled(true);
+          setMjpegFailed(false);
+        }, 2500)
+      : undefined;
     return () => {
       clearTimeout(idr);
       if (armMjpeg) clearTimeout(armMjpeg);
@@ -583,7 +611,25 @@ export function DeviceScreen({
     };
   }, [dh, dw, h264Active, streamSize]);
 
-  /** Mirror CSS object-cover exactly, then convert stream ratio to device pixels. */
+  const resolvedStreamFit = React.useMemo<'cover' | 'contain'>(() => {
+    if (streamFit) return streamFit;
+    // Auto: if aspect ratio differs a lot, prefer contain to avoid aggressive crop.
+    const { sourceW, sourceH } = getCoordinateSpace();
+    if (wrapSize.width <= 0 || wrapSize.height <= 0) return 'cover';
+    if (sourceW <= 0 || sourceH <= 0) return 'cover';
+    const r1 = wrapSize.width / wrapSize.height;
+    const r2 = sourceW / sourceH;
+    const diff = Math.abs(Math.log(r1 / r2));
+    return diff > 0.16 ? 'contain' : 'cover';
+  }, [getCoordinateSpace, streamFit, wrapSize.height, wrapSize.width]);
+
+  // When we choose `contain`, align center to avoid a "pushed down" look
+  // (black bars should be symmetric for best UX).
+  const resolvedAlign = React.useMemo<'center' | 'bottom'>(() => {
+    return resolvedStreamFit === 'contain' ? 'center' : streamCoverAlign;
+  }, [resolvedStreamFit, streamCoverAlign]);
+
+  /** Mirror CSS object-fit exactly, then convert stream ratio to device pixels. */
   const clientToDevice = useCallback(
     (
       displayX: number,
@@ -605,13 +651,22 @@ export function DeviceScreen({
         };
       }
 
-      const fit = getObjectCoverRect(
-        sourceW,
-        sourceH,
-        displayW,
-        displayH,
-        streamCoverAlign
-      );
+      const fit =
+        resolvedStreamFit === 'contain'
+          ? getObjectContainRect(
+              sourceW,
+              sourceH,
+              displayW,
+              displayH,
+              resolvedAlign
+            )
+          : getObjectCoverRect(
+              sourceW,
+              sourceH,
+              displayW,
+              displayH,
+              resolvedAlign
+            );
       const sourceX = clamp((displayX - fit.left) / fit.scale, 0, sourceW);
       const sourceY = clamp((displayY - fit.top) / fit.scale, 0, sourceH);
       const rx = clamp(sourceX / sourceW, 0, 1);
@@ -627,20 +682,29 @@ export function DeviceScreen({
         srcH: sourceH
       };
     },
-    [getCoordinateSpace, streamCoverAlign]
+    [getCoordinateSpace, resolvedAlign, resolvedStreamFit]
   );
 
   const highlightStyle = React.useMemo<React.CSSProperties | undefined>(() => {
     if (!highlightBounds || wrapSize.width <= 0 || wrapSize.height <= 0)
       return undefined;
     const { sourceW, sourceH, targetW, targetH } = getCoordinateSpace();
-    const fit = getObjectCoverRect(
-      sourceW,
-      sourceH,
-      wrapSize.width,
-      wrapSize.height,
-      streamCoverAlign
-    );
+    const fit =
+      resolvedStreamFit === 'contain'
+        ? getObjectContainRect(
+            sourceW,
+            sourceH,
+            wrapSize.width,
+            wrapSize.height,
+            resolvedAlign
+          )
+        : getObjectCoverRect(
+            sourceW,
+            sourceH,
+            wrapSize.width,
+            wrapSize.height,
+            resolvedAlign
+          );
     const [x1, y1, x2, y2] = highlightBounds;
     return {
       left: `${fit.left + (x1 / targetW) * fit.width}px`,
@@ -651,15 +715,23 @@ export function DeviceScreen({
   }, [
     getCoordinateSpace,
     highlightBounds,
-    streamCoverAlign,
+    resolvedStreamFit,
+    resolvedAlign,
     wrapSize.height,
     wrapSize.width
   ]);
 
-  const streamObjectClass =
-    streamCoverAlign === 'bottom'
+  const streamObjectClass = React.useMemo(() => {
+    const pos = resolvedAlign === 'bottom' ? 'bottom' : 'center';
+    if (resolvedStreamFit === 'contain') {
+      return pos === 'bottom'
+        ? 'object-contain object-bottom'
+        : 'object-contain object-center';
+    }
+    return pos === 'bottom'
       ? 'object-cover object-bottom'
       : 'object-cover object-center';
+  }, [resolvedAlign, resolvedStreamFit]);
 
   const requestStreamRefreshAfterInput = useCallback(() => {
     if (!isActive || !relayH264Allowed) return;
@@ -878,6 +950,8 @@ export function DeviceScreen({
             ref={imageRef}
             src={mjpegUrl}
             alt={`${device.brand} ${device.model}`}
+            fetchPriority={streamFetchPriority}
+            decoding='async'
             className={`absolute inset-0 h-full w-full ${streamObjectClass} transition-opacity duration-500 ${h264Active ? 'pointer-events-none opacity-0' : 'opacity-100'}`}
             onLoad={() => {
               setHasFrame(true);
@@ -896,6 +970,14 @@ export function DeviceScreen({
           ref={canvasRef}
           className={`pointer-events-none absolute inset-0 h-full w-full ${streamObjectClass} transition-opacity duration-500 ${h264Active ? 'opacity-100' : 'opacity-0'}`}
         />
+
+        {/* Solid placeholder — contentful paint before stream; avoids tiny text becoming LCP. */}
+        {isActive && !hasFrame && (
+          <div
+            className='absolute inset-0 bg-gradient-to-b from-zinc-700 to-zinc-900'
+            aria-hidden
+          />
+        )}
 
         {/* Highlight bounds overlay for XML tree node selection */}
         {highlightBounds && dw > 0 && dh > 0 && (
@@ -926,24 +1008,21 @@ export function DeviceScreen({
 
         {!hasFrame && isActive && (
           <div
-            className='absolute inset-0 flex items-center justify-center text-xs text-muted-foreground'
+            className='absolute inset-0 flex items-center justify-center'
             style={{ pointerEvents: 'none' }}
+            aria-live='polite'
           >
-            <div className='flex flex-col items-center gap-2 rounded-md bg-black/40 px-3 py-2 backdrop-blur-[1px]'>
-              {!isUnresponsive && (
-                <div className='h-4 w-4 animate-spin rounded-full border-2 border-zinc-400 border-t-transparent' />
-              )}
-              <div className='text-[11px] text-zinc-200'>
-                {isUnresponsive
-                  ? t('streamUnresponsive')
-                  : wsConnected
-                    ? t('streamWaitingFirstFrame')
-                    : t('streamConnecting')}
-              </div>
-              <div className='text-[10px] text-zinc-400'>
-                {loadingElapsedSec}s
-              </div>
-            </div>
+            <span className='sr-only'>
+              {isUnresponsive
+                ? t('streamUnresponsive')
+                : wsConnected
+                  ? t('streamWaitingFirstFrame')
+                  : t('streamConnecting')}
+              {loadingElapsedSec > 0 ? ` (${loadingElapsedSec}s)` : ''}
+            </span>
+            {!isUnresponsive && (
+              <div className='h-5 w-5 animate-spin rounded-full border-2 border-zinc-400/80 border-t-transparent' />
+            )}
           </div>
         )}
         {!isActive && (

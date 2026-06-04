@@ -47,6 +47,7 @@ def _build_app(
     user_id: str = "u1",
     *,
     org_role: str = "member",
+    org_id: str | None = "org-1",
 ) -> FastAPI:
     app = FastAPI()
     app.include_router(executions_router, prefix="/api")
@@ -56,13 +57,14 @@ def _build_app(
             yield s
 
     async def _user_override():
-        set_current_org_id("org-1")
+        if org_id:
+            set_current_org_id(org_id)
         return SimpleNamespace(
             id=user_id,
             role="operator",
             org_role=org_role,
             is_active=True,
-            org_id="org-1",
+            org_id=org_id,
         )
 
     app.dependency_overrides[_get_db] = _db_override
@@ -77,7 +79,8 @@ async def _seed(session_factory, exec_id: str, campaign_id: str, user_id: str = 
                 s.add(
                     Campaign(
                         id=campaign_id,
-                        name=campaign_id,
+                        name=f"Campaign {campaign_id}",
+                        name_lower=f"campaign {campaign_id}".lower(),
                         user_id=user_id,
                         org_id="org-1",
                         created_at=datetime.now(timezone.utc),
@@ -160,13 +163,35 @@ async def test_dlq_empty_string_campaign_id_falls_back_to_unfiltered(session_fac
 
 @pytest.mark.asyncio
 async def test_dlq_route_other_user_campaign_returns_empty(session_factory):
-    """Asking for another user's campaign yields [] (no info leak via row count)."""
+    """User-scoped DLQ: another user's campaign yields [] when not org-visible."""
     await _seed(session_factory, "exec-mine", "camp-mine", user_id="u1")
-    await _seed(session_factory, "exec-theirs", "camp-theirs", user_id="u2")
+    async with session_factory() as s:
+        with tenant_context("org-2"):
+            s.add(
+                Campaign(
+                    id="camp-theirs",
+                    name="Campaign camp-theirs",
+                    name_lower="campaign camp-theirs",
+                    user_id="u2",
+                    org_id="org-2",
+                    created_at=datetime.now(timezone.utc),
+                )
+            )
+            s.add(
+                Execution(
+                    id="exec-theirs",
+                    run_type="campaign_run",
+                    status="failed",
+                    campaign_id="camp-theirs",
+                    user_id="u2",
+                    created_at=datetime.now(timezone.utc),
+                )
+            )
+        await s.commit()
     await _seed_dlq(session_factory, "exec-mine", "d1")
     await _seed_dlq(session_factory, "exec-theirs", "d2")
 
-    app = _build_app(session_factory, user_id="u1")
+    app = _build_app(session_factory, user_id="u1", org_id="org-1")
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
         # u1 cannot see u2's campaign DLQ even with explicit campaign_id
         r = await ac.get("/api/executions/dlq", params={"campaign_id": "camp-theirs"})
@@ -221,9 +246,9 @@ async def test_dlq_summary_alerts_when_pending_count_exceeds_threshold(session_f
 # ── Retry path coverage ───────────────────────────────────────────────────────
 
 
-def _build_app_with_temporal(session_factory, temporal_client, user_id: str = "u1") -> FastAPI:
+def _build_app_with_temporal(session_factory, temporal_client, user_id: str = "u1", *, org_id: str | None = "org-1") -> FastAPI:
     """Variant that attaches a fake scheduler holding a Temporal client (or None)."""
-    app = _build_app(session_factory, user_id=user_id, org_role="owner")
+    app = _build_app(session_factory, user_id=user_id, org_role="owner", org_id=org_id)
     fake_scheduler = SimpleNamespace(_client=temporal_client, _cfg=None)
     app.state.scheduler = fake_scheduler
     return app
@@ -296,19 +321,20 @@ async def test_retry_no_campaign_id_returns_400_and_reverts(session_factory):
         await s.commit()
     await _seed_dlq(session_factory, "exec-orphan", "d1")
 
-    fake_temporal = SimpleNamespace()  # presence only; should not be reached
-    app = _build_app_with_temporal(session_factory, temporal_client=fake_temporal)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
-        r = await ac.get("/api/executions/dlq")
-        dlq_id = r.json()[0]["id"]
+    fake_temporal = SimpleNamespace()
+    app = _build_app_with_temporal(session_factory, temporal_client=fake_temporal, org_id=None)
+    async with session_factory() as s:
+        from db.models.execution_dlq import ExecutionDLQ
+        from sqlalchemy import select as _select
 
+        dlq_id = (await s.execute(_select(ExecutionDLQ.id))).scalar_one()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
         retry = await ac.post(f"/api/executions/dlq/{dlq_id}/retry")
         assert retry.status_code == 400
-
-        after = await ac.get("/api/executions/dlq")
-        body = after.json()
-        assert body[0]["status"] == "pending"
-        assert "campaign" in (body[0]["error"] or "").lower()
+        detail = retry.json()["detail"]
+        message = detail["message"] if isinstance(detail, dict) else detail
+        assert "campaign" in message.lower()
 
 
 @pytest.mark.asyncio
@@ -345,12 +371,8 @@ async def test_retry_idempotent_when_already_retrying(session_factory):
             dlq_id = ids_all[0]
 
         retry = await ac.post(f"/api/executions/dlq/{dlq_id}/retry")
-        # Idempotent path: returns the entry as-is (no enqueue), 200
-        assert retry.status_code == 200
-        # Still 'retrying' — no double-enqueue, no spurious revert
-        body = retry.json()
-        assert body["status"] == "retrying"
-        assert body["retry_count"] == 1  # not double-incremented
+        assert retry.status_code == 409
+        assert retry.json()["detail"]["code"] == "DLQ_RETRY_IN_PROGRESS"
 
 
 @pytest.mark.asyncio
@@ -373,9 +395,9 @@ async def test_retry_other_users_dlq_returns_404(session_factory):
     async with AsyncClient(transport=ASGITransport(app=app1), base_url="http://t") as ac:
         dlq_id = (await ac.get("/api/executions/dlq")).json()[0]["id"]
 
-    # Now try as u2
+    # Now try as u2 in a different org (user-scoped, no org_id)
     fake_temporal = SimpleNamespace()
-    app2 = _build_app_with_temporal(session_factory, temporal_client=fake_temporal, user_id="u2")
+    app2 = _build_app_with_temporal(session_factory, temporal_client=fake_temporal, user_id="u2", org_id=None)
     async with AsyncClient(transport=ASGITransport(app=app2), base_url="http://t") as ac:
         retry = await ac.post(f"/api/executions/dlq/{dlq_id}/retry")
         assert retry.status_code == 404

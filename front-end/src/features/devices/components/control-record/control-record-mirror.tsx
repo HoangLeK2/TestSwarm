@@ -1,0 +1,141 @@
+'use client';
+
+import { memo, type ReactNode } from 'react';
+import type { Device } from '../../types';
+import { DeviceTile } from '../device-tile';
+import type { DeviceOpsConfig } from '../device-ops-rail';
+
+type Props = {
+  device: Device;
+  logLines: string[];
+  mode: 'tap' | 'swipe';
+  wsSend: (obj: object) => void;
+  onToggleMode: (serial: string) => void;
+  onRestart: (serial: string) => void;
+  onTap?: (rx: number, ry: number) => void;
+  onSwipe?: (
+    rx1: number,
+    ry1: number,
+    rx2: number,
+    ry2: number,
+    durationMs: number
+  ) => void;
+  highlightBounds?: [number, number, number, number] | null;
+  hideControls?: boolean;
+  hideDeviceFunctions?: boolean;
+  readOnlyPreview?: boolean;
+  busyBanner?: ReactNode;
+  /** Mirror scale in multi-phone layouts. */
+  mirrorSize?: 'default' | 'multiCompact' | 'multiFocus';
+  deviceOps?: DeviceOpsConfig;
+};
+
+function deviceMirrorPropsEqual(prev: Props, next: Props) {
+  if (prev.mode !== next.mode) return false;
+  if (prev.onTap !== next.onTap) return false;
+  if (prev.onSwipe !== next.onSwipe) return false;
+  if (prev.wsSend !== next.wsSend) return false;
+  if (prev.onToggleMode !== next.onToggleMode) return false;
+  if (prev.onRestart !== next.onRestart) return false;
+  if (prev.hideControls !== next.hideControls) return false;
+  if (prev.hideDeviceFunctions !== next.hideDeviceFunctions) return false;
+  if (prev.readOnlyPreview !== next.readOnlyPreview) return false;
+  if (prev.busyBanner !== next.busyBanner) return false;
+  if (prev.mirrorSize !== next.mirrorSize) return false;
+  if (prev.deviceOps !== next.deviceOps) return false;
+  if (prev.highlightBounds !== next.highlightBounds) {
+    const pb = prev.highlightBounds;
+    const nb = next.highlightBounds;
+    if (pb == null || nb == null) return pb === nb;
+    if (
+      pb[0] !== nb[0] ||
+      pb[1] !== nb[1] ||
+      pb[2] !== nb[2] ||
+      pb[3] !== nb[3]
+    ) {
+      return false;
+    }
+  }
+  const pd = prev.device;
+  const nd = next.device;
+  return (
+    pd.serial === nd.serial &&
+    pd.state === nd.state &&
+    pd.brand === nd.brand &&
+    pd.model === nd.model &&
+    pd.battery === nd.battery &&
+    pd.current_app === nd.current_app &&
+    pd.screen_width === nd.screen_width &&
+    pd.screen_height === nd.screen_height &&
+    pd.scenario_active === nd.scenario_active &&
+    pd.relay_scrcpy_enabled === nd.relay_scrcpy_enabled
+  );
+}
+
+/** Isolated device mirror — step editor updates must not re-render this column. */
+export const ControlRecordMirror = memo(function ControlRecordMirror({
+  device,
+  logLines,
+  mode,
+  wsSend,
+  onToggleMode,
+  onRestart,
+  onTap,
+  onSwipe,
+  highlightBounds,
+  hideControls,
+  hideDeviceFunctions,
+  readOnlyPreview,
+  busyBanner,
+  mirrorSize = 'default',
+  deviceOps
+}: Props) {
+  const mockupScreenWidth =
+    mirrorSize === 'multiFocus'
+      ? 236
+      : mirrorSize === 'multiCompact'
+        ? 252
+        : 262;
+  const compactPadding = mirrorSize !== 'default';
+
+  return (
+    <div className='flex min-h-0 w-full flex-1 flex-col'>
+      <div
+        className={
+          compactPadding
+            ? 'flex w-full min-w-0 flex-1 justify-center px-2 pt-2'
+            : 'flex w-full flex-1 justify-center px-3 pt-3'
+        }
+      >
+        <div className='mx-auto flex w-fit max-w-full flex-col items-stretch gap-0.5'>
+          <div className='mx-auto w-fit'>
+            <DeviceTile
+              device={device}
+              logLines={logLines}
+              mode={mode}
+              wsSend={wsSend}
+              onToggleMode={onToggleMode}
+              onRestart={onRestart}
+              onTap={onTap}
+              onSwipe={onSwipe}
+              highlightBounds={highlightBounds}
+              hideHeader
+              hideStepMonitor
+              minimalRailControls
+              hideControls={hideControls}
+              hideDeviceFunctions={hideDeviceFunctions}
+              readOnlyPreview={readOnlyPreview}
+              mockupScreenWidth={mockupScreenWidth}
+              streamFetchPriority='high'
+              hideAppCaption={compactPadding}
+              deviceOps={deviceOps}
+            />
+          </div>
+          {busyBanner ? (
+            <div className='-mt-2 w-full'>{busyBanner}</div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}, deviceMirrorPropsEqual);

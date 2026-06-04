@@ -49,13 +49,7 @@ function DetailField({
   );
 }
 
-function OrganizationLogo({
-  src,
-  alt
-}: {
-  src: string;
-  alt: string;
-}) {
+function OrganizationLogo({ src, alt }: { src: string; alt: string }) {
   return (
     <div className='relative size-[72px] shrink-0 overflow-hidden rounded-full border border-border bg-muted'>
       <Image
@@ -126,7 +120,9 @@ export function OrganizationSettingsPage() {
         </>
       ) : isError ? (
         <div className='rounded-xl border border-destructive/30 bg-card p-8 text-center'>
-          <p className='text-sm text-muted-foreground'>{t('messages.loadError')}</p>
+          <p className='text-sm text-muted-foreground'>
+            {t('messages.loadError')}
+          </p>
           <Button
             type='button'
             variant='outline'

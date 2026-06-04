@@ -6,6 +6,8 @@ import { useRouter } from '@/i18n/navigation';
 import { ROUTES } from '@/config/routes';
 import { authApi } from '../services/api';
 
+const CURRENT_ORG_STORAGE_KEY = 'device-farm:current-organization-id';
+
 export function useLogout() {
   const { setUser } = useAuthContext();
   const router = useRouter();
@@ -18,6 +20,9 @@ export function useLogout() {
       // Clear local session even if revoke fails (offline / expired access token).
     }
     tokenStorage.clearTokens();
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem(CURRENT_ORG_STORAGE_KEY);
+    }
     setUser(null);
     router.replace(ROUTES.AUTH.SIGN_IN);
   };

@@ -11,7 +11,7 @@
 | **Module** | DF-MOD-05 — Scheduling |
 | **Priority** | P1 |
 | **Story Points** | 5 |
-| **Status** | `Backlog` |
+| **Status** | `Done` |
 | **Labels** | `module:scheduling`, `layer:backend`, `layer:contract`, `type:feature`, `risk:performance`, `persona:fleet-operator` |
 | **Truy vết — FR refs** | FR-05-01 (mở rộng capacity planning), gap mục 8 concurrency |
 | **Truy vết — UC refs** | UC-05-09 (operator biết được trùng giờ chạy chồng) |

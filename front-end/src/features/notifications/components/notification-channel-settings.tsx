@@ -2,7 +2,15 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import { Bell, ExternalLink, Loader2, Pencil, Plus, Send, Trash2 } from 'lucide-react';
+import {
+  Bell,
+  ExternalLink,
+  Loader2,
+  Pencil,
+  Plus,
+  Send,
+  Trash2
+} from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
 import { Badge } from '@/components/ui/badge';
@@ -74,7 +82,7 @@ function channelToForm(channel?: NotificationChannel): FormState {
   if (!channel) return DEFAULT_FORM;
   return {
     name: channel.name,
-    type: channel.type,
+    type: channel.type as NotificationChannelType,
     enabled: channel.is_enabled,
     events: channel.events?.length ? channel.events : [...NOTIFICATION_EVENTS],
     botToken: String(channel.config?.bot_token ?? ''),
@@ -277,7 +285,7 @@ function ChannelDialog({
         toast.error(t('errors.nameRequired'));
         return;
       }
-      if (payload.events.length === 0) {
+      if ((payload.events ?? []).length === 0) {
         toast.error(t('errors.eventRequired'));
         return;
       }
@@ -428,7 +436,11 @@ function formatEventBadge(
   return t.has(labelKey) ? t(labelKey) : eventName;
 }
 
-export function NotificationChannelSettings() {
+export function NotificationChannelSettings({
+  embedded = false
+}: {
+  embedded?: boolean;
+}) {
   const t = useTranslations('notificationsFeature');
   const { data: channels = [], isLoading, error } = useNotificationChannels();
   const [editing, setEditing] = useState<NotificationChannel | null>(null);
@@ -453,10 +465,18 @@ export function NotificationChannelSettings() {
   return (
     <div className='space-y-6'>
       <div className='flex flex-wrap items-center justify-between gap-3'>
-        <div>
-          <h1 className='text-xl font-semibold tracking-tight'>{t('title')}</h1>
-          <p className='text-sm text-muted-foreground'>{t('subtitle')}</p>
-        </div>
+        {embedded ? (
+          <p className='text-sm text-muted-foreground'>
+            {t('channelsTabHint')}
+          </p>
+        ) : (
+          <div>
+            <h1 className='text-xl font-semibold tracking-tight'>
+              {t('title')}
+            </h1>
+            <p className='text-sm text-muted-foreground'>{t('subtitle')}</p>
+          </div>
+        )}
         {perms.canCreate ? (
           <Button size='sm' onClick={() => setCreateOpen(true)}>
             <Plus size={15} />
@@ -496,7 +516,9 @@ export function NotificationChannelSettings() {
               {sortedChannels.map((channel) => (
                 <TableRow key={channel.id}>
                   <TableCell className='font-medium'>{channel.name}</TableCell>
-                  <TableCell>{typeLabel(channel.type, t)}</TableCell>
+                  <TableCell>
+                    {typeLabel(channel.type as NotificationChannelType, t)}
+                  </TableCell>
                   <TableCell>
                     <div className='flex max-w-[420px] flex-wrap gap-1'>
                       {channel.events.slice(0, 4).map((eventName) => (

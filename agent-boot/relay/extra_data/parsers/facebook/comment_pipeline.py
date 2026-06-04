@@ -49,6 +49,12 @@ def _node_has_comment_button_token(node) -> bool:
 
     if d_cf in exact:
         return True
+    # FB action bar: "Nút Bình luận. Nhấn đúp để xem bình luận."
+    if (d_cf.startswith("nút bình luận") or d_cf.startswith("comment button")) and (
+        "Button" in (node.get("class") or "") or node.get("clickable") == "true"
+    ):
+        if "nút thích" not in d_cf and "react to the comment" not in d_cf:
+            return True
     # Action-bar count badges only — not header stats like "23 bình luận" on comment sheet.
     if re.match(r"^\d+\s+bình luận\b", d_cf) or re.match(r"^bình luận[,.]?\s*\d", d_cf):
         cls = node.get("class") or ""
@@ -84,6 +90,58 @@ def _resolve_comment_button_bounds(node) -> Optional[Tuple[Tuple[int, int, int, 
             if bnds:
                 is_btn = "Button" in (cur.get("class") or "")
                 return bnds, is_btn
+        parent = cur.getparent()
+        if parent is None:
+            break
+        cur = parent
+    return None
+
+
+def build_comment_button_u2_click(node, bounds: Tuple[int, int, int, int]) -> dict[str, Any]:
+    """Build U2 click targets from the clickable comment node (bounds-pinned xpath + selector)."""
+    bounds_str = (node.get("bounds") or "").strip()
+    if not bounds_str:
+        bounds_str = f"[{bounds[0]},{bounds[1]}][{bounds[2]},{bounds[3]}]"
+    text = _norm_fb_ui(node.get("text") or "")
+    desc = _norm_fb_ui(node.get("content-desc") or "")
+    rid = (node.get("resource-id") or "").strip()
+    cls = (node.get("class") or "").strip()
+    xpath = (
+        f'//*[@bounds="{bounds_str}" and '
+        f'(@clickable="true" or contains(@class, "Button"))]'
+    )
+    selector: dict[str, Any] = {"clickable": True}
+    if text:
+        selector["text"] = text
+    elif desc:
+        selector["description"] = desc
+    if rid:
+        selector["resourceId"] = rid
+    if cls:
+        selector["className"] = cls
+    return {
+        "xpath": xpath,
+        "spec": {"xpath": xpath},
+        "selector": selector,
+        "bounds": list(bounds),
+    }
+
+
+def _resolve_comment_button_click_meta(node) -> Optional[dict[str, Any]]:
+    """Resolve tappable comment control metadata for U2 click + bounds fallback."""
+    if not _node_has_comment_button_token(node):
+        return None
+    cur = node
+    for _ in range(12):
+        if _is_tappable_fb_node(cur):
+            bnds = _parse_bounds_from_node(cur)
+            if bnds:
+                is_btn = "Button" in (cur.get("class") or "")
+                return {
+                    "bounds": bnds,
+                    "is_button": is_btn,
+                    "u2_click": build_comment_button_u2_click(cur, bnds),
+                }
         parent = cur.getparent()
         if parent is None:
             break
@@ -408,9 +466,14 @@ def _comment_sheet_composer_top(root) -> Optional[int]:
 
 def detect_comment_sheet_interrupt_reason(root) -> Optional[str]:
     """Return why we left the comment sheet (keyboard, profile, etc.) for recovery."""
+    from .comment_filter import _is_sort_bottom_sheet_open, _looks_like_fb_comment_filter_context
     from .parser import _hierarchy_is_fb_comment_sheet, _normalize_fb_ui_spacing
 
+    if _is_sort_bottom_sheet_open(root):
+        return None
     if not _hierarchy_is_fb_comment_sheet(root):
+        if _looks_like_fb_comment_filter_context(root):
+            return None
         return "left_comment_sheet"
 
     for node in root.iter():
@@ -441,6 +504,260 @@ def detect_comment_sheet_interrupt_from_xml(xml: str) -> Optional[str]:
     if root is None:
         return None
     return detect_comment_sheet_interrupt_reason(root)
+
+
+def _hierarchy_looks_like_fb_post_feed(root) -> bool:
+    """Scrollable feed with action bars — avatar nodes are normal, not profile overlay."""
+    from .shared import XPATH_LIST, XPATH_RECYCLER
+
+    if root is None:
+        return False
+    containers = root.xpath(XPATH_RECYCLER) or root.xpath(XPATH_LIST)
+    if not containers:
+        return False
+    has_scrollable = any(
+        (c.get("scrollable") or "").lower() == "true" for c in containers
+    )
+    if not has_scrollable:
+        return False
+    for node in root.iter("node"):
+        if _node_has_comment_button_token(node):
+            return True
+    return False
+
+
+def is_group_feed_hierarchy(root) -> bool:
+    """True when hierarchy looks like FB group/post feed (not comment sheet or profile)."""
+    from .parser import _hierarchy_is_fb_comment_sheet, _normalize_fb_ui_spacing
+
+    if _hierarchy_is_fb_comment_sheet(root):
+        return False
+    if _hierarchy_looks_like_fb_post_feed(root):
+        for node in root.iter():
+            pkg = node.get("package") or ""
+            if pkg and pkg != "com.facebook.katana":
+                continue
+            text = _normalize_fb_ui_spacing(node.get("text") or "")
+            desc = _normalize_fb_ui_spacing(node.get("content-desc") or "")
+            lowered = f"{text} {desc}".lower()
+            if any(
+                tok in lowered
+                for tok in (
+                    "bạn viết gì",
+                    "what's on your mind",
+                    "nhóm công khai",
+                    "public group",
+                    "chia sẻ với: nhóm",
+                    "shared with: public group",
+                )
+            ):
+                return True
+    for node in root.iter():
+        pkg = node.get("package") or ""
+        if pkg and pkg != "com.facebook.katana":
+            continue
+        text = _normalize_fb_ui_spacing(node.get("text") or "")
+        desc = _normalize_fb_ui_spacing(node.get("content-desc") or "")
+        lowered = f"{text} {desc}".lower()
+        if "bạn viết gì" in lowered or "what's on your mind" in lowered:
+            return True
+        if "nhóm công khai" in lowered or "chia sẻ với: nhóm" in lowered:
+            return True
+    return False
+
+
+def is_group_feed_from_xml(xml: str) -> bool:
+    from .parser import _parse_xml
+
+    root = _parse_xml(xml)
+    if root is None:
+        return False
+    return is_group_feed_hierarchy(root)
+
+
+_GROUP_NAV_CONTEXT_KEYS = (
+    "collection",
+    "scenario_name",
+    "SAVE_COLLECTION",
+    "content_strategy",
+)
+
+
+def context_implies_fb_group_navigation(context: dict[str, Any] | None) -> bool:
+    """True when scenario/collection metadata indicates a FB group crawl."""
+    if not context:
+        return False
+    if context.get("_fb_group_navigation"):
+        return True
+    if context.get("fb_group_id"):
+        return True
+    for key in _GROUP_NAV_CONTEXT_KEYS:
+        blob = str(context.get(key) or "").lower()
+        if not blob:
+            continue
+        if "fb_group" in blob or blob.startswith("fb_group"):
+            return True
+        if "group" in blob and ("fb" in blob or "facebook" in blob):
+            return True
+    return False
+
+
+def note_fb_group_navigation(
+    context: dict[str, Any],
+    xml: str | None = None,
+) -> bool:
+    """Sticky lock: while crawling a FB group, never send system BACK (exits the group)."""
+    if context.get("_fb_group_navigation"):
+        return True
+    if context_implies_fb_group_navigation(context):
+        context["_fb_group_navigation"] = True
+        return True
+    if xml and is_group_feed_from_xml(xml):
+        context["_fb_group_navigation"] = True
+        return True
+    return False
+
+
+def fb_group_navigation_locked(context: dict[str, Any] | None) -> bool:
+    return bool(context and context.get("_fb_group_navigation"))
+
+
+def should_allow_system_back(
+    xml: str | None,
+    context: dict[str, Any] | None = None,
+) -> bool:
+    """Whether a system BACK is safe (dismiss overlay only, not group/comment sheet)."""
+    if fb_group_navigation_locked(context):
+        return False
+    if xml and is_group_feed_from_xml(xml):
+        return False
+    if not xml:
+        return False
+    return detect_transient_overlay_from_xml(xml) is not None
+
+
+def _avatar_desc_is_profile_overlay_context(root) -> bool:
+    """Avatars on feed cards and comment threads are not full-screen profile viewer."""
+    from .parser import _hierarchy_is_fb_comment_sheet
+    from .post_open_pipeline import _hierarchy_has_post_detail_chrome
+
+    if _hierarchy_looks_like_fb_post_feed(root):
+        return False
+    if is_group_feed_hierarchy(root):
+        return False
+    if _hierarchy_is_fb_comment_sheet(root):
+        return False
+    if _hierarchy_has_post_detail_chrome(root):
+        return False
+    return True
+
+
+def detect_transient_overlay_reason(root) -> Optional[str]:
+    """Profile viewer, photo viewer, share sheet — safe to dismiss with BACK."""
+    from .parser import _normalize_fb_ui_spacing, _parse_bounds
+
+    allow_avatar_overlay = _avatar_desc_is_profile_overlay_context(root)
+
+    for node in root.iter():
+        pkg = (node.get("package") or "").lower()
+        if pkg and pkg != "com.facebook.katana":
+            continue
+        text = _normalize_fb_ui_spacing(node.get("text") or "")
+        desc = _normalize_fb_ui_spacing(node.get("content-desc") or "")
+        lowered = f"{text} {desc}".lower()
+        if any(
+            tok in lowered
+            for tok in (
+                "trang cá nhân",
+                "xem trang cá nhân",
+                "view profile",
+            )
+        ):
+            return "profile_overlay"
+        # Feed/comment avatars expose "Ảnh đại diện của …" — not a profile viewer overlay.
+        if allow_avatar_overlay and any(
+            tok in lowered
+            for tok in (
+                "profile picture",
+                "ảnh đại diện của",
+            )
+        ):
+            return "profile_overlay"
+        if any(
+            tok in lowered
+            for tok in (
+                "photo viewer",
+                "xem ảnh",
+                "view photo",
+                "full screen",
+            )
+        ):
+            bounds = _parse_bounds(node)
+            if bounds and (bounds[2] - bounds[0]) >= 800:
+                return "photo_viewer"
+    return None
+
+
+def detect_transient_overlay_from_xml(xml: str) -> Optional[str]:
+    from .parser import _parse_xml
+
+    root = _parse_xml(xml)
+    if root is None:
+        return None
+    return detect_transient_overlay_reason(root)
+
+
+def should_press_back_after_failed_tap(
+    xml: str,
+    context: dict[str, Any] | None = None,
+) -> bool:
+    """Only BACK when we opened a dismissible overlay — never during group crawls."""
+    if fb_group_navigation_locked(context):
+        return False
+    if not xml:
+        return False
+    if is_group_feed_from_xml(xml):
+        return False
+    return detect_transient_overlay_from_xml(xml) is not None
+
+
+def comment_tap_point(
+    bounds: Tuple[int, int, int, int],
+    *,
+    screen_w: int = 1080,
+) -> Tuple[int, int]:
+    """Tap the action-bar Comment control — bias right to miss avatar/name column."""
+    x1, y1, x2, y2 = bounds
+    width = max(1, x2 - x1)
+    min_x = int(screen_w * 0.28)
+    preferred = x1 + int(width * 0.72)
+    cx = max(x1 + 4, min(x2 - 4, preferred))
+    if cx < min_x and x2 > min_x:
+        cx = min(x2 - 4, max(x1 + 4, min_x))
+    cy = (y1 + y2) // 2
+    return cx, cy
+
+
+def interrupt_reason_allows_back(
+    reason: Optional[str],
+    context: dict[str, Any] | None = None,
+) -> bool:
+    """Dismiss IME with BACK only outside FB group navigation (BACK pops the whole group)."""
+    if fb_group_navigation_locked(context):
+        return False
+    return reason == "keyboard_open"
+
+
+FB_COMMENT_SHEET_WAIT_SELECTORS: tuple[dict[str, str], ...] = (
+    {"descriptionContains": "Viết bình luận"},
+    {"descriptionContains": "Write a comment"},
+    {"descriptionContains": "Write a public comment"},
+    {"textContains": "Viết bình luận"},
+    {"textContains": "Phù hợp nhất"},
+    {"textContains": "Most relevant"},
+    {"textContains": "Tất cả bình luận"},
+    {"textContains": "All comments"},
+)
 
 
 def _resolve_comment_region_anchors(root, row_match_pid: Optional[str]) -> Tuple[Optional[int], Optional[int], Optional[int]]:
@@ -516,30 +833,32 @@ def _resolve_comment_region_anchors(root, row_match_pid: Optional[str]) -> Tuple
     return _legacy_last_binh_luan_anchors(root)
 
 
-def _find_binh_luan_button_bounds_in_element(element) -> Optional[Tuple[int, int, int, int]]:
+def _find_comment_button_click_target_in_element(element) -> Optional[dict[str, Any]]:
     from .parser import _parse_bounds
 
     parent_bounds = _parse_bounds(element)
-    best: Optional[Tuple[int, int, int, int]] = None
-    best_y1 = 10**9
-    fallback: Optional[Tuple[int, int, int, int]] = None
-    fallback_y1 = 10**9
+    best: Optional[tuple[int, dict[str, Any]]] = None
+    fallback: Optional[tuple[int, dict[str, Any]]] = None
     for node in element.iter():
-        resolved = _resolve_comment_button_bounds(node)
-        if not resolved:
+        meta = _resolve_comment_button_click_meta(node)
+        if not meta:
             continue
-        bnds, is_btn = resolved
+        bnds = meta["bounds"]
         if not _comment_button_within_post_card(bnds, parent_bounds):
             continue
         y1 = bnds[1]
-        if is_btn:
-            if y1 < best_y1:
-                best_y1 = y1
-                best = bnds
-        elif y1 < fallback_y1:
-            fallback_y1 = y1
-            fallback = bnds
-    return best or fallback
+        if meta.get("is_button"):
+            if best is None or y1 < best[0]:
+                best = (y1, meta)
+        elif fallback is None or y1 < fallback[0]:
+            fallback = (y1, meta)
+    chosen = best or fallback
+    return chosen[1] if chosen else None
+
+
+def _find_binh_luan_button_bounds_in_element(element) -> Optional[Tuple[int, int, int, int]]:
+    hit = _find_comment_button_click_target_in_element(element)
+    return hit["bounds"] if hit else None
 
 
 def resolve_topmost_comment_target_from_xml(
@@ -621,11 +940,12 @@ def _build_comment_candidate(
     )
     from .parser import _collect_text_nodes, _parse_bounds
 
-    btn = _find_binh_luan_button_bounds_in_element(candidate)
+    btn = _find_comment_button_click_target_in_element(candidate)
     if not btn:
         return None
+    comment_bounds = btn["bounds"]
     parent_bounds = _parse_bounds(candidate)
-    if not _comment_button_within_post_card(btn, parent_bounds):
+    if not _comment_button_within_post_card(comment_bounds, parent_bounds):
         return None
     nodes = _collect_text_nodes(candidate, toolbar_cutoff_y=0)
     if not nodes:
@@ -644,7 +964,8 @@ def _build_comment_candidate(
     if not post or not post.get("_pid"):
         return None
     return {
-        "comment_bounds": btn,
+        "comment_bounds": comment_bounds,
+        "comment_u2_click": btn.get("u2_click"),
         "parent_post_bounds": parent_bounds,
         "post": post,
         "feed_item_index": feed_item_index,
@@ -655,23 +976,89 @@ def _comment_candidate_passes_filter(
     cand: Dict[str, Any],
     *,
     screen_h: int,
-    band_low: float = 0.15,
-    band_high: float = 0.82,
+    band_low: float = 0.12,
+    band_high: float = 0.97,
 ) -> bool:
-    """Reject buttons outside the safe vertical band or with zero-size bounds."""
+    """Reject buttons in status-bar / bottom-nav chrome; allow low action bars."""
     x1, y1, x2, y2 = cand["comment_bounds"]
     if x2 <= x1 or y2 <= y1:
         return False
     if screen_h <= 0:
         return True
-    y_mid = (y1 + y2) // 2
-    return int(screen_h * band_low) <= y_mid <= int(screen_h * band_high)
+    top_limit = int(screen_h * band_low)
+    bottom_limit = int(screen_h * band_high)
+    nav_strip = max(56, int(screen_h * 0.022))
+    if y1 < top_limit:
+        return False
+    if y1 > bottom_limit:
+        return False
+    if y1 >= screen_h - nav_strip:
+        return False
+    return True
+
+
+def diagnose_comment_target_resolution(
+    xml: str,
+    *,
+    band_low: float = 0.12,
+    band_high: float = 0.97,
+) -> Dict[str, Any]:
+    """Explain why ``resolve_comment_targets_from_xml`` found no candidates."""
+    from .feed_pipeline import _is_ad_container
+    from .parser import _infer_screen_size, _parse_xml, _pick_feed_container
+
+    root = _parse_xml(xml)
+    if root is None:
+        return {"reason_code": "xml_parse_error"}
+
+    screen_w, screen_h = _infer_screen_size(root)
+    containers = root.xpath(XPATH_RECYCLER) or root.xpath(XPATH_LIST)
+    feed_children: List[Any] = []
+    if containers:
+        feed = _pick_feed_container(containers, root)
+        feed_children = feed.findall("node")
+
+    token_nodes = 0
+    for node in root.iter():
+        if _node_has_comment_button_token(node):
+            token_nodes += 1
+
+    buttons_in_cards = 0
+    missing_post_pid = 0
+    filtered_by_band = 0
+    for feed_item_index, element in enumerate(feed_children):
+        if _is_ad_container(element):
+            continue
+        btn = _find_comment_button_click_target_in_element(element)
+        if not btn:
+            continue
+        buttons_in_cards += 1
+        cand = _build_comment_candidate(element, feed_item_index=feed_item_index)
+        if cand is None:
+            missing_post_pid += 1
+            continue
+        if not _comment_candidate_passes_filter(
+            cand, screen_h=screen_h, band_low=band_low, band_high=band_high
+        ):
+            filtered_by_band += 1
+
+    return {
+        "reason_code": "diagnostic",
+        "screen_size": [screen_w, screen_h],
+        "feed_children": len(feed_children),
+        "comment_token_nodes": token_nodes,
+        "buttons_in_cards": buttons_in_cards,
+        "missing_post_pid": missing_post_pid,
+        "filtered_by_band": filtered_by_band,
+        "band": [band_low, band_high],
+    }
 
 
 def _score_comment_candidate(
     cand: Dict[str, Any],
     *,
     screen_h: int,
+    screen_w: int = 1080,
     center_y_ratio: float,
 ) -> Dict[str, Any]:
     """Score a candidate using the center-of-card heuristic + penalties.
@@ -718,7 +1105,16 @@ def _score_comment_candidate(
     elif y2 >= int(safe_h * 0.82):
         bottom_risk_penalty = 0.10
 
-    score = distance + cut_penalty + metadata_missing_penalty + bottom_risk_penalty
+    x_mid = (x1 + x2) // 2
+    left_column_penalty = 0.35 if x_mid < int(max(1, screen_w) * 0.22) else 0.0
+
+    score = (
+        distance
+        + cut_penalty
+        + metadata_missing_penalty
+        + bottom_risk_penalty
+        + left_column_penalty
+    )
     return {
         "score": round(score, 4),
         "breakdown": {
@@ -726,9 +1122,11 @@ def _score_comment_candidate(
             "cut_penalty": round(cut_penalty, 4),
             "metadata_missing_penalty": round(metadata_missing_penalty, 4),
             "bottom_risk_penalty": round(bottom_risk_penalty, 4),
+            "left_column_penalty": round(left_column_penalty, 4),
             "visible_ratio": round(visible_ratio, 4),
             "focus_y": focus_y,
             "comment_y_mid": comment_y_mid,
+            "comment_x_mid": x_mid,
             "has_strong_key": has_strong_key,
             "has_timestamp": has_timestamp,
         },
@@ -740,8 +1138,8 @@ def resolve_comment_targets_from_xml(
     *,
     center_y_ratio: float = 0.5,
     max_candidates: int = 5,
-    band_low: float = 0.15,
-    band_high: float = 0.82,
+    band_low: float = 0.12,
+    band_high: float = 0.97,
 ) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
     """Rank visible FB Comment buttons per the post-comment linking spec.
 
@@ -769,9 +1167,11 @@ def resolve_comment_targets_from_xml(
     if root is None:
         return None, []
 
-    _, screen_h = _infer_screen_size(root)
+    screen_w, screen_h = _infer_screen_size(root)
     if screen_h <= 0:
         screen_h = 2200
+    if screen_w <= 0:
+        screen_w = 1080
     center_y_ratio = max(band_low, min(band_high, float(center_y_ratio)))
 
     containers = root.xpath(XPATH_RECYCLER) or root.xpath(XPATH_LIST)
@@ -797,10 +1197,32 @@ def resolve_comment_targets_from_xml(
             continue
         cand.update(
             _score_comment_candidate(
-                cand, screen_h=screen_h, center_y_ratio=center_y_ratio
+                cand,
+                screen_h=screen_h,
+                screen_w=screen_w,
+                center_y_ratio=center_y_ratio,
             )
         )
         scored.append(cand)
+
+    if not scored and band_high < 0.99:
+        for feed_item_index, element in scan_candidates:
+            cand = _build_comment_candidate(element, feed_item_index=feed_item_index)
+            if cand is None:
+                continue
+            if not _comment_candidate_passes_filter(
+                cand, screen_h=screen_h, band_low=0.08, band_high=0.99
+            ):
+                continue
+            cand.update(
+                _score_comment_candidate(
+                    cand,
+                    screen_h=screen_h,
+                    screen_w=screen_w,
+                    center_y_ratio=center_y_ratio,
+                )
+            )
+            scored.append(cand)
 
     if not scored:
         return None, []
@@ -1245,6 +1667,21 @@ __all__ = [
     "resolve_comment_scroll_swipe_from_xml",
     "detect_comment_sheet_interrupt_from_xml",
     "detect_comment_sheet_interrupt_reason",
+    "is_group_feed_hierarchy",
+    "is_group_feed_from_xml",
+    "context_implies_fb_group_navigation",
+    "note_fb_group_navigation",
+    "fb_group_navigation_locked",
+    "should_allow_system_back",
+    "detect_transient_overlay_reason",
+    "detect_transient_overlay_from_xml",
+    "should_press_back_after_failed_tap",
+    "comment_tap_point",
+    "build_comment_button_u2_click",
+    "_find_comment_button_click_target_in_element",
+    "diagnose_comment_target_resolution",
+    "FB_COMMENT_SHEET_WAIT_SELECTORS",
+    "interrupt_reason_allows_back",
     "_post_id_from_ctx",
 ]
 

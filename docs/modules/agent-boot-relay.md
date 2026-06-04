@@ -1,7 +1,7 @@
 # Agent Boot And Relay
 
 Status: active
-Last audited: 2026-05-18
+Last audited: 2026-05-31
 
 ## Scope
 
@@ -76,6 +76,10 @@ flowchart TB
 - Execution channels must keep serial identity and session ownership explicit.
 - Backend relay-agent APIs register devices, push connect URLs, bootstrap relay
   devices in bulk, and expose relay state to dashboard surfaces.
+- gRPC relay supports server-side TLS and the agent can opt into TLS with
+  `grpcs://`, `RELAY_GRPC_TLS=true`, or `RELAY_GRPC_ROOT_CERT_FILE`.
+- Relay registration is persisted through the control-channel enrollment token;
+  missing or revoked tokens are rejected when ownership enforcement is enabled.
 
 ## Data Contract
 
@@ -103,3 +107,5 @@ Primary APIs:
 
 - Agent-boot was under-documented relative to its current source footprint. New
   relay work should update this doc first.
+- Revoking an enrollment token prevents future registration, but active control
+  streams are not forcibly disconnected yet.

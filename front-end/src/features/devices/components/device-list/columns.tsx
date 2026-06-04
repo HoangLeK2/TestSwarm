@@ -1,8 +1,9 @@
 'use client';
 
 import { formatDistanceToNow } from 'date-fns';
-import { enUS, vi } from 'date-fns/locale';
+import { vi } from 'date-fns/locale';
 import type { Locale } from 'date-fns';
+import Link from 'next/link';
 import { QrCode, Trash2, Wifi, WifiOff } from 'lucide-react';
 import type { ColumnDef } from '@tanstack/react-table';
 import { useQueryClient } from '@tanstack/react-query';
@@ -26,6 +27,7 @@ import {
 } from '../../lib/device-fsm';
 import { ReviveDeviceButton } from './ReviveDeviceButton';
 import { removeDeviceFromCache } from '../../hooks/use-devices';
+import { useOrganization } from '@/features/organization/hooks/use-organization';
 import { TagsCell } from './TagsCell';
 import { DeviceCmdButton } from './BootstrapDialog';
 import type { ConfirmModalOptions } from '@/providers/modal-provider';
@@ -37,6 +39,7 @@ import {
 import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
 import { normalizeNavUserRole } from '@/lib/nav-access';
 import { useAuthContext } from '@/features/auth/providers/auth-provider';
+import { ROUTES } from '@/config/routes';
 
 function DeviceActionsCell({
   device,
@@ -60,6 +63,7 @@ function DeviceActionsCell({
   tCommon: (key: string, values?: Record<string, any>) => string;
 }) {
   const qc = useQueryClient();
+  const { currentOrg } = useOrganization();
   const perms = useResourcePermissions('devices');
   const { user } = useAuthContext();
   const platformRole = normalizeNavUserRole(user?.role);
@@ -80,7 +84,7 @@ function DeviceActionsCell({
     setDeletingId(device.id);
     try {
       await devicesApi.delete(device.id);
-      removeDeviceFromCache(qc, device.id);
+      removeDeviceFromCache(qc, device.id, currentOrg?.id);
     } finally {
       setDeletingId((prev) => (prev === device.id ? null : prev));
     }
@@ -167,7 +171,12 @@ export function getDeviceColumns({
 
         return (
           <div className='flex flex-col'>
-            <span className='truncate text-sm font-medium'>{label}</span>
+            <Link
+              href={ROUTES.DEVICES.DETAIL(d.serial)}
+              className='truncate text-sm font-medium hover:underline'
+            >
+              {label}
+            </Link>
             <span className='font-mono text-[11px] text-muted-foreground'>
               {pending ? t('notConnected') : d.serial}
             </span>

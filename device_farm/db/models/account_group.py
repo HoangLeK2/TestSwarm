@@ -29,7 +29,7 @@ class AccountGroup(TenantScopedModel, Base):
 
     __tablename__ = "account_groups"
     __table_args__ = (
-        UniqueConstraint("user_id", "name", name="uq_account_groups_user_name"),
+        UniqueConstraint("org_id", "platform", "name", name="uq_account_groups_org_platform_name"),
         Index("idx_account_groups_user", "user_id"),
         Index("idx_account_groups_platform", "platform"),
     )
@@ -72,7 +72,9 @@ class AccountGroupMember(TenantScopedModel, Base):
 
     __tablename__ = "account_group_members"
     __table_args__ = (
-        UniqueConstraint("group_id", "account_id", name="uq_agm_group_account"),
+        UniqueConstraint(
+            "org_id", "group_id", "account_id", name="uq_account_group_members_org_group_account"
+        ),
         Index("idx_agm_group_position", "group_id", "position"),
         Index("idx_agm_group_lru", "group_id", "last_used_at"),
     )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from api.auth.rbac import is_superadmin
 from api.deps import CurrentUser, DB, require_permission
 from api.org_scope import org_member_user_ids
 from api.schemas.scenario_template import (
@@ -71,6 +72,14 @@ async def create_scenario_template(
     db: DB,
     user: CurrentUser,
 ):
+    if not is_superadmin(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "FORBIDDEN",
+                "message": "Only superadmin can create system scenario templates",
+            },
+        )
     tmpl = await create_template(
         db,
         name=body.name,
@@ -80,7 +89,7 @@ async def create_scenario_template(
         steps=body.steps,
         variables=body.variables,
         tags=body.tags,
-        is_builtin=False,
+        is_builtin=True,
         user_id=user.id,
     )
     await db.commit()

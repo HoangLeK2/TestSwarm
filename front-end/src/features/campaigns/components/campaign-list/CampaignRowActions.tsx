@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Play,
@@ -9,13 +9,15 @@ import {
   Trash2,
   MoreHorizontal,
   BarChart3,
-  MonitorPlay
+  MonitorPlay,
+  Pencil
 } from 'lucide-react';
 import { Link } from '@/i18n/navigation';
 import { toast } from 'sonner';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { RunCampaignDialog } from '../run-campaign-dialog';
+import { DispatchCampaignDialog } from '../dispatch-campaign-dialog';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -30,6 +32,7 @@ import {
 } from '@/components/ui/tooltip';
 import { AddDevicesToCampaignDialog } from '../add-devices-dialog';
 import { ScenarioListDialog } from '../scenario-list-dialog';
+import { EditCampaignEntityDialog } from '../edit-campaign-entity-dialog';
 import { CampaignMonitorDialog } from '../campaign-monitor';
 import { ROUTES } from '@/config/routes';
 import { cn } from '@/lib/utils';
@@ -37,15 +40,30 @@ import { CampaignRunProgress } from './CampaignRunProgress';
 import {
   useCampaignDevices,
   useCampaignWorkflows,
+  useCampaign,
   useCampaignCancel,
   useCampaignPause,
   useCampaignResume,
   useDeleteCampaign,
+  useDispatchCampaign,
+  useExecutionRuntime,
   useRunCampaign,
   useScenarios
 } from '../../hooks/use-campaigns';
 import type { CampaignOut } from '../../types';
-import { isCampaignActiveExecution, isIdleStatus } from '../../types';
+import {
+  campaignVariables,
+  isCampaignEntityOut,
+  type CampaignEntityOut
+} from '../../services/api';
+import { useOrgScenarioBodies } from '@/features/org-scenarios/hooks/use-org-scenarios';
+import { useOrgScenarios } from '@/features/org-scenarios/hooks/use-org-scenarios';
+import {
+  isCampaignActiveExecution,
+  isCampaignMetadataEditable,
+  isDispatchableStatus
+} from '../../types';
+import { formatFarmApiError } from '@/lib/format-farm-api-error';
 import { useConfirm } from '@/providers/modal-provider';
 import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
 
@@ -63,16 +81,64 @@ export function CampaignRowActions({
   const router = useRouter();
 
   const [runDialogOpen, setRunDialogOpen] = useState(false);
+  const [dispatchDialogOpen, setDispatchDialogOpen] = useState(false);
   const [addDevicesOpen, setAddDevicesOpen] = useState(false);
   const [scenarioOpen, setScenarioOpen] = useState(false);
+  const [entityEditOpen, setEntityEditOpen] = useState(false);
+
+  const { data: campaignDetail, isFetching: detailFetching } = useCampaign(
+    campaign.id,
+    perms.canExecute || perms.canUpdate
+  );
+  const isEntityCampaign =
+    isCampaignEntityOut(campaign) ||
+    (campaignDetail != null && isCampaignEntityOut(campaignDetail));
+  const entityDetail: CampaignEntityOut | null = (() => {
+    const row = campaignDetail ?? campaign;
+    return isCampaignEntityOut(row) ? row : null;
+  })();
+  const scenarioRefIds = useMemo(
+    () => (entityDetail?.scenario_refs ?? []).map((ref) => ref.scenario_id),
+    [entityDetail?.scenario_refs]
+  );
+  const { data: orgScenarios = [] } = useOrgScenarios();
+  const orgScenarioBodies = useOrgScenarioBodies(
+    scenarioRefIds,
+    dispatchDialogOpen && isEntityCampaign
+  );
+  const dispatchScenarios = useMemo(
+    () =>
+      scenarioRefIds.map((id, index) => {
+        const bodyJson = orgScenarioBodies[index]?.data?.body_json;
+        const variables =
+          bodyJson && typeof bodyJson === 'object'
+            ? ((bodyJson as Record<string, unknown>).variables as
+                | Record<string, unknown>
+                | undefined)
+            : undefined;
+        return {
+          id,
+          name: orgScenarios.find((row) => row.id === id)?.name ?? id,
+          variables
+        };
+      }),
+    [orgScenarioBodies, orgScenarios, scenarioRefIds]
+  );
 
   const { data: devices = [] } = useCampaignDevices(campaign.id);
   const { data: scenarios = [] } = useScenarios(campaign.id);
+  const { data: executionRuntime } = useExecutionRuntime();
 
   const runMutation = useRunCampaign(() => toast.success(t('campaignDone')), {
     onTemporalFallback: () => toast.warning(t('temporalFallback'))
   });
+  const dispatchMutation = useDispatchCampaign(() =>
+    toast.success(t('campaignDone'))
+  );
   const { mutate: runCampaign, isPending: isRunning } = runMutation;
+  const { mutate: dispatchCampaign, isPending: isDispatching } =
+    dispatchMutation;
+  const isStarting = isRunning || isDispatching;
   const { mutate: deleteCampaign, isPending: isDeleting } = useDeleteCampaign();
 
   const { data: wfData } = useCampaignWorkflows(
@@ -90,9 +156,7 @@ export function CampaignRowActions({
     .filter((w) => w.status === 'RUNNING')
     .map((w) => w.workflow_id);
   const pausedWorkflowIds = workflows
-    .filter(
-      (w) => w.status === 'PAUSED' || w.status === 'paused_on_error'
-    )
+    .filter((w) => w.status === 'PAUSED' || w.status === 'paused_on_error')
     .map((w) => w.workflow_id);
 
   const { mutate: pauseCampaign, isPending: isPausing } = useCampaignPause();
@@ -101,7 +165,12 @@ export function CampaignRowActions({
     useCampaignCancel();
 
   const totalSteps = scenarios.reduce((s, sc) => s + sc.steps.length, 0);
-  const hasScenario = totalSteps > 0;
+  const entityRefCount = isEntityCampaign
+    ? (entityDetail?.scenario_refs?.length ?? 0)
+    : 0;
+  const hasScenario = totalSteps > 0 || entityRefCount > 0;
+  const canDispatch = isDispatchableStatus(campaign.status);
+  const canEditEntity = isCampaignMetadataEditable(campaign.status);
 
   type PrimaryAction = {
     label: string;
@@ -111,7 +180,7 @@ export function CampaignRowActions({
   };
 
   const primaryAction: PrimaryAction = (() => {
-    if (isRunning) {
+    if (isStarting || (perms.canExecute && detailFetching && !campaignDetail)) {
       return {
         label: t('titleRun'),
         onClick: () => {},
@@ -129,7 +198,7 @@ export function CampaignRowActions({
           tooltip: t('missingScenario')
         };
       }
-      if (devices.length === 0) {
+      if (devices.length === 0 && !isEntityCampaign) {
         return {
           label: t('titleNeedDevice'),
           onClick: () => setAddDevicesOpen(true),
@@ -139,14 +208,17 @@ export function CampaignRowActions({
       }
     }
 
-    const canRun = devices.length > 0 && hasScenario;
+    const canRun = isEntityCampaign
+      ? hasScenario
+      : devices.length > 0 && hasScenario;
     return {
       label: t('titleRun'),
-      onClick: () => setRunDialogOpen(true),
+      onClick: () =>
+        isEntityCampaign ? setDispatchDialogOpen(true) : setRunDialogOpen(true),
       disabled: !canRun || !perms.canExecute,
       tooltip: !hasScenario
         ? t('missingScenario')
-        : devices.length === 0
+        : !isEntityCampaign && devices.length === 0
           ? t('titleNeedDevice')
           : undefined
     };
@@ -165,7 +237,8 @@ export function CampaignRowActions({
       if (!ok) return;
       deleteCampaign(campaign.id, {
         onSuccess: () => toast.success(t('deleteSuccess')),
-        onError: () => toast.error(t('deleteFailed'))
+        onError: (err) =>
+          toast.error(formatFarmApiError(err, t('deleteFailed')))
       });
     })();
   };
@@ -184,9 +257,10 @@ export function CampaignRowActions({
       onSuccess: () => {
         toast.info(
           t('resumingAll', {
-            count: workflows.filter(
-              (w) => w.status === 'PAUSED' || w.status === 'paused_on_error'
-            ).length || 1
+            count:
+              workflows.filter(
+                (w) => w.status === 'PAUSED' || w.status === 'paused_on_error'
+              ).length || 1
           })
         );
       },
@@ -206,12 +280,10 @@ export function CampaignRowActions({
     if (!ok) return;
     try {
       const data = await cancelCampaign({ campaignId: campaign.id });
-      if (data.warning) {
-        toast.warning(data.warning, { duration: 8000 });
-      }
+      toast.success(t('cancelSuccess'));
       toast.info(t('cancellingAll', { count: data.workflows_signalled ?? 0 }));
-    } catch {
-      toast.error(t('runFailed'));
+    } catch (err) {
+      toast.error(formatFarmApiError(err, t('cancelFailed')));
     }
   };
 
@@ -219,13 +291,16 @@ export function CampaignRowActions({
   const showPause =
     campaign.status === 'running' &&
     (hasActiveWorkflows || runningWorkflowIds.length > 0);
-  const showResume = campaign.status === 'paused' || pausedWorkflowIds.length > 0;
+  const showResume =
+    campaign.status === 'paused' || pausedWorkflowIds.length > 0;
 
   return (
     <div
       className={cn(
         'flex min-w-0',
-        layout === 'stacked' ? 'w-full flex-col gap-2' : 'items-center justify-end'
+        layout === 'stacked'
+          ? 'w-full flex-col gap-2'
+          : 'items-center justify-end'
       )}
     >
       <div
@@ -236,7 +311,7 @@ export function CampaignRowActions({
       >
         <CampaignRunProgress campaignId={campaign.id} isRunning={running} />
 
-        {isIdleStatus(campaign.status) && perms.canExecute && (
+        {canDispatch && perms.canExecute && (
           <>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -258,7 +333,7 @@ export function CampaignRowActions({
             </Tooltip>
 
             <RunCampaignDialog
-              open={runDialogOpen}
+              open={runDialogOpen && !isEntityCampaign}
               campaignId={campaign.id}
               campaignVariables={campaign.variables ?? {}}
               onClose={() => setRunDialogOpen(false)}
@@ -279,20 +354,70 @@ export function CampaignRowActions({
                       router.push(ROUTES.DEVICES.ROOT);
                     },
                     onError: (err: unknown) => {
-                      const msg =
-                        err && typeof err === 'object' && 'response' in err
-                          ? (
-                              err as {
-                                response?: { data?: { error?: string } };
-                              }
-                            ).response?.data?.error
-                          : null;
-                      toast.error(msg ?? t('runFailed'));
+                      toast.error(formatFarmApiError(err, t('runFailed')));
                     }
                   }
                 );
               }}
             />
+
+            {isEntityCampaign ? (
+              <DispatchCampaignDialog
+                open={dispatchDialogOpen}
+                campaignId={campaign.id}
+                onClose={() => setDispatchDialogOpen(false)}
+                devices={devices}
+                scenarios={dispatchScenarios}
+                campaignVariables={
+                  entityDetail ? campaignVariables(entityDetail) : {}
+                }
+                perDeviceOverrides={entityDetail?.per_device_overrides ?? {}}
+                isDispatching={isDispatching}
+                onConfirm={(body) => {
+                  setDispatchDialogOpen(false);
+                  dispatchCampaign(
+                    { id: campaign.id, body },
+                    {
+                      onSuccess: (data) => {
+                        const failed =
+                          data.executions?.filter(
+                            (e) => e.status === 'failed' || e.failure_reason
+                          ).length ?? 0;
+                        const usedFallback =
+                          executionRuntime?.campaign_run
+                            ?.fallback_mode_active ||
+                          data.executions?.some(
+                            (e) => e.dispatch_source === 'fallback'
+                          );
+                        if (usedFallback) {
+                          toast.warning(t('fallbackDispatchActive'), {
+                            duration: 8000
+                          });
+                        }
+                        toast.success(
+                          t('dispatchStarted', { count: data.target_count }),
+                          {
+                            description:
+                              failed > 0
+                                ? t('dispatchPartialFailures', {
+                                    count: failed
+                                  })
+                                : campaign.name,
+                            duration: 5000
+                          }
+                        );
+                        router.push(ROUTES.DEVICES.ROOT);
+                      },
+                      onError: (err) => {
+                        toast.error(
+                          formatFarmApiError(err, t('dispatchFailed'))
+                        );
+                      }
+                    }
+                  );
+                }}
+              />
+            ) : null}
           </>
         )}
 
@@ -320,15 +445,15 @@ export function CampaignRowActions({
             <span className='hidden xl:inline'>{t('titleResume')}</span>
           </Button>
         )}
-        {running && hasActiveWorkflows && perms.canExecute && (
+        {running && perms.canExecute && (
           <Button
             size='sm'
             variant='ghost'
             className='h-8 w-8 p-0 text-destructive hover:text-destructive'
             disabled={isCancelling}
             onClick={handleCancelAll}
-            title={t('titleCancel') ?? 'Huỷ'}
-            aria-label='Huỷ'
+            title={t('titleCancel')}
+            aria-label={t('titleCancel')}
           >
             <Square size={13} />
           </Button>
@@ -366,40 +491,59 @@ export function CampaignRowActions({
         </CampaignMonitorDialog>
 
         {(perms.canUpdate || perms.canDelete) && (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              size='sm'
-              variant='ghost'
-              className='h-8 w-8 p-0'
-              aria-label='Thêm hành động'
-            >
-              <MoreHorizontal size={14} />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align='end' className='w-56'>
-            <DropdownMenuItem asChild className='gap-2'>
-              <Link href={ROUTES.CONTENT.BY_CAMPAIGN(campaign.id)}>
-                <BarChart3 size={14} />
-                {t('titleContent')}
-              </Link>
-            </DropdownMenuItem>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size='sm'
+                variant='ghost'
+                className='h-8 w-8 p-0'
+                aria-label='Thêm hành động'
+              >
+                <MoreHorizontal size={14} />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align='end' className='w-56'>
+              <DropdownMenuItem asChild className='gap-2'>
+                <Link href={ROUTES.CONTENT.BY_CAMPAIGN(campaign.id)}>
+                  <BarChart3 size={14} />
+                  {t('titleContent')}
+                </Link>
+              </DropdownMenuItem>
 
-            {perms.canDelete ? (
-              <>
-                <DropdownMenuSeparator />
+              {perms.canUpdate && isEntityCampaign ? (
                 <DropdownMenuItem
-                  className='gap-2 text-destructive focus:text-destructive'
-                  disabled={isDeleting}
-                  onClick={handleDelete}
+                  className='gap-2'
+                  disabled={!canEditEntity}
+                  onClick={() => {
+                    if (!canEditEntity) {
+                      toast.error(t('editLocked'));
+                      return;
+                    }
+                    setEntityEditOpen(true);
+                  }}
                 >
-                  <Trash2 size={14} />
-                  {t('titleDelete')}
+                  <Pencil size={14} />
+                  {t('titleEditEntity')}
                 </DropdownMenuItem>
-              </>
-            ) : null}
-          </DropdownMenuContent>
-        </DropdownMenu>
+              ) : null}
+
+              {perms.canDelete ? (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    className='gap-2 text-destructive focus:text-destructive'
+                    disabled={
+                      isDeleting || isCampaignActiveExecution(campaign.status)
+                    }
+                    onClick={handleDelete}
+                  >
+                    <Trash2 size={14} />
+                    {t('titleDelete')}
+                  </DropdownMenuItem>
+                </>
+              ) : null}
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
       </div>
 
@@ -420,6 +564,12 @@ export function CampaignRowActions({
       >
         {null}
       </ScenarioListDialog>
+
+      <EditCampaignEntityDialog
+        campaign={campaign}
+        open={entityEditOpen}
+        onOpenChange={setEntityEditOpen}
+      />
     </div>
   );
 }

@@ -33,6 +33,18 @@ _EXACT_VAR_RE = _re.compile(r"^\$\{(\w+)\}$")
 _VAR_PATTERN = _re.compile(r"\$\{(\w+)\}")
 
 with workflow.unsafe.imports_passed_through():
+    try:
+        import web.metrics  # noqa: F401 — preload before workflow retry loop
+    except Exception:
+        pass
+    from services.execution.retry_policy import (
+        compute_wait_ms,
+        emit_retry_metrics,
+        is_step_failure_retryable,
+        parse_step_retry_policy,
+        record_attempt,
+        step_for_single_attempt,
+    )
     from temporal.shared import (
         MAX_NESTING_DEPTH,
         TASK_QUEUE_NAME,
@@ -156,6 +168,8 @@ class ScenarioWorkflow:
             merged_config = dict(inp.scenario_config or {})
             if inp.capture_steps:
                 merged_config["capture_steps"] = True
+            elif inp.execution_id or inp.run_id:
+                merged_config.setdefault("capture_steps", True)
             result = await workflow.execute_child_workflow(
                 ScenarioStepsWorkflow.run,
                 StepsInput(
@@ -170,6 +184,7 @@ class ScenarioWorkflow:
                     campaign_id=inp.campaign_id,
                     run_id=inp.run_id,
                     execution_id=inp.execution_id,
+                    start_step=int(getattr(inp, "start_step", 0) or 0),
                 ),
                 id=f"{workflow.info().workflow_id}:steps",
                 task_queue=TASK_QUEUE_NAME,
@@ -364,6 +379,109 @@ class ScenarioStepsWorkflow:
         if self._paused and not self._cancelled:
             await workflow.wait_condition(lambda: not self._paused or self._cancelled)
 
+    @staticmethod
+    def _step_result_dict(sr: StepResult, step_index: int) -> dict[str, Any]:
+        entry: dict[str, Any] = {
+            "index": step_index,
+            "type": sr.step_type,
+            "ok": sr.ok,
+            "message": sr.message or "",
+        }
+        if sr.details:
+            for key, val in sr.details.items():
+                if key not in entry:
+                    entry[key] = val
+        return entry
+
+    @staticmethod
+    def _retry_check_payload(entry: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "ok": entry.get("ok", True),
+            "reason_code": entry.get("reason_code"),
+            "retryable": entry.get("retryable"),
+        }
+
+    async def _execute_leaf_with_durable_retry(
+        self,
+        inp: StepsInput,
+        step: dict[str, Any],
+        step_index: int,
+    ) -> dict[str, Any]:
+        """Run one leaf step with DF-T-04-011 retry at workflow level (durable backoff)."""
+        policy = parse_step_retry_policy(step)
+        if policy is None:
+            raise ValueError("_execute_leaf_with_durable_retry requires an explicit retry block")
+
+        step_type = str(step.get("type") or "")
+        activity_step = step_for_single_attempt(step)
+        attempt_records: list[dict[str, Any]] = []
+        wf_random = _get_wf_random()
+        final_entry: dict[str, Any] | None = None
+
+        for attempt in range(1, policy.max_attempts + 1):
+            await self._wait_if_paused()
+            if self._cancelled:
+                return {
+                    "index": step_index,
+                    "type": step_type,
+                    "ok": False,
+                    "message": "Cancelled during execution",
+                    "retry_attempts": attempt_records,
+                }
+
+            sr: StepResult = await workflow.execute_activity(
+                "execute_device_action",
+                DeviceActionInput(
+                    device_serial=inp.device_serial,
+                    step=activity_step,
+                    step_index=step_index,
+                    variables=inp.variables,
+                    campaign_vars=inp.campaign_vars,
+                    scenario_config=getattr(inp, "scenario_config", {}),
+                    scenario_registry=inp.scenario_registry,
+                    execution_id=inp.execution_id or inp.run_id,
+                    campaign_id=inp.campaign_id,
+                ),
+                result_type=StepResult,
+                start_to_close_timeout=_LONG_TIMEOUT,
+                retry_policy=_ACTIVITY_RETRY,
+                heartbeat_timeout=timedelta(seconds=30),
+            )
+            entry = self._step_result_dict(sr, step_index)
+            final_entry = entry
+
+            will_retry = (
+                is_step_failure_retryable(self._retry_check_payload(entry), policy)
+                and attempt < policy.max_attempts
+            )
+            if not will_retry:
+                record_attempt(
+                    attempt_records,
+                    attempt=attempt,
+                    error_reason=str(entry.get("reason_code") or "") if not entry.get("ok", True) else None,
+                    wait_ms_before_next=None,
+                )
+                break
+
+            wait = compute_wait_ms(attempt, policy, rng=wf_random)
+            emit_retry_metrics(
+                step_type=step_type or "unknown",
+                reason_code=entry.get("reason_code"),
+                backoff_capped=wait.backoff_capped,
+            )
+            record_attempt(
+                attempt_records,
+                attempt=attempt,
+                error_reason=str(entry.get("reason_code") or ""),
+                wait_ms_before_next=wait.wait_ms,
+            )
+            await workflow.sleep(timedelta(milliseconds=wait.wait_ms))
+
+        assert final_entry is not None
+        if attempt_records:
+            final_entry["retry_attempts"] = attempt_records
+        return final_entry
+
     def _cancelled_result(
         self,
         inp: "StepsInput",
@@ -539,12 +657,14 @@ class ScenarioStepsWorkflow:
                     scenario_config=getattr(inp, "scenario_config", {}),
                     scenario_registry=inp.scenario_registry,
                     execution_id=inp.execution_id,
+                    campaign_id=inp.campaign_id,
                 ),
                 result_type=DeviceActionBatchResult,
                 # 120 s per step, cap at 10 min
                 start_to_close_timeout=timedelta(seconds=min(120 * n, 600)),
                 retry_policy=_ACTIVITY_RETRY,
-                heartbeat_timeout=timedelta(seconds=30),
+                # Extract/comment steps can run minutes; keep margin over 5s heartbeat loop.
+                heartbeat_timeout=timedelta(seconds=60),
             )
             orig_indices = list(_pending_indices)  # snapshot before clear
             _pending_steps.clear()
@@ -563,7 +683,11 @@ class ScenarioStepsWorkflow:
                 return False, failed.get("message", "batch step failed"), failed_orig_idx
             return True, "", -1
 
+        start_step = max(0, int(getattr(inp, "start_step", 0) or 0))
+
         for idx, raw_step in enumerate(inp.steps):
+            if idx < start_step:
+                continue
             # ── continue_as_new guard (top-level loop only) ──────────────────
             # Checked every 25 steps to amortise the workflow.info() call cost.
             # continue_as_new resets event history while preserving full state:
@@ -887,6 +1011,7 @@ class ScenarioStepsWorkflow:
                         run_id=inp.run_id,
                         execution_id=inp.execution_id,
                         user_id=inp.campaign_vars.get("__USER_ID__"),
+                        campaign_vars=dict(inp.campaign_vars or {}),
                     ),
                     result_type=StepResult,
                     start_to_close_timeout=timedelta(seconds=120),
@@ -915,10 +1040,32 @@ class ScenarioStepsWorkflow:
                     continue
                 continue
 
-            # ── Default: accumulate leaf step for batch dispatch ─────────────
-            # Steps are grouped and sent as one execute_device_action_batch call.
-            # The batch activity handles ignore_error per-step internally and only
-            # sets first_failure_index for genuinely hard failures.
+            # ── Leaf step: durable workflow retry OR batch dispatch ──────────
+            # Steps with explicit retry config run one activity per attempt with
+            # workflow.sleep() between attempts (survives worker restart).
+            if parse_step_retry_policy(step) is not None:
+                ok, msg, failed_idx = await _flush_batch()
+                if not ok:
+                    failed_step = inp.steps[failed_idx] if 0 <= failed_idx < len(inp.steps) else {}
+                    action, early = await self._apply_error_policy(
+                        failed_step, failed_idx, msg, inp, runtime_vars, runtime_context,
+                        steps_executed, step_results,
+                    )
+                    if action == "stop":
+                        return early
+
+                entry = await self._execute_leaf_with_durable_retry(inp, step, idx)
+                _append(entry)
+                steps_executed += 1
+                if not entry.get("ok", True):
+                    action, early = await self._apply_error_policy(
+                        step, idx, entry.get("message") or "", inp, runtime_vars, runtime_context,
+                        steps_executed, step_results,
+                    )
+                    if action == "stop":
+                        return early
+                continue
+
             _pending_steps.append(step)
             _pending_indices.append(idx)
             if len(_pending_steps) >= _batch_size:

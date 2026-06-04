@@ -1,7 +1,6 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import {
@@ -14,12 +13,19 @@ import {
   AlertDialogHeader,
   AlertDialogTitle
 } from '@/components/ui/alert-dialog';
-import { DeviceTile } from './device-tile';
+import { ControlRecordMirror } from './control-record/control-record-mirror';
+import {
+  packageFromCurrentApp,
+  type DeviceOpsConfig
+} from './device-ops-rail';
+import { ManualControlBlockedBanner } from './control-record/manual-control-blocked-banner';
+import { MultiDevicePicker } from './control-record/multi-device-picker';
+import { MultiDeviceStage } from './control-record/multi-device-stage';
+import { MirrorPhonePlaceholder } from './control-record/mirror-phone-placeholder';
 import { SafeModeBanner } from '@/features/core/components/safe-mode-banner';
 import { useSafeMode } from '@/features/core/services/use-safe-mode';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Input } from '@/components/ui/input';
 import {
   DeviceVarsJsonPanel,
   formatInitialDeviceVars,
@@ -53,7 +59,6 @@ import {
   Timer,
   Keyboard,
   CheckSquare,
-  PackagePlus,
   Code2,
   GitBranch,
   List
@@ -75,7 +80,32 @@ const FlowgramCanvas = dynamic(
     )
   }
 );
-import { VariableEditor } from '@/components/variable-editor';
+
+const FlowEditor = dynamic(
+  () =>
+    import('@/features/campaigns/components/flow-editor').then(
+      (m) => m.FlowEditor
+    ),
+  {
+    ssr: false,
+    loading: () => (
+      <div className='flex flex-1 items-center justify-center text-xs text-muted-foreground'>
+        Đang tải editor…
+      </div>
+    )
+  }
+);
+
+const ScenarioPlayer = dynamic(
+  () =>
+    import('./control-record/scenario-player').then((m) => m.ScenarioPlayer),
+  { ssr: false }
+);
+
+const VariableEditor = dynamic(
+  () => import('@/components/variable-editor').then((m) => m.VariableEditor),
+  { ssr: false }
+);
 import {
   Dialog,
   DialogContent,
@@ -86,20 +116,27 @@ import {
 import { ROUTES } from '@/config/routes';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import { useSaveOrgScenarioBody } from '@/features/org-scenarios/hooks/use-org-scenarios';
+import { buildOrgScenarioBodyPayload } from '@/features/org-scenarios/lib/build-org-scenario-body';
+import { isGraphOrgScenario } from '@/features/org-scenarios/lib/campaign-scenario-eligibility';
+import { validateScenarioStepsForApi } from '@/features/campaigns/utils/validate-scenario-steps-for-api';
+import { formatFarmApiError } from '@/lib/format-farm-api-error';
+import { useRouter } from '@/i18n/navigation';
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger
 } from '@/components/ui/tooltip';
 import { useControlRecord } from '../hooks/use-control-record';
-import { campaignsApi } from '@/features/campaigns/services/api';
+import {
+  campaignVariables,
+  campaignsApi
+} from '@/features/campaigns/services/api';
 import { useScenarioTemplates } from '@/features/scenario-templates/hooks/use-scenario-templates';
 import type { ScenarioTemplateOut } from '@/features/scenario-templates/services/api';
 import { useAccountGroups } from '@/features/account-groups/hooks/use-account-groups';
 import { EmptyNodePicker } from './control-record/empty-node-picker';
 import { XmlTreeViewer } from './control-record/xml-tree-viewer';
-import { ScenarioPlayer } from './control-record/scenario-player';
-import { FlowEditor } from '@/features/campaigns/components/flow-editor';
 import {
   applySelectorToSteps,
   applyTapPointToSteps,
@@ -119,7 +156,8 @@ import { parseHierarchyTree, findNodeIdAtRatio } from '../utils/hierarchy-tree';
 import {
   previewScenarioStream,
   cancelPreviewStream,
-  interruptDevice
+  interruptDevice,
+  runAgentShell
 } from '../services/api';
 import {
   createPreviewRunSession,
@@ -139,6 +177,14 @@ import { isSelectorPickableStep } from '@/features/campaigns/components/flow-edi
 import { applyStepsToFlowgramDocument } from '@/features/scenario-templates/components/scenario-flow-editor/flow-doc-sync';
 import type { FlowgramRunState } from '@/features/scenario-templates/components/scenario-flow-editor/flowgram-scenario-context';
 import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
+import { useOrganization } from '@/features/organization/hooks/use-organization';
+import {
+  deviceSelectFullTitle,
+  formatDeviceSelectLabel
+} from '@/features/devices/lib/device-select-label';
+
+const MAX_MULTI_CONTROL_DEVICES = 20;
+const MAX_MULTI_FOLLOWER_DEVICES = MAX_MULTI_CONTROL_DEVICES - 1;
 
 /**
  * Template variables are stored as metadata dicts:
@@ -164,29 +210,25 @@ function flattenVarDefs(vars: Record<string, any>): Record<string, any> {
   return out;
 }
 
-/** Bounded label for device Select (long model/serial otherwise breaks the top bar). */
-function formatDeviceSelectLabel(d: {
-  brand: string;
-  model: string;
-  serial: string;
-}) {
-  const left = `${d.brand} ${d.model}`.trim().replace(/\s+/g, ' ');
-  const s = d.serial;
-  const serialShort = s.length > 16 ? `${s.slice(0, 7)}…${s.slice(-6)}` : s;
-  if (!left) return serialShort;
-  const maxLeft = 26;
-  const leftShort =
-    left.length > maxLeft ? `${left.slice(0, maxLeft - 1)}…` : left;
-  return `${leftShort} — ${serialShort}`;
+function mergeTemplateVariablesIntoEditor(
+  prev: Record<string, any>,
+  templateVars: Record<string, any> | undefined
+): Record<string, any> {
+  if (!templateVars || Object.keys(templateVars).length === 0) return prev;
+  return flattenVarDefs({
+    ...prev,
+    ...flattenVarDefs(templateVars)
+  });
 }
 
-function deviceSelectFullTitle(d: {
-  brand: string;
-  model: string;
-  serial: string;
+function isManualControlEligible(d: {
+  state?: string | null;
+  scenario_active?: number | null;
 }) {
-  const left = `${d.brand} ${d.model}`.trim();
-  return left ? `${left} — ${d.serial}` : d.serial;
+  const state = String(d.state || '')
+    .replace('DeviceState.', '')
+    .toUpperCase();
+  return state === 'READY' && (d.scenario_active ?? 0) <= 0;
 }
 
 type Props = {
@@ -194,6 +236,9 @@ type Props = {
   initialCampaignId?: string | null;
   initialScenarioId?: string | null;
   initialTemplateId?: string | null;
+  initialOrgScenarioId?: string | null;
+  /** Optional redirect target after saving (used when launched from org-scenario). */
+  returnTo?: string | null;
 };
 
 const ENABLE_FLOWGRAM_CONTROL_UI = false; // UI flowgram disabled
@@ -202,30 +247,100 @@ export function ControlRecordView({
   initialSerial,
   initialCampaignId,
   initialScenarioId,
-  initialTemplateId
+  initialTemplateId,
+  initialOrgScenarioId,
+  returnTo
 }: Props = {}) {
   const t = useTranslations('devicesControlRecord.view');
+  const tOrg = useTranslations('orgScenariosFeature.detail');
   const tDv = useTranslations('components.deviceVarsJson');
   const tDvDlg = useTranslations('devicesControlRecord.deviceVarsDialog');
   const tModal = useTranslations('components.modal');
   const tVar = useTranslations('components.variableEditor');
+  const router = useRouter();
   const { error, device, record, steps, save, hierarchy, selector } =
     useControlRecord(
       initialSerial,
       initialCampaignId,
       initialScenarioId,
-      initialTemplateId
+      initialTemplateId,
+      initialOrgScenarioId
     );
+  const hierarchyXml = hierarchy.xml;
+  const handleScreenTapRef = useRef<(rx: number, ry: number) => void>(() => {});
+  const handleScreenSwipeRef = useRef<
+    (
+      rx1: number,
+      ry1: number,
+      rx2: number,
+      ry2: number,
+      durationMs: number
+    ) => void
+  >(() => {});
   const { read_only: safeReadOnly, stream_hierarchy: safeHierarchy } =
     useSafeMode();
   const devicePerms = useResourcePermissions('devices');
   const campaignPerms = useResourcePermissions('campaigns');
   const templatePerms = useResourcePermissions('scenario-templates');
+  const orgScenarioPerms = useResourcePermissions('scenarios');
   const canExecuteDevice = devicePerms.canExecute && !safeReadOnly;
+  const savingOrgScenario = Boolean(initialOrgScenarioId);
   const canSaveWork =
     !safeReadOnly &&
-    (save.templateContext ? templatePerms.canUpdate : campaignPerms.canUpdate);
+    (save.templateContext
+      ? templatePerms.canUpdate
+      : savingOrgScenario
+        ? orgScenarioPerms.canUpdate
+        : campaignPerms.canUpdate);
   const { setSkipTapRecordingWhilePick } = record;
+
+  const saveOrgBodyMutation = useSaveOrgScenarioBody();
+
+  useEffect(() => {
+    if (!isGraphOrgScenario(save.orgScenarioContext)) return;
+    const back = (returnTo ?? '').trim() || ROUTES.ORG_SCENARIOS.ROOT;
+    toast.error(tOrg('sequenceOnlyNoGraph'));
+    router.replace(back);
+  }, [save.orgScenarioContext?.kind, returnTo, router, tOrg]);
+
+  const handleSaveOrgScenario = async () => {
+    const scenarioId = (initialOrgScenarioId ?? '').trim();
+    if (!scenarioId) return;
+    if (isGraphOrgScenario(save.orgScenarioContext)) {
+      toast.error(tOrg('sequenceOnlyNoGraph'));
+      return;
+    }
+    if (steps.items.length === 0) {
+      toast.warning(tOrg('saveOrgNoSteps'));
+      return;
+    }
+    const body = buildOrgScenarioBodyPayload(steps.items, scenarioVariables);
+    const check = validateScenarioStepsForApi(body.steps ?? []);
+    if (!check.ok) {
+      toast.error(check.message);
+      return;
+    }
+    saveOrgBodyMutation.mutate(
+      {
+        scenarioId,
+        body
+      },
+      {
+        onSuccess: () => {
+          toast.success(tOrg('saveOrgSuccess'));
+          const next = (returnTo ?? '').trim();
+          if (next) {
+            router.push(next);
+          } else {
+            router.push(ROUTES.ORG_SCENARIOS.ROOT);
+          }
+        },
+        onError: (err) => {
+          toast.error(formatFarmApiError(err, tOrg('saveOrgFailed')));
+        }
+      }
+    );
+  };
 
   const [highlightBounds, setHighlightBounds] = useState<
     [number, number, number, number] | null
@@ -237,12 +352,83 @@ export function ControlRecordView({
   const [coordinatePickTarget, setCoordinatePickTarget] =
     useState<CoordinatePickTarget | null>(null);
   const mirrorColRef = useRef<HTMLDivElement>(null);
+  const leftCollapsedBeforeMultiRef = useRef<boolean | null>(null);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [flowMode, setFlowMode] = useState(false);
   useEffect(() => {
     if (!ENABLE_FLOWGRAM_CONTROL_UI) setFlowMode(false);
   }, []);
   const showFlowUi = ENABLE_FLOWGRAM_CONTROL_UI && flowMode;
+  const [multiFollowerSerials, setMultiFollowerSerials] = useState<string[]>(
+    []
+  );
+  const [stepPickerOpen, setStepPickerOpen] = useState(true);
+  const multiFollowerOptions = useMemo(
+    () =>
+      device.connectedDevices.filter(
+        (d) =>
+          d.serial !== device.selectedDevice?.serial &&
+          isManualControlEligible(d)
+      ),
+    [device.connectedDevices, device.selectedDevice?.serial]
+  );
+  useEffect(() => {
+    const allowed = new Set(multiFollowerOptions.map((d) => d.serial));
+    setMultiFollowerSerials((prev) =>
+      prev
+        .filter((serial) => allowed.has(serial))
+        .slice(0, MAX_MULTI_FOLLOWER_DEVICES)
+    );
+  }, [multiFollowerOptions]);
+  const activeMultiSerials = useMemo(() => {
+    const primary = device.selectedDevice?.serial;
+    if (!primary) return [];
+    return [
+      primary,
+      ...multiFollowerSerials.filter((serial) => serial !== primary)
+    ];
+  }, [device.selectedDevice?.serial, multiFollowerSerials]);
+  const selectedMultiFollowerDevices = useMemo(() => {
+    const selected = new Set(multiFollowerSerials);
+    return device.connectedDevices.filter((d) => selected.has(d.serial));
+  }, [device.connectedDevices, multiFollowerSerials]);
+  const hasMultiFollowers = multiFollowerSerials.length > 0;
+  const multiFocusMode = hasMultiFollowers && !stepPickerOpen && !playerMode;
+  const showEditorPanel = !hasMultiFollowers || stepPickerOpen || playerMode;
+  const treePanelOpen = safeHierarchy && !leftCollapsed && !hasMultiFollowers;
+
+  const prevMultiRef = useRef(false);
+
+  useEffect(() => {
+    if (hasMultiFollowers) {
+      if (!prevMultiRef.current) {
+        setStepPickerOpen(false);
+      }
+      setLeftCollapsed((prev) => {
+        if (leftCollapsedBeforeMultiRef.current === null) {
+          leftCollapsedBeforeMultiRef.current = prev;
+        }
+        return true;
+      });
+    } else {
+      if (prevMultiRef.current) {
+        setStepPickerOpen(true);
+      }
+      if (leftCollapsedBeforeMultiRef.current !== null) {
+        const restore = leftCollapsedBeforeMultiRef.current;
+        leftCollapsedBeforeMultiRef.current = null;
+        setLeftCollapsed(restore);
+      }
+    }
+    prevMultiRef.current = hasMultiFollowers;
+  }, [hasMultiFollowers]);
+  const sendAndRecord = record.sendAndRecord;
+  const mirrorWsSend = useCallback(
+    (obj: object) => {
+      sendAndRecord(obj, { multiSerials: activeMultiSerials });
+    },
+    [sendAndRecord, activeMultiSerials]
+  );
   // Track steps updated from the flowgram canvas (used for saving in flow mode)
   const flowStepsRef = useRef<typeof steps.items>(steps.items);
   const [flowCanvasKey, setFlowCanvasKey] = useState(0);
@@ -294,16 +480,15 @@ export function ControlRecordView({
   const [selectedScenarioDeviceId, setSelectedScenarioDeviceId] = useState<
     string | null
   >(null);
-  const [installDialogOpen, setInstallDialogOpen] = useState(false);
-  const [installUrl, setInstallUrl] = useState('');
   const [jsonDialogOpen, setJsonDialogOpen] = useState(false);
 
   // Scenario-player running state + stop handle. Used by the Farm back button
   // and device-switch guard to confirm+abort before leaving.
-  const router = useRouter();
   const [playerPlaying, setPlayerPlaying] = useState(false);
   const stopPlayerRef = useRef<(() => void) | null>(null);
   const [exitConfirm, setExitConfirm] = useState<null | (() => void)>(null);
+  const [takeoverDialogOpen, setTakeoverDialogOpen] = useState(false);
+  const [takeoverPending, setTakeoverPending] = useState(false);
 
   const setCoordinatePickTargetSafe = useCallback(
     (next: CoordinatePickTarget | null) => {
@@ -432,6 +617,70 @@ export function ControlRecordView({
   );
   const previewBlocking = playerPlaying || inlinePreviewRunning;
 
+  const deviceSelectValue = useMemo(() => {
+    const serial = device.selectedSerial;
+    if (!serial) return undefined;
+    return device.connectedDevices.some((d) => d.serial === serial)
+      ? serial
+      : undefined;
+  }, [device.selectedSerial, device.connectedDevices]);
+
+  const handleFlowStepsChange = useCallback(
+    (newSteps: FlowStep[]) => {
+      steps.setItems(
+        newSteps.map((s: FlowStep, i: number) => ({
+          ...s,
+          _id: (s as { _id?: string })._id || `step-${Date.now()}-${i}`
+        })) as typeof steps.items
+      );
+    },
+    [steps]
+  );
+
+  const handlePlayerPlayingChange = useCallback(
+    (playing: boolean) => {
+      hierarchy.setPaused(playing);
+      setPlayerPlaying(playing);
+    },
+    [hierarchy.setPaused]
+  );
+
+  const registerPlayerStop = useCallback((fn: (() => void) | null) => {
+    stopPlayerRef.current = fn;
+  }, []);
+
+  const mirrorBusyBanner = useMemo(() => {
+    const d = device.selectedDevice;
+    if (!d) return null;
+    const blocked =
+      (d.state || '').replace('DeviceState.', '') === 'BUSY' ||
+      (d.scenario_active ?? 0) > 0;
+    if (!blocked) return null;
+    return (
+      <ManualControlBlockedBanner
+        canTakeControl={canExecuteDevice}
+        onTakeControl={() => setTakeoverDialogOpen(true)}
+      />
+    );
+  }, [canExecuteDevice, device.selectedDevice]);
+
+  const handleTakeoverConfirm = useCallback(async () => {
+    const serial = device.selectedDevice?.serial?.trim();
+    if (!serial || takeoverPending) return;
+    setTakeoverPending(true);
+    try {
+      await interruptDevice(serial);
+      toast.success(t('takeover.success'));
+      setTakeoverDialogOpen(false);
+    } catch (err) {
+      toast.error(
+        formatFarmApiError(err, t('takeover.failed')) ?? t('takeover.failed')
+      );
+    } finally {
+      setTakeoverPending(false);
+    }
+  }, [device.selectedDevice?.serial, takeoverPending, t]);
+
   // Farm back button, device switch, player close — confirm before leaving while preview runs.
   const guardWhilePreviewActive = useCallback(
     (action: () => void) => {
@@ -442,6 +691,29 @@ export function ControlRecordView({
       }
     },
     [previewBlocking]
+  );
+
+  const promoteMultiFollower = useCallback(
+    (serial: string) => {
+      guardWhilePreviewActive(() => {
+        const previousPrimary = device.selectedDevice?.serial;
+        if (!previousPrimary) return;
+        setMultiFollowerSerials((prev) =>
+          Array.from(
+            new Set([
+              ...prev.filter((item) => item !== serial),
+              previousPrimary
+            ])
+          )
+        );
+        device.setSelectedSerial(serial);
+      });
+    },
+    [
+      device.selectedDevice?.serial,
+      device.setSelectedSerial,
+      guardWhilePreviewActive
+    ]
   );
 
   // Global guard: intercept sidebar/header links while preview is running.
@@ -489,9 +761,12 @@ export function ControlRecordView({
   const activeCampaignId = save.editingContext?.campaignId ?? null;
   const activeScenarioId = save.editingContext?.scenarioId ?? null;
   const selectedSerial = device.selectedDevice?.serial ?? null;
+  const { currentOrg } = useOrganization();
+  const controlRecordOrgId = currentOrg?.id ?? null;
   const devicesQuery = useQuery({
-    queryKey: ['control-record-device-map'],
+    queryKey: ['control-record-device-map', controlRecordOrgId],
     queryFn: devicesApi.list,
+    enabled: Boolean(controlRecordOrgId),
     staleTime: 15_000
   });
   const selectedDeviceId = useMemo(() => {
@@ -594,10 +869,10 @@ export function ControlRecordView({
   const deviceVarGlobalPreview = useMemo(
     () =>
       mergeCampaignScenarioVariables(
-        campaignForGlobalVarsQuery.data?.variables,
+        campaignVariables(campaignForGlobalVarsQuery.data),
         scenarioVariables
       ),
-    [campaignForGlobalVarsQuery.data?.variables, scenarioVariables]
+    [campaignForGlobalVarsQuery.data, scenarioVariables]
   );
   const setCurrentDeviceVarsEnabled = useCallback(
     (enabled: boolean) => {
@@ -814,6 +1089,12 @@ export function ControlRecordView({
   }, [save.editingContext]);
 
   useEffect(() => {
+    if (save.orgScenarioContext?.variables) {
+      setScenarioVariables(flattenVarDefs(save.orgScenarioContext.variables));
+    }
+  }, [save.orgScenarioContext]);
+
+  useEffect(() => {
     stepsItemsRef.current = steps.items;
   }, [steps.items]);
 
@@ -822,13 +1103,12 @@ export function ControlRecordView({
   }, [flowSelectedFgId]);
 
   useEffect(() => {
-    if (!showFlowUi) {
-      setFlowSelectedFgId(null);
-      setFlowDetailStep(null);
-      setFlowCoordPick(null);
-      setFlowSelectorPickFgId(null);
-      setFlowRunStates({});
-    }
+    if (showFlowUi) return;
+    setFlowSelectedFgId(null);
+    setFlowDetailStep(null);
+    setFlowCoordPick(null);
+    setFlowSelectorPickFgId(null);
+    setFlowRunStates((prev) => (Object.keys(prev).length === 0 ? prev : {}));
   }, [showFlowUi]);
 
   useEffect(() => {
@@ -948,9 +1228,7 @@ export function ControlRecordView({
           steps.setItems(synced as typeof steps.items);
           const updated = findStepByFlowgramId(synced, fgId);
           if (updated) {
-            const normalized = JSON.parse(
-              JSON.stringify(updated)
-            ) as FlowStep;
+            const normalized = JSON.parse(JSON.stringify(updated)) as FlowStep;
             flowDetailPendingRef.current = normalized;
             setFlowDetailStep(normalized);
           }
@@ -1043,6 +1321,49 @@ export function ControlRecordView({
       scenarioVariables,
       inlineScenarioDeviceVars,
       previewSession
+    ]
+  );
+
+  const runDeviceOpStep = useCallback(
+    async (step: FlowStep) => {
+      if (!device.selectedDevice) {
+        toast.warning('Chưa chọn thiết bị');
+        return;
+      }
+      const runId = previewSession.beginRun();
+      const serial = device.selectedDevice.serial;
+      try {
+        await previewScenarioStream(
+          serial,
+          [step as Record<string, any>],
+          previewSession.makeStreamHandler(runId, serial, (event) => {
+            if (event.event === 'step_done' && !event.ok) {
+              toast.error(
+                typeof event.message === 'string'
+                  ? event.message
+                  : 'Thao tác thất bại'
+              );
+            }
+          }),
+          undefined,
+          scenarioVariables,
+          null,
+          activeScenarioId,
+          inlineScenarioDeviceVars
+        );
+      } catch (e) {
+        toast.error(String(e));
+        throw e;
+      } finally {
+        previewSession.onStreamEnd(runId);
+      }
+    },
+    [
+      activeScenarioId,
+      device.selectedDevice,
+      inlineScenarioDeviceVars,
+      previewSession,
+      scenarioVariables
     ]
   );
 
@@ -1218,20 +1539,13 @@ export function ControlRecordView({
         );
       }
     },
-    [
-      coordinatePickTarget,
-      showFlowUi,
-      flowCoordPick,
-      steps,
-      device.selectedDevice,
-      hierarchy
-    ]
+    [coordinatePickTarget, showFlowUi, flowCoordPick, steps]
   );
 
   // When user taps the phone screen → hierarchy highlight + optional selector pick
   const handleScreenTap = useCallback(
     (rx: number, ry: number) => {
-      const tree = parseHierarchyTree(hierarchy.xml);
+      const tree = parseHierarchyTree(hierarchyXml);
       if (tree) {
         const nodeId = findNodeIdAtRatio(tree, rx, ry);
         setSelectedNodeId(nodeId);
@@ -1283,7 +1597,7 @@ export function ControlRecordView({
       }
 
       if (showFlowUi && flowSelectorPickFgId && flowCtxRef.current) {
-        const sel = findSelectorInXml(hierarchy.xml, rx, ry);
+        const sel = findSelectorInXml(hierarchyXml, rx, ry);
         if (!sel?.value?.trim()) {
           toast.warning(t('pickSelectorNoElement'));
           return;
@@ -1344,7 +1658,7 @@ export function ControlRecordView({
       }
 
       if (selectorPickTarget) {
-        const sel = findSelectorInXml(hierarchy.xml, rx, ry);
+        const sel = findSelectorInXml(hierarchyXml, rx, ry);
         if (sel?.value) {
           applySelectorPick(sel.selector, { rx: rx3, ry: ry3 });
         } else {
@@ -1354,7 +1668,7 @@ export function ControlRecordView({
       }
     },
     [
-      hierarchy,
+      hierarchyXml,
       selectorPickTarget,
       coordinatePickTarget,
       applySelectorPick,
@@ -1367,6 +1681,60 @@ export function ControlRecordView({
       selector
     ]
   );
+
+  handleScreenTapRef.current = handleScreenTap;
+  handleScreenSwipeRef.current = handleScreenSwipe;
+
+  const mirrorOnTap = useCallback((rx: number, ry: number) => {
+    handleScreenTapRef.current(rx, ry);
+  }, []);
+
+  const mirrorSwipeEnabled =
+    coordinatePickTarget?.mode === 'swipe_segment' ||
+    (showFlowUi && flowCoordPick?.kind === 'swipe');
+
+  const mirrorOnSwipe = useMemo(
+    () =>
+      mirrorSwipeEnabled
+        ? (
+            rx1: number,
+            ry1: number,
+            rx2: number,
+            ry2: number,
+            durationMs: number
+          ) => handleScreenSwipeRef.current(rx1, ry1, rx2, ry2, durationMs)
+        : undefined,
+    [mirrorSwipeEnabled]
+  );
+
+  const mirrorInputLocked = useMemo(() => {
+    const d = device.selectedDevice;
+    if (!d) return { hideControls: true, readOnlyPreview: true };
+    const blocked =
+      (d.state || '').replace('DeviceState.', '') === 'BUSY' ||
+      (d.scenario_active ?? 0) > 0;
+    return { hideControls: blocked, readOnlyPreview: blocked };
+  }, [device.selectedDevice]);
+
+  const mirrorDeviceOps = useMemo((): DeviceOpsConfig | undefined => {
+    const d = device.selectedDevice;
+    if (!d) return undefined;
+    return {
+      disabled: mirrorInputLocked.hideControls,
+      defaultPackage: packageFromCurrentApp(d.current_app),
+      onRunStep: runDeviceOpStep,
+      onRunShell: (cmd) => runAgentShell(d.serial, cmd),
+      onInstallApk: (url) => {
+        record.wsSend({ type: 'install', serial: d.serial, url });
+        toast.info(`Đang cài APK lên ${d.serial}…`);
+      }
+    };
+  }, [
+    device.selectedDevice,
+    mirrorInputLocked.hideControls,
+    record,
+    runDeviceOpStep
+  ]);
 
   // ── Error / empty states ─────────────────────────────────────────────────
   if (error) {
@@ -1442,9 +1810,12 @@ export function ControlRecordView({
         </div>
 
         {save.editingContext && (
-          <span className='inline-flex shrink-0 items-center rounded-full border border-amber-400/40 bg-amber-400/10 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300'>
-            Đang chỉnh sửa
-          </span>
+          <Badge
+            variant='outline'
+            className='shrink-0 border-amber-400/40 bg-amber-400/10 text-[10px] font-medium text-amber-700 dark:text-amber-300'
+          >
+            {t('editingScenario')}
+          </Badge>
         )}
         {save.templateContext && (
           <span className='inline-flex shrink-0 items-center rounded-full border border-emerald-400/40 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300'>
@@ -1452,54 +1823,79 @@ export function ControlRecordView({
           </span>
         )}
 
-        {/* Device selector */}
-        <div className='min-w-0 max-w-[min(280px,calc(100vw-14rem))] shrink'>
-          <Select
-            value={device.selectedSerial ?? ''}
-            onValueChange={(v) =>
-              guardWhilePreviewActive(() => device.setSelectedSerial(v || null))
-            }
-          >
-            <SelectTrigger
-              className={cn(
-                'h-8 w-full min-w-0 max-w-full overflow-hidden text-xs',
-                '[&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate [&_[data-slot=select-value]]:text-left'
-              )}
+        {/* Device selector + multi sync */}
+        <div className='flex min-w-0 shrink items-center gap-1.5'>
+          <div className='min-w-0 max-w-[min(240px,calc(100vw-16rem))]'>
+            <Select
+              value={deviceSelectValue}
+              onValueChange={(v) =>
+                guardWhilePreviewActive(() =>
+                  device.setSelectedSerial(v || null)
+                )
+              }
             >
-              <SelectValue placeholder={t('selectPhonePlaceholder')} />
-            </SelectTrigger>
-            <SelectContent className='max-w-[min(420px,calc(100vw-2rem))]'>
-              {device.connectedDevices.map((d) => (
-                <SelectItem
-                  key={d.serial}
-                  value={d.serial}
-                  title={deviceSelectFullTitle(d)}
-                  className='text-xs'
-                >
-                  <span className='inline-flex min-w-0 max-w-full items-center gap-1'>
-                    <span className='min-w-0 truncate'>
-                      {formatDeviceSelectLabel(d)}
-                    </span>
-                    {((d.state || '').replace('DeviceState.', '') === 'BUSY' ||
-                      (d.scenario_active ?? 0) > 0) && (
-                      <span className='shrink-0 rounded bg-amber-400/20 px-1 py-0.5 text-[9px] font-medium text-amber-700 dark:text-amber-300'>
-                        chiến dịch
+              <SelectTrigger
+                className={cn(
+                  'h-8 w-full min-w-0 max-w-full overflow-hidden text-xs',
+                  '[&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate [&_[data-slot=select-value]]:text-left'
+                )}
+              >
+                <SelectValue placeholder={t('selectPhonePlaceholder')} />
+              </SelectTrigger>
+              <SelectContent className='max-w-[min(420px,calc(100vw-2rem))]'>
+                {device.connectedDevices.map((d) => (
+                  <SelectItem
+                    key={d.serial}
+                    value={d.serial}
+                    title={deviceSelectFullTitle(d)}
+                    className='text-xs'
+                  >
+                    <span className='inline-flex min-w-0 max-w-full items-center gap-1'>
+                      <span className='min-w-0 truncate'>
+                        {formatDeviceSelectLabel(d)}
                       </span>
-                    )}
-                  </span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+                      {((d.state || '').replace('DeviceState.', '') ===
+                        'BUSY' ||
+                        (d.scenario_active ?? 0) > 0) && (
+                        <Badge
+                          variant='outline'
+                          className='h-4 shrink-0 border-amber-400/40 bg-amber-400/10 px-1 text-[9px] font-medium text-amber-700 dark:text-amber-300'
+                        >
+                          {t('deviceCampaignBadge')}
+                        </Badge>
+                      )}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <MultiDevicePicker
+            options={multiFollowerOptions}
+            selectedSerials={multiFollowerSerials}
+            onSelectedChange={setMultiFollowerSerials}
+            maxFollowers={MAX_MULTI_FOLLOWER_DEVICES}
+            maxTotalDevices={MAX_MULTI_CONTROL_DEVICES}
+            disabled={!selectedDevice || !canExecuteDevice}
+            disabledTitle={
+              !canExecuteDevice
+                ? safeReadOnly
+                  ? t('safeModeReadOnly')
+                  : t('noControlPermission')
+                : undefined
+            }
+          />
         </div>
 
-        {/* WS status dot */}
-        <span
+        {/* WS status */}
+        <Badge
+          variant='outline'
           className={cn(
-            'inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-1 text-[11px] font-medium',
+            'h-8 shrink-0 gap-1.5 rounded-full px-2.5 text-[11px] font-medium',
             device.wsConnected
-              ? 'border-green-500/20 bg-green-500/10 text-green-700 dark:text-green-400'
-              : 'border-red-500/20 bg-red-500/10 text-red-600 dark:text-red-400'
+              ? 'border-green-500/30 bg-green-500/10 text-green-700 dark:text-green-400'
+              : 'border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400'
           )}
         >
           <span
@@ -1509,7 +1905,7 @@ export function ControlRecordView({
             )}
           />
           {device.wsConnected ? t('wsConnected') : t('wsDisconnected')}
-        </span>
+        </Badge>
 
         <div className='h-5 w-px bg-border' />
 
@@ -1528,18 +1924,14 @@ export function ControlRecordView({
               }
               setFlowMode((v) => !v);
             }}
-            title={
-              flowMode
-                ? 'Chuyển về danh sách bước'
-                : 'Chuyển sang Flow Editor trực quan'
-            }
+            title={flowMode ? t('flowSwitchToList') : t('flowSwitchToFlow')}
           >
             {flowMode ? (
               <List className='size-3.5' />
             ) : (
               <GitBranch className='size-3.5' />
             )}
-            {flowMode ? 'Danh sách' : 'Flow'}
+            {flowMode ? t('flowListLabel') : t('flowFlowLabel')}
           </Button>
         )}
       </div>
@@ -1550,9 +1942,7 @@ export function ControlRecordView({
         <div
           className={cn(
             'flex shrink-0 flex-col border-r border-border/60 bg-muted/10 transition-all duration-200',
-            leftCollapsed || !safeHierarchy
-              ? 'w-0 overflow-hidden'
-              : 'w-[280px]'
+            treePanelOpen ? 'w-[280px]' : 'w-0 overflow-hidden'
           )}
         >
           {/* Tree */}
@@ -1620,7 +2010,9 @@ export function ControlRecordView({
                     size='sm'
                     variant='secondary'
                     className='h-5 shrink-0 px-1.5 text-[9px]'
-                    onClick={selector.tap}
+                    onClick={() =>
+                      selector.tap({ multiSerials: activeMultiSerials })
+                    }
                     disabled={!selectedDevice || !canExecuteDevice}
                     title={
                       !canExecuteDevice
@@ -1724,74 +2116,129 @@ export function ControlRecordView({
           </div>
         </div>
 
-        {/* Collapse toggle button */}
-        <button
-          type='button'
-          onClick={() => setLeftCollapsed(!leftCollapsed)}
-          className='relative z-10 flex w-4 shrink-0 items-center justify-center border-r border-border/40 bg-muted/20 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground'
-          title={leftCollapsed ? 'Mở cây giao diện' : 'Thu cây giao diện'}
-        >
-          {leftCollapsed ? (
-            <ChevronRight className='size-3' />
-          ) : (
-            <ChevronLeft className='size-3' />
-          )}
-        </button>
+        {/* Collapse toggle — hidden while multi-phone uses the freed horizontal space */}
+        {!hasMultiFollowers ? (
+          <button
+            type='button'
+            onClick={() => setLeftCollapsed(!leftCollapsed)}
+            className='relative z-10 flex w-4 shrink-0 items-center justify-center border-r border-border/40 bg-muted/20 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground'
+            title={leftCollapsed ? 'Mở cây giao diện' : 'Thu cây giao diện'}
+          >
+            {leftCollapsed ? (
+              <ChevronRight className='size-3' />
+            ) : (
+              <ChevronLeft className='size-3' />
+            )}
+          </button>
+        ) : null}
 
-        {/* ── COL 2: Phone screen (centered) ───────────────────────────── */}
+        {/* ── COL 2: Phone screen ───────────────────────────────────────── */}
         <div
           ref={mirrorColRef}
-          className='flex min-h-0 w-[clamp(300px,28vw,440px)] shrink-0 flex-col overflow-y-auto overflow-x-hidden border-r border-border/60 bg-muted/20'
+          className={cn(
+            'flex min-h-0 flex-col overflow-hidden bg-muted/20',
+            multiFocusMode
+              ? 'min-w-0 flex-1'
+              : 'w-[clamp(300px,30vw,360px)] shrink-0 border-r border-border/60'
+          )}
         >
           {selectedDevice ? (
-            <>
-              {((selectedDevice.state || '').replace('DeviceState.', '') ===
-                'BUSY' ||
-                (selectedDevice.scenario_active ?? 0) > 0) && (
-                <div className='flex w-full shrink-0 items-center gap-2 border-b border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300'>
-                  <span>{t('takeover.manualControlBlocked')}</span>
-                </div>
-              )}
-              <div className='flex w-full justify-center p-3'>
-                <DeviceTile
+            hasMultiFollowers ? (
+              <MultiDeviceStage
+                mode={multiFocusMode ? 'focus' : 'edit'}
+                toolbar={
+                  multiFocusMode ? (
+                    <div className='flex shrink-0 items-center gap-2 border-b border-border/60 bg-background/90 px-3 py-1.5'>
+                      <Button
+                        size='sm'
+                        variant={record.recording ? 'destructive' : 'default'}
+                        className='h-7 gap-1.5 px-2.5 text-xs'
+                        onClick={() => void record.toggleRecording()}
+                      >
+                        {record.recording ? (
+                          <Square className='size-3.5' />
+                        ) : (
+                          <Circle className='size-3.5 fill-current' />
+                        )}
+                        {record.recording
+                          ? t('stopRecording')
+                          : t('startRecording')}
+                      </Button>
+                      <Button
+                        size='sm'
+                        variant='outline'
+                        className='h-7 gap-1.5 px-2.5 text-xs'
+                        onClick={() => setPlayerMode(true)}
+                        disabled={
+                          (selectedDevice.state || '').replace(
+                            'DeviceState.',
+                            ''
+                          ) === 'BUSY'
+                        }
+                      >
+                        <Play className='size-3.5' />
+                        {t('tryRun')}
+                      </Button>
+                      <div className='flex-1' />
+                      <Button
+                        size='sm'
+                        variant='outline'
+                        className='h-7 gap-1.5 px-2.5 text-xs'
+                        onClick={() => setStepPickerOpen(true)}
+                      >
+                        <Plus className='size-3.5' />
+                        {t('multiControl.openPicker')}
+                      </Button>
+                    </div>
+                  ) : undefined
+                }
+                primaryMirror={
+                  <ControlRecordMirror
+                    device={selectedDevice}
+                    logLines={device.logs[selectedDevice.serial] ?? []}
+                    mode={device.mode}
+                    wsSend={mirrorWsSend}
+                    onToggleMode={record.handleToggleMode}
+                    onRestart={record.handleRestart}
+                    onTap={mirrorOnTap}
+                    onSwipe={mirrorOnSwipe}
+                    highlightBounds={highlightBounds}
+                    hideControls={mirrorInputLocked.hideControls}
+                    hideDeviceFunctions={mirrorInputLocked.hideControls}
+                    readOnlyPreview={mirrorInputLocked.readOnlyPreview}
+                    busyBanner={mirrorBusyBanner}
+                    mirrorSize={multiFocusMode ? 'multiFocus' : 'multiCompact'}
+                    deviceOps={mirrorDeviceOps}
+                  />
+                }
+                devices={selectedMultiFollowerDevices}
+                wsMode={device.mode}
+                wsSend={mirrorWsSend}
+                onPromote={promoteMultiFollower}
+              />
+            ) : (
+              <div className='flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden'>
+                <ControlRecordMirror
                   device={selectedDevice}
                   logLines={device.logs[selectedDevice.serial] ?? []}
                   mode={device.mode}
-                  wsSend={record.sendAndRecord}
+                  wsSend={mirrorWsSend}
                   onToggleMode={record.handleToggleMode}
                   onRestart={record.handleRestart}
-                  onTap={handleScreenTap}
-                  hideHeader
-                  hideStepMonitor
-                  minimalRailControls
-                  onSwipe={
-                    coordinatePickTarget?.mode === 'swipe_segment' ||
-                    (showFlowUi && flowCoordPick?.kind === 'swipe')
-                      ? handleScreenSwipe
-                      : undefined
-                  }
+                  onTap={mirrorOnTap}
+                  onSwipe={mirrorOnSwipe}
                   highlightBounds={highlightBounds}
-                  hideControls={
-                    (selectedDevice.state || '').replace('DeviceState.', '') ===
-                      'BUSY' || (selectedDevice.scenario_active ?? 0) > 0
-                  }
-                  hideDeviceFunctions={
-                    (selectedDevice.state || '').replace('DeviceState.', '') ===
-                      'BUSY' || (selectedDevice.scenario_active ?? 0) > 0
-                  }
-                  readOnlyPreview={
-                    (selectedDevice.state || '').replace('DeviceState.', '') ===
-                      'BUSY' || (selectedDevice.scenario_active ?? 0) > 0
-                  }
+                  hideControls={mirrorInputLocked.hideControls}
+                  hideDeviceFunctions={mirrorInputLocked.hideControls}
+                  readOnlyPreview={mirrorInputLocked.readOnlyPreview}
+                  busyBanner={mirrorBusyBanner}
+                  deviceOps={mirrorDeviceOps}
                 />
               </div>
-            </>
+            )
           ) : (
-            <div className='flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center'>
-              <Video
-                className='size-8 text-muted-foreground/30'
-                strokeWidth={1.25}
-              />
+            <div className='flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center'>
+              <MirrorPhonePlaceholder />
               <p className='text-xs text-muted-foreground'>
                 Chọn thiết bị từ thanh trên
               </p>
@@ -1800,489 +2247,474 @@ export function ControlRecordView({
         </div>
 
         {/* ── COL 3: Recording / scenario editor ───────────────────────── */}
-        <div className='flex min-w-0 flex-1 flex-col overflow-hidden'>
-          {playerMode && selectedDevice ? (
-            /* Player mode — fill column; list scrolls inside ScenarioPlayer */
-            <div className='flex min-h-0 flex-1 flex-col overflow-hidden p-4'>
-              <ScenarioPlayer
-                serial={selectedDevice.serial}
-                onClose={() =>
-                  guardWhilePreviewActive(() => setPlayerMode(false))
-                }
-                onPlayingChange={(p) => {
-                  hierarchy.setPaused(p);
-                  setPlayerPlaying(p);
-                }}
-                registerStop={(fn) => {
-                  stopPlayerRef.current = fn;
-                }}
-                preloadedSteps={
-                  steps.items.length > 0 ? (steps.items as any[]) : undefined
-                }
-                preloadedName={save.editingContext?.name}
-                preloadedVariables={scenarioVariables}
-                preloadedScenarioId={activeScenarioId}
-                preloadedScenarioDeviceVars={inlineScenarioDeviceVars}
-                preloadedAccountGroupId={
-                  saveAccountGroupId ||
-                  save.editingContext?.accountGroupId ||
-                  null
-                }
-                deviceBusy={
-                  (selectedDevice.state || '').replace('DeviceState.', '') ===
-                  'BUSY'
-                }
-              />
-            </div>
-          ) : (
-            <div className='flex min-h-0 flex-1 flex-col overflow-hidden'>
-              {/* Selector pick banner */}
-              {selectorPickTarget && (
-                <div className='flex shrink-0 items-center gap-2 border-b border-amber-400/30 bg-amber-50/80 px-4 py-2 dark:bg-amber-950/20'>
-                  <Crosshair className='size-3.5 shrink-0 text-amber-600' />
-                  <p className='flex-1 text-[11px] text-amber-800 dark:text-amber-300'>
-                    {t('pickSelectorBanner')}
-                  </p>
-                  <button
-                    type='button'
-                    className='text-[10px] text-amber-700 underline underline-offset-2 hover:no-underline dark:text-amber-400'
-                    onClick={() => setSelectorPickTarget(null)}
-                  >
-                    Huỷ
-                  </button>
-                </div>
-              )}
-
-              {coordinatePickTarget?.mode === 'tap_point' && (
-                <div className='flex shrink-0 items-center gap-2 border-b border-sky-400/35 bg-sky-50/90 px-4 py-2 dark:bg-sky-950/25'>
-                  <MousePointerClick className='size-3.5 shrink-0 text-sky-700 dark:text-sky-400' />
-                  <p className='flex-1 text-[11px] text-sky-900 dark:text-sky-200'>
-                    CHẠM TỌA ĐỘ — chạm một điểm trên mirror (cột điện thoại).
-                    Esc hoặc Huỷ để thoát.
-                  </p>
-                  <button
-                    type='button'
-                    className='text-[10px] text-sky-800 underline underline-offset-2 hover:no-underline dark:text-sky-300'
-                    onClick={() => setCoordinatePickTarget(null)}
-                  >
-                    Huỷ
-                  </button>
-                </div>
-              )}
-
-              {coordinatePickTarget?.mode === 'swipe_segment' && (
-                <div className='flex shrink-0 items-center gap-2 border-b border-sky-400/35 bg-sky-50/90 px-4 py-2 dark:bg-sky-950/25'>
-                  <Move className='size-3.5 shrink-0 text-sky-700 dark:text-sky-400' />
-                  <p className='flex-1 text-[11px] text-sky-900 dark:text-sky-200'>
-                    Vuốt trên mirror để lấy đoạn (điểm đầu → cuối). Esc hoặc Huỷ
-                    để thoát.
-                  </p>
-                  <button
-                    type='button'
-                    className='text-[10px] text-sky-800 underline underline-offset-2 hover:no-underline dark:text-sky-300'
-                    onClick={() => setCoordinatePickTarget(null)}
-                  >
-                    Huỷ
-                  </button>
-                </div>
-              )}
-
-              {showFlowUi && flowCoordPick && (
-                <div className='flex shrink-0 items-center gap-2 border-b border-sky-400/35 bg-sky-50/90 px-4 py-2 dark:bg-sky-950/25'>
-                  <MousePointerClick className='size-3.5 shrink-0 text-sky-700 dark:text-sky-400' />
-                  <p className='flex-1 text-[11px] text-sky-900 dark:text-sky-200'>
-                    {flowCoordPick.kind === 'tap'
-                      ? 'FLOW — chạm mirror để gán tọa độ cho node đang chọn. Esc để hủy.'
-                      : 'FLOW — vuốt mirror để gán swipe_ratio. Esc để hủy.'}
-                  </p>
-                  <button
-                    type='button'
-                    className='text-[10px] text-sky-800 underline underline-offset-2 hover:no-underline dark:text-sky-300'
-                    onClick={() => setFlowCoordPick(null)}
-                  >
-                    Huỷ
-                  </button>
-                </div>
-              )}
-
-              {showFlowUi && flowSelectorPickFgId && (
-                <div className='flex shrink-0 items-center gap-2 border-b border-amber-400/30 bg-amber-50/80 px-4 py-2 dark:bg-amber-950/20'>
-                  <Crosshair className='size-3.5 shrink-0 text-amber-600' />
-                  <p className='flex-1 text-[11px] text-amber-800 dark:text-amber-300'>
-                    FLOW — chạm phần tử trên mirror để gán selector cho node
-                    đang chọn (cần XML cây bên trái). Esc để hủy.
-                  </p>
-                  <button
-                    type='button'
-                    className='text-[10px] text-amber-700 underline underline-offset-2 hover:no-underline dark:text-amber-400'
-                    onClick={() => setFlowSelectorPickFgId(null)}
-                  >
-                    Huỷ
-                  </button>
-                </div>
-              )}
-
-              {/* Section header */}
-              <div className='flex shrink-0 items-center border-b border-border/40 bg-muted/20 px-4 py-2'>
-                <div className='flex min-w-0 max-w-full flex-nowrap items-center gap-1.5 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'>
-                  {record.pollingXml && (
-                    <RefreshCw
-                      size={12}
-                      className='animate-spin text-red-500/80'
-                    />
-                  )}
-                  <Button
-                    size='sm'
-                    variant={record.recording ? 'destructive' : 'default'}
-                    className='h-7 shrink-0 gap-1.5 px-2.5 text-xs'
-                    onClick={() => void record.toggleRecording()}
-                    disabled={!selectedDevice}
-                  >
-                    {record.recording ? (
-                      <Square className='size-3.5' />
-                    ) : (
-                      <Circle className='size-3.5 fill-current' />
-                    )}
-                    {record.recording
-                      ? t('stopRecording')
-                      : t('startRecording')}
-                  </Button>
-                  <Button
-                    size='sm'
-                    variant='outline'
-                    className='h-7 shrink-0 gap-1.5 px-2.5 text-xs'
-                    onClick={() => setPlayerMode(true)}
-                    disabled={
-                      !selectedDevice ||
-                      (selectedDevice.state || '').replace(
-                        'DeviceState.',
-                        ''
-                      ) === 'BUSY'
-                    }
-                    title={
-                      selectedDevice &&
-                      (selectedDevice.state || '').replace(
-                        'DeviceState.',
-                        ''
-                      ) === 'BUSY'
-                        ? 'Thiết bị đang chạy campaign — không cho chạy thử'
-                        : undefined
-                    }
-                  >
-                    <Play className='size-3.5' />
-                    {t('tryRun')}
-                  </Button>
-                  <Tooltip delayDuration={300}>
-                    <TooltipTrigger asChild>
-                      <Button
-                        size='sm'
-                        variant='ghost'
-                        className='h-7 w-7 shrink-0 p-0'
-                        onClick={() => setJsonDialogOpen(true)}
-                        disabled={steps.items.length === 0}
-                      >
-                        <Code2 className='size-3.5' />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side='bottom' className='text-xs'>
-                      Xem JSON
-                    </TooltipContent>
-                  </Tooltip>
-                  <Button
-                    size='sm'
-                    variant='outline'
-                    className='h-7 shrink-0 gap-1.5 px-2.5 text-xs'
-                    onClick={() => {
-                      if (save.templateContext) {
-                        save.saveToTemplate(scenarioVariables);
-                        return;
-                      }
-                      steps.openSave();
-                    }}
-                    disabled={
-                      steps.items.length === 0 ||
-                      !canSaveWork ||
-                      save.savingTemplate
-                    }
-                    title={
-                      !canSaveWork
-                        ? safeReadOnly
-                          ? 'Safe mode: không cho lưu'
-                          : undefined
-                        : undefined
-                    }
-                  >
-                    <Save className='size-3.5' />
-                    {save.templateContext
-                      ? save.savingTemplate
-                        ? t('templateSaving')
-                        : t('templateSave')
-                      : 'Lưu'}
-                  </Button>
-                  <Tooltip delayDuration={400}>
-                    <TooltipTrigger asChild>
-                      <Button
-                        size='sm'
-                        variant='outline'
-                        onClick={() => setVarDialogOpen(true)}
-                        className={cn(
-                          'h-7 shrink-0 gap-1.5 px-2.5 text-xs',
-                          Object.keys(scenarioVariables).length > 0 &&
-                            'border-primary/40 bg-primary/10 text-primary hover:bg-primary/20'
-                        )}
-                      >
-                        <SlidersHorizontal className='size-3.5' />
-                        Biến
-                        {Object.keys(scenarioVariables).length > 0 && (
-                          <span className='rounded-full bg-primary/20 px-1.5 text-[10px] font-bold'>
-                            {Object.keys(scenarioVariables).length}
-                          </span>
-                        )}
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side='bottom' className='text-xs'>
-                      Chỉnh biến — giá trị thay thế cho {'${VAR}'} khi chạy thử
-                      bước
-                    </TooltipContent>
-                  </Tooltip>
-                  <Tooltip delayDuration={400}>
-                    <TooltipTrigger asChild>
-                      <Button
-                        size='sm'
-                        variant='outline'
-                        onClick={() => setDeviceVarDialogOpen(true)}
-                        disabled={!activeCampaignId || !selectedDeviceId}
-                        className={cn(
-                          'h-7 shrink-0 gap-1.5 px-2.5 text-xs',
-                          hasEnabledDeviceVars &&
-                            activeCampaignId &&
-                            selectedDeviceId
-                            ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-300'
-                            : ''
-                        )}
-                      >
-                        <SlidersHorizontal className='size-3.5' />
-                        Biến thiết bị
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side='bottom' className='text-xs'>
-                      {!activeCampaignId
-                        ? 'Mở trong ngữ cảnh chiến dịch để thiết lập'
-                        : !selectedScenarioDeviceId
-                          ? 'Chọn thiết bị trước'
-                          : `Đang gắn cho: ${selectedDeviceLabel}`}
-                    </TooltipContent>
-                  </Tooltip>
-                  <Tooltip delayDuration={400}>
-                    <TooltipTrigger asChild>
-                      <Button
-                        size='sm'
-                        variant='ghost'
-                        className='h-7 w-7 shrink-0 p-0'
-                      >
-                        <HelpCircle className='size-3.5' />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side='bottom' className='max-w-xs text-xs'>
-                      {t('tooltipScenarioSection')}
-                    </TooltipContent>
-                  </Tooltip>
-                </div>
+        {showEditorPanel ? (
+          <div className='flex min-h-0 min-w-[min(100%,480px)] flex-1 flex-col overflow-hidden border-l border-border/60'>
+            {playerMode && selectedDevice ? (
+              /* Player mode — fill column; list scrolls inside ScenarioPlayer */
+              <div className='flex min-h-0 flex-1 flex-col overflow-hidden p-4'>
+                <ScenarioPlayer
+                  serial={selectedDevice.serial}
+                  onClose={() =>
+                    guardWhilePreviewActive(() => setPlayerMode(false))
+                  }
+                  onPlayingChange={handlePlayerPlayingChange}
+                  registerStop={registerPlayerStop}
+                  preloadedSteps={
+                    steps.items.length > 0 ? (steps.items as any[]) : undefined
+                  }
+                  preloadedName={save.editingContext?.name}
+                  preloadedVariables={scenarioVariables}
+                  preloadedScenarioId={activeScenarioId}
+                  preloadedScenarioDeviceVars={inlineScenarioDeviceVars}
+                  preloadedAccountGroupId={
+                    saveAccountGroupId ||
+                    save.editingContext?.accountGroupId ||
+                    null
+                  }
+                  deviceBusy={
+                    (selectedDevice.state || '').replace('DeviceState.', '') ===
+                    'BUSY'
+                  }
+                />
               </div>
-
-              {/* Flow editor */}
+            ) : (
               <div className='flex min-h-0 flex-1 flex-col overflow-hidden'>
-                <div className='min-h-0 flex-1 overflow-y-auto px-3 pb-2'>
-                {steps.items.length === 0 ? (
-                  <EmptyNodePicker
-                    templates={templatesQuery.data}
-                    templatesLoading={templatesQuery.isLoading}
-                    onPreviewTemplate={setPreviewTemplate}
-                    onAddFlow={steps.addFlow}
-                    onAddWait={steps.addWait}
-                  />
-                ) : showFlowUi ? (
-                  <div className='flex h-full min-h-[240px] flex-col overflow-hidden rounded-lg border border-border/50 bg-background lg:flex-row'>
-                    <div className='relative min-h-[220px] flex-1 overflow-hidden lg:min-h-0'>
-                      <FlowgramCanvas
-                        key={`flow-${flowCanvasKey}`}
-                        steps={steps.items as any}
-                        workbench={flowWorkbench}
-                        onFlowCtx={(ctx) => {
-                          flowCtxRef.current = ctx;
-                        }}
-                        onStepsChange={(newSteps) => {
-                          flowStepsRef.current = newSteps as any;
-                          steps.setItems(newSteps as any);
-                        }}
-                      />
-                    </div>
-                    <div className='max-h-[min(38vh,320px)] w-full shrink-0 overflow-y-auto border-t border-border bg-card lg:max-h-none lg:w-[min(100%,280px)] lg:border-l lg:border-t-0'>
-                      {flowDetailStep ? (
-                        <StepDetailPanel
-                          step={flowDetailStep}
-                          onChange={handleFlowDetailChange}
-                          onClose={() => setFlowSelectedFgId(null)}
-                          onRequestPickSelector={
-                            flowSelectedFgId &&
-                            flowDetailStep &&
-                            isSelectorPickableStep(flowDetailStep)
-                              ? () => {
-                                  setFlowSelectorPickFgId(flowSelectedFgId);
-                                  setSelectorPickTarget(null);
-                                  setFlowCoordPick(null);
-                                  setCoordinatePickTarget(null);
-                                  toast.info(
-                                    'Chạm phần tử trên mirror để gán selector'
-                                  );
-                                }
-                              : undefined
-                          }
-                          onRequestPickTapCoords={
-                            flowSelectedFgId
-                              ? () => {
-                                  setFlowCoordPick({
-                                    fgId: flowSelectedFgId,
-                                    kind: 'tap'
-                                  });
-                                  setCoordinatePickTarget(null);
-                                  setFlowSelectorPickFgId(null);
-                                  toast.info(
-                                    'Chạm mirror để gán tọa độ cho node này'
-                                  );
-                                }
-                              : undefined
-                          }
-                          onRequestPickSwipeCoords={
-                            flowSelectedFgId
-                              ? () => {
-                                  setFlowCoordPick({
-                                    fgId: flowSelectedFgId,
-                                    kind: 'swipe'
-                                  });
-                                  setCoordinatePickTarget(null);
-                                  setFlowSelectorPickFgId(null);
-                                  toast.info(
-                                    'Vuốt trên mirror để gán swipe_ratio'
-                                  );
-                                }
-                              : undefined
-                          }
-                        />
-                      ) : (
-                        <div className='space-y-2 p-3 text-[11px] leading-relaxed text-muted-foreground'>
-                          <p>
-                            Bấm <strong>con trỏ</strong> trên node → chỉnh chi
-                            tiết; <strong>play</strong> chạy một bước. Cây XML +
-                            thêm bước từ selector vẫn dùng cột trái như chế độ
-                            danh sách.
-                          </p>
-                          <p className='rounded-md border border-border/80 bg-muted/30 px-2 py-1.5 text-[10px]'>
-                            <strong>Không có “kéo dây” tự do</strong> — Flowgram
-                            (fixed-layout) tự vẽ nối theo thứ tự dọc và nhánh
-                            if/loop/random. Đổi thứ tự bằng{' '}
-                            <strong>kéo thả node</strong>. Muốn nối dây tùy ý
-                            cần editor dạng graph tự do (vd. React Flow), không
-                            nằm trong thư viện hiện tại.
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <div className='flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border/50 bg-background'>
-                    {selectedDevice &&
-                      Object.values(stepRunStates).some(
-                        (st) => st === 'running'
-                      ) && (
-                        <div className='flex shrink-0 justify-end border-b border-border/60 bg-muted/40 px-2 py-1.5'>
-                          <Button
-                            type='button'
-                            size='sm'
-                            variant='outline'
-                            className='h-7 gap-1 text-xs text-destructive hover:bg-destructive/10'
-                            onClick={handleStopInlineRun}
-                          >
-                            <Square className='size-3' fill='currentColor' />
-                            Dừng chạy thử
-                          </Button>
-                        </div>
-                      )}
-                    <div className='min-h-0 flex-1 overflow-hidden'>
-                      <FlowEditor
-                        steps={steps.items as FlowStep[]}
-                        onChange={(newSteps) =>
-                          steps.setItems(
-                            newSteps.map((s: FlowStep, i: number) => ({
-                              ...s,
-                              _id: (s as any)._id || `step-${Date.now()}-${i}`
-                            })) as any
-                          )
-                        }
-                        maxHeight='calc(100vh - 170px)'
-                        selectorPickTarget={selectorPickTarget}
-                        onSelectorPickTargetChange={setSelectorPickTarget}
-                        coordinatePickTarget={coordinatePickTarget}
-                        onCoordinatePickTargetChange={
-                          setCoordinatePickTargetSafe
-                        }
-                        onRunStep={selectedDevice ? handleRunStep : undefined}
-                        onStopInlineRun={
-                          selectedDevice ? handleStopInlineRun : undefined
-                        }
-                        stepRunStates={stepRunStates}
-                      />
-                    </div>
+                {/* Selector pick banner */}
+                {selectorPickTarget && (
+                  <div className='flex shrink-0 items-center gap-2 border-b border-amber-400/30 bg-amber-50/80 px-4 py-2 dark:bg-amber-950/20'>
+                    <Crosshair className='size-3.5 shrink-0 text-amber-600' />
+                    <p className='flex-1 text-[11px] text-amber-800 dark:text-amber-300'>
+                      {t('pickSelectorBanner')}
+                    </p>
+                    <button
+                      type='button'
+                      className='text-[10px] text-amber-700 underline underline-offset-2 hover:no-underline dark:text-amber-400'
+                      onClick={() => setSelectorPickTarget(null)}
+                    >
+                      Huỷ
+                    </button>
                   </div>
                 )}
+
+                {coordinatePickTarget?.mode === 'tap_point' && (
+                  <div className='flex shrink-0 items-center gap-2 border-b border-sky-400/35 bg-sky-50/90 px-4 py-2 dark:bg-sky-950/25'>
+                    <MousePointerClick className='size-3.5 shrink-0 text-sky-700 dark:text-sky-400' />
+                    <p className='flex-1 text-[11px] text-sky-900 dark:text-sky-200'>
+                      CHẠM TỌA ĐỘ — chạm một điểm trên mirror (cột điện thoại).
+                      Esc hoặc Huỷ để thoát.
+                    </p>
+                    <button
+                      type='button'
+                      className='text-[10px] text-sky-800 underline underline-offset-2 hover:no-underline dark:text-sky-300'
+                      onClick={() => setCoordinatePickTarget(null)}
+                    >
+                      Huỷ
+                    </button>
+                  </div>
+                )}
+
+                {coordinatePickTarget?.mode === 'swipe_segment' && (
+                  <div className='flex shrink-0 items-center gap-2 border-b border-sky-400/35 bg-sky-50/90 px-4 py-2 dark:bg-sky-950/25'>
+                    <Move className='size-3.5 shrink-0 text-sky-700 dark:text-sky-400' />
+                    <p className='flex-1 text-[11px] text-sky-900 dark:text-sky-200'>
+                      Vuốt trên mirror để lấy đoạn (điểm đầu → cuối). Esc hoặc
+                      Huỷ để thoát.
+                    </p>
+                    <button
+                      type='button'
+                      className='text-[10px] text-sky-800 underline underline-offset-2 hover:no-underline dark:text-sky-300'
+                      onClick={() => setCoordinatePickTarget(null)}
+                    >
+                      Huỷ
+                    </button>
+                  </div>
+                )}
+
+                {showFlowUi && flowCoordPick && (
+                  <div className='flex shrink-0 items-center gap-2 border-b border-sky-400/35 bg-sky-50/90 px-4 py-2 dark:bg-sky-950/25'>
+                    <MousePointerClick className='size-3.5 shrink-0 text-sky-700 dark:text-sky-400' />
+                    <p className='flex-1 text-[11px] text-sky-900 dark:text-sky-200'>
+                      {flowCoordPick.kind === 'tap'
+                        ? 'FLOW — chạm mirror để gán tọa độ cho node đang chọn. Esc để hủy.'
+                        : 'FLOW — vuốt mirror để gán swipe_ratio. Esc để hủy.'}
+                    </p>
+                    <button
+                      type='button'
+                      className='text-[10px] text-sky-800 underline underline-offset-2 hover:no-underline dark:text-sky-300'
+                      onClick={() => setFlowCoordPick(null)}
+                    >
+                      Huỷ
+                    </button>
+                  </div>
+                )}
+
+                {showFlowUi && flowSelectorPickFgId && (
+                  <div className='flex shrink-0 items-center gap-2 border-b border-amber-400/30 bg-amber-50/80 px-4 py-2 dark:bg-amber-950/20'>
+                    <Crosshair className='size-3.5 shrink-0 text-amber-600' />
+                    <p className='flex-1 text-[11px] text-amber-800 dark:text-amber-300'>
+                      FLOW — chạm phần tử trên mirror để gán selector cho node
+                      đang chọn (cần XML cây bên trái). Esc để hủy.
+                    </p>
+                    <button
+                      type='button'
+                      className='text-[10px] text-amber-700 underline underline-offset-2 hover:no-underline dark:text-amber-400'
+                      onClick={() => setFlowSelectorPickFgId(null)}
+                    >
+                      Huỷ
+                    </button>
+                  </div>
+                )}
+
+                {/* Section header */}
+                <div className='flex shrink-0 items-center gap-1 border-b border-border/40 bg-muted/20 px-2 py-2'>
+                  {hasMultiFollowers && stepPickerOpen ? (
+                    <Button
+                      type='button'
+                      size='sm'
+                      variant='ghost'
+                      className='h-7 shrink-0 gap-1 px-2 text-xs text-muted-foreground'
+                      onClick={() => setStepPickerOpen(false)}
+                      title={t('multiControl.closePicker')}
+                    >
+                      <ChevronRight className='size-3.5' />
+                    </Button>
+                  ) : null}
+                  <div className='flex min-w-0 max-w-full flex-1 flex-nowrap items-center gap-1.5 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'>
+                    {record.pollingXml && (
+                      <RefreshCw
+                        size={12}
+                        className='animate-spin text-red-500/80'
+                      />
+                    )}
+                    <Button
+                      size='sm'
+                      variant={record.recording ? 'destructive' : 'default'}
+                      className='h-7 shrink-0 gap-1.5 px-2.5 text-xs'
+                      onClick={() => void record.toggleRecording()}
+                      disabled={!selectedDevice}
+                    >
+                      {record.recording ? (
+                        <Square className='size-3.5' />
+                      ) : (
+                        <Circle className='size-3.5 fill-current' />
+                      )}
+                      {record.recording
+                        ? t('stopRecording')
+                        : t('startRecording')}
+                    </Button>
+                    <Button
+                      size='sm'
+                      variant='outline'
+                      className='h-7 shrink-0 gap-1.5 px-2.5 text-xs'
+                      onClick={() => setPlayerMode(true)}
+                      disabled={
+                        !selectedDevice ||
+                        (selectedDevice.state || '').replace(
+                          'DeviceState.',
+                          ''
+                        ) === 'BUSY'
+                      }
+                      title={
+                        selectedDevice &&
+                        (selectedDevice.state || '').replace(
+                          'DeviceState.',
+                          ''
+                        ) === 'BUSY'
+                          ? 'Thiết bị đang chạy campaign — không cho chạy thử'
+                          : undefined
+                      }
+                    >
+                      <Play className='size-3.5' />
+                      {t('tryRun')}
+                    </Button>
+                    <Tooltip delayDuration={300}>
+                      <TooltipTrigger asChild>
+                        <Button
+                          size='sm'
+                          variant='ghost'
+                          className='h-7 w-7 shrink-0 p-0'
+                          onClick={() => setJsonDialogOpen(true)}
+                          disabled={steps.items.length === 0}
+                        >
+                          <Code2 className='size-3.5' />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side='bottom' className='text-xs'>
+                        Xem JSON
+                      </TooltipContent>
+                    </Tooltip>
+                    <Button
+                      size='sm'
+                      variant='outline'
+                      className='h-7 shrink-0 gap-1.5 px-2.5 text-xs'
+                      onClick={() => {
+                        if (save.templateContext) {
+                          save.saveToTemplate(scenarioVariables);
+                          return;
+                        }
+                        if (savingOrgScenario) {
+                          void handleSaveOrgScenario();
+                          return;
+                        }
+                        steps.openSave();
+                      }}
+                      disabled={
+                        steps.items.length === 0 ||
+                        !canSaveWork ||
+                        save.savingTemplate ||
+                        saveOrgBodyMutation.isPending
+                      }
+                      title={
+                        !canSaveWork
+                          ? safeReadOnly
+                            ? 'Safe mode: không cho lưu'
+                            : undefined
+                          : undefined
+                      }
+                    >
+                      <Save className='size-3.5' />
+                      {save.templateContext
+                        ? save.savingTemplate
+                          ? t('templateSaving')
+                          : t('templateSave')
+                        : savingOrgScenario
+                          ? saveOrgBodyMutation.isPending
+                            ? 'Đang lưu…'
+                            : 'Lưu'
+                          : 'Lưu'}
+                    </Button>
+                    <Tooltip delayDuration={400}>
+                      <TooltipTrigger asChild>
+                        <Button
+                          size='sm'
+                          variant='outline'
+                          onClick={() => setVarDialogOpen(true)}
+                          className={cn(
+                            'h-7 shrink-0 gap-1.5 px-2.5 text-xs',
+                            Object.keys(scenarioVariables).length > 0 &&
+                              'border-primary/40 bg-primary/10 text-primary hover:bg-primary/20'
+                          )}
+                        >
+                          <SlidersHorizontal className='size-3.5' />
+                          Biến
+                          {Object.keys(scenarioVariables).length > 0 && (
+                            <span className='rounded-full bg-primary/20 px-1.5 text-[10px] font-bold'>
+                              {Object.keys(scenarioVariables).length}
+                            </span>
+                          )}
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side='bottom' className='text-xs'>
+                        Chỉnh biến — giá trị thay thế cho {'${VAR}'} khi chạy
+                        thử bước
+                      </TooltipContent>
+                    </Tooltip>
+                    <Tooltip delayDuration={400}>
+                      <TooltipTrigger asChild>
+                        <Button
+                          size='sm'
+                          variant='outline'
+                          onClick={() => setDeviceVarDialogOpen(true)}
+                          disabled={!activeCampaignId || !selectedDeviceId}
+                          className={cn(
+                            'h-7 shrink-0 gap-1.5 px-2.5 text-xs',
+                            hasEnabledDeviceVars &&
+                              activeCampaignId &&
+                              selectedDeviceId
+                              ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-300'
+                              : ''
+                          )}
+                        >
+                          <SlidersHorizontal className='size-3.5' />
+                          Biến thiết bị
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side='bottom' className='text-xs'>
+                        {!activeCampaignId
+                          ? 'Mở trong ngữ cảnh chiến dịch để thiết lập'
+                          : !selectedScenarioDeviceId
+                            ? 'Chọn thiết bị trước'
+                            : `Đang gắn cho: ${selectedDeviceLabel}`}
+                      </TooltipContent>
+                    </Tooltip>
+                    <Tooltip delayDuration={400}>
+                      <TooltipTrigger asChild>
+                        <Button
+                          size='sm'
+                          variant='ghost'
+                          className='h-7 w-7 shrink-0 p-0'
+                        >
+                          <HelpCircle className='size-3.5' />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent
+                        side='bottom'
+                        className='max-w-xs text-xs'
+                      >
+                        {t('tooltipScenarioSection')}
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
+                </div>
+
+                {/* Flow editor */}
+                <div className='flex min-h-0 flex-1 flex-col overflow-hidden'>
+                  <div className='min-h-0 flex-1 overflow-y-auto px-3 pb-2'>
+                    {steps.items.length === 0 ? (
+                      <EmptyNodePicker
+                        templates={templatesQuery.data}
+                        templatesLoading={templatesQuery.isLoading}
+                        onPreviewTemplate={(tpl) => {
+                          setScenarioVariables((prev) =>
+                            mergeTemplateVariablesIntoEditor(
+                              prev,
+                              tpl.variables
+                            )
+                          );
+                          setPreviewTemplate(tpl);
+                        }}
+                        onAddFlow={steps.addFlow}
+                        onAddWait={steps.addWait}
+                      />
+                    ) : showFlowUi ? (
+                      <div className='flex h-full min-h-[240px] flex-col overflow-hidden rounded-lg border border-border/50 bg-background lg:flex-row'>
+                        <div className='relative min-h-[220px] flex-1 overflow-hidden lg:min-h-0'>
+                          <FlowgramCanvas
+                            key={`flow-${flowCanvasKey}`}
+                            steps={steps.items as any}
+                            workbench={flowWorkbench}
+                            onFlowCtx={(ctx) => {
+                              flowCtxRef.current = ctx;
+                            }}
+                            onStepsChange={(newSteps) => {
+                              flowStepsRef.current = newSteps as any;
+                              steps.setItems(newSteps as any);
+                            }}
+                          />
+                        </div>
+                        <div className='max-h-[min(38vh,320px)] w-full shrink-0 overflow-y-auto border-t border-border bg-card lg:max-h-none lg:w-[min(100%,280px)] lg:border-l lg:border-t-0'>
+                          {flowDetailStep ? (
+                            <StepDetailPanel
+                              step={flowDetailStep}
+                              onChange={handleFlowDetailChange}
+                              onClose={() => setFlowSelectedFgId(null)}
+                              onRequestPickSelector={
+                                flowSelectedFgId &&
+                                flowDetailStep &&
+                                isSelectorPickableStep(flowDetailStep)
+                                  ? () => {
+                                      setFlowSelectorPickFgId(flowSelectedFgId);
+                                      setSelectorPickTarget(null);
+                                      setFlowCoordPick(null);
+                                      setCoordinatePickTarget(null);
+                                      toast.info(
+                                        'Chạm phần tử trên mirror để gán selector'
+                                      );
+                                    }
+                                  : undefined
+                              }
+                              onRequestPickTapCoords={
+                                flowSelectedFgId
+                                  ? () => {
+                                      setFlowCoordPick({
+                                        fgId: flowSelectedFgId,
+                                        kind: 'tap'
+                                      });
+                                      setCoordinatePickTarget(null);
+                                      setFlowSelectorPickFgId(null);
+                                      toast.info(
+                                        'Chạm mirror để gán tọa độ cho node này'
+                                      );
+                                    }
+                                  : undefined
+                              }
+                              onRequestPickSwipeCoords={
+                                flowSelectedFgId
+                                  ? () => {
+                                      setFlowCoordPick({
+                                        fgId: flowSelectedFgId,
+                                        kind: 'swipe'
+                                      });
+                                      setCoordinatePickTarget(null);
+                                      setFlowSelectorPickFgId(null);
+                                      toast.info(
+                                        'Vuốt trên mirror để gán swipe_ratio'
+                                      );
+                                    }
+                                  : undefined
+                              }
+                            />
+                          ) : (
+                            <div className='space-y-2 p-3 text-[11px] leading-relaxed text-muted-foreground'>
+                              <p>
+                                Bấm <strong>con trỏ</strong> trên node → chỉnh
+                                chi tiết; <strong>play</strong> chạy một bước.
+                                Cây XML + thêm bước từ selector vẫn dùng cột
+                                trái như chế độ danh sách.
+                              </p>
+                              <p className='rounded-md border border-border/80 bg-muted/30 px-2 py-1.5 text-[10px]'>
+                                <strong>Không có “kéo dây” tự do</strong> —
+                                Flowgram (fixed-layout) tự vẽ nối theo thứ tự
+                                dọc và nhánh if/loop/random. Đổi thứ tự bằng{' '}
+                                <strong>kéo thả node</strong>. Muốn nối dây tùy
+                                ý cần editor dạng graph tự do (vd. React Flow),
+                                không nằm trong thư viện hiện tại.
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className='flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border/50 bg-background'>
+                        {selectedDevice &&
+                          Object.values(stepRunStates).some(
+                            (st) => st === 'running'
+                          ) && (
+                            <div className='flex shrink-0 justify-end border-b border-border/60 bg-muted/40 px-2 py-1.5'>
+                              <Button
+                                type='button'
+                                size='sm'
+                                variant='outline'
+                                className='h-7 gap-1 text-xs text-destructive hover:bg-destructive/10'
+                                onClick={handleStopInlineRun}
+                              >
+                                <Square
+                                  className='size-3'
+                                  fill='currentColor'
+                                />
+                                Dừng chạy thử
+                              </Button>
+                            </div>
+                          )}
+                        <div className='min-h-0 flex-1 overflow-hidden'>
+                          <FlowEditor
+                            steps={steps.items as FlowStep[]}
+                            onChange={handleFlowStepsChange}
+                            maxHeight='calc(100vh - 170px)'
+                            selectorPickTarget={selectorPickTarget}
+                            onSelectorPickTargetChange={setSelectorPickTarget}
+                            coordinatePickTarget={coordinatePickTarget}
+                            onCoordinatePickTargetChange={
+                              setCoordinatePickTargetSafe
+                            }
+                            onRunStep={
+                              selectedDevice ? handleRunStep : undefined
+                            }
+                            onStopInlineRun={
+                              selectedDevice ? handleStopInlineRun : undefined
+                            }
+                            stepRunStates={stepRunStates}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* ── Install APK dialog ──────────────────────────────────────────────── */}
-      <Dialog open={installDialogOpen} onOpenChange={setInstallDialogOpen}>
-        <DialogContent className='max-w-md'>
-          <DialogHeader>
-            <DialogTitle className='flex items-center gap-2 text-base'>
-              <PackagePlus className='size-4' />
-              Cài APK từ URL
-            </DialogTitle>
-          </DialogHeader>
-          <p className='-mt-1 text-[12px] text-muted-foreground'>
-            Nhập URL APK công khai. atx-agent trên thiết bị sẽ tải và cài đặt tự
-            động.
-          </p>
-          <div className='flex gap-2'>
-            <Input
-              placeholder='https://example.com/app.apk'
-              value={installUrl}
-              onChange={(e) => setInstallUrl(e.target.value)}
-              className='h-8 font-mono text-xs'
-            />
-            <Button
-              size='sm'
-              className='h-8 shrink-0'
-              disabled={!installUrl.trim() || !selectedDevice}
-              onClick={() => {
-                if (!selectedDevice || !installUrl.trim()) return;
-                record.wsSend({
-                  type: 'install',
-                  serial: selectedDevice.serial,
-                  url: installUrl.trim()
-                });
-                toast.info(`Đang cài APK lên ${selectedDevice.serial}…`);
-                setInstallDialogOpen(false);
-                setInstallUrl('');
-              }}
-            >
-              Cài
-            </Button>
+            )}
           </div>
-        </DialogContent>
-      </Dialog>
+        ) : null}
+      </div>
 
       {/* ── Variables dialog ────────────────────────────────────────────────── */}
       <Dialog open={varDialogOpen} onOpenChange={setVarDialogOpen}>
@@ -2292,7 +2724,10 @@ export function ControlRecordView({
               <SlidersHorizontal className='size-4 shrink-0' />
               {tVar('title')}
               {Object.keys(scenarioVariables).length > 0 ? (
-                <Badge variant='secondary' className='h-6 text-[11px] font-normal'>
+                <Badge
+                  variant='secondary'
+                  className='h-6 text-[11px] font-normal'
+                >
                   {tVar('variableCount', {
                     count: Object.keys(scenarioVariables).length
                   })}
@@ -2672,6 +3107,37 @@ export function ControlRecordView({
         </AlertDialogContent>
       </AlertDialog>
 
+      <AlertDialog
+        open={takeoverDialogOpen}
+        onOpenChange={(o) => {
+          if (!takeoverPending) setTakeoverDialogOpen(o);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('takeover.confirmTitle')}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('takeover.confirmDesc')}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={takeoverPending}>
+              {t('takeover.confirmCancel')}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={takeoverPending}
+              className='bg-destructive text-destructive-foreground hover:bg-destructive/90'
+              onClick={(e) => {
+                e.preventDefault();
+                void handleTakeoverConfirm();
+              }}
+            >
+              {t('takeover.confirmAction')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {/* Template preview dialog — opened from the empty-state picker. */}
       <Dialog
         open={previewTemplate !== null}
@@ -2764,6 +3230,9 @@ export function ControlRecordView({
                   onClick={() => {
                     const tpl = previewTemplate;
                     if (!tpl) return;
+                    setScenarioVariables((prev) =>
+                      mergeTemplateVariablesIntoEditor(prev, tpl.variables)
+                    );
                     const n = steps.appendSteps(
                       Array.isArray(tpl.steps) ? tpl.steps : []
                     );

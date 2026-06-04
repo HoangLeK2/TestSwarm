@@ -19,7 +19,8 @@ const STATE_STYLES: Record<
   },
   connected: {
     variant: 'default',
-    className: 'border-transparent bg-emerald-600 text-white hover:bg-emerald-600'
+    className:
+      'border-transparent bg-emerald-600 text-white hover:bg-emerald-600'
   }
 };
 

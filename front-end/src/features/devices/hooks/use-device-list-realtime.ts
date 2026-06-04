@@ -13,7 +13,10 @@ import { connectLifecycleWs } from '../services/lifecycle-ws';
 
 const DEAD_TOAST_DEDUP_MS = 5000;
 
-function deviceDisplayLabel(device: DeviceOut | undefined, deviceId: string): string {
+function deviceDisplayLabel(
+  device: DeviceOut | undefined,
+  deviceId: string
+): string {
   if (!device) return deviceId.slice(0, 8);
   const name = device.name || `${device.brand} ${device.model}`.trim();
   if (name) {
@@ -44,7 +47,9 @@ function maybeNotifyDeviceDead(
   const row = devices.find((d) => d.id === event.device_id);
   const label = deviceDisplayLabel(row, event.device_id);
   const reason =
-    typeof event.payload?.reason === 'string' ? event.payload.reason : undefined;
+    typeof event.payload?.reason === 'string'
+      ? event.payload.reason
+      : undefined;
   const description =
     reason && reason !== 'reconnect_timeout'
       ? t('deadReason', { reason })
@@ -76,12 +81,7 @@ export function useDeviceListRealtime(enabled = true) {
       (msg) =>
         applyLifecycleMessage(queryClient, msg, {
           onDeviceDead: (event, devices) =>
-            maybeNotifyDeviceDead(
-              event,
-              devices,
-              lastDeadToastRef.current,
-              t
-            )
+            maybeNotifyDeviceDead(event, devices, lastDeadToastRef.current, t)
         }),
       (connected) => setLifecycleWsConnected(connected)
     );

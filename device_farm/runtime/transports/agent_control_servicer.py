@@ -46,12 +46,33 @@ class ControlConnection:
         kind   = ctrl_msg.WhichOneof("payload")
         msg_id = getattr(getattr(ctrl_msg, kind), "msg_id", "")
         loop   = asyncio.get_running_loop()
+        enqueue_started = loop.time()
         fut    = loop.create_future()
         self._pending[msg_id] = fut
         await self._q.put(ctrl_msg)
+        enqueued_at = loop.time()
         try:
-            return await asyncio.wait_for(asyncio.shield(fut), timeout=timeout + 10.0)
+            result = await asyncio.wait_for(asyncio.shield(fut), timeout=timeout + 10.0)
+            log.info(
+                "control command result kind=%s relay_id=%s msg_id=%s enqueue_wait_ms=%.1f total_ms=%.1f ok=%s",
+                kind or "-",
+                self.relay_id,
+                msg_id or "-",
+                (enqueued_at - enqueue_started) * 1000.0,
+                (loop.time() - enqueue_started) * 1000.0,
+                bool(result.get("ok", False)) if isinstance(result, dict) else False,
+            )
+            return result
         except asyncio.TimeoutError:
+            log.warning(
+                "control command timeout kind=%s relay_id=%s msg_id=%s timeout_s=%.1f enqueue_wait_ms=%.1f total_ms=%.1f",
+                kind or "-",
+                self.relay_id,
+                msg_id or "-",
+                timeout,
+                (enqueued_at - enqueue_started) * 1000.0,
+                (loop.time() - enqueue_started) * 1000.0,
+            )
             return {"ok": False, "error": "timeout", "exit_code": -1, "output": ""}
         finally:
             self._pending.pop(msg_id, None)

@@ -167,9 +167,10 @@ class TestContentSchemas:
             data={"author": "test", "content": "hello"},
             collection="fb_posts",
             platform="facebook",
+            content_type="fb_post",
         )
         assert body.collection == "fb_posts"
-        assert body.content_type == "post"  # default
+        assert body.content_type == "fb_post"
 
     def test_content_query_defaults(self):
         from api.schemas.content import ContentQueryParams

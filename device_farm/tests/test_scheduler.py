@@ -12,10 +12,16 @@ Coverage:
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch, call
 import pytest
+
+
+@asynccontextmanager
+async def _mock_schedule_tenant_db(_schedule_id: str, db):
+    yield db, "org-001"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -42,10 +48,22 @@ def _make_schedule(**kwargs):
         "stagger_devices": False,
         "stagger_interval_seconds": 60,
         "is_enabled": True,
+        "status": "enabled",
+        "schedule_kind": "cron",
+        "run_at": None,
+        "skip_dates": [],
+        "skip_windows": [],
+        "misfire_policy": "skip",
+        "priority": "normal",
+        "max_concurrent_per_device": 1,
+        "account_rate_limit_per_hour": None,
+        "quota_policy": {},
+        "deleted_at": None,
         "last_run_at": None,
         "next_run_at": None,
         "run_count": 0,
         "user_id": "user-001",
+        "org_id": "org-001",
         "created_at": datetime.now(timezone.utc),
         "updated_at": datetime.now(timezone.utc),
     }
@@ -62,12 +80,19 @@ def _make_run(**kwargs):
         "id": "run-001",
         "schedule_id": "sched-001",
         "status": "pending",
+        "trigger_source": "cron",
+        "scheduled_at": datetime.now(timezone.utc),
         "started_at": datetime.now(timezone.utc),
         "finished_at": None,
+        "deferred_until": None,
+        "was_catch_up": False,
+        "execution_id": None,
         "devices_dispatched": 0,
         "devices_succeeded": 0,
         "devices_failed": 0,
         "task_ids": [],
+        "workflow_ids": [],
+        "error_code": None,
         "error_message": None,
         "created_at": datetime.now(timezone.utc),
     }
@@ -269,6 +294,85 @@ class TestSchedulerServiceToggle:
         assert result.is_enabled is True
 
 
+class TestSchedulerServiceEpic05:
+    @pytest.mark.asyncio
+    async def test_trigger_now_rejects_disabled_schedule(self):
+        from services.scheduler import SchedulerService
+
+        mock_db = AsyncMock()
+        disabled = _make_schedule(is_enabled=False)
+
+        with patch("db.crud.schedule.get_schedule", return_value=disabled):
+            service = SchedulerService(temporal_client=None, manager=None, queue=None)
+            with pytest.raises(ValueError, match="SCHEDULE_DISABLED"):
+                await service.trigger_now(mock_db, "sched-001")
+
+    @pytest.mark.asyncio
+    async def test_create_one_shot_requires_future_run_at(self):
+        from services.scheduler import SchedulerService
+
+        mock_db = AsyncMock()
+        service = SchedulerService(temporal_client=None, manager=None, queue=None)
+
+        with pytest.raises(ValueError, match="RUN_AT_IN_PAST"):
+            await service.create(
+                mock_db,
+                name="Past one shot",
+                target_type="campaign",
+                target_id="camp-001",
+                cron_expression=None,
+                run_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                now=datetime(2026, 5, 31, tzinfo=timezone.utc),
+            )
+
+    @pytest.mark.asyncio
+    async def test_create_rejects_cron_and_run_at_together(self):
+        from services.scheduler import SchedulerService
+
+        mock_db = AsyncMock()
+        service = SchedulerService(temporal_client=None, manager=None, queue=None)
+
+        with pytest.raises(ValueError, match="CRON_AND_RUN_AT_MUTUALLY_EXCLUSIVE"):
+            await service.create(
+                mock_db,
+                name="Ambiguous",
+                target_type="campaign",
+                target_id="camp-001",
+                cron_expression="0 8 * * *",
+                run_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+                now=datetime(2026, 5, 31, tzinfo=timezone.utc),
+            )
+
+    @pytest.mark.asyncio
+    async def test_finalize_terminal_run_emits_schedule_event_and_audit(self):
+        from services.scheduler import finalize_schedule_run_record
+
+        mock_db = AsyncMock()
+        dispatch_result = {"devices_dispatched": 1, "task_ids": ["task-1"], "workflow_ids": ["wf-1"]}
+
+        with (
+            patch("db.crud.schedule.update_schedule_run", new_callable=AsyncMock) as update_run,
+            patch("db.crud.schedule.update_schedule_after_run", new_callable=AsyncMock) as update_after,
+            patch("services.scheduler.emit_schedule_run_terminal", new_callable=AsyncMock) as emit_event,
+        ):
+            await finalize_schedule_run_record(
+                mock_db,
+                run_id="run-001",
+                schedule_id="sched-001",
+                status="completed",
+                finished_at=datetime.now(timezone.utc),
+                dispatch_result=dispatch_result,
+                cron_expression="*/5 * * * *",
+                timezone_name="UTC",
+                organization_id="org-1",
+                execution_id="exec-1",
+            )
+
+        update_run.assert_awaited_once()
+        update_after.assert_awaited_once()
+        emit_event.assert_awaited_once()
+
+
 class TestSchedulerServiceDelete:
     @pytest.mark.asyncio
     async def test_delete_calls_temporal(self):
@@ -314,7 +418,7 @@ class TestScheduleActivities:
         mock_db.__aexit__ = AsyncMock(return_value=False)
 
         with patch("temporal.schedule_activities.activity") as mock_act, \
-             patch("db.database.AsyncSessionLocal", return_value=mock_db), \
+             patch("temporal.schedule_activities._schedule_tenant_db", lambda sid: _mock_schedule_tenant_db(sid, mock_db)), \
              patch("db.crud.schedule.get_schedule", return_value=mock_schedule):
             mock_act.heartbeat = MagicMock()
             activities = ScheduleActivities()
@@ -333,7 +437,7 @@ class TestScheduleActivities:
         mock_db.__aexit__ = AsyncMock(return_value=False)
 
         with patch("temporal.schedule_activities.activity") as mock_act, \
-             patch("db.database.AsyncSessionLocal", return_value=mock_db), \
+             patch("temporal.schedule_activities._schedule_tenant_db", lambda sid: _mock_schedule_tenant_db(sid, mock_db)), \
              patch("db.crud.schedule.get_schedule", return_value=None):
             mock_act.heartbeat = MagicMock()
             activities = ScheduleActivities()
@@ -351,7 +455,7 @@ class TestScheduleActivities:
         mock_db.commit = AsyncMock()
 
         with patch("temporal.schedule_activities.activity") as mock_act, \
-             patch("db.database.AsyncSessionLocal", return_value=mock_db), \
+             patch("temporal.schedule_activities._schedule_tenant_db", lambda sid: _mock_schedule_tenant_db(sid, mock_db)), \
              patch("db.crud.schedule.create_schedule_run", return_value=mock_run):
             mock_act.heartbeat = MagicMock()
             activities = ScheduleActivities()
@@ -376,9 +480,8 @@ class TestScheduleActivities:
         )
 
         with patch("temporal.schedule_activities.activity") as mock_act, \
-             patch("db.database.activity_session", return_value=mock_db), \
-             patch("db.crud.schedule.update_schedule_run", new_callable=AsyncMock) as mock_ur, \
-             patch("db.crud.schedule.update_schedule_after_run", new_callable=AsyncMock) as mock_ua:
+             patch("temporal.schedule_activities._schedule_tenant_db", lambda sid: _mock_schedule_tenant_db(sid, mock_db)), \
+             patch("services.scheduler.finalize_schedule_run_record", new_callable=AsyncMock) as mock_finalize:
             mock_act.heartbeat = MagicMock()
             activities = ScheduleActivities()
             await activities.finalize_schedule_run(
@@ -386,8 +489,7 @@ class TestScheduleActivities:
                 "*/30 * * * *", "Asia/Ho_Chi_Minh"
             )
 
-        mock_ur.assert_awaited_once()
-        mock_ua.assert_awaited_once()
+        mock_finalize.assert_awaited_once()
         # Should commit
         mock_db.commit.assert_awaited_once()
 
@@ -411,10 +513,12 @@ class TestScheduleActivities:
         async def _mock_update_run(db, run_id, **kwargs):
             captured.update(kwargs)
 
+        async def _capture_finalize(db, **kwargs):
+            captured.update(kwargs)
+
         with patch("temporal.schedule_activities.activity") as mock_act, \
-             patch("db.database.AsyncSessionLocal", return_value=mock_db), \
-             patch("db.crud.schedule.update_schedule_run", side_effect=_mock_update_run), \
-             patch("db.crud.schedule.update_schedule_after_run", new_callable=AsyncMock):
+             patch("temporal.schedule_activities._schedule_tenant_db", lambda sid: _mock_schedule_tenant_db(sid, mock_db)), \
+             patch("services.scheduler.finalize_schedule_run_record", side_effect=_capture_finalize):
             mock_act.heartbeat = MagicMock()
             activities = ScheduleActivities()
             await activities.finalize_schedule_run(
@@ -501,7 +605,7 @@ class TestSchedulerEngine:
         engine = SchedulerEngine(queue=MagicMock(), manager=MagicMock())
 
         with patch("db.database.AsyncSessionLocal", return_value=mock_db), \
-             patch("db.crud.schedule.get_due_schedules", return_value=[due_schedule]), \
+             patch("db.crud.schedule.claim_due_schedules", return_value=[due_schedule]), \
              patch.object(engine, "_execute_schedule", new_callable=AsyncMock) as mock_exec:
             await engine._check_due_schedules()
 

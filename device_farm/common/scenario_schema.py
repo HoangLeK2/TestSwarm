@@ -25,6 +25,7 @@ SCENARIO_STEP_TYPES = [
     "scroll_to",
     "input_text",
     "key",
+    "adb_shell",
     "scroll_down",
     "wait_stable",
     "verify_screen",
@@ -34,6 +35,7 @@ SCENARIO_STEP_TYPES = [
     "repeat_until",
     "if_element",
     "if_variable",
+    "fb_tap_comment_button",
     "tap_fb_comment_button",
     "random_pick",
     "run_scenario",
@@ -192,6 +194,16 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
         "optional": [],
         "description": "Phím: enter, back, home, ...",
     },
+    "adb_shell": {
+        "required": ["command"],
+        "optional": ["timeout", "fail_on_error", "save_as", "max_output_chars"],
+        "description": (
+            "Chạy lệnh `adb shell` trên phone thật thông qua agent-boot. "
+            "command hỗ trợ biến ${VAR}; timeout được giới hạn để tránh treo worker. "
+            "save_as lưu output vào biến runtime để dùng ở bước sau. "
+            "max_output_chars giới hạn output giữ trong kết quả/context."
+        ),
+    },
     "scroll_down": {
         "required": [],
         "optional": [
@@ -287,6 +299,25 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "then: steps chạy khi đúng. else: steps chạy khi sai (optional)."
         ),
     },
+    "fb_tap_comment_button": {
+        "required": [],
+        "optional": [
+            "timeout",
+            "poll",
+            "dedupe_field",
+            "ignore_error",
+            "switch_to_all_comments",
+            "comment_filter",
+            "post_tap_wait_s",
+            "then",
+            "else",
+        ],
+        "description": (
+            "Canonical Facebook comment-button step. Same behavior as legacy "
+            "tap_fb_comment_button: find + tap the visible Facebook comment "
+            "button and set parent context for following extract fb_comments."
+        ),
+    },
     "tap_fb_comment_button": {
         "required": [],
         "optional": [
@@ -337,6 +368,8 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "no_new_threshold",
             "expand_see_more",
             "extract_profile",
+            "open_post_before_extract",
+            "open_post_press_back_after_extract",
             "strategy_version",
             "collection",
             "platform",
@@ -355,11 +388,13 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "'text_nodes' — thu thập text node vào context['text_nodes']; "
             "'fb_comments' — parse comment rows + stats trong comment view/feed preview; "
             "ig/tiktok/linkedin/auto posts/comments — parse content tương ứng trong agent-boot. "
-            "extract_profile: balanced|aggressive|safe (áp defaults scan params). "
+            "extract_profile: balanced|aggressive|safe hoặc ${VAR} (áp defaults scan params). "
             "strategy_version: lock behavior parser/runtime (vd: fb_comments:v1). "
             "stop_if_no_new (bool, default False): set ctx['_break']=True khi không có bài mới "
             "trong no_new_threshold (default 3) lần scroll liên tiếp — dùng bên trong step 'loop'. "
             "expand_see_more (bool, default True): tự tap nút 'See more'/'Xem thêm' trước khi parse. "
+            "open_post_before_extract (fb_posts): mở màn chi tiết bài trước extract. "
+            "open_post_press_back_after_extract: tự Back sau extract; mặc định False — template có bước Back riêng. "
             "Nếu set collection/platform/content_type/dedupe_field thì agent-boot sẽ ghi trực tiếp "
             "vào content DB. "
             "⚠ Dùng với step 'loop' (không phải 'repeat') để stop_if_no_new hoạt động."

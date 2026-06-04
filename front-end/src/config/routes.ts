@@ -18,6 +18,8 @@ export const ROUTES = {
   DEVICES: {
     ROOT: '/dashboard/device-farm',
     MANAGE: '/dashboard/devices',
+    DETAIL: (serial: string) =>
+      `/dashboard/devices/${encodeURIComponent(serial)}`,
     CONTROL_RECORD: '/dashboard/device-farm/control',
     /** Điều khiển thiết bị với serial đã chọn (để vào đúng màn hình rồi lấy XML). */
     CONTROL_RECORD_WITH_SERIAL: (serial: string) =>
@@ -31,13 +33,25 @@ export const ROUTES = {
       const params = new URLSearchParams({ campaignId, scenarioId });
       if (serial) params.set('serial', serial);
       return `/dashboard/device-farm/control?${params.toString()}`;
+    },
+    /** Mở trang điều khiển để ghi và lưu vào kịch bản tổ chức. */
+    CONTROL_RECORD_EDIT_ORG_SCENARIO: (
+      orgScenarioId: string,
+      opts?: { serial?: string; returnTo?: string }
+    ) => {
+      const params = new URLSearchParams({ orgScenarioId });
+      if (opts?.serial) params.set('serial', opts.serial);
+      if (opts?.returnTo) params.set('returnTo', opts.returnTo);
+      return `/dashboard/device-farm/control?${params.toString()}`;
     }
   },
   CAMPAIGNS: {
     ROOT: '/dashboard/campaigns',
-    /** Opens campaigns list and auto-opens monitor for the campaign (modal). */
+    /** Campaign list with row scroll/highlight (monitor opens manually). */
     DETAIL: (id: string) =>
-      `/dashboard/campaigns?campaign_id=${encodeURIComponent(id)}`
+      `/dashboard/campaigns?campaign_id=${encodeURIComponent(id)}`,
+    MONITOR: (id: string) =>
+      `/dashboard/campaigns/${encodeURIComponent(id)}/monitor`
   },
   DEVICE_GROUPS: {
     ROOT: '/dashboard/device-groups'
@@ -52,6 +66,21 @@ export const ROUTES = {
     ROOT: '/dashboard/scenario-templates',
     FLOW: (id: string) => `/scenario-flow/${id}`
   },
+  ORG_SCENARIOS: {
+    ROOT: '/dashboard/org-scenarios',
+    /** Opens org scenario library with detail sheet for this scenario. */
+    DETAIL: (scenarioId: string) =>
+      `/dashboard/org-scenarios?scenario_id=${encodeURIComponent(scenarioId)}`,
+    /** Flowgram editor for graph-kind org scenarios. */
+    FLOW_EDIT: (scenarioId: string, opts?: { returnTo?: string }) => {
+      const base = `/scenario-flow/org/${encodeURIComponent(scenarioId)}`;
+      if (!opts?.returnTo?.trim()) return base;
+      const params = new URLSearchParams({
+        returnTo: opts.returnTo.trim()
+      });
+      return `${base}?${params.toString()}`;
+    }
+  },
   SCHEDULES: {
     ROOT: '/dashboard/schedules'
   },
@@ -61,17 +90,38 @@ export const ROUTES = {
   CONTENT: {
     ROOT: '/dashboard/content',
     DETAIL: (id: string) => `/dashboard/content/${id}`,
+    EXPORTS: '/dashboard/content/exports',
     /** Jump to content page pre-filtered by campaign */
     BY_CAMPAIGN: (campaignId: string) =>
       `/dashboard/content?campaign_id=${encodeURIComponent(campaignId)}`,
     BY_EXECUTION: (executionId: string) =>
-      `/dashboard/content?execution_id=${encodeURIComponent(executionId)}`
+      `/dashboard/content?execution_id=${encodeURIComponent(executionId)}`,
+    BY_HASH: (contentHash: string) =>
+      `/dashboard/content?content_hash=${encodeURIComponent(contentHash)}`
   },
   NOTIFICATIONS: {
-    ROOT: '/dashboard/notifications'
+    ROOT: '/dashboard/notifications',
+    INBOX: '/dashboard/notifications?tab=inbox',
+    CHANNELS: '/dashboard/notifications?tab=channels'
+  },
+  ANALYTICS: {
+    ROOT: '/dashboard/analytics',
+    ACTIVITY: '/dashboard/analytics?tab=activity',
+    AUDIT: '/dashboard/analytics?tab=audit'
+  },
+  MCP: {
+    ROOT: '/dashboard/settings/mcp',
+    TOKENS: '/dashboard/settings/mcp',
+    AUDIT: '/dashboard/settings/mcp/audit-log',
+    LEGACY_ROOT: '/dashboard/mcp',
+    LEGACY_TOKENS: '/dashboard/mcp/tokens',
+    LEGACY_AUDIT: '/dashboard/mcp/audit-log',
+    LEGACY_TOOLS: '/dashboard/mcp/tools',
+    LEGACY_SANDBOX: '/dashboard/mcp/sandbox'
   },
   DASHBOARD: {
     ROOT: '/dashboard',
+    PROFILE: '/dashboard/settings/profile',
     ORGANIZATION: '/dashboard/settings/organization',
     ORGANIZATION_LIST: '/dashboard/settings/organizations',
     ORGANIZATION_MEMBER: '/dashboard/settings/organization/members',

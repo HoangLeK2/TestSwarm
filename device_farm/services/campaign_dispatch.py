@@ -7,7 +7,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, Tuple
 
-from db.database import AsyncSessionLocal
+from db.database import activity_session
 from db import crud as repo
 from db.crud.default_scenario import DEVICE_CONTEXT_KEY
 from db.crud.scenario_device_variable import (
@@ -272,7 +272,7 @@ async def enqueue_campaign_run_temporal(
     from db.crud.scenario_template import list_templates
     from db.crud.device_group import list_group_devices
 
-    async with AsyncSessionLocal() as db:
+    async with activity_session() as db:
         campaign = await repo.get_campaign(db, campaign_id)
         if not campaign:
             return {"error": "Campaign not found"}, 404
@@ -372,7 +372,7 @@ async def enqueue_campaign_run_temporal(
     # account group get a rotated pick; unbound scenarios use the device's
     # primary account (existing behavior).
     campaign_platform: str = (campaign.variables or {}).get("__PLATFORM__", "facebook")
-    async with AsyncSessionLocal() as account_db:
+    async with activity_session() as account_db:
         per_scenario_device_vars = await _build_per_scenario_device_vars(
             account_db,
             scenarios=scenarios,
@@ -516,7 +516,7 @@ async def enqueue_campaign_run_temporal(
         )
         # Mark execution as failed and reset campaign out of running state
         from db.crud.execution import finish_execution
-        async with AsyncSessionLocal() as db:
+        async with activity_session() as db:
             await finish_execution(db, execution_id, status="failed")
             await repo.update_campaign_status(db, campaign_id, "idle")
             await db.commit()
@@ -527,7 +527,7 @@ async def enqueue_campaign_run_temporal(
 
     # Store workflow IDs in execution.meta
     from db.crud.execution import update_execution
-    async with AsyncSessionLocal() as db:
+    async with activity_session() as db:
         await update_execution(
             db, execution_id,
             meta={

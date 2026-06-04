@@ -1,0 +1,1379 @@
+"""Resolve feed post header taps to open post detail before extraction.
+
+Tap targets are structural (timestamp row, metadata to the right of author,
+privacy affordance, geometric fallback) — not tied to specific badge labels
+("Top contributor", "Người đóng góp nhiều nhất", etc.).
+"""
+from __future__ import annotations
+
+import re
+from typing import Any, Dict, List, Optional, Tuple
+
+from .comment_pipeline import (
+    _is_tappable_fb_node,
+    _parse_bounds_from_node,
+    build_comment_button_u2_click,
+)
+from .constants import _RE_TS
+from .shared import COMMENT_BUTTON_TOKENS, XPATH_LIST, XPATH_RECYCLER
+
+_BOUNDS_RE = re.compile(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]")
+
+_POST_MENU_MARKERS = (
+    "other options for post",
+    "lựa chọn khác cho bài viết",
+    "more options for this post",
+)
+
+_PRIVACY_MARKERS = (
+    "public",
+    "công khai",
+    "friends",
+    "bạn bè",
+    "group",
+    "nhóm",
+    "only me",
+    "chỉ mình tôi",
+)
+
+_ACTION_REJECT = (
+    "nút thích",
+    "like button",
+    "nút bình luận",
+    "comment button",
+    "nút chia sẻ",
+    "double tap to share",
+    "share button",
+    "sponsored",
+    "được tài trợ",
+    "quảng cáo",
+    "phát nhạc",
+    "play music",
+)
+
+_TAP_KIND_RANK = {
+    "timestamp": 0,
+    "metadata": 1,
+    "privacy": 2,
+    "author_row_gap": 3,
+    "geometric": 4,
+    "post_media": 5,
+    "post_body": 6,
+}
+
+# Body/photo taps open lightbox or "see more" — not post detail for extraction.
+_UNSAFE_POST_OPEN_TAP_KINDS = frozenset({"post_media", "post_body"})
+
+_AVATAR_HINTS = (
+    "ảnh đại diện",
+    "profile picture",
+    "mở tin của",
+    "story của",
+)
+
+_MEDIA_ONLY_LABELS = frozenset({
+    "ảnh",
+    "photo",
+    "hình",
+    "image",
+    "picture",
+    "video",
+    "clip",
+})
+
+_MEDIA_OPEN_REJECT = (
+    "mở rộng ảnh",
+    "mở rộng",
+    "expand photo",
+    "open photo",
+    "ảnh 1/",
+    "photo 1/",
+)
+
+_TRANSLATION_CHROME = (
+    "xếp hạng bản dịch",
+    "rate this translation",
+    "đánh giá bản dịch",
+    "see translation",
+    "xem bản dịch",
+    "bản dịch tự động",
+    "auto-translated",
+)
+
+_FOLLOW_REJECT = (
+    "theo dõi",
+    "follow",
+    "following",
+    "unfollow",
+    "đang theo dõi",
+)
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"\s+", " ", (s or "").strip())
+
+
+def _node_label(node) -> str:
+    return _norm(node.get("text") or "") or _norm(node.get("content-desc") or "")
+
+
+def _is_action_or_chrome(label: str) -> bool:
+    ll = label.casefold()
+    if not ll:
+        return False
+    if ll in {tok.casefold() for tok in COMMENT_BUTTON_TOKENS}:
+        return True
+    if any(tok in ll for tok in _FOLLOW_REJECT):
+        return True
+    return any(tok in ll for tok in _ACTION_REJECT)
+
+
+def _count_distinct_post_action_bars(element) -> int:
+    """Count feed posts by clustering comment-button rows (handles flat RecyclerView)."""
+    y_mids: list[int] = []
+    for node in element.iter("node"):
+        if not _node_has_comment_button_token(node):
+            continue
+        bounds = _parse_bounds_from_node(node)
+        if not bounds:
+            continue
+        y_mid = (bounds[1] + bounds[3]) // 2
+        if any(abs(y_mid - existing) < 120 for existing in y_mids):
+            continue
+        y_mids.append(y_mid)
+    return len(y_mids)
+
+
+def _node_has_comment_button_token(node) -> bool:
+    from .comment_pipeline import _node_has_comment_button_token as _has_btn
+
+    return _has_btn(node)
+
+
+def _hierarchy_has_post_menu(root) -> bool:
+    for node in root.iter():
+        merged = _node_label(node).casefold()
+        if any(m in merged for m in _POST_MENU_MARKERS):
+            return True
+    return False
+
+
+def _hierarchy_has_post_detail_chrome(root) -> bool:
+    """FB post-detail / inline-comments chrome (Đóng + Bài viết của …)."""
+    if root is None:
+        return False
+    has_close = False
+    has_post_of = False
+    for node in root.iter():
+        pkg = node.get("package") or ""
+        if pkg and pkg != "com.facebook.katana":
+            continue
+        desc = _norm(node.get("content-desc") or "")
+        text = _norm(node.get("text") or "")
+        if desc in {"Đóng", "Close"} or text in {"Đóng", "Close"}:
+            has_close = True
+        if desc.lower().startswith("bài viết của "):
+            has_post_of = True
+    return has_close and has_post_of
+
+
+def hierarchy_is_fb_post_detail_from_xml(xml: str) -> bool:
+    """True when UI looks like a single-post detail screen (not multi-card feed)."""
+    from .feed_pipeline import _is_ad_container
+    from .parser import _parse_xml, _pick_feed_container
+
+    root = _parse_xml(xml)
+    if root is None:
+        return False
+    if _hierarchy_has_post_detail_chrome(root):
+        return True
+    if not _hierarchy_has_post_menu(root):
+        return False
+
+    containers = root.xpath(XPATH_RECYCLER) or root.xpath(XPATH_LIST)
+    if not containers:
+        return _count_distinct_post_action_bars(root) == 1
+
+    feed = _pick_feed_container(containers, root)
+    children = [c for c in feed.findall("node") if not _is_ad_container(c)]
+    post_cards = sum(1 for child in children if _card_has_action_bar(child))
+    action_count = _count_distinct_post_action_bars(feed)
+
+    if post_cards >= 2 or action_count >= 2:
+        return False
+
+    # One card in RecyclerView is still the scroll feed — not post detail.
+    if post_cards == 1 and action_count >= 1:
+        return False
+
+    # Nested/flat feed (common on Vivo) — action bars not clustered per child.
+    if action_count == 0:
+        return False
+
+    if action_count == 1:
+        return True
+
+    return False
+
+
+def _card_has_action_bar(element) -> bool:
+    from .comment_pipeline import _node_has_comment_button_token
+
+    for node in element.iter():
+        if _node_has_comment_button_token(node):
+            return True
+    return False
+
+
+def post_header_tap_point(
+    bounds: Tuple[int, int, int, int],
+    *,
+    screen_w: int = 1080,
+    tap_kind: str | None = None,
+) -> Tuple[int, int]:
+    """Pick tap coords by target kind — post body center; header taps avoid Follow on the right."""
+    x1, y1, x2, y2 = bounds
+    width = max(1, x2 - x1)
+    height = max(1, y2 - y1)
+    kind = (tap_kind or "").strip().lower()
+
+    if kind in {"post_body", "post_media"}:
+        # Left-upper quadrant — "xem thêm" / See more is almost always bottom-right.
+        cx = x1 + max(32, width // 4)
+        cy = y1 + max(24, height // 4)
+        return cx, cy
+
+    if kind in {"author_row_gap", "geometric"}:
+        # Gap is author→menu; right side is often Theo dõi / Follow — stay left of gap.
+        cx = x1 + int(width * 0.2)
+        return max(x1 + 8, min(x2 - 8, cx)), (y1 + y2) // 2
+
+    if kind == "timestamp":
+        cx = x1 + int(width * 0.35)
+        return max(x1 + 6, min(x2 - 6, cx)), (y1 + y2) // 2
+
+    # metadata / privacy / fallback: mild right bias but not into menu column
+    min_x = int(screen_w * 0.38)
+    preferred = x1 + int(width * 0.45)
+    cx = max(x1 + 6, min(x2 - 6, preferred))
+    if cx < min_x and x2 > min_x:
+        cx = min(x2 - 6, max(x1 + 6, min_x))
+    return cx, (y1 + y2) // 2
+
+
+def _looks_like_avatar_node(n: Dict[str, Any]) -> bool:
+    text = (n.get("text") or "").casefold()
+    if any(h in text for h in _AVATAR_HINTS):
+        return True
+    x1, y1, x2, y2 = n["bounds"]
+    w, h = x2 - x1, y2 - y1
+    if x1 < 200 and w < 220 and h < 220 and abs(w - h) < 100:
+        return True
+    return False
+
+
+def _find_author_bounds(
+    nodes: List[Dict[str, Any]],
+    card_bounds: Tuple[int, int, int, int],
+) -> Optional[Tuple[int, int, int, int]]:
+    cx1, cy1, cx2, cy2 = card_bounds
+    card_h = max(1, cy2 - cy1)
+    card_w = max(1, cx2 - cx1)
+    header_limit = cy1 + int(card_h * 0.22)
+    left_column_x = cx1 + int(card_w * 0.42)
+    name_column_x = cx1 + int(card_w * 0.12)
+
+    hinted = [
+        n
+        for n in nodes
+        if n.get("is_author_hint")
+        and n["bounds"][1] <= header_limit
+        and not _looks_like_avatar_node(n)
+    ]
+    if hinted:
+        # Prefer the author name chip (wide, right of avatar), not profile photo.
+        name_hints = [n for n in hinted if n["bounds"][0] >= name_column_x]
+        pool = name_hints or hinted
+        left_hints = [
+            n
+            for n in pool
+            if n["bounds"][0] < left_column_x
+            and (n["bounds"][2] - n["bounds"][0]) <= int(card_w * 0.55)
+        ]
+        if not left_hints:
+            left_hints = [n for n in pool if n["bounds"][0] < left_column_x]
+        if not left_hints:
+            left_hints = list(pool)
+        if left_hints:
+            best = max(
+                left_hints,
+                key=lambda n: (n["bounds"][2] - n["bounds"][0], -n["bounds"][0]),
+            )
+            b = best["bounds"]
+            return b[0], b[1], b[2], b[3]
+
+    ordered = sorted(nodes, key=lambda n: (n["bounds"][1], n["bounds"][0]))
+    for n in ordered:
+        text = (n.get("text") or "").strip()
+        x1, y1, x2, y2 = n["bounds"]
+        if y1 > header_limit:
+            break
+        if _looks_like_avatar_node(n):
+            continue
+        if x1 < name_column_x:
+            continue
+        if x1 > left_column_x:
+            continue
+        if not (2 <= len(text) <= 64):
+            continue
+        if text.casefold() in _MEDIA_ONLY_LABELS:
+            continue
+        if (x2 - x1) > int(card_w * 0.65):
+            continue
+        if _RE_TS.search(text):
+            continue
+        if _is_action_or_chrome(text):
+            continue
+        return x1, y1, x2, y2
+    return None
+
+
+def _find_post_menu_bounds(element) -> Optional[Tuple[int, int, int, int]]:
+    for node in element.iter("node"):
+        merged = _node_label(node).casefold()
+        if not any(m in merged for m in _POST_MENU_MARKERS):
+            continue
+        bounds = _parse_bounds_from_node(node)
+        if bounds:
+            return bounds
+    return None
+
+
+def _gap_region_has_follow_or_chrome(
+    element,
+    gap_bounds: Tuple[int, int, int, int],
+) -> bool:
+    """True when the author→menu strip contains Follow / action buttons (not empty)."""
+    gx1, gy1, gx2, gy2 = gap_bounds
+    for node in element.iter("node"):
+        if not _is_tappable_fb_node(node):
+            continue
+        bounds = _parse_bounds_from_node(node)
+        if not bounds:
+            continue
+        x1, y1, x2, y2 = bounds
+        if x2 <= gx1 or x1 >= gx2 or y2 <= gy1 or y1 >= gy2:
+            continue
+        merged = _node_label(node).casefold()
+        if _is_action_or_chrome(merged):
+            return True
+        text = _norm(node.get("text") or "")
+        if text and len(text) <= 28 and x1 >= gx1 + 8:
+            return True
+    return False
+
+
+def _author_row_gap_candidate(
+    element,
+    *,
+    author_bounds: Tuple[int, int, int, int],
+    card_bounds: Tuple[int, int, int, int],
+    menu_bounds: Optional[Tuple[int, int, int, int]],
+) -> Optional[Dict[str, Any]]:
+    """Empty header strip between author name end and post ⋯ menu — skip when Follow fills the strip."""
+    ax1, ay1, ax2, ay2 = author_bounds
+    cx1, _cy1, cx2, _cy2 = card_bounds
+    menu_x1 = menu_bounds[0] if menu_bounds else cx2 - 72
+    gap_x1 = ax2 + 12
+    gap_x2 = min(menu_x1 - 10, cx2 - 48)
+    if gap_x2 - gap_x1 < 28:
+        return None
+    gap = (gap_x1, ay1, gap_x2, min(ay2 + 6, ay1 + 52))
+    if _gap_region_has_follow_or_chrome(element, gap):
+        return None
+    return {
+        "tap_kind": "author_row_gap",
+        "bounds": gap,
+        "label": "",
+        "u2_click": None,
+    }
+
+
+def _is_translation_chrome_label(label: str) -> bool:
+    ll = label.casefold()
+    return any(tok in ll for tok in _TRANSLATION_CHROME)
+
+
+def _is_see_more_label(text: str) -> bool:
+    t = text.strip().casefold()
+    return t in {"xem thêm", "see more", "xem bài viết", "view post"}
+
+
+def _find_see_more_buttons(
+    element,
+    within: Tuple[int, int, int, int],
+) -> List[Tuple[int, int, int, int]]:
+    wx1, wy1, wx2, wy2 = within
+    found: List[Tuple[int, int, int, int]] = []
+    for node in element.iter("node"):
+        if not _is_see_more_label(_norm(node.get("text") or "")):
+            continue
+        bounds = _parse_bounds_from_node(node)
+        if not bounds:
+            continue
+        x1, y1, x2, y2 = bounds
+        if x2 <= wx1 or x1 >= wx2 or y2 <= wy1 or y1 >= wy2:
+            continue
+        found.append(bounds)
+    return found
+
+
+def _body_invites_see_more(
+    element,
+    body_bounds: Tuple[int, int, int, int],
+    label: str,
+) -> bool:
+    ll = label.casefold()
+    if "xem thêm" in ll or "see more" in ll:
+        return True
+    return bool(_find_see_more_buttons(element, body_bounds))
+
+
+def _tap_bounds_avoiding_see_more(
+    element,
+    body_bounds: Tuple[int, int, int, int],
+    *,
+    see_more_buttons: List[Tuple[int, int, int, int]],
+) -> Tuple[int, int, int, int]:
+    """Prefer the main text node region, clipped left of any See-more chip."""
+    x1, y1, x2, y2 = body_bounds
+    best_inner: Optional[Tuple[int, int, int, int]] = None
+    best_len = 0
+    for node in element.iter("node"):
+        text = _norm(node.get("text") or "") or _norm(node.get("content-desc") or "")
+        if not text or _is_see_more_label(text):
+            continue
+        if _is_translation_chrome_label(text):
+            continue
+        bounds = _parse_bounds_from_node(node)
+        if not bounds:
+            continue
+        bx1, by1, bx2, by2 = bounds
+        if by2 < y1 - 8 or by1 > y2 + 8:
+            continue
+        if len(text) > best_len:
+            best_len = len(text)
+            best_inner = bounds
+    if best_inner:
+        x1, y1, x2, y2 = best_inner
+    if see_more_buttons:
+        clip_x = min(b[0] for b in see_more_buttons) - 12
+        x2 = min(x2, clip_x)
+    if x2 - x1 < 40:
+        x1, _y1, x2, y2 = body_bounds
+        if see_more_buttons:
+            x2 = min(x2, min(b[0] for b in see_more_buttons) - 12)
+    return x1, y1, max(x1 + 40, x2), y2
+
+
+def _subtree_text_label(node) -> str:
+    """Merge text/content-desc from a clickable post body container and its children."""
+    parts: list[str] = []
+    for child in node.iter("node"):
+        text = _norm(child.get("text") or "")
+        desc = _norm(child.get("content-desc") or "")
+        chunk = text if len(text) >= len(desc) else desc
+        if not chunk or chunk in parts:
+            continue
+        if _is_translation_chrome_label(chunk) and len(chunk) < 48:
+            continue
+        parts.append(chunk)
+    direct = _norm(node.get("text") or "") or _norm(node.get("content-desc") or "")
+    if direct and direct not in parts:
+        parts.insert(0, direct)
+    return _norm(" ".join(parts))
+
+
+def _is_post_body_label(label: str) -> bool:
+    ll = label.casefold()
+    stripped = label.strip()
+    if len(stripped) < 8:
+        return False
+    if stripped.casefold() in {"xem thêm", "see more", "xem bài viết", "view post"}:
+        return False
+    if _is_translation_chrome_label(label):
+        return False
+    if _is_action_or_chrome(label):
+        return False
+    if any(tok in ll for tok in _MEDIA_OPEN_REJECT):
+        return False
+    if _node_has_comment_button_token_from_label(ll):
+        return False
+    return True
+
+
+def _node_has_comment_button_token_from_label(label_cf: str) -> bool:
+    from .comment_pipeline import COMMENT_BUTTON_TOKENS
+
+    return any(tok in label_cf for tok in COMMENT_BUTTON_TOKENS)
+
+
+def _header_bottom_for_body(
+    card_bounds: Tuple[int, int, int, int],
+    author_bounds: Tuple[int, int, int, int],
+    nodes: Optional[List[Dict[str, Any]]] = None,
+) -> int:
+    """Y coordinate just below author row / badge / timestamp (not % of full card height)."""
+    _ax1, _ay1, _ax2, ay2 = author_bounds
+    cy1, _cy1, _cx2, cy2 = card_bounds
+    card_h = max(1, cy2 - cy1)
+    header_limit = cy1 + int(card_h * 0.22)
+    floor_y = ay2 + 20
+    if nodes:
+        for n in nodes:
+            y1 = n["bounds"][1]
+            y2 = n["bounds"][3]
+            if y1 > header_limit:
+                continue
+            text = (n.get("text") or "").strip()
+            if not text:
+                continue
+            if _RE_TS.search(text) or len(text) <= 80:
+                floor_y = max(floor_y, y2)
+    return min(cy2, floor_y + 12)
+
+
+def _find_post_body_tap(
+    element,
+    *,
+    card_bounds: Tuple[int, int, int, int],
+    author_bounds: Tuple[int, int, int, int],
+    nodes: Optional[List[Dict[str, Any]]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Tap the main post text block — opens full post detail (not Follow / header chrome)."""
+    cx1, cy1, cx2, cy2 = card_bounds
+    card_h = max(1, cy2 - cy1)
+    body_top = _header_bottom_for_body(card_bounds, author_bounds, nodes)
+    action_strip = max(72, int(card_h * 0.14))
+    body_bottom = cy2 - action_strip
+
+    best_bounds: Optional[Tuple[int, int, int, int]] = None
+    best_label = ""
+    best_score = -1
+
+    for node in element.iter("node"):
+        if not _is_tappable_fb_node(node):
+            continue
+        bounds = _parse_bounds_from_node(node)
+        if not bounds:
+            continue
+        x1, y1, x2, y2 = bounds
+        if y1 < body_top or y2 > body_bottom:
+            continue
+        if (x2 - x1) < int((cx2 - cx1) * 0.35):
+            continue
+        label = _subtree_text_label(node) or _node_label(node)
+        if not _is_post_body_label(label):
+            continue
+        if _node_has_comment_button_token(node):
+            continue
+        area = (x2 - x1) * (y2 - y1)
+        text_bonus = min(len(label), 600)
+        score = area + text_bonus * 12
+        if score > best_score:
+            best_score = score
+            best_bounds = bounds
+            best_label = label[:120]
+
+    if best_bounds is None and nodes:
+        for n in nodes:
+            text = (n.get("text") or "").strip()
+            if not text or len(text) < 12:
+                continue
+            x1, y1, x2, y2 = n["bounds"]
+            if y1 < body_top or y2 > body_bottom:
+                continue
+            if not _is_post_body_label(text):
+                continue
+            area = (x2 - x1) * (y2 - y1)
+            if area > best_score:
+                best_score = area
+                best_bounds = (x1, y1, x2, y2)
+                best_label = text[:120]
+
+    if best_bounds is None:
+        return None
+    see_more = _find_see_more_buttons(element, best_bounds)
+    tap_bounds = _tap_bounds_avoiding_see_more(
+        element, best_bounds, see_more_buttons=see_more
+    )
+    return {
+        "tap_kind": "post_body",
+        "bounds": best_bounds,
+        "tap_bounds": tap_bounds,
+        "has_see_more": _body_invites_see_more(element, best_bounds, best_label),
+        "label": best_label,
+        "u2_click": None,
+    }
+
+
+def _is_feed_media_label(label: str) -> bool:
+    ll = label.casefold().strip()
+    if ll in _MEDIA_ONLY_LABELS:
+        return True
+    if "mở rộng" in ll or "expand" in ll:
+        return True
+    if re.search(r"ảnh\s+\d+\s*/\s*\d+", ll):
+        return True
+    return False
+
+
+def _action_bar_top_y(
+    element,
+    card_bounds: Tuple[int, int, int, int],
+) -> int:
+    """Y of the post Like/Comment/Share row — media may extend just above it."""
+    _cx1, cy1, _cx2, cy2 = card_bounds
+    card_h = max(1, cy2 - cy1)
+    top = cy2
+    for node in element.iter("node"):
+        if not _node_has_comment_button_token(node):
+            continue
+        bounds = _parse_bounds_from_node(node)
+        if not bounds:
+            continue
+        _x1, y1, _x2, _y2 = bounds
+        if y1 < cy1 + int(card_h * 0.2):
+            continue
+        top = min(top, y1)
+    return top if top < cy2 else cy2 - max(56, int(card_h * 0.06))
+
+
+def _find_post_media_tap(
+    element,
+    *,
+    card_bounds: Tuple[int, int, int, int],
+    author_bounds: Optional[Tuple[int, int, int, int]] = None,
+    nodes: Optional[List[Dict[str, Any]]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Tap main photo/video area — case 2: image-only posts or caption + large image below."""
+    cx1, cy1, cx2, cy2 = card_bounds
+    card_w = max(1, cx2 - cx1)
+    card_h = max(1, cy2 - cy1)
+    if author_bounds:
+        media_top = _header_bottom_for_body(card_bounds, author_bounds, nodes)
+    else:
+        media_top = cy1 + 8
+    media_bottom = _action_bar_top_y(element, card_bounds)
+
+    best_bounds: Optional[Tuple[int, int, int, int]] = None
+    best_score = -1
+    best_label = ""
+
+    for node in element.iter("node"):
+        if not _is_tappable_fb_node(node):
+            continue
+        bounds = _parse_bounds_from_node(node)
+        if not bounds:
+            continue
+        x1, y1, x2, y2 = bounds
+        w, h = x2 - x1, y2 - y1
+        if y1 < media_top or y2 > media_bottom:
+            continue
+        if w < int(card_w * 0.45):
+            continue
+        if h < max(100, int(card_h * 0.08)):
+            continue
+        # Skip left avatar chip
+        if x1 < cx1 + 220 and w < 260 and h < 220:
+            continue
+        label = _node_label(node)
+        cls = (node.get("class") or "").lower()
+        if not _is_feed_media_label(label) and "image" not in cls:
+            continue
+        if _is_action_or_chrome(label):
+            continue
+        if _node_has_comment_button_token(node):
+            continue
+        score = w * h
+        if score > best_score:
+            best_score = score
+            best_bounds = bounds
+            best_label = label[:120]
+
+    if best_bounds is None:
+        return None
+    return {
+        "tap_kind": "post_media",
+        "bounds": best_bounds,
+        "label": best_label,
+        "u2_click": None,
+    }
+
+
+def _header_band(
+    card_bounds: Tuple[int, int, int, int],
+    author_bounds: Tuple[int, int, int, int],
+    nodes: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[int, int, int, int]:
+    cx1, cy1, cx2, cy2 = card_bounds
+    ax1, ay1, ax2, ay2 = author_bounds
+    card_h = max(1, cy2 - cy1)
+    band_bottom = min(cy2, ay2 + max(72, int(card_h * 0.14)))
+    if nodes:
+        for n in nodes:
+            text = (n.get("text") or "").strip()
+            if not text or not _RE_TS.search(text):
+                continue
+            _x1, y1, _x2, y2 = n["bounds"]
+            if y1 >= ay1 - 4 and y1 <= ay2 + 96:
+                band_bottom = max(band_bottom, min(cy2, y2 + 8))
+    band_top = max(cy1, ay1 - 8)
+    # Timestamp/privacy sit below or beside the name — include the full header column.
+    band_left = max(cx1, ax1 - 12)
+    return band_left, band_top, cx2, band_bottom
+
+
+def _classify_header_node(
+    node,
+    *,
+    band: Tuple[int, int, int, int],
+    author_bounds: Tuple[int, int, int, int],
+) -> Optional[str]:
+    bx1, by1, bx2, by2 = band
+    bounds = _parse_bounds_from_node(node)
+    if not bounds:
+        return None
+    x1, y1, x2, y2 = bounds
+    if x2 <= bx1 or x1 >= bx2 or y2 <= by1 or y1 >= by2:
+        return None
+
+    text = _norm(node.get("text") or "")
+    desc = _norm(node.get("content-desc") or "")
+    merged = f"{text} {desc}".strip()
+    if not merged:
+        cls = node.get("class") or ""
+        if "Image" in cls and _is_tappable_fb_node(node):
+            return "privacy"
+        return None
+
+    if _is_action_or_chrome(merged):
+        return None
+    if any(m in merged.casefold() for m in _POST_MENU_MARKERS):
+        return None
+
+    ax1, ay1, ax2, ay2 = author_bounds
+    if y1 <= ay2 + 8 and x1 <= ax2 + 24 and not _RE_TS.search(text or desc):
+        return None
+
+    if x2 <= ax2 + 8 and not _RE_TS.search(text):
+        return None
+
+    if text and _RE_TS.search(text) and len(text) <= 96:
+        return "timestamp"
+
+    desc_cf = desc.casefold()
+    if any(m in desc_cf for m in _PRIVACY_MARKERS) and len(text) <= 4:
+        return "privacy"
+
+    if text and 2 <= len(text) <= 80 and x1 >= ax2 - 16:
+        return "metadata"
+
+    if desc and len(desc) <= 48 and x1 >= ax2 - 16:
+        return "metadata"
+
+    return None
+
+
+def _resolve_tappable_bounds(node) -> Optional[Tuple[int, int, int, int]]:
+    cur = node
+    for _ in range(10):
+        if _is_tappable_fb_node(cur):
+            bnds = _parse_bounds_from_node(cur)
+            if bnds:
+                return bnds
+        parent = cur.getparent()
+        if parent is None:
+            break
+        cur = parent
+    bnds = _parse_bounds_from_node(node)
+    return bnds
+
+
+def _media_dominates_for_post_open(
+    body: Dict[str, Any],
+    media: Dict[str, Any],
+    *,
+    has_timestamp_row: bool = False,
+) -> bool:
+    """Photo-first posts without a timestamp row — tap image only as last resort.
+
+    When a timestamp/privacy row exists, tapping the photo usually opens the
+    lightbox, not the post detail screen the extraction flow needs.
+    """
+    if has_timestamp_row:
+        return False
+    _bx1, by1, _bx2, by2 = body["bounds"]
+    body_h = by2 - by1
+    mx1, my1, mx2, my2 = media["bounds"]
+    media_area = (mx2 - mx1) * (my2 - my1)
+    body_area = max(1, (_bx2 - _bx1) * body_h)
+    body_label = str(body.get("label") or "")
+    has_see_more = bool(body.get("has_see_more"))
+    if _is_translation_chrome_label(body_label):
+        return True
+    if has_see_more or (body_h < 110 and media_area > body_area * 2):
+        return True
+    return body_h < 200 and media_area > body_area * 4
+
+
+def _pick_header_tap_for_card(
+    element,
+    *,
+    card_bounds: Tuple[int, int, int, int],
+    nodes: Optional[List[Dict[str, Any]]] = None,
+    author_bounds: Optional[Tuple[int, int, int, int]] = None,
+) -> Optional[Dict[str, Any]]:
+    candidates: List[Dict[str, Any]] = []
+    header_candidates: List[Dict[str, Any]] = []
+
+    body = (
+        _find_post_body_tap(
+            element,
+            card_bounds=card_bounds,
+            author_bounds=author_bounds or card_bounds,
+            nodes=nodes,
+        )
+        if author_bounds
+        else None
+    )
+    media = _find_post_media_tap(
+        element,
+        card_bounds=card_bounds,
+        author_bounds=author_bounds,
+        nodes=nodes,
+    )
+
+    if author_bounds:
+        menu_bounds = _find_post_menu_bounds(element)
+        gap = _author_row_gap_candidate(
+            element,
+            author_bounds=author_bounds,
+            card_bounds=card_bounds,
+            menu_bounds=menu_bounds,
+        )
+        if gap:
+            header_candidates.append(gap)
+
+        band = _header_band(card_bounds, author_bounds, nodes)
+        for node in element.iter("node"):
+            kind = _classify_header_node(
+                node, band=band, author_bounds=author_bounds
+            )
+            if not kind:
+                continue
+            bounds = _resolve_tappable_bounds(node)
+            if not bounds:
+                continue
+            if kind in {"timestamp", "metadata"}:
+                # Avoid bubbling to full-width header row (often includes Follow).
+                node_bounds = _parse_bounds_from_node(node)
+                if node_bounds:
+                    bounds = node_bounds
+                bx1, _by1, bx2, _by2 = bounds
+                card_w = max(1, card_bounds[2] - card_bounds[0])
+                if (bx2 - bx1) >= int(card_w * 0.72):
+                    continue
+            header_candidates.append(
+                {
+                    "tap_kind": kind,
+                    "bounds": bounds,
+                    "label": _node_label(node)[:120],
+                    "u2_click": build_comment_button_u2_click(node, bounds),
+                }
+            )
+
+    timestamps = [
+        h for h in header_candidates if h.get("tap_kind") == "timestamp"
+    ]
+    use_media_path = bool(
+        body
+        and media
+        and _media_dominates_for_post_open(
+            body, media, has_timestamp_row=bool(timestamps)
+        )
+    )
+
+    # Prefer header row (time/badge/gap) — body/photo rarely land on post detail.
+    if header_candidates and not use_media_path:
+        candidates.extend(header_candidates)
+
+    if not candidates:
+        if body and media:
+            if use_media_path:
+                candidates.append(media)
+            else:
+                _bx1, by1, _bx2, by2 = body["bounds"]
+                body_h = by2 - by1
+                mx1, my1, mx2, my2 = media["bounds"]
+                media_area = (mx2 - mx1) * (my2 - my1)
+                body_area = max(1, (_bx2 - _bx1) * body_h)
+                candidates.append(body)
+                if body_h < 200 and media_area > body_area * 4:
+                    candidates.append(media)
+        elif body:
+            if body.get("has_see_more"):
+                body = {
+                    **body,
+                    "bounds": body.get("tap_bounds") or body["bounds"],
+                }
+            candidates.append(body)
+        elif media:
+            candidates.append(media)
+
+    if not candidates and author_bounds:
+        ax1, ay1, ax2, ay2 = author_bounds
+        cx1, cy1, cx2, cy2 = card_bounds
+        card_w = max(1, cx2 - cx1)
+        gx1 = max(ax2 + 24, cx1 + int(card_w * 0.55))
+        gx2 = min(cx2 - 12, gx1 + max(80, int(card_w * 0.35)))
+        gy1 = ay1
+        gy2 = min(cy2, ay2 + 48)
+        if gx2 > gx1 + 20:
+            geo = (gx1, gy1, gx2, gy2)
+            candidates.append(
+                {
+                    "tap_kind": "geometric",
+                    "bounds": geo,
+                    "label": "",
+                    "u2_click": None,
+                }
+            )
+
+    if not candidates:
+        return None
+
+    safe = [c for c in candidates if c.get("tap_kind") not in _UNSAFE_POST_OPEN_TAP_KINDS]
+    if safe:
+        candidates = safe
+
+    has_media_cand = any(c.get("tap_kind") == "post_media" for c in candidates)
+    body_see_more = any(
+        c.get("tap_kind") == "post_body" and c.get("has_see_more") for c in candidates
+    )
+    if body_see_more and not has_media_cand:
+        ts = [c for c in candidates if c.get("tap_kind") == "timestamp"]
+        if ts:
+            rest = [c for c in candidates if c.get("tap_kind") != "timestamp"]
+            candidates = ts + rest
+
+    def _sort_key(c: Dict[str, Any]) -> Tuple[int, int, int]:
+        kind = c.get("tap_kind") or "metadata"
+        rank = _TAP_KIND_RANK.get(kind, 9)
+        if kind == "post_body" and c.get("has_see_more"):
+            rank = 7
+        b = c["bounds"]
+        return (rank, -b[2], b[1])
+
+    candidates.sort(key=_sort_key)
+    return candidates[0]
+
+
+def _build_post_open_candidate(
+    element,
+    *,
+    feed_item_index: int,
+) -> Optional[Dict[str, Any]]:
+    from .feed_pipeline import _is_ad_container
+    from .parser import _collect_text_nodes, _parse_bounds
+    from .post_extractor import (
+        _extract_fb_link_meta,
+        _extract_post,
+        _resource_id_media_hint,
+        _structural_post_type_hint,
+    )
+
+    if _is_ad_container(element):
+        return None
+    card_bounds = _parse_bounds(element)
+    if not card_bounds:
+        return None
+    nodes = _collect_text_nodes(element, toolbar_cutoff_y=0)
+    if not nodes:
+        return None
+    author_bounds = _find_author_bounds(nodes, card_bounds)
+    tap = _pick_header_tap_for_card(
+        element,
+        card_bounds=card_bounds,
+        nodes=nodes,
+        author_bounds=author_bounds,
+    )
+    if not tap:
+        return None
+
+    fb_pid, fb_gid, perms = _extract_fb_link_meta(element)
+    post = _extract_post(
+        nodes,
+        0,
+        structural_type_hint=_structural_post_type_hint(element),
+        resource_id_media_hint=_resource_id_media_hint(element),
+        fb_post_id=fb_pid,
+        fb_group_id=fb_gid,
+        permalink_candidates=perms,
+        feed_item_index=feed_item_index,
+    )
+    if not post:
+        author_text = _first_author_text(nodes)
+        if not author_text and not tap:
+            return None
+        post = {
+            "author": author_text or "",
+            "text": "",
+            "_pid": f"open:{feed_item_index}",
+            "post_key": f"open:{feed_item_index}",
+        }
+    elif not post.get("_pid"):
+        post["_pid"] = post.get("post_key") or f"open:{feed_item_index}"
+
+    tb = tap.get("tap_bounds") or tap["bounds"]
+    return {
+        "bounds": [tb[0], tb[1], tb[2], tb[3]],
+        "tap_kind": tap.get("tap_kind"),
+        "tap_label": tap.get("label") or "",
+        "u2_click": tap.get("u2_click"),
+        "parent_post_bounds": card_bounds,
+        "post": post,
+        "feed_item_index": feed_item_index,
+        "has_see_more": bool(tap.get("has_see_more")),
+    }
+
+
+def _score_post_open_candidate(
+    cand: Dict[str, Any],
+    *,
+    screen_h: int,
+    screen_w: int,
+    center_y_ratio: float,
+    locked_post_key: str | None,
+) -> Dict[str, Any]:
+    from .comment_pipeline import _score_comment_candidate
+
+    scored = _score_comment_candidate(
+        {
+            **cand,
+            "comment_bounds": tuple(cand["bounds"]),
+        },
+        screen_h=screen_h,
+        screen_w=screen_w,
+        center_y_ratio=center_y_ratio,
+    )
+    breakdown = dict(scored.get("breakdown") or {})
+    if locked_post_key:
+        post = cand.get("post") or {}
+        if post.get("post_key") == locked_post_key or post.get("stable_post_id") == locked_post_key:
+            breakdown["post_key_match"] = True
+            scored["score"] = float(scored.get("score", 0.0)) - 500.0
+        else:
+            breakdown["post_key_match"] = False
+            scored["score"] = float(scored.get("score", 0.0)) + 800.0
+    kind = cand.get("tap_kind") or "metadata"
+    scored["score"] = float(scored.get("score", 0.0)) + _TAP_KIND_RANK.get(kind, 3) * 2.0
+    if kind in _UNSAFE_POST_OPEN_TAP_KINDS:
+        scored["score"] = float(scored.get("score", 0.0)) + 40.0
+    scored["breakdown"] = breakdown
+    return scored
+
+
+def _first_author_text(nodes: List[Dict[str, Any]]) -> str:
+    for n in nodes:
+        if n.get("is_author_hint") and (n.get("text") or "").strip():
+            return str(n["text"]).strip()
+    for n in sorted(nodes, key=lambda item: (item["bounds"][1], item["bounds"][0])):
+        text = (n.get("text") or "").strip()
+        if not (2 <= len(text) <= 64):
+            continue
+        if n["bounds"][0] > 280:
+            continue
+        if _RE_TS.search(text):
+            continue
+        if _is_action_or_chrome(text):
+            continue
+        return text
+    return ""
+
+
+def _minimal_post_card_ancestor(node, stop: Any) -> Any | None:
+    from .parser import _parse_bounds
+
+    cur = node
+    best = None
+    best_h: int | None = None
+    for _ in range(32):
+        if cur is None:
+            break
+        bounds = _parse_bounds(cur)
+        if bounds:
+            height = bounds[3] - bounds[1]
+            if height >= 180 and (best_h is None or height < best_h):
+                best = cur
+                best_h = height
+        if cur == stop:
+            break
+        cur = cur.getparent()
+    return best
+
+
+def _post_cards_anchored_on_comment_buttons(container) -> List[Any]:
+    from .comment_pipeline import (
+        _comment_button_within_post_card,
+        _resolve_comment_button_click_meta,
+    )
+    from .parser import _parse_bounds
+
+    cards: List[Any] = []
+    seen_y: set[int] = set()
+    for node in container.iter("node"):
+        meta = _resolve_comment_button_click_meta(node)
+        if not meta:
+            continue
+        btn_bounds = meta["bounds"]
+        card = _minimal_post_card_ancestor(node, container)
+        if card is None:
+            continue
+        card_bounds = _parse_bounds(card)
+        if not card_bounds:
+            continue
+        if not _comment_button_within_post_card(btn_bounds, card_bounds):
+            continue
+        y_key = card_bounds[1] // 100
+        if y_key in seen_y:
+            continue
+        seen_y.add(y_key)
+        cards.append(card)
+    cards.sort(key=lambda el: (_parse_bounds(el) or (0, 0, 0, 0))[1])
+    return cards
+
+
+def _is_viable_feed_post_card(element) -> bool:
+    """Skip comment-thread slivers and partial off-screen stubs."""
+    from .parser import _parse_bounds
+
+    bounds = _parse_bounds(element)
+    if not bounds:
+        return False
+    if bounds[3] - bounds[1] < 280:
+        return False
+    return _card_has_action_bar(element)
+
+
+def _discover_post_open_scan_elements(root) -> List[Tuple[int, Any]]:
+    from .feed_pipeline import _is_ad_container
+    from .parser import _pick_feed_container
+
+    containers = root.xpath(XPATH_RECYCLER) or root.xpath(XPATH_LIST)
+    if not containers:
+        return [(0, root)]
+
+    feed = _pick_feed_container(containers, root)
+    children = [
+        c
+        for c in feed.findall("node")
+        if not _is_ad_container(c) and _is_viable_feed_post_card(c)
+    ]
+    if len(children) >= 2:
+        return [(i, c) for i, c in enumerate(children)]
+
+    search = children[0] if len(children) == 1 else feed
+    anchored = _post_cards_anchored_on_comment_buttons(search)
+    if anchored:
+        return list(enumerate(anchored))
+
+    if len(children) == 1:
+        return [(0, children[0])]
+    return [(0, root)]
+
+
+def _post_open_candidate_passes_filter(
+    cand: Dict[str, Any],
+    *,
+    screen_h: int,
+    band_low: float = 0.05,
+    band_high: float = 0.97,
+) -> bool:
+    """Band filter for feed cards — uses card vertical center, not header tap y.
+
+    Header taps sit at the top of a card; comment-button filters reject y1 < 12%
+  screen which wrongly drops the first visible post on group feeds.
+    """
+    parent = cand.get("parent_post_bounds")
+    if parent and len(parent) == 4:
+        _x1, y1, _x2, y2 = parent
+        anchor_y = (y1 + y2) // 2
+    else:
+        _x1, anchor_y, _x2, _y2 = cand.get("bounds") or cand.get("comment_bounds") or (0, 0, 0, 0)
+    if screen_h <= 0:
+        return True
+    top_limit = int(screen_h * band_low)
+    bottom_limit = int(screen_h * band_high)
+    nav_strip = max(56, int(screen_h * 0.022))
+    if anchor_y < top_limit:
+        return False
+    if anchor_y > bottom_limit:
+        return False
+    if anchor_y >= screen_h - nav_strip:
+        return False
+    return True
+
+
+def diagnose_post_open_resolution(
+    xml: str,
+    *,
+    band_low: float = 0.05,
+    band_high: float = 0.97,
+) -> Dict[str, Any]:
+    from .parser import _infer_screen_size, _parse_xml
+
+    root = _parse_xml(xml)
+    if root is None:
+        return {"reason_code": "xml_parse_error"}
+
+    screen_w, screen_h = _infer_screen_size(root)
+    scan = _discover_post_open_scan_elements(root)
+    built = 0
+    missing_author = 0
+    missing_tap = 0
+    missing_post = 0
+    filtered = 0
+    for feed_item_index, element in scan:
+        from .parser import _collect_text_nodes, _parse_bounds
+
+        nodes = _collect_text_nodes(element, toolbar_cutoff_y=0)
+        card_bounds = _parse_bounds(element)
+        if not nodes or not card_bounds:
+            missing_post += 1
+            continue
+        author_bounds = _find_author_bounds(nodes, card_bounds)
+        if not author_bounds:
+            missing_author += 1
+        tap = _pick_header_tap_for_card(
+            element,
+            card_bounds=card_bounds,
+            nodes=nodes,
+            author_bounds=author_bounds,
+        )
+        if not tap:
+            missing_tap += 1
+            continue
+        built += 1
+        if not _post_open_candidate_passes_filter(
+            {"bounds": tap["bounds"], "parent_post_bounds": card_bounds},
+            screen_h=screen_h,
+            band_low=band_low,
+            band_high=band_high,
+        ):
+            filtered += 1
+
+    return {
+        "reason_code": "diagnostic",
+        "screen_size": [screen_w, screen_h],
+        "is_post_detail": hierarchy_is_fb_post_detail_from_xml(xml),
+        "scan_elements": len(scan),
+        "built_with_tap": built,
+        "missing_author": missing_author,
+        "missing_tap": missing_tap,
+        "missing_post_nodes": missing_post,
+        "filtered_by_band": filtered,
+    }
+
+
+def resolve_post_open_targets_from_xml(
+    xml: str,
+    *,
+    center_y_ratio: float = 0.5,
+    max_candidates: int = 5,
+    locked_post_key: str | None = None,
+    band_low: float = 0.05,
+    band_high: float = 0.97,
+) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Rank feed cards by mid-screen heuristic; pick header tap per card."""
+    from .parser import _infer_screen_size, _parse_xml
+
+    root = _parse_xml(xml)
+    if root is None:
+        return None, []
+
+    if hierarchy_is_fb_post_detail_from_xml(xml):
+        return None, []
+
+    screen_w, screen_h = _infer_screen_size(root)
+    if screen_h <= 0:
+        screen_h = 2200
+    if screen_w <= 0:
+        screen_w = 1080
+
+    containers = root.xpath(XPATH_RECYCLER) or root.xpath(XPATH_LIST)
+    scan = _discover_post_open_scan_elements(root)
+
+    scored: List[Dict[str, Any]] = []
+    for feed_item_index, element in scan:
+        cand = _build_post_open_candidate(element, feed_item_index=feed_item_index)
+        if cand is None:
+            continue
+        if not _post_open_candidate_passes_filter(cand, screen_h=screen_h, band_low=band_low, band_high=band_high):
+            continue
+        cand.update(
+            _score_post_open_candidate(
+                cand,
+                screen_h=screen_h,
+                screen_w=screen_w,
+                center_y_ratio=center_y_ratio,
+                locked_post_key=locked_post_key,
+            )
+        )
+        scored.append(cand)
+
+    if not scored:
+        return None, []
+
+    def _tie_key(c: Dict[str, Any]) -> Tuple[float, int, float]:
+        post = c.get("post") or {}
+        has_strong = bool(post.get("post_key") or post.get("stable_post_id"))
+        breakdown = c.get("breakdown") or {}
+        return (
+            float(c.get("score", 0.0)),
+            0 if has_strong else 1,
+            float(breakdown.get("distance", 1.0)),
+        )
+
+    scored.sort(key=_tie_key)
+    ranked = scored[: max(1, int(max_candidates))]
+    top = ranked[0]
+    target = {
+        "bounds": top["bounds"],
+        "tap_kind": top.get("tap_kind"),
+        "tap_label": top.get("tap_label"),
+        "u2_click": top.get("u2_click"),
+        "post_key": (top.get("post") or {}).get("post_key"),
+        "feed_item_index": top.get("feed_item_index"),
+        "score": top.get("score"),
+    }
+    alternates = [
+        {
+            "bounds": c["bounds"],
+            "tap_kind": c.get("tap_kind"),
+            "tap_label": c.get("tap_label"),
+            "u2_click": c.get("u2_click"),
+            "post_key": (c.get("post") or {}).get("post_key"),
+            "feed_item_index": c.get("feed_item_index"),
+            "score": c.get("score"),
+        }
+        for c in ranked[1:]
+    ]
+    return target, alternates
+
+
+__all__ = [
+    "hierarchy_is_fb_post_detail_from_xml",
+    "post_header_tap_point",
+    "resolve_post_open_targets_from_xml",
+]

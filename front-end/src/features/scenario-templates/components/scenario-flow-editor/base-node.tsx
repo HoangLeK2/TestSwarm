@@ -17,6 +17,7 @@ const BORDER_COLORS: Record<string, string> = {
   tap_ratio: '#3b82f6',
   tap_position: '#3b82f6',
   tap: '#3b82f6',
+  fb_tap_comment_button: '#2563eb',
   tap_fb_comment_button: '#2563eb',
   long_tap_selector: '#3b82f6',
   swipe_ratio: '#3b82f6',

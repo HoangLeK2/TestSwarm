@@ -44,7 +44,11 @@ function sessionToIdentity(user: SessionUser | null) {
   });
 }
 
-export function PermissionProvider({ children }: { children: React.ReactNode }) {
+export function PermissionProvider({
+  children
+}: {
+  children: React.ReactNode;
+}) {
   const { pending, user } = useAuthContext();
 
   const value = React.useMemo<PermissionContextValue>(() => {

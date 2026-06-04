@@ -20,7 +20,10 @@ function resolvedArtifactHref(artifact: ExecutionArtifact): string | null {
   return resolveArtifactUrl(artifact.url, deviceFarmBackendBase);
 }
 
-function artifactIsImage(artifact: ExecutionArtifact, href: string | null): boolean {
+function artifactIsImage(
+  artifact: ExecutionArtifact,
+  href: string | null
+): boolean {
   const kind = String(artifact.metadata?.content_type || '');
   if (kind.startsWith('image/')) return true;
   if (artifact.artifact_type.includes('screenshot')) return true;

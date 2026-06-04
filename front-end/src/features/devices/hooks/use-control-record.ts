@@ -1053,10 +1053,7 @@ export function useControlRecord(
       while (!cancelled && attempts < HIERARCHY_BOOTSTRAP_MAX_ATTEMPTS) {
         attempts += 1;
         try {
-          const xml = await fetchAndSetHierarchy(
-            selectedHierarchySerial,
-            true
-          );
+          const xml = await fetchAndSetHierarchy(selectedHierarchySerial, true);
           if (xml?.trim() || cancelled) return;
         } catch {
           /* retry */
@@ -1175,37 +1172,40 @@ export function useControlRecord(
   >('text');
   const [selectorValue, setSelectorValue] = useState('');
 
-  const handleTapSelector = useCallback((options?: SendAndRecordOptions) => {
-    if (!selectedDevice || !selectorValue.trim()) return;
-    const by = selectorBy;
-    const value = selectorValue.trim();
-    sendAndRecord(
-      { type: 'tap_selector', serial: selectedDevice.serial, by, value },
-      options
-    );
-    if (recording) {
-      recordStep(
-        buildRecordedTapStep({
-          by,
-          value,
-          rx: 0.5,
-          ry: 0.5,
-          selector: { by: by as any, value }
-        }) as ScenarioStep
+  const handleTapSelector = useCallback(
+    (options?: SendAndRecordOptions) => {
+      if (!selectedDevice || !selectorValue.trim()) return;
+      const by = selectorBy;
+      const value = selectorValue.trim();
+      sendAndRecord(
+        { type: 'tap_selector', serial: selectedDevice.serial, by, value },
+        options
       );
-    }
-    toast.success(
-      t('toast.tapSelectorSuccess', { by, value: value.slice(0, 30) })
-    );
-  }, [
-    selectedDevice,
-    selectorBy,
-    selectorValue,
-    sendAndRecord,
-    recording,
-    recordStep,
-    t
-  ]);
+      if (recording) {
+        recordStep(
+          buildRecordedTapStep({
+            by,
+            value,
+            rx: 0.5,
+            ry: 0.5,
+            selector: { by: by as any, value }
+          }) as ScenarioStep
+        );
+      }
+      toast.success(
+        t('toast.tapSelectorSuccess', { by, value: value.slice(0, 30) })
+      );
+    },
+    [
+      selectedDevice,
+      selectorBy,
+      selectorValue,
+      sendAndRecord,
+      recording,
+      recordStep,
+      t
+    ]
+  );
 
   // ── Return (grouped) ─────────────────────────────────────────────────────
   const mode = selectedDevice ? (modes[selectedDevice.serial] ?? 'tap') : 'tap';

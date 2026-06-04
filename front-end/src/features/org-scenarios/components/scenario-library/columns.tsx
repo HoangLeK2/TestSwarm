@@ -131,7 +131,10 @@ export function getOrgScenarioColumns(
         isSystemTemplateItem(row.original) ? (
           <span className='text-sm text-muted-foreground'>—</span>
         ) : (
-          <Badge variant={statusVariant(row.original.status)} className='font-normal'>
+          <Badge
+            variant={statusVariant(row.original.status)}
+            className='font-normal'
+          >
             {statusLabel(t, row.original.status)}
           </Badge>
         )
@@ -233,7 +236,11 @@ function ScenarioRowActions({
       </Button>
 
       {isSystem && perms.canCreate ? (
-        <CloneTemplateDialog template={scenario} variant='outline' className='h-8' />
+        <CloneTemplateDialog
+          template={scenario}
+          variant='outline'
+          className='h-8'
+        />
       ) : null}
 
       {!isSystem && !isArchived && campaignPerms.canCreate ? (
@@ -258,7 +265,10 @@ function ScenarioRowActions({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align='end' className='w-52'>
-          <DropdownMenuItem className='gap-2 sm:hidden' onClick={() => onOpen(scenario)}>
+          <DropdownMenuItem
+            className='gap-2 sm:hidden'
+            onClick={() => onOpen(scenario)}
+          >
             <Eye className='size-4' />
             {isSystem ? t('previewTemplate') : t('open')}
           </DropdownMenuItem>
@@ -277,7 +287,10 @@ function ScenarioRowActions({
             </DropdownMenuItem>
           ) : null}
           {!isSystem && isArchived && perms.canUpdate ? (
-            <DropdownMenuItem className='gap-2' onClick={() => onRestore(scenario)}>
+            <DropdownMenuItem
+              className='gap-2'
+              onClick={() => onRestore(scenario)}
+            >
               <RotateCcw className='size-4' />
               {t('restoreShort')}
             </DropdownMenuItem>

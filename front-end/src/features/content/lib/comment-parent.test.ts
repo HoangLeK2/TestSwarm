@@ -1,7 +1,37 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { commentParentSummary } from './comment-parent.ts';
+import {
+  commentParentSummary,
+  type CommentParentLabels
+} from './comment-parent.ts';
+
+const VI_LABELS: CommentParentLabels = {
+  fallbackTitle: 'Bài gốc',
+  linkedTitle: 'Bài gốc đã liên kết',
+  postIdLabel: (id) => `Post ${id}`
+};
+
+test('commentParentSummary hides secondary when it duplicates comment body', () => {
+  const commentText =
+    'Minh Hoang Mn cho mình hỏi là có bên thứ 3 nào bán API không nhỉ?';
+  const summary = commentParentSummary({
+    parent_id: 'scoped-parent-hash',
+    content_type: 'fb_comment',
+    body: commentText,
+    title: null,
+    raw_data: {
+      text: commentText,
+      parent_post_anchor: {
+        author: 'OpenClaw VN',
+        text_prefix: commentText
+      }
+    }
+  });
+
+  assert.equal(summary?.primary, 'OpenClaw VN');
+  assert.equal(summary?.secondary, null);
+});
 
 test('commentParentSummary shows human-readable parent anchor', () => {
   const summary = commentParentSummary({
@@ -32,17 +62,23 @@ test('commentParentSummary falls back to parser post id', () => {
     raw_data: { parent_post_id: 'ee5add7e48beb17f-extra' }
   });
 
-  assert.equal(summary?.primary, 'Post ee5add7e48beb17…');
+  assert.equal(summary?.primary, VI_LABELS.postIdLabel('ee5add7e48beb17…'));
   assert.equal(summary?.secondary, null);
   assert.equal(summary?.linkedParentId, null);
   assert.equal(summary?.source, null);
 });
 
 test('commentParentSummary can identify a linked parent from hash only', () => {
-  const summary = commentParentSummary({
-    parent_id: 'scoped-parent-hash',
-    raw_data: {}
-  });
+  const summary = commentParentSummary(
+    {
+      parent_id: 'scoped-parent-hash',
+      content_type: 'fb_comment',
+      body: 'x',
+      title: null,
+      raw_data: { text: 'x' }
+    },
+    VI_LABELS
+  );
 
   assert.equal(summary?.primary, 'Bài gốc đã liên kết');
   assert.equal(summary?.secondary, 'scoped-parent-h…');

@@ -85,7 +85,8 @@ export function isImageArtifact(
   if (mime?.startsWith('image/')) return true;
   const label = (hints?.label ?? '').toLowerCase();
   const source = (hints?.source ?? '').toLowerCase();
-  if (/\bscreenshot\b/.test(label) || /\bscreenshot\b/.test(source)) return true;
+  if (/\bscreenshot\b/.test(label) || /\bscreenshot\b/.test(source))
+    return true;
   if (/\belement\b/.test(label) || /\belement\b/.test(source)) return true;
   if (!url) return false;
   return /\.(png|jpe?g|webp|gif)(\?|$)/i.test(url);

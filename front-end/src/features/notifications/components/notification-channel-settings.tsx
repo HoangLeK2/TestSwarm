@@ -2,7 +2,15 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import { Bell, ExternalLink, Loader2, Pencil, Plus, Send, Trash2 } from 'lucide-react';
+import {
+  Bell,
+  ExternalLink,
+  Loader2,
+  Pencil,
+  Plus,
+  Send,
+  Trash2
+} from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
 import { Badge } from '@/components/ui/badge';
@@ -458,10 +466,14 @@ export function NotificationChannelSettings({
     <div className='space-y-6'>
       <div className='flex flex-wrap items-center justify-between gap-3'>
         {embedded ? (
-          <p className='text-sm text-muted-foreground'>{t('channelsTabHint')}</p>
+          <p className='text-sm text-muted-foreground'>
+            {t('channelsTabHint')}
+          </p>
         ) : (
           <div>
-            <h1 className='text-xl font-semibold tracking-tight'>{t('title')}</h1>
+            <h1 className='text-xl font-semibold tracking-tight'>
+              {t('title')}
+            </h1>
             <p className='text-sm text-muted-foreground'>{t('subtitle')}</p>
           </div>
         )}

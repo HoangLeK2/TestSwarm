@@ -107,7 +107,10 @@ export function isSystemUiPackage(pkg: string): boolean {
   );
 }
 
-function redepthTree(node: HierarchyTreeNode, depth: number): HierarchyTreeNode {
+function redepthTree(
+  node: HierarchyTreeNode,
+  depth: number
+): HierarchyTreeNode {
   return {
     ...node,
     depth,

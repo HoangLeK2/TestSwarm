@@ -33,7 +33,9 @@ function toDayPickerRange(value: AnalyticsDateRangeValue): DateRange {
   return { from: value.from, to: value.to ?? value.from };
 }
 
-function fromDayPickerRange(range: DateRange | undefined): AnalyticsDateRangeValue | null {
+function fromDayPickerRange(
+  range: DateRange | undefined
+): AnalyticsDateRangeValue | null {
   if (!range?.from) return null;
   return {
     from: startOfDay(range.from),
@@ -68,10 +70,7 @@ export function AnalyticsDateRangeSelect({
           type='button'
           variant='outline'
           size='sm'
-          className={cn(
-            'h-9 gap-1.5 px-3 font-normal shadow-none',
-            className
-          )}
+          className={cn('h-9 gap-1.5 px-3 font-normal shadow-none', className)}
         >
           <CalendarIcon className='size-4 shrink-0 text-muted-foreground' />
           <span className='max-w-[11rem] truncate'>{label}</span>

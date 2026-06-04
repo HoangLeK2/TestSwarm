@@ -108,8 +108,7 @@ const ScenarioPlayer = dynamic(
 );
 
 const VariableEditor = dynamic(
-  () =>
-    import('@/components/variable-editor').then((m) => m.VariableEditor),
+  () => import('@/components/variable-editor').then((m) => m.VariableEditor),
   { ssr: false }
 );
 import {
@@ -134,7 +133,10 @@ import {
   TooltipTrigger
 } from '@/components/ui/tooltip';
 import { useControlRecord } from '../hooks/use-control-record';
-import { campaignVariables, campaignsApi } from '@/features/campaigns/services/api';
+import {
+  campaignVariables,
+  campaignsApi
+} from '@/features/campaigns/services/api';
 import { useScenarioTemplates } from '@/features/scenario-templates/hooks/use-scenario-templates';
 import type { ScenarioTemplateOut } from '@/features/scenario-templates/services/api';
 import { useAccountGroups } from '@/features/account-groups/hooks/use-account-groups';
@@ -247,7 +249,9 @@ function isManualControlEligible(d: {
   state?: string | null;
   scenario_active?: number | null;
 }) {
-  const state = String(d.state || '').replace('DeviceState.', '').toUpperCase();
+  const state = String(d.state || '')
+    .replace('DeviceState.', '')
+    .toUpperCase();
   return state === 'READY' && (d.scenario_active ?? 0) <= 0;
 }
 
@@ -414,8 +418,7 @@ export function ControlRecordView({
   }, [device.connectedDevices, multiFollowerSerials]);
   const hasMultiFollowers = multiFollowerSerials.length > 0;
   const multiFocusMode = hasMultiFollowers && !stepPickerOpen && !playerMode;
-  const showEditorPanel =
-    !hasMultiFollowers || stepPickerOpen || playerMode;
+  const showEditorPanel = !hasMultiFollowers || stepPickerOpen || playerMode;
   const treePanelOpen = safeHierarchy && !leftCollapsed && !hasMultiFollowers;
 
   const prevMultiRef = useRef(false);
@@ -1108,9 +1111,7 @@ export function ControlRecordView({
     setFlowDetailStep(null);
     setFlowCoordPick(null);
     setFlowSelectorPickFgId(null);
-    setFlowRunStates((prev) =>
-      Object.keys(prev).length === 0 ? prev : {}
-    );
+    setFlowRunStates((prev) => (Object.keys(prev).length === 0 ? prev : {}));
   }, [showFlowUi]);
 
   useEffect(() => {
@@ -1230,9 +1231,7 @@ export function ControlRecordView({
           steps.setItems(synced as typeof steps.items);
           const updated = findStepByFlowgramId(synced, fgId);
           if (updated) {
-            const normalized = JSON.parse(
-              JSON.stringify(updated)
-            ) as FlowStep;
+            const normalized = JSON.parse(JSON.stringify(updated)) as FlowStep;
             flowDetailPendingRef.current = normalized;
             setFlowDetailStep(normalized);
           }
@@ -1500,12 +1499,7 @@ export function ControlRecordView({
         );
       }
     },
-    [
-      coordinatePickTarget,
-      showFlowUi,
-      flowCoordPick,
-      steps
-    ]
+    [coordinatePickTarget, showFlowUi, flowCoordPick, steps]
   );
 
   // When user taps the phone screen → hierarchy highlight + optional selector pick
@@ -1668,8 +1662,7 @@ export function ControlRecordView({
             rx2: number,
             ry2: number,
             durationMs: number
-          ) =>
-            handleScreenSwipeRef.current(rx1, ry1, rx2, ry2, durationMs)
+          ) => handleScreenSwipeRef.current(rx1, ry1, rx2, ry2, durationMs)
         : undefined,
     [mirrorSwipeEnabled]
   );
@@ -1892,7 +1885,10 @@ export function ControlRecordView({
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               {multiFollowerOptions.length === 0 ? (
-                <DropdownMenuItem disabled className='text-xs text-muted-foreground'>
+                <DropdownMenuItem
+                  disabled
+                  className='text-xs text-muted-foreground'
+                >
                   {t('multiControl.noReadyDevices')}
                 </DropdownMenuItem>
               ) : (
@@ -1971,9 +1967,7 @@ export function ControlRecordView({
               }
               setFlowMode((v) => !v);
             }}
-            title={
-              flowMode ? t('flowSwitchToList') : t('flowSwitchToFlow')
-            }
+            title={flowMode ? t('flowSwitchToList') : t('flowSwitchToFlow')}
           >
             {flowMode ? (
               <List className='size-3.5' />
@@ -2296,458 +2290,469 @@ export function ControlRecordView({
         {/* ── COL 3: Recording / scenario editor ───────────────────────── */}
         {showEditorPanel ? (
           <div className='flex min-h-0 min-w-[min(100%,480px)] flex-1 flex-col overflow-hidden border-l border-border/60'>
-          {playerMode && selectedDevice ? (
-            /* Player mode — fill column; list scrolls inside ScenarioPlayer */
-            <div className='flex min-h-0 flex-1 flex-col overflow-hidden p-4'>
-              <ScenarioPlayer
-                serial={selectedDevice.serial}
-                onClose={() =>
-                  guardWhilePreviewActive(() => setPlayerMode(false))
-                }
-                onPlayingChange={handlePlayerPlayingChange}
-                registerStop={registerPlayerStop}
-                preloadedSteps={
-                  steps.items.length > 0 ? (steps.items as any[]) : undefined
-                }
-                preloadedName={save.editingContext?.name}
-                preloadedVariables={scenarioVariables}
-                preloadedScenarioId={activeScenarioId}
-                preloadedScenarioDeviceVars={inlineScenarioDeviceVars}
-                preloadedAccountGroupId={
-                  saveAccountGroupId ||
-                  save.editingContext?.accountGroupId ||
-                  null
-                }
-                deviceBusy={
-                  (selectedDevice.state || '').replace('DeviceState.', '') ===
-                  'BUSY'
-                }
-              />
-            </div>
-          ) : (
-            <div className='flex min-h-0 flex-1 flex-col overflow-hidden'>
-              {/* Selector pick banner */}
-              {selectorPickTarget && (
-                <div className='flex shrink-0 items-center gap-2 border-b border-amber-400/30 bg-amber-50/80 px-4 py-2 dark:bg-amber-950/20'>
-                  <Crosshair className='size-3.5 shrink-0 text-amber-600' />
-                  <p className='flex-1 text-[11px] text-amber-800 dark:text-amber-300'>
-                    {t('pickSelectorBanner')}
-                  </p>
-                  <button
-                    type='button'
-                    className='text-[10px] text-amber-700 underline underline-offset-2 hover:no-underline dark:text-amber-400'
-                    onClick={() => setSelectorPickTarget(null)}
-                  >
-                    Huỷ
-                  </button>
-                </div>
-              )}
-
-              {coordinatePickTarget?.mode === 'tap_point' && (
-                <div className='flex shrink-0 items-center gap-2 border-b border-sky-400/35 bg-sky-50/90 px-4 py-2 dark:bg-sky-950/25'>
-                  <MousePointerClick className='size-3.5 shrink-0 text-sky-700 dark:text-sky-400' />
-                  <p className='flex-1 text-[11px] text-sky-900 dark:text-sky-200'>
-                    CHẠM TỌA ĐỘ — chạm một điểm trên mirror (cột điện thoại).
-                    Esc hoặc Huỷ để thoát.
-                  </p>
-                  <button
-                    type='button'
-                    className='text-[10px] text-sky-800 underline underline-offset-2 hover:no-underline dark:text-sky-300'
-                    onClick={() => setCoordinatePickTarget(null)}
-                  >
-                    Huỷ
-                  </button>
-                </div>
-              )}
-
-              {coordinatePickTarget?.mode === 'swipe_segment' && (
-                <div className='flex shrink-0 items-center gap-2 border-b border-sky-400/35 bg-sky-50/90 px-4 py-2 dark:bg-sky-950/25'>
-                  <Move className='size-3.5 shrink-0 text-sky-700 dark:text-sky-400' />
-                  <p className='flex-1 text-[11px] text-sky-900 dark:text-sky-200'>
-                    Vuốt trên mirror để lấy đoạn (điểm đầu → cuối). Esc hoặc Huỷ
-                    để thoát.
-                  </p>
-                  <button
-                    type='button'
-                    className='text-[10px] text-sky-800 underline underline-offset-2 hover:no-underline dark:text-sky-300'
-                    onClick={() => setCoordinatePickTarget(null)}
-                  >
-                    Huỷ
-                  </button>
-                </div>
-              )}
-
-              {showFlowUi && flowCoordPick && (
-                <div className='flex shrink-0 items-center gap-2 border-b border-sky-400/35 bg-sky-50/90 px-4 py-2 dark:bg-sky-950/25'>
-                  <MousePointerClick className='size-3.5 shrink-0 text-sky-700 dark:text-sky-400' />
-                  <p className='flex-1 text-[11px] text-sky-900 dark:text-sky-200'>
-                    {flowCoordPick.kind === 'tap'
-                      ? 'FLOW — chạm mirror để gán tọa độ cho node đang chọn. Esc để hủy.'
-                      : 'FLOW — vuốt mirror để gán swipe_ratio. Esc để hủy.'}
-                  </p>
-                  <button
-                    type='button'
-                    className='text-[10px] text-sky-800 underline underline-offset-2 hover:no-underline dark:text-sky-300'
-                    onClick={() => setFlowCoordPick(null)}
-                  >
-                    Huỷ
-                  </button>
-                </div>
-              )}
-
-              {showFlowUi && flowSelectorPickFgId && (
-                <div className='flex shrink-0 items-center gap-2 border-b border-amber-400/30 bg-amber-50/80 px-4 py-2 dark:bg-amber-950/20'>
-                  <Crosshair className='size-3.5 shrink-0 text-amber-600' />
-                  <p className='flex-1 text-[11px] text-amber-800 dark:text-amber-300'>
-                    FLOW — chạm phần tử trên mirror để gán selector cho node
-                    đang chọn (cần XML cây bên trái). Esc để hủy.
-                  </p>
-                  <button
-                    type='button'
-                    className='text-[10px] text-amber-700 underline underline-offset-2 hover:no-underline dark:text-amber-400'
-                    onClick={() => setFlowSelectorPickFgId(null)}
-                  >
-                    Huỷ
-                  </button>
-                </div>
-              )}
-
-              {/* Section header */}
-              <div className='flex shrink-0 items-center gap-1 border-b border-border/40 bg-muted/20 px-2 py-2'>
-                {hasMultiFollowers && stepPickerOpen ? (
-                  <Button
-                    type='button'
-                    size='sm'
-                    variant='ghost'
-                    className='h-7 shrink-0 gap-1 px-2 text-xs text-muted-foreground'
-                    onClick={() => setStepPickerOpen(false)}
-                    title={t('multiControl.closePicker')}
-                  >
-                    <ChevronRight className='size-3.5' />
-                  </Button>
-                ) : null}
-                <div className='flex min-w-0 max-w-full flex-1 flex-nowrap items-center gap-1.5 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'>
-                  {record.pollingXml && (
-                    <RefreshCw
-                      size={12}
-                      className='animate-spin text-red-500/80'
-                    />
-                  )}
-                  <Button
-                    size='sm'
-                    variant={record.recording ? 'destructive' : 'default'}
-                    className='h-7 shrink-0 gap-1.5 px-2.5 text-xs'
-                    onClick={() => void record.toggleRecording()}
-                    disabled={!selectedDevice}
-                  >
-                    {record.recording ? (
-                      <Square className='size-3.5' />
-                    ) : (
-                      <Circle className='size-3.5 fill-current' />
-                    )}
-                    {record.recording
-                      ? t('stopRecording')
-                      : t('startRecording')}
-                  </Button>
-                  <Button
-                    size='sm'
-                    variant='outline'
-                    className='h-7 shrink-0 gap-1.5 px-2.5 text-xs'
-                    onClick={() => setPlayerMode(true)}
-                    disabled={
-                      !selectedDevice ||
-                      (selectedDevice.state || '').replace(
-                        'DeviceState.',
-                        ''
-                      ) === 'BUSY'
-                    }
-                    title={
-                      selectedDevice &&
-                      (selectedDevice.state || '').replace(
-                        'DeviceState.',
-                        ''
-                      ) === 'BUSY'
-                        ? 'Thiết bị đang chạy campaign — không cho chạy thử'
-                        : undefined
-                    }
-                  >
-                    <Play className='size-3.5' />
-                    {t('tryRun')}
-                  </Button>
-                  <Tooltip delayDuration={300}>
-                    <TooltipTrigger asChild>
-                      <Button
-                        size='sm'
-                        variant='ghost'
-                        className='h-7 w-7 shrink-0 p-0'
-                        onClick={() => setJsonDialogOpen(true)}
-                        disabled={steps.items.length === 0}
-                      >
-                        <Code2 className='size-3.5' />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side='bottom' className='text-xs'>
-                      Xem JSON
-                    </TooltipContent>
-                  </Tooltip>
-                  <Button
-                    size='sm'
-                    variant='outline'
-                    className='h-7 shrink-0 gap-1.5 px-2.5 text-xs'
-                    onClick={() => {
-                      if (save.templateContext) {
-                        save.saveToTemplate(scenarioVariables);
-                        return;
-                      }
-                      if (savingOrgScenario) {
-                        void handleSaveOrgScenario();
-                        return;
-                      }
-                      steps.openSave();
-                    }}
-                    disabled={
-                      steps.items.length === 0 ||
-                      !canSaveWork ||
-                      save.savingTemplate ||
-                      saveOrgBodyMutation.isPending
-                    }
-                    title={
-                      !canSaveWork
-                        ? safeReadOnly
-                          ? 'Safe mode: không cho lưu'
-                          : undefined
-                        : undefined
-                    }
-                  >
-                    <Save className='size-3.5' />
-                    {save.templateContext
-                      ? save.savingTemplate
-                        ? t('templateSaving')
-                        : t('templateSave')
-                      : savingOrgScenario
-                        ? saveOrgBodyMutation.isPending
-                          ? 'Đang lưu…'
-                          : 'Lưu'
-                        : 'Lưu'}
-                  </Button>
-                  <Tooltip delayDuration={400}>
-                    <TooltipTrigger asChild>
-                      <Button
-                        size='sm'
-                        variant='outline'
-                        onClick={() => setVarDialogOpen(true)}
-                        className={cn(
-                          'h-7 shrink-0 gap-1.5 px-2.5 text-xs',
-                          Object.keys(scenarioVariables).length > 0 &&
-                            'border-primary/40 bg-primary/10 text-primary hover:bg-primary/20'
-                        )}
-                      >
-                        <SlidersHorizontal className='size-3.5' />
-                        Biến
-                        {Object.keys(scenarioVariables).length > 0 && (
-                          <span className='rounded-full bg-primary/20 px-1.5 text-[10px] font-bold'>
-                            {Object.keys(scenarioVariables).length}
-                          </span>
-                        )}
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side='bottom' className='text-xs'>
-                      Chỉnh biến — giá trị thay thế cho {'${VAR}'} khi chạy thử
-                      bước
-                    </TooltipContent>
-                  </Tooltip>
-                  <Tooltip delayDuration={400}>
-                    <TooltipTrigger asChild>
-                      <Button
-                        size='sm'
-                        variant='outline'
-                        onClick={() => setDeviceVarDialogOpen(true)}
-                        disabled={!activeCampaignId || !selectedDeviceId}
-                        className={cn(
-                          'h-7 shrink-0 gap-1.5 px-2.5 text-xs',
-                          hasEnabledDeviceVars &&
-                            activeCampaignId &&
-                            selectedDeviceId
-                            ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-300'
-                            : ''
-                        )}
-                      >
-                        <SlidersHorizontal className='size-3.5' />
-                        Biến thiết bị
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side='bottom' className='text-xs'>
-                      {!activeCampaignId
-                        ? 'Mở trong ngữ cảnh chiến dịch để thiết lập'
-                        : !selectedScenarioDeviceId
-                          ? 'Chọn thiết bị trước'
-                          : `Đang gắn cho: ${selectedDeviceLabel}`}
-                    </TooltipContent>
-                  </Tooltip>
-                  <Tooltip delayDuration={400}>
-                    <TooltipTrigger asChild>
-                      <Button
-                        size='sm'
-                        variant='ghost'
-                        className='h-7 w-7 shrink-0 p-0'
-                      >
-                        <HelpCircle className='size-3.5' />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side='bottom' className='max-w-xs text-xs'>
-                      {t('tooltipScenarioSection')}
-                    </TooltipContent>
-                  </Tooltip>
-                </div>
+            {playerMode && selectedDevice ? (
+              /* Player mode — fill column; list scrolls inside ScenarioPlayer */
+              <div className='flex min-h-0 flex-1 flex-col overflow-hidden p-4'>
+                <ScenarioPlayer
+                  serial={selectedDevice.serial}
+                  onClose={() =>
+                    guardWhilePreviewActive(() => setPlayerMode(false))
+                  }
+                  onPlayingChange={handlePlayerPlayingChange}
+                  registerStop={registerPlayerStop}
+                  preloadedSteps={
+                    steps.items.length > 0 ? (steps.items as any[]) : undefined
+                  }
+                  preloadedName={save.editingContext?.name}
+                  preloadedVariables={scenarioVariables}
+                  preloadedScenarioId={activeScenarioId}
+                  preloadedScenarioDeviceVars={inlineScenarioDeviceVars}
+                  preloadedAccountGroupId={
+                    saveAccountGroupId ||
+                    save.editingContext?.accountGroupId ||
+                    null
+                  }
+                  deviceBusy={
+                    (selectedDevice.state || '').replace('DeviceState.', '') ===
+                    'BUSY'
+                  }
+                />
               </div>
-
-              {/* Flow editor */}
+            ) : (
               <div className='flex min-h-0 flex-1 flex-col overflow-hidden'>
-                <div className='min-h-0 flex-1 overflow-y-auto px-3 pb-2'>
-                {steps.items.length === 0 ? (
-                  <EmptyNodePicker
-                    templates={templatesQuery.data}
-                    templatesLoading={templatesQuery.isLoading}
-                    onPreviewTemplate={(tpl) => {
-                      setScenarioVariables((prev) =>
-                        mergeTemplateVariablesIntoEditor(prev, tpl.variables)
-                      );
-                      setPreviewTemplate(tpl);
-                    }}
-                    onAddFlow={steps.addFlow}
-                    onAddWait={steps.addWait}
-                  />
-                ) : showFlowUi ? (
-                  <div className='flex h-full min-h-[240px] flex-col overflow-hidden rounded-lg border border-border/50 bg-background lg:flex-row'>
-                    <div className='relative min-h-[220px] flex-1 overflow-hidden lg:min-h-0'>
-                      <FlowgramCanvas
-                        key={`flow-${flowCanvasKey}`}
-                        steps={steps.items as any}
-                        workbench={flowWorkbench}
-                        onFlowCtx={(ctx) => {
-                          flowCtxRef.current = ctx;
-                        }}
-                        onStepsChange={(newSteps) => {
-                          flowStepsRef.current = newSteps as any;
-                          steps.setItems(newSteps as any);
-                        }}
-                      />
-                    </div>
-                    <div className='max-h-[min(38vh,320px)] w-full shrink-0 overflow-y-auto border-t border-border bg-card lg:max-h-none lg:w-[min(100%,280px)] lg:border-l lg:border-t-0'>
-                      {flowDetailStep ? (
-                        <StepDetailPanel
-                          step={flowDetailStep}
-                          onChange={handleFlowDetailChange}
-                          onClose={() => setFlowSelectedFgId(null)}
-                          onRequestPickSelector={
-                            flowSelectedFgId &&
-                            flowDetailStep &&
-                            isSelectorPickableStep(flowDetailStep)
-                              ? () => {
-                                  setFlowSelectorPickFgId(flowSelectedFgId);
-                                  setSelectorPickTarget(null);
-                                  setFlowCoordPick(null);
-                                  setCoordinatePickTarget(null);
-                                  toast.info(
-                                    'Chạm phần tử trên mirror để gán selector'
-                                  );
-                                }
-                              : undefined
-                          }
-                          onRequestPickTapCoords={
-                            flowSelectedFgId
-                              ? () => {
-                                  setFlowCoordPick({
-                                    fgId: flowSelectedFgId,
-                                    kind: 'tap'
-                                  });
-                                  setCoordinatePickTarget(null);
-                                  setFlowSelectorPickFgId(null);
-                                  toast.info(
-                                    'Chạm mirror để gán tọa độ cho node này'
-                                  );
-                                }
-                              : undefined
-                          }
-                          onRequestPickSwipeCoords={
-                            flowSelectedFgId
-                              ? () => {
-                                  setFlowCoordPick({
-                                    fgId: flowSelectedFgId,
-                                    kind: 'swipe'
-                                  });
-                                  setCoordinatePickTarget(null);
-                                  setFlowSelectorPickFgId(null);
-                                  toast.info(
-                                    'Vuốt trên mirror để gán swipe_ratio'
-                                  );
-                                }
-                              : undefined
-                          }
-                        />
-                      ) : (
-                        <div className='space-y-2 p-3 text-[11px] leading-relaxed text-muted-foreground'>
-                          <p>
-                            Bấm <strong>con trỏ</strong> trên node → chỉnh chi
-                            tiết; <strong>play</strong> chạy một bước. Cây XML +
-                            thêm bước từ selector vẫn dùng cột trái như chế độ
-                            danh sách.
-                          </p>
-                          <p className='rounded-md border border-border/80 bg-muted/30 px-2 py-1.5 text-[10px]'>
-                            <strong>Không có “kéo dây” tự do</strong> — Flowgram
-                            (fixed-layout) tự vẽ nối theo thứ tự dọc và nhánh
-                            if/loop/random. Đổi thứ tự bằng{' '}
-                            <strong>kéo thả node</strong>. Muốn nối dây tùy ý
-                            cần editor dạng graph tự do (vd. React Flow), không
-                            nằm trong thư viện hiện tại.
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <div className='flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border/50 bg-background'>
-                    {selectedDevice &&
-                      Object.values(stepRunStates).some(
-                        (st) => st === 'running'
-                      ) && (
-                        <div className='flex shrink-0 justify-end border-b border-border/60 bg-muted/40 px-2 py-1.5'>
-                          <Button
-                            type='button'
-                            size='sm'
-                            variant='outline'
-                            className='h-7 gap-1 text-xs text-destructive hover:bg-destructive/10'
-                            onClick={handleStopInlineRun}
-                          >
-                            <Square className='size-3' fill='currentColor' />
-                            Dừng chạy thử
-                          </Button>
-                        </div>
-                      )}
-                    <div className='min-h-0 flex-1 overflow-hidden'>
-                      <FlowEditor
-                        steps={steps.items as FlowStep[]}
-                        onChange={handleFlowStepsChange}
-                        maxHeight='calc(100vh - 170px)'
-                        selectorPickTarget={selectorPickTarget}
-                        onSelectorPickTargetChange={setSelectorPickTarget}
-                        coordinatePickTarget={coordinatePickTarget}
-                        onCoordinatePickTargetChange={
-                          setCoordinatePickTargetSafe
-                        }
-                        onRunStep={selectedDevice ? handleRunStep : undefined}
-                        onStopInlineRun={
-                          selectedDevice ? handleStopInlineRun : undefined
-                        }
-                        stepRunStates={stepRunStates}
-                      />
-                    </div>
+                {/* Selector pick banner */}
+                {selectorPickTarget && (
+                  <div className='flex shrink-0 items-center gap-2 border-b border-amber-400/30 bg-amber-50/80 px-4 py-2 dark:bg-amber-950/20'>
+                    <Crosshair className='size-3.5 shrink-0 text-amber-600' />
+                    <p className='flex-1 text-[11px] text-amber-800 dark:text-amber-300'>
+                      {t('pickSelectorBanner')}
+                    </p>
+                    <button
+                      type='button'
+                      className='text-[10px] text-amber-700 underline underline-offset-2 hover:no-underline dark:text-amber-400'
+                      onClick={() => setSelectorPickTarget(null)}
+                    >
+                      Huỷ
+                    </button>
                   </div>
                 )}
+
+                {coordinatePickTarget?.mode === 'tap_point' && (
+                  <div className='flex shrink-0 items-center gap-2 border-b border-sky-400/35 bg-sky-50/90 px-4 py-2 dark:bg-sky-950/25'>
+                    <MousePointerClick className='size-3.5 shrink-0 text-sky-700 dark:text-sky-400' />
+                    <p className='flex-1 text-[11px] text-sky-900 dark:text-sky-200'>
+                      CHẠM TỌA ĐỘ — chạm một điểm trên mirror (cột điện thoại).
+                      Esc hoặc Huỷ để thoát.
+                    </p>
+                    <button
+                      type='button'
+                      className='text-[10px] text-sky-800 underline underline-offset-2 hover:no-underline dark:text-sky-300'
+                      onClick={() => setCoordinatePickTarget(null)}
+                    >
+                      Huỷ
+                    </button>
+                  </div>
+                )}
+
+                {coordinatePickTarget?.mode === 'swipe_segment' && (
+                  <div className='flex shrink-0 items-center gap-2 border-b border-sky-400/35 bg-sky-50/90 px-4 py-2 dark:bg-sky-950/25'>
+                    <Move className='size-3.5 shrink-0 text-sky-700 dark:text-sky-400' />
+                    <p className='flex-1 text-[11px] text-sky-900 dark:text-sky-200'>
+                      Vuốt trên mirror để lấy đoạn (điểm đầu → cuối). Esc hoặc
+                      Huỷ để thoát.
+                    </p>
+                    <button
+                      type='button'
+                      className='text-[10px] text-sky-800 underline underline-offset-2 hover:no-underline dark:text-sky-300'
+                      onClick={() => setCoordinatePickTarget(null)}
+                    >
+                      Huỷ
+                    </button>
+                  </div>
+                )}
+
+                {showFlowUi && flowCoordPick && (
+                  <div className='flex shrink-0 items-center gap-2 border-b border-sky-400/35 bg-sky-50/90 px-4 py-2 dark:bg-sky-950/25'>
+                    <MousePointerClick className='size-3.5 shrink-0 text-sky-700 dark:text-sky-400' />
+                    <p className='flex-1 text-[11px] text-sky-900 dark:text-sky-200'>
+                      {flowCoordPick.kind === 'tap'
+                        ? 'FLOW — chạm mirror để gán tọa độ cho node đang chọn. Esc để hủy.'
+                        : 'FLOW — vuốt mirror để gán swipe_ratio. Esc để hủy.'}
+                    </p>
+                    <button
+                      type='button'
+                      className='text-[10px] text-sky-800 underline underline-offset-2 hover:no-underline dark:text-sky-300'
+                      onClick={() => setFlowCoordPick(null)}
+                    >
+                      Huỷ
+                    </button>
+                  </div>
+                )}
+
+                {showFlowUi && flowSelectorPickFgId && (
+                  <div className='flex shrink-0 items-center gap-2 border-b border-amber-400/30 bg-amber-50/80 px-4 py-2 dark:bg-amber-950/20'>
+                    <Crosshair className='size-3.5 shrink-0 text-amber-600' />
+                    <p className='flex-1 text-[11px] text-amber-800 dark:text-amber-300'>
+                      FLOW — chạm phần tử trên mirror để gán selector cho node
+                      đang chọn (cần XML cây bên trái). Esc để hủy.
+                    </p>
+                    <button
+                      type='button'
+                      className='text-[10px] text-amber-700 underline underline-offset-2 hover:no-underline dark:text-amber-400'
+                      onClick={() => setFlowSelectorPickFgId(null)}
+                    >
+                      Huỷ
+                    </button>
+                  </div>
+                )}
+
+                {/* Section header */}
+                <div className='flex shrink-0 items-center gap-1 border-b border-border/40 bg-muted/20 px-2 py-2'>
+                  {hasMultiFollowers && stepPickerOpen ? (
+                    <Button
+                      type='button'
+                      size='sm'
+                      variant='ghost'
+                      className='h-7 shrink-0 gap-1 px-2 text-xs text-muted-foreground'
+                      onClick={() => setStepPickerOpen(false)}
+                      title={t('multiControl.closePicker')}
+                    >
+                      <ChevronRight className='size-3.5' />
+                    </Button>
+                  ) : null}
+                  <div className='flex min-w-0 max-w-full flex-1 flex-nowrap items-center gap-1.5 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'>
+                    {record.pollingXml && (
+                      <RefreshCw
+                        size={12}
+                        className='animate-spin text-red-500/80'
+                      />
+                    )}
+                    <Button
+                      size='sm'
+                      variant={record.recording ? 'destructive' : 'default'}
+                      className='h-7 shrink-0 gap-1.5 px-2.5 text-xs'
+                      onClick={() => void record.toggleRecording()}
+                      disabled={!selectedDevice}
+                    >
+                      {record.recording ? (
+                        <Square className='size-3.5' />
+                      ) : (
+                        <Circle className='size-3.5 fill-current' />
+                      )}
+                      {record.recording
+                        ? t('stopRecording')
+                        : t('startRecording')}
+                    </Button>
+                    <Button
+                      size='sm'
+                      variant='outline'
+                      className='h-7 shrink-0 gap-1.5 px-2.5 text-xs'
+                      onClick={() => setPlayerMode(true)}
+                      disabled={
+                        !selectedDevice ||
+                        (selectedDevice.state || '').replace(
+                          'DeviceState.',
+                          ''
+                        ) === 'BUSY'
+                      }
+                      title={
+                        selectedDevice &&
+                        (selectedDevice.state || '').replace(
+                          'DeviceState.',
+                          ''
+                        ) === 'BUSY'
+                          ? 'Thiết bị đang chạy campaign — không cho chạy thử'
+                          : undefined
+                      }
+                    >
+                      <Play className='size-3.5' />
+                      {t('tryRun')}
+                    </Button>
+                    <Tooltip delayDuration={300}>
+                      <TooltipTrigger asChild>
+                        <Button
+                          size='sm'
+                          variant='ghost'
+                          className='h-7 w-7 shrink-0 p-0'
+                          onClick={() => setJsonDialogOpen(true)}
+                          disabled={steps.items.length === 0}
+                        >
+                          <Code2 className='size-3.5' />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side='bottom' className='text-xs'>
+                        Xem JSON
+                      </TooltipContent>
+                    </Tooltip>
+                    <Button
+                      size='sm'
+                      variant='outline'
+                      className='h-7 shrink-0 gap-1.5 px-2.5 text-xs'
+                      onClick={() => {
+                        if (save.templateContext) {
+                          save.saveToTemplate(scenarioVariables);
+                          return;
+                        }
+                        if (savingOrgScenario) {
+                          void handleSaveOrgScenario();
+                          return;
+                        }
+                        steps.openSave();
+                      }}
+                      disabled={
+                        steps.items.length === 0 ||
+                        !canSaveWork ||
+                        save.savingTemplate ||
+                        saveOrgBodyMutation.isPending
+                      }
+                      title={
+                        !canSaveWork
+                          ? safeReadOnly
+                            ? 'Safe mode: không cho lưu'
+                            : undefined
+                          : undefined
+                      }
+                    >
+                      <Save className='size-3.5' />
+                      {save.templateContext
+                        ? save.savingTemplate
+                          ? t('templateSaving')
+                          : t('templateSave')
+                        : savingOrgScenario
+                          ? saveOrgBodyMutation.isPending
+                            ? 'Đang lưu…'
+                            : 'Lưu'
+                          : 'Lưu'}
+                    </Button>
+                    <Tooltip delayDuration={400}>
+                      <TooltipTrigger asChild>
+                        <Button
+                          size='sm'
+                          variant='outline'
+                          onClick={() => setVarDialogOpen(true)}
+                          className={cn(
+                            'h-7 shrink-0 gap-1.5 px-2.5 text-xs',
+                            Object.keys(scenarioVariables).length > 0 &&
+                              'border-primary/40 bg-primary/10 text-primary hover:bg-primary/20'
+                          )}
+                        >
+                          <SlidersHorizontal className='size-3.5' />
+                          Biến
+                          {Object.keys(scenarioVariables).length > 0 && (
+                            <span className='rounded-full bg-primary/20 px-1.5 text-[10px] font-bold'>
+                              {Object.keys(scenarioVariables).length}
+                            </span>
+                          )}
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side='bottom' className='text-xs'>
+                        Chỉnh biến — giá trị thay thế cho {'${VAR}'} khi chạy
+                        thử bước
+                      </TooltipContent>
+                    </Tooltip>
+                    <Tooltip delayDuration={400}>
+                      <TooltipTrigger asChild>
+                        <Button
+                          size='sm'
+                          variant='outline'
+                          onClick={() => setDeviceVarDialogOpen(true)}
+                          disabled={!activeCampaignId || !selectedDeviceId}
+                          className={cn(
+                            'h-7 shrink-0 gap-1.5 px-2.5 text-xs',
+                            hasEnabledDeviceVars &&
+                              activeCampaignId &&
+                              selectedDeviceId
+                              ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-300'
+                              : ''
+                          )}
+                        >
+                          <SlidersHorizontal className='size-3.5' />
+                          Biến thiết bị
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side='bottom' className='text-xs'>
+                        {!activeCampaignId
+                          ? 'Mở trong ngữ cảnh chiến dịch để thiết lập'
+                          : !selectedScenarioDeviceId
+                            ? 'Chọn thiết bị trước'
+                            : `Đang gắn cho: ${selectedDeviceLabel}`}
+                      </TooltipContent>
+                    </Tooltip>
+                    <Tooltip delayDuration={400}>
+                      <TooltipTrigger asChild>
+                        <Button
+                          size='sm'
+                          variant='ghost'
+                          className='h-7 w-7 shrink-0 p-0'
+                        >
+                          <HelpCircle className='size-3.5' />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent
+                        side='bottom'
+                        className='max-w-xs text-xs'
+                      >
+                        {t('tooltipScenarioSection')}
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
+                </div>
+
+                {/* Flow editor */}
+                <div className='flex min-h-0 flex-1 flex-col overflow-hidden'>
+                  <div className='min-h-0 flex-1 overflow-y-auto px-3 pb-2'>
+                    {steps.items.length === 0 ? (
+                      <EmptyNodePicker
+                        templates={templatesQuery.data}
+                        templatesLoading={templatesQuery.isLoading}
+                        onPreviewTemplate={(tpl) => {
+                          setScenarioVariables((prev) =>
+                            mergeTemplateVariablesIntoEditor(
+                              prev,
+                              tpl.variables
+                            )
+                          );
+                          setPreviewTemplate(tpl);
+                        }}
+                        onAddFlow={steps.addFlow}
+                        onAddWait={steps.addWait}
+                      />
+                    ) : showFlowUi ? (
+                      <div className='flex h-full min-h-[240px] flex-col overflow-hidden rounded-lg border border-border/50 bg-background lg:flex-row'>
+                        <div className='relative min-h-[220px] flex-1 overflow-hidden lg:min-h-0'>
+                          <FlowgramCanvas
+                            key={`flow-${flowCanvasKey}`}
+                            steps={steps.items as any}
+                            workbench={flowWorkbench}
+                            onFlowCtx={(ctx) => {
+                              flowCtxRef.current = ctx;
+                            }}
+                            onStepsChange={(newSteps) => {
+                              flowStepsRef.current = newSteps as any;
+                              steps.setItems(newSteps as any);
+                            }}
+                          />
+                        </div>
+                        <div className='max-h-[min(38vh,320px)] w-full shrink-0 overflow-y-auto border-t border-border bg-card lg:max-h-none lg:w-[min(100%,280px)] lg:border-l lg:border-t-0'>
+                          {flowDetailStep ? (
+                            <StepDetailPanel
+                              step={flowDetailStep}
+                              onChange={handleFlowDetailChange}
+                              onClose={() => setFlowSelectedFgId(null)}
+                              onRequestPickSelector={
+                                flowSelectedFgId &&
+                                flowDetailStep &&
+                                isSelectorPickableStep(flowDetailStep)
+                                  ? () => {
+                                      setFlowSelectorPickFgId(flowSelectedFgId);
+                                      setSelectorPickTarget(null);
+                                      setFlowCoordPick(null);
+                                      setCoordinatePickTarget(null);
+                                      toast.info(
+                                        'Chạm phần tử trên mirror để gán selector'
+                                      );
+                                    }
+                                  : undefined
+                              }
+                              onRequestPickTapCoords={
+                                flowSelectedFgId
+                                  ? () => {
+                                      setFlowCoordPick({
+                                        fgId: flowSelectedFgId,
+                                        kind: 'tap'
+                                      });
+                                      setCoordinatePickTarget(null);
+                                      setFlowSelectorPickFgId(null);
+                                      toast.info(
+                                        'Chạm mirror để gán tọa độ cho node này'
+                                      );
+                                    }
+                                  : undefined
+                              }
+                              onRequestPickSwipeCoords={
+                                flowSelectedFgId
+                                  ? () => {
+                                      setFlowCoordPick({
+                                        fgId: flowSelectedFgId,
+                                        kind: 'swipe'
+                                      });
+                                      setCoordinatePickTarget(null);
+                                      setFlowSelectorPickFgId(null);
+                                      toast.info(
+                                        'Vuốt trên mirror để gán swipe_ratio'
+                                      );
+                                    }
+                                  : undefined
+                              }
+                            />
+                          ) : (
+                            <div className='space-y-2 p-3 text-[11px] leading-relaxed text-muted-foreground'>
+                              <p>
+                                Bấm <strong>con trỏ</strong> trên node → chỉnh
+                                chi tiết; <strong>play</strong> chạy một bước.
+                                Cây XML + thêm bước từ selector vẫn dùng cột
+                                trái như chế độ danh sách.
+                              </p>
+                              <p className='rounded-md border border-border/80 bg-muted/30 px-2 py-1.5 text-[10px]'>
+                                <strong>Không có “kéo dây” tự do</strong> —
+                                Flowgram (fixed-layout) tự vẽ nối theo thứ tự
+                                dọc và nhánh if/loop/random. Đổi thứ tự bằng{' '}
+                                <strong>kéo thả node</strong>. Muốn nối dây tùy
+                                ý cần editor dạng graph tự do (vd. React Flow),
+                                không nằm trong thư viện hiện tại.
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className='flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border/50 bg-background'>
+                        {selectedDevice &&
+                          Object.values(stepRunStates).some(
+                            (st) => st === 'running'
+                          ) && (
+                            <div className='flex shrink-0 justify-end border-b border-border/60 bg-muted/40 px-2 py-1.5'>
+                              <Button
+                                type='button'
+                                size='sm'
+                                variant='outline'
+                                className='h-7 gap-1 text-xs text-destructive hover:bg-destructive/10'
+                                onClick={handleStopInlineRun}
+                              >
+                                <Square
+                                  className='size-3'
+                                  fill='currentColor'
+                                />
+                                Dừng chạy thử
+                              </Button>
+                            </div>
+                          )}
+                        <div className='min-h-0 flex-1 overflow-hidden'>
+                          <FlowEditor
+                            steps={steps.items as FlowStep[]}
+                            onChange={handleFlowStepsChange}
+                            maxHeight='calc(100vh - 170px)'
+                            selectorPickTarget={selectorPickTarget}
+                            onSelectorPickTargetChange={setSelectorPickTarget}
+                            coordinatePickTarget={coordinatePickTarget}
+                            onCoordinatePickTargetChange={
+                              setCoordinatePickTargetSafe
+                            }
+                            onRunStep={
+                              selectedDevice ? handleRunStep : undefined
+                            }
+                            onStopInlineRun={
+                              selectedDevice ? handleStopInlineRun : undefined
+                            }
+                            stepRunStates={stepRunStates}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
+            )}
           </div>
         ) : null}
       </div>
@@ -2802,7 +2807,10 @@ export function ControlRecordView({
               <SlidersHorizontal className='size-4 shrink-0' />
               {tVar('title')}
               {Object.keys(scenarioVariables).length > 0 ? (
-                <Badge variant='secondary' className='h-6 text-[11px] font-normal'>
+                <Badge
+                  variant='secondary'
+                  className='h-6 text-[11px] font-normal'
+                >
                   {tVar('variableCount', {
                     count: Object.keys(scenarioVariables).length
                   })}

@@ -2,7 +2,11 @@
 
 import { Badge } from '@/components/ui/badge';
 import { useTranslations } from 'next-intl';
-import type { DeviceOut, FleetStatsOut, RelayAgentOut } from '../../services/manage-api';
+import type {
+  DeviceOut,
+  FleetStatsOut,
+  RelayAgentOut
+} from '../../services/manage-api';
 import { computeDeviceTransportCounts } from '../../lib/device-online';
 
 /** FSM states worth surfacing in the operator summary (not transport). */

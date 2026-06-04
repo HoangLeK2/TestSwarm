@@ -1,10 +1,12 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { FileCode, Search } from 'lucide-react';
 import { toast } from 'sonner';
 import { useSearchParams } from 'next/navigation';
+import { useRouter } from '@/i18n/navigation';
+import { ROUTES } from '@/config/routes';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -33,7 +35,6 @@ import { CreateOrgScenarioDialog } from '../create-scenario-dialog';
 import { ImportOrgScenarioDialog } from '../import-scenario-dialog';
 import { ScenarioDetailSheet } from '../scenario-detail-sheet';
 import { getOrgScenarioColumns } from './columns';
-import { CampaignHintBanner } from './campaign-hint-banner';
 import { isOrgScenarioVisibleInLibrary } from '../../lib/campaign-scenario-eligibility';
 
 type LibraryTab = 'org' | 'system';
@@ -42,6 +43,7 @@ export function ScenarioLibrary() {
   const t = useTranslations('orgScenariosFeature.list');
   const tCommon = useTranslations('common');
   const searchParams = useSearchParams();
+  const router = useRouter();
   const { user } = useUser();
   const isSuperadmin = isSuperadminRole(user?.role);
   const confirm = useConfirm();
@@ -50,9 +52,14 @@ export function ScenarioLibrary() {
   const [activeTab, setActiveTab] = useState<LibraryTab>('org');
   const [selected, setSelected] = useState<ScenarioLibraryItem | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  /** Prevents deep-link effect from reopening sheet after user closes it while URL still has scenario_id. */
+  const openedDeepLinkRef = useRef<string | null>(null);
 
-  const { data: orgScenarios, isLoading: orgLoading, error: orgError } =
-    useOrgScenarios({ include_archived: showHidden });
+  const {
+    data: orgScenarios,
+    isLoading: orgLoading,
+    error: orgError
+  } = useOrgScenarios({ include_archived: showHidden });
   const {
     data: templates,
     isLoading: templatesLoading,
@@ -100,8 +107,11 @@ export function ScenarioLibrary() {
   // URL: /dashboard/org-scenarios?scenario_id=...
   const deepLinkScenarioId = (searchParams.get('scenario_id') ?? '').trim();
   useEffect(() => {
-    if (!deepLinkScenarioId) return;
-    if (detailOpen) return;
+    if (!deepLinkScenarioId) {
+      openedDeepLinkRef.current = null;
+      return;
+    }
+    if (openedDeepLinkRef.current === deepLinkScenarioId) return;
     const candidates =
       activeTab === 'system'
         ? (templates ?? []).map(templateToLibraryItem)
@@ -110,10 +120,30 @@ export function ScenarioLibrary() {
             .map(orgScenarioToLibraryItem);
     const found = candidates.find((s) => s.id === deepLinkScenarioId);
     if (found) {
+      openedDeepLinkRef.current = deepLinkScenarioId;
       setSelected(found);
       setDetailOpen(true);
     }
-  }, [deepLinkScenarioId, detailOpen, activeTab, orgScenarios, templates]);
+  }, [deepLinkScenarioId, activeTab, orgScenarios, templates]);
+
+  const handleDetailOpenChange = useCallback(
+    (open: boolean) => {
+      setDetailOpen(open);
+      if (open) return;
+      if (deepLinkScenarioId) {
+        openedDeepLinkRef.current = deepLinkScenarioId;
+      }
+      if (!searchParams.has('scenario_id')) return;
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete('scenario_id');
+      const qs = params.toString();
+      router.replace(
+        qs ? `${ROUTES.ORG_SCENARIOS.ROOT}?${qs}` : ROUTES.ORG_SCENARIOS.ROOT,
+        { scroll: false }
+      );
+    },
+    [deepLinkScenarioId, router, searchParams]
+  );
 
   const openScenario = (scenario: ScenarioLibraryItem) => {
     setSelected(scenario);
@@ -186,10 +216,10 @@ export function ScenarioLibrary() {
         }}
         className='space-y-0'
       >
-        <Card className='overflow-hidden border-border/80 shadow-sm'>
-          <CardHeader className='space-y-4 border-b bg-muted/20 px-4 py-4 sm:px-6'>
-            <div className='flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between'>
-              <TabsList className='grid h-10 w-full grid-cols-2 lg:w-[360px]'>
+        <Card className='gap-0 overflow-hidden border-0 bg-transparent py-0 shadow-none'>
+          <CardHeader className='space-y-4 px-0 py-0'>
+            <div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
+              <TabsList className='grid h-10 w-full grid-cols-2 sm:w-auto sm:min-w-[22rem]'>
                 <TabsTrigger value='org' className='gap-1.5 text-sm'>
                   {t('tabLibrary')}
                   <span className='rounded-full bg-background/80 px-1.5 py-0.5 text-[11px] font-normal tabular-nums text-muted-foreground'>
@@ -204,79 +234,83 @@ export function ScenarioLibrary() {
                 </TabsTrigger>
               </TabsList>
 
-              <div className='flex flex-wrap gap-2'>
-              {activeTab === 'org' ? (
-                <Can object='scenarios' action='create'>
-                  <ImportOrgScenarioDialog />
-                  <CreateOrgScenarioDialog />
-                </Can>
-              ) : isSuperadmin ? (
-                <Can object='scenario-templates' action='create'>
-                  <CreateTemplateDialog />
-                </Can>
+              <div className='flex shrink-0 flex-wrap justify-end gap-2'>
+                {activeTab === 'org' ? (
+                  <Can object='scenarios' action='create'>
+                    <ImportOrgScenarioDialog />
+                    <CreateOrgScenarioDialog />
+                  </Can>
+                ) : isSuperadmin ? (
+                  <Can object='scenario-templates' action='create'>
+                    <CreateTemplateDialog />
+                  </Can>
+                ) : null}
+              </div>
+            </div>
+
+            <div className='flex w-full flex-col gap-3 sm:flex-row sm:items-center'>
+              <div className='relative min-w-0 w-full flex-1'>
+                <Search
+                  size={16}
+                  className='pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground'
+                />
+                <Input
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder={searchPlaceholder}
+                  className='h-10 w-full border-border/80 bg-background pl-9'
+                />
+              </div>
+              {activeTab === 'org' && counts.hidden > 0 ? (
+                <label
+                  className={cn(
+                    'flex shrink-0 cursor-pointer items-center gap-2 rounded-md border border-border/80',
+                    'bg-background px-3 py-2 text-sm text-muted-foreground transition-colors',
+                    'hover:bg-muted/50'
+                  )}
+                >
+                  <Checkbox
+                    checked={showHidden}
+                    onCheckedChange={(checked) =>
+                      setShowHidden(checked === true)
+                    }
+                  />
+                  <span>
+                    {t('showHidden')}{' '}
+                    <span className='font-medium text-foreground'>
+                      ({counts.hidden})
+                    </span>
+                  </span>
+                </label>
               ) : null}
             </div>
-          </div>
-
-          {activeTab === 'org' ? <CampaignHintBanner /> : null}
-
-          <div className='flex flex-col gap-3 sm:flex-row sm:items-center'>
-            <div className='relative flex-1 sm:max-w-sm'>
-              <Search
-                size={16}
-                className='pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground'
-              />
-              <Input
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder={searchPlaceholder}
-                className='h-10 border-border/80 bg-background pl-9'
-              />
-            </div>
-            {activeTab === 'org' && counts.hidden > 0 ? (
-              <label
-                className={cn(
-                  'flex cursor-pointer items-center gap-2 rounded-md border border-border/80',
-                  'bg-background px-3 py-2 text-sm text-muted-foreground transition-colors',
-                  'hover:bg-muted/50'
-                )}
-              >
-                <Checkbox
-                  checked={showHidden}
-                  onCheckedChange={(checked) => setShowHidden(checked === true)}
-                />
-                <span>
-                  {t('showHidden')}{' '}
-                  <span className='font-medium text-foreground'>({counts.hidden})</span>
-                </span>
-              </label>
-            ) : null}
-          </div>
-        </CardHeader>
+          </CardHeader>
 
           <CardContent className='p-0'>
-          {isLoading && (
-            <p className='px-6 py-8 text-sm text-muted-foreground'>{t('loading')}</p>
-          )}
-          {error && (
-            <p className='px-6 py-8 text-sm text-destructive'>{t('loadError')}</p>
-          )}
-          {!isLoading && !filtered.length && (
-            <div className='px-4 py-6 sm:px-6'>
-              <EmptyState
-                t={t}
-                tab={activeTab}
-                hasSearch={Boolean(search.trim())}
-                showHidden={showHidden}
-                isSuperadmin={isSuperadmin}
-              />
-            </div>
-          )}
+            {isLoading && (
+              <p className='py-8 text-sm text-muted-foreground'>
+                {t('loading')}
+              </p>
+            )}
+            {error && (
+              <p className='py-8 text-sm text-destructive'>{t('loadError')}</p>
+            )}
+            {!isLoading && !filtered.length && (
+              <div className='py-6'>
+                <EmptyState
+                  t={t}
+                  tab={activeTab}
+                  hasSearch={Boolean(search.trim())}
+                  showHidden={showHidden}
+                  isSuperadmin={isSuperadmin}
+                />
+              </div>
+            )}
             {filtered.length > 0 ? (
               <DataTable
                 table={table}
                 total={filtered.length}
-                className='border-0 shadow-none [&_table]:text-sm'
+                className='border-0 shadow-none [&>div>div]:border-0 [&_table]:text-sm'
               />
             ) : null}
           </CardContent>
@@ -286,7 +320,7 @@ export function ScenarioLibrary() {
       <ScenarioDetailSheet
         item={selected}
         open={detailOpen}
-        onOpenChange={setDetailOpen}
+        onOpenChange={handleDetailOpenChange}
       />
     </>
   );
@@ -325,8 +359,12 @@ function EmptyState({
     return (
       <div className='rounded-xl border border-dashed bg-muted/20 px-6 py-14 text-center'>
         <FileCode className='mx-auto mb-3 size-10 text-muted-foreground/60' />
-        <p className='text-sm font-medium text-foreground'>{t('templatesEmptyTitle')}</p>
-        <p className='mt-1 text-sm text-muted-foreground'>{t('templatesEmpty')}</p>
+        <p className='text-sm font-medium text-foreground'>
+          {t('templatesEmptyTitle')}
+        </p>
+        <p className='mt-1 text-sm text-muted-foreground'>
+          {t('templatesEmpty')}
+        </p>
         {isSuperadmin ? (
           <div className='mt-5 flex justify-center'>
             <Can object='scenario-templates' action='create'>
@@ -342,7 +380,9 @@ function EmptyState({
     <div className='rounded-xl border border-dashed bg-muted/20 px-6 py-14 text-center'>
       <FileCode className='mx-auto mb-3 size-10 text-muted-foreground/60' />
       <p className='text-sm font-medium text-foreground'>{t('emptyTitle')}</p>
-      <p className='mt-1 text-sm text-muted-foreground'>{t('emptyDescription')}</p>
+      <p className='mt-1 text-sm text-muted-foreground'>
+        {t('emptyDescription')}
+      </p>
       <div className='mt-5 flex flex-wrap justify-center gap-2'>
         <Can object='scenarios' action='create'>
           <ImportOrgScenarioDialog />

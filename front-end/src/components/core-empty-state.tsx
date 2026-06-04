@@ -33,7 +33,13 @@ function trackEmptyStateView(key: string | undefined) {
   );
 }
 
-function CtaButton({ cta, variant }: { cta: CoreEmptyStateCta; variant: 'default' | 'outline' }) {
+function CtaButton({
+  cta,
+  variant
+}: {
+  cta: CoreEmptyStateCta;
+  variant: 'default' | 'outline';
+}) {
   if (cta.href) {
     return (
       <Button asChild size='sm' variant={variant} className='min-w-[8rem]'>
@@ -42,7 +48,12 @@ function CtaButton({ cta, variant }: { cta: CoreEmptyStateCta; variant: 'default
     );
   }
   return (
-    <Button size='sm' variant={variant} className='min-w-[8rem]' onClick={cta.onClick}>
+    <Button
+      size='sm'
+      variant={variant}
+      className='min-w-[8rem]'
+      onClick={cta.onClick}
+    >
       {cta.label}
     </Button>
   );
@@ -82,7 +93,9 @@ export function CoreEmptyState({
         {description}
       </p>
       {readOnlyHint ? (
-        <p className='mt-3 max-w-md text-xs text-muted-foreground/80'>{readOnlyHint}</p>
+        <p className='mt-3 max-w-md text-xs text-muted-foreground/80'>
+          {readOnlyHint}
+        </p>
       ) : null}
       {(cta || secondaryCta) && (
         <div className='mt-5 flex w-full max-w-sm flex-col items-stretch gap-2 sm:flex-row sm:justify-center'>

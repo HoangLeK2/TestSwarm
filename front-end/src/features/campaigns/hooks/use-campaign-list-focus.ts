@@ -35,15 +35,16 @@ export function useCampaignListFocus(
     let highlightTimer: ReturnType<typeof setTimeout> | undefined;
 
     const run = () => {
-      const el = document.getElementById(
-        campaignRowAnchorId(focusCampaignId)
-      );
+      const el = document.getElementById(campaignRowAnchorId(focusCampaignId));
       if (!el) return false;
       el.scrollIntoView({ behavior: 'smooth', block: 'center' });
       handledRef.current = true;
       setHighlightCampaignId(focusCampaignId);
       onHandled?.();
-      highlightTimer = setTimeout(() => setHighlightCampaignId(null), HIGHLIGHT_MS);
+      highlightTimer = setTimeout(
+        () => setHighlightCampaignId(null),
+        HIGHLIGHT_MS
+      );
       return true;
     };
 

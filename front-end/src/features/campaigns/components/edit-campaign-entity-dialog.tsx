@@ -44,8 +44,12 @@ export function EditCampaignEntityDialog({
 }) {
   const t = useTranslations('campaignsFeature.entityDialog');
   const { data: detail } = useCampaign(campaign.id, open);
-  const { mutate: patchEntity, isPending: isPatching, error, reset } =
-    usePatchCampaignEntity();
+  const {
+    mutate: patchEntity,
+    isPending: isPatching,
+    error,
+    reset
+  } = usePatchCampaignEntity();
   const { mutateAsync: bindAccounts, isPending: isBinding } =
     useBindCampaignAccounts();
   const { mutateAsync: unbindAccounts, isPending: isUnbinding } =
@@ -59,11 +63,12 @@ export function EditCampaignEntityDialog({
   const [tags, setTags] = useState('');
   const [variables, setVariables] = useState<Record<string, unknown>>({});
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [accountBinding, setAccountBinding] = useState<CampaignAccountBindingValue>({
-    mode: 'none',
-    accountGroupId: '',
-    scenarioAccountId: ''
-  });
+  const [accountBinding, setAccountBinding] =
+    useState<CampaignAccountBindingValue>({
+      mode: 'none',
+      accountGroupId: '',
+      scenarioAccountId: ''
+    });
 
   useEffect(() => {
     if (!entity) return;
@@ -149,7 +154,9 @@ export function EditCampaignEntityDialog({
             entity?.completed_at ||
             entity?.cancelled_at) && (
             <div className='space-y-1 rounded-md border bg-muted/30 px-3 py-2 text-xs'>
-              <p className='font-medium text-foreground'>{t('lifecycleTitle')}</p>
+              <p className='font-medium text-foreground'>
+                {t('lifecycleTitle')}
+              </p>
               {entity?.started_at ? (
                 <p className='text-muted-foreground'>
                   {t('startedAt')}:{' '}
@@ -196,7 +203,10 @@ export function EditCampaignEntityDialog({
             />
           </div>
           <div
-            className={cn('space-y-1.5', bodyLocked && 'pointer-events-none opacity-60')}
+            className={cn(
+              'space-y-1.5',
+              bodyLocked && 'pointer-events-none opacity-60'
+            )}
           >
             <Label>{t('variablesLabel')}</Label>
             <VariableEditor
@@ -225,10 +235,18 @@ export function EditCampaignEntityDialog({
             </p>
           )}
           <div className='flex justify-end gap-2'>
-            <Button variant='ghost' size='sm' onClick={() => onOpenChange(false)}>
+            <Button
+              variant='ghost'
+              size='sm'
+              onClick={() => onOpenChange(false)}
+            >
               {t('cancel')}
             </Button>
-            <Button size='sm' onClick={onSubmit} disabled={isSaving || !name.trim()}>
+            <Button
+              size='sm'
+              onClick={onSubmit}
+              disabled={isSaving || !name.trim()}
+            >
               {isSaving ? t('saving') : t('submit')}
             </Button>
           </div>

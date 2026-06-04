@@ -38,8 +38,7 @@ export function PermissionGuard({
   const requiredRoles = rule?.roles;
 
   const roleAllowed =
-    !requiredRoles ||
-    requiredRoles.includes(normalizeNavUserRole(user?.role));
+    !requiredRoles || requiredRoles.includes(normalizeNavUserRole(user?.role));
 
   const permissionAllowed =
     !requiredObject || can(requiredObject, requiredAction);

@@ -18,11 +18,7 @@ function loadMessages(locale: 'en' | 'vi') {
   return JSON.parse(readFileSync(join(messagesDir, `${locale}.json`), 'utf8'));
 }
 
-const STATES: RelayConnectionState[] = [
-  'inactive',
-  'connecting',
-  'connected'
-];
+const STATES: RelayConnectionState[] = ['inactive', 'connecting', 'connected'];
 
 test('relay connection status i18n exists in en and vi', () => {
   for (const locale of ['en', 'vi'] as const) {
@@ -34,10 +30,7 @@ test('relay connection status i18n exists in en and vi', () => {
         `${locale}.relayAgentsFeature.connectionStatus.${state}`
       );
     }
-    assert.match(
-      messages.relayAgentsFeature.onlineSummary,
-      /\{connected\}/
-    );
+    assert.match(messages.relayAgentsFeature.onlineSummary, /\{connected\}/);
   }
 });
 

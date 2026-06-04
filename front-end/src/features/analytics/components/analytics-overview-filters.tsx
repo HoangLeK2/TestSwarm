@@ -53,7 +53,9 @@ export function AnalyticsOverviewFilters({
           className='h-9 w-auto min-w-[168px] gap-2 shadow-none'
           aria-label={t('dimension')}
         >
-          <span className='text-xs text-muted-foreground'>{t('dimension')}</span>
+          <span className='text-xs text-muted-foreground'>
+            {t('dimension')}
+          </span>
           <SelectValue />
         </SelectTrigger>
         <SelectContent align='end'>

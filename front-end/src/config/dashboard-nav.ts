@@ -18,19 +18,13 @@ type NavGroupDef = {
   items: NavLeafDef[];
 };
 
-const DEVICES_GROUP: NavGroupDef = {
-  titleKey: 'nav_group_devices',
+const DAILY_OPERATIONS_GROUP: NavGroupDef = {
+  titleKey: 'nav_group_daily_operations',
   items: [
     {
       titleKey: 'device_farm',
       url: ROUTES.DEVICES.ROOT,
       icon: 'laptop',
-      permission: { object: 'devices', action: 'read' }
-    },
-    {
-      titleKey: 'devices_manage',
-      url: ROUTES.DEVICES.MANAGE,
-      icon: 'smartphone',
       permission: { object: 'devices', action: 'read' }
     },
     {
@@ -40,35 +34,29 @@ const DEVICES_GROUP: NavGroupDef = {
       permission: { object: 'devices', action: 'execute' }
     },
     {
-      titleKey: 'device_groups',
-      url: ROUTES.DEVICE_GROUPS.ROOT,
-      icon: 'folder',
-      permission: { object: 'device-groups', action: 'read' }
-    }
-  ]
-};
-
-const AUTOMATION_GROUP: NavGroupDef = {
-  titleKey: 'nav_group_automation',
-  items: [
-    {
       titleKey: 'campaigns',
       url: ROUTES.CAMPAIGNS.ROOT,
       icon: 'play',
       permission: { object: 'campaigns', action: 'read' }
     },
     {
-      titleKey: 'schedules',
-      url: ROUTES.SCHEDULES.ROOT,
-      icon: 'calendarTime',
-      permission: { object: 'schedules', action: 'read' }
+      titleKey: 'content',
+      url: ROUTES.CONTENT.ROOT,
+      icon: 'stats',
+      permission: { object: 'content', action: 'read' }
     }
   ]
 };
 
-const LIBRARY_GROUP: NavGroupDef = {
-  titleKey: 'nav_group_library',
+const PREPARATION_GROUP: NavGroupDef = {
+  titleKey: 'nav_group_preparation',
   items: [
+    {
+      titleKey: 'org_scenarios',
+      url: ROUTES.ORG_SCENARIOS.ROOT,
+      icon: 'flow',
+      permission: { object: 'scenarios', action: 'read' }
+    },
     {
       titleKey: 'accounts',
       url: ROUTES.ACCOUNTS.ROOT,
@@ -82,16 +70,34 @@ const LIBRARY_GROUP: NavGroupDef = {
       permission: { object: 'account-groups', action: 'read' }
     },
     {
-      titleKey: 'org_scenarios',
-      url: ROUTES.ORG_SCENARIOS.ROOT,
-      icon: 'flow',
-      permission: { object: 'scenarios', action: 'read' }
+      titleKey: 'device_groups',
+      url: ROUTES.DEVICE_GROUPS.ROOT,
+      icon: 'folder',
+      permission: { object: 'device-groups', action: 'read' }
+    }
+  ]
+};
+
+const ADMIN_MONITORING_GROUP: NavGroupDef = {
+  titleKey: 'nav_group_admin_monitoring',
+  items: [
+    {
+      titleKey: 'devices_manage',
+      url: ROUTES.DEVICES.MANAGE,
+      icon: 'smartphone',
+      permission: { object: 'devices', action: 'read' }
     },
     {
-      titleKey: 'content',
-      url: ROUTES.CONTENT.ROOT,
-      icon: 'stats',
-      permission: { object: 'content', action: 'read' }
+      titleKey: 'schedules',
+      url: ROUTES.SCHEDULES.ROOT,
+      icon: 'calendarTime',
+      permission: { object: 'schedules', action: 'read' }
+    },
+    {
+      titleKey: 'notifications',
+      url: ROUTES.NOTIFICATIONS.ROOT,
+      icon: 'bell',
+      permission: { object: 'notifications', action: 'read' }
     },
     {
       // Temporary: analytics rollout — superadmin platform accounts only.
@@ -105,18 +111,6 @@ const LIBRARY_GROUP: NavGroupDef = {
       url: ROUTES.DASHBOARD.ACTIVITY_HISTORY.ROOT,
       icon: 'history',
       permission: { object: 'analytics', action: 'read' }
-    }
-  ]
-};
-
-const OPERATIONS_GROUP: NavGroupDef = {
-  titleKey: 'nav_group_operations',
-  items: [
-    {
-      titleKey: 'notifications',
-      url: ROUTES.NOTIFICATIONS.ROOT,
-      icon: 'bell',
-      permission: { object: 'notifications', action: 'read' }
     },
     {
       // Temporary: MCP tools — superadmin platform accounts only.
@@ -165,10 +159,9 @@ const INFRASTRUCTURE_GROUP: NavGroupDef = {
 };
 
 export const DASHBOARD_MAIN_NAV_GROUPS = [
-  DEVICES_GROUP,
-  AUTOMATION_GROUP,
-  LIBRARY_GROUP,
-  OPERATIONS_GROUP
+  DAILY_OPERATIONS_GROUP,
+  PREPARATION_GROUP,
+  ADMIN_MONITORING_GROUP
 ] as const;
 
 export const DASHBOARD_SETTINGS_NAV_GROUPS = [

@@ -25,9 +25,14 @@ from typing import Any
 # ── Container node types ──────────────────────────────────────────────────────
 
 _CONTAINER_STEP_TYPES = {"loop", "repeat", "repeat_until"}
-_CONTAINER_IF_TYPES   = {"if_element", "if_variable"}
+_CONTAINER_IF_TYPES = {
+    "if_element",
+    "if_variable",
+    "tap_fb_comment_button",
+    "fb_tap_comment_button",
+}
 _CONTAINER_PICK_TYPES = {"random_pick"}
-_CONTAINER_TYPES      = _CONTAINER_STEP_TYPES | _CONTAINER_IF_TYPES | _CONTAINER_PICK_TYPES
+_CONTAINER_TYPES = _CONTAINER_STEP_TYPES | _CONTAINER_IF_TYPES | _CONTAINER_PICK_TYPES
 
 # Keys removed from config when converting to nodes (handled as child scopes or top-level fields)
 _NESTED_KEYS = ("steps", "then", "else", "branches", "else_steps")

@@ -139,7 +139,9 @@ export function CampaignAccountBindingFields({
             </p>
           )}
           {!groups.length && (
-            <p className='text-[11px] text-muted-foreground'>{t('groupEmpty')}</p>
+            <p className='text-[11px] text-muted-foreground'>
+              {t('groupEmpty')}
+            </p>
           )}
         </div>
       )}
@@ -171,7 +173,9 @@ export function CampaignAccountBindingFields({
             </SelectContent>
           </Select>
           {!accounts.length && (
-            <p className='text-[11px] text-muted-foreground'>{t('singleEmpty')}</p>
+            <p className='text-[11px] text-muted-foreground'>
+              {t('singleEmpty')}
+            </p>
           )}
         </div>
       )}

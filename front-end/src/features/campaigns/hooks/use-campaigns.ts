@@ -195,13 +195,8 @@ export function useUpdateCampaignStatus() {
 export function usePatchCampaignEntity() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({
-      id,
-      data
-    }: {
-      id: string;
-      data: CampaignEntityUpdate;
-    }) => campaignsApi.patchEntity(id, data),
+    mutationFn: ({ id, data }: { id: string; data: CampaignEntityUpdate }) =>
+      campaignsApi.patchEntity(id, data),
     onSuccess: (_data, { id }) => {
       qc.invalidateQueries({ queryKey: KEYS.list });
       qc.invalidateQueries({ queryKey: KEYS.detail(id) });
@@ -212,13 +207,8 @@ export function usePatchCampaignEntity() {
 export function useBindCampaignAccounts() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({
-      id,
-      data
-    }: {
-      id: string;
-      data: CampaignAccountBindIn;
-    }) => campaignsApi.bindAccounts(id, data),
+    mutationFn: ({ id, data }: { id: string; data: CampaignAccountBindIn }) =>
+      campaignsApi.bindAccounts(id, data),
     onSuccess: (_data, { id }) => {
       qc.invalidateQueries({ queryKey: KEYS.list });
       qc.invalidateQueries({ queryKey: KEYS.detail(id) });
@@ -888,13 +878,8 @@ export function useDispatchCampaign(onAllDone?: () => void) {
   useEffect(() => clearPollTimer, []);
 
   return useMutation({
-    mutationFn: ({
-      id,
-      body
-    }: {
-      id: string;
-      body: CampaignDispatchIn;
-    }) => campaignsApi.dispatch(id, body),
+    mutationFn: ({ id, body }: { id: string; body: CampaignDispatchIn }) =>
+      campaignsApi.dispatch(id, body),
     onSuccess: async (_data, { id }) => {
       clearPollTimer();
       qc.invalidateQueries({ queryKey: KEYS.list });

@@ -447,9 +447,13 @@ class ContentItemWriter:
             base_where = """
                 collection = $1
                   AND item_level <= 1
-                  AND (content_type = 'fb_post' OR content_type IS NULL OR content_type = 'post')
+                  AND (
+                    content_type IN ('fb_post', 'fb_group_posts', 'post')
+                    OR content_type IS NULL
+                  )
                   AND (
                     raw_data->>'_pid' = $2
+                    OR raw_data->>'post_key' = $2
                     OR raw_data->>'fb_post_id' = $2
                     OR raw_data->>'stable_post_id' = $2
                   )

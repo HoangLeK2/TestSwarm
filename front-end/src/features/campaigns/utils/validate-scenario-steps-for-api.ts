@@ -329,6 +329,15 @@ function validateStep(
       }
       return { ok: true };
     }
+    case 'adb_shell': {
+      if (!nonempty(s.command) && !nonempty(s.cmd)) {
+        return {
+          ok: false,
+          message: `${path} (adb_shell): command không được để trống`
+        };
+      }
+      return { ok: true };
+    }
     case 'set_variable': {
       if (!nonempty(s.name)) {
         return {

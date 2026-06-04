@@ -115,8 +115,8 @@ export function DeviceGroupList() {
                 </ol>
                 <div className='mt-3 flex flex-wrap justify-center gap-2'>
                   <Can object='device-groups' action='create'>
-                <CreateDeviceGroupDialog />
-              </Can>
+                    <CreateDeviceGroupDialog />
+                  </Can>
                   <Button asChild size='sm' variant='outline'>
                     <Link href={ROUTES.CAMPAIGNS.ROOT}>
                       {t('quickStartGoCampaigns')}

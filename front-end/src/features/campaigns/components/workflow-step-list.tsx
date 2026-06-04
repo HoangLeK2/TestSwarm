@@ -36,6 +36,41 @@ export function parseWorkflowId(id: string) {
 
 // ── Single step row ───────────────────────────────────────────────────────────
 
+function stepOutput(logEntry?: StepLogEntry): {
+  output: string;
+  exitCode?: number;
+  saveAs?: string;
+  truncated: boolean;
+} | null {
+  if (!logEntry) return null;
+  const details = logEntry.details ?? {};
+  const output =
+    typeof logEntry.output === 'string'
+      ? logEntry.output
+      : typeof details.output === 'string'
+        ? details.output
+        : '';
+  if (!output) return null;
+  const exitCode =
+    typeof logEntry.exit_code === 'number'
+      ? logEntry.exit_code
+      : typeof details.exit_code === 'number'
+        ? details.exit_code
+        : undefined;
+  const saveAs =
+    typeof logEntry.save_as === 'string'
+      ? logEntry.save_as
+      : typeof details.save_as === 'string'
+        ? details.save_as
+        : undefined;
+  return {
+    output,
+    exitCode,
+    saveAs,
+    truncated: Boolean(logEntry.output_truncated ?? details.output_truncated)
+  };
+}
+
 export function StepRow({
   index,
   stepDef,
@@ -77,6 +112,7 @@ export function StepRow({
   const isFailed = isDone && !logEntry.ok;
   const isOk = isDone && logEntry.ok;
   const msg = isCurrentlyRunning ? currentMessage : (logEntry?.message ?? '');
+  const adbOutput = stepOutput(logEntry);
 
   return (
     <div
@@ -153,6 +189,34 @@ export function StepRow({
         {isFailed && msg && (
           <div className='truncate text-[10px] text-destructive/80' title={msg}>
             {msg}
+          </div>
+        )}
+        {adbOutput && (
+          <div className='mt-1.5 rounded-md border border-border/60 bg-muted/35'>
+            <div className='flex min-w-0 items-center gap-2 border-b border-border/50 px-2 py-1 text-[9px] font-medium uppercase tracking-wide text-muted-foreground'>
+              <span>{t('monitorStepAdbOutput')}</span>
+              {adbOutput.exitCode != null && (
+                <span className='rounded bg-background px-1 py-px normal-case tracking-normal'>
+                  exit {adbOutput.exitCode}
+                </span>
+              )}
+              {adbOutput.saveAs && (
+                <span
+                  className='truncate rounded bg-background px-1 py-px font-mono normal-case tracking-normal'
+                  title={`\${${adbOutput.saveAs}}`}
+                >
+                  {`\${${adbOutput.saveAs}}`}
+                </span>
+              )}
+              {adbOutput.truncated && (
+                <span className='rounded bg-amber-500/10 px-1 py-px text-amber-700 dark:text-amber-300'>
+                  {t('monitorStepOutputTruncated')}
+                </span>
+              )}
+            </div>
+            <pre className='max-h-28 overflow-auto whitespace-pre-wrap break-words px-2 py-1.5 font-mono text-[10px] leading-relaxed text-foreground'>
+              {adbOutput.output}
+            </pre>
           </div>
         )}
       </div>
@@ -239,8 +303,7 @@ export function WorkflowStepList({
     ? (sseStepLog ?? [])
     : (stepLog?.steps ?? []);
 
-  const current =
-    liveProgress?.current_step ?? prog?.current_step ?? 0;
+  const current = liveProgress?.current_step ?? prog?.current_step ?? 0;
   const total =
     liveProgress?.total_steps ??
     prog?.total_steps ??

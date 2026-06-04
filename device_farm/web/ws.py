@@ -360,7 +360,7 @@ class WebSocketManager:
                 # Video senders are spawned on-demand via watch_serial/unwatch_serial.
                 self._conn_sender_groups[conn_id] = []
             send_task = asyncio.create_task(self._sender_ctrl(ws, ctrl_q, ws_send_lock))
-            recv_task = asyncio.create_task(self._receiver(ws))
+            recv_task = asyncio.create_task(self._receiver(ws, ws_send_lock))
             # Ping loop keeps TCP alive; excluded from wait so silent failures don't tear down connection.
             ping_task = asyncio.create_task(self._ws_ping_loop(ws, ws_send_lock))
             watchdog_task = asyncio.create_task(self._ws_pong_watchdog(ws, ws_send_lock))
@@ -453,6 +453,19 @@ class WebSocketManager:
                     await ws.send_json(msg)
             except Exception:
                 return
+
+    async def _send_json_locked(
+        self,
+        ws: WebSocket,
+        ws_send_lock: asyncio.Lock,
+        msg: dict,
+    ) -> bool:
+        try:
+            async with ws_send_lock:
+                await ws.send_json(msg)
+            return True
+        except Exception:
+            return False
 
     async def _ws_ping_loop(
         self, ws: WebSocket, ws_send_lock: asyncio.Lock, interval: float = 30.0
@@ -606,7 +619,7 @@ class WebSocketManager:
             except Exception:
                 pass
 
-    async def _receiver(self, ws: WebSocket) -> None:
+    async def _receiver(self, ws: WebSocket, ws_send_lock: asyncio.Lock) -> None:
         loop = asyncio.get_running_loop()
         conn_id: Optional[str] = None
         async with self._lock:
@@ -636,9 +649,10 @@ class WebSocketManager:
                 except Exception:
                     pass
                 if msg_type == "ping":
-                    try:
-                        await ws.send_json({"type": "pong", "ts": time.time()})
-                    except Exception:
+                    ok = await self._send_json_locked(
+                        ws, ws_send_lock, {"type": "pong", "ts": time.time()}
+                    )
+                    if not ok:
                         break
                 continue
             if msg_type == "multi_action":
@@ -650,9 +664,8 @@ class WebSocketManager:
                     allowed_serials=allowed_serials,
                     read_only=self._read_only,
                 )
-                try:
-                    await ws.send_json(result)
-                except Exception:
+                ok = await self._send_json_locked(ws, ws_send_lock, result)
+                if not ok:
                     break
                 continue
             serial = data.get("serial")
@@ -744,15 +757,16 @@ class WebSocketManager:
                         msg_type, serial, is_busy_state, scenario_active,
                     )
                     reason = "busy_state" if is_busy_state else "scenario_active"
-                    try:
-                        await ws.send_json({
+                    await self._send_json_locked(
+                        ws,
+                        ws_send_lock,
+                        {
                             "type": "device_busy",
                             "serial": serial,
                             "reason": reason,
                             "scenario_active": scenario_active,
-                        })
-                    except Exception:
-                        pass
+                        },
+                    )
                     continue
 
             # Fire-and-forget all input commands — don't await executor so the receiver

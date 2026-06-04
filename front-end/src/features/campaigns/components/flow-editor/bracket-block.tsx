@@ -566,6 +566,9 @@ export function BracketBlock({
         return tFlow('blockTitle.if_variable');
       case 'if':
         return tFlow('blockTitle.if');
+      case 'fb_tap_comment_button':
+      case 'tap_fb_comment_button':
+        return getStepTypeName(step.type);
       case 'random_pick':
         return tFlow('blockTitle.random_pick');
       case 'run_scenario':
@@ -583,8 +586,9 @@ export function BracketBlock({
 
   const ifElementCondition = useMemo(() => {
     if (step.type !== 'if_element') return null;
-    const by = (step as { by?: string; selector?: { by?: string } }).selector
-      ?.by ?? (step as { by?: string }).by;
+    const by =
+      (step as { by?: string; selector?: { by?: string } }).selector?.by ??
+      (step as { by?: string }).by;
     const val =
       (step as { value?: string; selector?: { value?: string } }).selector
         ?.value ?? (step as { value?: string }).value;
@@ -827,7 +831,9 @@ export function BracketBlock({
           'overflow-hidden rounded-xl border border-border/70 bg-card shadow-sm',
           step.type === 'if_element' ||
             step.type === 'if_variable' ||
-            step.type === 'if'
+            step.type === 'if' ||
+            step.type === 'fb_tap_comment_button' ||
+            step.type === 'tap_fb_comment_button'
             ? 'border-l-[3px] border-l-amber-500'
             : step.type === 'repeat' || step.type === 'repeat_until'
               ? 'border-l-[3px] border-l-orange-500'
@@ -845,7 +851,9 @@ export function BracketBlock({
             'flex cursor-pointer items-center gap-2 border-b border-border/50 bg-muted/25 px-2.5 py-2',
             (step.type === 'if_element' ||
               step.type === 'if_variable' ||
-              step.type === 'if') &&
+              step.type === 'if' ||
+              step.type === 'fb_tap_comment_button' ||
+              step.type === 'tap_fb_comment_button') &&
               'bg-amber-500/[0.06] dark:bg-amber-950/15'
           )}
           onClick={onSelectSelf}
@@ -1034,7 +1042,9 @@ export function BracketBlock({
 
             {(step.type === 'if_element' ||
               step.type === 'if_variable' ||
-              step.type === 'if') &&
+              step.type === 'if' ||
+              step.type === 'fb_tap_comment_button' ||
+              step.type === 'tap_fb_comment_button') &&
               (() => {
                 const thenSteps = step.then ?? [];
                 const elseSteps = step.else ?? [];

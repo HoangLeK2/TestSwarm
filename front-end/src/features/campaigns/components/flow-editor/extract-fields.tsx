@@ -17,6 +17,8 @@ import {
 
 type ExtractStep = FlowStep & {
   strategy?: string;
+  edge_extra_data?: boolean;
+  strategy_version?: string;
   extract_profile?: string;
   open_post_before_extract?: boolean;
   open_post_press_back_after_extract?: boolean;
@@ -32,6 +34,13 @@ type ExtractStep = FlowStep & {
   expand_completion_retries?: number | string;
   max_items?: number | string;
   parent_post_id_var?: string;
+  comment_scroll_passes?: number | string;
+  comment_swipes_per_dump?: number | string;
+  comment_scroll_distance?: number | string;
+  comment_scroll_duration_ms?: number | string;
+  comment_scroll_pause_s?: number | string;
+  comment_no_growth_break?: number | string;
+  min_comment_scan_passes?: number | string;
   no_new_threshold?: number;
   result_var?: string;
   collection?: string;
@@ -46,16 +55,29 @@ type ExtractStep = FlowStep & {
 const EXTRACT_PROFILES = ['balanced', 'aggressive', 'safe'] as const;
 
 const STRATEGIES = [
-  { value: 'fb_posts', titleKey: 'strategyPostsTitle', descKey: 'strategyPostsDesc' },
+  {
+    value: 'fb_posts',
+    titleKey: 'strategyPostsTitle',
+    descKey: 'strategyPostsDesc'
+  },
   {
     value: 'fb_comments',
     titleKey: 'strategyCommentsTitle',
     descKey: 'strategyCommentsDesc'
   },
-  { value: 'text_nodes', titleKey: 'strategyTextTitle', descKey: 'strategyTextDesc' }
+  {
+    value: 'text_nodes',
+    titleKey: 'strategyTextTitle',
+    descKey: 'strategyTextDesc'
+  }
 ] as const;
 
-const FLOW_STEPS = ['flowRead', 'flowExpand', 'flowScroll', 'flowSave'] as const;
+const FLOW_STEPS = [
+  'flowRead',
+  'flowExpand',
+  'flowScroll',
+  'flowSave'
+] as const;
 
 function isVarRef(v: string) {
   return /^\$\{[^}]+\}$/.test(v.trim());
@@ -100,7 +122,10 @@ function StrategyCard({
         {description}
       </span>
       {selected ? (
-        <Badge variant='secondary' className='mt-0.5 w-fit px-1.5 py-0 text-[9px]'>
+        <Badge
+          variant='secondary'
+          className='mt-0.5 w-fit px-1.5 py-0 text-[9px]'
+        >
           {selectedLabel}
         </Badge>
       ) : null}
@@ -142,10 +167,14 @@ function CompactField({
 }) {
   return (
     <div className='space-y-1 rounded-md border border-border/50 bg-background/80 p-2'>
-      <span className='text-[10px] font-medium text-muted-foreground'>{label}</span>
+      <span className='text-[10px] font-medium text-muted-foreground'>
+        {label}
+      </span>
       {children}
       {hint ? (
-        <p className='text-[9px] leading-relaxed text-muted-foreground/90'>{hint}</p>
+        <p className='text-[9px] leading-relaxed text-muted-foreground/90'>
+          {hint}
+        </p>
       ) : null}
     </div>
   );
@@ -176,8 +205,7 @@ function labelContentType(
   strategy: string,
   t: (k: string) => string
 ) {
-  const ct =
-    contentType ?? saveDefaultsForStrategy(strategy).content_type;
+  const ct = contentType ?? saveDefaultsForStrategy(strategy).content_type;
   if (ct === 'fb_comment') return t('saveContentTypeComment');
   if (ct === 'fb_post') return t('saveContentTypeGroupPost');
   if (ct === 'text') return t('saveContentTypeText');
@@ -288,8 +316,7 @@ export function ExtractStepFields({
   const strategy = step.strategy ?? 'fb_posts';
   const expand = step.expand_see_more ?? true;
   const openPost =
-    step.open_post_before_extract ??
-    (strategy === 'fb_posts' ? true : false);
+    step.open_post_before_extract ?? (strategy === 'fb_posts' ? true : false);
   const autoBackAfterOpenPost =
     step.open_post_press_back_after_extract ?? false;
   const extractParentMode = step.parent_post_id_var ? 'custom' : 'auto';
@@ -349,10 +376,18 @@ export function ExtractStepFields({
               onSelect={() => {
                 const patch: Partial<FlowStep> = { strategy: s.value };
                 if (s.value === 'fb_posts') {
+                  patch.edge_extra_data = step.edge_extra_data ?? true;
+                  patch.strategy_version = 'fb_posts:v1';
                   patch.open_post_before_extract = true;
                   patch.open_post_press_back_after_extract = false;
                   patch.extract_profile = step.extract_profile ?? 'balanced';
+                } else if (s.value === 'fb_comments') {
+                  patch.edge_extra_data = step.edge_extra_data ?? true;
+                  patch.strategy_version = 'fb_comments:v1';
+                  patch.extract_profile = step.extract_profile ?? 'balanced';
                 } else {
+                  patch.edge_extra_data = undefined;
+                  patch.strategy_version = undefined;
                   patch.open_post_before_extract = undefined;
                   patch.open_post_press_back_after_extract = undefined;
                 }
@@ -371,7 +406,7 @@ export function ExtractStepFields({
       </StepPanelSection>
 
       <StepPanelSection title={t('behaviorSectionTitle')}>
-        {(strategy === 'fb_posts' || strategy === 'fb_comments') ? (
+        {strategy === 'fb_posts' || strategy === 'fb_comments' ? (
           <StepPanelField label={t('extractProfileLabel')}>
             <select
               className='h-9 w-full rounded-md border border-input bg-background px-2 text-xs'
@@ -399,7 +434,10 @@ export function ExtractStepFields({
                 const patch: Partial<FlowStep> = {
                   open_post_before_extract: checked
                 };
-                if (checked && step.open_post_press_back_after_extract === undefined) {
+                if (
+                  checked &&
+                  step.open_post_press_back_after_extract === undefined
+                ) {
                   patch.open_post_press_back_after_extract = false;
                 }
                 update(patch);
@@ -433,6 +471,207 @@ export function ExtractStepFields({
           onCheckedChange={(checked) => update({ stop_if_no_new: checked })}
         />
       </StepPanelSection>
+
+      {strategy === 'fb_posts' || strategy === 'fb_comments' ? (
+        <StepPanelSection
+          title={t('facebookExtraTitle')}
+          badge={
+            <Badge variant='outline' className='text-[10px] font-normal'>
+              {t('facebookExtraBadge')}
+            </Badge>
+          }
+        >
+          <StepPanelToggle
+            label={t('edgeExtraDataLabel')}
+            description={t('edgeExtraDataDescription')}
+            checked={step.edge_extra_data !== false}
+            onCheckedChange={(checked) => update({ edge_extra_data: checked })}
+          />
+          <CompactField
+            label={t('strategyVersionLabel')}
+            hint={t('strategyVersionHint')}
+          >
+            <Input
+              className='h-8 font-mono text-xs'
+              value={
+                step.strategy_version ??
+                (strategy === 'fb_comments' ? 'fb_comments:v1' : 'fb_posts:v1')
+              }
+              onChange={(e) =>
+                update({ strategy_version: e.target.value || undefined })
+              }
+            />
+          </CompactField>
+
+          {strategy === 'fb_comments' ? (
+            <div className='space-y-3 rounded-lg border border-border/60 bg-muted/20 p-3'>
+              <div className='grid grid-cols-2 gap-3'>
+                <CompactField
+                  label={t('maxItemsLabel')}
+                  hint={t('maxItemsHint')}
+                >
+                  <Input
+                    className='h-8 w-full font-mono text-xs'
+                    value={String(step.max_items ?? 500)}
+                    onChange={(e) =>
+                      update({ max_items: parseNumOrVar(e.target.value, 500) })
+                    }
+                  />
+                </CompactField>
+                <CompactField
+                  label={t('parentPostIdVarLabel')}
+                  hint={t('parentPostIdVarHint')}
+                >
+                  <select
+                    className='h-8 w-full rounded-md border border-input bg-background px-2 text-xs'
+                    value={extractParentMode}
+                    onChange={(e) => {
+                      if (e.target.value === 'auto') {
+                        update({ parent_post_id_var: undefined });
+                      } else {
+                        update({
+                          parent_post_id_var: step.parent_post_id_var || ''
+                        });
+                      }
+                    }}
+                  >
+                    <option value='auto'>{t('parentPostModeAuto')}</option>
+                    <option value='custom'>{t('parentPostModeCustom')}</option>
+                  </select>
+                  {extractParentMode === 'custom' ? (
+                    <Input
+                      className='mt-1.5 h-8 font-mono text-xs'
+                      placeholder='_fb_comment_parent_pid'
+                      value={step.parent_post_id_var ?? ''}
+                      onChange={(e) =>
+                        update({
+                          parent_post_id_var: e.target.value || undefined
+                        })
+                      }
+                    />
+                  ) : null}
+                </CompactField>
+                <CompactField
+                  label={t('commentScrollPassesLabel')}
+                  hint={t('commentScrollPassesHint')}
+                >
+                  <Input
+                    className='h-8 font-mono text-xs'
+                    value={String(step.comment_scroll_passes ?? 48)}
+                    onChange={(e) =>
+                      update({
+                        comment_scroll_passes: parseNumOrVar(e.target.value, 48)
+                      })
+                    }
+                  />
+                </CompactField>
+                <CompactField
+                  label={t('commentSwipesPerDumpLabel')}
+                  hint={t('commentSwipesPerDumpHint')}
+                >
+                  <Input
+                    className='h-8 font-mono text-xs'
+                    value={String(step.comment_swipes_per_dump ?? 3)}
+                    onChange={(e) =>
+                      update({
+                        comment_swipes_per_dump: parseNumOrVar(
+                          e.target.value,
+                          3
+                        )
+                      })
+                    }
+                  />
+                </CompactField>
+                <CompactField
+                  label={t('commentScrollDistanceLabel')}
+                  hint={t('commentScrollDistanceHint')}
+                >
+                  <Input
+                    className='h-8 font-mono text-xs'
+                    value={String(step.comment_scroll_distance ?? 0.3)}
+                    onChange={(e) =>
+                      update({
+                        comment_scroll_distance: parseNumOrVar(
+                          e.target.value,
+                          0.3
+                        )
+                      })
+                    }
+                  />
+                </CompactField>
+                <CompactField
+                  label={t('commentScrollDurationLabel')}
+                  hint={t('commentScrollDurationHint')}
+                >
+                  <Input
+                    className='h-8 font-mono text-xs'
+                    value={String(step.comment_scroll_duration_ms ?? 300)}
+                    onChange={(e) =>
+                      update({
+                        comment_scroll_duration_ms: parseNumOrVar(
+                          e.target.value,
+                          300
+                        )
+                      })
+                    }
+                  />
+                </CompactField>
+                <CompactField
+                  label={t('commentScrollPauseLabel')}
+                  hint={t('commentScrollPauseHint')}
+                >
+                  <Input
+                    className='h-8 font-mono text-xs'
+                    value={String(step.comment_scroll_pause_s ?? 0.12)}
+                    onChange={(e) =>
+                      update({
+                        comment_scroll_pause_s: parseNumOrVar(
+                          e.target.value,
+                          0.12
+                        )
+                      })
+                    }
+                  />
+                </CompactField>
+                <CompactField
+                  label={t('commentNoGrowthBreakLabel')}
+                  hint={t('commentNoGrowthBreakHint')}
+                >
+                  <Input
+                    className='h-8 font-mono text-xs'
+                    value={String(step.comment_no_growth_break ?? 3)}
+                    onChange={(e) =>
+                      update({
+                        comment_no_growth_break: parseNumOrVar(
+                          e.target.value,
+                          3
+                        )
+                      })
+                    }
+                  />
+                </CompactField>
+                <CompactField
+                  label={t('minCommentScanPassesLabel')}
+                  hint={t('minCommentScanPassesHint')}
+                >
+                  <Input
+                    className='h-8 font-mono text-xs'
+                    value={String(step.min_comment_scan_passes ?? 2)}
+                    onChange={(e) =>
+                      update({
+                        min_comment_scan_passes: parseNumOrVar(
+                          e.target.value,
+                          2
+                        )
+                      })
+                    }
+                  />
+                </CompactField>
+              </div>
+            </div>
+          ) : null}
+        </StepPanelSection>
+      ) : null}
 
       {expand ? (
         <CollapsibleBlock
@@ -499,7 +738,10 @@ export function ExtractStepFields({
                 value={String(step.expand_lazy_hydration_rounds ?? 6)}
                 onChange={(e) =>
                   update({
-                    expand_lazy_hydration_rounds: parseNumOrVar(e.target.value, 6)
+                    expand_lazy_hydration_rounds: parseNumOrVar(
+                      e.target.value,
+                      6
+                    )
                   })
                 }
               />
@@ -513,7 +755,10 @@ export function ExtractStepFields({
                 value={String(step.expand_lazy_scroll_distance ?? 0.3)}
                 onChange={(e) =>
                   update({
-                    expand_lazy_scroll_distance: parseNumOrVar(e.target.value, 0.3)
+                    expand_lazy_scroll_distance: parseNumOrVar(
+                      e.target.value,
+                      0.3
+                    )
                   })
                 }
               />
@@ -527,7 +772,10 @@ export function ExtractStepFields({
                 value={String(step.expand_prefetch_scroll_passes ?? 0)}
                 onChange={(e) =>
                   update({
-                    expand_prefetch_scroll_passes: parseNumOrVar(e.target.value, 0)
+                    expand_prefetch_scroll_passes: parseNumOrVar(
+                      e.target.value,
+                      0
+                    )
                   })
                 }
               />
@@ -541,7 +789,10 @@ export function ExtractStepFields({
                 value={String(step.expand_prefetch_scroll_pause ?? 0.7)}
                 onChange={(e) =>
                   update({
-                    expand_prefetch_scroll_pause: parseNumOrVar(e.target.value, 0.7)
+                    expand_prefetch_scroll_pause: parseNumOrVar(
+                      e.target.value,
+                      0.7
+                    )
                   })
                 }
               />
@@ -562,58 +813,6 @@ export function ExtractStepFields({
             </CompactField>
           </div>
         </CollapsibleBlock>
-      ) : null}
-
-      {strategy === 'fb_comments' ? (
-        <StepPanelSection title={t('commentsSectionTitle')}>
-          <div className='grid grid-cols-2 gap-3'>
-            <StepPanelField label={t('maxItemsLabel')}>
-              <Input
-                className='h-9 w-full font-mono text-xs'
-                value={String(step.max_items ?? 50)}
-                onChange={(e) =>
-                  update({ max_items: parseNumOrVar(e.target.value, 50) })
-                }
-              />
-              <p className='mt-1 text-[10px] text-muted-foreground'>
-                {t('maxItemsHint')}
-              </p>
-            </StepPanelField>
-            <StepPanelField label={t('parentPostIdVarLabel')}>
-              <select
-                className='h-9 w-full rounded-md border border-input bg-background px-2 text-xs'
-                value={extractParentMode}
-                onChange={(e) => {
-                  if (e.target.value === 'auto') {
-                    update({ parent_post_id_var: undefined });
-                  } else {
-                    update({
-                      parent_post_id_var: step.parent_post_id_var || ''
-                    });
-                  }
-                }}
-              >
-                <option value='auto'>{t('parentPostModeAuto')}</option>
-                <option value='custom'>{t('parentPostModeCustom')}</option>
-              </select>
-              {extractParentMode === 'custom' ? (
-                <Input
-                  className='mt-1.5 h-9 font-mono text-xs'
-                  placeholder='_active_comment_parent_hash'
-                  value={step.parent_post_id_var ?? ''}
-                  onChange={(e) =>
-                    update({
-                      parent_post_id_var: e.target.value || undefined
-                    })
-                  }
-                />
-              ) : null}
-              <p className='mt-1 text-[10px] text-muted-foreground'>
-                {t('parentPostIdVarHint')}
-              </p>
-            </StepPanelField>
-          </div>
-        </StepPanelSection>
       ) : null}
 
       {step.stop_if_no_new ? (
@@ -651,7 +850,9 @@ export function ExtractStepFields({
             className='h-9 font-mono text-xs'
             placeholder={t('resultVarPlaceholder')}
             value={step.result_var ?? ''}
-            onChange={(e) => update({ result_var: e.target.value || undefined })}
+            onChange={(e) =>
+              update({ result_var: e.target.value || undefined })
+            }
           />
           <p className='mt-1 text-[10px] text-muted-foreground'>
             {t('resultVarHint')}
@@ -662,9 +863,7 @@ export function ExtractStepFields({
       <StepPanelSection title={t('saveTitle')}>
         <StepPanelToggle
           label={t('saveEnableLabel')}
-          description={
-            saveEnabled ? undefined : t('saveEnableDescription')
-          }
+          description={saveEnabled ? undefined : t('saveEnableDescription')}
           checked={saveEnabled}
           onCheckedChange={(checked) => {
             if (checked) {
@@ -691,7 +890,10 @@ export function ExtractStepFields({
 
         {saveEnabled ? (
           <div className='space-y-3'>
-            <SaveSummaryCard title={t('saveSummaryTitle')} rows={saveSummaryRows} />
+            <SaveSummaryCard
+              title={t('saveSummaryTitle')}
+              rows={saveSummaryRows}
+            />
 
             <F label={t('saveCollectionLabel')}>
               <Input
@@ -759,7 +961,9 @@ export function ExtractStepFields({
                     <option value='fb_post'>
                       {t('saveContentTypeGroupPost')}
                     </option>
-                    <option value='fb_comment'>{t('saveContentTypeComment')}</option>
+                    <option value='fb_comment'>
+                      {t('saveContentTypeComment')}
+                    </option>
                     <option value='text'>{t('saveContentTypeText')}</option>
                   </select>
                 </F>
@@ -769,7 +973,9 @@ export function ExtractStepFields({
                   className='h-9 text-xs'
                   placeholder={t('saveTagsPlaceholder')}
                   value={step.tags ?? ''}
-                  onChange={(e) => update({ tags: e.target.value || undefined })}
+                  onChange={(e) =>
+                    update({ tags: e.target.value || undefined })
+                  }
                 />
                 <p className='mt-1 text-[10px] text-muted-foreground'>
                   {t('saveTagsHint')}

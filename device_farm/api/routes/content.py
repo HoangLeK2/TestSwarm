@@ -388,6 +388,42 @@ async def get_content_item(
 
 
 @router.get(
+    "/{item_id}/children",
+    dependencies=[Depends(require_permission("content", "read"))],
+)
+async def list_content_children(
+    item_id: str,
+    db: DB,
+    user: CurrentUser,
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
+    """Comments for a post — matches parent_id hash variants and parser post ids."""
+    owner_id = data_owner_user_id(user)
+    item = await content_crud.get_content_item(db, item_id, user_id=owner_id)
+    if item is None:
+        raise HTTPException(404, "Content item not found")
+    children, total = await content_crud.query_content_children(
+        db,
+        item,
+        user_id=owner_id,
+        limit=limit,
+        offset=offset,
+    )
+    parent_items = await _resolve_parent_items_for_list(db, children)
+    out_items = [
+        _item_to_out_with_parent(child, parent_item=parent_items.get(child.id))
+        for child in children
+    ]
+    return {
+        "items": out_items,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@router.get(
     "/{item_id}/artifacts/{artifact_id}/download",
     dependencies=[Depends(require_permission("content", "read"))],
 )
@@ -612,6 +648,7 @@ async def _resolve_parent_item(db, item):
         ContentItem.collection == item.collection,
         or_(
             ContentItem.content_type == "fb_post",
+            ContentItem.content_type == "fb_group_posts",
             ContentItem.content_type == "post",
             ContentItem.content_type == "group_post",
             ContentItem.content_type.like("%post"),
@@ -638,23 +675,7 @@ async def _resolve_parent_item(db, item):
         if parent is not None:
             return parent
 
-    if not item.execution_id:
-        return None
-
-    timeline_filters = [
-        *post_filters,
-        ContentItem.execution_id == item.execution_id,
-    ]
-    if item.extracted_at:
-        timeline_filters.append(ContentItem.extracted_at <= item.extracted_at)
-    elif item.created_at:
-        timeline_filters.append(ContentItem.created_at <= item.created_at)
-
-    return await _fetch(
-        select(ContentItem)
-        .where(*timeline_filters)
-        .order_by(ContentItem.extracted_at.desc().nullslast(), ContentItem.created_at.desc())
-    )
+    return None
 
 
 async def _resolve_parent_items_for_list(db, items: list[ContentItem]) -> dict[str, ContentItem]:
@@ -700,6 +721,7 @@ async def _resolve_parent_items_for_list(db, items: list[ContentItem]) -> dict[s
         ContentItem.collection.in_(collections),
         or_(
             ContentItem.content_type == "fb_post",
+            ContentItem.content_type == "fb_group_posts",
             ContentItem.content_type == "post",
             ContentItem.content_type == "group_post",
             ContentItem.content_type.like("%post"),
@@ -725,11 +747,23 @@ async def _resolve_parent_items_for_list(db, items: list[ContentItem]) -> dict[s
 
     for item in unresolved:
         key = (item.execution_id, item.collection, item.org_id, item.user_id)
-        parent = _nearest_previous_parent(item, by_scope.get(key, []))
+        parent = _match_parent_by_identifiers(item, by_scope.get(key, []))
         if parent is not None:
             resolved[item.id] = parent
 
     return resolved
+
+
+def _match_parent_by_identifiers(item, posts: list[ContentItem]) -> ContentItem | None:
+    identifiers = _parent_post_identifiers(item)
+    if not identifiers:
+        return None
+    for post in posts:
+        raw = _raw_dict(post)
+        for key, value in identifiers:
+            if str(raw.get(key) or "").strip() == value:
+                return post
+    return None
 
 
 def _best_parent_candidate(item, candidates: list[ContentItem]) -> ContentItem | None:
@@ -743,16 +777,6 @@ def _best_parent_candidate(item, candidates: list[ContentItem]) -> ContentItem |
         if item.user_id and parent.user_id != item.user_id:
             continue
         return parent
-    return None
-
-
-def _nearest_previous_parent(item, posts: list[ContentItem]) -> ContentItem | None:
-    item_time = item.extracted_at or item.created_at
-    for post in posts:
-        post_time = post.extracted_at or post.created_at
-        if item_time and post_time and post_time > item_time:
-            continue
-        return post
     return None
 
 

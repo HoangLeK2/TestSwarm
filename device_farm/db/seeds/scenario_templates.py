@@ -33,10 +33,22 @@ _FB_POST_OPEN_EXTRACT: Dict[str, Any] = {
     "open_post_press_back_after_extract": False,
 }
 
-# Sau extract trên màn chi tiết — quay feed trước tap Bình luận.
-_FB_POST_DETAIL_BACK_STEPS: List[Dict[str, Any]] = [
+# Sau extract comments — đóng sheet/detail để quay lại feed trước vòng kế tiếp.
+_FB_RETURN_TO_FEED_AFTER_COMMENTS_STEPS: List[Dict[str, Any]] = [
     {"type": "key", "key": "back"},
     {"type": "wait", "seconds": 0.5},
+    {
+        "type": "if_element",
+        "by": "text",
+        "value": "Bài viết",
+        "timeout": 1,
+        "then": [
+            {"type": "key", "key": "back"},
+            {"type": "wait", "seconds": 1},
+        ],
+        "else": [],
+    },
+    {"type": "dismiss_popup", "retries": 1},
 ]
 
 _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
@@ -50,22 +62,15 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "Chấp nhận bài trùng lặp — DB dedup qua content_hash, loop không dừng sớm. "
             "Navigation: tìm kiếm → tab Nhóm → tap nhóm qua text. "
             "Scroll neo trái (SCROLL_X_RATIO=0.18) tránh mở ảnh. "
-            "Mỗi bài: mở chi tiết → extract posts → back feed → cuộn nhẹ lộ nút Bình luận → atomic tap + switch filter → extract comments → back.\n"
+            "Mỗi bài: mở chi tiết → extract posts → atomic tap/filter comments trên detail → extract comments → quay feed.\n"
         ),
         "tags": "facebook,group,crawl",
         "variables": {
             "GROUP_NAME": "openclaw vn",
             "GROUP_TEXT": "OpenClaw VN · Truy cập",
             "MAX_SCROLLS": 540,
-            "MAX_COMMENT_SCROLLS": 48,
-            "MAX_COMMENTS_PER_POST": 500,
-            "MIN_COMMENT_SCAN_PASSES": 2,
-            "COMMENT_NO_NEW_THRESHOLD": 3,
             "SCROLL_X_RATIO": 0.18,
             "SAVE_COLLECTION": "fb_group_posts",
-            "EXTRACT_PROFILE": "balanced",
-            "FB_POSTS_STRATEGY_VERSION": "fb_posts:v1",
-            "FB_COMMENTS_STRATEGY_VERSION": "fb_comments:v1",
         },
         "steps": [
             # ── Phase 1: Khởi động ────────────────────────────────────────────
@@ -119,8 +124,8 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                         "type": "extract",
                         "strategy": "fb_posts",
                         "edge_extra_data": True,
-                        "extract_profile": "${EXTRACT_PROFILE}",
-                        "strategy_version": "${FB_POSTS_STRATEGY_VERSION}",
+                        "extract_profile": "balanced",
+                        "strategy_version": "fb_posts:v1",
                         **_FB_POST_OPEN_EXTRACT,
                         "expand_see_more": True,
                         "expand_see_more_max_passes": 2,
@@ -134,12 +139,10 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                         "dedupe_field": "post_key",
                         "tags": "group,crawl,${GROUP_NAME}",
                     },
-                    *_FB_POST_DETAIL_BACK_STEPS,
-
-                    # Atomic tap: resolve → ghi _pid → bấm Bình luận → switch filter
-                    # pre_scroll=True: cuộn nhẹ lộ nút (thay scroll_down riêng)
+                    # Atomic tap trên chính detail vừa mở: giữ parent context chính xác cho comments.
+                    # pre_scroll=True: cuộn nhẹ lộ nút/filter nếu cần.
                     {
-                        "type": "tap_fb_comment_button",
+                        "type": "fb_tap_comment_button",
                         "timeout": 5,
                         "pre_scroll": True,
                         "pre_scroll_distance": 0.24,
@@ -152,17 +155,17 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                                 "type": "extract",
                                 "strategy": "fb_comments",
                                 "edge_extra_data": True,
-                                "extract_profile": "${EXTRACT_PROFILE}",
-                                "strategy_version": "${FB_COMMENTS_STRATEGY_VERSION}",
+                                "extract_profile": "balanced",
+                                "strategy_version": "fb_comments:v1",
                                 "parent_post_id_var": "_fb_comment_parent_pid",
-                                "max_items": "${MAX_COMMENTS_PER_POST}",
-                                "comment_scroll_passes": "${MAX_COMMENT_SCROLLS}",
+                                "max_items": 500,
+                                "comment_scroll_passes": 48,
                                 "comment_swipes_per_dump": 3,
                                 "comment_scroll_distance": 0.30,
                                 "comment_scroll_duration_ms": 300,
                                 "comment_scroll_pause_s": 0.12,
-                                "comment_no_growth_break": "${COMMENT_NO_NEW_THRESHOLD}",
-                                "min_comment_scan_passes": "${MIN_COMMENT_SCAN_PASSES}",
+                                "comment_no_growth_break": 3,
+                                "min_comment_scan_passes": 2,
                                 "stop_if_no_new": False,
                                 "no_new_threshold": 4,
                                 "collection": "${SAVE_COLLECTION}",
@@ -173,9 +176,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                                 "save_parent_id_var": "_active_comment_parent_hash",
                                 "item_level": 1,
                             },
-                            {"type": "key", "key": "back"},
-                            {"type": "wait", "seconds": 1},
-                            {"type": "dismiss_popup", "retries": 1},
+                            *_FB_RETURN_TO_FEED_AFTER_COMMENTS_STEPS,
                         ],
                         "else": [],
                     },
@@ -215,15 +216,8 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "PROFILE_5_SEARCH": "tên profile 5",
             "PROFILE_5_ROW_TEXT": "Tên Profile 5 · Bạn bè",
             "MAX_SCROLLS_PER_PROFILE": 120,
-            "MAX_COMMENT_SCROLLS": 48,
-            "MAX_COMMENTS_PER_POST": 500,
-            "MIN_COMMENT_SCAN_PASSES": 2,
-            "COMMENT_NO_NEW_THRESHOLD": 3,
             "SCROLL_X_RATIO": 0.18,
             "SAVE_COLLECTION": "fb_profile_posts",
-            "EXTRACT_PROFILE": "balanced",
-            "FB_POSTS_STRATEGY_VERSION": "fb_posts:v1",
-            "FB_COMMENTS_STRATEGY_VERSION": "fb_comments:v1",
         },
         "steps": [
             {"type": "launch_app", "package": "com.facebook.katana", "title": "mở fb"},
@@ -363,8 +357,8 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                                 "type": "extract",
                                 "strategy": "fb_posts",
                                 "edge_extra_data": True,
-                                "extract_profile": "${EXTRACT_PROFILE}",
-                                "strategy_version": "${FB_POSTS_STRATEGY_VERSION}",
+                                "extract_profile": "balanced",
+                                "strategy_version": "fb_posts:v1",
                                 **_FB_POST_OPEN_EXTRACT,
                                 "expand_see_more": True,
                                 "expand_see_more_max_passes": 2,
@@ -378,9 +372,8 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                                 "dedupe_field": "post_key",
                                 "tags": "profile,crawl,${PROFILE_SEARCH}",
                             },
-                            *_FB_POST_DETAIL_BACK_STEPS,
                             {
-                                "type": "tap_fb_comment_button",
+                                "type": "fb_tap_comment_button",
                                 "timeout": 5,
                                 "pre_scroll": True,
                                 "pre_scroll_distance": 0.24,
@@ -393,17 +386,17 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                                         "type": "extract",
                                         "strategy": "fb_comments",
                                         "edge_extra_data": True,
-                                        "extract_profile": "${EXTRACT_PROFILE}",
-                                        "strategy_version": "${FB_COMMENTS_STRATEGY_VERSION}",
+                                        "extract_profile": "balanced",
+                                        "strategy_version": "fb_comments:v1",
                                         "parent_post_id_var": "_fb_comment_parent_pid",
-                                        "max_items": "${MAX_COMMENTS_PER_POST}",
-                                        "comment_scroll_passes": "${MAX_COMMENT_SCROLLS}",
+                                        "max_items": 500,
+                                        "comment_scroll_passes": 48,
                                         "comment_swipes_per_dump": 3,
                                         "comment_scroll_distance": 0.30,
                                         "comment_scroll_duration_ms": 300,
                                         "comment_scroll_pause_s": 0.12,
-                                        "comment_no_growth_break": "${COMMENT_NO_NEW_THRESHOLD}",
-                                        "min_comment_scan_passes": "${MIN_COMMENT_SCAN_PASSES}",
+                                        "comment_no_growth_break": 3,
+                                        "min_comment_scan_passes": 2,
                                         "stop_if_no_new": False,
                                         "no_new_threshold": 4,
                                         "collection": "${SAVE_COLLECTION}",
@@ -414,9 +407,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                                         "save_parent_id_var": "_active_comment_parent_hash",
                                         "item_level": 1,
                                     },
-                                    {"type": "key", "key": "back"},
-                                    {"type": "wait", "seconds": 1},
-                                    {"type": "dismiss_popup", "retries": 1},
+                                    *_FB_RETURN_TO_FEED_AFTER_COMMENTS_STEPS,
                                 ],
                                 "else": [],
                             },
@@ -446,33 +437,23 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
             "Chấp nhận bài trùng lặp — DB dedup qua content_hash, loop không dừng sớm. "
             "Navigation: tìm kiếm → tab Nhóm → tap nhóm qua xpath. "
             "Scroll neo trái (SCROLL_X_RATIO=0.18) tránh mở ảnh. "
-            "Mỗi bài: mở chi tiết → extract posts → back feed → cuộn nhẹ lộ nút Bình luận → atomic tap + switch filter → extract comments → back.\n"
+            "Mỗi bài: mở chi tiết → extract posts → atomic tap/filter comments trên detail → extract comments → quay feed.\n"
             "\n"
             "Biến cấu hình:\n"
             "  GROUP_NAME: tên nhóm để tìm kiếm.\n"
             "  GROUP_XPATH: xpath hàng nhóm trong kết quả tìm kiếm.\n"
             "  MAX_SCROLLS: số vòng crawl (mặc định 540 ≈ 3h với ~20s/vòng).\n"
-            "  MAX_COMMENT_SCROLLS: tổng số lần swipe trong sheet bình luận (mặc định 48; dump mỗi 3 swipe).\n"
-            "  MAX_COMMENTS_PER_POST: giới hạn số bình luận mỗi bài (mặc định 500).\n"
-            "  MIN_COMMENT_SCAN_PASSES: số vòng cuộn tối thiểu dù đã đủ bình luận (mặc định 2).\n"
-            "  COMMENT_NO_NEW_THRESHOLD: dừng cuộn sau N vòng dump liên tiếp có hierarchy XML giống hệt (mặc định 3).\n"
             "  SCROLL_X_RATIO: neo ngang khi scroll feed (mặc định 0.18).\n"
-            "  SAVE_COLLECTION: collection lưu cả bài và bình luận."
+            "  SAVE_COLLECTION: collection lưu cả bài và bình luận.\n"
+            "Các tham số extra-data Facebook nằm trong từng node extract để chỉnh trên frontend."
         ),
         "tags": "facebook,group,crawl,feed,post,comment,duplicate-ok",
         "variables": {
             "GROUP_NAME": "openclaw vn",
             "GROUP_XPATH": "//*[@content-desc=\"OpenClaw VN · Truy cập\"]",
             "MAX_SCROLLS": 540,
-            "MAX_COMMENT_SCROLLS": 48,
-            "MAX_COMMENTS_PER_POST": 500,
-            "MIN_COMMENT_SCAN_PASSES": 2,
-            "COMMENT_NO_NEW_THRESHOLD": 3,
             "SCROLL_X_RATIO": 0.18,
             "SAVE_COLLECTION": "fb_group_posts",
-            "EXTRACT_PROFILE": "balanced",
-            "FB_POSTS_STRATEGY_VERSION": "fb_posts:v1",
-            "FB_COMMENTS_STRATEGY_VERSION": "fb_comments:v1",
         },
         "steps": [
             # ── Phase 1: Khởi động ────────────────────────────────────────────
@@ -532,8 +513,8 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                         "type": "extract",
                         "strategy": "fb_posts",
                         "edge_extra_data": True,
-                        "extract_profile": "${EXTRACT_PROFILE}",
-                        "strategy_version": "${FB_POSTS_STRATEGY_VERSION}",
+                        "extract_profile": "balanced",
+                        "strategy_version": "fb_posts:v1",
                         **_FB_POST_OPEN_EXTRACT,
                         "expand_see_more": True,
                         "expand_see_more_max_passes": 2,
@@ -547,12 +528,10 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                         "dedupe_field": "post_key",
                         "tags": "group,crawl,${GROUP_NAME}",
                     },
-                    *_FB_POST_DETAIL_BACK_STEPS,
-
-                    # Atomic tap: resolve → ghi _pid → bấm Bình luận → switch filter
-                    # pre_scroll=True: cuộn nhẹ lộ nút (thay scroll_down riêng)
+                    # Atomic tap trên chính detail vừa mở: giữ parent context chính xác cho comments.
+                    # pre_scroll=True: cuộn nhẹ lộ nút/filter nếu cần.
                     {
-                        "type": "tap_fb_comment_button",
+                        "type": "fb_tap_comment_button",
                         "timeout": 5,
                         "pre_scroll": True,
                         "pre_scroll_distance": 0.24,
@@ -565,17 +544,17 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                                 "type": "extract",
                                 "strategy": "fb_comments",
                                 "edge_extra_data": True,
-                                "extract_profile": "${EXTRACT_PROFILE}",
-                                "strategy_version": "${FB_COMMENTS_STRATEGY_VERSION}",
+                                "extract_profile": "balanced",
+                                "strategy_version": "fb_comments:v1",
                                 "parent_post_id_var": "_fb_comment_parent_pid",
-                                "max_items": "${MAX_COMMENTS_PER_POST}",
-                                "comment_scroll_passes": "${MAX_COMMENT_SCROLLS}",
+                                "max_items": 500,
+                                "comment_scroll_passes": 48,
                                 "comment_swipes_per_dump": 3,
                                 "comment_scroll_distance": 0.30,
                                 "comment_scroll_duration_ms": 300,
                                 "comment_scroll_pause_s": 0.12,
-                                "comment_no_growth_break": "${COMMENT_NO_NEW_THRESHOLD}",
-                                "min_comment_scan_passes": "${MIN_COMMENT_SCAN_PASSES}",
+                                "comment_no_growth_break": 3,
+                                "min_comment_scan_passes": 2,
                                 "stop_if_no_new": False,
                                 "no_new_threshold": 4,
                                 "collection": "${SAVE_COLLECTION}",
@@ -586,9 +565,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                                 "save_parent_id_var": "_active_comment_parent_hash",
                                 "item_level": 1,
                             },
-                            {"type": "key", "key": "back"},
-                            {"type": "wait", "seconds": 1},
-                            {"type": "dismiss_popup", "retries": 1},
+                            *_FB_RETURN_TO_FEED_AFTER_COMMENTS_STEPS,
                         ],
                         "else": [],
                     },
@@ -616,15 +593,8 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
         "variables": {
             "group_name": "openclaw vn",
             "MAX_SCROLLS": 540,
-            "MAX_COMMENT_SCROLLS": 48,
-            "MAX_COMMENTS_PER_POST": 500,
-            "MIN_COMMENT_SCAN_PASSES": 2,
-            "COMMENT_NO_NEW_THRESHOLD": 3,
             "SCROLL_X_RATIO": 0.18,
             "SAVE_COLLECTION": "fb_group_posts",
-            "EXTRACT_PROFILE": "balanced",
-            "FB_POSTS_STRATEGY_VERSION": "fb_posts:v1",
-            "FB_COMMENTS_STRATEGY_VERSION": "fb_comments:v1",
         },
         "steps": [
             {"type": "set_variable", "name": "SEARCH_TEXT", "value": "${group_name}"},
@@ -690,8 +660,8 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                         "type": "extract",
                         "strategy": "fb_posts",
                         "edge_extra_data": True,
-                        "extract_profile": "${EXTRACT_PROFILE}",
-                        "strategy_version": "${FB_POSTS_STRATEGY_VERSION}",
+                        "extract_profile": "balanced",
+                        "strategy_version": "fb_posts:v1",
                         **_FB_POST_OPEN_EXTRACT,
                         "expand_see_more": True,
                         "expand_see_more_max_passes": 2,
@@ -705,9 +675,8 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                         "dedupe_field": "post_key",
                         "tags": "group,crawl,${TARGET_GROUP_NAME}",
                     },
-                    *_FB_POST_DETAIL_BACK_STEPS,
                     {
-                        "type": "tap_fb_comment_button",
+                        "type": "fb_tap_comment_button",
                         "timeout": 5,
                         "pre_scroll": True,
                         "pre_scroll_distance": 0.24,
@@ -720,17 +689,17 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                                 "type": "extract",
                                 "strategy": "fb_comments",
                                 "edge_extra_data": True,
-                                "extract_profile": "${EXTRACT_PROFILE}",
-                                "strategy_version": "${FB_COMMENTS_STRATEGY_VERSION}",
+                                "extract_profile": "balanced",
+                                "strategy_version": "fb_comments:v1",
                                 "parent_post_id_var": "_fb_comment_parent_pid",
-                                "max_items": "${MAX_COMMENTS_PER_POST}",
-                                "comment_scroll_passes": "${MAX_COMMENT_SCROLLS}",
+                                "max_items": 500,
+                                "comment_scroll_passes": 48,
                                 "comment_swipes_per_dump": 3,
                                 "comment_scroll_distance": 0.30,
                                 "comment_scroll_duration_ms": 300,
                                 "comment_scroll_pause_s": 0.12,
-                                "comment_no_growth_break": "${COMMENT_NO_NEW_THRESHOLD}",
-                                "min_comment_scan_passes": "${MIN_COMMENT_SCAN_PASSES}",
+                                "comment_no_growth_break": 3,
+                                "min_comment_scan_passes": 2,
                                 "stop_if_no_new": False,
                                 "no_new_threshold": 4,
                                 "collection": "${SAVE_COLLECTION}",
@@ -741,9 +710,7 @@ _FACEBOOK_TEMPLATES: List[Dict[str, Any]] = [
                                 "save_parent_id_var": "_active_comment_parent_hash",
                                 "item_level": 1,
                             },
-                            {"type": "key", "key": "back"},
-                            {"type": "wait", "seconds": 1},
-                            {"type": "dismiss_popup", "retries": 1},
+                            *_FB_RETURN_TO_FEED_AFTER_COMMENTS_STEPS,
                         ],
                         "else": [],
                     },

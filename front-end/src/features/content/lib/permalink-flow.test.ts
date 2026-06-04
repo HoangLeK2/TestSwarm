@@ -6,7 +6,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  AUTH_RETURN_TO_KEY,
   buildContentPermalink,
   consumeAuthReturnTo,
   saveAuthReturnTo

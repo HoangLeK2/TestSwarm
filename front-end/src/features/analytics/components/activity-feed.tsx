@@ -13,6 +13,7 @@ import {
   Loader2,
   LogIn,
   MousePointerClick,
+  FileText,
   PlayCircle,
   Shield,
   Smartphone,
@@ -36,6 +37,12 @@ import {
 import { useActivityLog } from '../hooks/use-activity-log';
 import type { ActivityLogItem } from '../services/api';
 import { activityLogDeepLink } from '../lib/activity-deep-link';
+import {
+  DEDICATED_ACTIVITY_TITLE_ACTIONS,
+  resolveActivityActionLabel,
+  resolveDedicatedActivityTitle,
+  resolveDomainActivityDescription
+} from '../lib/activity-action-labels';
 import { triggerBlobDownload } from '@/features/content/lib/download';
 import { toast } from 'sonner';
 
@@ -73,47 +80,6 @@ const ACTION_ICON = {
   'schedule.triggered': Clock
 } as const;
 
-const ACTION_LABEL_KEY: Record<string, string> = {
-  'device.connect': 'device_connect',
-  'device.disconnect': 'device_disconnect',
-  'device.error': 'device_error',
-  'task.done': 'task_done',
-  'task.failed': 'task_failed',
-  'campaign.run': 'campaign_run',
-  'campaign.complete': 'campaign_complete',
-  'schedule.triggered': 'schedule_triggered',
-  'auth.login.success': 'auth_login_success',
-  'auth.login.failed': 'auth_login_failed',
-  'auth.login.org_disabled': 'auth_login_org_disabled',
-  'auth.logout': 'auth_logout',
-  'auth.refresh': 'auth_refresh',
-  'auth.refresh.replay_attempt': 'auth_refresh_replay',
-  'ws.connected': 'ws_connected',
-  'ws.auth.rejected': 'ws_auth_rejected',
-  'admin.access': 'admin_access',
-  'admin.access.denied': 'admin_access_denied'
-};
-
-/** Actions whose primary line is a dedicated title (badge may show category). */
-const DEDICATED_TITLE_ACTIONS = new Set([
-  'device.connect',
-  'device.disconnect',
-  'device.error',
-  'task.done',
-  'task.failed',
-  'campaign.run',
-  'campaign.complete',
-  'schedule.triggered',
-  'auth.login.success',
-  'auth.login.failed',
-  'auth.login.org_disabled',
-  'auth.logout',
-  'auth.refresh',
-  'auth.refresh.replay_attempt',
-  'ws.connected',
-  'ws.auth.rejected'
-]);
-
 const USER_OPERATION_LABEL_KEY: Record<string, string> = {
   '/api/devices/{serial}/interrupt': 'device_interrupt',
   '/api/devices/{serial}/scrcpy/attach': 'device_screen_attach',
@@ -133,11 +99,15 @@ function actionTone(action: string) {
   if (action.startsWith('user.')) return 'text-sky-500';
   if (
     action.endsWith('.failed') ||
+    action.includes('cancelled') ||
+    action.includes('run_failed') ||
+    action.includes('dlq.opened') ||
     action.includes('rejected') ||
     action.includes('replay') ||
     action.includes('denied') ||
     action === 'device.disconnect' ||
-    action === 'device.error'
+    action === 'device.error' ||
+    action === 'device.dead'
   ) {
     return 'text-destructive';
   }
@@ -169,23 +139,7 @@ function formatDate(value: string, locale: string) {
 }
 
 function getActionLabel(action: string, t: ReturnType<typeof useTranslations>) {
-  if (action.startsWith('user.')) {
-    return t('actionLabels.user_action');
-  }
-  const labelKey = ACTION_LABEL_KEY[action];
-  if (labelKey) {
-    return t(`actionLabels.${labelKey}` as 'actionLabels.device_connect');
-  }
-  if (action.startsWith('auth.') || action.startsWith('account.')) {
-    return t('categoryLabels.security');
-  }
-  if (action.startsWith('ws.')) {
-    return t('categoryLabels.connection');
-  }
-  if (action.startsWith('admin.')) {
-    return t('categoryLabels.admin');
-  }
-  return action.replaceAll('.', ' · ');
+  return resolveActivityActionLabel(action, t);
 }
 
 function getReasonLabel(reason: string, t: ReturnType<typeof useTranslations>) {
@@ -213,7 +167,9 @@ function getUserOperationLabel(
   const route = item.route_template ?? '';
   const labelKey = USER_OPERATION_LABEL_KEY[route];
   if (labelKey) {
-    return t(`operationLabels.${labelKey}` as 'operationLabels.device_interrupt');
+    return t(
+      `operationLabels.${labelKey}` as 'operationLabels.device_interrupt'
+    );
   }
   return t('operationLabels.generic');
 }
@@ -290,8 +246,11 @@ function getActivityTitle(
       return t('titles.wsConnected');
     case 'ws.auth.rejected':
       return t('titles.wsAuthRejected');
-    default:
+    default: {
+      const dedicated = resolveDedicatedActivityTitle(item, t);
+      if (dedicated) return dedicated;
       return getActionLabel(item.action, t);
+    }
   }
 }
 
@@ -308,7 +267,7 @@ function getActivityCategoryBadge(
     return category === title ? null : category;
   }
 
-  if (!DEDICATED_TITLE_ACTIONS.has(item.action)) {
+  if (!DEDICATED_ACTIVITY_TITLE_ACTIONS.has(item.action)) {
     return null;
   }
 
@@ -324,6 +283,14 @@ function getActivityIcon(action: string) {
       : Shield;
   }
   if (action.startsWith('ws.')) return Wifi;
+  if (action.startsWith('scenario.')) return FileText;
+  if (action.startsWith('execution.') || action.startsWith('campaign.')) {
+    return PlayCircle;
+  }
+  if (action.startsWith('schedule.')) return Clock;
+  if (action.includes('dlq') || action.endsWith('.failed')) {
+    return AlertTriangle;
+  }
   return ACTION_ICON[action as keyof typeof ACTION_ICON] ?? Smartphone;
 }
 
@@ -367,6 +334,18 @@ function getActivityDescription(
     item.action.startsWith('admin.')
   ) {
     return securityContextLine(item, details, t);
+  }
+  if (
+    item.action.startsWith('campaign.') ||
+    item.action.startsWith('execution.') ||
+    item.action.startsWith('scenario.') ||
+    item.action.startsWith('session.') ||
+    item.action.startsWith('schedule.')
+  ) {
+    const domainLine = resolveDomainActivityDescription(item, t, (serial) =>
+      t('deviceSerial', { serial })
+    );
+    if (domainLine) return domainLine;
   }
   if (item.action.startsWith('user.')) {
     const parts = [];
@@ -461,7 +440,7 @@ function ActivityRow({
               className={
                 description
                   ? 'break-words text-[11px] leading-relaxed text-muted-foreground'
-                  : 'text-[11px] leading-relaxed text-transparent select-none'
+                  : 'select-none text-[11px] leading-relaxed text-transparent'
               }
               aria-hidden={!description}
             >
@@ -522,8 +501,7 @@ export function ActivityFeed({ embedded = false }: { embedded?: boolean }) {
     [actionFilter, deviceSerial, page]
   );
 
-  const { data, isLoading, error, refetch, isFetching } =
-    useActivityLog(query);
+  const { data, isLoading, error, refetch, isFetching } = useActivityLog(query);
   const activities = data?.activities ?? [];
   const total = data?.total ?? activities.length;
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -553,10 +531,7 @@ export function ActivityFeed({ embedded = false }: { embedded?: boolean }) {
             size='sm'
             disabled={activities.length === 0}
             onClick={() => {
-              exportActivitiesCsv(
-                activities,
-                `activity-page-${page + 1}.csv`
-              );
+              exportActivitiesCsv(activities, `activity-page-${page + 1}.csv`);
               toast.success(tActivity('exportCsvSuccess'));
             }}
           >
@@ -616,7 +591,12 @@ export function ActivityFeed({ embedded = false }: { embedded?: boolean }) {
           />
         </div>
         {(actionFilter !== 'all' || deviceSerial.trim()) && (
-          <Button variant='ghost' size='sm' className='h-8' onClick={resetFilters}>
+          <Button
+            variant='ghost'
+            size='sm'
+            className='h-8'
+            onClick={resetFilters}
+          >
             {tActivity('filterReset')}
           </Button>
         )}

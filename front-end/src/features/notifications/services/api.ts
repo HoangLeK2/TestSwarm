@@ -40,11 +40,8 @@ export type NotificationChannelInput = NotificationChannelCreate;
 const df = () => getDeviceFarmApi().api;
 
 export const notificationsApi = {
-  list: async (query?: {
-    unread?: boolean;
-    offset?: number;
-    limit?: number;
-  }) => (await df().listNotificationsApiNotificationsGet(query)).data,
+  list: async (query?: { unread?: boolean; offset?: number; limit?: number }) =>
+    (await df().listNotificationsApiNotificationsGet(query)).data,
 
   unreadCount: async () =>
     (await df().unreadCountApiNotificationsUnreadCountGet()).data.count,
@@ -62,10 +59,7 @@ export const notificationsApi = {
   createChannel: async (data: NotificationChannelInput) =>
     (await df().createChannelApiNotificationChannelsPost(data)).data,
 
-  updateChannel: async (
-    channelId: string,
-    data: NotificationChannelPatch
-  ) =>
+  updateChannel: async (channelId: string, data: NotificationChannelPatch) =>
     (
       await df().updateChannelApiNotificationChannelsChannelIdPatch(
         channelId,
@@ -78,7 +72,6 @@ export const notificationsApi = {
   },
 
   testChannel: async (channelId: string) =>
-    (
-      await df().testChannelApiNotificationChannelsChannelIdTestPost(channelId)
-    ).data as TestNotificationOut
+    (await df().testChannelApiNotificationChannelsChannelIdTestPost(channelId))
+      .data as TestNotificationOut
 };

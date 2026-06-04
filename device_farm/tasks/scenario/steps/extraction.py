@@ -485,6 +485,7 @@ def request_edge_extra_data(
     step: Dict[str, Any],
     strategy: str,
     result: Dict[str, Any],
+    cancel_event: Any = None,
 ) -> bool:
     has_edge_flag = "edge_extra_data" in step
     explicit_enabled = (
@@ -499,6 +500,11 @@ def request_edge_extra_data(
         return False
     if strategy not in EDGE_CONTENT_STRATEGIES:
         return False
+    if cancel_event is not None and cancel_event.is_set():
+        result["ok"] = False
+        result["message"] = f"edge extra_data {strategy}: cancelled"
+        result["cancelled"] = True
+        return True
     collection = step.get("collection")
     if not _relay_extra_data_available(device):
         result["ok"] = False
@@ -632,11 +638,18 @@ def request_edge_extra_data(
             strategy=strategy,
             context=context,
             timeout=timeout,
+            cancel_event=cancel_event,
         )
     except Exception as exc:
         log.warning("[%s] edge extra_data failed before request: %s", serial, exc)
         return False
     if not summary.get("ok"):
+        if summary.get("cancelled"):
+            result["ok"] = False
+            result["message"] = f"edge extra_data {strategy}: cancelled"
+            result["edge_extra_summary"] = summary
+            result["cancelled"] = True
+            return True
         log.warning("[%s] edge extra_data failed: %s", serial, summary.get("error") or summary)
         result["ok"] = False
         result["message"] = f"edge extra_data failed: {summary.get('error') or 'unknown'}"
@@ -716,10 +729,16 @@ def request_edge_comment_target(
     scenario: Dict[str, Any],
     step: Dict[str, Any],
     result: Dict[str, Any],
+    cancel_event: Any = None,
 ) -> dict[str, Any] | None:
     if not _relay_extra_data_available(device):
         result["ok"] = False
         result["message"] = "tap_fb_comment_button: no relay for device"
+        return None
+    if cancel_event is not None and cancel_event.is_set():
+        result["ok"] = False
+        result["message"] = "tap_fb_comment_button: cancelled"
+        result["cancelled"] = True
         return None
     context = {
         "schema_version": 1,
@@ -761,6 +780,7 @@ def request_edge_comment_target(
             strategy=strategy,
             context=context,
             timeout=timeout,
+            cancel_event=cancel_event,
         )
     except Exception as exc:
         result["ok"] = False
@@ -789,6 +809,7 @@ def run_edge_comment_filter_switch(
     scenario: Dict[str, Any],
     step: Dict[str, Any],
     result: Dict[str, Any],
+    cancel_event: Any = None,
 ) -> Dict[str, Any]:
     """Drive FB comment sort sheet via agent-boot (open sheet, tap chosen option)."""
     target_filter = resolve_step_comment_filter(step)
@@ -804,6 +825,10 @@ def run_edge_comment_filter_switch(
 
     if not _relay_extra_data_available(device):
         report["reason_code"] = "no_relay"
+        return report
+    if cancel_event is not None and cancel_event.is_set():
+        report["reason_code"] = "cancelled"
+        report["cancelled"] = True
         return report
 
     wait_s = float(step.get("post_tap_wait_s", 0.8) or 0.8)
@@ -834,6 +859,7 @@ def run_edge_comment_filter_switch(
                 strategy="fb_comment_filter_apply",
                 context=context,
                 timeout=apply_timeout,
+                cancel_event=cancel_event,
             )
         except Exception as exc:
             report["reason_code"] = "request_failed"
@@ -859,6 +885,7 @@ def run_edge_comment_filter_switch(
                 strategy="fb_comment_filter_next",
                 context=context,
                 timeout=timeout,
+                cancel_event=cancel_event,
             )
         except Exception as exc:
             report["reason_code"] = "request_failed"
@@ -915,6 +942,7 @@ def _try_edge_extra_data(sc: ScenarioContext, step: Dict[str, Any], strategy: st
         step=step,
         strategy=strategy,
         result=result,
+        cancel_event=sc.cancel_event,
     )
 
 @register_step("extract")

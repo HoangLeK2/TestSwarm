@@ -648,16 +648,59 @@ class DeviceActivities:
             }
             from tasks.scenario.steps.extraction import request_edge_extra_data
 
-            handled = await _to_thread_with_heartbeat(
-                request_edge_extra_data,
-                device=device,
-                serial=inp.device_serial,
-                ctx=ctx,
-                scenario=scenario_meta,
-                step=step,
-                strategy=strategy,
-                result=edge_result,
-            )
+            async def _wait_until_unpaused() -> None:
+                if not inp.execution_id:
+                    return
+                from services.execution_pause_flags import is_execution_paused_async
+
+                while await is_execution_paused_async(inp.execution_id):
+                    _safe_activity_heartbeat(f"extract:{idx}:paused")
+                    await asyncio.sleep(0.5)
+
+            while True:
+                edge_result = {}
+                cancel_event = threading.Event()
+                stop_reason = {"reason": ""}
+
+                async def _pause_monitor() -> None:
+                    if not inp.execution_id:
+                        return
+                    from services.execution_pause_flags import is_execution_paused_async
+
+                    while not cancel_event.is_set():
+                        if activity.is_cancelled():
+                            stop_reason["reason"] = "cancelled"
+                            cancel_event.set()
+                            return
+                        if await is_execution_paused_async(inp.execution_id):
+                            stop_reason["reason"] = "paused"
+                            cancel_event.set()
+                            return
+                        await asyncio.sleep(0.5)
+
+                pause_task = asyncio.create_task(_pause_monitor())
+                try:
+                    handled = await _to_thread_with_heartbeat(
+                        request_edge_extra_data,
+                        device=device,
+                        serial=inp.device_serial,
+                        ctx=ctx,
+                        scenario=scenario_meta,
+                        step=step,
+                        strategy=strategy,
+                        result=edge_result,
+                        cancel_event=cancel_event,
+                        cooperative_cancel_event=cancel_event,
+                    )
+                finally:
+                    pause_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await pause_task
+
+                if edge_result.get("cancelled") and stop_reason.get("reason") == "paused":
+                    await _wait_until_unpaused()
+                    continue
+                break
             if handled:
                 return ExtractResult(
                     ok=bool(edge_result.get("ok", True)),

@@ -59,7 +59,9 @@ export function useMergedOrgScenarios(query?: {
 
   const data = useMemo(() => {
     const orgItems = (orgQuery.data ?? []).map(orgScenarioToLibraryItem);
-    const templateItems = (templatesQuery.data ?? []).map(templateToLibraryItem);
+    const templateItems = (templatesQuery.data ?? []).map(
+      templateToLibraryItem
+    );
     const byId = new Map<string, ScenarioLibraryItem>();
     for (const item of [...orgItems, ...templateItems]) {
       if (!byId.has(item.id)) {
@@ -104,10 +106,7 @@ export function useOrgScenarioBody(scenarioId: string, enabled = true) {
 }
 
 /** Fetch scenario bodies for campaign creation / variable merge. */
-export function useOrgScenarioBodies(
-  scenarioIds: string[],
-  enabled = true
-) {
+export function useOrgScenarioBodies(scenarioIds: string[], enabled = true) {
   return useQueries({
     queries: scenarioIds.map((scenarioId) => ({
       queryKey: KEYS.body(scenarioId),

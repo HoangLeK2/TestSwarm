@@ -6,7 +6,9 @@ import { DeviceAndroidFrame } from '../device-android-frame';
 import { DeviceScreen } from '../device-screen';
 import { cn } from '@/lib/utils';
 
-export function formatFollowerLabel(d: Pick<Device, 'brand' | 'model' | 'serial'>) {
+export function formatFollowerLabel(
+  d: Pick<Device, 'brand' | 'model' | 'serial'>
+) {
   const name = `${d.brand} ${d.model}`.trim();
   if (name) return name.length > 22 ? `${name.slice(0, 21)}…` : name;
   return d.serial.length > 16 ? `${d.serial.slice(0, 8)}…` : d.serial;

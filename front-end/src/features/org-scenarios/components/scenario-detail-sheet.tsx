@@ -56,10 +56,7 @@ import {
   useUpdateOrgScenario,
   useValidateOrgScenario
 } from '../hooks/use-org-scenarios';
-import type {
-  OrgScenarioOut,
-  OrgScenarioValidationOut
-} from '../services/api';
+import type { OrgScenarioOut, OrgScenarioValidationOut } from '../services/api';
 import type { ScenarioLibraryItem } from '../lib/scenario-library-item';
 import { isSystemTemplateItem } from '../lib/constants';
 import { CloneTemplateDialog } from './clone-template-dialog';
@@ -107,10 +104,11 @@ export function ScenarioDetailSheet({
     scenarioId,
     open && !isTemplate
   );
-  const { data: template, isLoading: templateLoading } = useScenarioTemplateDetail(
-    isTemplate && item ? item.id : '',
-    open && isTemplate
-  );
+  const { data: template, isLoading: templateLoading } =
+    useScenarioTemplateDetail(
+      isTemplate && item ? item.id : '',
+      open && isTemplate
+    );
   const { data: bodyData, isLoading: bodyLoading } = useOrgScenarioBody(
     scenarioId,
     open && !isTemplate
@@ -123,7 +121,9 @@ export function ScenarioDetailSheet({
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [tags, setTags] = useState('');
-  const [status, setStatus] = useState<'draft' | 'active' | 'archived'>('draft');
+  const [status, setStatus] = useState<'draft' | 'active' | 'archived'>(
+    'draft'
+  );
   const [validation, setValidation] = useState<OrgScenarioValidationOut | null>(
     null
   );
@@ -171,9 +171,10 @@ export function ScenarioDetailSheet({
         variables: tpl.variables ?? {}
       } as Record<string, unknown>;
     }
-    return (bodyData?.body_json ?? scenario?.body_json ?? null) as
-      | Record<string, unknown>
-      | null;
+    return (bodyData?.body_json ?? scenario?.body_json ?? null) as Record<
+      string,
+      unknown
+    > | null;
   }, [bodyData, scenario, isTemplate, template]);
 
   const bodyPreview = useMemo(() => {
@@ -186,8 +187,8 @@ export function ScenarioDetailSheet({
   }, [bodyPayload]);
 
   const previewKind = isTemplate
-    ? item?.kind ?? 'sequence'
-    : scenario?.kind ?? item?.kind ?? 'sequence';
+    ? (item?.kind ?? 'sequence')
+    : (scenario?.kind ?? item?.kind ?? 'sequence');
 
   const handleSaveMeta = () => {
     if (!scenarioId) return;
@@ -262,7 +263,8 @@ export function ScenarioDetailSheet({
   };
 
   const readOnly = isTemplate && !isSuperadmin;
-  const displayName = item?.name ?? scenario?.name ?? template?.name ?? t('title');
+  const displayName =
+    item?.name ?? scenario?.name ?? template?.name ?? t('title');
   const detailLoaded = isTemplate ? Boolean(template) : Boolean(scenario);
 
   const lastValidationStatus =
@@ -271,8 +273,7 @@ export function ScenarioDetailSheet({
     scenario.last_validation_summary !== null &&
     'status' in scenario.last_validation_summary
       ? String(
-          (scenario.last_validation_summary as { status?: string }).status ??
-            ''
+          (scenario.last_validation_summary as { status?: string }).status ?? ''
         )
       : null;
 
@@ -337,7 +338,9 @@ export function ScenarioDetailSheet({
               >
                 <div className='flex-1 space-y-4 overflow-y-auto px-6 py-4'>
                   <div className='space-y-1.5'>
-                    <Label htmlFor='scenario-detail-name'>{t('nameLabel')}</Label>
+                    <Label htmlFor='scenario-detail-name'>
+                      {t('nameLabel')}
+                    </Label>
                     <Input
                       id='scenario-detail-name'
                       value={name}
@@ -358,7 +361,9 @@ export function ScenarioDetailSheet({
                     />
                   </div>
                   <div className='space-y-1.5'>
-                    <Label htmlFor='scenario-detail-tags'>{t('tagsLabel')}</Label>
+                    <Label htmlFor='scenario-detail-tags'>
+                      {t('tagsLabel')}
+                    </Label>
                     <Input
                       id='scenario-detail-tags'
                       value={tags}
@@ -379,7 +384,10 @@ export function ScenarioDetailSheet({
                           setStatus(value as 'draft' | 'active' | 'archived')
                         }
                       >
-                        <SelectTrigger id='scenario-detail-status' className='h-9'>
+                        <SelectTrigger
+                          id='scenario-detail-status'
+                          className='h-9'
+                        >
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent className='z-[10001]'>
@@ -397,7 +405,7 @@ export function ScenarioDetailSheet({
                     </div>
                   ) : null}
                 </div>
-                <SheetFooter className='shrink-0 border-t bg-muted/20 px-6 py-3 sm:justify-end gap-2'>
+                <SheetFooter className='shrink-0 gap-2 border-t bg-muted/20 px-6 py-3 sm:justify-end'>
                   {readOnly && item ? (
                     <Can object='scenarios' action='create'>
                       <CloneTemplateDialog template={item} />
@@ -433,14 +441,16 @@ export function ScenarioDetailSheet({
                 value='body'
                 className='mt-0 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6 py-4 data-[state=inactive]:hidden'
               >
-                <p className='text-xs text-muted-foreground'>{t('bodyFlowHint')}</p>
+                <p className='text-xs text-muted-foreground'>
+                  {t('bodyFlowHint')}
+                </p>
 
                 <ScenarioBodyActions
                   t={t}
                   isRunnable={
                     isTemplate
-                      ? item?.is_runnable ?? false
-                      : scenario?.is_runnable ?? false
+                      ? (item?.is_runnable ?? false)
+                      : (scenario?.is_runnable ?? false)
                   }
                   readOnly={readOnly || isTemplate}
                   showOrgActions={!isTemplate}
@@ -656,7 +666,8 @@ function ValidationAlert({
   ];
 
   const isValid = validation.status === 'valid' && issues.length === 0;
-  const isInvalid = validation.status === 'invalid' || issues.some((i) => i.level === 'error');
+  const isInvalid =
+    validation.status === 'invalid' || issues.some((i) => i.level === 'error');
 
   return (
     <Alert variant={isInvalid ? 'destructive' : 'default'}>
@@ -666,8 +677,7 @@ function ValidationAlert({
         <AlertCircle className='size-4' />
       )}
       <AlertTitle>
-        {t('validationTitle')}:{' '}
-        {validationStatusLabel(t, validation.status)}
+        {t('validationTitle')}: {validationStatusLabel(t, validation.status)}
       </AlertTitle>
       <AlertDescription>
         {!issues.length ? (

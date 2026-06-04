@@ -2,14 +2,18 @@ import type { ExecutionEventOut } from '../../device-farm/services/generated/Dev
 import type { ExecutionOut, StepLogEntry, WorkflowProgress } from '../types';
 
 /** Epic 04 Temporal workflows use `exec_{execution_id}`. */
-export function executionIdFromWorkflowId(workflowId: string): string | undefined {
+export function executionIdFromWorkflowId(
+  workflowId: string
+): string | undefined {
   if (workflowId.startsWith('exec_')) {
     return workflowId.slice(5) || undefined;
   }
   return undefined;
 }
 
-export function deviceSerialFromWorkflowId(workflowId: string): string | undefined {
+export function deviceSerialFromWorkflowId(
+  workflowId: string
+): string | undefined {
   const m = workflowId.match(/^campaign:[^:]+:device:(.+):scenario:[^:]+$/);
   return m?.[1];
 }
@@ -22,7 +26,10 @@ export function resolveExecutionIdForWorkflow(
   if (direct) return direct;
 
   const byMeta = executions.find(
-    (ex) => String((ex.meta as Record<string, unknown> | undefined)?.workflow_id ?? '') === workflowId
+    (ex) =>
+      String(
+        (ex.meta as Record<string, unknown> | undefined)?.workflow_id ?? ''
+      ) === workflowId
   );
   if (byMeta) return byMeta.id;
 
@@ -30,7 +37,9 @@ export function resolveExecutionIdForWorkflow(
   if (!serial) return undefined;
 
   const active = executions.filter((ex) =>
-    ['running', 'pending', 'paused'].includes(String(ex.status || '').toLowerCase())
+    ['running', 'pending', 'paused'].includes(
+      String(ex.status || '').toLowerCase()
+    )
   );
   const pool = active.length > 0 ? active : executions;
 
@@ -44,7 +53,9 @@ export function resolveExecutionIdForWorkflow(
   })?.id;
 }
 
-export function parseExecutionEventEnvelope(raw: string): ExecutionEventOut | null {
+export function parseExecutionEventEnvelope(
+  raw: string
+): ExecutionEventOut | null {
   try {
     return JSON.parse(raw) as ExecutionEventOut;
   } catch {
@@ -52,7 +63,9 @@ export function parseExecutionEventEnvelope(raw: string): ExecutionEventOut | nu
   }
 }
 
-export function foldEventsToStepLog(events: ExecutionEventOut[]): StepLogEntry[] {
+export function foldEventsToStepLog(
+  events: ExecutionEventOut[]
+): StepLogEntry[] {
   const byIndex = new Map<number, StepLogEntry>();
 
   for (const ev of events) {
@@ -68,7 +81,12 @@ export function foldEventsToStepLog(events: ExecutionEventOut[]): StepLogEntry[]
         step_type: stepType,
         ok,
         message: String(p.message ?? p.reason_code ?? '') || null,
-        depth: 0
+        depth: 0,
+        output: typeof p.output === 'string' ? p.output : null,
+        exit_code:
+          typeof p.exit_code === 'number' ? p.exit_code : null,
+        save_as: typeof p.save_as === 'string' ? p.save_as : null,
+        output_truncated: Boolean(p.output_truncated)
       });
     }
   }

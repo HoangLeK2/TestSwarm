@@ -33,7 +33,9 @@ export function formatFarmApiError(err: unknown, fallback: string): string {
     }
     if (code === 'SCENARIO_REQUIRED') {
       const msg = (d as { message?: string }).message;
-      return msg?.trim() || 'Chiến dịch phải gắn ít nhất một kịch bản từ thư viện.';
+      return (
+        msg?.trim() || 'Chiến dịch phải gắn ít nhất một kịch bản từ thư viện.'
+      );
     }
     if (code === 'SCENARIO_NAME_DUPLICATE') {
       return 'Tên kịch bản đã tồn tại trong thư viện — hãy chọn tên khác.';

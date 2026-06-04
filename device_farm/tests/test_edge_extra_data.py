@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 import pytest
 from types import SimpleNamespace
 
@@ -31,6 +33,7 @@ def _ctx(device):
             "_run_hash_scope": "scope",
             "name": "scenario",
         },
+        cancel_event=None,
     )
 
 
@@ -81,8 +84,33 @@ def test_try_edge_extra_data_success(monkeypatch) -> None:
     assert "endpoint" not in device.calls[0]
     assert device.calls[0]["context"]["persist"] is True
     assert device.calls[0]["context"]["return_items"] is False
+    assert device.calls[0]["cancel_event"] is None
     assert result["edge_extra_summary"]["items_omitted"] == 1
     assert "posts" not in sc.ctx
+
+
+def test_try_edge_extra_data_propagates_cancel_event(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    event = threading.Event()
+    device = _FakeDevice({
+        "ok": False,
+        "error": "cancelled",
+        "cancelled": True,
+    })
+    sc = _ctx(device)
+    sc.cancel_event = event
+    result = {}
+
+    handled = extraction_mod._try_edge_extra_data(
+        sc,
+        {"collection": "fb", "dedupe_field": "post_key", "edge_extra_data": True},
+        "fb_posts",
+        result,
+    )
+
+    assert handled is True
+    assert result["cancelled"] is True
+    assert device.calls[0]["cancel_event"] is event
 
 
 def test_try_edge_extra_data_no_relay(monkeypatch) -> None:
@@ -644,6 +672,41 @@ def test_tap_fb_comment_button_already_on_sheet_clears_existing_anchor() -> None
     assert "_active_comment_parent_hash" not in sc.ctx
     assert "_active_comment_parent_anchor" not in sc.ctx
     assert "_active_comment_anchor_verified" not in sc.ctx
+
+
+def test_tap_fb_comment_button_already_on_sheet_preserves_verified_parent_context() -> None:
+    device = _FakeDevice({
+        "ok": True,
+        "ingest": {
+            "diagnostic": {
+                "reason_code": "already_on_comment_sheet",
+                "verified": True,
+                "target": None,
+            },
+        },
+    })
+    sc = _ctx(device)
+    sc.ctx["_fb_comment_parent_pid"] = "pid-verified"
+    sc.ctx["_active_comment_parent_hash"] = "scoped-parent-hash"
+    sc.ctx["_active_comment_parent_source"] = "tap_fb_comment_button"
+    sc.ctx["_active_comment_parent_anchor"] = {
+        "pid": "pid-verified",
+        "author": "Alice",
+        "timestamp": "1 giờ",
+        "text_prefix": "verified parent post",
+    }
+    sc.ctx["_active_comment_anchor_verified"] = True
+    result = {}
+
+    control_flow.handle_tap_fb_comment_button(sc, {}, 0, result)
+
+    assert result["tapped"] is True
+    assert result["parent_id"] == "scoped-parent-hash"
+    assert result["parent_context_preserved"] is True
+    assert result.get("parent_context_cleared") is not True
+    assert sc.ctx["_fb_comment_parent_pid"] == "pid-verified"
+    assert sc.ctx["_active_comment_parent_hash"] == "scoped-parent-hash"
+    assert sc.ctx["_active_comment_anchor_verified"] is True
 
 
 def test_tap_fb_comment_button_skips_server_tap_when_agent_tapped(monkeypatch) -> None:

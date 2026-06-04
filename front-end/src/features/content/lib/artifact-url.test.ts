@@ -20,7 +20,8 @@ test('isImageArtifact detects by kind and extension', () => {
 });
 
 test('shouldProxyArtifactFetch is false for absolute R2 URLs', () => {
-  const raw = 'https://pub.example.r2.dev/device-farm/content-screenshots/abc.jpg';
+  const raw =
+    'https://pub.example.r2.dev/device-farm/content-screenshots/abc.jpg';
   assert.equal(shouldProxyArtifactFetch(raw, raw), false);
   assert.equal(directObjectStorageUrl(raw, raw), raw);
 });

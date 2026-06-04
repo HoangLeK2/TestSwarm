@@ -30,7 +30,9 @@ test('deviceFsmStateOf treats pending serial as unknown', () => {
 
 test('matchesDeviceFsmFilter by fsm and transport', () => {
   const online = () => true;
-  const d = device({ state: 'busy' }) as Parameters<typeof matchesDeviceFsmFilter>[0];
+  const d = device({ state: 'busy' }) as Parameters<
+    typeof matchesDeviceFsmFilter
+  >[0];
   assert.equal(matchesDeviceFsmFilter(d, 'busy', online), true);
   assert.equal(matchesDeviceFsmFilter(d, 'online', online), false);
   assert.equal(matchesDeviceFsmFilter(d, 'transport_online', online), true);

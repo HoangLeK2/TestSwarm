@@ -1,4 +1,8 @@
 import type { ContentItem } from '../services/api';
+import {
+  resolveCommentDisplayBody,
+  shouldHideParentSecondary
+} from './comment-display.ts';
 
 export interface CommentParentSummary {
   primary: string;
@@ -7,6 +11,18 @@ export interface CommentParentSummary {
   linkedParentId: string | null;
   source: string | null;
 }
+
+export interface CommentParentLabels {
+  fallbackTitle: string;
+  linkedTitle: string;
+  postIdLabel: (shortId: string) => string;
+}
+
+const DEFAULT_LABELS: CommentParentLabels = {
+  fallbackTitle: 'Original post',
+  linkedTitle: 'Linked parent post',
+  postIdLabel: (shortId) => `Post ${shortId}`
+};
 
 function objectValue(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -31,11 +47,16 @@ export function commentParentSummary(
     | 'parent_item_hash'
     | 'parent_item_author'
     | 'parent_item_body'
-  >
+    | 'body'
+    | 'title'
+    | 'content_type'
+  >,
+  labels: CommentParentLabels = DEFAULT_LABELS
 ): CommentParentSummary | null {
   const raw = objectValue(item.raw_data);
   const anchor = objectValue(raw?.parent_post_anchor);
-  const author = textValue(item.parent_item_author) || textValue(anchor?.author);
+  const author =
+    textValue(item.parent_item_author) || textValue(anchor?.author);
   const timestamp = textValue(anchor?.timestamp);
   const text =
     textValue(item.parent_item_body) ||
@@ -55,10 +76,18 @@ export function commentParentSummary(
     textValue(anchor?.source) ||
     null;
 
+  const commentBody = resolveCommentDisplayBody(item);
+
   if (author || timestamp || text) {
+    const secondary =
+      text && !shouldHideParentSecondary(text, commentBody)
+        ? truncate(text, 180)
+        : null;
     return {
-      primary: [author || 'Bài gốc', timestamp].filter(Boolean).join(' · '),
-      secondary: text ? truncate(text, 180) : null,
+      primary: [author || labels.fallbackTitle, timestamp]
+        .filter(Boolean)
+        .join(' · '),
+      secondary,
       postId,
       linkedParentId: item.parent_item_hash || item.parent_id,
       source
@@ -67,7 +96,7 @@ export function commentParentSummary(
 
   if (postId) {
     return {
-      primary: `Post ${truncate(postId, 16)}`,
+      primary: labels.postIdLabel(truncate(postId, 16)),
       secondary: null,
       postId,
       linkedParentId: item.parent_item_hash || item.parent_id,
@@ -78,7 +107,7 @@ export function commentParentSummary(
   const linkedParentId = item.parent_item_hash || item.parent_id;
   if (linkedParentId) {
     return {
-      primary: 'Bài gốc đã liên kết',
+      primary: labels.linkedTitle,
       secondary: truncate(linkedParentId, 16),
       postId: null,
       linkedParentId,

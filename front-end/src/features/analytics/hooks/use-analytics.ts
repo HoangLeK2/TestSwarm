@@ -26,9 +26,7 @@ export function useAnalyticsSummary(windowDays = 7) {
   });
 }
 
-export function useAnalyticsTimeseries(
-  query: AnalyticsTimeseriesQuery | null
-) {
+export function useAnalyticsTimeseries(query: AnalyticsTimeseriesQuery | null) {
   const { currentOrg } = useOrganization();
   const orgId = currentOrg?.id ?? null;
 

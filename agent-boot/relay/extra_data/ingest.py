@@ -336,6 +336,14 @@ def _comment_parent_source(context: dict[str, Any]) -> str:
     ).strip()
 
 
+def _has_verified_comment_parent_context(context: dict[str, Any]) -> bool:
+    source = _comment_parent_source(context)
+    return bool(
+        context.get("parent_id")
+        and source in {"post_detail", "tap_fb_comment_button"}
+    )
+
+
 def _parsed_comment_parent_post_ids(items: list[dict[str, Any]]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
@@ -364,7 +372,7 @@ def _drop_stale_comment_parent_context(
     parsed_pids = _parsed_comment_parent_post_ids(items)
     if not context_pid or not parsed_pids or context_pid in parsed_pids:
         return context
-    if _comment_parent_source(context) == "post_detail" and context.get("parent_id"):
+    if _has_verified_comment_parent_context(context):
         diagnostic["parent_context_locked"] = True
         diagnostic["context_parent_post_id"] = context_pid
         diagnostic["parsed_parent_post_ids"] = parsed_pids
@@ -414,7 +422,7 @@ def _with_comment_parent_context(
     ).strip()
     anchor = _comment_parent_anchor(context)
     parent_source = _comment_parent_source(context)
-    force_context_parent = parent_source == "post_detail"
+    force_context_parent = _has_verified_comment_parent_context(context)
     if not parent_post_id and not parent_hash and not anchor:
         return items
 

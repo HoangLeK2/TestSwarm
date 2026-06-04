@@ -2161,6 +2161,7 @@ def _run_scenario_task_legacy(
                     step=step,
                     strategy=strategy,
                     result=step_result,
+                    cancel_event=cancel_event,
                 ):
                     results.append(step_result)
                     continue

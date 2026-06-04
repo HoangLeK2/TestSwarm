@@ -156,11 +156,12 @@ export function CreateCampaignDialog({
     lastMergedSelectionRef.current = selectionKey;
   }, [open, selectedScenarioIds, scenarioBodiesKey, bodyQueries]);
 
-  const [accountBinding, setAccountBinding] = useState<CampaignAccountBindingValue>({
-    mode: 'none',
-    accountGroupId: '',
-    scenarioAccountId: ''
-  });
+  const [accountBinding, setAccountBinding] =
+    useState<CampaignAccountBindingValue>({
+      mode: 'none',
+      accountGroupId: '',
+      scenarioAccountId: ''
+    });
   const { mutate, isPending, error } = useCreateCampaign();
   const {
     register,

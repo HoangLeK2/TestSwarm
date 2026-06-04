@@ -774,7 +774,10 @@ export default function RelayAgentsPage() {
           </div>
         </div>
         {!isLoading && agents.length > 0 && (
-          <Badge variant='outline' className='w-fit shrink-0 text-sm font-normal'>
+          <Badge
+            variant='outline'
+            className='w-fit shrink-0 text-sm font-normal'
+          >
             {t('onlineSummary', {
               connected: connectedCount,
               total: agents.length

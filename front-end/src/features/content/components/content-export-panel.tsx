@@ -39,7 +39,8 @@ function filterSummary(filters: ContentFilters): string {
   const parts: string[] = [];
   if (filters.collection) parts.push(`collection=${filters.collection}`);
   if (filters.platform) parts.push(`platform=${filters.platform}`);
-  if (filters.campaign_id) parts.push(`campaign=${filters.campaign_id.slice(0, 8)}…`);
+  if (filters.campaign_id)
+    parts.push(`campaign=${filters.campaign_id.slice(0, 8)}…`);
   if (filters.run_id) parts.push(`execution=${filters.run_id.slice(0, 8)}…`);
   if (filters.search) parts.push(`search="${filters.search}"`);
   return parts.length ? parts.join(' · ') : '—';
@@ -93,7 +94,9 @@ export function ContentExportDialog({
           <p className='text-muted-foreground'>{t('dialogHint')}</p>
           <div className='rounded-md border bg-muted/30 px-3 py-2 text-xs'>
             <p className='font-medium'>{t('filterSnapshot')}</p>
-            <p className='mt-1 text-muted-foreground'>{filterSummary(filters)}</p>
+            <p className='mt-1 text-muted-foreground'>
+              {filterSummary(filters)}
+            </p>
             <p className='mt-1 text-muted-foreground'>
               {t('itemEstimate', { count: itemCount })}
             </p>
@@ -119,9 +122,7 @@ export function ContentExportDialog({
           <Can
             object='content'
             action='read'
-            fallback={
-              <Button disabled>{t('noPermission')}</Button>
-            }
+            fallback={<Button disabled>{t('noPermission')}</Button>}
           >
             <Button disabled={isExporting} onClick={() => void handleExport()}>
               {isExporting ? (
@@ -181,7 +182,12 @@ export function ContentExportHistoryPanel() {
           <CardTitle className='text-base'>{t('historyTitle')}</CardTitle>
           <p className='text-xs text-muted-foreground'>{t('historyHint')}</p>
         </div>
-        <Button variant='ghost' size='icon' className='size-8' onClick={refresh}>
+        <Button
+          variant='ghost'
+          size='icon'
+          className='size-8'
+          onClick={refresh}
+        >
           <RefreshCw className='size-4' />
         </Button>
       </CardHeader>
@@ -191,7 +197,10 @@ export function ContentExportHistoryPanel() {
         ) : (
           <ul className='divide-y rounded-md border'>
             {records.map((job) => (
-              <li key={job.id} className='flex flex-wrap items-center gap-2 px-3 py-3 text-xs'>
+              <li
+                key={job.id}
+                className='flex flex-wrap items-center gap-2 px-3 py-3 text-xs'
+              >
                 <FileSpreadsheet className='size-4 shrink-0 text-muted-foreground' />
                 <div className='min-w-0 flex-1'>
                   <p className='font-medium uppercase'>{job.format}</p>
@@ -238,9 +247,7 @@ export function ContentExportJobDetailGuard({ jobId }: { jobId: string }) {
   const job = getExportJob(jobId);
 
   if (!job) {
-    return (
-      <p className='text-sm text-muted-foreground'>{t('jobNotFound')}</p>
-    );
+    return <p className='text-sm text-muted-foreground'>{t('jobNotFound')}</p>;
   }
 
   return (

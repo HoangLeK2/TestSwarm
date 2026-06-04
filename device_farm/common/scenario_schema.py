@@ -25,6 +25,7 @@ SCENARIO_STEP_TYPES = [
     "scroll_to",
     "input_text",
     "key",
+    "adb_shell",
     "scroll_down",
     "wait_stable",
     "verify_screen",
@@ -34,6 +35,7 @@ SCENARIO_STEP_TYPES = [
     "repeat_until",
     "if_element",
     "if_variable",
+    "fb_tap_comment_button",
     "tap_fb_comment_button",
     "random_pick",
     "run_scenario",
@@ -192,6 +194,16 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
         "optional": [],
         "description": "Phím: enter, back, home, ...",
     },
+    "adb_shell": {
+        "required": ["command"],
+        "optional": ["timeout", "fail_on_error", "save_as", "max_output_chars"],
+        "description": (
+            "Chạy lệnh `adb shell` trên phone thật thông qua agent-boot. "
+            "command hỗ trợ biến ${VAR}; timeout được giới hạn để tránh treo worker. "
+            "save_as lưu output vào biến runtime để dùng ở bước sau. "
+            "max_output_chars giới hạn output giữ trong kết quả/context."
+        ),
+    },
     "scroll_down": {
         "required": [],
         "optional": [
@@ -285,6 +297,25 @@ STEP_SCHEMA: Dict[str, Dict[str, Any]] = {
             "Điều kiện: equals | not_equals | contains | greater_than. "
             "Nếu không có điều kiện → branch theo truthy (var có giá trị). "
             "then: steps chạy khi đúng. else: steps chạy khi sai (optional)."
+        ),
+    },
+    "fb_tap_comment_button": {
+        "required": [],
+        "optional": [
+            "timeout",
+            "poll",
+            "dedupe_field",
+            "ignore_error",
+            "switch_to_all_comments",
+            "comment_filter",
+            "post_tap_wait_s",
+            "then",
+            "else",
+        ],
+        "description": (
+            "Canonical Facebook comment-button step. Same behavior as legacy "
+            "tap_fb_comment_button: find + tap the visible Facebook comment "
+            "button and set parent context for following extract fb_comments."
         ),
     },
     "tap_fb_comment_button": {

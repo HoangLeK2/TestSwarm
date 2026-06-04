@@ -10,7 +10,10 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select';
-import { useCampaignExecutions, useCampaignWorkflows } from '../../hooks/use-campaigns';
+import {
+  useCampaignExecutions,
+  useCampaignWorkflows
+} from '../../hooks/use-campaigns';
 import type { WorkflowInfo } from '../../types';
 import { WorkflowProgressCard } from './workflow-progress-card';
 import { ArtifactPanel } from './artifact-panel';
@@ -114,7 +117,10 @@ export function MonitorContent({ campaignId, isRunning }: Props) {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [deviceFilter, setDeviceFilter] = useState('');
   const { data, isLoading } = useCampaignWorkflows(campaignId, isRunning);
-  const { data: executions = [] } = useCampaignExecutions(campaignId, isRunning);
+  const { data: executions = [] } = useCampaignExecutions(
+    campaignId,
+    isRunning
+  );
   const workflows = data?.workflows ?? [];
   const filteredWorkflows = useMemo(
     () => filterWorkflows(workflows, statusFilter, deviceFilter),

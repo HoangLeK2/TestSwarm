@@ -240,6 +240,7 @@ async def save_content_item(
     screenshot_bytes: bytes | None = None,
     tags: str = "",
     parent_id: str | None = None,
+    parent_id_already_scoped: bool = False,
     item_level: int | None = None,
     user_id: str | None = None,
     org_id: str | None = None,
@@ -289,7 +290,10 @@ async def save_content_item(
     scope = hash_scope or execution_id
     base_hash = compute_content_hash(payload, dedupe_field)
     content_hash = scope_content_hash(base_hash, scope)
-    scoped_parent_id = scope_content_hash(parent_id, scope) if parent_id else None
+    if parent_id and parent_id_already_scoped:
+        scoped_parent_id = str(parent_id)
+    else:
+        scoped_parent_id = scope_content_hash(parent_id, scope) if parent_id else None
     external_id = payload.get("external_id")
     if external_id is not None:
         external_id = str(external_id)[:255]

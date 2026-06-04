@@ -40,7 +40,12 @@ export function CreateOrgScenarioDialog({
 }: CreateOrgScenarioDialogProps = {}) {
   const t = useTranslations('orgScenariosFeature.createDialog');
   const [open, setOpen] = useState(false);
-  const { mutate, isPending, error, reset: resetMutation } = useCreateOrgScenario();
+  const {
+    mutate,
+    isPending,
+    error,
+    reset: resetMutation
+  } = useCreateOrgScenario();
   const schema = z.object({
     name: z.string().min(1, t('nameRequired')),
     description: z.string().optional(),

@@ -19,6 +19,7 @@ Usage (called from web/server.py at startup):
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import struct
@@ -941,6 +942,14 @@ class AdbRelayManager:
             return {"ok": False, "stopped_at": 0, "results": [],
                     "error": f"no relay for serial={serial!r}"}
         actual = self.resolve_serial(serial)
+        fast_touch = self._u2_batch_touch_fast_path_actions(actions)
+        if fast_touch is not None:
+            return await self._run_u2_batch_touch_fast_path(
+                conn=conn,
+                serial=actual,
+                prepared=fast_touch,
+                early_exit=early_exit,
+            )
         req_id = f"batch-{uuid.uuid4().hex[:8]}"
         return await conn.send_json_request(
             msg={
@@ -949,6 +958,93 @@ class AdbRelayManager:
             },
             reply_id=req_id, timeout=timeout,
         )
+
+    @staticmethod
+    def _u2_batch_touch_fast_path_actions(
+        actions: list[dict],
+    ) -> Optional[list[tuple[str, dict, float]]]:
+        prepared: list[tuple[str, dict, float]] = []
+        for idx, act in enumerate(actions, start=1):
+            op = str(act.get("op", "") or "")
+            payload: dict[str, Any] = {"jsonrpc": "2.0", "id": idx}
+            timeout = 1.5
+            if op == "click":
+                payload["method"] = "click"
+                payload["params"] = [int(act["x"]), int(act["y"])]
+            elif op == "swipe":
+                duration = max(0.0, float(act.get("duration", 0.5)))
+                payload["method"] = "swipe"
+                payload["params"] = [
+                    int(act["fx"]), int(act["fy"]),
+                    int(act["tx"]), int(act["ty"]),
+                    max(1, int(duration * 40)),
+                ]
+                timeout = max(1.5, duration + 0.8)
+            elif op == "long_click":
+                duration = max(0.1, float(act.get("duration", 0.5)))
+                payload["method"] = "longClick"
+                payload["params"] = [int(act["x"]), int(act["y"])]
+                timeout = max(1.5, duration + 0.8)
+            else:
+                return None
+            prepared.append((op, payload, timeout))
+        return prepared
+
+    async def _run_u2_batch_touch_fast_path(
+        self,
+        *,
+        conn: RelayConnection,
+        serial: str,
+        prepared: list[tuple[str, dict, float]],
+        early_exit: bool,
+    ) -> dict:
+        results: list[dict] = []
+        stopped_at: Optional[int] = None
+        for idx, (op, payload, timeout) in enumerate(prepared):
+            try:
+                res = await conn.send_u2_request(
+                    serial,
+                    "POST",
+                    "/jsonrpc/0",
+                    json.dumps(payload),
+                    "application/json",
+                    timeout,
+                )
+                ok, error = self._parse_u2_touch_rpc_result(res)
+            except Exception as exc:
+                ok, error = False, str(exc)
+            entry: dict[str, Any] = {"op": op, "ok": ok}
+            if error:
+                entry["error"] = error
+            results.append(entry)
+            if not ok and early_exit:
+                stopped_at = idx
+                break
+        all_ok = all(bool(item.get("ok")) for item in results) and len(results) == len(prepared)
+        return {
+            "ok": all_ok,
+            "stopped_at": stopped_at,
+            "results": results,
+            "error": None if all_ok else (results[-1].get("error") if results else "touch_failed"),
+        }
+
+    @staticmethod
+    def _parse_u2_touch_rpc_result(res: dict) -> tuple[bool, str]:
+        if not bool(res.get("ok")):
+            status = int(res.get("status", 0) or 0)
+            if status:
+                return False, f"JSON-RPC HTTP {status}"
+            return False, str(res.get("body") or "JSON-RPC request failed")
+        raw = str(res.get("body") or "")
+        if not raw.strip():
+            return False, "JSON-RPC empty response"
+        try:
+            data = json.loads(raw)
+        except Exception:
+            return False, f"JSON-RPC invalid response: {raw[:120]!r}"
+        if "error" in data:
+            return False, f"JSON-RPC error: {data['error']}"
+        return True, ""
 
     async def u2_flow(
         self,
@@ -986,20 +1082,38 @@ class AdbRelayManager:
         actual = self.resolve_serial(serial)
         req_id = f"extra-{uuid.uuid4().hex[:10]}"
         grace = max(5.0, min(30.0, timeout * 0.15))
-        result = await conn.send_json_request(
-            msg={
-                "type": "extra_data",
-                "id": req_id,
-                "serial": actual,
-                "strategy": strategy,
-                "context": context or {},
-                "timeout_s": timeout,
-            },
-            reply_id=req_id,
-            timeout=timeout,
-            timeout_grace=grace,
-        )
+        msg = {
+            "type": "extra_data",
+            "id": req_id,
+            "serial": actual,
+            "strategy": strategy,
+            "context": context or {},
+            "timeout_s": timeout,
+        }
+        try:
+            result = await conn.send_json_request(
+                msg=msg,
+                reply_id=req_id,
+                timeout=timeout,
+                timeout_grace=grace,
+            )
+        except asyncio.CancelledError:
+            with contextlib.suppress(Exception):
+                await conn.send_json_message({
+                    "type": "extra_data_cancel",
+                    "id": req_id,
+                    "serial": actual,
+                    "strategy": strategy,
+                })
+            raise
         if result.get("type") != "extra_data_result":
+            with contextlib.suppress(Exception):
+                await conn.send_json_message({
+                    "type": "extra_data_cancel",
+                    "id": req_id,
+                    "serial": actual,
+                    "strategy": strategy,
+                })
             return {
                 "ok": False,
                 "error": str(result.get("error") or result.get("body") or "invalid_extra_data_result"),

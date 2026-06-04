@@ -197,9 +197,7 @@ export function CampaignRunProgress({
         </div>
         <CampaignProgressBar value={pct} />
         <div className='flex flex-wrap items-center gap-1.5'>
-          <StatPill
-            label={t('progressDone', { done: finished, total })}
-          />
+          <StatPill label={t('progressDone', { done: finished, total })} />
           {execSummary.running > 0 && (
             <StatPill
               label={t('wfRunning', { count: execSummary.running })}

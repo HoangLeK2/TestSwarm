@@ -87,7 +87,11 @@ export const ControlRecordMirror = memo(function ControlRecordMirror({
   mirrorSize = 'default'
 }: Props) {
   const mockupScreenWidth =
-    mirrorSize === 'multiFocus' ? 236 : mirrorSize === 'multiCompact' ? 252 : 262;
+    mirrorSize === 'multiFocus'
+      ? 236
+      : mirrorSize === 'multiCompact'
+        ? 252
+        : 262;
   const compactPadding = mirrorSize !== 'default';
 
   return (

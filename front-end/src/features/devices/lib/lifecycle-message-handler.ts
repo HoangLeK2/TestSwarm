@@ -1,9 +1,6 @@
 import type { QueryClient } from '@tanstack/react-query';
 import type { DeviceOut, FleetStatsOut } from '../services/manage-api';
-import {
-  DEVICES_LIST_KEY,
-  FLEET_STATS_KEY
-} from './device-query-keys';
+import { DEVICES_LIST_KEY, FLEET_STATS_KEY } from './device-query-keys';
 import {
   lifecycleMessageNeedsRefresh,
   type DeviceLifecycleEventPayload,

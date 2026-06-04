@@ -3,7 +3,10 @@ import { vi } from 'date-fns/locale';
 import { Badge } from '@/components/ui/badge';
 import type { ColumnDef } from '@tanstack/react-table';
 import type { CampaignOut } from '../../types';
-import { campaignStatusLabel, campaignStatusVariant } from '../../campaign-status-ui';
+import {
+  campaignStatusLabel,
+  campaignStatusVariant
+} from '../../campaign-status-ui';
 import { CampaignSetupCell } from './CampaignSetupCell';
 import { CampaignRowActions } from './CampaignRowActions';
 import {
@@ -19,10 +22,7 @@ import { cn } from '@/lib/utils';
 
 type TFn = (key: string, values?: Record<string, any>) => string;
 
-function responsiveCol(
-  cellClassName: string,
-  visibility?: 'lg' | 'xl'
-) {
+function responsiveCol(cellClassName: string, visibility?: 'lg' | 'xl') {
   const hide =
     visibility === 'lg'
       ? 'hidden lg:table-cell'

@@ -1,6 +1,12 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react';
 import { HelpCircle, Loader2, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -128,7 +134,7 @@ export function XmlTreeViewer({
     <div className='flex h-full flex-col'>
       {/* Header — two rows so controls fit the 280px hierarchy column */}
       <div className='shrink-0 border-b border-border/60 bg-muted/20'>
-        <div className='flex items-center gap-1 px-2.5 pt-2 pb-1'>
+        <div className='flex items-center gap-1 px-2.5 pb-1 pt-2'>
           <span className='min-w-0 flex-1 truncate text-xs font-semibold leading-tight text-foreground'>
             {t('hierarchyTitle')}
           </span>
@@ -175,7 +181,7 @@ export function XmlTreeViewer({
             />
             <Label
               htmlFor='hierarchy-hide-system'
-              className='cursor-pointer text-[11px] font-normal leading-none whitespace-nowrap text-muted-foreground'
+              className='cursor-pointer whitespace-nowrap text-[11px] font-normal leading-none text-muted-foreground'
             >
               {t('hideSystemUiShort')}
             </Label>
@@ -189,7 +195,7 @@ export function XmlTreeViewer({
             />
             <Label
               htmlFor='hierarchy-auto-refresh'
-              className='cursor-pointer text-[11px] font-normal leading-none whitespace-nowrap text-muted-foreground'
+              className='cursor-pointer whitespace-nowrap text-[11px] font-normal leading-none text-muted-foreground'
             >
               {t('autoShort')}
             </Label>

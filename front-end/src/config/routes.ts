@@ -33,8 +33,7 @@ export const ROUTES = {
       const params = new URLSearchParams({ campaignId, scenarioId });
       if (serial) params.set('serial', serial);
       return `/dashboard/device-farm/control?${params.toString()}`;
-    }
-    ,
+    },
     /** Mở trang điều khiển để ghi và lưu vào kịch bản tổ chức. */
     CONTROL_RECORD_EDIT_ORG_SCENARIO: (
       orgScenarioId: string,

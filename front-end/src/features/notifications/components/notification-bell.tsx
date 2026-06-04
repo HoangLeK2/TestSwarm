@@ -84,41 +84,41 @@ function NotificationRow({
         }}
         type='button'
       >
-      <span className='relative mt-0.5 shrink-0'>
-        <span
-          className={cn(
-            'flex size-9 items-center justify-center rounded-full',
-            toneClasses.bg
-          )}
-        >
-          <Icon className={cn('size-4', toneClasses.icon)} aria-hidden />
-        </span>
-        {!item.is_read ? (
-          <span className='absolute -right-0.5 -top-0.5 size-2 rounded-full bg-primary ring-2 ring-background' />
-        ) : null}
-      </span>
-      <span className='min-w-0 flex-1 pt-0.5'>
-        <span className='flex items-start justify-between gap-3'>
+        <span className='relative mt-0.5 shrink-0'>
           <span
             className={cn(
-              'line-clamp-2 text-[13px] leading-snug',
-              item.is_read
-                ? 'font-normal text-foreground/80'
-                : 'font-medium text-foreground'
+              'flex size-9 items-center justify-center rounded-full',
+              toneClasses.bg
             )}
           >
-            {title}
+            <Icon className={cn('size-4', toneClasses.icon)} aria-hidden />
           </span>
-          <span className='shrink-0 pt-0.5 text-[11px] tabular-nums text-muted-foreground/60'>
-            {timeAgo(item.created_at)}
-          </span>
+          {!item.is_read ? (
+            <span className='absolute -right-0.5 -top-0.5 size-2 rounded-full bg-primary ring-2 ring-background' />
+          ) : null}
         </span>
-        {detail ? (
-          <span className='mt-0.5 line-clamp-2 block text-xs leading-relaxed text-muted-foreground'>
-            {detail}
+        <span className='min-w-0 flex-1 pt-0.5'>
+          <span className='flex items-start justify-between gap-3'>
+            <span
+              className={cn(
+                'line-clamp-2 text-[13px] leading-snug',
+                item.is_read
+                  ? 'font-normal text-foreground/80'
+                  : 'font-medium text-foreground'
+              )}
+            >
+              {title}
+            </span>
+            <span className='shrink-0 pt-0.5 text-[11px] tabular-nums text-muted-foreground/60'>
+              {timeAgo(item.created_at)}
+            </span>
           </span>
-        ) : null}
-      </span>
+          {detail ? (
+            <span className='mt-0.5 line-clamp-2 block text-xs leading-relaxed text-muted-foreground'>
+              {detail}
+            </span>
+          ) : null}
+        </span>
       </button>
       {href ? (
         <Button variant='ghost' size='icon' className='size-7 shrink-0' asChild>
@@ -268,7 +268,9 @@ export function NotificationBell() {
                   </Link>
                 </Button>
               </TooltipTrigger>
-              <TooltipContent side='bottom'>{t('manageChannels')}</TooltipContent>
+              <TooltipContent side='bottom'>
+                {t('manageChannels')}
+              </TooltipContent>
             </Tooltip>
           </div>
         </div>

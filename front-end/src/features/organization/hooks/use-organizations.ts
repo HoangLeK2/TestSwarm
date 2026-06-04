@@ -11,7 +11,8 @@ const CURRENT_ORG_STORAGE_KEY = 'device-farm:current-organization-id';
 export const organizationQueryKeys = {
   list: (params: OrganizationListParams) =>
     ['organization', 'list', params] as const,
-  infinite: (search: string) => ['organization', 'list', 'infinite', search] as const
+  infinite: (search: string) =>
+    ['organization', 'list', 'infinite', search] as const
 };
 
 /** Bootstrap org list for provider (includes stored current org via ensure_id). */
@@ -26,7 +27,7 @@ export function useOrganizationsQuery() {
     queryFn: () =>
       listOrganizations({ limit: 100, offset: 0, ensure_id: ensureId }),
     staleTime: 60_000,
-    select: (data) => data.items ?? [],
+    select: (data) => data.items ?? []
   });
 }
 

@@ -20,15 +20,32 @@ interface DataTablePaginationProps<TData> extends React.ComponentProps<'div'> {
   showRowsPerPage?: boolean;
 }
 
-export function DataTablePagination<TData>({
-  table,
+type TablePaginationControlsProps = React.ComponentProps<'div'> & {
+  pageIndex: number;
+  pageCount: number;
+  pageSize: number;
+  pageSizeOptions?: number[];
+  total?: number;
+  showRowsPerPage?: boolean;
+  onPageIndexChange: (pageIndex: number) => void;
+  onPageSizeChange: (pageSize: number) => void;
+};
+
+export function TablePaginationControls({
+  pageIndex,
+  pageCount,
+  pageSize,
   pageSizeOptions = [10, 20, 30, 40, 50],
   className,
   total = 0,
   showRowsPerPage = true,
+  onPageIndexChange,
+  onPageSizeChange,
   ...props
-}: DataTablePaginationProps<TData>) {
+}: TablePaginationControlsProps) {
   const t = useTranslations('components.table');
+  const canPreviousPage = pageIndex > 0;
+  const canNextPage = pageIndex < pageCount - 1;
 
   return (
     <div
@@ -65,15 +82,13 @@ export function DataTablePagination<TData>({
               {t('rowsPerPage')}
             </p>
             <Select
-              value={`${table.getState().pagination.pageSize}`}
+              value={`${pageSize}`}
               onValueChange={(value) => {
-                table.setPageSize(Number(value));
+                onPageSizeChange(Number(value));
               }}
             >
               <SelectTrigger className='h-8 w-[4.5rem] [&[data-size]]:h-8'>
-                <SelectValue
-                  placeholder={table.getState().pagination.pageSize}
-                />
+                <SelectValue placeholder={pageSize} />
               </SelectTrigger>
               <SelectContent side='top'>
                 {pageSizeOptions.map((pageSize) => (
@@ -87,8 +102,8 @@ export function DataTablePagination<TData>({
         ) : null}
         <div className='flex items-center justify-center text-sm font-medium'>
           {t('pageOf', {
-            current: table.getState().pagination.pageIndex + 1,
-            total: table.getPageCount()
+            current: pageIndex + 1,
+            total: pageCount
           })}
         </div>
         <div className='flex items-center space-x-2'>
@@ -97,8 +112,8 @@ export function DataTablePagination<TData>({
             variant='outline'
             size='icon'
             className='hidden size-8 lg:flex'
-            onClick={() => table.setPageIndex(0)}
-            disabled={!table.getCanPreviousPage()}
+            onClick={() => onPageIndexChange(0)}
+            disabled={!canPreviousPage}
           >
             <ChevronsLeft />
           </Button>
@@ -107,8 +122,8 @@ export function DataTablePagination<TData>({
             variant='outline'
             size='icon'
             className='size-8'
-            onClick={() => table.previousPage()}
-            disabled={!table.getCanPreviousPage()}
+            onClick={() => onPageIndexChange(pageIndex - 1)}
+            disabled={!canPreviousPage}
           >
             <ChevronLeftIcon />
           </Button>
@@ -117,8 +132,8 @@ export function DataTablePagination<TData>({
             variant='outline'
             size='icon'
             className='size-8'
-            onClick={() => table.nextPage()}
-            disabled={!table.getCanNextPage()}
+            onClick={() => onPageIndexChange(pageIndex + 1)}
+            disabled={!canNextPage}
           >
             <ChevronRightIcon />
           </Button>
@@ -127,13 +142,37 @@ export function DataTablePagination<TData>({
             variant='outline'
             size='icon'
             className='hidden size-8 lg:flex'
-            onClick={() => table.setPageIndex(table.getPageCount() - 1)}
-            disabled={!table.getCanNextPage()}
+            onClick={() => onPageIndexChange(pageCount - 1)}
+            disabled={!canNextPage}
           >
             <ChevronsRight />
           </Button>
         </div>
       </div>
     </div>
+  );
+}
+
+export function DataTablePagination<TData>({
+  table,
+  pageSizeOptions = [10, 20, 30, 40, 50],
+  className,
+  total = 0,
+  showRowsPerPage = true,
+  ...props
+}: DataTablePaginationProps<TData>) {
+  return (
+    <TablePaginationControls
+      pageIndex={table.getState().pagination.pageIndex}
+      pageCount={table.getPageCount()}
+      pageSize={table.getState().pagination.pageSize}
+      pageSizeOptions={pageSizeOptions}
+      className={className}
+      total={total}
+      showRowsPerPage={showRowsPerPage}
+      onPageIndexChange={(pageIndex) => table.setPageIndex(pageIndex)}
+      onPageSizeChange={(pageSize) => table.setPageSize(pageSize)}
+      {...props}
+    />
   );
 }

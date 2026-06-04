@@ -60,7 +60,6 @@ import { useOrgScenarioBodies } from '@/features/org-scenarios/hooks/use-org-sce
 import { useOrgScenarios } from '@/features/org-scenarios/hooks/use-org-scenarios';
 import {
   isCampaignActiveExecution,
-  isCampaignBodyEditable,
   isCampaignMetadataEditable,
   isDispatchableStatus
 } from '../../types';
@@ -137,7 +136,8 @@ export function CampaignRowActions({
     toast.success(t('campaignDone'))
   );
   const { mutate: runCampaign, isPending: isRunning } = runMutation;
-  const { mutate: dispatchCampaign, isPending: isDispatching } = dispatchMutation;
+  const { mutate: dispatchCampaign, isPending: isDispatching } =
+    dispatchMutation;
   const isStarting = isRunning || isDispatching;
   const { mutate: deleteCampaign, isPending: isDeleting } = useDeleteCampaign();
 
@@ -156,9 +156,7 @@ export function CampaignRowActions({
     .filter((w) => w.status === 'RUNNING')
     .map((w) => w.workflow_id);
   const pausedWorkflowIds = workflows
-    .filter(
-      (w) => w.status === 'PAUSED' || w.status === 'paused_on_error'
-    )
+    .filter((w) => w.status === 'PAUSED' || w.status === 'paused_on_error')
     .map((w) => w.workflow_id);
 
   const { mutate: pauseCampaign, isPending: isPausing } = useCampaignPause();
@@ -259,9 +257,10 @@ export function CampaignRowActions({
       onSuccess: () => {
         toast.info(
           t('resumingAll', {
-            count: workflows.filter(
-              (w) => w.status === 'PAUSED' || w.status === 'paused_on_error'
-            ).length || 1
+            count:
+              workflows.filter(
+                (w) => w.status === 'PAUSED' || w.status === 'paused_on_error'
+              ).length || 1
           })
         );
       },
@@ -281,9 +280,6 @@ export function CampaignRowActions({
     if (!ok) return;
     try {
       const data = await cancelCampaign({ campaignId: campaign.id });
-      if (data.warning) {
-        toast.warning(data.warning, { duration: 8000 });
-      }
       toast.success(t('cancelSuccess'));
       toast.info(t('cancellingAll', { count: data.workflows_signalled ?? 0 }));
     } catch (err) {
@@ -295,13 +291,16 @@ export function CampaignRowActions({
   const showPause =
     campaign.status === 'running' &&
     (hasActiveWorkflows || runningWorkflowIds.length > 0);
-  const showResume = campaign.status === 'paused' || pausedWorkflowIds.length > 0;
+  const showResume =
+    campaign.status === 'paused' || pausedWorkflowIds.length > 0;
 
   return (
     <div
       className={cn(
         'flex min-w-0',
-        layout === 'stacked' ? 'w-full flex-col gap-2' : 'items-center justify-end'
+        layout === 'stacked'
+          ? 'w-full flex-col gap-2'
+          : 'items-center justify-end'
       )}
     >
       <div
@@ -382,12 +381,11 @@ export function CampaignRowActions({
                       onSuccess: (data) => {
                         const failed =
                           data.executions?.filter(
-                            (e) =>
-                              e.status === 'failed' ||
-                              e.failure_reason
+                            (e) => e.status === 'failed' || e.failure_reason
                           ).length ?? 0;
                         const usedFallback =
-                          executionRuntime?.campaign_run?.fallback_mode_active ||
+                          executionRuntime?.campaign_run
+                            ?.fallback_mode_active ||
                           data.executions?.some(
                             (e) => e.dispatch_source === 'fallback'
                           );
@@ -401,7 +399,9 @@ export function CampaignRowActions({
                           {
                             description:
                               failed > 0
-                                ? t('dispatchPartialFailures', { count: failed })
+                                ? t('dispatchPartialFailures', {
+                                    count: failed
+                                  })
                                 : campaign.name,
                             duration: 5000
                           }
@@ -409,7 +409,9 @@ export function CampaignRowActions({
                         router.push(ROUTES.DEVICES.ROOT);
                       },
                       onError: (err) => {
-                        toast.error(formatFarmApiError(err, t('dispatchFailed')));
+                        toast.error(
+                          formatFarmApiError(err, t('dispatchFailed'))
+                        );
                       }
                     }
                   );
@@ -489,60 +491,59 @@ export function CampaignRowActions({
         </CampaignMonitorDialog>
 
         {(perms.canUpdate || perms.canDelete) && (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              size='sm'
-              variant='ghost'
-              className='h-8 w-8 p-0'
-              aria-label='Thêm hành động'
-            >
-              <MoreHorizontal size={14} />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align='end' className='w-56'>
-            <DropdownMenuItem asChild className='gap-2'>
-              <Link href={ROUTES.CONTENT.BY_CAMPAIGN(campaign.id)}>
-                <BarChart3 size={14} />
-                {t('titleContent')}
-              </Link>
-            </DropdownMenuItem>
-
-            {perms.canUpdate && isEntityCampaign ? (
-              <DropdownMenuItem
-                className='gap-2'
-                disabled={!canEditEntity}
-                onClick={() => {
-                  if (!canEditEntity) {
-                    toast.error(t('editLocked'));
-                    return;
-                  }
-                  setEntityEditOpen(true);
-                }}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size='sm'
+                variant='ghost'
+                className='h-8 w-8 p-0'
+                aria-label='Thêm hành động'
               >
-                <Pencil size={14} />
-                {t('titleEditEntity')}
+                <MoreHorizontal size={14} />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align='end' className='w-56'>
+              <DropdownMenuItem asChild className='gap-2'>
+                <Link href={ROUTES.CONTENT.BY_CAMPAIGN(campaign.id)}>
+                  <BarChart3 size={14} />
+                  {t('titleContent')}
+                </Link>
               </DropdownMenuItem>
-            ) : null}
 
-            {perms.canDelete ? (
-              <>
-                <DropdownMenuSeparator />
+              {perms.canUpdate && isEntityCampaign ? (
                 <DropdownMenuItem
-                  className='gap-2 text-destructive focus:text-destructive'
-                  disabled={
-                    isDeleting ||
-                    isCampaignActiveExecution(campaign.status)
-                  }
-                  onClick={handleDelete}
+                  className='gap-2'
+                  disabled={!canEditEntity}
+                  onClick={() => {
+                    if (!canEditEntity) {
+                      toast.error(t('editLocked'));
+                      return;
+                    }
+                    setEntityEditOpen(true);
+                  }}
                 >
-                  <Trash2 size={14} />
-                  {t('titleDelete')}
+                  <Pencil size={14} />
+                  {t('titleEditEntity')}
                 </DropdownMenuItem>
-              </>
-            ) : null}
-          </DropdownMenuContent>
-        </DropdownMenu>
+              ) : null}
+
+              {perms.canDelete ? (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    className='gap-2 text-destructive focus:text-destructive'
+                    disabled={
+                      isDeleting || isCampaignActiveExecution(campaign.status)
+                    }
+                    onClick={handleDelete}
+                  >
+                    <Trash2 size={14} />
+                    {t('titleDelete')}
+                  </DropdownMenuItem>
+                </>
+              ) : null}
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
       </div>
 

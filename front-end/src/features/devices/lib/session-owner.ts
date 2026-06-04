@@ -26,7 +26,8 @@ export function deriveSessionOwnerType(
 ): SessionOwnerTypeKey {
   if (userId?.trim()) return 'user';
   const sid = (sessionId || '').trim().toLowerCase();
-  if (sid.startsWith('exec:') || sid.startsWith('execution:')) return 'execution';
+  if (sid.startsWith('exec:') || sid.startsWith('execution:'))
+    return 'execution';
   if (sid.startsWith('camp:') || sid.startsWith('campaign:')) return 'campaign';
   if (sid.startsWith('sys:') || sid.startsWith('system:')) return 'system';
   return 'unknown';

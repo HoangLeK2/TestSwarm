@@ -48,33 +48,51 @@ export function DlqEntryDetailDrawer({ entry, open, onOpenChange }: Props) {
 
           <dl className='grid gap-3 text-xs'>
             <div>
-              <dt className='text-muted-foreground'>{t('monitorDlqDetailExecution')}</dt>
+              <dt className='text-muted-foreground'>
+                {t('monitorDlqDetailExecution')}
+              </dt>
               <dd className='mt-0.5 font-mono'>{entry.execution_id}</dd>
             </div>
             {entry.failed_step_id ? (
               <div>
-                <dt className='text-muted-foreground'>{t('monitorDlqFailedStep', { step: entry.failed_step_id })}</dt>
+                <dt className='text-muted-foreground'>
+                  {t('monitorDlqFailedStep', { step: entry.failed_step_id })}
+                </dt>
               </div>
             ) : null}
             <div>
-              <dt className='text-muted-foreground'>{t('monitorDlqDetailError')}</dt>
-              <dd className='mt-0.5 whitespace-pre-wrap break-words'>{message}</dd>
+              <dt className='text-muted-foreground'>
+                {t('monitorDlqDetailError')}
+              </dt>
+              <dd className='mt-0.5 whitespace-pre-wrap break-words'>
+                {message}
+              </dd>
             </div>
             <div>
-              <dt className='text-muted-foreground'>{t('monitorDlqRetryCount', { count: entry.retry_count })}</dt>
+              <dt className='text-muted-foreground'>
+                {t('monitorDlqRetryCount', { count: entry.retry_count })}
+              </dt>
             </div>
             <div>
-              <dt className='text-muted-foreground'>{t('monitorDlqDetailCreated')}</dt>
+              <dt className='text-muted-foreground'>
+                {t('monitorDlqDetailCreated')}
+              </dt>
               <dd className='mt-0.5'>{formatTs(entry.created_at)}</dd>
             </div>
             {entry.last_attempt_at ? (
               <div>
-                <dt className='text-muted-foreground'>{t('monitorDlqLastAttempt', { time: formatTs(entry.last_attempt_at) })}</dt>
+                <dt className='text-muted-foreground'>
+                  {t('monitorDlqLastAttempt', {
+                    time: formatTs(entry.last_attempt_at)
+                  })}
+                </dt>
               </div>
             ) : null}
             {entry.close_reason ? (
               <div>
-                <dt className='text-muted-foreground'>{t('monitorDlqCloseReasonLabel')}</dt>
+                <dt className='text-muted-foreground'>
+                  {t('monitorDlqCloseReasonLabel')}
+                </dt>
                 <dd className='mt-0.5'>{entry.close_reason}</dd>
               </div>
             ) : null}

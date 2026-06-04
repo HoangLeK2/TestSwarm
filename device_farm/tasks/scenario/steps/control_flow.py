@@ -370,7 +370,15 @@ def handle_tap_fb_comment_button(
             sy2 = int(sc.h * end_y_ratio)
             sc.device.swipe(sx, sy1, sx, sy2, duration_ms=max(120, duration_ms))
             if pause_s > 0:
-                time.sleep(pause_s)
+                if sc.cancel_event is not None:
+                    sc.cancel_event.wait(pause_s)
+                else:
+                    time.sleep(pause_s)
+            if _cancelled(sc):
+                result["ok"] = False
+                result["message"] = "tap_fb_comment_button: cancelled"
+                result["cancelled"] = True
+                return
             result["pre_scrolled"] = True
         except Exception as exc:
             log.warning("[%s] tap_fb_comment_button: pre_scroll failed: %s", sc.serial, exc)
@@ -382,6 +390,7 @@ def handle_tap_fb_comment_button(
         scenario=sc.scenario,
         step=step,
         result=result,
+        cancel_event=sc.cancel_event,
     )
     ignore_error = bool(step.get("ignore_error", True))
     then_steps = step.get("then") or []
@@ -390,9 +399,24 @@ def handle_tap_fb_comment_button(
     tapped = False
     if result.get("reason_code") == "already_on_comment_sheet":
         tapped = True
-        _clear_active_comment_parent(sc.ctx)
-        result["parent_context_cleared"] = True
-        result["message"] = "tap_fb_comment_button: comment sheet already open"
+        keep_existing_parent = bool(
+            sc.ctx.get("_active_comment_parent_hash")
+            and (
+                sc.ctx.get("_active_comment_anchor_verified")
+                or sc.ctx.get("_active_comment_parent_source") == "post_detail"
+            )
+        )
+        if keep_existing_parent:
+            result["parent_id"] = sc.ctx.get("_active_comment_parent_hash")
+            result["_pid"] = sc.ctx.get("_fb_comment_parent_pid")
+            result["parent_context_preserved"] = True
+            result["message"] = (
+                "tap_fb_comment_button: comment sheet already open; preserved verified parent context"
+            )
+        else:
+            _clear_active_comment_parent(sc.ctx)
+            result["parent_context_cleared"] = True
+            result["message"] = "tap_fb_comment_button: comment sheet already open"
     elif target:
         bounds = target.get("bounds")
         if isinstance(bounds, list) and len(bounds) == 4:
@@ -466,6 +490,7 @@ def handle_tap_fb_comment_button(
                 scenario=sc.scenario,
                 step=step,
                 result=result,
+                cancel_event=sc.cancel_event,
             )
         except Exception as exc:
             log.warning("[%s] tap_fb_comment_button: filter switch failed: %s", sc.serial, exc)
@@ -473,7 +498,15 @@ def handle_tap_fb_comment_button(
             step.get("comment_filter_settle_s", step.get("post_tap_wait_s", 0.6)) or 0.6
         )
         if settle_s > 0:
-            time.sleep(settle_s)
+            if sc.cancel_event is not None:
+                sc.cancel_event.wait(settle_s)
+            else:
+                time.sleep(settle_s)
+        if _cancelled(sc):
+            result["ok"] = False
+            result["message"] = "tap_fb_comment_button: cancelled"
+            result["cancelled"] = True
+            return
 
     branch_steps = then_steps if tapped else else_steps
     branch_name = "then" if tapped else "else"

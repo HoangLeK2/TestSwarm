@@ -230,8 +230,7 @@ export function WorkflowProgressCard({
 
   const showWorkflowPause = wf.status === 'RUNNING';
   const showWorkflowResume = wf.status === 'PAUSED';
-  const showWorkflowCancel =
-    wf.status === 'RUNNING' || wf.status === 'PAUSED';
+  const showWorkflowCancel = wf.status === 'RUNNING' || wf.status === 'PAUSED';
 
   const handleWorkflowCancel = async () => {
     const ok = await confirm({
@@ -245,8 +244,7 @@ export function WorkflowProgressCard({
     if (!ok) return;
     workflowCancel.mutate(wf.workflow_id, {
       onSuccess: () => toast.success(t('monitorWfCancelSuccess')),
-      onError: (err) =>
-        toast.error(formatFarmApiError(err, t('cancelFailed')))
+      onError: (err) => toast.error(formatFarmApiError(err, t('cancelFailed')))
     });
   };
 
@@ -365,7 +363,9 @@ export function WorkflowProgressCard({
         )}
       </button>
 
-      {canExecute && !isPausedOnError && (showWorkflowPause || showWorkflowResume || showWorkflowCancel) ? (
+      {canExecute &&
+      !isPausedOnError &&
+      (showWorkflowPause || showWorkflowResume || showWorkflowCancel) ? (
         <div
           className='flex items-center gap-1.5 border-t bg-muted/20 px-4 py-1.5'
           onClick={(e) => e.stopPropagation()}

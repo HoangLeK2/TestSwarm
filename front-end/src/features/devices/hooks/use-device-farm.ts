@@ -6,7 +6,11 @@ import { useTranslations } from 'next-intl';
 import type { Device, Task, WsMessage } from '../types';
 import { createWs } from '../services/ws';
 import { fetchConfig, fetchLiveDevices, fetchTasks } from '../services/api';
-import { devicesApi, relayAgentsApi, type DeviceOut } from '../services/manage-api';
+import {
+  devicesApi,
+  relayAgentsApi,
+  type DeviceOut
+} from '../services/manage-api';
 import { hasOperationalRelayAgent } from '../lib/relay-agent-status';
 import { useConfirm } from '@/providers/modal-provider';
 import { useOrganization } from '@/features/organization/hooks/use-organization';

@@ -17,7 +17,9 @@ export type SseStreamOptions = {
   onOpen?: () => void;
 };
 
-export async function consumeSseStream(options: SseStreamOptions): Promise<void> {
+export async function consumeSseStream(
+  options: SseStreamOptions
+): Promise<void> {
   const headers: Record<string, string> = {
     Accept: 'text/event-stream',
     ...options.headers

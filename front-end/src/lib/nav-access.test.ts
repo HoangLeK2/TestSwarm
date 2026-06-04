@@ -36,7 +36,10 @@ test('filterNavItemsByRole hides superadmin-only leaves for admins', () => {
   const filtered = filterNavItemsByRole(items, 'admin');
   assert.equal(filtered.length, 1);
   assert.equal(filtered[0]?.items?.length, 1);
-  assert.equal(filtered[0]?.items?.[0]?.url, '/dashboard/settings/organization');
+  assert.equal(
+    filtered[0]?.items?.[0]?.url,
+    '/dashboard/settings/organization'
+  );
 });
 
 test('filterNavItemsByAccess hides write-only nav for org members', () => {

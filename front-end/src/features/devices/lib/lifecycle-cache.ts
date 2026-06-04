@@ -150,7 +150,8 @@ export function applyLifecycleEventToFleetStats(
     } else if (
       row &&
       event.from_state &&
-      normalizeDeviceFsmState(row.state) !== normalizeDeviceFsmState(event.from_state)
+      normalizeDeviceFsmState(row.state) !==
+        normalizeDeviceFsmState(event.from_state)
     ) {
       skipDeviceShift = true;
     }
@@ -162,7 +163,9 @@ export function applyLifecycleEventToFleetStats(
   if (!skipDeviceShift) {
     const deviceShift =
       event.type === 'device.unpaired'
-        ? shiftDeviceCounts(stats.devices, event.from_state, null, { remove: true })
+        ? shiftDeviceCounts(stats.devices, event.from_state, null, {
+            remove: true
+          })
         : shiftDeviceCounts(stats.devices, event.from_state, event.to_state);
     if (deviceShift) {
       next = { ...next, devices: deviceShift };

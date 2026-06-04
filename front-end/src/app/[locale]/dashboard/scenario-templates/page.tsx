@@ -5,7 +5,9 @@ type PageProps = {
   params: Promise<{ locale: string }>;
 };
 
-export default async function ScenarioTemplatesRedirectPage({ params }: PageProps) {
+export default async function ScenarioTemplatesRedirectPage({
+  params
+}: PageProps) {
   const { locale } = await params;
   redirect({ href: ROUTES.ORG_SCENARIOS.ROOT, locale });
 }

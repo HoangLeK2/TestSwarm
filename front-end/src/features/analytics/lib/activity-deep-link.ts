@@ -9,6 +9,9 @@ export function activityLogDeepLink(item: ActivityLogItem): string | null {
   if (entityType === 'campaign' && entityId) {
     return ROUTES.CAMPAIGNS.DETAIL(entityId);
   }
+  if (entityType === 'org_scenario' && entityId) {
+    return ROUTES.ORG_SCENARIOS.DETAIL(entityId);
+  }
   if (
     (entityType === 'execution' || item.action.startsWith('campaign.')) &&
     entityId
@@ -22,6 +25,16 @@ export function activityLogDeepLink(item: ActivityLogItem): string | null {
     if (campaignId) return ROUTES.CAMPAIGNS.DETAIL(campaignId);
   }
   if (entityType === 'schedule' && entityId) {
+    return ROUTES.SCHEDULES.ROOT;
+  }
+  if (entityType === 'schedule_run') {
+    const scheduleId =
+      typeof item.details?.schedule_id === 'string'
+        ? item.details.schedule_id.trim()
+        : '';
+    if (scheduleId) {
+      return `${ROUTES.SCHEDULES.ROOT}?schedule_id=${encodeURIComponent(scheduleId)}`;
+    }
     return ROUTES.SCHEDULES.ROOT;
   }
   if (entityType === 'content' && entityId) {

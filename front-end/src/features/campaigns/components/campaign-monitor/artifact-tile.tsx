@@ -9,11 +9,7 @@ interface Props {
   label: string;
 }
 
-export function ArtifactMonitorTile({
-  artifact,
-  href,
-  label
-}: Props) {
+export function ArtifactMonitorTile({ artifact, href, label }: Props) {
   return (
     <a
       href={href}

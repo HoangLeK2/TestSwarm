@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { useTranslations } from 'next-intl';
+import { useLocale, useTranslations } from 'next-intl';
 import { useRouter } from '@/i18n/navigation';
 import Link from 'next/link';
 import { ROUTES } from '@/config/routes';
@@ -11,8 +11,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Trash2,
-  ExternalLink,
-  Eye,
   Database,
   TrendingUp,
   Smartphone,
@@ -22,8 +20,6 @@ import {
   Heart,
   Share2,
   ThumbsUp,
-  Clock,
-  CornerDownRight,
   Download,
   ChevronDown,
   X,
@@ -49,7 +45,7 @@ import {
   type ContentItem,
   type ExportFormat
 } from '../services/api';
-import { commentParentSummary } from '../lib/comment-parent';
+import { ContentTable } from './content-table';
 import {
   Select,
   SelectContent,
@@ -62,6 +58,8 @@ import { useCampaigns } from '@/features/campaigns/hooks/use-campaigns';
 // ── Stats bar ────────────────────────────────────────────────────────────────
 
 function StatsBar() {
+  const t = useTranslations('contentFeature.list');
+  const locale = useLocale();
   const { stats, loading } = useContentStats();
   if (loading && !stats) return <StatsBarSkeleton />;
   if (!stats) return null;
@@ -69,28 +67,28 @@ function StatsBar() {
     <div className='grid grid-cols-2 gap-3 sm:grid-cols-4'>
       <StatCard
         icon={<Database className='size-5' />}
-        label='Tổng bản ghi'
-        value={stats.total_items.toLocaleString()}
+        label={t('statsTotalRecords')}
+        value={stats.total_items.toLocaleString(locale)}
         tint='primary'
       />
       <StatCard
         icon={<TrendingUp className='size-5' />}
-        label='Nền tảng'
+        label={t('statsPlatforms')}
         value={Object.keys(stats.by_platform).length.toString()}
         tint='emerald'
       />
       <StatCard
         icon={<FileText className='size-5' />}
-        label='Bộ sưu tập'
+        label={t('statsCollections')}
         value={Object.keys(stats.by_collection).length.toString()}
         tint='blue'
       />
       <StatCard
         icon={<Smartphone className='size-5' />}
-        label='Cào gần nhất'
+        label={t('statsLatestScrape')}
         value={
           stats.latest_extraction
-            ? new Date(stats.latest_extraction).toLocaleString('vi-VN', {
+            ? new Date(stats.latest_extraction).toLocaleString(locale, {
                 dateStyle: 'short',
                 timeStyle: 'short'
               })
@@ -187,19 +185,7 @@ function StatCard({
 
 // ── Filters ──────────────────────────────────────────────────────────────────
 
-const CONTENT_TYPE_TABS = [
-  { value: '', label: 'Tất cả', icon: <Database className='size-3.5' /> },
-  {
-    value: 'fb_post',
-    label: 'Bài đăng',
-    icon: <Newspaper className='size-3.5' />
-  },
-  {
-    value: 'fb_comment',
-    label: 'Bình luận',
-    icon: <MessageCircle className='size-3.5' />
-  }
-] as const;
+const DEFAULT_CONTENT_TYPE = 'fb_post';
 
 interface FiltersProps {
   search: string;
@@ -234,8 +220,22 @@ function Filters({
   onClear,
   loading
 }: FiltersProps) {
+  const t = useTranslations('contentFeature.list');
   const { data: campaigns = [], isLoading: loadingCampaigns } = useCampaigns();
   const { stats } = useContentStats();
+
+  const contentTypeTabs = [
+    {
+      value: 'fb_post',
+      label: t('tabPosts'),
+      icon: <Newspaper className='size-3.5' />
+    },
+    {
+      value: 'fb_comment',
+      label: t('tabComments'),
+      icon: <MessageCircle className='size-3.5' />
+    }
+  ] as const;
 
   const onKeyEnter = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') onApply();
@@ -245,7 +245,7 @@ function Filters({
     campaignId ||
     collection ||
     platform ||
-    contentType
+    (contentType && contentType !== DEFAULT_CONTENT_TYPE)
   );
 
   const platformOptions = Object.keys(stats?.by_platform ?? {}).sort((a, b) =>
@@ -265,7 +265,7 @@ function Filters({
       {/* Tabs + actions */}
       <div className='flex flex-wrap items-center justify-between gap-2'>
         <div className='inline-flex items-center gap-1 rounded-xl bg-muted/60 p-1 ring-1 ring-border/40'>
-          {CONTENT_TYPE_TABS.map((tab) => {
+          {contentTypeTabs.map((tab) => {
             const active = contentType === tab.value;
             return (
               <button
@@ -296,7 +296,7 @@ function Filters({
               onClick={onClear}
             >
               <X className='size-3.5' />
-              Xoá lọc
+              {t('clearFilters')}
             </Button>
           )}
           <Button
@@ -305,10 +305,10 @@ function Filters({
             className='h-9 gap-1.5 text-xs'
             onClick={onRefresh}
             disabled={loading}
-            title='Tải lại'
+            title={t('refreshTitle')}
           >
             <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
-            Tải lại
+            {t('refresh')}
           </Button>
         </div>
       </div>
@@ -319,11 +319,11 @@ function Filters({
           <Search className='pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground' />
           <Input
             className='h-10 pl-9 text-sm'
-            placeholder='Tìm kiếm theo nội dung, tác giả…'
+            placeholder={t('searchPlaceholder')}
             value={search}
             onChange={(e) => onSearchChange(e.target.value)}
             onKeyDown={onKeyEnter}
-            aria-label='Tìm kiếm'
+            aria-label={t('searchAria')}
           />
         </div>
         <div className='relative min-w-[240px] max-w-full flex-[0_0_280px]'>
@@ -335,19 +335,21 @@ function Filters({
           >
             <SelectTrigger
               className='h-10 w-full min-w-0 overflow-hidden pl-9 text-sm'
-              aria-label='Lọc theo chiến dịch'
+              aria-label={t('filterCampaignAria')}
             >
-              <SelectValue placeholder='Chiến dịch'>
+              <SelectValue placeholder={t('filterCampaign')}>
                 <span className='block w-full truncate'>
                   {campaignId
                     ? (selectedCampaign?.name ?? campaignId)
-                    : 'Chiến dịch'}
+                    : t('filterCampaign')}
                 </span>
               </SelectValue>
             </SelectTrigger>
             <SelectContent className='z-[10002]'>
               <SelectItem value='_all'>
-                <span className='text-muted-foreground'>Tất cả chiến dịch</span>
+                <span className='text-muted-foreground'>
+                  {t('filterAllCampaigns')}
+                </span>
               </SelectItem>
               {campaigns.map((c) => (
                 <SelectItem key={c.id} value={c.id}>
@@ -365,17 +367,19 @@ function Filters({
           >
             <SelectTrigger
               className='h-10 w-full min-w-0 overflow-hidden pl-9 text-sm'
-              aria-label='Lọc theo bộ sưu tập'
+              aria-label={t('filterCollectionAria')}
             >
-              <SelectValue placeholder='Bộ sưu tập'>
+              <SelectValue placeholder={t('filterCollection')}>
                 <span className='block w-full truncate'>
-                  {collection ? collection : 'Bộ sưu tập'}
+                  {collection ? collection : t('filterCollection')}
                 </span>
               </SelectValue>
             </SelectTrigger>
             <SelectContent className='z-[10002]'>
               <SelectItem value='_all'>
-                <span className='text-muted-foreground'>Tất cả bộ sưu tập</span>
+                <span className='text-muted-foreground'>
+                  {t('filterAllCollections')}
+                </span>
               </SelectItem>
               {collectionOptions.map((c) => (
                 <SelectItem key={c} value={c}>
@@ -393,17 +397,19 @@ function Filters({
           >
             <SelectTrigger
               className='h-10 w-full min-w-0 overflow-hidden pl-9 text-sm'
-              aria-label='Lọc theo nền tảng'
+              aria-label={t('filterPlatformAria')}
             >
-              <SelectValue placeholder='Nền tảng'>
+              <SelectValue placeholder={t('filterPlatform')}>
                 <span className='block w-full truncate'>
-                  {platform ? platform : 'Nền tảng'}
+                  {platform ? platform : t('filterPlatform')}
                 </span>
               </SelectValue>
             </SelectTrigger>
             <SelectContent className='z-[10002]'>
               <SelectItem value='_all'>
-                <span className='text-muted-foreground'>Tất cả nền tảng</span>
+                <span className='text-muted-foreground'>
+                  {t('filterAllPlatforms')}
+                </span>
               </SelectItem>
               {platformOptions.map((p) => (
                 <SelectItem key={p} value={p}>
@@ -419,105 +425,10 @@ function Filters({
           onClick={onApply}
         >
           <Filter className='size-4' />
-          <span className='sm:hidden'>Lọc</span>
+          <span className='sm:hidden'>{t('applyFilter')}</span>
         </Button>
       </div>
     </div>
-  );
-}
-
-// ── Table (Tất cả / Post) ─────────────────────────────────────────────────────
-
-function CommentParentLine({
-  item,
-  onViewParent
-}: {
-  item: ContentItem;
-  onViewParent?: (parentId: string) => void;
-}) {
-  if (item.content_type !== 'fb_comment' && item.item_level <= 0) return null;
-  const summary = commentParentSummary(item);
-  if (!summary) return null;
-  const content = (
-    <>
-      <div className='flex min-w-0 flex-wrap items-center gap-1.5'>
-        <span className='font-semibold text-blue-700 dark:text-blue-300'>
-          Bình luận thuộc bài:
-        </span>
-        <span className='min-w-0 truncate font-medium text-foreground'>
-          {summary.primary}
-        </span>
-        {summary.source ? (
-          <span className='rounded bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:text-blue-300'>
-            {summary.source === 'post_detail' ? 'đã xác minh' : summary.source}
-          </span>
-        ) : null}
-      </div>
-      {summary.secondary ? (
-        <span className='block max-w-full truncate text-foreground/70'>
-          {summary.secondary}
-        </span>
-      ) : null}
-      {summary.postId ? (
-        <span className='block max-w-full truncate font-mono text-[10px] text-muted-foreground'>
-          {summary.postId}
-        </span>
-      ) : null}
-    </>
-  );
-  const className =
-    'mt-2 flex max-w-full items-start gap-2 rounded-md border border-blue-500/20 bg-blue-500/[0.04] px-2.5 py-2 text-[11px] leading-snug transition-colors';
-
-  if (summary.linkedParentId && onViewParent) {
-    return (
-      <button
-        type='button'
-        onClick={(e) => {
-          e.stopPropagation();
-          onViewParent(summary.linkedParentId!);
-        }}
-        className={cn(
-          className,
-          'w-full cursor-pointer text-left hover:border-blue-500/35 hover:bg-blue-500/[0.08]'
-        )}
-      >
-        <CornerDownRight size={13} className='mt-0.5 shrink-0 text-blue-500' />
-        <div className='min-w-0'>{content}</div>
-      </button>
-    );
-  }
-
-  return (
-    <div className={cn(className, 'text-muted-foreground')}>
-      <CornerDownRight size={13} className='mt-0.5 shrink-0 text-blue-500' />
-      <div className='min-w-0'>{content}</div>
-    </div>
-  );
-}
-
-const PLATFORM_STYLES: Record<string, string> = {
-  facebook: 'bg-blue-500/10 text-blue-700 ring-blue-500/20 dark:text-blue-300',
-  instagram: 'bg-pink-500/10 text-pink-700 ring-pink-500/20 dark:text-pink-300',
-  tiktok:
-    'bg-neutral-900/10 text-neutral-900 ring-neutral-900/20 dark:bg-neutral-50/10 dark:text-neutral-100',
-  twitter: 'bg-sky-500/10 text-sky-700 ring-sky-500/20 dark:text-sky-300',
-  x: 'bg-sky-500/10 text-sky-700 ring-sky-500/20 dark:text-sky-300',
-  youtube: 'bg-red-500/10 text-red-700 ring-red-500/20 dark:text-red-300'
-};
-
-function PlatformBadge({ name }: { name: string }) {
-  const key = (name || '').toLowerCase();
-  const cls =
-    PLATFORM_STYLES[key] ?? 'bg-muted text-muted-foreground ring-border';
-  return (
-    <span
-      className={cn(
-        'inline-flex h-5 items-center rounded-md px-1.5 text-[11px] font-semibold capitalize ring-1 ring-inset',
-        cls
-      )}
-    >
-      {name}
-    </span>
   );
 }
 
@@ -543,9 +454,7 @@ function EmptyState({
           ? t('content.descriptionFiltered')
           : t('content.descriptionNoData')
       }
-      readOnlyHint={
-        canCreateCampaigns ? undefined : t('readOnlyHint')
-      }
+      readOnlyHint={canCreateCampaigns ? undefined : t('readOnlyHint')}
       trackingKey={
         hasFilters
           ? 'content-empty-filtered'
@@ -591,416 +500,6 @@ function TableSkeleton() {
   );
 }
 
-function ContentTable({
-  items,
-  onViewItem,
-  onDeleteItem,
-  onViewParent,
-  hasFilters,
-  onClear,
-  canDelete = false,
-  executionId
-}: {
-  items: ContentItem[];
-  onViewItem: (item: ContentItem) => void;
-  onDeleteItem: (id: string) => void;
-  onViewParent: (parentId: string) => void;
-  hasFilters: boolean;
-  onClear: () => void;
-  canDelete?: boolean;
-  executionId?: string;
-}) {
-  if (items.length === 0)
-    return (
-      <EmptyState
-        hasFilters={hasFilters}
-        onClear={onClear}
-        executionId={executionId}
-      />
-    );
-  return (
-    <div className='overflow-hidden rounded-xl border border-border/60 bg-card shadow-sm'>
-      <div className='overflow-x-auto'>
-        <table className='w-full text-sm'>
-          <thead className='sticky top-0 z-10 bg-muted/50 backdrop-blur-sm'>
-            <tr className='border-b border-border/60 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground'>
-              <th className='px-4 py-3 text-left'>Thời gian</th>
-              <th className='px-4 py-3 text-left'>Nền tảng</th>
-              <th className='px-4 py-3 text-left'>Nội dung</th>
-              <th className='px-4 py-3 text-left'>Tác giả</th>
-              <th className='px-4 py-3 text-right'>Tương tác</th>
-              <th className='px-4 py-3 text-left'>Bộ sưu tập</th>
-              <th className='w-24 px-4 py-3 text-right'>Hành động</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((item, idx) => (
-              <tr
-                key={item.id}
-                className={cn(
-                  'group cursor-pointer border-b border-border/40 transition-colors last:border-b-0',
-                  idx % 2 === 1 && 'bg-muted/10',
-                  'hover:bg-primary/[0.05]'
-                )}
-                onClick={() => onViewItem(item)}
-              >
-                <td className='whitespace-nowrap px-4 py-3.5 align-top font-mono text-[11px] text-muted-foreground'>
-                  {item.extracted_at
-                    ? new Date(item.extracted_at).toLocaleString('vi-VN', {
-                        dateStyle: 'short',
-                        timeStyle: 'short'
-                      })
-                    : '–'}
-                </td>
-                <td className='px-4 py-3.5 align-top'>
-                  <div className='flex flex-col items-start gap-1'>
-                    {item.platform && <PlatformBadge name={item.platform} />}
-                    <span className='text-[11px] font-medium text-muted-foreground'>
-                      {item.content_type}
-                    </span>
-                    {item.parent_id ? (
-                      <button
-                        type='button'
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onViewParent(item.parent_id!);
-                        }}
-                        className='inline-flex cursor-pointer items-center gap-1 rounded px-1 py-0.5 text-[10px] font-medium text-blue-600 transition-colors hover:bg-blue-500/10 hover:underline dark:text-blue-400'
-                      >
-                        <FileText size={10} /> Bài gốc
-                      </button>
-                    ) : null}
-                  </div>
-                </td>
-                <td className='max-w-[380px] px-4 py-3.5 align-top'>
-                  <p className='line-clamp-2 leading-snug text-foreground/90'>
-                    {item.title || item.body || (
-                      <span className='italic text-muted-foreground'>
-                        (trống)
-                      </span>
-                    )}
-                  </p>
-                  {item.url && (
-                    <a
-                      href={item.url}
-                      target='_blank'
-                      rel='noopener noreferrer'
-                      className='mt-1.5 inline-flex max-w-full items-center gap-1 text-[11px] text-primary/80 hover:text-primary hover:underline'
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <ExternalLink size={11} className='shrink-0' />
-                      <span className='max-w-[260px] truncate'>{item.url}</span>
-                    </a>
-                  )}
-                  <CommentParentLine item={item} onViewParent={onViewParent} />
-                </td>
-                <td className='px-4 py-3.5 align-top text-foreground/90'>
-                  {item.author || (
-                    <span className='text-muted-foreground'>–</span>
-                  )}
-                </td>
-                <td className='whitespace-nowrap px-4 py-3.5 text-right align-top font-mono text-xs text-muted-foreground'>
-                  {[item.likes_count, item.comments_count, item.shares_count]
-                    .filter((v) => v != null)
-                    .join(' / ') || '–'}
-                </td>
-                <td className='px-4 py-3.5 align-top'>
-                  <span className='inline-flex items-center rounded-md border border-border/60 bg-background px-2 py-0.5 text-[11px] font-medium text-foreground/80'>
-                    {item.collection}
-                  </span>
-                </td>
-                <td className='px-4 py-3.5 align-top'>
-                  <div className='flex items-center justify-end gap-1 opacity-60 transition-opacity focus-within:opacity-100 group-hover:opacity-100'>
-                    <Button
-                      size='sm'
-                      variant='ghost'
-                      className='h-8 w-8 p-0'
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onViewItem(item);
-                      }}
-                      title='Xem chi tiết'
-                      aria-label='Xem chi tiết'
-                    >
-                      <Eye size={15} />
-                    </Button>
-                    {canDelete ? (
-                      <Button
-                        size='sm'
-                        variant='ghost'
-                        className='h-8 w-8 p-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive'
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onDeleteItem(item.id);
-                        }}
-                        title='Xoá'
-                        aria-label='Xoá'
-                      >
-                        <Trash2 size={15} />
-                      </Button>
-                    ) : null}
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-// ── Card feed (Comment) ───────────────────────────────────────────────────────
-
-function ContentFeed({
-  items,
-  onViewItem,
-  onDeleteItem,
-  onViewParent,
-  hasFilters,
-  onClear,
-  canDelete = false,
-  executionId
-}: {
-  items: ContentItem[];
-  onViewItem: (item: ContentItem) => void;
-  onDeleteItem: (id: string) => void;
-  onViewParent: (parentId: string) => void;
-  hasFilters: boolean;
-  onClear: () => void;
-  canDelete?: boolean;
-  executionId?: string;
-}) {
-  if (items.length === 0)
-    return (
-      <EmptyState
-        hasFilters={hasFilters}
-        onClear={onClear}
-        executionId={executionId}
-      />
-    );
-
-  return (
-    <div className='space-y-3'>
-      {items.map((item) => (
-        <ContentCard
-          key={item.id}
-          item={item}
-          onView={() => onViewItem(item)}
-          onDelete={() => onDeleteItem(item.id)}
-          canDelete={canDelete}
-          onViewParent={
-            item.parent_id ? () => onViewParent(item.parent_id!) : undefined
-          }
-        />
-      ))}
-    </div>
-  );
-}
-
-function ContentCard({
-  item,
-  onView,
-  onDelete,
-  onViewParent,
-  canDelete = false
-}: {
-  item: ContentItem;
-  onView: () => void;
-  onDelete: () => void;
-  onViewParent?: () => void;
-  canDelete?: boolean;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const isComment = item.item_level > 0;
-  const body = item.body ?? item.title ?? '';
-  const isLong = body.length > 240;
-  const displayBody = isLong && !expanded ? body.slice(0, 240) + '…' : body;
-
-  const time = item.extracted_at
-    ? new Date(item.extracted_at).toLocaleString('vi-VN', {
-        dateStyle: 'short',
-        timeStyle: 'short'
-      })
-    : '';
-
-  const initials = item.author
-    ? item.author
-        .split(' ')
-        .map((w) => w[0])
-        .slice(0, 2)
-        .join('')
-        .toUpperCase()
-    : '?';
-
-  return (
-    <div
-      className={cn(
-        'group relative rounded-xl border bg-card transition-all hover:border-primary/30 hover:shadow-md',
-        isComment
-          ? 'ml-6 border-l-2 border-border/40 border-l-blue-400/60 bg-blue-500/[0.02]'
-          : 'border-border/50'
-      )}
-    >
-      {isComment && (
-        <div className='absolute -left-6 top-4 flex items-center text-blue-400/60'>
-          <CornerDownRight size={14} />
-        </div>
-      )}
-
-      <div className='p-4'>
-        <div className='mb-3 flex items-start justify-between gap-3'>
-          <div className='flex items-center gap-3'>
-            <div
-              className={cn(
-                'flex size-9 shrink-0 items-center justify-center rounded-full text-xs font-bold',
-                isComment
-                  ? 'bg-blue-500/15 text-blue-600 dark:text-blue-400'
-                  : 'bg-primary/15 text-primary'
-              )}
-            >
-              {initials}
-            </div>
-            <div className='min-w-0'>
-              <div className='flex flex-wrap items-center gap-1.5'>
-                <span className='text-sm font-semibold text-foreground'>
-                  {item.author || 'Ẩn danh'}
-                </span>
-                {item.platform && (
-                  <Badge
-                    variant='secondary'
-                    className='h-5 px-1.5 text-[10px] capitalize'
-                  >
-                    {item.platform}
-                  </Badge>
-                )}
-                {isComment && (
-                  <Badge className='h-5 bg-blue-500/15 px-1.5 text-[10px] text-blue-600 hover:bg-blue-500/15 dark:text-blue-400'>
-                    bình luận
-                  </Badge>
-                )}
-              </div>
-              <div className='mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground'>
-                <Clock size={10} />
-                <span>{time}</span>
-                {item.collection && (
-                  <>
-                    <span>·</span>
-                    <span className='rounded bg-muted px-1.5 py-0.5'>
-                      {item.collection}
-                    </span>
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div className='flex shrink-0 items-center gap-0.5 opacity-60 transition-opacity focus-within:opacity-100 group-hover:opacity-100'>
-            {onViewParent && (
-              <Button
-                size='sm'
-                variant='ghost'
-                className='h-7 gap-1 px-2 text-[11px] text-blue-600'
-                onClick={onViewParent}
-              >
-                <FileText size={11} /> Bài gốc
-              </Button>
-            )}
-            <Button
-              size='sm'
-              variant='ghost'
-              className='h-7 w-7 p-0'
-              onClick={onView}
-              aria-label='Xem chi tiết'
-            >
-              <Eye size={13} />
-            </Button>
-            {canDelete ? (
-              <Button
-                size='sm'
-                variant='ghost'
-                className='h-7 w-7 p-0 hover:text-destructive'
-                onClick={onDelete}
-                aria-label='Xoá'
-              >
-                <Trash2 size={13} />
-              </Button>
-            ) : null}
-          </div>
-        </div>
-
-        {body && (
-          <div className='mb-3'>
-            <p className='whitespace-pre-wrap text-sm leading-relaxed text-foreground/90'>
-              {displayBody}
-            </p>
-            {isLong && (
-              <button
-                type='button'
-                onClick={() => setExpanded((v) => !v)}
-                className='mt-1 cursor-pointer text-xs font-medium text-primary hover:underline'
-              >
-                {expanded ? 'Thu gọn' : 'Xem thêm'}
-              </button>
-            )}
-          </div>
-        )}
-
-        <CommentParentLine
-          item={item}
-          onViewParent={onViewParent ? () => onViewParent() : undefined}
-        />
-
-        {item.url && (
-          <a
-            href={item.url}
-            target='_blank'
-            rel='noopener noreferrer'
-            className='mb-3 flex items-center gap-1 truncate text-xs text-primary/80 hover:text-primary hover:underline'
-          >
-            <ExternalLink size={11} className='shrink-0' />
-            <span className='truncate'>{item.url}</span>
-          </a>
-        )}
-
-        {(item.likes_count != null ||
-          item.comments_count != null ||
-          item.shares_count != null ||
-          item.views_count != null) && (
-          <div className='flex items-center gap-4 border-t border-border/30 pt-3 text-xs text-muted-foreground'>
-            {item.likes_count != null && (
-              <span className='flex items-center gap-1.5'>
-                <ThumbsUp size={12} className='text-blue-500' />
-                {item.likes_count.toLocaleString()}
-              </span>
-            )}
-            {item.comments_count != null && (
-              <span className='flex items-center gap-1.5'>
-                <MessageCircle size={12} className='text-emerald-500' />
-                {item.comments_count.toLocaleString()}
-              </span>
-            )}
-            {item.shares_count != null && (
-              <span className='flex items-center gap-1.5'>
-                <Share2 size={12} className='text-violet-500' />
-                {item.shares_count.toLocaleString()}
-              </span>
-            )}
-            {item.likes_count == null &&
-              item.shares_count == null &&
-              item.views_count != null && (
-                <span className='flex items-center gap-1.5'>
-                  <Heart size={12} className='text-rose-500' />
-                  {item.views_count.toLocaleString()}
-                </span>
-              )}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
 // ── Pagination ────────────────────────────────────────────────────────────────
 
 function Pagination({
@@ -1018,20 +517,18 @@ function Pagination({
   onPageChange: (p: number) => void;
   onPageSizeChange: (n: number) => void;
 }) {
+  const t = useTranslations('contentFeature.list');
+  const locale = useLocale();
   const from = page * pageSize + 1;
   const to = Math.min((page + 1) * pageSize, total);
   return (
     <div className='flex flex-wrap items-center justify-between gap-3'>
       <p className='text-xs text-muted-foreground'>
-        Hiển thị{' '}
-        <span className='font-semibold text-foreground'>
-          {from.toLocaleString()}–{to.toLocaleString()}
-        </span>{' '}
-        trong tổng{' '}
-        <span className='font-semibold text-foreground'>
-          {total.toLocaleString()}
-        </span>{' '}
-        bản ghi
+        {t('paginationShowing', {
+          from: from.toLocaleString(locale),
+          to: to.toLocaleString(locale),
+          total: total.toLocaleString(locale)
+        })}
       </p>
       <div className='flex items-center gap-1.5'>
         <Select
@@ -1044,7 +541,7 @@ function Pagination({
           <SelectContent align='end'>
             {[10, 25, 50, 100].map((n) => (
               <SelectItem key={n} value={String(n)}>
-                {n}/trang
+                {t('paginationPerPage', { size: n })}
               </SelectItem>
             ))}
           </SelectContent>
@@ -1057,7 +554,7 @@ function Pagination({
           disabled={page === 0}
         >
           <ChevronLeft size={14} />
-          Trước
+          {t('paginationPrev')}
         </Button>
         <span className='rounded-md border border-border/60 bg-muted/50 px-3 py-1 text-xs font-medium tabular-nums'>
           {page + 1} / {totalPages}
@@ -1069,7 +566,7 @@ function Pagination({
           onClick={() => onPageChange(page + 1)}
           disabled={page >= totalPages - 1}
         >
-          Sau
+          {t('paginationNext')}
           <ChevronRight size={14} />
         </Button>
       </div>
@@ -1099,9 +596,10 @@ export function ContentViewer({
   const [executionId, setExecutionId] = useState(defaultExecutionId ?? '');
   const [collection, setCollection] = useState('');
   const [platform, setPlatform] = useState('');
-  const [contentType, setContentType] = useState('');
+  const [contentType, setContentType] = useState(DEFAULT_CONTENT_TYPE);
   const [exportOpen, setExportOpen] = useState(false);
   const [pageSize, setPageSize] = useState(50);
+  const tList = useTranslations('contentFeature.list');
   const tExport = useTranslations('contentFeature.export');
   const { canDelete } = useResourcePermissions('content');
 
@@ -1125,7 +623,8 @@ export function ContentViewer({
     {
       campaign_id: defaultCampaignId || undefined,
       run_id: defaultExecutionId || undefined,
-      content_hash: defaultContentHash || undefined
+      content_hash: defaultContentHash || undefined,
+      content_type: defaultContentHash ? undefined : DEFAULT_CONTENT_TYPE
     },
     { pageSize }
   );
@@ -1203,12 +702,15 @@ export function ContentViewer({
     } catch {
       // Fallback to the filtered list below.
     }
-    applyFilters({ content_hash: parentId });
+    applyFilters({
+      content_hash: parentId,
+      content_type: DEFAULT_CONTENT_TYPE
+    });
     setSearch('');
     setCampaignId('');
     setCollection('');
     setPlatform('');
-    setContentType('');
+    setContentType(DEFAULT_CONTENT_TYPE);
   };
 
   const handleContentTypeChange = (v: string) => {
@@ -1222,8 +724,8 @@ export function ContentViewer({
     setExecutionId('');
     setCollection('');
     setPlatform('');
-    setContentType('');
-    applyFilters({});
+    setContentType(DEFAULT_CONTENT_TYPE);
+    applyFilters({ content_type: DEFAULT_CONTENT_TYPE });
   };
 
   const hasFilters = !!(
@@ -1232,7 +734,7 @@ export function ContentViewer({
     executionId ||
     collection ||
     platform ||
-    contentType ||
+    (contentType && contentType !== DEFAULT_CONTENT_TYPE) ||
     filters.content_hash
   );
 
@@ -1245,10 +747,10 @@ export function ContentViewer({
         <div className='flex flex-wrap items-center justify-between gap-3 border-b border-border/60 bg-gradient-to-b from-muted/40 to-transparent px-5 py-4'>
           <div>
             <p className='text-base font-semibold leading-tight text-foreground'>
-              Dữ liệu đã thu thập
+              {tList('panelTitle')}
             </p>
             <p className='mt-1 text-xs text-muted-foreground'>
-              Tất cả nội dung được cào từ các lần chạy kịch bản
+              {tList('panelSubtitle')}
             </p>
           </div>
           <div className='flex items-center gap-2'>
@@ -1257,10 +759,12 @@ export function ContentViewer({
               className='h-8 gap-1.5 rounded-full px-3 text-xs font-semibold tabular-nums'
             >
               <Database className='size-3.5' />
-              {total.toLocaleString()} bản ghi
+              {tList('recordCount', { count: total })}
             </Badge>
             <Button asChild size='sm' variant='ghost' className='h-9 text-xs'>
-              <Link href={ROUTES.CONTENT.EXPORTS}>{tExport('historyLink')}</Link>
+              <Link href={ROUTES.CONTENT.EXPORTS}>
+                {tExport('historyLink')}
+              </Link>
             </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -1300,7 +804,9 @@ export function ContentViewer({
             <div className='flex flex-wrap items-center justify-between gap-2 text-xs'>
               <div className='flex min-w-0 items-center gap-2 text-blue-800 dark:text-blue-200'>
                 <FileText className='size-3.5 shrink-0' />
-                <span className='font-medium'>Đang mở bài viết cha</span>
+                <span className='font-medium'>
+                  {tList('parentHashFilterTitle')}
+                </span>
                 <span className='min-w-0 truncate rounded bg-background px-2 py-0.5 font-mono text-[11px] text-muted-foreground'>
                   {filters.content_hash}
                 </span>
@@ -1313,7 +819,7 @@ export function ContentViewer({
                 onClick={handleClear}
               >
                 <X className='size-3' />
-                Bỏ lọc
+                {tList('clearParentFilter')}
               </Button>
             </div>
           </div>
@@ -1354,15 +860,10 @@ export function ContentViewer({
             </div>
           ) : loading ? (
             <TableSkeleton />
-          ) : contentType === 'comment' ? (
-            <ContentFeed
-              items={items}
-              onViewItem={openContentDetail}
-              onDeleteItem={deleteItem}
-              onViewParent={handleViewParent}
+          ) : items.length === 0 ? (
+            <EmptyState
               hasFilters={hasFilters}
               onClear={handleClear}
-              canDelete={canDelete}
               executionId={executionId || undefined}
             />
           ) : (
@@ -1371,10 +872,7 @@ export function ContentViewer({
               onViewItem={openContentDetail}
               onDeleteItem={deleteItem}
               onViewParent={handleViewParent}
-              hasFilters={hasFilters}
-              onClear={handleClear}
               canDelete={canDelete}
-              executionId={executionId || undefined}
             />
           )}
         </div>

@@ -10,7 +10,9 @@ import {
 
 test('createPermissionChecker allows admin all permissions', () => {
   clearPermissionCheckerCache();
-  const checker = createPermissionChecker(identityFromSession({ role: 'admin' }));
+  const checker = createPermissionChecker(
+    identityFromSession({ role: 'admin' })
+  );
   assert.equal(checker.can('devices', 'read'), true);
   assert.equal(checker.can('devices', 'manage'), true);
 });
@@ -21,7 +23,10 @@ test('createPermissionChecker allows superadmin all permissions', () => {
     identityFromSession({ role: 'superadmin' })
   );
   assert.equal(checker.can('executions', 'execute'), true);
-  assert.equal(isSuperadminIdentity(identityFromSession({ role: 'superadmin' })), true);
+  assert.equal(
+    isSuperadminIdentity(identityFromSession({ role: 'superadmin' })),
+    true
+  );
 });
 
 test('createPermissionChecker denies operator user management', () => {

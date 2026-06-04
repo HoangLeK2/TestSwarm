@@ -148,8 +148,8 @@ function DeviceTilePreviewInner({
     return Math.max(1, Math.min(8, Math.round(raw)));
   }, []);
 
-  /** Grid preview — target ~282px outer after lib bezel + side padding. */
-  const previewMockupScreenWidth = 262;
+  /** Compact grid preview — readable enough for scanning without dominating the dashboard. */
+  const previewMockupScreenWidth = 216;
 
   const isContinuous =
     streamingConfig !== null && streamingConfig.mode === 'continuous';
@@ -199,7 +199,9 @@ function DeviceTilePreviewInner({
     if (allowH264 && h264Active) return null;
     const base = `${deviceFarmBackendBase}/stream/${encodeURIComponent(device.serial)}?fps=${previewFps}`;
     const token = tokenStorage.getAuthToken();
-    const withAuth = token ? `${base}&token=${encodeURIComponent(token)}` : base;
+    const withAuth = token
+      ? `${base}&token=${encodeURIComponent(token)}`
+      : base;
     return mjpegAttempt > 0 ? `${withAuth}&_r=${mjpegAttempt}` : withAuth;
   }, [
     allowH264,
@@ -211,8 +213,7 @@ function DeviceTilePreviewInner({
     serverAllowPreviewMjpeg
   ]);
 
-  const showMjpegImg =
-    Boolean(mjpegUrl) && loadStream && !mjpegFailed;
+  const showMjpegImg = Boolean(mjpegUrl) && loadStream && !mjpegFailed;
 
   const isUnresponsive =
     isActive && loadStream && !hasFrame && loadingElapsedSec >= 12;
@@ -243,6 +244,7 @@ function DeviceTilePreviewInner({
   }, [
     streamingConfig?.mode,
     streamingConfig?.autoAttachScrcpy,
+    streamingConfig,
     device.serial,
     device.relay_scrcpy_enabled,
     allowH264
@@ -277,7 +279,8 @@ function DeviceTilePreviewInner({
     isContinuous,
     relayStreamOn,
     streamingConfig?.autoAttachScrcpy,
-    streamingConfig?.mode
+    streamingConfig?.mode,
+    streamingConfig
   ]);
 
   const onRelayStreamChange = useCallback(
@@ -362,10 +365,7 @@ function DeviceTilePreviewInner({
   useEffect(() => {
     if (!mjpegFailed || !isActive || !loadStream || !serverAllowPreviewMjpeg)
       return;
-    const retry = window.setTimeout(
-      () => setMjpegAttempt((n) => n + 1),
-      3000
-    );
+    const retry = window.setTimeout(() => setMjpegAttempt((n) => n + 1), 3000);
     return () => window.clearTimeout(retry);
   }, [mjpegFailed, isActive, loadStream, serverAllowPreviewMjpeg]);
 
@@ -413,7 +413,7 @@ function DeviceTilePreviewInner({
       data-serial={device.serial}
       className='flex h-full flex-col overflow-hidden border-border bg-card shadow-sm'
     >
-      <CardHeader className='relative z-10 border-b border-border/60 px-4 py-3'>
+      <CardHeader className='relative z-10 border-b border-border/60 px-3 py-2.5'>
         <div className='flex items-center justify-between gap-2'>
           <div className='flex min-w-0 flex-col gap-0.5'>
             <CardTitle className='truncate text-xs font-medium text-foreground'>
@@ -472,7 +472,7 @@ function DeviceTilePreviewInner({
           </div>
         </div>
       </CardHeader>
-      <CardContent className='flex flex-1 flex-col gap-2 px-3 pb-3 pt-3'>
+      <CardContent className='flex flex-1 flex-col gap-2 px-2.5 pb-2.5 pt-2.5'>
         <div className='flex flex-col items-center gap-2'>
           <div className='flex w-full justify-center'>
             <DeviceAndroidFrame

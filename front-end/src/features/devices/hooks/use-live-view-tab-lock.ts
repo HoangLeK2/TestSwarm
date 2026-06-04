@@ -37,10 +37,18 @@ export function useLiveViewTabLock(serial: string, enabled: boolean) {
     };
 
     channel.addEventListener('message', onMessage);
-    channel.postMessage({ type: 'open', serial, tabId } satisfies LiveViewMessage);
+    channel.postMessage({
+      type: 'open',
+      serial,
+      tabId
+    } satisfies LiveViewMessage);
 
     return () => {
-      channel.postMessage({ type: 'close', serial, tabId } satisfies LiveViewMessage);
+      channel.postMessage({
+        type: 'close',
+        serial,
+        tabId
+      } satisfies LiveViewMessage);
       channel.removeEventListener('message', onMessage);
       channel.close();
       if (otherTabOpen) setBlockedByOtherTab(false);

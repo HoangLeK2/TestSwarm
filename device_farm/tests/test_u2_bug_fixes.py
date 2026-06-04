@@ -246,6 +246,52 @@ class TestDeviceClientHierarchyCoalescing:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Hierarchy failure policy: slow XML must not disable coordinate control
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestDeviceClientHierarchyRecoveryPolicy:
+    """A slow/failed hierarchy dump should not make live u2 touch unavailable."""
+
+    def test_hierarchy_timeout_does_not_trigger_u2_recovery_or_drop_touch(self):
+        d = DeviceClient(serial="logical-serial", index=0, config=Config())
+        d._u2_host = "172.16.0.83"
+        d._agent_send = lambda msg: None
+        d.ensure_u2_healthy = lambda *args, **kwargs: True  # type: ignore[method-assign]
+        d._a11y_query = (  # type: ignore[method-assign]
+            lambda *args, **kwargs: {"ok": False, "error": "relay timeout (4.0s)"}
+        )
+        d._recover_u2_ws_mode = Mock()  # type: ignore[method-assign]
+        d._request_u2_start_services = Mock()  # type: ignore[method-assign]
+
+        class _LiveButSlowHierarchyU2:
+            def __init__(self):
+                self.clicks: list[tuple[int, int]] = []
+
+            def page_source(self, timeout=None, compressed=False):
+                raise TimeoutError("dump_hierarchy timeout after 2.5s")
+
+            def click(self, x, y):
+                self.clicks.append((x, y))
+
+        live_u2 = _LiveButSlowHierarchyU2()
+        d._u2 = live_u2
+
+        def _send_a11y_unavailable(_msg):
+            d._ws_hierarchy_error = "accessibility_not_available"
+            d._ws_hierarchy_event.set()
+
+        d._send_to_agent = _send_a11y_unavailable  # type: ignore[method-assign]
+
+        assert d.hierarchy_xml(force_refresh=True) is None
+        assert d._u2 is live_u2
+        d._recover_u2_ws_mode.assert_not_called()
+        d._request_u2_start_services.assert_not_called()
+
+        d.tap(11, 22)
+        assert live_u2.clicks == [(11, 22)]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # U2 relay selection: current host must beat stale _adb_serial
 # ═══════════════════════════════════════════════════════════════════════════════
 

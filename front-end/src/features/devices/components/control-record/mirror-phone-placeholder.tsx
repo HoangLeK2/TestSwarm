@@ -13,7 +13,7 @@ export function MirrorPhonePlaceholder({
       role='img'
       aria-label={label}
       className={cn(
-        'mx-auto aspect-[9/19.5] w-[min(100%,262px)] min-h-[480px]',
+        'mx-auto aspect-[9/19.5] min-h-[480px] w-[min(100%,262px)]',
         'rounded-[2rem] border-[3px] border-zinc-400/30',
         'bg-gradient-to-b from-zinc-300 to-zinc-400',
         'shadow-[inset_0_0_0_1px_rgba(255,255,255,0.35)]',

@@ -80,12 +80,12 @@ def test_item_to_out_includes_resolved_parent_summary() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resolve_parent_item_uses_previous_post_in_same_execution_timeline() -> None:
+async def test_resolve_parent_item_returns_none_without_definite_link() -> None:
     comment = SimpleNamespace(
         content_type="fb_comment",
         parent_id=None,
         item_level=0,
-        raw_data={"parent_post_id": "stale-parser-pid"},
+        raw_data={"parent_post_id": "orphan-pid"},
         user_id="user-1",
         org_id="org-1",
         collection="fb",
@@ -93,7 +93,6 @@ async def test_resolve_parent_item_uses_previous_post_in_same_execution_timeline
         extracted_at=datetime(2026, 6, 3, 9, 50, tzinfo=timezone.utc),
         created_at=datetime(2026, 6, 3, 9, 50, 1, tzinfo=timezone.utc),
     )
-    parent = SimpleNamespace(id="post-id", content_hash="post-hash")
 
     class Result:
         def __init__(self, value):
@@ -105,32 +104,25 @@ async def test_resolve_parent_item_uses_previous_post_in_same_execution_timeline
     class FakeDb:
         def __init__(self) -> None:
             self.statements = []
-            self.results = [None, None, parent]
+            self.results = [None, None]
 
         async def execute(self, stmt):
             self.statements.append(str(stmt))
-            return Result(self.results.pop(0))
+            return Result(self.results.pop(0) if self.results else None)
 
     db = FakeDb()
 
-    assert await _resolve_parent_item(db, comment) is parent
-    assert len(db.statements) == 3
-    assert "content_items.raw_data" in db.statements[0]
-    statement = db.statements[-1]
-    assert "content_items.execution_id = :execution_id_1" in statement
-    assert "content_items.collection = :collection_1" in statement
-    assert "content_items.extracted_at <= :extracted_at_1" in statement
-    assert "content_items.extracted_at DESC" in statement
+    assert await _resolve_parent_item(db, comment) is None
 
 
 @pytest.mark.asyncio
-async def test_resolve_parent_items_for_list_batches_timeline_parent() -> None:
+async def test_resolve_parent_items_for_list_matches_by_parser_pid() -> None:
     comment = SimpleNamespace(
         id="comment-id",
         content_type="fb_comment",
         parent_id=None,
         item_level=1,
-        raw_data={"parent_post_id": "stale-parser-pid"},
+        raw_data={"parent_post_id": "pid-abc"},
         user_id="user-1",
         org_id="org-1",
         collection="fb",
@@ -138,31 +130,19 @@ async def test_resolve_parent_items_for_list_batches_timeline_parent() -> None:
         extracted_at=datetime(2026, 6, 3, 9, 50, tzinfo=timezone.utc),
         created_at=datetime(2026, 6, 3, 9, 50, 1, tzinfo=timezone.utc),
     )
-    previous_post = SimpleNamespace(
-        id="previous-post",
-        content_hash="previous-hash",
-        content_type="fb_post",
+    matched_post = SimpleNamespace(
+        id="matched-post",
+        content_hash="matched-hash",
+        content_type="fb_group_posts",
         parent_id=None,
         item_level=0,
+        raw_data={"_pid": "pid-abc"},
         user_id="user-1",
         org_id="org-1",
         collection="fb",
         execution_id="exec-1",
         extracted_at=datetime(2026, 6, 3, 9, 49, tzinfo=timezone.utc),
         created_at=datetime(2026, 6, 3, 9, 49, 1, tzinfo=timezone.utc),
-    )
-    newer_post = SimpleNamespace(
-        id="newer-post",
-        content_hash="newer-hash",
-        content_type="fb_post",
-        parent_id=None,
-        item_level=0,
-        user_id="user-1",
-        org_id="org-1",
-        collection="fb",
-        execution_id="exec-1",
-        extracted_at=datetime(2026, 6, 3, 9, 51, tzinfo=timezone.utc),
-        created_at=datetime(2026, 6, 3, 9, 51, 1, tzinfo=timezone.utc),
     )
 
     class ScalarRows:
@@ -180,17 +160,9 @@ async def test_resolve_parent_items_for_list_batches_timeline_parent() -> None:
             return ScalarRows(self.rows)
 
     class FakeDb:
-        def __init__(self) -> None:
-            self.statements = []
-
         async def execute(self, stmt):
-            self.statements.append(str(stmt))
-            return Result([newer_post, previous_post])
+            return Result([matched_post])
 
-    db = FakeDb()
+    resolved = await _resolve_parent_items_for_list(FakeDb(), [comment])
 
-    resolved = await _resolve_parent_items_for_list(db, [comment])
-
-    assert resolved == {"comment-id": previous_post}
-    assert len(db.statements) == 1
-    assert "content_items.execution_id IN" in db.statements[0]
+    assert resolved == {"comment-id": matched_post}

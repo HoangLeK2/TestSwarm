@@ -58,10 +58,7 @@ export function MonitorControlBar({ campaign }: Props) {
     });
     if (!ok) return;
     try {
-      const data = await cancelCampaign({ campaignId: campaign.id });
-      if (data.warning) {
-        toast.warning(data.warning, { duration: 8000 });
-      }
+      await cancelCampaign({ campaignId: campaign.id });
       toast.success(t('cancelSuccess'));
     } catch (err) {
       toast.error(formatFarmApiError(err, t('cancelFailed')));
@@ -82,7 +79,9 @@ export function MonitorControlBar({ campaign }: Props) {
           onClick={() =>
             pauseCampaign(campaign.id, {
               onSuccess: (data) =>
-                toast.info(t('pausingAll', { count: data.workflows_signalled ?? 0 })),
+                toast.info(
+                  t('pausingAll', { count: data.workflows_signalled ?? 0 })
+                ),
               onError: (err) =>
                 toast.error(formatFarmApiError(err, t('runFailed')))
             })

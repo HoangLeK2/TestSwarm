@@ -6,7 +6,6 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import type { FlowStep } from '@/features/campaigns/components/scenario-steps/types';
 import {
   countScenarioVariables,
   extractPreviewSteps
@@ -57,9 +56,7 @@ export function ScenarioBodyPreview({
           </Badge>
         ) : null}
         {hasFlow ? (
-          <span>
-            {t('stepsPreviewCount', { count: steps.length })}
-          </span>
+          <span>{t('stepsPreviewCount', { count: steps.length })}</span>
         ) : (
           <span>{t('noStepsPreview')}</span>
         )}
@@ -101,7 +98,7 @@ export function ScenarioBodyPreview({
             {t('toggleRawJson')}
           </Button>
           {showRaw ? (
-            <pre className='max-h-48 overflow-auto rounded-lg border bg-muted/20 p-3 font-mono text-[10px] leading-relaxed whitespace-pre-wrap break-all'>
+            <pre className='max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-lg border bg-muted/20 p-3 font-mono text-[10px] leading-relaxed'>
               {rawJson}
             </pre>
           ) : null}

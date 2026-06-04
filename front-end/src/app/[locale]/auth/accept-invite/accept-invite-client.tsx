@@ -110,12 +110,7 @@ export function AcceptInviteClient() {
     }
 
     void tryAcceptWhileLoggedIn();
-  }, [
-    preview,
-    sessionChecked,
-    sessionEmail,
-    tryAcceptWhileLoggedIn
-  ]);
+  }, [preview, sessionChecked, sessionEmail, tryAcceptWhileLoggedIn]);
 
   const handleSwitchAccount = () => {
     tokenStorage.clearTokens();
@@ -128,7 +123,9 @@ export function AcceptInviteClient() {
   if (!token) {
     return (
       <InviteShell>
-        <p className='text-center text-sm text-destructive'>{t('missingToken')}</p>
+        <p className='text-center text-sm text-destructive'>
+          {t('missingToken')}
+        </p>
         <Button asChild className='w-full'>
           <Link href={ROUTES.AUTH.SIGN_IN}>{t('goSignIn')}</Link>
         </Button>
@@ -139,7 +136,9 @@ export function AcceptInviteClient() {
   if (!preview) {
     return (
       <InviteShell>
-        <p className='text-center text-sm text-muted-foreground'>{t('loading')}</p>
+        <p className='text-center text-sm text-muted-foreground'>
+          {t('loading')}
+        </p>
       </InviteShell>
     );
   }
@@ -158,7 +157,9 @@ export function AcceptInviteClient() {
   if (accepted) {
     return (
       <InviteShell>
-        <p className='text-center text-sm text-muted-foreground'>{t('accepted')}</p>
+        <p className='text-center text-sm text-muted-foreground'>
+          {t('accepted')}
+        </p>
       </InviteShell>
     );
   }
@@ -178,7 +179,9 @@ export function AcceptInviteClient() {
     return (
       <InviteShell>
         <div className='space-y-1.5 text-center'>
-          <h1 className='text-2xl font-semibold tracking-tight'>{t('title')}</h1>
+          <h1 className='text-2xl font-semibold tracking-tight'>
+            {t('title')}
+          </h1>
           <p className='text-sm text-muted-foreground'>
             {t('subtitle', { org: preview.organizationName })}
           </p>
@@ -192,7 +195,12 @@ export function AcceptInviteClient() {
         <p className='text-center text-xs text-muted-foreground'>
           {t('useAnotherAccount')}
         </p>
-        <Button type='button' variant='outline' className='w-full' onClick={handleSwitchAccount}>
+        <Button
+          type='button'
+          variant='outline'
+          className='w-full'
+          onClick={handleSwitchAccount}
+        >
           {t('switchAccount')}
         </Button>
         <InviteActions
@@ -241,7 +249,9 @@ export function AcceptInviteClient() {
         t={t}
       />
       {accepting ? (
-        <p className='text-center text-xs text-muted-foreground'>{t('accepting')}</p>
+        <p className='text-center text-xs text-muted-foreground'>
+          {t('accepting')}
+        </p>
       ) : null}
     </InviteShell>
   );

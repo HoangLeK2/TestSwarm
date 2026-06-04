@@ -56,7 +56,8 @@ export function AccountStateTransitionDialog({
 
   const current = (account.state || account.status) as AccountStateKey;
   const targets = allowedTransitionTargets(current);
-  const firstTarget = defaultTo && targets.includes(defaultTo) ? defaultTo : targets[0];
+  const firstTarget =
+    defaultTo && targets.includes(defaultTo) ? defaultTo : targets[0];
 
   const schema = z
     .object({
@@ -154,7 +155,9 @@ export function AccountStateTransitionDialog({
       </DialogTrigger>
       <DialogContent className='sm:max-w-md'>
         <DialogHeader>
-          <DialogTitle>{t('title', { username: account.username })}</DialogTitle>
+          <DialogTitle>
+            {t('title', { username: account.username })}
+          </DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit(onSubmit)} className='space-y-4'>
           <p className='text-sm text-muted-foreground'>
@@ -189,7 +192,9 @@ export function AccountStateTransitionDialog({
                 {...register('ttl_hours')}
               />
               {errors.ttl_hours ? (
-                <p className='text-xs text-destructive'>{errors.ttl_hours.message}</p>
+                <p className='text-xs text-destructive'>
+                  {errors.ttl_hours.message}
+                </p>
               ) : null}
             </div>
           ) : null}
@@ -197,7 +202,9 @@ export function AccountStateTransitionDialog({
             <Label htmlFor='reason'>{t('reason')}</Label>
             <Textarea id='reason' rows={3} {...register('reason')} />
             {errors.reason ? (
-              <p className='text-xs text-destructive'>{errors.reason.message}</p>
+              <p className='text-xs text-destructive'>
+                {errors.reason.message}
+              </p>
             ) : null}
           </div>
           {account.state_reason ? (

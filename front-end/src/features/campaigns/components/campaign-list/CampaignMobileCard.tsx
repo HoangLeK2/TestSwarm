@@ -55,7 +55,10 @@ export function CampaignMobileCard({
       </div>
 
       <div className='mt-1'>
-        <CampaignEngineBadge campaignId={campaign.id} status={campaign.status} />
+        <CampaignEngineBadge
+          campaignId={campaign.id}
+          status={campaign.status}
+        />
       </div>
 
       <div className='mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground'>

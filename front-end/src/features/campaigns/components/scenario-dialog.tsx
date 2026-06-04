@@ -1251,7 +1251,10 @@ export function ScenarioDialog({
         ? coerceSteps(effectiveRow.steps)
         : [];
       currentVariables = normalizeScenarioVariables(
-        ((effectiveRow as ScenarioOut).variables ?? {}) as Record<string, unknown>
+        ((effectiveRow as ScenarioOut).variables ?? {}) as Record<
+          string,
+          unknown
+        >
       ) as Record<string, any>;
       const sc: any = (campaign.scenario as any) ?? {};
       const ctx: any = sc.device_context ?? {};
@@ -1357,9 +1360,10 @@ export function ScenarioDialog({
   const resolveVariablesForSave = (): Record<string, any> => {
     const text = rawJson.trim();
     if (text) {
-      return extractVariablesFromScenarioJson(
-        JSON.parse(text)
-      ) as Record<string, any>;
+      return extractVariablesFromScenarioJson(JSON.parse(text)) as Record<
+        string,
+        any
+      >;
     }
     return normalizeScenarioVariables(variables) as Record<string, any>;
   };
@@ -1466,7 +1470,9 @@ export function ScenarioDialog({
       );
       if (ctrl.signal.aborted) return;
       if (failedSteps.length > 0) {
-        toast.error(`Một số bước lỗi: ${failedSteps.map((n) => `#${n}`).join(', ')}`);
+        toast.error(
+          `Một số bước lỗi: ${failedSteps.map((n) => `#${n}`).join(', ')}`
+        );
       } else {
         toast.success('Đã chạy thử toàn bộ kịch bản');
       }

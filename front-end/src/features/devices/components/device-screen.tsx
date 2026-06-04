@@ -564,13 +564,12 @@ export function DeviceScreen({
     if (!isActive || !wsConnected || hasFrame) return;
     ensureWatchSerial(device.serial);
     const idr = setTimeout(() => requestIdr(device.serial), 100);
-    const armMjpeg =
-      h264PrimaryMode
-        ? setTimeout(() => {
-            setMjpegEnabled(true);
-            setMjpegFailed(false);
-          }, 2500)
-        : undefined;
+    const armMjpeg = h264PrimaryMode
+      ? setTimeout(() => {
+          setMjpegEnabled(true);
+          setMjpegFailed(false);
+        }, 2500)
+      : undefined;
     return () => {
       clearTimeout(idr);
       if (armMjpeg) clearTimeout(armMjpeg);

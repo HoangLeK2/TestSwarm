@@ -41,11 +41,7 @@ function triggerBlobDownload(blob: Blob, filename: string) {
 }
 
 export const orgScenariosApi = {
-  list: (query?: {
-    include_archived?: boolean;
-    tag?: string;
-    org?: string;
-  }) =>
+  list: (query?: { include_archived?: boolean; tag?: string; org?: string }) =>
     farmApi
       .get<OrgScenarioSummaryOut[]>('/scenarios', { params: query })
       .then((r) => r.data),
@@ -56,9 +52,7 @@ export const orgScenariosApi = {
       .then((r) => r.data),
 
   get: (scenarioId: string) =>
-    farmApi
-      .get<OrgScenarioOut>(`/scenarios/${scenarioId}`)
-      .then((r) => r.data),
+    farmApi.get<OrgScenarioOut>(`/scenarios/${scenarioId}`).then((r) => r.data),
 
   create: (data: OrgScenarioCreate) =>
     farmApi.post<OrgScenarioOut>('/scenarios', data).then((r) => r.data),
@@ -69,7 +63,9 @@ export const orgScenariosApi = {
       .then((r) => r.data),
 
   archive: (scenarioId: string) =>
-    farmApi.delete<OrgScenarioOut>(`/scenarios/${scenarioId}`).then((r) => r.data),
+    farmApi
+      .delete<OrgScenarioOut>(`/scenarios/${scenarioId}`)
+      .then((r) => r.data),
 
   restore: (scenarioId: string) =>
     farmApi
@@ -81,11 +77,7 @@ export const orgScenariosApi = {
       .get<OrgScenarioBodyOut>(`/scenarios/${scenarioId}/body`)
       .then((r) => r.data),
 
-  saveBody: (
-    scenarioId: string,
-    data: OrgScenarioBodyIn,
-    force = false
-  ) =>
+  saveBody: (scenarioId: string, data: OrgScenarioBodyIn, force = false) =>
     farmApi
       .post<OrgScenarioBodyOut>(`/scenarios/${scenarioId}/body`, data, {
         params: force ? { force: true } : undefined
@@ -100,10 +92,7 @@ export const orgScenariosApi = {
       )
       .then((r) => r.data),
 
-  importFile: (
-    file: File,
-    resolve: 'reject' | 'create_stub' = 'reject'
-  ) => {
+  importFile: (file: File, resolve: 'reject' | 'create_stub' = 'reject') => {
     const form = new FormData();
     form.append('file', file);
     return farmApi
@@ -127,14 +116,18 @@ export const orgScenariosApi = {
     format: 'yaml' | 'json' = 'yaml',
     version?: number
   ) => {
-    const response = await farmApi.get<Blob>(`/scenarios/${scenarioId}/export`, {
-      params: { format, ...(version != null ? { version } : {}) },
-      responseType: 'blob'
-    });
+    const response = await farmApi.get<Blob>(
+      `/scenarios/${scenarioId}/export`,
+      {
+        params: { format, ...(version != null ? { version } : {}) },
+        responseType: 'blob'
+      }
+    );
     const disposition = String(response.headers['content-disposition'] ?? '');
     const match = /filename="([^"]+)"/.exec(disposition);
     const filename =
-      match?.[1] ?? `scenario-${scenarioId}.${format === 'yaml' ? 'yaml' : 'json'}`;
+      match?.[1] ??
+      `scenario-${scenarioId}.${format === 'yaml' ? 'yaml' : 'json'}`;
     triggerBlobDownload(response.data, filename);
   },
 

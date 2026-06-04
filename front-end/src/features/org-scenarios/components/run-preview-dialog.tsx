@@ -91,7 +91,11 @@ export function RunPreviewDialog({
     if (code && isPreviewErrorCode(code)) {
       return t(`errors.${code}`);
     }
-    if (typeof detail === 'object' && detail && typeof detail.message === 'string') {
+    if (
+      typeof detail === 'object' &&
+      detail &&
+      typeof detail.message === 'string'
+    ) {
       return detail.message;
     }
     return formatFarmApiError(error, t('startFailed'));
@@ -209,7 +213,10 @@ export function RunPreviewDialog({
           </div>
         ) : (
           <>
-            <Alert variant='destructive' className='border-amber-500/40 bg-amber-500/10 text-amber-950 dark:text-amber-50'>
+            <Alert
+              variant='destructive'
+              className='border-amber-500/40 bg-amber-500/10 text-amber-950 dark:text-amber-50'
+            >
               <AlertTriangle className='h-4 w-4 text-amber-600' />
               <AlertTitle>{t('realDeviceTitle')}</AlertTitle>
               <AlertDescription>{t('realDeviceHint')}</AlertDescription>
@@ -244,7 +251,9 @@ export function RunPreviewDialog({
                   </SelectContent>
                 </Select>
                 {!loadingDevices && !onlineDevices.length ? (
-                  <p className='text-xs text-muted-foreground'>{t('noOnlineDevices')}</p>
+                  <p className='text-xs text-muted-foreground'>
+                    {t('noOnlineDevices')}
+                  </p>
                 ) : null}
               </div>
 
@@ -269,7 +278,9 @@ export function RunPreviewDialog({
                     ))}
                   </SelectContent>
                 </Select>
-                <p className='text-xs text-muted-foreground'>{t('accountHint')}</p>
+                <p className='text-xs text-muted-foreground'>
+                  {t('accountHint')}
+                </p>
               </div>
 
               {(needsForceAck || forceSideEffects) && (
@@ -285,7 +296,9 @@ export function RunPreviewDialog({
                     <Label htmlFor='preview-force' className='cursor-pointer'>
                       {t('forceLabel')}
                     </Label>
-                    <p className='text-xs text-muted-foreground'>{t('forceHint')}</p>
+                    <p className='text-xs text-muted-foreground'>
+                      {t('forceHint')}
+                    </p>
                   </div>
                 </div>
               )}

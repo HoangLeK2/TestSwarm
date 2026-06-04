@@ -15,7 +15,13 @@ import { useLocale, useTranslations } from 'next-intl';
 import { CoreEmptyState } from '@/components/core-empty-state';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle
+} from '@/components/ui/card';
 import { DatePicker } from '@/components/ui/date-time-picker/date-picker';
 import {
   Collapsible,
@@ -48,7 +54,10 @@ export type AnalyticsOverviewProps = {
   dimension: AnalyticsDimension;
 };
 
-export function AnalyticsOverview({ range, dimension }: AnalyticsOverviewProps) {
+export function AnalyticsOverview({
+  range,
+  dimension
+}: AnalyticsOverviewProps) {
   const t = useTranslations('analyticsFeature.overview');
   const locale = useLocale();
   const { currentOrg } = useOrganization();
@@ -117,7 +126,12 @@ export function AnalyticsOverview({ range, dimension }: AnalyticsOverviewProps) 
       summary.success_count > 0 ||
       summary.fail_count > 0);
   const showGlobalEmpty =
-    hasOrg && !summaryLoading && !seriesLoading && !loadError && !hasChartData && !hasSummaryData;
+    hasOrg &&
+    !summaryLoading &&
+    !seriesLoading &&
+    !loadError &&
+    !hasChartData &&
+    !hasSummaryData;
 
   const successRateDisplay =
     summary != null ? `${(summary.success_rate * 100).toFixed(1)}%` : undefined;
@@ -214,7 +228,9 @@ export function AnalyticsOverview({ range, dimension }: AnalyticsOverviewProps) 
           <CardHeader className='pb-2'>
             <div className='flex items-center gap-2'>
               <LineChart className='size-4 text-muted-foreground' />
-              <CardTitle className='text-base'>{t('timeseriesTitle')}</CardTitle>
+              <CardTitle className='text-base'>
+                {t('timeseriesTitle')}
+              </CardTitle>
             </div>
             <CardDescription>{t('timeseriesHint')}</CardDescription>
           </CardHeader>
@@ -312,25 +328,30 @@ export function AnalyticsOverview({ range, dimension }: AnalyticsOverviewProps) 
                     <TableHeader>
                       <TableRow>
                         {Object.keys(adhoc.data.rows[0] ?? {}).map((key) => (
-                          <TableHead key={key} className='whitespace-nowrap text-xs'>
+                          <TableHead
+                            key={key}
+                            className='whitespace-nowrap text-xs'
+                          >
                             {key}
                           </TableHead>
                         ))}
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {adhoc.data.rows.slice(0, 50).map((row: Record<string, unknown>, idx: number) => (
-                        <TableRow key={idx}>
-                          {Object.entries(row).map(([key, value]) => (
-                            <TableCell
-                              key={key}
-                              className='tabular-nums text-sm'
-                            >
-                              {value == null ? '—' : String(value)}
-                            </TableCell>
-                          ))}
-                        </TableRow>
-                      ))}
+                      {adhoc.data.rows
+                        .slice(0, 50)
+                        .map((row: Record<string, unknown>, idx: number) => (
+                          <TableRow key={idx}>
+                            {Object.entries(row).map(([key, value]) => (
+                              <TableCell
+                                key={key}
+                                className='text-sm tabular-nums'
+                              >
+                                {value == null ? '—' : String(value)}
+                              </TableCell>
+                            ))}
+                          </TableRow>
+                        ))}
                     </TableBody>
                   </Table>
                   {adhoc.data.rows.length > 50 ? (
@@ -340,7 +361,9 @@ export function AnalyticsOverview({ range, dimension }: AnalyticsOverviewProps) 
                   ) : null}
                 </div>
               ) : adhoc.isSuccess ? (
-                <p className='text-sm text-muted-foreground'>{t('adhocEmpty')}</p>
+                <p className='text-sm text-muted-foreground'>
+                  {t('adhocEmpty')}
+                </p>
               ) : null}
             </CardContent>
           </CollapsibleContent>

@@ -38,6 +38,7 @@ export function canSelectOrgScenarioForCampaign(
   scenario: Pick<OrgScenarioSummaryOut, 'kind' | 'status' | 'is_runnable'>
 ): boolean {
   return (
-    isOrgScenarioVisibleInCampaignPicker(scenario) && Boolean(scenario.is_runnable)
+    isOrgScenarioVisibleInCampaignPicker(scenario) &&
+    Boolean(scenario.is_runnable)
   );
 }

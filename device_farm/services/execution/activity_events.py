@@ -80,6 +80,9 @@ async def emit_step_finished(
         "message": step_result.get("message"),
         "reason_code": step_result.get("reason_code"),
     }
+    for key in ("output", "exit_code", "save_as", "output_truncated"):
+        if key in step_result:
+            payload[key] = step_result.get(key)
     if ok:
         payload["effective_config"] = build_effective_config_snapshot(
             step, step_index=step_index,

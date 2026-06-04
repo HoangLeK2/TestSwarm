@@ -100,20 +100,22 @@ const SYSTEM_BUILTINS = BUILTINS.filter((b) => b.group === 'system');
 const ACCOUNT_BUILTINS = BUILTINS.filter((b) => b.group === 'account');
 
 function toEntries(vars: Record<string, any>): VarEntry[] {
-  return Object.entries(normalizeScenarioVariables(vars)).map(([key, value]) => {
-    if (Array.isArray(value)) {
-      return { key, type: 'list', strVal: '', listVal: value.map(String) };
+  return Object.entries(normalizeScenarioVariables(vars)).map(
+    ([key, value]) => {
+      if (Array.isArray(value)) {
+        return { key, type: 'list', strVal: '', listVal: value.map(String) };
+      }
+      if (typeof value === 'number') {
+        return { key, type: 'number', strVal: String(value), listVal: [] };
+      }
+      return {
+        key,
+        type: 'string',
+        strVal: typeof value === 'string' ? value : JSON.stringify(value),
+        listVal: []
+      };
     }
-    if (typeof value === 'number') {
-      return { key, type: 'number', strVal: String(value), listVal: [] };
-    }
-    return {
-      key,
-      type: 'string',
-      strVal: typeof value === 'string' ? value : JSON.stringify(value),
-      listVal: []
-    };
-  });
+  );
 }
 
 function toRecord(entries: VarEntry[]): Record<string, any> {

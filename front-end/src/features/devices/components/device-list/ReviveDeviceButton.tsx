@@ -94,10 +94,14 @@ export function ReviveDeviceButton({ device }: { device: DeviceOut }) {
             <HeartPulse size={16} />
             {t('confirmTitle', { label })}
           </AlertDialogTitle>
-          <AlertDialogDescription>{t('confirmDescription')}</AlertDialogDescription>
+          <AlertDialogDescription>
+            {t('confirmDescription')}
+          </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={running}>{t('cancel')}</AlertDialogCancel>
+          <AlertDialogCancel disabled={running}>
+            {t('cancel')}
+          </AlertDialogCancel>
           <AlertDialogAction
             disabled={running}
             onClick={(e) => {

@@ -427,6 +427,14 @@ class KeyStep(StepBase):
     type: Literal["key"]
     key: str = Field(min_length=1)
 
+class AdbShellStep(StepBase):
+    type: Literal["adb_shell"]
+    command: str = Field(min_length=1)
+    timeout: float = Field(30.0, ge=1.0, le=120.0)
+    fail_on_error: bool = True
+    save_as: Optional[str] = None
+    max_output_chars: int = Field(8000, ge=1000, le=50000)
+
 class ScrollDownStep(StepBase):
     type: Literal["scroll_down"]
     repeats: IntOrVar = 1
@@ -692,6 +700,7 @@ StepModel = Annotated[
         Annotated[ScrollToStep, Tag("scroll_to")],
         Annotated[InputTextStep, Tag("input_text")],
         Annotated[KeyStep, Tag("key")],
+        Annotated[AdbShellStep, Tag("adb_shell")],
         Annotated[ScrollDownStep, Tag("scroll_down")],
         Annotated[WaitStableStep, Tag("wait_stable")],
         Annotated[VerifyScreenStep, Tag("verify_screen")],

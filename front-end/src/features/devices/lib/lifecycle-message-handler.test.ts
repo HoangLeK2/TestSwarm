@@ -70,9 +70,13 @@ describe('lifecycle message handler (QueryClient)', () => {
       }
     });
 
-    assert.equal(qc.getQueryData<DeviceOut[]>(DEVICES_LIST_KEY)![0].state, 'busy');
     assert.equal(
-      qc.getQueryData<FleetStatsOut>(FLEET_STATS_KEY)!.active_sessions.execution,
+      qc.getQueryData<DeviceOut[]>(DEVICES_LIST_KEY)![0].state,
+      'busy'
+    );
+    assert.equal(
+      qc.getQueryData<FleetStatsOut>(FLEET_STATS_KEY)!.active_sessions
+        .execution,
       1
     );
   });

@@ -17,9 +17,10 @@ const TRANSITIONS: Record<AccountStateKey, readonly AccountStateKey[]> = {
   retired: []
 };
 
-export function accountEffectiveState(
-  account: { state?: string; status: string }
-): AccountStateKey {
+export function accountEffectiveState(account: {
+  state?: string;
+  status: string;
+}): AccountStateKey {
   const raw = (account.state || account.status || 'active').toLowerCase();
   if (raw === 'disabled') return 'suspended';
   if ((ACCOUNT_STATES as readonly string[]).includes(raw)) {

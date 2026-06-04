@@ -82,7 +82,12 @@ function dlqErrorMessage(err: unknown, fallback: string): string {
   if (err && typeof err === 'object' && 'response' in err) {
     const detail = (err as { response?: { data?: { detail?: unknown } } })
       .response?.data?.detail;
-    if (detail && typeof detail === 'object' && detail !== null && 'message' in detail) {
+    if (
+      detail &&
+      typeof detail === 'object' &&
+      detail !== null &&
+      'message' in detail
+    ) {
       return String((detail as { message: string }).message);
     }
     if (typeof detail === 'string') return detail;
@@ -112,10 +117,16 @@ export function DlqPanel({ campaignId }: { campaignId?: string }) {
     const errorNeedle = errorFilter.trim().toLowerCase();
     const execNeedle = executionFilter.trim().toLowerCase();
     return data.filter((entry) => {
-      if (deviceNeedle && !entry.device_serial.toLowerCase().includes(deviceNeedle)) {
+      if (
+        deviceNeedle &&
+        !entry.device_serial.toLowerCase().includes(deviceNeedle)
+      ) {
         return false;
       }
-      if (execNeedle && !entry.execution_id.toLowerCase().includes(execNeedle)) {
+      if (
+        execNeedle &&
+        !entry.execution_id.toLowerCase().includes(execNeedle)
+      ) {
         return false;
       }
       if (errorNeedle) {
@@ -156,8 +167,12 @@ export function DlqPanel({ campaignId }: { campaignId?: string }) {
       },
       {
         onSuccess: (results) => {
-          const ok = results.filter((r) => r.status === 'replayed' || r.status === 'resolved').length;
-          toast.success(t('monitorDlqBulkRetrySuccess', { ok, total: results.length }));
+          const ok = results.filter(
+            (r) => r.status === 'replayed' || r.status === 'resolved'
+          ).length;
+          toast.success(
+            t('monitorDlqBulkRetrySuccess', { ok, total: results.length })
+          );
         },
         onError: (err) =>
           toast.error(dlqErrorMessage(err, t('monitorDlqRetryFailed')))
@@ -278,7 +293,10 @@ export function DlqPanel({ campaignId }: { campaignId?: string }) {
                 dismissMut.isPending ||
                 closeMut.isPending);
             const previewUrl = artifactPreviewUrl(entry);
-            const reason = dlqDisplayMessage(entry, t('monitorDlqNoErrorMessage'));
+            const reason = dlqDisplayMessage(
+              entry,
+              t('monitorDlqNoErrorMessage')
+            );
             const replayable = isDlqEntryReplayable(entry);
             const blockedReason = dlqReplayBlockedReason(entry, t);
 
@@ -307,7 +325,9 @@ export function DlqPanel({ campaignId }: { campaignId?: string }) {
                     </Badge>
                     {entry.failed_step_id ? (
                       <span className='text-xs text-muted-foreground'>
-                        {t('monitorDlqFailedStep', { step: entry.failed_step_id })}
+                        {t('monitorDlqFailedStep', {
+                          step: entry.failed_step_id
+                        })}
                       </span>
                     ) : null}
                   </div>
@@ -316,7 +336,7 @@ export function DlqPanel({ campaignId }: { campaignId?: string }) {
                       'line-clamp-3 text-sm leading-relaxed',
                       reason !== t('monitorDlqNoErrorMessage')
                         ? 'text-foreground/90'
-                        : 'text-muted-foreground italic'
+                        : 'italic text-muted-foreground'
                     )}
                     title={reason}
                   >
@@ -330,7 +350,9 @@ export function DlqPanel({ campaignId }: { campaignId?: string }) {
                     </span>
                     {entry.retry_count > 0 ? (
                       <span>
-                        {t('monitorDlqRetryCount', { count: entry.retry_count })}
+                        {t('monitorDlqRetryCount', {
+                          count: entry.retry_count
+                        })}
                       </span>
                     ) : null}
                     {previewUrl ? (
@@ -362,30 +384,33 @@ export function DlqPanel({ campaignId }: { campaignId?: string }) {
                                   className='h-10 gap-1 px-2.5'
                                   disabled={isRowPending || !replayable}
                                 >
-                            <RefreshCw
-                              size={16}
-                              className={
-                                isRowPending && retryMut.isPending
-                                  ? 'animate-spin'
-                                  : undefined
-                              }
-                            />
-                            <ChevronDown size={14} className='opacity-60' />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align='end'>
-                          <DropdownMenuItem
-                            onClick={() => handleRetry(entry, true)}
-                          >
-                            {t('monitorDlqRetryCheckpoint')}
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() => handleRetry(entry, false)}
-                          >
-                            {t('monitorDlqRetryFull')}
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
+                                  <RefreshCw
+                                    size={16}
+                                    className={
+                                      isRowPending && retryMut.isPending
+                                        ? 'animate-spin'
+                                        : undefined
+                                    }
+                                  />
+                                  <ChevronDown
+                                    size={14}
+                                    className='opacity-60'
+                                  />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align='end'>
+                                <DropdownMenuItem
+                                  onClick={() => handleRetry(entry, true)}
+                                >
+                                  {t('monitorDlqRetryCheckpoint')}
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() => handleRetry(entry, false)}
+                                >
+                                  {t('monitorDlqRetryFull')}
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
                           </span>
                         </TooltipTrigger>
                         {!replayable && blockedReason ? (
@@ -463,7 +488,9 @@ export function DlqPanel({ campaignId }: { campaignId?: string }) {
             <DialogTitle>{t('monitorDlqCloseTitle')}</DialogTitle>
           </DialogHeader>
           <div className='space-y-2 py-2'>
-            <Label htmlFor='dlq-close-reason'>{t('monitorDlqCloseReasonLabel')}</Label>
+            <Label htmlFor='dlq-close-reason'>
+              {t('monitorDlqCloseReasonLabel')}
+            </Label>
             <Input
               id='dlq-close-reason'
               value={closeReason}

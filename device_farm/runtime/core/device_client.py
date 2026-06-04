@@ -277,6 +277,7 @@ class DeviceClient:
         self._hierarchy_cache_ttl = 2.0
         self._hierarchy_failure_until: float = 0.0
         self._hierarchy_failure_reason: str = ""
+        self._hierarchy_last_u2_failure_kind: str = ""
 
         # Reconnect tracking
         self.reconnect_attempts: int = 0
@@ -961,6 +962,67 @@ class DeviceClient:
         # the next input route.
         return False
 
+    def _relay_u2_control_serial(self, relay: Any) -> Optional[str]:
+        host = self._u2_host_hint()
+        if host:
+            actual = self._select_u2_relay_serial(relay, host)
+            if actual:
+                return actual
+
+        for hint in (self._adb_serial, self.serial):
+            h = str(hint or "").strip()
+            if not h:
+                continue
+            actual = relay.resolve_serial(h)
+            if relay.relay_for_serial(actual):
+                return actual
+        return None
+
+    def _try_relay_u2_batch_touch(self, actions: list[dict], timeout: float = 1.5) -> bool:
+        """Run coordinate touch through agent-boot u2_batch without inline reconnect."""
+        if self._loop is None or not actions:
+            return False
+        try:
+            from runtime.transports.adb_relay_server import get_relay_manager
+
+            relay = get_relay_manager()
+            if relay is None:
+                return False
+            actual = self._relay_u2_control_serial(relay)
+            if not actual:
+                return False
+
+            touch_timeout = max(0.5, min(float(timeout), 6.0))
+            fut = asyncio.run_coroutine_threadsafe(
+                relay.u2_batch(actual, actions, timeout=touch_timeout),
+                self._loop,
+            )
+            res = fut.result(timeout=touch_timeout + 0.5)
+            results = res.get("results") if isinstance(res, dict) else None
+            ok = (
+                bool(res.get("ok"))
+                and isinstance(results, list)
+                and len(results) >= len(actions)
+                and all(
+                    isinstance(item, dict) and bool(item.get("ok"))
+                    for item in results[:len(actions)]
+                )
+            )
+            if ok:
+                self._log(
+                    f"touch route=agent_boot_u2_batch serial={actual} ops={len(actions)}",
+                    level=logging.INFO,
+                )
+                self.hierarchy_invalidate_cache()
+                return True
+            self._log(
+                f"touch u2_batch failed: {res.get('error') if isinstance(res, dict) else res}",
+                level=logging.DEBUG,
+            )
+        except Exception as exc:
+            self._log(f"touch u2_batch unavailable: {exc}", level=logging.DEBUG)
+        return False
+
     def _get_scrcpy_control(self) -> Optional[ScrcpyControl]:
         """Return active ScrcpyControl instance if available (thread-safe)."""
         receiver = self._scrcpy_receiver
@@ -1121,6 +1183,14 @@ class DeviceClient:
             except Exception:
                 pass
             return "device_farm_u2_local"
+        try:
+            from runtime.transports.adb_relay_server import get_relay_manager
+
+            relay = get_relay_manager()
+            if self._loop is not None and relay is not None and self._relay_u2_control_serial(relay):
+                return "agent_boot_u2_batch"
+        except Exception:
+            pass
         if self._a11y_grpc_enabled and self._a11y_force_route != "u2":
             return "agent_boot_a11y_grpc"
         if self._shell_input_ok():
@@ -1299,7 +1369,10 @@ class DeviceClient:
         Android 14+ (SDK 34+) blocks `input tap` via shell; WsAgent uses
         TouchAccessibilityService or InputManager (SDK < 34) on the same path as drag.
         """
+        action = {"op": "click", "x": int(x), "y": int(y)}
         if self._try_u2_tap(lambda: self._u2.click(x, y) if self._u2 else None):
+            return
+        if self._try_relay_u2_batch_touch([action], timeout=1.5):
             return
         if self._a11y_mutate("tap", {"x": int(x), "y": int(y)}, timeout=4.0):
             return
@@ -1310,7 +1383,19 @@ class DeviceClient:
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300) -> None:
         """Touch priority: U2 → agent shell (SDK ≤ 33) → agent WS (swipe)"""
+        duration_s = max(0.0, int(duration_ms) / 1000.0)
+        action = {
+            "op": "swipe",
+            "fx": int(x1),
+            "fy": int(y1),
+            "tx": int(x2),
+            "ty": int(y2),
+            "duration": duration_s,
+        }
+        relay_timeout = max(1.5, duration_s + 0.8)
         if self._try_u2_tap(lambda: self._u2.swipe(x1, y1, x2, y2, duration=duration_ms / 1000.0) if self._u2 else None):
+            return
+        if self._try_relay_u2_batch_touch([action], timeout=relay_timeout):
             return
         if self._a11y_mutate(
             "swipe",
@@ -1335,7 +1420,12 @@ class DeviceClient:
 
     def long_tap(self, x: int, y: int, duration_ms: int = 800) -> None:
         """Touch priority: U2 → agent shell (SDK ≤ 33) → agent WS (long_tap)"""
+        duration_s = max(0.1, int(duration_ms) / 1000.0)
+        action = {"op": "long_click", "x": int(x), "y": int(y), "duration": duration_s}
+        relay_timeout = max(1.5, duration_s + 0.8)
         if self._try_u2_tap(lambda: self._u2.long_click(x, y, duration=duration_ms / 1000.0) if self._u2 else None):
+            return
+        if self._try_relay_u2_batch_touch([action], timeout=relay_timeout):
             return
         if self._a11y_mutate(
             "long_tap",
@@ -1353,7 +1443,13 @@ class DeviceClient:
 
     def double_tap(self, x: int, y: int) -> None:
         """Double-tap at coordinates. U2 → WsAgent (TouchA11y)."""
+        actions = [
+            {"op": "click", "x": int(x), "y": int(y)},
+            {"op": "click", "x": int(x), "y": int(y)},
+        ]
         if self._try_u2_tap(lambda: self._u2.double_click(x, y) if self._u2 else None):
+            return
+        if self._try_relay_u2_batch_touch(actions, timeout=1.5):
             return
         if self._a11y_mutate("double_tap", {"x": int(x), "y": int(y)}, timeout=4.0):
             return
@@ -1980,6 +2076,7 @@ class DeviceClient:
         context: Dict[str, Any],
         token: str = "",
         timeout: float = 45.0,
+        cancel_event: Optional[threading.Event] = None,
     ) -> Dict[str, Any]:
         """PA B relay-only: dump + parse on agent-boot via relay.extra_data."""
         del endpoint, token  # relay path does not use HTTP ingest or APK WS
@@ -1987,6 +2084,8 @@ class DeviceClient:
             return {"ok": False, "error": "edge_extra_relay_disabled"}
         if self._loop is None:
             return {"ok": False, "error": "no_event_loop"}
+        if cancel_event is not None and cancel_event.is_set():
+            return {"ok": False, "error": "cancelled", "cancelled": True}
         try:
             fut = asyncio.run_coroutine_threadsafe(
                 self._extra_data_via_relay_async(
@@ -1996,7 +2095,20 @@ class DeviceClient:
                 ),
                 self._loop,
             )
-            result = fut.result(timeout=timeout + 15.0)
+            deadline = time.monotonic() + timeout + 15.0
+            while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    fut.cancel()
+                    return {"ok": False, "error": "cancelled", "cancelled": True}
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    fut.cancel()
+                    return {"ok": False, "error": f"relay timeout ({timeout}s)"}
+                try:
+                    result = fut.result(timeout=min(0.25, remaining))
+                    break
+                except concurrent.futures.TimeoutError:
+                    continue
             if result.get("ok"):
                 self._log(
                     f"edge_extra route=relay_u2 strategy={strategy}",
@@ -2060,10 +2172,25 @@ class DeviceClient:
 
     def _note_hierarchy_relay_u2_failure(self, error: str) -> None:
         s = (error or "").lower()
+        timeout_only = (
+            ("timed out" in s or "timeout" in s)
+            and not any(
+                marker in s
+                for marker in (
+                    "signal: killed",
+                    "connection refused",
+                    "connection reset",
+                    "bad gateway",
+                )
+            )
+        )
+        if timeout_only:
+            # A slow hierarchy dump is not proof that u2 touch is dead. Keep
+            # coordinate control live and let the keepalive path diagnose
+            # actual transport death.
+            return
         hard = (
-            "timed out" in s
-            or "timeout" in s
-            or "signal: killed" in s
+            "signal: killed" in s
             or "connection refused" in s
             or "connection reset" in s
             or "bad gateway" in s
@@ -2213,7 +2340,12 @@ class DeviceClient:
 
             self._log("hierarchy: route=u2->a11y failed", level=logging.WARNING)
             self._note_hierarchy_failure("route_failed")
-            if self._u2_host:
+            if self._hierarchy_last_u2_failure_kind == "timeout":
+                self._log(
+                    "hierarchy: XML dump timed out; keeping u2 control session live",
+                    level=logging.WARNING,
+                )
+            elif self._u2_host:
                 self._recover_u2_ws_mode()
             else:
                 self._request_u2_start_services("hierarchy_route_failed")
@@ -2262,7 +2394,9 @@ class DeviceClient:
         self._hierarchy_failure_reason = reason
 
     def _hierarchy_xml_u2_impl(self, now: float) -> Optional[str]:
+        self._hierarchy_last_u2_failure_kind = ""
         if not self.ensure_u2_healthy() or self._u2 is None:
+            self._hierarchy_last_u2_failure_kind = "unavailable"
             return None
         u2_snap = self._u2
         try:
@@ -2271,20 +2405,24 @@ class DeviceClient:
                 compressed=self._U2_HIERARCHY_COMPRESSED,
             )
             if self._is_empty_hierarchy(xml or ""):
+                self._hierarchy_last_u2_failure_kind = "empty"
                 return None  # Don't cache; UI can show "enable Accessibility" etc.
             # Strip redundant false-boolean and empty-string attributes before
             # caching.  Reduces cached XML size by ~40-50% and speeds up all
             # downstream consumers (HierarchyExtractor, selector_healer, etc.).
             xml = _trim_xml(xml)
             self._hierarchy_cache = (now, xml)
+            self._hierarchy_last_u2_failure_kind = ""
             return xml
         except Exception as exc:
             if self._is_u2_hierarchy_timeout(exc):
+                self._hierarchy_last_u2_failure_kind = "timeout"
                 self._log(
                     f"hierarchy_xml timed out: {exc} — keeping u2 session for keepalive",
                     level=logging.WARNING,
                 )
                 return None
+            self._hierarchy_last_u2_failure_kind = "hard"
             self._log(f"hierarchy_xml failed: {exc}", level=logging.WARNING)
         with self._u2_lock:
             if self._u2 is u2_snap:

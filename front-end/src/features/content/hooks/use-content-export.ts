@@ -43,7 +43,10 @@ export function useContentExport() {
       updateExportJob(id, { status: 'running' });
 
       try {
-        const { blob, filename } = await contentApi.exportStream(filters, format);
+        const { blob, filename } = await contentApi.exportStream(
+          filters,
+          format
+        );
         triggerBlobDownload(blob, filename);
         const completed: Partial<ContentExportJobRecord> = {
           status: 'completed',
@@ -53,8 +56,7 @@ export function useContentExport() {
         updateExportJob(id, completed);
         return { ...queued, ...completed, status: 'completed' };
       } catch (err) {
-        const message =
-          err instanceof Error ? err.message : 'Export failed';
+        const message = err instanceof Error ? err.message : 'Export failed';
         updateExportJob(id, {
           status: 'failed',
           completedAt: new Date().toISOString(),

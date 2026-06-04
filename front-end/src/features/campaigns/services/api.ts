@@ -105,13 +105,19 @@ export function campaignVariables(
   value: CampaignOut | CampaignEntityOut | null | undefined
 ): Record<string, unknown> {
   if (!value) return {};
-  if (isCampaignEntityOut(value)) return (value.vars ?? {}) as Record<string, unknown>;
+  if (isCampaignEntityOut(value))
+    return (value.vars ?? {}) as Record<string, unknown>;
   return (value.variables ?? {}) as Record<string, unknown>;
 }
 
 /** Map Epic-04 entity payloads to the shape list/detail UI expects (`scenario_refs`, `variables`, …). */
 export function normalizeCampaignOut(
-  raw: CampaignOut | CampaignEntityOut | Record<string, unknown> | null | undefined
+  raw:
+    | CampaignOut
+    | CampaignEntityOut
+    | Record<string, unknown>
+    | null
+    | undefined
 ): CampaignOut | null {
   if (raw == null) return null;
   const row = raw as CampaignEntityOut & CampaignOut;
@@ -178,24 +184,22 @@ export type ScenarioDeviceVariablesBody = {
 
 export const campaignsApi = {
   list: () =>
-    farmApi
-      .get<unknown>('/campaigns')
-      .then((r) => {
-        if (!Array.isArray(r.data)) {
-          const raw =
-            r.data === null
-              ? 'null'
-              : typeof r.data === 'string'
-                ? r.data.slice(0, 200)
-                : JSON.stringify(r.data).slice(0, 200);
-          throw new Error(`Unexpected /campaigns response (non-array): ${raw}`);
-        }
-        return r.data
-          .map((item) =>
-            normalizeCampaignOut(item as CampaignOut | CampaignEntityOut)
-          )
-          .filter((item): item is CampaignOut => item != null);
-      }),
+    farmApi.get<unknown>('/campaigns').then((r) => {
+      if (!Array.isArray(r.data)) {
+        const raw =
+          r.data === null
+            ? 'null'
+            : typeof r.data === 'string'
+              ? r.data.slice(0, 200)
+              : JSON.stringify(r.data).slice(0, 200);
+        throw new Error(`Unexpected /campaigns response (non-array): ${raw}`);
+      }
+      return r.data
+        .map((item) =>
+          normalizeCampaignOut(item as CampaignOut | CampaignEntityOut)
+        )
+        .filter((item): item is CampaignOut => item != null);
+    }),
   create: async (data: CampaignCreate) => {
     const r = await farmApi.post<CampaignOut | CampaignEntityOut>(
       '/campaigns',
@@ -206,9 +210,7 @@ export const campaignsApi = {
     if (r.status >= 200 && r.status < 300) {
       const nameKey = data.name.trim().toLowerCase();
       const listed = await campaignsApi.list();
-      const match = listed.find(
-        (c) => c.name.trim().toLowerCase() === nameKey
-      );
+      const match = listed.find((c) => c.name.trim().toLowerCase() === nameKey);
       if (match) return match;
     }
     throw new Error('Campaign create returned an empty response body');
@@ -496,7 +498,9 @@ export const dlqApi = {
       .then((r) => r.data),
   getByExecution: (executionId: string) =>
     farmApi
-      .get<DlqEntry>(`/executions/dlq/executions/${encodeURIComponent(executionId)}`)
+      .get<DlqEntry>(
+        `/executions/dlq/executions/${encodeURIComponent(executionId)}`
+      )
       .then((r) => r.data),
   summary: (params?: { campaignId?: string }) =>
     farmApi

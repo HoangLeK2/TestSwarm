@@ -76,13 +76,15 @@ export function DispatchCampaignDialog({
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [groupIds, setGroupIds] = useState<Set<string>>(new Set());
-  const [strategy, setStrategy] = useState<'parallel' | 'sequential'>('parallel');
+  const [strategy, setStrategy] = useState<'parallel' | 'sequential'>(
+    'parallel'
+  );
   const [activeDeviceId, setActiveDeviceId] = useState('');
   const [activeScenarioId, setActiveScenarioId] = useState('');
   const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const [deviceVarEnabled, setDeviceVarEnabled] = useState<Record<string, boolean>>(
-    {}
-  );
+  const [deviceVarEnabled, setDeviceVarEnabled] = useState<
+    Record<string, boolean>
+  >({});
   const [dirtyKeys, setDirtyKeys] = useState<Record<string, true>>({});
   const [isSaving, setIsSaving] = useState(false);
 
@@ -378,7 +380,10 @@ export function DispatchCampaignDialog({
                       <span className='font-medium'>
                         {tList('runDialogSelectAll')}
                       </span>
-                      <Badge variant='secondary' className='ml-auto text-[10px]'>
+                      <Badge
+                        variant='secondary'
+                        className='ml-auto text-[10px]'
+                      >
                         {devices.length}
                       </Badge>
                     </button>
@@ -488,7 +493,7 @@ export function DispatchCampaignDialog({
             </div>
 
             {showVarsPanel ? (
-              <div className='flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden md:pl-4 md:pt-0 max-md:pt-4'>
+              <div className='flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden max-md:pt-4 md:pl-4 md:pt-0'>
                 <DeviceVarsJsonPanel
                   enabled={currentDeviceVarsEnabled}
                   onEnabledChange={handleDeviceVarsToggle}
@@ -533,8 +538,7 @@ export function DispatchCampaignDialog({
                 ? tVars('footerLoading')
                 : t('dispatchCount', {
                     count:
-                      selectedIds.size +
-                      (groupIds.size > 0 ? groupIds.size : 0)
+                      selectedIds.size + (groupIds.size > 0 ? groupIds.size : 0)
                   })}
           </Button>
         </DialogFooter>

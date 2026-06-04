@@ -1,7 +1,7 @@
 'use client';
 
 import { formatDistanceToNow } from 'date-fns';
-import { enUS, vi } from 'date-fns/locale';
+import { vi } from 'date-fns/locale';
 import type { Locale } from 'date-fns';
 import Link from 'next/link';
 import { QrCode, Trash2, Wifi, WifiOff } from 'lucide-react';

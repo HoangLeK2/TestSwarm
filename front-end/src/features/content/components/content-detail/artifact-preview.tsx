@@ -46,7 +46,10 @@ function readInlineFromDetail(
   return JSON.stringify(value, null, 2);
 }
 
-function truncateLines(text: string, maxLines: number): { text: string; truncated: boolean } {
+function truncateLines(
+  text: string,
+  maxLines: number
+): { text: string; truncated: boolean } {
   const lines = text.split('\n');
   if (lines.length <= maxLines) {
     return { text, truncated: false };
@@ -74,7 +77,7 @@ function VirtualTextPreview({ text }: { text: string }) {
     >
       <div style={{ height: totalHeight, position: 'relative' }}>
         <pre
-          className='absolute left-0 right-0 p-3 font-mono text-[11px] leading-4 whitespace-pre-wrap break-all'
+          className='absolute left-0 right-0 whitespace-pre-wrap break-all p-3 font-mono text-[11px] leading-4'
           style={{ transform: `translateY(${offsetY}px)` }}
         >
           {slice.join('\n')}
@@ -101,8 +104,7 @@ export function ArtifactPreview({ detail, artifact, shareToken }: Props) {
   );
 
   const directImageUrl = useMemo(
-    () =>
-      directObjectStorageUrl(artifact.url, resolvedUrl),
+    () => directObjectStorageUrl(artifact.url, resolvedUrl),
     [artifact.url, resolvedUrl]
   );
 
@@ -114,8 +116,7 @@ export function ArtifactPreview({ detail, artifact, shareToken }: Props) {
   const shouldShowImagePreview = CONTENT_IMAGE_PREVIEW_ENABLED && isImage;
   const canOpenStorageLink =
     Boolean(directImageUrl) && (!isImage || CONTENT_IMAGE_PREVIEW_ENABLED);
-  const isExpired =
-    artifact.status === 'expired' || imageError || previewError;
+  const isExpired = artifact.status === 'expired' || imageError || previewError;
 
   useEffect(() => {
     setImageSrc(null);
@@ -268,8 +269,18 @@ export function ArtifactPreview({ detail, artifact, shareToken }: Props) {
         </div>
         <div className='flex shrink-0 items-center gap-1'>
           {canOpenStorageLink ? (
-            <Button type='button' size='sm' variant='ghost' className='h-8 text-xs' asChild>
-              <a href={directImageUrl} target='_blank' rel='noopener noreferrer'>
+            <Button
+              type='button'
+              size='sm'
+              variant='ghost'
+              className='h-8 text-xs'
+              asChild
+            >
+              <a
+                href={directImageUrl}
+                target='_blank'
+                rel='noopener noreferrer'
+              >
                 {t('openStorageLink', { default: 'Mở link storage' })}
               </a>
             </Button>
@@ -326,7 +337,7 @@ export function ArtifactPreview({ detail, artifact, shareToken }: Props) {
             <VirtualTextPreview text={textPreview ?? ''} />
           ) : (
             <ScrollArea className='h-[min(60vh,520px)] w-full rounded-md border bg-muted/20'>
-              <pre className='p-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap break-all'>
+              <pre className='whitespace-pre-wrap break-all p-3 font-mono text-[11px] leading-relaxed'>
                 {displayText}
               </pre>
             </ScrollArea>

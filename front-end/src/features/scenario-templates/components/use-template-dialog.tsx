@@ -151,7 +151,9 @@ export function UseTemplateDialog({
               }}
             />
             {createErrorMessage && (
-              <p className='text-[11px] text-destructive'>{createErrorMessage}</p>
+              <p className='text-[11px] text-destructive'>
+                {createErrorMessage}
+              </p>
             )}
           </div>
 

@@ -131,8 +131,7 @@ export const contentApi = {
       | string
       | undefined;
     const filename =
-      filenameFromContentDisposition(disposition) ??
-      `content-export.${format}`;
+      filenameFromContentDisposition(disposition) ?? `content-export.${format}`;
     return { blob: response.data as Blob, filename };
   },
 
@@ -177,18 +176,35 @@ export const contentApi = {
   stats: async (): Promise<ContentStats> =>
     farmApi.get<ContentStats>('/content/stats').then((r) => r.data),
 
-  getItem: async (id: string): Promise<ContentItem> =>
-    contentApi.getDetail(id),
+  getItem: async (id: string): Promise<ContentItem> => contentApi.getDetail(id),
 
-  getDetail: async (id: string, shareToken?: string | null): Promise<ContentDetail> =>
+  getDetail: async (
+    id: string,
+    shareToken?: string | null
+  ): Promise<ContentDetail> =>
     farmApi
       .get<ContentDetail>(`/content/${id}`, {
         params: shareToken ? { share: shareToken } : undefined
       })
       .then((r) => r.data),
 
+  listChildren: async (
+    itemId: string,
+    opts?: { limit?: number; offset?: number }
+  ): Promise<ContentListResponse> =>
+    farmApi
+      .get<ContentListResponse>(`/content/${itemId}/children`, {
+        params: {
+          limit: opts?.limit ?? 100,
+          offset: opts?.offset ?? 0
+        }
+      })
+      .then((r) => r.data),
+
   createPermalink: async (id: string): Promise<ContentPermalink> =>
-    farmApi.post<ContentPermalink>(`/content/${id}/permalink`).then((r) => r.data),
+    farmApi
+      .post<ContentPermalink>(`/content/${id}/permalink`)
+      .then((r) => r.data),
 
   downloadArtifact: async (
     contentId: string,

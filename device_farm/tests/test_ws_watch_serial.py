@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Optional
 
-from fastapi import FastAPI, WebSocket
+import pytest
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.testclient import TestClient
 
 from web.ws import WebSocketManager
@@ -87,6 +89,22 @@ class _FakeManager:
         return self._by_serial.get(serial)
 
 
+class _PingThenDisconnectWebSocket:
+    def __init__(self) -> None:
+        self.state = SimpleNamespace()
+        self.sent: list[dict] = []
+        self._received = False
+
+    async def receive_json(self) -> dict:
+        if not self._received:
+            self._received = True
+            return {"type": "ping"}
+        raise WebSocketDisconnect()
+
+    async def send_json(self, msg: dict) -> None:
+        self.sent.append(msg)
+
+
 def test_ws_watch_serial_spawns_sender_and_emits_binary_frames():
     dev = _FakeDevice(serial="SN001")
     mgr = _FakeManager([dev])
@@ -112,6 +130,26 @@ def test_ws_watch_serial_spawns_sender_and_emits_binary_frames():
         assert buf1 != buf2
 
         ws.send_json({"type": "unwatch_serial", "serial": "SN001"})
+
+
+@pytest.mark.asyncio
+async def test_ws_receiver_pong_uses_connection_send_lock():
+    mgr = _FakeManager([])
+    ws_manager = WebSocketManager(mgr, db_enabled=False, read_only=False)
+    ws = _PingThenDisconnectWebSocket()
+    lock = asyncio.Lock()
+
+    await lock.acquire()
+    task = asyncio.create_task(ws_manager._receiver(ws, lock))
+    await asyncio.sleep(0)
+
+    assert ws.sent == []
+
+    lock.release()
+    await task
+
+    assert ws.sent
+    assert ws.sent[0]["type"] == "pong"
 
 
 def test_ws_multi_action_returns_per_device_result_and_scales_ratio():

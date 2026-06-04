@@ -194,6 +194,11 @@ export type StepLogEntry = {
   ok: boolean;
   message: string | null;
   depth: number;
+  output?: string | null;
+  exit_code?: number | null;
+  save_as?: string | null;
+  output_truncated?: boolean;
+  details?: Record<string, unknown>;
 };
 
 export type WorkflowStepLog = {

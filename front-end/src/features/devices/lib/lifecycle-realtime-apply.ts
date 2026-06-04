@@ -68,11 +68,10 @@ export function applyLifecycleMessageToCache(
       };
     }
 
-    const devices =
-      applySnapshotToDevices(cached, msg.devices) ?? cached;
+    const devices = applySnapshotToDevices(cached, msg.devices) ?? cached;
     const fleetStats = cache.fleetStats
-      ? applySnapshotToFleetStats(cache.fleetStats, msg.devices) ??
-        cache.fleetStats
+      ? (applySnapshotToFleetStats(cache.fleetStats, msg.devices) ??
+        cache.fleetStats)
       : cache.fleetStats;
 
     let result: ApplyLifecycleResult = {

@@ -16,10 +16,7 @@ export function CampaignSetupCell({ campaign }: { campaign: CampaignOut }) {
         targetGroupId={campaign.target_group_id}
         triggerClassName={TRIGGER}
       />
-      <CampaignScenarioSummary
-        campaign={campaign}
-        triggerClassName={TRIGGER}
-      />
+      <CampaignScenarioSummary campaign={campaign} triggerClassName={TRIGGER} />
     </div>
   );
 }

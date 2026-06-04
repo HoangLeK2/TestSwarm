@@ -1,5 +1,8 @@
 import type { NotificationItem } from '../services/api';
-import { resolveDeviceLabel, sanitizeNotificationBody } from './notification-ui';
+import {
+  resolveDeviceLabel,
+  sanitizeNotificationBody
+} from './notification-ui';
 
 export type NotificationText = {
   title: string;
@@ -26,8 +29,7 @@ export function translateNotificationItem(
     return {
       title: t('eventTitles.deviceDisconnect', { label }),
       body:
-        sanitizeNotificationBody(item.body) ??
-        t('eventBodies.deviceDisconnect')
+        sanitizeNotificationBody(item.body) ?? t('eventBodies.deviceDisconnect')
     };
   }
   if (item.event === 'device.reconnect') {
@@ -41,8 +43,7 @@ export function translateNotificationItem(
   if (item.event === 'task.failed' && payload.raw_event === 'error') {
     return {
       title: t('eventTitles.deviceError', { label }),
-      body:
-        sanitizeNotificationBody(item.body) ?? t('eventBodies.deviceError')
+      body: sanitizeNotificationBody(item.body) ?? t('eventBodies.deviceError')
     };
   }
   return {

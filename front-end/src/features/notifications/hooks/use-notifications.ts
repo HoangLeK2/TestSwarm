@@ -17,8 +17,7 @@ export const notificationKeys = {
     ['notifications', orgId, query] as const,
   unreadCount: (orgId: string | null) =>
     ['notifications', 'unread-count', orgId] as const,
-  channels: (orgId: string | null) =>
-    ['notification-channels', orgId] as const
+  channels: (orgId: string | null) => ['notification-channels', orgId] as const
 };
 
 export function useNotifications(query: NotificationListQuery = { limit: 12 }) {

@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Optional
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.content import ContentCollection, ContentItem
@@ -129,6 +129,69 @@ async def query_content(
     items = list(result.scalars().all())
 
     return items, total
+
+
+async def query_content_children(
+    db: AsyncSession,
+    parent_item: ContentItem,
+    *,
+    user_id: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> tuple[list[ContentItem], int]:
+    """Comments linked to a post via parent_id variants or parser post ids."""
+    from services.content.parent_links import (
+        parent_link_candidates,
+        parent_post_id_values,
+    )
+
+    candidates = parent_link_candidates(parent_item)
+    pid_values = parent_post_id_values(parent_item)
+    link_filters = []
+    if candidates:
+        link_filters.append(ContentItem.parent_id.in_(candidates))
+    for pid in pid_values:
+        link_filters.append(ContentItem.raw_data["parent_post_id"].as_string() == pid)
+        link_filters.append(ContentItem.raw_data["post_key"].as_string() == pid)
+        link_filters.append(ContentItem.raw_data["_pid"].as_string() == pid)
+        link_filters.append(ContentItem.raw_data["stable_post_id"].as_string() == pid)
+        link_filters.append(ContentItem.raw_data["fb_post_id"].as_string() == pid)
+    for candidate in candidates:
+        link_filters.append(
+            ContentItem.raw_data["parent_content_hash"].as_string() == candidate
+        )
+
+    if not link_filters:
+        return [], 0
+
+    stmt = select(ContentItem).where(
+        ContentItem.deleted_at.is_(None),
+        or_(
+            ContentItem.content_type == "fb_comment",
+            ContentItem.content_type.like("%comment"),
+            ContentItem.item_level > 0,
+        ),
+        or_(*link_filters),
+    )
+    if parent_item.collection:
+        stmt = stmt.where(ContentItem.collection == parent_item.collection)
+    if parent_item.campaign_id:
+        stmt = stmt.where(ContentItem.campaign_id == parent_item.campaign_id)
+    if user_id:
+        stmt = stmt.where(ContentItem.user_id == user_id)
+    if parent_item.org_id:
+        stmt = stmt.where(ContentItem.org_id == parent_item.org_id)
+
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total = (await db.execute(count_stmt)).scalar_one()
+
+    data_stmt = (
+        stmt.order_by(ContentItem.extracted_at.asc().nullslast(), ContentItem.created_at.asc())
+        .offset(offset)
+        .limit(limit)
+    )
+    result = await db.execute(data_stmt)
+    return list(result.scalars().all()), total
 
 
 async def update_content_screenshot_path(

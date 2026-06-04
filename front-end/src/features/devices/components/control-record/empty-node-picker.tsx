@@ -2,12 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { useTranslations } from 'next-intl';
-import {
-  ChevronRight,
-  List,
-  Search,
-  Workflow
-} from 'lucide-react';
+import { ChevronRight, List, Search, Workflow } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -83,10 +78,7 @@ function StepSection({
           dense ? 'px-2.5 py-1.5' : 'px-4 py-2.5'
         )}
       >
-        <span
-          className={cn('h-3 w-1 rounded-full', section.bar)}
-          aria-hidden
-        />
+        <span className={cn('h-3 w-1 rounded-full', section.bar)} aria-hidden />
         <h4
           className={cn(
             'font-medium text-foreground',
@@ -244,7 +236,8 @@ export function EmptyNodePicker({
         items: flow,
         bar: 'bg-amber-500',
         iconWrap: 'bg-amber-50 text-amber-600 ring-amber-100',
-        cardHover: 'hover:border-amber-300/80 hover:bg-amber-50/50 hover:shadow-sm'
+        cardHover:
+          'hover:border-amber-300/80 hover:bg-amber-50/50 hover:shadow-sm'
       }
     ],
     [flow, interactions, t]
@@ -268,15 +261,15 @@ export function EmptyNodePicker({
     <div
       className={cn(
         'flex h-full min-h-0 flex-col',
-        dense
-          ? 'overflow-hidden'
-          : 'w-full px-4 py-4 sm:px-6 sm:py-6'
+        dense ? 'overflow-hidden' : 'w-full px-4 py-4 sm:px-6 sm:py-6'
       )}
     >
       <div
         className={cn(
           'w-full space-y-3',
-          dense ? 'flex min-h-0 flex-1 flex-col overflow-hidden' : 'max-w-2xl space-y-5'
+          dense
+            ? 'flex min-h-0 flex-1 flex-col overflow-hidden'
+            : 'max-w-2xl space-y-5'
         )}
       >
         <div
@@ -323,7 +316,10 @@ export function EmptyNodePicker({
 
         <Tabs
           defaultValue='steps'
-          className={cn('w-full', dense && 'flex min-h-0 flex-1 flex-col overflow-hidden')}
+          className={cn(
+            'w-full',
+            dense && 'flex min-h-0 flex-1 flex-col overflow-hidden'
+          )}
         >
           <TabsList
             className={cn(
@@ -354,7 +350,11 @@ export function EmptyNodePicker({
           >
             <div className={cn(dense && 'space-y-2')}>
               {sections.map((section) => (
-                <StepSection key={section.key} section={section} dense={dense} />
+                <StepSection
+                  key={section.key}
+                  section={section}
+                  dense={dense}
+                />
               ))}
             </div>
             <p
@@ -378,7 +378,7 @@ export function EmptyNodePicker({
             )}
           >
             <div className='relative'>
-              <Search className='pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground' />
+              <Search className='pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground' />
               <Input
                 value={templateQuery}
                 onChange={(e) => setTemplateQuery(e.target.value)}

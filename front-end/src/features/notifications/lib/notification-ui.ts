@@ -68,10 +68,7 @@ const EVENT_VISUALS: Record<string, NotificationVisual> = {
   }
 };
 
-const TONE_CLASSES: Record<
-  NotificationTone,
-  { icon: string; bg: string }
-> = {
+const TONE_CLASSES: Record<NotificationTone, { icon: string; bg: string }> = {
   danger: {
     icon: 'text-destructive',
     bg: 'bg-destructive/10'

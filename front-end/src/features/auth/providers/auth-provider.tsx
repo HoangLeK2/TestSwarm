@@ -13,7 +13,9 @@ type AuthContextValue = {
 
 const AuthContext = React.createContext<AuthContextValue | null>(null);
 
-function meToSessionUser(me: Awaited<ReturnType<typeof authApi.me>>): SessionUser {
+function meToSessionUser(
+  me: Awaited<ReturnType<typeof authApi.me>>
+): SessionUser {
   return {
     id: me.id,
     email: me.email,

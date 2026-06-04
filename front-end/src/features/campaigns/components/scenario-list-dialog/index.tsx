@@ -40,7 +40,10 @@ import {
 } from '../../hooks/use-campaigns';
 import type { CampaignOut, ScenarioOut } from '../../types';
 import { isCampaignBodyEditable } from '../../types';
-import { isCampaignEntityOut, type CampaignEntityOut } from '../../services/api';
+import {
+  isCampaignEntityOut,
+  type CampaignEntityOut
+} from '../../services/api';
 import { useOrgScenarios } from '@/features/org-scenarios/hooks/use-org-scenarios';
 import { isGraphOrgScenario } from '@/features/org-scenarios/lib/campaign-scenario-eligibility';
 import { CampaignOrgScenarioPicker } from '../campaign-org-scenario-picker';
@@ -77,7 +80,8 @@ export function ScenarioListDialog({
     const row = campaignDetail ?? campaign;
     return isCampaignEntityOut(row) ? row : null;
   })();
-  const entityRefs = entityDetail?.scenario_refs ?? campaign.scenario_refs ?? [];
+  const entityRefs =
+    entityDetail?.scenario_refs ?? campaign.scenario_refs ?? [];
   const isEntityCampaign =
     entityDetail != null ||
     entityRefs.length > 0 ||
@@ -87,7 +91,8 @@ export function ScenarioListDialog({
   const { data: orgScenarios = [] } = useOrgScenarios();
   const [selectedRefIds, setSelectedRefIds] = useState<string[]>([]);
   const { mutate: createScenario, isPending: isCreating } = useCreateScenario();
-  const { mutate: patchEntity, isPending: isSavingRefs } = usePatchCampaignEntity();
+  const { mutate: patchEntity, isPending: isSavingRefs } =
+    usePatchCampaignEntity();
   const { mutateAsync: reorderScenarios, isPending: isReordering } =
     useReorderScenarios();
 
@@ -313,7 +318,9 @@ export function ScenarioListDialog({
                               }
                             >
                               <Trash2 className='size-3.5' />
-                              <span className='sr-only'>{t('entityRemove')}</span>
+                              <span className='sr-only'>
+                                {t('entityRemove')}
+                              </span>
                             </Button>
                           ) : null}
                         </div>

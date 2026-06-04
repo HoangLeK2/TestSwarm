@@ -24,15 +24,18 @@ function fgIdFromStep(step: FlowStep): string {
 function stepToNode(step: FlowStep): FlowNodeJSON {
   const id = fgIdFromStep(step);
 
-  // Condition (if_element / if_variable / tap_fb_comment_button — control with then/else)
+  // Condition (if_element / if_variable / Facebook comment button — control with then/else)
   if (
     step.type === 'if_element' ||
     step.type === 'if_variable' ||
-    step.type === 'tap_fb_comment_button'
+    step.type === 'tap_fb_comment_button' ||
+    step.type === 'fb_tap_comment_button'
   ) {
     const thenNodes = stepsToNodes((step as any).then ?? []);
     const elseNodes = stepsToNodes((step as any).else ?? []);
-    const isFbTap = step.type === 'tap_fb_comment_button';
+    const isFbTap =
+      step.type === 'tap_fb_comment_button' ||
+      step.type === 'fb_tap_comment_button';
     return {
       id,
       type: 'condition',
@@ -154,7 +157,8 @@ function nodeToStep(node: FlowNodeJSON): FlowStep | null {
   if (
     step.type === 'if_element' ||
     step.type === 'if_variable' ||
-    step.type === 'tap_fb_comment_button'
+    step.type === 'tap_fb_comment_button' ||
+    step.type === 'fb_tap_comment_button'
   ) {
     const thenBlock = node.blocks?.[0];
     const elseBlock = node.blocks?.[1];

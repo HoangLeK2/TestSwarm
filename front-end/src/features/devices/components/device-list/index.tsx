@@ -157,7 +157,7 @@ export function DeviceList() {
                 className={`mr-1.5 inline-block size-1.5 rounded-full ${
                   wsLive
                     ? 'bg-emerald-500'
-                    : 'bg-muted-foreground/60 animate-pulse'
+                    : 'animate-pulse bg-muted-foreground/60'
                 }`}
               />
               {wsLive ? t('realtime.connected') : t('realtime.reconnecting')}
@@ -203,7 +203,10 @@ export function DeviceList() {
             title={tEmpty('fleet.title')}
             description={tEmpty('fleet.description')}
             trackingKey='devices-list-empty'
-            cta={{ label: tEmpty('fleet.ctaPair'), href: ROUTES.DEVICES.MANAGE }}
+            cta={{
+              label: tEmpty('fleet.ctaPair'),
+              href: ROUTES.DEVICES.MANAGE
+            }}
             secondaryCta={{
               label: tEmpty('fleet.ctaRelay'),
               href: ROUTES.RELAY_AGENTS.ROOT
@@ -230,7 +233,9 @@ export function DeviceList() {
                     <SelectValue placeholder={t('filters.statusPlaceholder')} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value='all'>{t('filters.statusAll')}</SelectItem>
+                    <SelectItem value='all'>
+                      {t('filters.statusAll')}
+                    </SelectItem>
                     <SelectItem value='transport_online'>
                       {t('filters.statusOnline')}
                     </SelectItem>

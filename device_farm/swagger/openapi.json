@@ -2242,7 +2242,14 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/CampaignOut"
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/CampaignEntityOut"
+                      },
+                      {
+                        "$ref": "#/components/schemas/CampaignOut"
+                      }
+                    ]
                   },
                   "title": "Response List Campaigns Api Campaigns Get"
                 }
@@ -2287,7 +2294,17 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/CampaignEntityOut"
+                    },
+                    {
+                      "$ref": "#/components/schemas/CampaignOut"
+                    }
+                  ],
+                  "title": "Response Create Campaign Api Campaigns Post"
+                }
               }
             }
           },
@@ -2333,7 +2350,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CampaignOut"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/CampaignOut"
+                    },
+                    {
+                      "$ref": "#/components/schemas/CampaignEntityOut"
+                    }
+                  ],
+                  "title": "Response Get Campaign Api Campaigns  Campaign Id  Get"
                 }
               }
             }
@@ -8290,6 +8315,75 @@
             "schema": {
               "type": "string",
               "title": "Item Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/content/{item_id}/children": {
+      "get": {
+        "tags": [
+          "content"
+        ],
+        "summary": "List Content Children",
+        "description": "Comments for a post — matches parent_id hash variants and parser post ids.",
+        "operationId": "list_content_children_api_content__item_id__children_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Item Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
             }
           }
         ],
@@ -20228,6 +20322,61 @@
               }
             ],
             "title": "Parent Id"
+          },
+          "parent_item_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Item Id"
+          },
+          "parent_item_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Item Hash"
+          },
+          "parent_item_author": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Item Author"
+          },
+          "parent_item_body": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Item Body"
+          },
+          "parent_item_content_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Item Content Type"
           },
           "item_level": {
             "type": "integer",

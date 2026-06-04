@@ -158,8 +158,7 @@ function DeviceControlsRail({
   const id = serialToId(serial);
   const ModeIcon = mode === 'tap' ? MousePointerClick : MoveHorizontal;
   const iconClass = 'size-[18px] shrink-0 stroke-[2.25]';
-  const gestureActive =
-    gestureMode === 'double_tap' || gestureMode === 'drag';
+  const gestureActive = gestureMode === 'double_tap' || gestureMode === 'drag';
 
   return (
     <div
@@ -411,15 +410,30 @@ function DeviceControlsBelow(props: DeviceControlsProps) {
         </>
       ) : null}
 
-      <Button size='sm' variant='outline' className={btn} onClick={() => onKey('home')}>
+      <Button
+        size='sm'
+        variant='outline'
+        className={btn}
+        onClick={() => onKey('home')}
+      >
         <Home className={icon} aria-hidden />
         {t('home')}
       </Button>
-      <Button size='sm' variant='outline' className={btn} onClick={() => onKey('back')}>
+      <Button
+        size='sm'
+        variant='outline'
+        className={btn}
+        onClick={() => onKey('back')}
+      >
         <ArrowLeft className={icon} aria-hidden />
         {t('back')}
       </Button>
-      <Button size='sm' variant='outline' className={btn} onClick={() => onKey('power')}>
+      <Button
+        size='sm'
+        variant='outline'
+        className={btn}
+        onClick={() => onKey('power')}
+      >
         <Power className={icon} aria-hidden />
         {t('power')}
       </Button>
@@ -445,7 +459,12 @@ function DeviceControlsBelow(props: DeviceControlsProps) {
       {onScreenOn && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button size='sm' variant='outline' className={btn} onClick={onScreenOn}>
+            <Button
+              size='sm'
+              variant='outline'
+              className={btn}
+              onClick={onScreenOn}
+            >
               <Sun className={icon} aria-hidden />
               {!compact && t('screenOn')}
             </Button>
@@ -458,7 +477,12 @@ function DeviceControlsBelow(props: DeviceControlsProps) {
       {onScreenOff && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button size='sm' variant='outline' className={btn} onClick={onScreenOff}>
+            <Button
+              size='sm'
+              variant='outline'
+              className={btn}
+              onClick={onScreenOff}
+            >
               <Moon className={icon} aria-hidden />
               {!compact && t('screenOff')}
             </Button>
@@ -471,7 +495,12 @@ function DeviceControlsBelow(props: DeviceControlsProps) {
       {onUnlock && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button size='sm' variant='outline' className={btn} onClick={onUnlock}>
+            <Button
+              size='sm'
+              variant='outline'
+              className={btn}
+              onClick={onUnlock}
+            >
               <LockOpen className={icon} aria-hidden />
               {!compact && t('unlock')}
             </Button>

@@ -4,9 +4,7 @@ import type { FlowDocumentJSON } from '@flowgram.ai/fixed-layout-editor';
 
 const NESTED_STEP_KEYS = ['then', 'else', 'steps'] as const;
 
-function isNonEmptyConfig(
-  config: unknown
-): config is Record<string, unknown> {
+function isNonEmptyConfig(config: unknown): config is Record<string, unknown> {
   return (
     typeof config === 'object' &&
     config !== null &&
@@ -80,9 +78,7 @@ function normalizeSequenceStep(raw: Record<string, unknown>): FlowStep {
 
 function graphNodesToFlowSteps(nodes: Record<string, unknown>[]): FlowStep[] {
   return [...nodes]
-    .sort((a, b) =>
-      String(a.order ?? '').localeCompare(String(b.order ?? ''))
-    )
+    .sort((a, b) => String(a.order ?? '').localeCompare(String(b.order ?? '')))
     .map((node) => {
       const config = (node.config ?? {}) as Record<string, unknown>;
       const rawType = String(node.type ?? config.type ?? 'unknown');
@@ -102,7 +98,8 @@ function isFlowgramDocument(nodes: unknown[]): boolean {
   return (
     !!first &&
     typeof first === 'object' &&
-    ('blocks' in (first as object) || (first as { type?: string }).type === 'start')
+    ('blocks' in (first as object) ||
+      (first as { type?: string }).type === 'start')
   );
 }
 
@@ -134,7 +131,9 @@ export function extractPreviewSteps(
   }
 
   return graphNodesToFlowSteps(
-    nodes.filter((n): n is Record<string, unknown> => !!n && typeof n === 'object')
+    nodes.filter(
+      (n): n is Record<string, unknown> => !!n && typeof n === 'object'
+    )
   );
 }
 

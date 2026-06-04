@@ -134,3 +134,22 @@ async def test_handle_extra_data_not_configured() -> None:
     msg = json.loads(await queue.get())
     assert msg["ok"] is False
     assert msg["error"] == "extra_data_not_configured"
+
+
+@pytest.mark.asyncio
+async def test_cancel_extra_data_task_by_request_id() -> None:
+    agent = RelayAgent(
+        server_url="localhost:50051",
+        api_key=None,
+        relay_id="test-relay",
+        relay_mode="grpc",
+        extra_ingest=_FakeIngest({"ok": True}),
+    )
+    task = asyncio.create_task(asyncio.sleep(30))
+    agent._extra_data_tasks["extra-cancel"] = task
+
+    assert agent._cancel_extra_data_task("extra-cancel") is True
+    await asyncio.sleep(0)
+
+    assert task.cancelled()
+    assert "extra-cancel" not in agent._extra_data_tasks

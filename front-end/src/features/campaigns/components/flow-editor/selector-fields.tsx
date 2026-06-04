@@ -126,7 +126,10 @@ function VariableInsertSelect({
   );
 }
 
-const SELECTOR_BY_I18N_KEY: Record<(typeof SELECTOR_BY_OPTIONS)[number], string> = {
+const SELECTOR_BY_I18N_KEY: Record<
+  (typeof SELECTOR_BY_OPTIONS)[number],
+  string
+> = {
   text: 'byOptions.text',
   'resource-id': 'byOptions.resource_id',
   xpath: 'byOptions.xpath',
@@ -144,7 +147,9 @@ function SelectorBySelect({
 }: {
   value: string;
   onChange: (by: string) => void;
-  tSel: ReturnType<typeof useTranslations<'campaignsFeature.stepEditor.selector'>>;
+  tSel: ReturnType<
+    typeof useTranslations<'campaignsFeature.stepEditor.selector'>
+  >;
 }) {
   return (
     <select
@@ -184,7 +189,13 @@ function shortWidgetName(className: string): string {
 function friendlyPackageName(packageName: string): string {
   const pkg = packageName.trim();
   if (!pkg) return '';
-  return KNOWN_PACKAGES[pkg] ?? pkg.replace(/^com\./, '').split('.').join(' · ');
+  return (
+    KNOWN_PACKAGES[pkg] ??
+    pkg
+      .replace(/^com\./, '')
+      .split('.')
+      .join(' · ')
+  );
 }
 
 function chainTargetLabel(target: Record<string, unknown>): string {
@@ -199,7 +210,9 @@ function chainTargetLabel(target: Record<string, unknown>): string {
 
 function describeChain(
   chain: Record<string, unknown>,
-  tSel: ReturnType<typeof useTranslations<'campaignsFeature.stepEditor.selector'>>
+  tSel: ReturnType<
+    typeof useTranslations<'campaignsFeature.stepEditor.selector'>
+  >
 ): string {
   const op = String(chain.op ?? '').trim();
   const target = (chain.target ?? {}) as Record<string, unknown>;
@@ -267,7 +280,9 @@ function SelectorAdvancedBlock({
   onInstanceChange: (instance: number | undefined) => void;
   onChainChange: (chain: Record<string, unknown> | undefined) => void;
   onClearAll: () => void;
-  tSel: ReturnType<typeof useTranslations<'campaignsFeature.stepEditor.selector'>>;
+  tSel: ReturnType<
+    typeof useTranslations<'campaignsFeature.stepEditor.selector'>
+  >;
 }) {
   const [open, setOpen] = useState(false);
   const [technicalOpen, setTechnicalOpen] = useState(false);
@@ -541,7 +556,9 @@ export function FallbackRatioFields({
   onRxChange: (n: number) => void;
   onRyChange: (n: number) => void;
   onRequestPick?: () => void;
-  tSel: ReturnType<typeof useTranslations<'campaignsFeature.stepEditor.selector'>>;
+  tSel: ReturnType<
+    typeof useTranslations<'campaignsFeature.stepEditor.selector'>
+  >;
 }) {
   return (
     <StepPanelSection
@@ -676,7 +693,9 @@ export function SelectorFields({
             availableVariables={availableVariables}
             t={t}
             onInsert={(token) =>
-              onChange(patchSelector(step, { value: insertToken(value, token) }))
+              onChange(
+                patchSelector(step, { value: insertToken(value, token) })
+              )
             }
           />
         </div>
@@ -709,9 +728,7 @@ export function SelectorFields({
           onChange(
             patchSelector(step, {
               conditions:
-                Object.keys(nextConditions).length > 0
-                  ? nextConditions
-                  : null,
+                Object.keys(nextConditions).length > 0 ? nextConditions : null,
               instance: null,
               chain: null
             })

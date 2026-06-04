@@ -18,7 +18,11 @@ function item(partial: Partial<ActivityLogItem>): ActivityLogItem {
 
 test('activityLogDeepLink returns campaign list deep link for campaign entity', () => {
   const link = activityLogDeepLink(
-    item({ entity_type: 'campaign', entity_id: 'camp-42', action: 'campaign.complete' })
+    item({
+      entity_type: 'campaign',
+      entity_id: 'camp-42',
+      action: 'campaign.complete'
+    })
   );
   assert.equal(link, '/dashboard/campaigns?campaign_id=camp-42');
 });
@@ -28,6 +32,29 @@ test('activityLogDeepLink returns device detail for device serial', () => {
     item({ device_serial: 'ABC123', action: 'device.connect' })
   );
   assert.equal(link, '/dashboard/devices/ABC123');
+});
+
+test('activityLogDeepLink returns schedules page for schedule_run entity', () => {
+  const link = activityLogDeepLink(
+    item({
+      action: 'schedule.run.terminal',
+      entity_type: 'schedule_run',
+      entity_id: 'run-1',
+      details: { schedule_id: 'sched-9' }
+    })
+  );
+  assert.equal(link, '/dashboard/schedules?schedule_id=sched-9');
+});
+
+test('activityLogDeepLink returns org scenario detail for org_scenario entity', () => {
+  const link = activityLogDeepLink(
+    item({
+      action: 'scenario.updated',
+      entity_type: 'org_scenario',
+      entity_id: 'sc-1'
+    })
+  );
+  assert.equal(link, '/dashboard/org-scenarios?scenario_id=sc-1');
 });
 
 test('activityLogDeepLink returns content detail for content entity', () => {

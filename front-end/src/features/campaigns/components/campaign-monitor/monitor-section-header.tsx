@@ -47,7 +47,9 @@ export function MonitorSectionHeader({
           {hint}
         </TooltipContent>
       </Tooltip>
-      {actions ? <div className='ml-auto flex items-center gap-2'>{actions}</div> : null}
+      {actions ? (
+        <div className='ml-auto flex items-center gap-2'>{actions}</div>
+      ) : null}
       <Badge
         variant={countVariant}
         className={cn(

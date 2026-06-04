@@ -43,7 +43,10 @@ import {
 } from '@/features/devices/services/manage-api';
 import { getDeviceAgentWsUrl } from '@/lib/farm-api';
 import { useTranslations } from 'next-intl';
-import { getRelayConnectionState, isRelayOperational } from '../lib/relay-agent-status';
+import {
+  getRelayConnectionState,
+  isRelayOperational
+} from '../lib/relay-agent-status';
 import type {
   DeviceOut,
   RelayAgentOut

@@ -208,6 +208,7 @@ class RelayAgent:
         # registry exists so `_handle_*` paths can spawn tasks before the
         # first stream is established (e.g. during the brief startup window).
         self._stream_tasks: TaskRegistry = TaskRegistry()
+        self._extra_data_tasks: dict[str, asyncio.Task] = {}
         self._loop_watchdog: Optional[LoopWatchdog] = None
         self._runtime_stats: Optional[RuntimeStats] = None
 
@@ -906,10 +907,19 @@ class RelayAgent:
             )
 
         elif mtype == "extra_data":
-            self._stream_tasks.add(
+            req_id = str(msg.get("id", "") or "")
+            task = self._stream_tasks.add(
                 self._guarded(extra_data_sem(), self._handle_extra_data(msg, send_queue)),
                 name="extra-data",
             )
+            if req_id:
+                self._extra_data_tasks[req_id] = task
+                task.add_done_callback(
+                    lambda _task, _req_id=req_id: self._extra_data_tasks.pop(_req_id, None)
+                )
+
+        elif mtype == "extra_data_cancel":
+            self._cancel_extra_data_task(str(msg.get("id", "") or ""))
 
         elif mtype == "a11y_action":
             await self._handle_a11y_action(msg, send_queue, loop)
@@ -1368,13 +1378,21 @@ class RelayAgent:
     async def _handle_u2_batch(self, msg: dict, send_queue: asyncio.Queue) -> None:
         """Execute a batch of primitive u2 actions and return aggregated results."""
         serial = str(msg.get("serial", "") or "")
-        if self._u2_executor is None:
+        actions = msg.get("actions") or []
+        result = await self._try_u2_batch_touch_fast_path(
+            serial=serial,
+            actions=actions,
+            early_exit=bool(msg.get("early_exit", True)),
+        )
+        if result is not None:
+            pass
+        elif self._u2_executor is None:
             result = {"ok": False, "stopped_at": 0, "results": [],
                       "error": "u2 batch not enabled"}
         else:
             result = await self._u2_executor.run_batch(
                 serial=serial,
-                actions=msg.get("actions") or [],
+                actions=actions,
                 early_exit=bool(msg.get("early_exit", True)),
             )
         result["type"] = "u2_batch_result"
@@ -1386,6 +1404,112 @@ class RelayAgent:
         await bounded_put(
             send_queue, payload, serial=serial, label="u2_batch_result"
         )
+
+    async def _try_u2_batch_touch_fast_path(
+        self,
+        *,
+        serial: str,
+        actions: list[dict],
+        early_exit: bool,
+    ) -> Optional[dict]:
+        """Low-latency u2_batch path for coordinate touch only.
+
+        Selector, dump, app, and file operations stay on U2Executor because they
+        need the richer uiautomator2 Python surface. Plain coordinate touch can
+        use the same atx-agent JSON-RPC HTTP path as u2_proxy, avoiding the
+        batch session pool, per-serial lock, and alive-check overhead.
+        """
+        if not actions:
+            return None
+        prepared: list[tuple[str, dict, float]] = []
+        for act in actions:
+            rpc = self._u2_touch_rpc_payload(act, len(prepared) + 1)
+            if rpc is None:
+                return None
+            method, payload, timeout = rpc
+            prepared.append((method, payload, timeout))
+
+        loop = asyncio.get_running_loop()
+
+        def _run() -> dict:
+            results: list[dict] = []
+            stopped_at: Optional[int] = None
+            for idx, (op, payload, timeout) in enumerate(prepared):
+                try:
+                    res = self._do_u2_http(
+                        serial,
+                        "POST",
+                        "/jsonrpc/0",
+                        json.dumps(payload),
+                        "application/json",
+                        timeout,
+                    )
+                    ok, error = self._parse_u2_touch_rpc_result(res)
+                except Exception as exc:
+                    ok, error = False, str(exc)
+                entry: dict[str, Any] = {"op": op, "ok": ok}
+                if error:
+                    entry["error"] = error
+                results.append(entry)
+                if not ok and early_exit:
+                    stopped_at = idx
+                    break
+            all_ok = all(bool(item.get("ok")) for item in results) and len(results) == len(prepared)
+            return {
+                "ok": all_ok,
+                "stopped_at": stopped_at,
+                "results": results,
+                "error": None if all_ok else (results[-1].get("error") if results else "touch_failed"),
+            }
+
+        return await loop.run_in_executor(u2_executor_pool(), _run)
+
+    def _u2_touch_rpc_payload(self, act: dict, req_id: int) -> Optional[tuple[str, dict, float]]:
+        op = str(act.get("op", "") or "")
+        payload: dict[str, Any] = {
+            "jsonrpc": "2.0",
+            "id": req_id,
+        }
+        timeout = 1.5
+        if op == "click":
+            payload["method"] = "click"
+            payload["params"] = [int(act["x"]), int(act["y"])]
+        elif op == "swipe":
+            duration = max(0.0, float(act.get("duration", 0.5)))
+            steps = max(1, int(duration * 40))
+            payload["method"] = "swipe"
+            payload["params"] = [
+                int(act["fx"]), int(act["fy"]),
+                int(act["tx"]), int(act["ty"]),
+                steps,
+            ]
+            timeout = max(1.5, duration + 0.8)
+        elif op == "long_click":
+            duration = max(0.1, float(act.get("duration", 0.5)))
+            payload["method"] = "longClick"
+            payload["params"] = [int(act["x"]), int(act["y"])]
+            timeout = max(1.5, duration + 0.8)
+        else:
+            return None
+        return op, payload, timeout
+
+    @staticmethod
+    def _parse_u2_touch_rpc_result(res: dict) -> tuple[bool, str]:
+        if not bool(res.get("ok")):
+            status = int(res.get("status", 0) or 0)
+            if status:
+                return False, f"JSON-RPC HTTP {status}"
+            return False, str(res.get("body") or "JSON-RPC request failed")
+        raw = str(res.get("body") or "")
+        if not raw.strip():
+            return False, "JSON-RPC empty response"
+        try:
+            data = json.loads(raw)
+        except Exception:
+            return False, f"JSON-RPC invalid response: {raw[:120]!r}"
+        if "error" in data:
+            return False, f"JSON-RPC error: {data['error']}"
+        return True, ""
 
     async def _handle_u2_flow(self, msg: dict, send_queue: asyncio.Queue) -> None:
         """Execute a named high-level u2 flow and return result."""
@@ -1560,6 +1684,16 @@ class RelayAgent:
             logger.warning("extra_data failed serial=%s strategy=%s: %s", serial, strategy, exc)
             reply["error"] = str(exc)
         await bounded_put(send_queue, await dumps_maybe_offload(reply), serial=serial, label="extra_data_result")
+
+    def _cancel_extra_data_task(self, req_id: str) -> bool:
+        if not req_id:
+            return False
+        task = self._extra_data_tasks.pop(req_id, None)
+        if task is None or task.done():
+            return False
+        task.cancel()
+        logger.info("extra_data cancelled request_id=%s", req_id)
+        return True
 
     def _execute_command(
         self,

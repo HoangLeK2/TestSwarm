@@ -16,6 +16,7 @@ import {
   MousePointerClick,
   MoveRight,
   Keyboard,
+  Terminal,
   ArrowDownToLine,
   Hand,
   XCircle,
@@ -85,6 +86,7 @@ export type ActionType =
   | 'dismiss_popup'
   | 'input_text'
   | 'key'
+  | 'adb_shell'
   | 'scroll_down'
   | 'set_variable'
   | 'set_var'
@@ -183,6 +185,8 @@ export function getStepIcon(type: string): LucideIcon {
     case 'key':
     case 'key_back':
       return Keyboard;
+    case 'adb_shell':
+      return Terminal;
     case 'wait_element':
     case 'assert_element':
       return Scan;
@@ -283,6 +287,8 @@ export function getStepLabel(step: FlowStep): string {
       return `input [${step.by}="${step.value}"] "${step.text}"`;
     case 'input_text':
       return `input_text "${step.text}"`;
+    case 'adb_shell':
+      return `adb shell ${step.command || step.cmd || ''}`;
     case 'set_variable':
       return `set ${step.name}=${(step.value ?? step.from_list) ? 'list' : '?'}`;
     case 'set_var':
@@ -330,6 +336,7 @@ export const ALL_STEP_TYPES: {
   { value: 'swipe_ratio', label: 'swipe_ratio', group: 'action' },
   { value: 'input_text', label: 'input_text', group: 'action' },
   { value: 'input_selector', label: 'input_selector', group: 'action' },
+  { value: 'adb_shell', label: 'adb_shell', group: 'action' },
   { value: 'wait_element', label: 'wait_element', group: 'action' },
   { value: 'assert_element', label: 'assert_element', group: 'action' },
   { value: 'long_tap_selector', label: 'long_tap_selector', group: 'action' },
@@ -372,6 +379,20 @@ export const ALL_STEP_TYPES: {
 ];
 
 /** Create a default step for a given type (with auto-generated id + order). */
+export function createDefaultFbCommentThenSteps(): FlowStep[] {
+  const waitForSheet = createDefaultStep('wait');
+  const backFromSheet = createDefaultStep('key');
+  const waitAfterBack = createDefaultStep('wait');
+  const dismissPopup = createDefaultStep('dismiss_popup');
+  return [
+    { ...waitForSheet, seconds: 0.6 },
+    createDefaultStep('extract_fb_comments'),
+    { ...backFromSheet, key: 'back' },
+    { ...waitAfterBack, seconds: 1 },
+    { ...dismissPopup, retries: 1 }
+  ];
+}
+
 export function createDefaultStep(
   type: string,
   afterOrder?: string | null,
@@ -508,7 +529,7 @@ export function createDefaultStep(
         ignore_error: true,
         pre_scroll: false,
         pre_scroll_distance: 0.24,
-        then: [],
+        then: createDefaultFbCommentThenSteps(),
         else: []
       };
     case 'tap_position':
@@ -525,6 +546,15 @@ export function createDefaultStep(
       };
     case 'input_text':
       return { ...base, type: 'input_text', via: 'u2', text: '' };
+    case 'adb_shell':
+      return {
+        ...base,
+        type: 'adb_shell',
+        command: '',
+        timeout: 30,
+        fail_on_error: true,
+        max_output_chars: 8000
+      };
     case 'input_selector':
       return {
         ...base,
@@ -632,6 +662,8 @@ export function createDefaultStep(
         ...base,
         type: 'extract',
         strategy: 'fb_posts',
+        edge_extra_data: true,
+        strategy_version: 'fb_posts:v1',
         expand_see_more: true,
         expand_see_more_max_passes: 4,
         expand_see_more_scroll: true,
@@ -649,22 +681,24 @@ export function createDefaultStep(
         dedupe_field: 'post_key'
       };
     // Shortcut — creates an `extract` step preset for FB comments. Mirrors what
-    // fb_group_1h templates use inside `tap_fb_comment_button.then`. User can
+    // fb_group_1h templates use inside `fb_tap_comment_button.then`. User can
     // still tweak any field in the detail panel afterwards.
     case 'extract_fb_comments':
       return {
         ...base,
         type: 'extract',
         strategy: 'fb_comments',
+        edge_extra_data: true,
+        strategy_version: 'fb_comments:v1',
         parent_post_id_var: '_fb_comment_parent_pid',
-        max_items: '${MAX_COMMENTS_PER_POST}',
-        comment_scroll_passes: '${MAX_COMMENT_SCROLLS}',
+        max_items: 500,
+        comment_scroll_passes: 48,
         comment_swipes_per_dump: 3,
-        comment_scroll_distance: 0.30,
+        comment_scroll_distance: 0.3,
         comment_scroll_duration_ms: 300,
         comment_scroll_pause_s: 0.18,
-        comment_no_growth_break: '${COMMENT_NO_NEW_THRESHOLD}',
-        min_comment_scan_passes: '${MIN_COMMENT_SCAN_PASSES}',
+        comment_no_growth_break: 3,
+        min_comment_scan_passes: 2,
         stop_if_no_new: false,
         no_new_threshold: 4,
         collection: '${SAVE_COLLECTION}',
@@ -681,6 +715,8 @@ export function createDefaultStep(
         ...base,
         type: 'extract',
         strategy: 'fb_posts',
+        edge_extra_data: true,
+        strategy_version: 'fb_posts:v1',
         expand_see_more: true,
         expand_see_more_max_passes: 4,
         expand_see_more_scroll: true,
@@ -783,6 +819,8 @@ export const CONTAINER_TYPES = new Set([
   'if',
   'if_element',
   'if_variable',
+  'fb_tap_comment_button',
+  'tap_fb_comment_button',
   'random_pick'
 ]);
 

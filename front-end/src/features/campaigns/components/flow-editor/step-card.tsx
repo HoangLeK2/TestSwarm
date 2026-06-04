@@ -98,7 +98,7 @@ export function StepCard({
   return (
     <div
       className={cn(
-        'group cursor-pointer rounded-lg border border-border/70 border-l-[3px] bg-card shadow-sm transition-all',
+        'group cursor-pointer rounded-lg border border-l-[3px] border-border/70 bg-card shadow-sm transition-all',
         colorCls,
         selected && 'bg-accent/25 ring-2 ring-primary/35',
         isPickTarget &&

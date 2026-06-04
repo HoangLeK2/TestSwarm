@@ -10,7 +10,7 @@
 #   postgres   — PostgreSQL (host port 5443 → container 5432; avoid clash with local PG)
 #   temporal   — Temporal Server (port 7233, UI: 8233)
 #   redis-ui   — Redis web UI (port 5540 → browse keys / MONITOR-lite)
-#   minio      — S3-compatible object storage (API :9000, console :9001)
+#   minio      — Optional local S3 (profile `minio`: API :9000, console :9001). Cloud dùng R2.
 #
 # DB config (read from .env in this directory, all have fallbacks):
 #   DB_HOST (default: host.docker.internal — external Postgres on the host)
@@ -78,34 +78,34 @@ services:
     ports:
       - "8233:8080"   # Temporal UI at http://localhost:8233
 
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    env_file:
-      - ./.env
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
+  # redis:
+  #   image: redis:7-alpine
+  #   restart: unless-stopped
+  #   env_file:
+  #     - ./.env
+  #   extra_hosts:
+  #     - "host.docker.internal:host-gateway"
+  #   ports:
+  #     - "6379:6379"
+  #   volumes:
+  #     - redis_data:/data
+  #   healthcheck:
+  #     test: ["CMD", "redis-cli", "ping"]
+  #     interval: 5s
+  #     timeout: 3s
+  #     retries: 5
 
-  redis-ui:
-    image: rediscommander/redis-commander:latest
-    platform: linux/amd64
-    restart: unless-stopped
-    depends_on:
-      redis:
-        condition: service_healthy
-    environment:
-      REDIS_HOSTS: local:redis:6379
-    ports:
-      - "${REDIS_UI_PORT:-5540}:8081"
+  # redis-ui:
+  #   image: rediscommander/redis-commander:latest
+  #   platform: linux/amd64
+  #   restart: unless-stopped
+  #   depends_on:
+  #     redis:
+  #       condition: service_healthy
+  #   environment:
+  #     REDIS_HOSTS: local:redis:6379
+  #   ports:
+  #     - "${REDIS_UI_PORT:-5540}:8081"
 
   farm:
     build:
@@ -121,8 +121,6 @@ services:
         condition: service_healthy
       temporal:
         condition: service_healthy
-      minio:
-        condition: service_started
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -162,6 +160,8 @@ services:
       MINIO_SECURE: ${MINIO_SECURE:-false}
       MINIO_PUBLIC_BASE_URL: ${MINIO_PUBLIC_BASE_URL:-http://localhost:9000}
       MINIO_PUBLIC_URL_INCLUDE_BUCKET: ${MINIO_PUBLIC_URL_INCLUDE_BUCKET:-true}
+      OBJECT_STORAGE_MAX_CONCURRENT_UPLOADS: ${OBJECT_STORAGE_MAX_CONCURRENT_UPLOADS:-8}
+      DEVICE_FARM_LOCAL_IMAGE_FALLBACK_ENABLED: ${DEVICE_FARM_LOCAL_IMAGE_FALLBACK_ENABLED:-false}
       RELAY_API_KEY: ${RELAY_API_KEY:-}
       RELAY_PORT: ${RELAY_PORT:-50051}
       DEVICE_FARM_U2_ALWAYS_TUNNEL: ${DEVICE_FARM_U2_ALWAYS_TUNNEL:-1}
@@ -227,6 +227,7 @@ services:
   #     NEXT_PUBLIC_SENTRY_DISABLED: ${NEXT_PUBLIC_SENTRY_DISABLED:-1}
 
   minio:
+    profiles: [minio]
     image: minio/minio:latest
     restart: unless-stopped
     command: server /data --console-address ":9001"
@@ -238,6 +239,25 @@ services:
       - "${MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
       - minio_data:/data
+
+  # Dev only: public GET on buckets (giống R2 public). Chạy tay sau khi bật profile minio:
+  #   docker compose --profile minio up -d && docker compose --profile minio run --rm minio-init
+  # minio-init:
+  #   profiles: [minio]
+  #   image: minio/mc:latest
+  #   restart: "no"
+  #   depends_on:
+  #     minio:
+  #       condition: service_started
+  #   volumes:
+  #     - ./scripts/minio/init-public.sh:/init-public.sh:ro
+  #   environment:
+  #     MINIO_ENDPOINT: http://minio:9000
+  #     MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+  #     MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+  #     MINIO_BUCKET: ${MINIO_BUCKET:-device-farm}
+  #     MINIO_PUBLIC_BASE_URL: ${MINIO_PUBLIC_BASE_URL:-http://localhost:9000}
+  #   entrypoint: ["/bin/sh", "/init-public.sh"]
 
   # ─── Observability (tạm tắt Prometheus/Grafana vì BE chưa dùng) ───
   # prometheus:

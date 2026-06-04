@@ -494,17 +494,13 @@ export function WorkflowProgressCard({
                 maxHeight='min(560px, calc(90dvh - 320px))'
                 sseStepLog={eventStream.stepLog}
                 sseConnected={eventStream.connected}
-                liveProgress={
-                  eventStream.connected
-                    ? {
-                        current_step: current,
-                        total_steps: total,
-                        current_step_type: stepType,
-                        message,
-                        loop_iteration: loopIter
-                      }
-                    : undefined
-                }
+                liveProgress={{
+                  current_step: current,
+                  total_steps: total,
+                  current_step_type: stepType,
+                  message,
+                  loop_iteration: loopIter
+                }}
               />
             </div>
           </div>

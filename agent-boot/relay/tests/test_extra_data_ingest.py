@@ -1030,3 +1030,57 @@ async def test_process_payload_preserves_parser_parent_post_id_without_context(
 
     assert result["ok"] is True
     assert inserted[0]["raw_data"]["parent_post_id"] == "pid-from-parser"
+
+
+@pytest.mark.asyncio
+async def test_process_payload_requires_verified_parent_before_persisting_comments(
+    monkeypatch,
+) -> None:
+    class Module:
+        pass
+
+    module = Module()
+
+    def fake_parse(xml, parent_post_id=None, max_items=50):
+        return [{"comment_key": "c1", "text": "comment body", "parent_post_id": "pid-from-parser"}], {
+            "reason_code": "ok"
+        }
+
+    module.parse_fb_comments_from_xml_with_diagnostic = fake_parse
+    monkeypatch.setitem(sys.modules, "relay.extra_data.parsers.facebook", module)
+
+    class FakeWriter:
+        async def prepare_context_for_persist(self, context):
+            return context
+
+        async def lookup_parent_hash_for_post_pid(self, **kwargs):
+            return "looked-up-parent-hash"
+
+        async def insert_rows(self, rows):
+            raise AssertionError("unverified parent comments must not be persisted")
+
+    server = ExtraDataIngestServer()
+    server._writer = FakeWriter()
+
+    result = await server.process_payload(
+        {
+            "serial": "serial-1",
+            "strategy": "fb_comments",
+            "xml": '<hierarchy><node text="comments" /></hierarchy>',
+            "context": {
+                "persist": True,
+                "collection": "fb_comments",
+                "content_type": "fb_comment",
+                "dedupe_field": "comment_key",
+                "hash_scope": "exec-1",
+                "require_verified_parent": True,
+            },
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["parsed_count"] == 1
+    assert result["inserted_attempted"] == 0
+    assert result["inserted_count"] == 0
+    assert result["diagnostic"]["parent_context_required"] is True
+    assert result["diagnostic"]["parent_context_missing"] is True

@@ -51,9 +51,6 @@ import { isImageArtifact } from '../../lib/artifact-url';
 import { shouldShowPostComments } from '../../lib/post-detail';
 import { PostCommentsSection } from './post-comments-section';
 
-/** Set true when artifact preview (screenshots, hierarchy) is ready to show again. */
-const SHOW_ARTIFACTS_SECTION = false;
-
 type Props = {
   contentId: string;
   shareToken?: string | null;
@@ -110,15 +107,18 @@ export function ContentDetailView({ contentId, shareToken }: Props) {
   const [permalinkCopied, setPermalinkCopied] = useState(false);
   const [payloadExpanded, setPayloadExpanded] = useState<boolean | null>(null);
 
+  const imageArtifacts = useMemo(() => {
+    if (!detail?.artifacts) return [];
+    return detail.artifacts.filter(contentArtifactIsImage);
+  }, [detail?.artifacts]);
   const artifacts = useMemo(() => {
-    if (!SHOW_ARTIFACTS_SECTION || !detail?.artifacts) return [];
+    if (!detail?.artifacts) return [];
     return detail.artifacts.filter(
       (artifact) => !contentArtifactIsImage(artifact)
     );
   }, [detail?.artifacts]);
-  const selected: ContentArtifact | null = SHOW_ARTIFACTS_SECTION
-    ? (artifacts.find((a) => a.id === selectedId) ?? artifacts[0] ?? null)
-    : null;
+  const selected: ContentArtifact | null =
+    artifacts.find((a) => a.id === selectedId) ?? artifacts[0] ?? null;
 
   const payloadJson = useMemo(() => {
     if (!detail?.payload) return '';
@@ -307,23 +307,23 @@ export function ContentDetailView({ contentId, shareToken }: Props) {
         ) : null}
       </div>
 
-      <section
-        className={cn(
-          'grid min-w-0 gap-4',
-          SHOW_ARTIFACTS_SECTION
-            ? 'lg:grid-cols-2'
-            : 'lg:grid-cols-[minmax(0,1fr)_minmax(280px,24rem)] lg:items-start'
-        )}
-      >
+      <section className='grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(280px,24rem)] lg:items-start'>
         <div className='min-w-0 space-y-4'>
           {isComment ? (
-            <CommentEvidenceCard
-              body={displayBody}
-              author={displayAuthor}
-              parentSummary={parentSummary}
-              t={t}
-              onOpenParent={(parentId) => void handleOpenParentPost(parentId)}
-            />
+            <>
+              <CommentEvidenceCard
+                body={displayBody}
+                author={displayAuthor}
+                parentSummary={parentSummary}
+                t={t}
+                onOpenParent={(parentId) => void handleOpenParentPost(parentId)}
+              />
+              <ImageArtifacts
+                detail={detail}
+                artifacts={imageArtifacts}
+                shareToken={shareToken}
+              />
+            </>
           ) : (
             <>
               <ContentBodyCard
@@ -331,6 +331,11 @@ export function ContentDetailView({ contentId, shareToken }: Props) {
                 body={displayBody}
                 author={displayAuthor}
                 t={t}
+              />
+              <ImageArtifacts
+                detail={detail}
+                artifacts={imageArtifacts}
+                shareToken={shareToken}
               />
               {showPostComments ? <PostCommentsSection post={detail} /> : null}
             </>
@@ -354,51 +359,65 @@ export function ContentDetailView({ contentId, shareToken }: Props) {
         </aside>
       </section>
 
-      <div className={cn(SHOW_ARTIFACTS_SECTION ? 'grid gap-6' : 'hidden')}>
-        {SHOW_ARTIFACTS_SECTION ? (
-          <section className='space-y-3'>
-            <div className='flex items-center justify-between gap-2'>
-              <h2 className='text-sm font-semibold'>{t('artifactsTitle')}</h2>
-              <span className='text-xs text-muted-foreground'>
-                {artifacts.length}
-              </span>
-            </div>
+      {artifacts.length > 0 ? (
+        <section className='space-y-3'>
+          <div className='flex items-center justify-between gap-2'>
+            <h2 className='text-sm font-semibold'>{t('artifactsTitle')}</h2>
+            <span className='text-xs text-muted-foreground'>
+              {artifacts.length}
+            </span>
+          </div>
 
-            {artifacts.length === 0 ? (
-              <p className='rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground'>
-                {t('artifactsEmpty')}
-              </p>
-            ) : (
-              <>
-                <div className='flex flex-wrap gap-2'>
-                  {artifacts.map((artifact) => (
-                    <button
-                      key={artifact.id}
-                      type='button'
-                      onClick={() => setSelectedId(artifact.id)}
-                      className={cn(
-                        'rounded-full border px-3 py-1 text-xs transition',
-                        selected?.id === artifact.id
-                          ? 'border-primary bg-primary/10 text-primary'
-                          : 'border-border bg-background hover:bg-muted/50'
-                      )}
-                    >
-                      {artifact.label}
-                    </button>
-                  ))}
-                </div>
-                {selected ? (
-                  <ArtifactPreview
-                    detail={detail}
-                    artifact={selected}
-                    shareToken={shareToken}
-                  />
-                ) : null}
-              </>
-            )}
-          </section>
-        ) : null}
-      </div>
+          <div className='flex flex-wrap gap-2'>
+            {artifacts.map((artifact) => (
+              <button
+                key={artifact.id}
+                type='button'
+                onClick={() => setSelectedId(artifact.id)}
+                className={cn(
+                  'rounded-full border px-3 py-1 text-xs transition',
+                  selected?.id === artifact.id
+                    ? 'border-primary bg-primary/10 text-primary'
+                    : 'border-border bg-background hover:bg-muted/50'
+                )}
+              >
+                {artifact.label}
+              </button>
+            ))}
+          </div>
+          {selected ? (
+            <ArtifactPreview
+              detail={detail}
+              artifact={selected}
+              shareToken={shareToken}
+            />
+          ) : null}
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
+function ImageArtifacts({
+  detail,
+  artifacts,
+  shareToken
+}: {
+  detail: ContentDetail;
+  artifacts: ContentArtifact[];
+  shareToken?: string | null;
+}) {
+  if (artifacts.length === 0) return null;
+  return (
+    <div className='space-y-3'>
+      {artifacts.map((artifact) => (
+        <ArtifactPreview
+          key={artifact.id}
+          detail={detail}
+          artifact={artifact}
+          shareToken={shareToken}
+        />
+      ))}
     </div>
   );
 }

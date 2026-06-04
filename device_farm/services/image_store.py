@@ -5,9 +5,10 @@ Storage backends
 ~~~~~~~~~~~~~~~~
 * Object storage / R2 (preferred): when ``minio_store.enabled()`` is True, images are
   uploaded to MinIO and URLs point to the MinIO object.
-* Local filesystem (fallback): images saved to
+* Local filesystem (debug fallback): images saved to
   ``<captures_dir>/screenshots/<scenario_id>/step_<idx>_<type>.jpg``
-  and served at ``/captures/screenshots/…``
+  and served at ``/captures/screenshots/…`` only when
+  ``DEVICE_FARM_LOCAL_IMAGE_FALLBACK_ENABLED=1``.
 
 Quality gate
 ~~~~~~~~~~~~
@@ -57,7 +58,7 @@ def _is_base64(value: str) -> bool:
 
 def _save_image(data: bytes, local_path: Path, minio_key: str, skip_quality: bool = False) -> Optional[str]:
     """
-    Persist image bytes via MinIO or local filesystem.
+    Persist image bytes via MinIO or debug local filesystem.
 
     Returns the URL/path string to store in the DB, or None when the image
     is rejected by the quality gate.
@@ -71,7 +72,13 @@ def _save_image(data: bytes, local_path: Path, minio_key: str, skip_quality: boo
         url = minio_store.upload(data, minio_key)
         if url:
             return url
-        # Upload failed — fall through to local save
+        # Upload failed — only debug runs may fall through to local save.
+
+    if not minio_store.local_image_fallback_enabled():
+        raise RuntimeError(
+            f"image_store: image object upload unavailable for {minio_key}; "
+            "local fallback disabled"
+        )
 
     try:
         local_path.parent.mkdir(parents=True, exist_ok=True)
@@ -161,7 +168,7 @@ def delete_scenario_images(scenario_id: str) -> None:
     # MinIO cleanup
     minio_store.delete_prefix(f"screenshots/{scenario_id}/")
 
-    # Local filesystem cleanup
+    # Debug local filesystem cleanup
     folder = _dir() / "screenshots" / scenario_id
     if folder.exists():
         for f in folder.iterdir():

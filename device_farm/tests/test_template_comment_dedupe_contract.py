@@ -27,6 +27,7 @@ def _assert_comment_extract_dedupe_comment_key(steps: list[dict[str, Any]]) -> N
     assert comment_extracts, "expected at least one fb_comments extract step"
     for step in comment_extracts:
         assert step.get("dedupe_field") == "comment_key", step
+        assert step.get("require_verified_parent") is True, step
 
 
 def _assert_comment_flow_stays_on_detail_until_comments(steps: list[dict[str, Any]]) -> None:

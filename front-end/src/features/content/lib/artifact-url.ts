@@ -25,9 +25,25 @@ export function isAbsoluteHttpUrl(url: string | null | undefined): boolean {
   return /^https?:\/\//i.test(url.trim());
 }
 
+/** Farm API routes that require JWT — never use as <img src> directly. */
+function isFarmApiArtifactRoute(url: string): boolean {
+  const value = url.trim();
+  return (
+    value.startsWith('/api/artifacts/') ||
+    value.startsWith('/api/content/') ||
+    /\/api\/artifacts\/[^/]+\/content/.test(value) ||
+    /\/api\/content\/[^/]+\/artifacts\//.test(value)
+  );
+}
+
+/** Execution artifact proxy stored in DB (private object, needs farm stream). */
+function isExecutionArtifactProxyPath(url: string): boolean {
+  return /^\/artifacts\/[0-9a-f-]{36}\/content$/i.test(url.trim());
+}
+
 /**
- * Use MinIO/R2 (or any absolute object URL) directly in the browser.
- * Proxy via farm API only for local paths and execution artifact routes.
+ * Use MinIO/R2 public (or presigned) URLs directly in the browser.
+ * Proxy via farm API only for private execution artifacts, farm API paths, and local disk paths.
  */
 export function shouldProxyArtifactFetch(
   rawUrl: string | null | undefined,
@@ -36,9 +52,11 @@ export function shouldProxyArtifactFetch(
   const raw = (rawUrl ?? '').trim();
   if (!raw) return true;
 
+  if (isFarmApiArtifactRoute(raw) || isExecutionArtifactProxyPath(raw)) {
+    return true;
+  }
+
   const farmRelative =
-    raw.startsWith('/artifacts') ||
-    raw.includes('/artifacts/') ||
     raw.startsWith('screenshots/') ||
     raw.startsWith('/screenshots') ||
     raw.startsWith('captures/') ||
@@ -46,23 +64,28 @@ export function shouldProxyArtifactFetch(
 
   if (farmRelative) return true;
 
+  // Absolute MinIO/R2/public CDN — browser loads directly (no farm download hop).
   if (isAbsoluteHttpUrl(raw)) {
-    return false;
+    return isFarmApiArtifactRoute(raw);
   }
 
   // Relative path resolved to farm origin (local disk fallback).
   if (resolvedUrl && isAbsoluteHttpUrl(resolvedUrl)) {
-    return true;
+    return isFarmApiArtifactRoute(resolvedUrl);
   }
 
   return Boolean(resolvedUrl);
 }
 
-/** Public URL for opening in a new tab (R2/MinIO); null when only farm proxy works. */
+/** Public object-storage URL for <img src> / open in tab; null when farm proxy is required. */
 export function directObjectStorageUrl(
   rawUrl: string | null | undefined,
   resolvedUrl: string | null
 ): string | null {
+  const raw = (rawUrl ?? '').trim();
+  if (isAbsoluteHttpUrl(raw) && !shouldProxyArtifactFetch(raw, raw)) {
+    return raw;
+  }
   if (!resolvedUrl || shouldProxyArtifactFetch(rawUrl, resolvedUrl)) {
     return null;
   }

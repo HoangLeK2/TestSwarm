@@ -155,7 +155,8 @@ class ObjectStorageConfig:
     """S3-compatible object storage (Cloudflare R2, MinIO, AWS S3, …) for screenshots.
 
     Set enabled: true and fill endpoint/keys to activate.
-    Falls back to local filesystem when disabled (default).
+    Image uploads require object storage by default. Local image fallback is
+    debug-only and must be explicitly enabled.
 
     R2: endpoint = ``<ACCOUNT_ID>.r2.cloudflarestorage.com`` (no scheme), secure = true,
     region left empty uses ``auto`` automatically for R2 hosts.
@@ -180,6 +181,11 @@ class ObjectStorageConfig:
     # Minimum JPEG size in bytes below which images are rejected as blank/black.
     # Blank frames compressed by minicap are typically < 2 KB.
     min_image_bytes: int = 3072
+    # Bound concurrent PUTs so large campaign batches apply backpressure instead
+    # of exhausting object-storage connections.
+    max_concurrent_uploads: int = 8
+    # Debug-only escape hatch. Production image paths should live in MinIO/R2/S3.
+    local_image_fallback_enabled: bool = False
 
 
 @dataclass
@@ -365,6 +371,27 @@ def _build_object_storage_config(raw: dict) -> ObjectStorageConfig:
     inc = os.environ.get("R2_PUBLIC_URL_INCLUDE_BUCKET")
     if inc is not None and str(inc).strip() != "":
         cfg.public_url_include_bucket = str(inc).strip().lower() in ("1", "true", "yes", "on")
+
+    max_uploads = (
+        os.environ.get("OBJECT_STORAGE_MAX_CONCURRENT_UPLOADS")
+        or os.environ.get("R2_MAX_CONCURRENT_UPLOADS")
+        or os.environ.get("MINIO_MAX_CONCURRENT_UPLOADS")
+        or ""
+    ).strip()
+    if max_uploads:
+        try:
+            cfg.max_concurrent_uploads = max(1, int(max_uploads))
+        except ValueError:
+            pass
+
+    local_fallback = os.environ.get("DEVICE_FARM_LOCAL_IMAGE_FALLBACK_ENABLED")
+    if local_fallback is not None and str(local_fallback).strip() != "":
+        cfg.local_image_fallback_enabled = str(local_fallback).strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
 
     return cfg
 

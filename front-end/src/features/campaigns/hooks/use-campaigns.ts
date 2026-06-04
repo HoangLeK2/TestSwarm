@@ -41,6 +41,19 @@ const KEYS = {
   executionRuntime: ['execution-runtime'] as const
 };
 
+/** Shared poll tuning — reduces API spam when monitor / campaigns are open. */
+const CAMPAIGN_LIST_ACTIVE_POLL_MS = 10_000;
+const MONITOR_WORKFLOW_POLL_MS = 8_000;
+const MONITOR_EXECUTION_POLL_MS = 15_000;
+const MONITOR_SIDEBAR_ACTIVE_POLL_MS = 15_000;
+const MONITOR_SIDEBAR_IDLE_POLL_MS = 45_000;
+const WORKFLOW_PROGRESS_POLL_MS = 5_000;
+const WORKFLOW_STEPS_POLL_MS = 10_000;
+
+const monitorQueryDefaults = {
+  refetchOnWindowFocus: false
+} as const;
+
 export function useExecutionRuntime() {
   return useQuery({
     queryKey: KEYS.executionRuntime,
@@ -71,7 +84,7 @@ export function useCampaigns() {
       const data = query.state.data as CampaignOut[] | undefined;
       return data &&
         data.some((c: CampaignOut) => isCampaignActiveExecution(c.status))
-        ? 3000
+        ? CAMPAIGN_LIST_ACTIVE_POLL_MS
         : false;
     }
   });
@@ -438,7 +451,8 @@ export function useCampaignWorkflows(campaignId: string, enabled: boolean) {
     queryKey: ['campaign-workflows', campaignId],
     queryFn: () => workflowsApi.listForCampaign(campaignId),
     enabled,
-    refetchInterval: 3000
+    ...monitorQueryDefaults,
+    refetchInterval: enabled ? MONITOR_WORKFLOW_POLL_MS : false
   });
 }
 
@@ -449,8 +463,9 @@ export function useCampaignExecutions(campaignId: string, enabled: boolean) {
     queryFn: () => executionsApi.list({ campaignId, limit: 200 }),
     enabled: enabled && !!campaignId,
     select: (data) => data.items,
-    staleTime: 5_000,
-    refetchInterval: enabled ? 8_000 : false
+    staleTime: 10_000,
+    ...monitorQueryDefaults,
+    refetchInterval: enabled ? MONITOR_EXECUTION_POLL_MS : false
   });
 }
 
@@ -459,7 +474,8 @@ export function useDeviceRunningWorkflows(serial: string, enabled: boolean) {
     queryKey: ['device-running-workflows', serial],
     queryFn: () => workflowsApi.listForDevice(serial),
     enabled: enabled && !!serial,
-    refetchInterval: 3000
+    ...monitorQueryDefaults,
+    refetchInterval: enabled ? MONITOR_WORKFLOW_POLL_MS : false
   });
 }
 
@@ -468,7 +484,9 @@ export function useWorkflowSteps(workflowId: string, enabled: boolean) {
     queryKey: ['workflow-steps', workflowId],
     queryFn: () => workflowsApi.steps(workflowId),
     enabled: enabled && !!workflowId,
-    refetchInterval: 2000
+    ...monitorQueryDefaults,
+    staleTime: 5_000,
+    refetchInterval: enabled ? WORKFLOW_STEPS_POLL_MS : false
   });
 }
 
@@ -477,7 +495,9 @@ export function useWorkflowProgress(workflowId: string, enabled: boolean) {
     queryKey: ['workflow-progress', workflowId],
     queryFn: () => workflowsApi.progress(workflowId),
     enabled: enabled && !!workflowId,
-    refetchInterval: 2000
+    ...monitorQueryDefaults,
+    staleTime: 3_000,
+    refetchInterval: enabled ? WORKFLOW_PROGRESS_POLL_MS : false
   });
 }
 
@@ -573,14 +593,20 @@ export function useStepAction(campaignId: string) {
 export function useDlqEntries(
   enabled: boolean,
   status?: string,
-  campaignId?: string
+  campaignId?: string,
+  pollAggressive = true
 ) {
   return useQuery({
     queryKey: ['dlq-entries', status ?? 'all', campaignId ?? 'global'],
     queryFn: () =>
       dlqApi.list({ status: status ?? 'open', campaignId, limit: 100 }),
     enabled,
-    refetchInterval: enabled ? 5000 : false
+    ...monitorQueryDefaults,
+    refetchInterval: enabled
+      ? pollAggressive
+        ? MONITOR_SIDEBAR_ACTIVE_POLL_MS
+        : MONITOR_SIDEBAR_IDLE_POLL_MS
+      : false
   });
 }
 
@@ -595,12 +621,21 @@ export function useDlqEntryByExecution(
   });
 }
 
-export function useDlqSummary(enabled: boolean, campaignId?: string) {
+export function useDlqSummary(
+  enabled: boolean,
+  campaignId?: string,
+  pollAggressive = true
+) {
   return useQuery({
     queryKey: ['dlq-summary', campaignId ?? 'global'],
     queryFn: () => dlqApi.summary({ campaignId }),
     enabled,
-    refetchInterval: enabled ? 5000 : false
+    ...monitorQueryDefaults,
+    refetchInterval: enabled
+      ? pollAggressive
+        ? MONITOR_SIDEBAR_ACTIVE_POLL_MS
+        : MONITOR_SIDEBAR_IDLE_POLL_MS
+      : false
   });
 }
 
@@ -666,11 +701,14 @@ export function useDismissDlqEntry() {
 
 export function useLatestExecutionArtifacts(
   campaignId: string,
-  enabled: boolean
+  enabled: boolean,
+  pollAggressive = true
 ) {
   return useQuery({
     queryKey: ['campaign-artifacts', campaignId],
     enabled: enabled && !!campaignId,
+    ...monitorQueryDefaults,
+    staleTime: 15_000,
     queryFn: async () => {
       const listing = await executionsApi.list({
         campaignId,
@@ -687,7 +725,11 @@ export function useLatestExecutionArtifacts(
       const artifacts = await executionsApi.listArtifacts(latest.id);
       return { execution: latest, artifacts };
     },
-    refetchInterval: enabled ? 5000 : false
+    refetchInterval: enabled
+      ? pollAggressive
+        ? MONITOR_SIDEBAR_ACTIVE_POLL_MS
+        : MONITOR_SIDEBAR_IDLE_POLL_MS
+      : false
   });
 }
 

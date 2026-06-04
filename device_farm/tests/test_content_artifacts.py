@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -73,6 +74,94 @@ async def test_content_store_skips_screenshot_path_by_default(monkeypatch):
     assert path is None
 
 
+def test_save_screenshot_requires_object_storage_without_debug_fallback(monkeypatch):
+    from services import minio_store
+    from services.content_store import _save_screenshot
+
+    monkeypatch.setenv("DEVICE_FARM_CONTENT_IMAGES_ENABLED", "1")
+    monkeypatch.setattr(minio_store, "is_quality_ok", lambda _data: True)
+    monkeypatch.setattr(minio_store, "enabled", lambda: False)
+    monkeypatch.setattr(minio_store, "local_image_fallback_enabled", lambda: False)
+
+    with pytest.raises(RuntimeError, match="local fallback disabled"):
+        _save_screenshot(b"jpeg-bytes", "abcdef1234567890")
+
+
+def test_save_screenshot_uses_image_hash_object_key(monkeypatch):
+    from services import minio_store
+    from services.content_store import _save_screenshot
+
+    uploaded: dict[str, str] = {}
+    data = b"same-image-bytes"
+    expected_digest = hashlib.sha256(data).hexdigest()[:32]
+
+    monkeypatch.setenv("DEVICE_FARM_CONTENT_IMAGES_ENABLED", "1")
+    monkeypatch.setattr(minio_store, "is_quality_ok", lambda _data: True)
+    monkeypatch.setattr(minio_store, "enabled", lambda: True)
+
+    def fake_upload(_data: bytes, object_name: str):
+        uploaded["object_name"] = object_name
+        return f"https://cdn.example/{object_name}"
+
+    monkeypatch.setattr(minio_store, "upload", fake_upload)
+
+    first = _save_screenshot(data, "content-hash-a")
+    second = _save_screenshot(data, "content-hash-b")
+
+    assert first == second
+    assert uploaded["object_name"] == f"content-screenshots/{expected_digest}.jpg"
+
+
+@pytest.mark.asyncio
+async def test_attach_screenshots_dedupes_upload_and_bulk_updates(monkeypatch):
+    import db.crud.content as crud_content
+    import db.database as database
+    from services import minio_store
+    from services.content_store import attach_screenshot_to_content_hashes
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def commit(self):
+            pass
+
+    upload_calls: list[str] = []
+    update_calls: list[list[str]] = []
+
+    monkeypatch.setenv("DEVICE_FARM_CONTENT_IMAGES_ENABLED", "1")
+    monkeypatch.setattr(database, "activity_session", lambda: FakeSession())
+    monkeypatch.setattr(minio_store, "is_quality_ok", lambda _data: True)
+    monkeypatch.setattr(minio_store, "enabled", lambda: True)
+
+    def fake_upload(_data: bytes, object_name: str, content_type: str = "image/jpeg"):
+        upload_calls.append(object_name)
+        return f"https://cdn.example/{object_name}"
+
+    async def fake_update_paths(_db, **kwargs):
+        update_calls.append(list(kwargs["content_hashes"]))
+        return len(kwargs["content_hashes"])
+
+    monkeypatch.setattr(minio_store, "upload", fake_upload)
+    monkeypatch.setattr(crud_content, "update_content_screenshot_paths", fake_update_paths)
+
+    updated = await attach_screenshot_to_content_hashes(
+        content_hashes=[f"hash-{i}" for i in range(25)],
+        collection="posts",
+        screenshot_bytes=b"same-image-bytes",
+        execution_id="exec-1",
+        only_if_missing=True,
+    )
+
+    assert updated == 25
+    assert len(upload_calls) == 1
+    assert len(update_calls) == 1
+    assert len(update_calls[0]) == 25
+
+
 def test_merge_execution_artifacts_skips_screenshot_by_default(monkeypatch):
     monkeypatch.delenv("DEVICE_FARM_CONTENT_IMAGES_ENABLED", raising=False)
     merged = merge_execution_artifacts(
@@ -121,3 +210,51 @@ def test_inline_hierarchy_label_is_vietnamese():
 async def test_read_missing_artifact_raises():
     with pytest.raises(FileNotFoundError):
         await read_artifact_bytes(_item(), "missing")
+
+
+@pytest.mark.asyncio
+async def test_read_screenshot_uses_minio_not_http(monkeypatch):
+    from services import content_artifacts, minio_store
+
+    item = _item(
+        screenshot_path="http://localhost:9000/device-farm/content-screenshots/abc123.jpg"
+    )
+    monkeypatch.setenv("DEVICE_FARM_CONTENT_IMAGES_ENABLED", "1")
+    fetch_calls: list[str] = []
+
+    def fake_fetch(url: str) -> bytes:
+        fetch_calls.append(url)
+        raise AssertionError("should not HTTP-fetch object storage URLs")
+
+    monkeypatch.setattr(content_artifacts, "_fetch_url_bytes", fake_fetch)
+    monkeypatch.setattr(minio_store, "enabled", lambda: True)
+    monkeypatch.setattr(
+        minio_store,
+        "get_object_bytes",
+        lambda name: b"jpeg-bytes" if name == "content-screenshots/abc123.jpg" else None,
+    )
+
+    payload, filename, mime = await read_artifact_bytes(item, "screenshot")
+    assert payload == b"jpeg-bytes"
+    assert "content_" in filename
+    assert mime.startswith("image/")
+    assert fetch_calls == []
+
+
+@pytest.mark.asyncio
+async def test_read_screenshot_storage_miss_raises_without_http(monkeypatch):
+    from services import content_artifacts, minio_store
+
+    item = _item(
+        screenshot_path="http://localhost:9000/device-farm/content-screenshots/missing.jpg"
+    )
+    monkeypatch.setenv("DEVICE_FARM_CONTENT_IMAGES_ENABLED", "1")
+    monkeypatch.setattr(
+        content_artifacts,
+        "_fetch_url_bytes",
+        lambda _url: (_ for _ in ()).throw(AssertionError("no http fallback")),
+    )
+    monkeypatch.setattr(minio_store, "get_object_bytes", lambda _name: None)
+
+    with pytest.raises(FileNotFoundError):
+        await read_artifact_bytes(item, "screenshot")

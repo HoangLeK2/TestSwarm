@@ -144,7 +144,7 @@ class TestCampaignDispatchExecution:
 
         with ExitStack() as stack:
             stack.enter_context(patch(
-                "services.campaign_dispatch.AsyncSessionLocal", return_value=db_mock
+                "services.campaign_dispatch.activity_session", return_value=db_mock
             ))
             stack.enter_context(patch(
                 "services.campaign_dispatch.repo.get_campaign",
@@ -206,7 +206,7 @@ class TestCampaignDispatchExecution:
 
         with ExitStack() as stack:
             stack.enter_context(patch(
-                "services.campaign_dispatch.AsyncSessionLocal", return_value=db_mock
+                "services.campaign_dispatch.activity_session", return_value=db_mock
             ))
             stack.enter_context(patch(
                 "services.campaign_dispatch.repo.get_campaign",
@@ -260,7 +260,7 @@ class TestCampaignDispatchExecution:
 
         with ExitStack() as stack:
             stack.enter_context(patch(
-                "services.campaign_dispatch.AsyncSessionLocal", return_value=db_mock
+                "services.campaign_dispatch.activity_session", return_value=db_mock
             ))
             stack.enter_context(patch(
                 "services.campaign_dispatch.repo.get_campaign",
@@ -319,7 +319,7 @@ class TestCampaignDispatchExecution:
 
         with ExitStack() as stack:
             stack.enter_context(patch(
-                "services.campaign_dispatch.AsyncSessionLocal", return_value=db_mock
+                "services.campaign_dispatch.activity_session", return_value=db_mock
             ))
             stack.enter_context(patch(
                 "services.campaign_dispatch.repo.get_campaign",

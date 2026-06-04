@@ -105,6 +105,7 @@
               "extract_profile": "balanced",
               "strategy_version": "fb_comments:v1",
               "parent_post_id_var": "_fb_comment_parent_pid",
+              "require_verified_parent": true,
               "max_items": 500,
               "comment_scroll_passes": 48,
               "comment_swipes_per_dump": 3,

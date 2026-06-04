@@ -229,6 +229,44 @@ async def update_content_screenshot_path(
     return bool(result.rowcount)
 
 
+async def update_content_screenshot_paths(
+    db: AsyncSession,
+    *,
+    content_hashes: list[str],
+    collection: str,
+    screenshot_path: str,
+    execution_id: str | None = None,
+    user_id: str | None = None,
+    only_if_missing: bool = False,
+) -> int:
+    hashes = [str(h) for h in content_hashes if h]
+    if not hashes:
+        return 0
+    stmt = (
+        update(ContentItem)
+        .where(
+            ContentItem.content_hash.in_(hashes),
+            ContentItem.collection == collection,
+        )
+        .values(screenshot_path=screenshot_path[:1000])
+    )
+    if execution_id:
+        stmt = stmt.where(ContentItem.execution_id == execution_id)
+    if user_id:
+        stmt = stmt.where(ContentItem.user_id == user_id)
+    if only_if_missing:
+        from sqlalchemy import or_
+
+        stmt = stmt.where(
+            or_(
+                ContentItem.screenshot_path.is_(None),
+                ContentItem.screenshot_path == "",
+            )
+        )
+    result = await db.execute(stmt)
+    return int(result.rowcount or 0)
+
+
 async def update_content_stats(
     db: AsyncSession,
     content_hash: str,

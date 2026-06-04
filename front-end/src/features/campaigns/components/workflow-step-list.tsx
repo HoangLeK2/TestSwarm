@@ -19,7 +19,7 @@ import { cn } from '@/lib/utils';
 import { Progress } from '@/components/ui/progress';
 import { scenariosApi } from '../services/api';
 import { useCampaignFlowI18n } from './flow-editor/flow-i18n';
-import { useWorkflowProgress, useWorkflowSteps } from '../hooks/use-campaigns';
+import { useWorkflowSteps } from '../hooks/use-campaigns';
 import type { StepLogEntry, WorkflowInfo } from '../types';
 import type { FlowStep } from './scenario-steps/types';
 
@@ -273,13 +273,9 @@ export function WorkflowStepList({
 
   const useSseSteps = sseConnected && (sseStepLog?.length ?? 0) > 0;
 
-  const { data: prog } = useWorkflowProgress(
-    wf.workflow_id,
-    isActive && !useSseSteps
-  );
   const { data: stepLog, isLoading: logLoading } = useWorkflowSteps(
     wf.workflow_id,
-    !useSseSteps
+    isActive && !useSseSteps
   );
 
   const { data: scenario, isLoading: scenarioLoading } = useQuery({
@@ -303,21 +299,17 @@ export function WorkflowStepList({
     ? (sseStepLog ?? [])
     : (stepLog?.steps ?? []);
 
-  const current = liveProgress?.current_step ?? prog?.current_step ?? 0;
+  const current = liveProgress?.current_step ?? 0;
   const total =
     liveProgress?.total_steps ??
-    prog?.total_steps ??
     scenarioDefs.length ??
     executedSteps.length;
-  const stepType =
-    liveProgress?.current_step_type ?? prog?.current_step_type ?? '';
-  const message = liveProgress?.message ?? prog?.message ?? '';
+  const stepType = liveProgress?.current_step_type ?? '';
+  const message = liveProgress?.message ?? '';
   const loopIter =
     liveProgress?.loop_iteration != null && liveProgress.loop_iteration >= 0
       ? liveProgress.loop_iteration
-      : prog?.loop_iteration != null && prog.loop_iteration >= 0
-        ? prog.loop_iteration
-        : null;
+      : null;
   const pct =
     total > 0
       ? Math.round(((isActive ? current : executedSteps.length) / total) * 100)

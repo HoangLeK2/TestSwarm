@@ -27,7 +27,10 @@ def reset_module(tmp_path):
     """
     image_store._CAPTURES_DIR = None
     image_store.init(tmp_path)
-    with patch.object(minio_store, "is_quality_ok", return_value=True):
+    with (
+        patch.object(minio_store, "is_quality_ok", return_value=True),
+        patch.object(minio_store, "local_image_fallback_enabled", return_value=True),
+    ):
         yield
     image_store._CAPTURES_DIR = None
 
@@ -87,6 +90,16 @@ def test_replaces_screenshot_with_url_path():
     result = image_store.save_step_images(steps, "scen1")
 
     assert result[0]["screen"]["screenshot"] == "/captures/screenshots/scen1/step_0_screenshot.jpg"
+
+
+def test_raises_when_object_storage_unavailable_without_debug_fallback(tmp_path):
+    with patch.object(minio_store, "local_image_fallback_enabled", return_value=False):
+        steps = [{"type": "tap", "screen": {"screenshot": _B64}}]
+        with pytest.raises(RuntimeError, match="local fallback disabled"):
+            image_store.save_step_images(steps, "scen-no-local")
+
+    path = tmp_path / "screenshots" / "scen-no-local" / "step_0_screenshot.jpg"
+    assert not path.exists()
 
 
 def test_saves_element_image_in_screen(tmp_path):

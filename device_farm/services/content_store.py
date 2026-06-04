@@ -555,40 +555,50 @@ async def attach_screenshot_to_content_hashes(
     per_hash_bytes: dict[str, bytes] | None = None,
 ) -> int:
     """Upload screenshot(s) and set screenshot_path on matching content rows."""
-    from db.crud.content import update_content_screenshot_path
+    from collections import defaultdict
+
+    from db.crud.content import update_content_screenshot_paths
     from db.database import activity_session
 
     if not _content_images_enabled() or not content_hashes:
         return 0
     updated = 0
+    hashes_by_path: dict[str, list[str]] = defaultdict(list)
     async with activity_session() as db:
+        saved_paths_by_image_hash: dict[str, str] = {}
         for content_hash in content_hashes:
             payload = (per_hash_bytes or {}).get(str(content_hash)) or screenshot_bytes
             if not payload:
                 continue
-            path = _save_screenshot(payload, str(content_hash))
+            image_hash = hashlib.sha256(payload).hexdigest()
+            path = saved_paths_by_image_hash.get(image_hash)
+            if not path:
+                path = _save_screenshot(payload, str(content_hash), image_hash=image_hash)
+                if path:
+                    saved_paths_by_image_hash[image_hash] = path
             if not path:
                 continue
-            if await update_content_screenshot_path(
+            hashes_by_path[path].append(str(content_hash))
+        for path, hashes in hashes_by_path.items():
+            updated += await update_content_screenshot_paths(
                 db,
-                content_hash=str(content_hash),
+                content_hashes=hashes,
                 collection=collection,
                 screenshot_path=path,
                 execution_id=execution_id,
                 user_id=user_id,
                 only_if_missing=only_if_missing,
-            ):
-                updated += 1
+            )
         if updated:
             await db.commit()
     return updated
 
 
-def _save_screenshot(data: bytes, content_hash: str) -> str:
+def _save_screenshot(data: bytes, content_hash: str, *, image_hash: str | None = None) -> str:
     """
     Save screenshot bytes. Returns URL/path string stored in DB.
 
-    Tries MinIO first; falls back to local filesystem.
+    Tries MinIO/R2 first; local filesystem is debug-only.
     Skips blank/black frames (quality gate in object storage / minio_store).
     """
     if not _content_images_enabled():
@@ -600,13 +610,20 @@ def _save_screenshot(data: bytes, content_hash: str) -> str:
         log.debug("content_store: skipped blank/black screenshot %s", content_hash[:12])
         return ""
 
-    object_name = f"content-screenshots/{content_hash[:16]}.jpg"
+    digest = image_hash or hashlib.sha256(data).hexdigest()
+    object_name = f"content-screenshots/{digest[:32]}.jpg"
     if minio_store.enabled():
         url = minio_store.upload(data, object_name)
         if url:
             return url
 
-    # Local fallback
+    if not minio_store.local_image_fallback_enabled():
+        raise RuntimeError(
+            f"content_store: screenshot object upload unavailable for {object_name}; "
+            "local fallback disabled"
+        )
+
+    # Debug local fallback
     base = os.path.join(os.path.dirname(os.path.dirname(__file__)), "screenshots")
     os.makedirs(base, exist_ok=True)
     filename = f"{content_hash[:16]}.jpg"

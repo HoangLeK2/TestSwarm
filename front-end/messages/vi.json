@@ -1465,6 +1465,7 @@
         "pickFromScreen": "Chọn từ màn hình",
         "autoFillHint": "Dùng «Chọn từ màn hình» hoặc ghi record — hệ thống tự điền loại widget, app và các điều kiện khớp. Bạn chỉ cần chỉnh giá trị chính (text, id…).",
         "byLabel": "Cách nhận diện",
+        "byDescriptionHint": "Khớp nhãn ẩn content-desc trên widget Android — dùng cho trình đọc màn hình, không phải chữ bạn nhìn thấy. Facebook thường gắn tên nhóm + trạng thái (vd «Claude VN, Công khai · 315K») vào nhãn này. Không tìm thấy phần tử → thử «Văn bản hiển thị (text)».",
         "valueLabel": "Giá trị cần khớp",
         "valuePlaceholder": "VD: Đăng nhập, com.app:id/btn_login hoặc ${BIEN}",
         "clickableLabel": "Chỉ phần tử có thể chạm (nút / link)",
@@ -1521,10 +1522,10 @@
           "resource_id": "ID phần tử (resource-id)",
           "xpath": "XPath",
           "class_name": "Tên class widget",
-          "description": "Mô tả accessibility",
-          "descriptionContains": "Mô tả chứa chuỗi",
-          "descriptionStartsWith": "Mô tả bắt đầu bằng",
-          "content_desc": "Content description"
+          "description": "Nhãn ẩn (content-desc)",
+          "descriptionContains": "Nhãn ẩn — chứa chuỗi",
+          "descriptionStartsWith": "Nhãn ẩn — bắt đầu bằng",
+          "content_desc": "Nhãn ẩn (content-desc)"
         }
       },
       "extract": {

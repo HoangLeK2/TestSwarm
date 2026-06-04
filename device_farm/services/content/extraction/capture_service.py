@@ -125,16 +125,27 @@ class ExtractionCaptureService:
 
         if persist and execution_ctx is not None:
             object_key = _object_key(execution_ctx, "png")
-            self._upload(object_key, png, "image/png")
-            artifact_id = _try_persist_artifact(
-                execution_ctx,
-                db=db,
-                object_key=object_key,
-                mime="image/png",
-                size=len(png),
-                sha256=digest,
-                captured_at=captured_at,
-            )
+            if self._upload(object_key, png, "image/png"):
+                artifact_id = _try_persist_artifact(
+                    execution_ctx,
+                    db=db,
+                    object_key=object_key,
+                    mime="image/png",
+                    size=len(png),
+                    sha256=digest,
+                    captured_at=captured_at,
+                )
+            else:
+                from services import minio_store
+
+                if minio_store.local_image_fallback_enabled():
+                    object_key = None
+                else:
+                    raise CaptureError(
+                        "object storage upload failed",
+                        code="OBJECT_STORAGE_UNAVAILABLE",
+                        details={"kind": execution_ctx.kind},
+                    )
 
         handle = CaptureHandle(
             image_bytes=png,
@@ -194,16 +205,18 @@ class ExtractionCaptureService:
 
         if persist and execution_ctx is not None:
             object_key = _object_key(execution_ctx, "xml")
-            self._upload(object_key, xml_bytes, "application/xml")
-            artifact_id = _try_persist_artifact(
-                execution_ctx,
-                db=db,
-                object_key=object_key,
-                mime="application/xml",
-                size=len(xml_bytes),
-                sha256=digest,
-                captured_at=captured_at,
-            )
+            if self._upload(object_key, xml_bytes, "application/xml"):
+                artifact_id = _try_persist_artifact(
+                    execution_ctx,
+                    db=db,
+                    object_key=object_key,
+                    mime="application/xml",
+                    size=len(xml_bytes),
+                    sha256=digest,
+                    captured_at=captured_at,
+                )
+            else:
+                object_key = None
 
         handle = HierarchyHandle(
             xml_bytes=xml_bytes,
@@ -239,11 +252,12 @@ class ExtractionCaptureService:
         return out.getvalue()
 
     @staticmethod
-    def _upload(object_key: str, data: bytes, mime: str) -> None:
+    def _upload(object_key: str, data: bytes, mime: str) -> bool:
         from services import minio_store
 
-        if minio_store.enabled():
-            minio_store.upload(data, object_key, content_type=mime)
+        if not minio_store.enabled():
+            return False
+        return bool(minio_store.upload(data, object_key, content_type=mime))
 
     @staticmethod
     def _observe_capture(kind: str, persist: bool, started: float) -> None:

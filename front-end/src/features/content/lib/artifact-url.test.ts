@@ -26,6 +26,19 @@ test('shouldProxyArtifactFetch is false for absolute R2 URLs', () => {
   assert.equal(directObjectStorageUrl(raw, raw), raw);
 });
 
+test('shouldProxyArtifactFetch is false for local MinIO public URL', () => {
+  const raw =
+    'http://localhost:9000/device-farm/content-screenshots/abc123.jpg';
+  assert.equal(shouldProxyArtifactFetch(raw, raw), false);
+  assert.equal(directObjectStorageUrl(raw, raw), raw);
+});
+
+test('shouldProxyArtifactFetch is true for execution artifact proxy path', () => {
+  const raw = '/artifacts/81f9a485-43dd-41b7-8844-dc88cd10eed3/content';
+  assert.equal(shouldProxyArtifactFetch(raw, null), true);
+  assert.equal(directObjectStorageUrl(raw, null), null);
+});
+
 test('shouldProxyArtifactFetch is true for local screenshot paths', () => {
   const raw = 'screenshots/deadbeef.jpg';
   const resolved = resolveArtifactUrl(raw, 'http://localhost:8081');

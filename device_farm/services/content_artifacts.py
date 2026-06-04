@@ -63,6 +63,39 @@ def normalize_artifact_url(url: str | None) -> str | None:
     return value
 
 
+def _object_name_from_storage_url(url: str) -> str | None:
+    path = urlparse(url).path.lstrip("/")
+    if not path:
+        return None
+    marker = "content-screenshots/"
+    if marker in path:
+        return path[path.index(marker) :]
+    return None
+
+
+_ARTIFACT_PROXY_RE = re.compile(
+    r"^/artifacts/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/content$",
+    re.IGNORECASE,
+)
+
+
+async def _load_execution_artifact_proxy_bytes(proxy_path: str) -> bytes | None:
+    """Load /artifacts/{id}/content via DB + object storage (no HTTP loopback)."""
+    match = _ARTIFACT_PROXY_RE.match(str(proxy_path).strip())
+    if not match:
+        return None
+    artifact_id = match.group(1)
+    from db.database import activity_session
+    from db.models.content import ExecutionArtifact
+    from services import minio_store
+
+    async with activity_session() as db:
+        row = await db.get(ExecutionArtifact, artifact_id)
+        if row is None or row.object_deleted:
+            return None
+        return minio_store.get_object_bytes(row.object_key)
+
+
 def _kind_for_execution_artifact(art_type: str, url: str) -> str:
     """Map execution step artifact types to preview kinds (proxy URLs lack extensions)."""
     lowered = art_type.lower()
@@ -355,13 +388,31 @@ async def read_artifact_bytes(
     if not url:
         raise FileNotFoundError("artifact expired")
 
-    if str(url).startswith(("http://", "https://")):
-        data = await asyncio.to_thread(_fetch_url_bytes, str(url))
-        parsed = urlparse(str(url))
+    url_str = str(url).strip()
+
+    proxy_bytes = await _load_execution_artifact_proxy_bytes(url_str)
+    if proxy_bytes is not None:
+        base = os.path.basename(url_str) or f"artifact_{stamp}.jpg"
+        return proxy_bytes, f"content_{content_id}_{base}", art["mime_type"]
+
+    if url_str.startswith(("http://", "https://")):
+        object_name = _object_name_from_storage_url(url_str)
+        if object_name:
+            from services import minio_store
+
+            data = minio_store.get_object_bytes(object_name)
+            if data is not None:
+                parsed = urlparse(url_str)
+                base = os.path.basename(parsed.path) or f"artifact_{stamp}"
+                return data, f"content_{content_id}_{base}", art["mime_type"]
+            # Public URL may point at localhost:9000 — unreachable from inside Docker.
+            raise FileNotFoundError("artifact expired")
+        data = await asyncio.to_thread(_fetch_url_bytes, url_str)
+        parsed = urlparse(url_str)
         base = os.path.basename(parsed.path) or f"artifact_{stamp}"
         return data, f"content_{content_id}_{base}", art["mime_type"]
 
-    local = _resolve_local_path(str(url))
+    local = _resolve_local_path(url_str)
     if not local or not os.path.isfile(local):
         raise FileNotFoundError("artifact expired")
     with open(local, "rb") as fh:

@@ -80,6 +80,30 @@ class TestCaptureService:
             svc.capture_screenshot(FakeDevice(), persist=True, execution_ctx=None)
         assert exc.value.code == "MISSING_CONTEXT"
 
+    def test_persist_requires_object_storage_upload(self, monkeypatch):
+        from services import minio_store
+
+        monkeypatch.setattr(minio_store, "enabled", lambda: False)
+        monkeypatch.setattr(minio_store, "local_image_fallback_enabled", lambda: False)
+        svc = ExtractionCaptureService()
+        ctx = ExecutionCaptureContext(execution_id="e1", step_index=1, kind="screenshot_pre")
+        with pytest.raises(CaptureError) as exc:
+            svc.capture_screenshot(FakeDevice(), persist=True, execution_ctx=ctx)
+        assert exc.value.code == "OBJECT_STORAGE_UNAVAILABLE"
+
+    def test_hierarchy_persist_tolerates_object_storage_unavailable(self, monkeypatch):
+        from services import minio_store
+
+        monkeypatch.setattr(minio_store, "enabled", lambda: False)
+        svc = ExtractionCaptureService()
+        ctx = ExecutionCaptureContext(execution_id="e1", step_index=1, kind="hierarchy")
+
+        handle = svc.capture_hierarchy(FakeDevice(), persist=True, execution_ctx=ctx)
+
+        assert handle.xml_bytes.startswith(b"<?xml")
+        assert handle.object_key is None
+        assert handle.artifact_id is None
+
 
 class TestHierarchyService:
     def test_screen_data_strategy(self):

@@ -609,6 +609,7 @@ def request_edge_extra_data(
         "open_post_tap_settle_s",
         "open_post_max_attempts",
         "open_post_verify",
+        "require_verified_parent",
         "allow_a11y_xml_fallback",
     ):
         if key in step:

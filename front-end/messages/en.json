@@ -1465,6 +1465,7 @@
         "pickFromScreen": "Pick from screen",
         "autoFillHint": "Use “Pick from screen” or recording — class, app, and match rules are filled automatically. You usually only edit the main value (text, id…).",
         "byLabel": "Match by",
+        "byDescriptionHint": "Matches the Android widget’s hidden content-desc label (screen-reader text), not necessarily what you see on screen. Facebook often puts group name + status here (e.g. “Claude VN, Public · 315K”). If the step fails, try “Visible text” instead.",
         "valueLabel": "Value to match",
         "valuePlaceholder": "e.g. Sign in, com.app:id/btn_login or ${VAR}",
         "clickableLabel": "Only tappable elements (buttons / links)",
@@ -1521,10 +1522,10 @@
           "resource_id": "Element ID (resource-id)",
           "xpath": "XPath",
           "class_name": "Widget class name",
-          "description": "Accessibility description",
-          "descriptionContains": "Description contains",
-          "descriptionStartsWith": "Description starts with",
-          "content_desc": "Content description"
+          "description": "Hidden label (content-desc)",
+          "descriptionContains": "Hidden label — contains",
+          "descriptionStartsWith": "Hidden label — starts with",
+          "content_desc": "Hidden label (content-desc)"
         }
       },
       "extract": {

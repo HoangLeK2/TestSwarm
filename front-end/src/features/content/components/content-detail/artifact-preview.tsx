@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, Download, Loader2 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
@@ -23,7 +24,7 @@ const PREVIEW_LINE_LIMIT = 400;
 const LARGE_INLINE_BYTES = 256_000;
 const VIRTUAL_LINE_HEIGHT_PX = 16;
 const VIRTUAL_VIEWPORT_LINES = 32;
-const CONTENT_IMAGE_PREVIEW_ENABLED = false;
+const CONTENT_IMAGE_PREVIEW_ENABLED = true;
 
 type Props = {
   detail: ContentDetail;
@@ -89,14 +90,12 @@ function VirtualTextPreview({ text }: { text: string }) {
 
 export function ArtifactPreview({ detail, artifact, shareToken }: Props) {
   const t = useTranslations('contentFeature.detail');
-  const [imageError, setImageError] = useState(false);
   const [previewError, setPreviewError] = useState(false);
   const [textPreview, setTextPreview] = useState<string | null>(null);
   const [loadingText, setLoadingText] = useState(false);
   const [showFullText, setShowFullText] = useState(false);
   const [downloading, setDownloading] = useState(false);
-  const [imageSrc, setImageSrc] = useState<string | null>(null);
-  const [imageLoadViaProxy, setImageLoadViaProxy] = useState(false);
+  const [directImageFailed, setDirectImageFailed] = useState(false);
 
   const resolvedUrl = useMemo(
     () => resolveArtifactUrl(artifact.url, deviceFarmBackendBase),
@@ -114,68 +113,70 @@ export function ArtifactPreview({ detail, artifact, shareToken }: Props) {
     source: artifact.source
   });
   const shouldShowImagePreview = CONTENT_IMAGE_PREVIEW_ENABLED && isImage;
-  const canOpenStorageLink =
-    Boolean(directImageUrl) && (!isImage || CONTENT_IMAGE_PREVIEW_ENABLED);
-  const isExpired = artifact.status === 'expired' || imageError || previewError;
+  const canOpenStorageLink = Boolean(directImageUrl);
+  const artifactExpired = artifact.status === 'expired';
+  const needsProxyImage =
+    shouldShowImagePreview &&
+    (directImageFailed ||
+      !directImageUrl ||
+      shouldProxyArtifactFetch(artifact.url, resolvedUrl));
 
+  const {
+    data: proxyImageSrc,
+    isError: proxyImageError,
+    isLoading: proxyImageLoading
+  } = useQuery({
+    queryKey: [
+      'content-artifact-image',
+      detail.id,
+      artifact.id,
+      shareToken ?? ''
+    ],
+    queryFn: async () => {
+      const { blob } = await contentApi.downloadArtifact(
+        detail.id,
+        artifact.id,
+        shareToken
+      );
+      return URL.createObjectURL(blob);
+    },
+    enabled: needsProxyImage && !artifactExpired,
+    staleTime: 10 * 60_000,
+    gcTime: 15 * 60_000,
+    refetchOnWindowFocus: false,
+    retry: 1
+  });
+
+  const proxyBlobRef = useRef<string | null>(null);
   useEffect(() => {
-    setImageSrc(null);
-    setImageLoadViaProxy(false);
-    if (!shouldShowImagePreview || isExpired) return undefined;
-
-    if (directImageUrl && !imageLoadViaProxy) {
-      setImageSrc(directImageUrl);
-      return undefined;
+    if (proxyImageSrc?.startsWith('blob:')) {
+      proxyBlobRef.current = proxyImageSrc;
     }
-
-    let cancelled = false;
-    let objectUrl: string | null = null;
-    const useFarmDownload =
-      imageLoadViaProxy || shouldProxyArtifactFetch(artifact.url, resolvedUrl);
-
-    const loadPromise = useFarmDownload
-      ? contentApi.downloadArtifact(detail.id, artifact.id, shareToken)
-      : resolvedUrl
-        ? contentApi.fetchArtifactBlob(resolvedUrl).then((blob) => ({
-            blob,
-            filename: null
-          }))
-        : Promise.reject(new Error('no artifact url'));
-
-    loadPromise
-      .then(({ blob }) => {
-        if (cancelled) return;
-        objectUrl = URL.createObjectURL(blob);
-        setImageSrc(objectUrl);
-      })
-      .catch(() => {
-        if (!cancelled) setImageError(true);
-      });
-
     return () => {
-      cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      if (proxyBlobRef.current) {
+        URL.revokeObjectURL(proxyBlobRef.current);
+        proxyBlobRef.current = null;
+      }
     };
-  }, [
-    artifact.id,
-    artifact.source,
-    artifact.url,
-    detail.id,
-    directImageUrl,
-    imageLoadViaProxy,
-    isExpired,
-    resolvedUrl,
-    shareToken,
-    shouldShowImagePreview
-  ]);
+  }, [proxyImageSrc]);
 
   useEffect(() => {
-    setImageError(false);
+    setDirectImageFailed(false);
     setPreviewError(false);
     setShowFullText(false);
     setTextPreview(null);
-    setImageLoadViaProxy(false);
+  }, [artifact.id, detail.id]);
 
+  const imageSrc = needsProxyImage
+    ? proxyImageSrc ?? null
+    : directImageUrl ?? null;
+  const imageLoadFailed =
+    shouldShowImagePreview &&
+    !artifactExpired &&
+    (proxyImageError || (needsProxyImage && !proxyImageLoading && !imageSrc));
+  const isExpired = artifactExpired || previewError || imageLoadFailed;
+
+  useEffect(() => {
     if (isImage || isExpired) return;
 
     const inline = artifact.inline
@@ -214,7 +215,7 @@ export function ArtifactPreview({ detail, artifact, shareToken }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [artifact, detail, isExpired, isImage, resolvedUrl, showFullText]);
+  }, [artifact.id, detail.id, isImage, artifactExpired, resolvedUrl, showFullText]);
 
   const displayText = useMemo(() => {
     if (!textPreview) return null;
@@ -229,6 +230,10 @@ export function ArtifactPreview({ detail, artifact, shareToken }: Props) {
   }, [showFullText, textPreview]);
 
   const handleDownload = async () => {
+    if (directImageUrl) {
+      window.open(directImageUrl, '_blank', 'noopener,noreferrer');
+      return;
+    }
     setDownloading(true);
     try {
       const { blob, filename } = await contentApi.downloadArtifact(
@@ -313,19 +318,17 @@ export function ArtifactPreview({ detail, artifact, shareToken }: Props) {
                 alt={artifact.label}
                 className='max-h-[min(60vh,520px)] w-full object-contain'
                 onError={() => {
-                  if (directImageUrl && !imageLoadViaProxy) {
-                    setImageLoadViaProxy(true);
-                    return;
+                  if (directImageUrl && !directImageFailed && !needsProxyImage) {
+                    setDirectImageFailed(true);
                   }
-                  setImageError(true);
                 }}
               />
-            ) : (
+            ) : proxyImageLoading || (directImageUrl && !directImageFailed) ? (
               <p className='flex items-center gap-2 p-4 text-sm text-muted-foreground'>
                 <Loader2 className='size-4 animate-spin' />
                 {t('loadingPreview')}
               </p>
-            )}
+            ) : null}
           </div>
         ) : loadingText ? (
           <p className='flex items-center gap-2 text-sm text-muted-foreground'>

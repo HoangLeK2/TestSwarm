@@ -91,6 +91,7 @@ def test_facebook_builtin_post_comment_flows_stay_on_detail_until_comments_extra
         assert isinstance(then_steps, list), name
         comment_extract_index = _first_step_index(then_steps, _is_fb_comment_extract)
         assert comment_extract_index is not None, name
+        assert then_steps[comment_extract_index].get("require_verified_parent") is True, name
         return_steps = then_steps[comment_extract_index + 1 :]
         assert return_steps and _is_back_step(return_steps[0]), name
         assert any(

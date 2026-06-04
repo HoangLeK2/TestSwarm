@@ -88,14 +88,16 @@ export function CampaignRunProgress({
     queryKey: ['campaign-latest-execution', campaignId],
     queryFn: () => executionsApi.list({ campaignId, limit: 1, offset: 0 }),
     enabled: isRunning && workflows.length === 0,
-    refetchInterval: isRunning ? 3000 : false
+    refetchInterval: isRunning ? 8_000 : false,
+    refetchOnWindowFocus: false
   });
   const latestExecId = latestExecution?.items?.[0]?.id;
   const { data: execSummary } = useQuery({
     queryKey: ['execution-summary', latestExecId],
     queryFn: () => executionsApi.summary(latestExecId!),
     enabled: isRunning && workflows.length === 0 && !!latestExecId,
-    refetchInterval: isRunning ? 3000 : false
+    refetchInterval: isRunning ? 8_000 : false,
+    refetchOnWindowFocus: false
   });
 
   if (!isRunning) return null;

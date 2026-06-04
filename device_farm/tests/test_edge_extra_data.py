@@ -540,6 +540,7 @@ def test_tap_fb_comment_button_resolves_target_via_agent_boot(monkeypatch) -> No
     assert device.taps == [(60, 40)]
     assert sc.ctx["_edge_comment_parent_base_hash"] == "base-hash"
     assert sc.ctx["_active_comment_parent_hash"] == "scoped-hash"
+    assert sc.ctx["_active_comment_parent_source"] == "tap_fb_comment_button"
 
 
 def test_tap_fb_comment_button_preserves_post_detail_parent_hash(monkeypatch) -> None:
@@ -840,6 +841,25 @@ def test_try_edge_extra_data_forwards_comment_scroll_context(monkeypatch) -> Non
     assert context["comment_scroll_distance"] == 0.25
     assert context["comment_scroll_duration_ms"] == 400
     assert context["comment_scroll_pause_s"] == 0.5
+
+
+def test_try_edge_extra_data_forwards_require_verified_parent(monkeypatch) -> None:
+    monkeypatch.setenv("EDGE_EXTRA_DATA_ENABLED", "1")
+    device = _FakeDevice({"ok": True, "ingest": {"parsed_count": 0, "inserted_count": 0}})
+
+    handled = extraction_mod._try_edge_extra_data(
+        _ctx(device),
+        {
+            "collection": "fb",
+            "edge_extra_data": True,
+            "require_verified_parent": True,
+        },
+        "fb_comments",
+        {},
+    )
+
+    assert handled is True
+    assert device.calls[0]["context"]["require_verified_parent"] is True
 
 
 def test_tap_fb_comment_button_ignore_error_keeps_step_ok(monkeypatch) -> None:

@@ -759,6 +759,16 @@ class ExtraDataIngestServer:
                     items=items,
                 )
                 parent_id_scoped = bool(parent_id)
+            if (
+                is_comment_strategy
+                and bool(context.get("require_verified_parent"))
+                and not _has_verified_comment_parent_context(context)
+            ):
+                diagnostic["parent_context_required"] = True
+                diagnostic["parent_context_missing"] = True
+                should_persist = False
+                parent_id = None
+                parent_id_scoped = False
             if is_comment_strategy:
                 items = _with_comment_parent_context(items, context, parent_id=parent_id)
 

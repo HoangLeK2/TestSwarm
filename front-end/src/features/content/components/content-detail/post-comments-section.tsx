@@ -67,7 +67,7 @@ export function PostCommentsSection({ post }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [post.id, t]);
+  }, [post.id]);
 
   const loadMore = async () => {
     if (loadingMore || comments.length >= total) return;

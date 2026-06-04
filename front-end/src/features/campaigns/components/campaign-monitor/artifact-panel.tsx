@@ -4,8 +4,10 @@ import { ImageIcon, Loader2 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { deviceFarmBackendBase } from '@/lib/farm-api';
 import {
+  directObjectStorageUrl,
   isImageArtifact,
-  resolveArtifactUrl
+  resolveArtifactUrl,
+  shouldProxyArtifactFetch
 } from '@/features/content/lib/artifact-url';
 import type { ExecutionArtifact } from '../../types';
 import { useLatestExecutionArtifacts } from '../../hooks/use-campaigns';
@@ -14,10 +16,33 @@ import { ArtifactMonitorTile } from './artifact-tile';
 
 interface Props {
   campaignId: string;
+  pollAggressive?: boolean;
 }
 
 function resolvedArtifactHref(artifact: ExecutionArtifact): string | null {
-  return resolveArtifactUrl(artifact.url, deviceFarmBackendBase);
+  const raw = String(artifact.url ?? '').trim();
+  if (!raw) return null;
+
+  const resolved = resolveArtifactUrl(raw, deviceFarmBackendBase);
+  const direct = directObjectStorageUrl(raw, resolved);
+  if (direct) return direct;
+
+  if (shouldProxyArtifactFetch(raw, resolved)) {
+    if (raw.startsWith('/artifacts/')) {
+      return resolveArtifactUrl(`/api${raw}`, deviceFarmBackendBase);
+    }
+    if (artifact.artifact_type === 'content_screenshot') {
+      const contentId = String(artifact.metadata?.content_id ?? '').trim();
+      if (contentId) {
+        return resolveArtifactUrl(
+          `/api/content/${encodeURIComponent(contentId)}/artifacts/screenshot/download`,
+          deviceFarmBackendBase
+        );
+      }
+    }
+  }
+
+  return resolved;
 }
 
 function artifactIsImage(
@@ -30,13 +55,20 @@ function artifactIsImage(
   return isImageArtifact(kind, href);
 }
 
-export function ArtifactPanel({ campaignId }: Props) {
+export function ArtifactPanel({
+  campaignId,
+  pollAggressive = true
+}: Props) {
   const t = useTranslations('campaignsFeature.list');
-  const { data, isLoading } = useLatestExecutionArtifacts(campaignId, true);
+  const { data, isLoading } = useLatestExecutionArtifacts(
+    campaignId,
+    true,
+    pollAggressive
+  );
   const artifacts = data?.artifacts ?? [];
   const withUrl = artifacts.filter((artifact) => {
     const href = resolvedArtifactHref(artifact);
-    return Boolean(href) && !artifactIsImage(artifact, href);
+    return Boolean(href) && artifactIsImage(artifact, href);
   });
 
   return (

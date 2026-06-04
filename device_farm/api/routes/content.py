@@ -442,6 +442,21 @@ async def download_content_artifact(
         )
     except FileNotFoundError as exc:
         raise HTTPException(410, "Artifact expired or unavailable") from exc
+    except Exception as exc:
+        # Defensive: misconfigured storage URLs must not surface as opaque 500s.
+        exc_name = type(exc).__name__
+        if exc_name in {"ConnectError", "ConnectTimeout", "ReadTimeout"} or (
+            exc.__class__.__module__.startswith("httpx")
+            and exc_name.endswith("Error")
+        ):
+            log.warning(
+                "content artifact_download fetch failed item_id=%s artifact_id=%s: %s",
+                item_id,
+                artifact_id,
+                exc,
+            )
+            raise HTTPException(410, "Artifact expired or unavailable") from exc
+        raise
     log.info(
         "content artifact_download item_id=%s artifact_id=%s user_id=%s bytes=%s",
         item_id,

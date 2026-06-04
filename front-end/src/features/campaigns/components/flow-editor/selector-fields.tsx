@@ -24,9 +24,24 @@ const SELECTOR_BY_OPTIONS = [
   'class name',
   'description',
   'descriptionContains',
+  'descriptionStartsWith'
+] as const;
+
+/** Legacy alias; normalized to `description` in the UI. */
+const DESCRIPTION_SELECTOR_BYS = new Set([
+  'description',
+  'descriptionContains',
   'descriptionStartsWith',
   'content-desc'
-] as const;
+]);
+
+function normalizeSelectorByForUi(by: string): (typeof SELECTOR_BY_OPTIONS)[number] {
+  if (by === 'content-desc') return 'description';
+  if ((SELECTOR_BY_OPTIONS as readonly string[]).includes(by)) {
+    return by as (typeof SELECTOR_BY_OPTIONS)[number];
+  }
+  return 'text';
+}
 
 function valueInsertRowClassName() {
   return 'flex min-w-0 flex-col gap-2 sm:flex-row sm:items-stretch sm:gap-2';
@@ -151,10 +166,11 @@ function SelectorBySelect({
     typeof useTranslations<'campaignsFeature.stepEditor.selector'>
   >;
 }) {
+  const uiValue = normalizeSelectorByForUi(value);
   return (
     <select
       className='w-full rounded-md border border-input bg-background px-2 py-2 text-xs'
-      value={value}
+      value={uiValue}
       onChange={(e) => onChange(e.target.value)}
     >
       {SELECTOR_BY_OPTIONS.map((o) => (
@@ -678,6 +694,10 @@ export function SelectorFields({
           tSel={tSel}
         />
       </StepPanelField>
+
+      {DESCRIPTION_SELECTOR_BYS.has(by) ? (
+        <StepPanelHint>{tSel('byDescriptionHint')}</StepPanelHint>
+      ) : null}
 
       <StepPanelField label={tSel('valueLabel')}>
         <div className={valueInsertRowClassName()}>

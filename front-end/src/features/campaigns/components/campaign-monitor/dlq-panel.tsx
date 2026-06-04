@@ -95,11 +95,22 @@ function dlqErrorMessage(err: unknown, fallback: string): string {
   return fallback;
 }
 
-export function DlqPanel({ campaignId }: { campaignId?: string }) {
+export function DlqPanel({
+  campaignId,
+  pollAggressive = true
+}: {
+  campaignId?: string;
+  pollAggressive?: boolean;
+}) {
   const t = useTranslations('campaignsFeature.list');
   const { canExecute } = useResourcePermissions('executions');
-  const { data = [], isLoading } = useDlqEntries(true, 'open', campaignId);
-  const { data: summary } = useDlqSummary(true, campaignId);
+  const { data = [], isLoading } = useDlqEntries(
+    true,
+    'open',
+    campaignId,
+    pollAggressive
+  );
+  const { data: summary } = useDlqSummary(true, campaignId, pollAggressive);
   const retryMut = useRetryDlqEntry();
   const closeMut = useCloseDlqEntry();
   const dismissMut = useDismissDlqEntry();

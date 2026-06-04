@@ -98,8 +98,10 @@ def _save_image(data: bytes, local_path: Path, minio_key: str, skip_quality: boo
 
 def save_step_images(steps: list, scenario_id: str) -> list:
     """
-    Walk steps, extract any base64 screenshot/element_image fields,
+    Walk steps, extract base64 full-screen screenshot fields,
     validate quality, persist them, and replace with URL paths.
+
+    Element crops (element_image) are not persisted — only full screenshots are stored.
 
     Returns the modified steps list (original is not mutated).
     """
@@ -116,48 +118,29 @@ def save_step_images(steps: list, scenario_id: str) -> list:
         screen = step.get("screen")
         if isinstance(screen, dict):
             screen = dict(screen)
-            for field, suffix in (("screenshot", "screenshot"), ("element_image", "element")):
-                val = screen.get(field)
-                if val and _is_base64(val):
-                    try:
-                        raw = base64.b64decode(_strip_data_url_prefix(val), validate=True)
-                    except Exception as exc:
-                        log.warning("image_store: base64 decode failed for %s/%s: %s",
-                                    scenario_id, field, exc)
-                        continue
-                    local_path = base / f"step_{idx}_{suffix}.jpg"
+            screen.pop("element_image", None)
+            val = screen.get("screenshot")
+            if val and _is_base64(val):
+                try:
+                    raw = base64.b64decode(_strip_data_url_prefix(val), validate=True)
+                except Exception as exc:
+                    log.warning(
+                        "image_store: base64 decode failed for %s/screenshot: %s",
+                        scenario_id,
+                        exc,
+                    )
+                else:
+                    local_path = base / f"step_{idx}_screenshot.jpg"
                     minio_key = f"screenshots/{scenario_id}/{local_path.name}"
-                    # element_image is always an intentional element crop — skip
-                    # blank-frame quality gate (which is designed to reject minicap
-                    # black frames, not small UI element crops).
-                    skip_quality = (field == "element_image")
-                    url = _save_image(raw, local_path, minio_key, skip_quality=skip_quality)
+                    url = _save_image(raw, local_path, minio_key)
                     if url:
-                        screen[field] = url
-                        log.debug("image_store: saved %s → %s", field, url)
+                        screen["screenshot"] = url
+                        log.debug("image_store: saved screenshot → %s", url)
                     else:
-                        # Remove blank image so DB doesn't store it
-                        screen.pop(field, None)
+                        screen.pop("screenshot", None)
             step["screen"] = screen
 
-        # tap_selector step stores element_image at top level
-        val = step.get("element_image")
-        if val and _is_base64(val):
-            try:
-                raw = base64.b64decode(_strip_data_url_prefix(val), validate=True)
-            except Exception as exc:
-                log.warning("image_store: base64 decode failed for top-level element_image: %s", exc)
-                raw = None
-            if raw is not None:
-                local_path = base / f"step_{idx}_element.jpg"
-                minio_key = f"screenshots/{scenario_id}/{local_path.name}"
-                # top-level element_image is also an intentional crop and can be
-                # very small; bypass blank-frame gate.
-                url = _save_image(raw, local_path, minio_key, skip_quality=True)
-                if url:
-                    step["element_image"] = url
-                else:
-                    step.pop("element_image", None)
+        step.pop("element_image", None)
 
         out.append(step)
     return out

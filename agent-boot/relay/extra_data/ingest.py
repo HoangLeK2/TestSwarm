@@ -878,21 +878,6 @@ class ExtraDataIngestServer:
                 if context.get("open_post_detail"):
                     active_parent["source"] = "post_detail"
                 result["active_parent_post"] = active_parent
-        if rows and should_persist:
-            targets: list[dict[str, Any]] = []
-            for row in rows:
-                raw = row.get("raw_data") if isinstance(row.get("raw_data"), dict) else {}
-                bounds = raw.get("card_bounds")
-                ch = row.get("content_hash")
-                if ch and isinstance(bounds, (list, tuple)) and len(bounds) == 4:
-                    targets.append(
-                        {
-                            "content_hash": str(ch),
-                            "bounds": [int(bounds[0]), int(bounds[1]), int(bounds[2]), int(bounds[3])],
-                        }
-                    )
-            if targets:
-                result["screenshot_targets"] = targets
         return result
 
     async def _insert_rows_with_retry(self, rows: list[dict[str, Any]]) -> dict[str, Any]:

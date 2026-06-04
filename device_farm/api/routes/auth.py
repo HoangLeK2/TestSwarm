@@ -315,4 +315,5 @@ async def me(db: DB, user: CurrentUser):
         role=user.role,
         api_key=user.api_key,
         orgRole=org_role,
+        defaultOrgId=getattr(user, "default_org_id", None),
     )

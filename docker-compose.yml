@@ -78,34 +78,34 @@ services:
     ports:
       - "8233:8080"   # Temporal UI at http://localhost:8233
 
-  # redis:
-  #   image: redis:7-alpine
-  #   restart: unless-stopped
-  #   env_file:
-  #     - ./.env
-  #   extra_hosts:
-  #     - "host.docker.internal:host-gateway"
-  #   ports:
-  #     - "6379:6379"
-  #   volumes:
-  #     - redis_data:/data
-  #   healthcheck:
-  #     test: ["CMD", "redis-cli", "ping"]
-  #     interval: 5s
-  #     timeout: 3s
-  #     retries: 5
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
-  # redis-ui:
-  #   image: rediscommander/redis-commander:latest
-  #   platform: linux/amd64
-  #   restart: unless-stopped
-  #   depends_on:
-  #     redis:
-  #       condition: service_healthy
-  #   environment:
-  #     REDIS_HOSTS: local:redis:6379
-  #   ports:
-  #     - "${REDIS_UI_PORT:-5540}:8081"
+  redis-ui:
+    image: rediscommander/redis-commander:latest
+    platform: linux/amd64
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    ports:
+      - "${REDIS_UI_PORT:-5540}:8081"
 
   farm:
     build:
@@ -152,8 +152,9 @@ services:
       R2_SECURE: ${R2_SECURE:-}
       R2_PUBLIC_URL_INCLUDE_BUCKET: ${R2_PUBLIC_URL_INCLUDE_BUCKET:-}
       R2_REGION: ${R2_REGION:-}
-      # Local MinIO (docker service below). Set MINIO_ENDPOINT= to disable object storage.
-      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
+      DEVICE_FARM_CONTENT_IMAGES_ENABLED: ${DEVICE_FARM_CONTENT_IMAGES_ENABLED:-0}
+      # Local MinIO (profile `minio`). With R2, leave MINIO_ENDPOINT empty in .env.
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-}
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
       MINIO_BUCKET: ${MINIO_BUCKET:-device-farm}
@@ -278,7 +279,7 @@ services:
 volumes:
   pgdata:
   farm_captures:
-  minio_data:
+  # minio_data:
   redis_data:
   # prometheus_data:
   # grafana_data:

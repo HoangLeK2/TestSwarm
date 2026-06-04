@@ -114,13 +114,18 @@ export function getStfApkDownloadUrl(): string {
   return `${API_BASE_URL}/devices/stf-apk`;
 }
 
+/** WS origin (scheme + host[:port]) — same base used for QR / link in connect dialogs. */
+export function getDeviceAgentWsBase(): string {
+  return getDeviceBackendBase()
+    .replace(/^http:\/\//i, 'ws://')
+    .replace(/^https:\/\//i, 'wss://')
+    .replace(/\/+$/, '');
+}
+
 /** WebSocket URL for device-agent (Pair device QR). */
 export function getDeviceAgentWsUrl(query = ''): string {
-  const base = getDeviceBackendBase()
-    .replace(/^http:\/\//i, 'ws://')
-    .replace(/^https:\/\//i, 'wss://');
   const suffix = query.startsWith('?') ? query : query ? `?${query}` : '';
-  return `${base}/device-agent${suffix}`;
+  return `${getDeviceAgentWsBase()}/device-agent${suffix}`;
 }
 
 /** URL for connect-by-QR (ADB): app on phone POSTs its IP here after scanning QR.

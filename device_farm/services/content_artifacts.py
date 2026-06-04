@@ -279,6 +279,8 @@ def merge_execution_artifacts(
         if "hierarchy" not in art_type and "screenshot" not in art_type:
             continue
         lowered = art_type.lower()
+        if "element" in lowered:
+            continue
         if not content_images_enabled() and "screenshot" in lowered:
             continue
         if skip_screenshot and "screenshot" in lowered:

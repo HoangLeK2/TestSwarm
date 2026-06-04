@@ -173,6 +173,7 @@ import { isSelectorPickableStep } from '@/features/campaigns/components/flow-edi
 import { applyStepsToFlowgramDocument } from '@/features/scenario-templates/components/scenario-flow-editor/flow-doc-sync';
 import type { FlowgramRunState } from '@/features/scenario-templates/components/scenario-flow-editor/flowgram-scenario-context';
 import { useResourcePermissions } from '@/features/auth/hooks/use-permission';
+import { useOrganization } from '@/features/organization/hooks/use-organization';
 import {
   deviceSelectFullTitle,
   formatDeviceSelectLabel
@@ -738,9 +739,12 @@ export function ControlRecordView({
   const activeCampaignId = save.editingContext?.campaignId ?? null;
   const activeScenarioId = save.editingContext?.scenarioId ?? null;
   const selectedSerial = device.selectedDevice?.serial ?? null;
+  const { currentOrg } = useOrganization();
+  const controlRecordOrgId = currentOrg?.id ?? null;
   const devicesQuery = useQuery({
-    queryKey: ['control-record-device-map'],
+    queryKey: ['control-record-device-map', controlRecordOrgId],
     queryFn: devicesApi.list,
+    enabled: Boolean(controlRecordOrgId),
     staleTime: 15_000
   });
   const selectedDeviceId = useMemo(() => {

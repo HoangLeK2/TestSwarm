@@ -21,7 +21,8 @@ function meToSessionUser(
     email: me.email,
     givenName: me.name,
     role: me.role,
-    orgRole: me.orgRole ?? null
+    orgRole: me.orgRole ?? null,
+    defaultOrgId: me.defaultOrgId ?? null
   };
 }
 

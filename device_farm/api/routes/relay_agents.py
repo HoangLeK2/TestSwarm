@@ -352,6 +352,31 @@ def _job_to_out(job, items: list | None = None) -> RelayBatchJobOut:
     )
 
 
+def _normalize_ws_base_url(raw: str) -> str | None:
+    """Parse ws(s)://host[:port] (optional /device-agent suffix) for phone-facing URLs."""
+    from urllib.parse import urlparse
+
+    s = (raw or "").strip()
+    if not s:
+        return None
+    if "/device-agent" in s:
+        s = s.split("/device-agent", 1)[0].rstrip("/")
+    lower = s.lower()
+    if lower.startswith("ws://"):
+        http_equiv = "http://" + s[5:]
+        ws_scheme = "ws"
+    elif lower.startswith("wss://"):
+        http_equiv = "https://" + s[6:]
+        ws_scheme = "wss"
+    else:
+        return None
+    parsed = urlparse(http_equiv)
+    if not parsed.hostname:
+        return None
+    netloc = parsed.netloc or parsed.hostname
+    return f"{ws_scheme}://{netloc}"
+
+
 def _ws_base_url_from_request(request: Request) -> str:
     configured = device_farm_ws_public_base()
     if configured:
@@ -359,6 +384,14 @@ def _ws_base_url_from_request(request: Request) -> str:
     scheme = "wss" if request.url.scheme == "https" else "ws"
     host = request.headers.get("host", request.url.netloc)
     return f"{scheme}://{host}"
+
+
+def _ws_base_for_push(request: Request, ws_base_url: str | None) -> str:
+    """Prefer dashboard-provided LAN URL; fall back to server env / request host."""
+    normalized = _normalize_ws_base_url(ws_base_url or "")
+    if normalized:
+        return normalized
+    return _ws_base_url_from_request(request)
 
 
 def _raise_onboarding_error(exc: relay_onboarding.RelayOnboardingError) -> None:
@@ -725,6 +758,10 @@ async def push_connect_url_to_device(
         None,
         description="Logical device id when DB serial is pending-* but ADB path serial is physical",
     ),
+    ws_base_url: str | None = Query(
+        None,
+        description="Phone-reachable ws(s) origin (same as dashboard QR). Overrides DEVICE_FARM_WS.",
+    ),
 ):
     """Send the device-agent URL to STFService via agent-boot/ADB; no QR scan required."""
     row = await repo.get_relay_agent(db, relay_id, user_id=user.id)
@@ -759,7 +796,7 @@ async def push_connect_url_to_device(
         )
 
     ws_url = relay_onboarding.build_device_agent_url(
-        _ws_base_url_from_request(request),
+        _ws_base_for_push(request, ws_base_url),
         device,
     )
     log.info("push-connect-url relay=%s serial=%s ws_url=%s", relay_id, serial, ws_url)
@@ -767,7 +804,8 @@ async def push_connect_url_to_device(
     cmd = (
         "am start "
         "-n jp.co.cyberagent.stf/.IdentityActivity "
-        "-a android.intent.action.MAIN "
+        "-a jp.co.cyberagent.stf.ACTION_IDENTIFY "
+        "--activity-single-top "
         f"--es qr_content {shlex.quote(ws_url)}"
     )
     ctrl = _get_ctrl()

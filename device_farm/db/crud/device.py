@@ -286,7 +286,23 @@ async def list_devices(
     q = select(Device).order_by(Device.created_at)
     # Prefer org scoping (multi-user org). `user_id` kept for legacy call sites.
     if org_id:
-        q = q.where(Device.org_id == org_id)
+        from db.crud.organization import list_organization_members
+
+        member_rows = await list_organization_members(db, org_id)
+        member_ids = [
+            str(member.user_id)
+            for member, _ in member_rows
+            if getattr(member, "user_id", None)
+        ]
+        if member_ids:
+            q = q.where(
+                or_(
+                    Device.org_id == org_id,
+                    (Device.org_id.is_(None)) & (Device.user_id.in_(member_ids)),
+                )
+            )
+        else:
+            q = q.where(Device.org_id == org_id)
     elif user_id:
         q = q.where(Device.user_id == user_id)
     result = await db.execute(q)

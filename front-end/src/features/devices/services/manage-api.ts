@@ -229,13 +229,18 @@ export const relayAgentsApi = {
   pushConnectUrl: (
     relayId: string,
     serial: string,
-    opts?: { deviceId?: string }
+    opts?: { deviceId?: string; wsBaseUrl?: string }
   ) =>
     farmApi
       .post<RelayCommandOut>(
         `/relay-agents/${encodeURIComponent(relayId)}/devices/${encodeURIComponent(serial)}/push-connect-url`,
         undefined,
-        opts?.deviceId ? { params: { device_id: opts.deviceId } } : undefined
+        {
+          params: {
+            ...(opts?.deviceId ? { device_id: opts.deviceId } : {}),
+            ...(opts?.wsBaseUrl ? { ws_base_url: opts.wsBaseUrl } : {})
+          }
+        }
       )
       .then((r) => r.data),
   bootstrapAll: (relayId: string) =>

@@ -177,36 +177,6 @@ def build_step_capture_payload(
             result["selector"] = sel_url
 
     if bounds:
-        try:
-            from PIL import Image
-
-            img = Image.open(io.BytesIO(png))
-            iw, ih = img.size
-            sx, sy = iw / max(sc.w, 1), ih / max(sc.h, 1)
-            crop_box = (
-                max(0, int(bounds["left"] * sx)),
-                max(0, int(bounds["top"] * sy)),
-                min(iw, int(bounds["right"] * sx)),
-                min(ih, int(bounds["bottom"] * sy)),
-            )
-            if crop_box[2] > crop_box[0] and crop_box[3] > crop_box[1]:
-                cropped = img.crop(crop_box)
-                buf = io.BytesIO()
-                cropped.save(buf, format="JPEG", quality=85)
-                crop_bytes = buf.getvalue()
-                elem_local = os.path.join(capture_dir, f"{prefix}_element.jpg") if capture_dir else ""
-                elem_key = f"{minio_prefix}/{prefix}_element.jpg"
-                elem_url = _store_bytes(
-                    crop_bytes,
-                    object_key=None,
-                    local_path=elem_local,
-                    minio_key=elem_key,
-                    content_type="image/jpeg",
-                )
-                if elem_url:
-                    result["element"] = elem_url
-                result["bounds"] = [bounds["left"], bounds["top"], bounds["right"], bounds["bottom"]]
-        except Exception as exc:
-            log.debug("element crop failed: %s", exc)
+        result["bounds"] = [bounds["left"], bounds["top"], bounds["right"], bounds["bottom"]]
 
     return result

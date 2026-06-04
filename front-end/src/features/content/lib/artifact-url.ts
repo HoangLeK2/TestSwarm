@@ -2,16 +2,36 @@ const DEFAULT_BACKEND_BASE = (
   process.env.NEXT_PUBLIC_PRODUCT_API_URL || 'http://localhost:8081'
 ).replace(/\/+$/, '');
 
+const OBJECT_STORAGE_PUBLIC_BASE = (
+  process.env.NEXT_PUBLIC_OBJECT_STORAGE_PUBLIC_BASE_URL ||
+  process.env.NEXT_PUBLIC_R2_PUBLIC_BASE_URL ||
+  ''
+).replace(/\/+$/, '');
+
+/** Rewrite legacy dev MinIO URLs (localhost:9000) to the public R2/CDN base. */
+export function rewriteLegacyObjectStorageUrl(
+  url: string | null | undefined
+): string | null {
+  if (!url) return null;
+  const value = url.trim();
+  if (!value || !OBJECT_STORAGE_PUBLIC_BASE) return value || null;
+  const match = value.match(
+    /^https?:\/\/(?:localhost|127\.0\.0\.1):\d+(?:\/device-farm)?\/(content-screenshots\/[^?#]+)/i
+  );
+  if (!match) return value;
+  return `${OBJECT_STORAGE_PUBLIC_BASE}/${match[1]}`;
+}
+
 /** Resolve artifact preview/download URLs against the farm API origin. */
 export function resolveArtifactUrl(
   url: string | null | undefined,
   backendBase: string = DEFAULT_BACKEND_BASE
 ): string | null {
   if (!url) return null;
-  const value = url.trim();
+  let value = url.trim();
   if (!value) return null;
   if (value.startsWith('http://') || value.startsWith('https://')) {
-    return value;
+    return rewriteLegacyObjectStorageUrl(value);
   }
   const base = backendBase.replace(/\/+$/, '');
   if (value.startsWith('/')) {
@@ -110,7 +130,6 @@ export function isImageArtifact(
   const source = (hints?.source ?? '').toLowerCase();
   if (/\bscreenshot\b/.test(label) || /\bscreenshot\b/.test(source))
     return true;
-  if (/\belement\b/.test(label) || /\belement\b/.test(source)) return true;
   if (!url) return false;
   return /\.(png|jpe?g|webp|gif)(\?|$)/i.test(url);
 }

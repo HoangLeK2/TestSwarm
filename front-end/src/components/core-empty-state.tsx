@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
@@ -20,6 +20,8 @@ export type CoreEmptyStateProps = {
   readOnlyHint?: string;
   cta?: CoreEmptyStateCta;
   secondaryCta?: CoreEmptyStateCta;
+  /** Custom primary action (e.g. dialog trigger) rendered inside the empty state card. */
+  action?: ReactNode;
   variant?: 'no-data' | 'no-results';
   className?: string;
   /** Analytics hook — fired once on mount. */
@@ -67,6 +69,7 @@ export function CoreEmptyState({
   readOnlyHint,
   cta,
   secondaryCta,
+  action,
   variant = 'no-data',
   className,
   trackingKey
@@ -97,12 +100,16 @@ export function CoreEmptyState({
           {readOnlyHint}
         </p>
       ) : null}
-      {(cta || secondaryCta) && (
+      {(action || cta || secondaryCta) && (
         <div className='mt-5 flex w-full max-w-sm flex-col items-stretch gap-2 sm:flex-row sm:justify-center'>
-          {cta ? <CtaButton cta={cta} variant='default' /> : null}
-          {secondaryCta ? (
-            <CtaButton cta={secondaryCta} variant='outline' />
-          ) : null}
+          {action ?? (
+            <>
+              {cta ? <CtaButton cta={cta} variant='default' /> : null}
+              {secondaryCta ? (
+                <CtaButton cta={secondaryCta} variant='outline' />
+              ) : null}
+            </>
+          )}
         </div>
       )}
     </div>

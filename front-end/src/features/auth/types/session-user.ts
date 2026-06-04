@@ -10,4 +10,6 @@ export type SessionUser = {
   role?: string | null;
   /** Org membership role from GET /auth/me — `owner` | `member` | `supervisor`. */
   orgRole?: string | null;
+  /** Persisted workspace from GET /auth/me (`users.default_org_id`). */
+  defaultOrgId?: string | null;
 };

@@ -296,7 +296,8 @@ async def push_connect_url(ctrl, *, serial: str, ws_url: str) -> dict:
     cmd = (
         "am start "
         "-n jp.co.cyberagent.stf/.IdentityActivity "
-        "-a android.intent.action.MAIN "
+        "-a jp.co.cyberagent.stf.ACTION_IDENTIFY "
+        "--activity-single-top "
         f"--es qr_content {shlex.quote(ws_url)}"
     )
     return await ctrl.shell(serial, cmd, timeout=15.0)

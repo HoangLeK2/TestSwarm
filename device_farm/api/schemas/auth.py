@@ -57,3 +57,4 @@ class UserOut(BaseModel):
     role: str
     api_key: str
     orgRole: str | None = None
+    defaultOrgId: str | None = None

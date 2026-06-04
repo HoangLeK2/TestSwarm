@@ -27,6 +27,7 @@ import {
 } from '../../lib/device-fsm';
 import { ReviveDeviceButton } from './ReviveDeviceButton';
 import { removeDeviceFromCache } from '../../hooks/use-devices';
+import { useOrganization } from '@/features/organization/hooks/use-organization';
 import { TagsCell } from './TagsCell';
 import { DeviceCmdButton } from './BootstrapDialog';
 import type { ConfirmModalOptions } from '@/providers/modal-provider';
@@ -62,6 +63,7 @@ function DeviceActionsCell({
   tCommon: (key: string, values?: Record<string, any>) => string;
 }) {
   const qc = useQueryClient();
+  const { currentOrg } = useOrganization();
   const perms = useResourcePermissions('devices');
   const { user } = useAuthContext();
   const platformRole = normalizeNavUserRole(user?.role);
@@ -82,7 +84,7 @@ function DeviceActionsCell({
     setDeletingId(device.id);
     try {
       await devicesApi.delete(device.id);
-      removeDeviceFromCache(qc, device.id);
+      removeDeviceFromCache(qc, device.id, currentOrg?.id);
     } finally {
       setDeletingId((prev) => (prev === device.id ? null : prev));
     }

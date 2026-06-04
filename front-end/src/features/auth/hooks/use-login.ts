@@ -8,6 +8,8 @@ import { ROUTES } from '@/config/routes';
 import { consumeAuthReturnTo } from '@/features/content/lib/permalink';
 import { acceptPendingOrgInviteAfterAuth } from '@/features/organization/lib/accept-invite-after-auth';
 
+const CURRENT_ORG_STORAGE_KEY = 'device-farm:current-organization-id';
+
 export function useLogin() {
   const router = useRouter();
 
@@ -27,8 +29,15 @@ export function useLogin() {
         email: user.email,
         givenName: user.name,
         role: user.role,
-        orgRole: user.orgRole ?? null
+        orgRole: user.orgRole ?? null,
+        defaultOrgId: user.defaultOrgId ?? null
       });
+      if (typeof window !== 'undefined' && user.defaultOrgId?.trim()) {
+        localStorage.setItem(
+          CURRENT_ORG_STORAGE_KEY,
+          user.defaultOrgId.trim()
+        );
+      }
       await acceptPendingOrgInviteAfterAuth();
       const returnTo = consumeAuthReturnTo();
       router.push(returnTo || ROUTES.DEVICES.ROOT);

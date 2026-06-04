@@ -193,10 +193,10 @@ def _attach_edge_content_screenshots(
     execution_id: str | None,
     user_id: str | None,
 ) -> None:
-    """Attach screenshot to rows from this extract batch (inserted + duplicates missing path).
+    """Attach one full-screen screenshot to all rows in this extract batch.
 
     Prefer framebuffer captured on agent-boot immediately after the last XML dump.
-    When ``screenshot_targets`` include card bounds, crop one JPEG per post on the feed.
+    The same full-screen JPEG is stored once and linked to every content_hash in the batch.
     """
     if not _env_bool("DEVICE_FARM_CONTENT_IMAGES_ENABLED", False):
         return
@@ -231,21 +231,6 @@ def _attach_edge_content_screenshots(
             return
     if not jpeg:
         return
-    per_hash_bytes: dict[str, bytes] = {}
-    targets = ingest.get("screenshot_targets")
-    if isinstance(targets, list) and jpeg:
-        from services.content_store import crop_jpeg_screenshot
-
-        for entry in targets:
-            if not isinstance(entry, dict):
-                continue
-            ch = str(entry.get("content_hash") or "").strip()
-            bounds = entry.get("bounds")
-            if not ch or not isinstance(bounds, (list, tuple)):
-                continue
-            cropped = crop_jpeg_screenshot(jpeg, bounds)
-            if cropped:
-                per_hash_bytes[ch] = cropped
     try:
         from db.database import run_activity_coro
         from services.content_store import attach_screenshot_to_content_hashes
@@ -258,14 +243,12 @@ def _attach_edge_content_screenshots(
                 screenshot_bytes=jpeg,
                 user_id=user_id,
                 only_if_missing=True,
-                per_hash_bytes=per_hash_bytes or None,
             )
         )
         if updated:
             log.info(
-                "edge extra_data: attached screenshot to %d content item(s) (cropped=%d)",
+                "edge extra_data: attached full-screen screenshot to %d content item(s)",
                 updated,
-                len(per_hash_bytes),
             )
     except Exception as exc:
         log.warning("edge extra_data screenshot attach failed: %s", exc)

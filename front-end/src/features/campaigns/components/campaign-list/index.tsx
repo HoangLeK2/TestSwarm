@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslations } from 'next-intl';
-import { FileText } from 'lucide-react';
+import { FileText, Plus } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { useCampaigns } from '../../hooks/use-campaigns';
 import { useCampaignListFocus } from '../../hooks/use-campaign-list-focus';
 import type { CampaignOut } from '../../types';
@@ -42,6 +43,7 @@ export function CampaignList({
   openCreateCampaign?: boolean;
 } = {}) {
   const t = useTranslations('campaignsFeature.list');
+  const tCreate = useTranslations('campaignsFeature.createDialog');
   const createDialogProps = {
     initialOpen: openCreateCampaign && Boolean(attachScenarioId),
     preselectedScenarioIds: attachScenarioId ? [attachScenarioId] : []
@@ -124,17 +126,23 @@ export function CampaignList({
                 />
               }
             >
-              <div className='space-y-4'>
-                <CoreEmptyState
-                  icon={FileText}
-                  title={tEmpty('campaigns.title')}
-                  description={tEmpty('campaigns.description')}
-                  trackingKey='campaigns-empty'
-                />
-                <div className='flex justify-center'>
-                  <CreateCampaignDialog {...createDialogProps} />
-                </div>
-              </div>
+              <CoreEmptyState
+                icon={FileText}
+                title={tEmpty('campaigns.title')}
+                description={tEmpty('campaigns.description')}
+                trackingKey='campaigns-empty'
+                action={
+                  <CreateCampaignDialog
+                    {...createDialogProps}
+                    trigger={
+                      <Button size='sm' className='min-w-[8rem]'>
+                        <Plus size={16} className='mr-1' />
+                        {tCreate('trigger')}
+                      </Button>
+                    }
+                  />
+                }
+              />
             </Can>
           )}
 

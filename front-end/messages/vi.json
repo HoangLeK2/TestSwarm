@@ -2514,12 +2514,12 @@
     "title": "Đăng ký thiết bị",
     "titleQr": "Quét mã QR để kết nối",
     "titleConnected": "Thiết bị đã kết nối",
-    "description": "Đặt tên thiết bị, rồi quét QR bằng app <strong>Chức năng thiết bị</strong> để gắn thiết bị này với tài khoản của bạn.",
+    "description": "Chọn thiết bị từ máy kết nối (cùng Wi‑Fi/LAN), rồi quét QR bằng app <strong>Chức năng thiết bị</strong> để gắn với tài khoản của bạn.",
     "nameLabel": "Tên thiết bị",
     "namePlaceholder": "VD: Điện thoại test 1",
     "deviceLabel": "Thiết bị cần đăng ký",
     "devicePlaceholder": "Chọn serial từ máy kết nối",
-    "noAvailableDevices": "Chưa thấy thiết bị cùng Wi‑Fi/LAN với máy kết nối. Bạn vẫn có thể đăng ký bằng QR bên dưới.",
+    "noAvailableDevices": "Chưa thấy thiết bị cùng Wi‑Fi/LAN với máy kết nối. Cắm USB hoặc bật ADB qua Wi‑Fi trên cùng mạng với máy kết nối, rồi thử lại.",
     "descLabel": "Ghi chú (tuỳ chọn)",
     "descPlaceholder": "VD: Phòng QA, máy Samsung...",
     "submit": "Đăng ký",
@@ -2765,14 +2765,14 @@
     "readOnlyHint": "Bạn chỉ có quyền xem. Liên hệ admin để tạo tài nguyên.",
     "fleet": {
       "title": "Chưa có thiết bị",
-      "description": "Ghép nối thiết bị qua máy kết nối điện thoại (agent-boot) hoặc đăng ký thiết bị để bắt đầu tự động hoá.",
+      "description": "Ghép nối thiết bị qua máy kết nối điện thoại hoặc đăng ký thiết bị để bắt đầu tự động hoá.",
       "ctaPair": "Đăng ký thiết bị",
       "ctaRelay": "Xem máy kết nối"
     },
     "campaigns": {
-      "title": "Chưa có campaign",
-      "description": "Tạo campaign để chạy scenario trên fleet thiết bị.",
-      "ctaCreate": "Tạo campaign"
+      "title": "Chưa có chiến dịch nào",
+      "description": "Tạo chiến dịch để chạy kịch bản trên nhiều thiết bị.",
+      "ctaCreate": "Tạo chiến dịch"
     },
     "accounts": {
       "title": "Chưa có account",

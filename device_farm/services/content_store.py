@@ -512,38 +512,6 @@ async def _resolve_content_screenshot_path(
     return None
 
 
-def crop_jpeg_screenshot(jpeg: bytes, bounds: list[int] | tuple[int, ...]) -> bytes | None:
-    """Crop a full-screen JPEG to a post card region (feed evidence per item)."""
-    if len(bounds) != 4:
-        return None
-    try:
-        import io
-
-        from PIL import Image
-    except Exception:
-        return None
-    try:
-        x1, y1, x2, y2 = (int(bounds[0]), int(bounds[1]), int(bounds[2]), int(bounds[3]))
-        if x2 <= x1 or y2 <= y1:
-            return None
-        img = Image.open(io.BytesIO(jpeg))
-        pad = 6
-        crop = img.crop(
-            (
-                max(0, x1 - pad),
-                max(0, y1 - pad),
-                min(img.width, x2 + pad),
-                min(img.height, y2 + pad),
-            )
-        )
-        buf = io.BytesIO()
-        crop.convert("RGB").save(buf, format="JPEG", quality=88, optimize=True)
-        return buf.getvalue()
-    except Exception as exc:
-        log.debug("crop_jpeg_screenshot failed: %s", exc)
-        return None
-
-
 async def attach_screenshot_to_content_hashes(
     *,
     content_hashes: list[str],
@@ -552,9 +520,8 @@ async def attach_screenshot_to_content_hashes(
     execution_id: str | None = None,
     user_id: str | None = None,
     only_if_missing: bool = False,
-    per_hash_bytes: dict[str, bytes] | None = None,
 ) -> int:
-    """Upload screenshot(s) and set screenshot_path on matching content rows."""
+    """Upload one full-screen screenshot and set screenshot_path on matching content rows."""
     from collections import defaultdict
 
     from db.crud.content import update_content_screenshot_paths
@@ -565,20 +532,10 @@ async def attach_screenshot_to_content_hashes(
     updated = 0
     hashes_by_path: dict[str, list[str]] = defaultdict(list)
     async with activity_session() as db:
-        saved_paths_by_image_hash: dict[str, str] = {}
-        for content_hash in content_hashes:
-            payload = (per_hash_bytes or {}).get(str(content_hash)) or screenshot_bytes
-            if not payload:
-                continue
-            image_hash = hashlib.sha256(payload).hexdigest()
-            path = saved_paths_by_image_hash.get(image_hash)
-            if not path:
-                path = _save_screenshot(payload, str(content_hash), image_hash=image_hash)
-                if path:
-                    saved_paths_by_image_hash[image_hash] = path
-            if not path:
-                continue
-            hashes_by_path[path].append(str(content_hash))
+        image_hash = hashlib.sha256(screenshot_bytes).hexdigest()
+        path = _save_screenshot(screenshot_bytes, "batch", image_hash=image_hash)
+        if path:
+            hashes_by_path[path] = [str(h) for h in content_hashes]
         for path, hashes in hashes_by_path.items():
             updated += await update_content_screenshot_paths(
                 db,

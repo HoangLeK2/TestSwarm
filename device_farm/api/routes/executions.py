@@ -1161,7 +1161,7 @@ def _extract_step_artifacts(execution_id: str, device_serial: str, steps: list, 
         if isinstance(step.get("screenshot"), str):
             screenshots.append(("screenshot", _normalize_artifact_url(step.get("screenshot")), {}))
         elif isinstance(step.get("screenshot"), dict):
-            for key in ("full", "element", "hierarchy", "selector"):
+            for key in ("full", "hierarchy", "selector"):
                 if step["screenshot"].get(key):
                     screenshots.append(
                         (
@@ -1171,7 +1171,7 @@ def _extract_step_artifacts(execution_id: str, device_serial: str, steps: list, 
                         )
                     )
         if isinstance(step.get("screenshot_pre"), dict):
-            for key in ("full", "element", "hierarchy", "selector"):
+            for key in ("full", "hierarchy", "selector"):
                 if step["screenshot_pre"].get(key):
                     screenshots.append(
                         (

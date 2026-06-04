@@ -29,12 +29,12 @@ function stepImageSrc(val: string): string {
   return `data:image/jpeg;base64,${val}`;
 }
 
-/** Get the best available image for a tap step (element crop preferred, full screenshot as fallback). */
+/** Get the full-screen image for a tap step (element crops are not persisted). */
 function getTapStepImage(step: FlowStep): string {
   const screen = step.screen as
     | { element_image?: string; screenshot?: string }
     | undefined;
-  const raw = screen?.element_image || screen?.screenshot || '';
+  const raw = screen?.screenshot || '';
   return raw ? stepImageSrc(raw) : '';
 }
 

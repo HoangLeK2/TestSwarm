@@ -10,7 +10,13 @@ import {
   type DeviceCreate,
   type DeviceOut
 } from '../services/manage-api';
-import { DEVICES_LIST_KEY, FLEET_STATS_KEY } from '../lib/device-query-keys';
+import {
+  DEVICES_LIST_KEY,
+  FLEET_STATS_KEY,
+  devicesListQueryKey,
+  fleetStatsQueryKey
+} from '../lib/device-query-keys';
+import { useOrganization } from '@/features/organization/hooks/use-organization';
 import {
   LIFECYCLE_WS_LIVE_POLL_MS,
   LIFECYCLE_WS_OFFLINE_POLL_MS,
@@ -24,19 +30,26 @@ export function invalidateDeviceFleetQueries(qc: QueryClient) {
   void qc.invalidateQueries({ queryKey: FLEET_STATS_KEY });
 }
 
-export function removeDeviceFromCache(qc: QueryClient, deviceId: string) {
-  qc.setQueryData<DeviceOut[]>(
-    DEVICES_LIST_KEY,
-    (old) => old?.filter((d) => d.id !== deviceId) ?? old
+export function removeDeviceFromCache(
+  qc: QueryClient,
+  deviceId: string,
+  orgId: string | null | undefined
+) {
+  if (!orgId) return;
+  qc.setQueryData<DeviceOut[]>(devicesListQueryKey(orgId), (old) =>
+    old?.filter((d) => d.id !== deviceId) ?? old
   );
-  void qc.invalidateQueries({ queryKey: FLEET_STATS_KEY });
+  void qc.invalidateQueries({ queryKey: fleetStatsQueryKey(orgId) });
 }
 
 export function useDevices() {
   const wsLive = useLifecycleWsConnected();
+  const { currentOrg } = useOrganization();
+  const orgId = currentOrg?.id ?? null;
   return useQuery({
-    queryKey: DEVICES_LIST_KEY,
+    queryKey: devicesListQueryKey(orgId),
     queryFn: devicesApi.list,
+    enabled: Boolean(orgId),
     refetchInterval: wsLive
       ? LIFECYCLE_WS_LIVE_POLL_MS
       : LIFECYCLE_WS_OFFLINE_POLL_MS
@@ -45,9 +58,12 @@ export function useDevices() {
 
 export function useFleetStats() {
   const wsLive = useLifecycleWsConnected();
+  const { currentOrg } = useOrganization();
+  const orgId = currentOrg?.id ?? null;
   return useQuery({
-    queryKey: FLEET_STATS_KEY,
+    queryKey: fleetStatsQueryKey(orgId),
     queryFn: () => devicesApi.fleetStats(),
+    enabled: Boolean(orgId),
     staleTime: 15_000,
     refetchInterval: wsLive
       ? LIFECYCLE_WS_LIVE_POLL_MS
@@ -74,9 +90,11 @@ export function useDeviceSessions(deviceId: string) {
 }
 
 export function useDeviceBySerial(serial: string) {
+  const { currentOrg } = useOrganization();
+  const orgId = currentOrg?.id ?? null;
   const decoded = decodeURIComponent(serial);
   return useQuery({
-    queryKey: [...DEVICES_LIST_KEY, 'by-serial', decoded],
+    queryKey: [...devicesListQueryKey(orgId), 'by-serial', decoded],
     queryFn: async () => {
       const list = await devicesApi.list();
       const match = list.find(

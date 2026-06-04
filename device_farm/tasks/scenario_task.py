@@ -894,7 +894,7 @@ def _capture_step_screenshot(
     screen_h: int,
     selector: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
-    """Save full screenshot + cropped element + XML hierarchy + selector info."""
+    """Save full-screen screenshot + XML hierarchy + selector info (no element crops)."""
     from services import capture_store
 
     jpeg = device.take_screenshot()
@@ -937,32 +937,8 @@ def _capture_step_screenshot(
         if sel_url:
             result["selector"] = sel_url
 
-    # Crop element
     if bounds:
-        try:
-            from PIL import Image
-            img = Image.open(io.BytesIO(jpeg))
-            iw, ih = img.size
-            sx, sy = iw / max(screen_w, 1), ih / max(screen_h, 1)
-            crop_box = (
-                max(0, int(bounds["left"] * sx)),
-                max(0, int(bounds["top"] * sy)),
-                min(iw, int(bounds["right"] * sx)),
-                min(ih, int(bounds["bottom"] * sy)),
-            )
-            if crop_box[2] > crop_box[0] and crop_box[3] > crop_box[1]:
-                cropped = img.crop(crop_box)
-                buf = io.BytesIO()
-                cropped.save(buf, format="JPEG", quality=85)
-                crop_bytes = buf.getvalue()
-                elem_local = os.path.join(capture_dir, f"{prefix}_element.jpg")
-                elem_key = f"{minio_prefix}/{prefix}_element.jpg"
-                elem_url = capture_store.save_capture(crop_bytes, elem_local, elem_key, "image/jpeg", skip_quality=True)
-                if elem_url:
-                    result["element"] = elem_url
-                result["bounds"] = [bounds["left"], bounds["top"], bounds["right"], bounds["bottom"]]
-        except Exception as exc:
-            log.debug(f"crop failed: {exc}")
+        result["bounds"] = [bounds["left"], bounds["top"], bounds["right"], bounds["bottom"]]
 
     return result
 def _xml_has_element(xml: str, by: str, value: str) -> bool:

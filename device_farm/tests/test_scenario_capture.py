@@ -116,13 +116,11 @@ class TestCaptureStepScreenshot:
         result = _capture_step_screenshot(device, str(tmp_path), 2, "tap", None, 1080, 1920)
         assert "hierarchy" in result
 
-    def test_crops_element_when_bounds_provided(self, tmp_path):
-        """PIL crop path — requires a real JPEG."""
+    def test_records_bounds_without_element_crop(self, tmp_path):
         pytest.importorskip("PIL")
         from tasks.scenario_task import _capture_step_screenshot
         from PIL import Image
         import io
-        # Create a minimal valid JPEG
         img = Image.new("RGB", (1080, 1920), color=(255, 0, 0))
         buf = io.BytesIO()
         img.save(buf, format="JPEG")
@@ -131,9 +129,10 @@ class TestCaptureStepScreenshot:
         device = _make_device(jpeg=jpeg)
         bounds = {"left": 100, "top": 200, "right": 400, "bottom": 600}
         result = _capture_step_screenshot(device, str(tmp_path), 3, "tap", bounds, 1080, 1920)
-        assert "element" in result
+        assert "element" not in result
         assert "bounds" in result
-        assert (tmp_path / "step_003_tap_element.jpg").exists()
+        assert not (tmp_path / "step_003_tap_element.jpg").exists()
+        assert (tmp_path / "step_003_tap_full.jpg").exists()
 
     def test_skips_crop_when_bounds_zero_size(self, tmp_path):
         """Degenerate bounds (left==right) should not produce element crop."""
